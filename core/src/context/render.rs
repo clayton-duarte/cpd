@@ -59,7 +59,7 @@ pub fn markdown_retired(
     let mut answers: HashMap<String, Vec<&Indexed>> = HashMap::new();
     for entry in records {
         let (_, record) = entry;
-        if let Some(old) = record.supersedes() {
+        if let Some(old) = record.supersedes().first() {
             successor.insert(old.to_string(), record);
         }
         if let Some(question) = record.question() {
@@ -147,6 +147,7 @@ pub fn markdown_retired(
             .map(|(_, r)| {
                 let replaces = r
                     .supersedes()
+                    .first()
                     .map(|s| format!(" (supersedes {s})"))
                     .unwrap_or_default();
                 item(r, &format!("{}{replaces}", r.text))
@@ -214,6 +215,7 @@ pub fn markdown_retired(
         .map(|(_, r)| {
             let replaces = r
                 .supersedes()
+                .first()
                 .map(|s| format!(" (supersedes {s})"))
                 .unwrap_or_default();
             item(r, &format!("{}{replaces}", r.text))
@@ -331,7 +333,7 @@ mod tests {
         vec![
             (
                 1,
-                rec("hs-d1", "Old.", Draft::Decision { supersedes: None }),
+                rec("hs-d1", "Old.", Draft::Decision { supersedes: vec![] }),
             ),
             (2, rec("hs-q1", "Why?", Draft::Question)),
             (3, rec("hs-q2", "When?", Draft::Question)),
@@ -341,7 +343,7 @@ mod tests {
                     "hs-d2",
                     "New.",
                     Draft::Decision {
-                        supersedes: d("hs-d1"),
+                        supersedes: d("hs-d1").into_iter().collect(),
                     },
                 ),
             ),
@@ -395,7 +397,7 @@ mod tests {
                     "hs-n2",
                     "New fact.",
                     Draft::NoteSupersedes {
-                        supersedes: RecordId::parse("hs-n1").unwrap(),
+                        supersedes: vec![RecordId::parse("hs-n1").unwrap()],
                     },
                 ),
             ),

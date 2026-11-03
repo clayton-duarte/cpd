@@ -437,7 +437,7 @@ fn a_step_sends_at_most_60_uncurated_records_and_the_known_short_forms() {
         "hs-d1",
         &ago(500),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.store()
         .write("fixture", |tx| {
@@ -513,21 +513,21 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(
         CONTEXT,
         "hs-d2",
         &ago(80),
         "Use sqlite in WAL mode.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(
         CONTEXT,
         "hs-d3",
         &ago(70),
         "Use sqlite with WAL.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(CONTEXT, "hs-n4", &ago(60), "Locks are flock.", Draft::Note);
     fx.pi.answers(
@@ -633,14 +633,14 @@ fn docs_md_lists_the_grep_hits_of_the_contexts_repos() {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(
         CONTEXT,
         "hs-d10",
         &ago(80),
         "Use flock.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     let a = repo_with(
         &fx,
@@ -690,7 +690,7 @@ fn no_repair_turn_and_no_contradictions_section() {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     // Output that is no JSON line: invalid. With one step of the ladder, one pi run; no repair turn.
     fx.pi.answers("# Digest\nCites [hs-d1].\n");
@@ -749,14 +749,14 @@ fn two_decisions(fx: &Fx) {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(
         CONTEXT,
         "hs-d2",
         &ago(80),
         "Use sqlite in WAL mode.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
 }
 
@@ -768,14 +768,14 @@ fn a_retirement_whose_target_left_force_meanwhile_is_dropped_and_the_curations_s
         "hs-d1",
         &ago(200),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(
         CONTEXT,
         "hs-d2",
         &ago(190),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     // hs-d1 and hs-d2 are curated; hs-d2 has a pending retirement the User will approve while the distiller runs.
     fx.store()
@@ -799,7 +799,7 @@ fn a_retirement_whose_target_left_force_meanwhile_is_dropped_and_the_curations_s
         "hs-d3",
         &ago(80),
         "Use sqlite in WAL mode.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.insert(CONTEXT, "hs-n4", &ago(70), "Locks are flock.", Draft::Note);
     // The fake pi has the User approve hs-d2's retirement (hs-d2 leaves force) while it runs, then proposes
@@ -1518,7 +1518,7 @@ fn the_distiller_runs_on_gx_with_the_g_model() {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let tiers: Vec<String> = fx
@@ -1541,7 +1541,7 @@ fn a_failed_pi_run_fails_the_run_with_no_second_step() {
         "hs-d1",
         &ago(90),
         "Use sqlite.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     );
     fx.pi.set(|_| Reply::exit(7, "", "model unavailable\n"));
     refused(
@@ -1727,7 +1727,7 @@ fn the_floor_counts_retired_and_superseded_records() {
         &ago(50),
         "Newer.",
         Draft::Decision {
-            supersedes: Some(RecordId::parse("hs-n1").unwrap()),
+            supersedes: vec![RecordId::parse("hs-n1").unwrap()],
         },
     );
     fx.store()

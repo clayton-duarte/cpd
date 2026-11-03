@@ -476,7 +476,7 @@ fn decide_note_and_ask_write_records() {
         ])
         .ok();
     assert_eq!(d2["record"]["id"], "hs-d2");
-    assert_eq!(d2["record"]["supersedes"], "hs-d1");
+    assert_eq!(d2["record"]["supersedes"], json!(["hs-d1"]));
     assert_eq!(d2["seq"], 4);
     assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1", "hs-q1", "hs-d2"]);
 
@@ -628,7 +628,7 @@ fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() 
         .ok();
     assert_eq!(n2["record"]["id"], "hs-n2", "{n2}");
     assert_eq!(n2["record"]["kind"], "note");
-    assert_eq!(n2["record"]["supersedes"], "hs-n1");
+    assert_eq!(n2["record"]["supersedes"], json!(["hs-n1"]));
     assert_eq!(n2["seq"], 2);
     assert_eq!(events(&fx, "context-record").len(), 2);
 
@@ -637,7 +637,7 @@ fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() 
     let records = shown["records"].as_array().unwrap();
     assert_eq!(records.len(), 2, "{shown}");
     assert!(records[0].get("supersedes").is_none());
-    assert_eq!(records[1]["supersedes"], "hs-n1");
+    assert_eq!(records[1]["supersedes"], json!(["hs-n1"]));
 
     // Markdown: the older note is listed, labelled superseded and naming its successor, after the active one.
     let md = shown["markdown"].as_str().unwrap();
@@ -686,9 +686,9 @@ fn a_decision_supersedes_a_note_which_is_then_labelled_superseded() {
         ])
         .ok();
     assert_eq!(d1["record"]["id"], "hs-d1", "{d1}");
-    assert_eq!(d1["record"]["supersedes"], "hs-n1");
+    assert_eq!(d1["record"]["supersedes"], json!(["hs-n1"]));
     let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
-    assert_eq!(shown["records"][1]["supersedes"], "hs-n1");
+    assert_eq!(shown["records"][1]["supersedes"], json!(["hs-n1"]));
     let md = shown["markdown"].as_str().unwrap();
     let old = item_line(md, "hs-n1");
     assert!(
@@ -1083,7 +1083,7 @@ fn show_renders_the_records() {
     let records = out["records"].as_array().unwrap();
     assert_eq!(records.len(), 6);
     assert_eq!(records[0]["seq"], 1);
-    assert_eq!(records[2]["supersedes"], "hs-d1");
+    assert_eq!(records[2]["supersedes"], json!(["hs-d1"]));
     assert_eq!(records[3]["question"], "hs-q1");
     let md = out["markdown"].as_str().unwrap();
     assert!(md.starts_with("# Building cpd\n"), "{md}");

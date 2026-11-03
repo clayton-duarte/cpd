@@ -299,7 +299,7 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
         .with("record", id.to_string())
         .with("kind", kind.as_str())
     };
-    if let Some(id) = draft.supersedes() {
+    if let Some(id) = draft.supersedes().first() {
         let found: Option<String> = conn
             .query_row(
                 "SELECT kind FROM context_records WHERE context = ?1 AND id = ?2",

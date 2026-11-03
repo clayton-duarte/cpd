@@ -28,6 +28,7 @@ mod context_pending_waiting;
 mod context_permanent;
 mod context_reindex;
 mod context_search;
+mod context_supersedes;
 mod context_topic;
 mod driver;
 mod driver_desc_gate;

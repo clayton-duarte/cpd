@@ -41,6 +41,8 @@ mod rename;
 pub(crate) mod render;
 mod search;
 mod show;
+#[cfg(test)]
+mod supersedes_tests;
 mod write;
 
 use std::fmt;
@@ -221,8 +223,8 @@ pub struct DecideArgs {
     /// The decision
     text: Text,
     /// The decision or note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
     #[command(flatten)]
     select: Select,
 }
@@ -232,8 +234,8 @@ pub struct NoteArgs {
     /// The note
     text: Text,
     /// The note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
     #[command(flatten)]
     select: Select,
 }
@@ -300,9 +302,12 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             write::write("context decide", &args.select, &args.text, draft)
         }
         Command::Note(args) => {
-            let draft = match args.supersedes {
-                Some(supersedes) => Draft::NoteSupersedes { supersedes },
-                None => Draft::Note,
+            let draft = if args.supersedes.is_empty() {
+                Draft::Note
+            } else {
+                Draft::NoteSupersedes {
+                    supersedes: args.supersedes,
+                }
             };
             write::write("context note", &args.select, &args.text, draft)
         }

@@ -79,7 +79,7 @@ export type PendingPlan = { id: string; phase: string; workflows: PendingPr[]; j
 export const MAX_PENDING_JOBS = 10;
 
 /** A Context record as `context show` prints it, reduced to what the update needs. */
-export type ContextRecord = { seq: number; id: string; kind: string; at: string; by: string | null; text: string; supersedes?: string; question?: string; plan?: string };
+export type ContextRecord = { seq: number; id: string; kind: string; at: string; by: string | null; text: string; supersedes?: string[]; question?: string; plan?: string };
 
 const bad = (what: string, why: string) => new CpdError("bad_output", `cpd ${what}: ${why}`);
 
@@ -187,7 +187,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
       at: r.at,
       by: r.by.session,
       text: r.text,
-      ...(typeof r.supersedes === "string" ? { supersedes: r.supersedes } : {}),
+      ...(Array.isArray(r.supersedes) && r.supersedes.every((s) => typeof s === "string") && r.supersedes.length > 0 ? { supersedes: r.supersedes as string[] } : {}),
       ...(typeof r.question === "string" ? { question: r.question } : {}),
       ...(isObject(r.plan) && typeof r.plan.id === "string" ? { plan: r.plan.id } : {}),
     };
@@ -198,7 +198,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
 const line = (r: ContextRecord): string =>
   r.kind === "brief"
     ? `- ${r.id} brief (${r.at.slice(0, 10)} UTC): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
-    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
+    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes[0]}.` : ""}`;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const sender = (p: BoardPost) => (p.from === null ? "Board post from the User" : `Board post from ${p.fromName ?? p.from} (${p.from})`);
