@@ -421,8 +421,40 @@ impl RecordId {
     /// Every distinct valid record id token in `text`, in order of first appearance. A token is `<machine>-<letter><n>`
     /// as [`RecordId::parse`] accepts it; the character before it is not an ASCII letter, digit, `-` or `_`, the
     /// character after it is not an ASCII letter, digit or `_`.
-    pub fn scan(_text: &str) -> Vec<RecordId> {
-        todo!()
+    pub fn scan(text: &str) -> Vec<RecordId> {
+        let b = text.as_bytes();
+        let mut found: Vec<RecordId> = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            let before_ok = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'-' || b[i - 1] == b'_');
+            if before_ok && b[i].is_ascii_lowercase() {
+                let mut j = i;
+                while j < b.len() && j - i < 8 && (b[j].is_ascii_lowercase() || b[j].is_ascii_digit()) {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b'-' {
+                    let mut k = j + 1;
+                    if k < b.len() && b[k].is_ascii_lowercase() {
+                        k += 1;
+                        while k < b.len() && b[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                        let after_ok = k == b.len() || !(b[k].is_ascii_alphanumeric() || b[k] == b'_');
+                        if after_ok {
+                            if let Ok(id) = RecordId::parse(&text[i..k]) {
+                                if !found.contains(&id) {
+                                    found.push(id);
+                                }
+                                i = k;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        found
     }
 
     pub fn parse(s: &str) -> Result<RecordId, CpdError> {
