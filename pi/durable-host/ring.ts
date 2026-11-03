@@ -4,10 +4,6 @@ export type Frame =
   | { type: "view"; epoch: string; seq: number; view: unknown }
   | { type: "ops"; epoch: string; seq: number; ops: unknown[] };
 
-// STUB (state-tests): the logic of protocol 1 under the protocol-2 types; the frames still carry the old shapes.
-const stubView = (epoch: string, seq: number, view: unknown): Extract<Frame, { type: "view" }> => ({ type: "snapshot", epoch, seq, snapshot: view }) as never;
-const stubOps = (epoch: string, seq: number, ops: unknown[]): Extract<Frame, { type: "ops" }> => ({ type: "events", epoch, seq, events: ops }) as never;
-
 export class Ring {
   #epoch: string;
   #base: Extract<Frame, { type: "view" }>;
@@ -15,7 +11,7 @@ export class Ring {
 
   constructor(epoch: string, view: unknown) {
     this.#epoch = epoch;
-    this.#base = stubView(epoch, 1, view);
+    this.#base = { type: "view", epoch, seq: 1, view };
   }
 
   get head(): number {
@@ -23,7 +19,7 @@ export class Ring {
   }
 
   append(ops: unknown[]): Frame {
-    const frame = stubOps(this.#epoch, this.head + 1, ops);
+    const frame: Extract<Frame, { type: "ops" }> = { type: "ops", epoch: this.#epoch, seq: this.head + 1, ops };
     this.#frames.push(frame);
     return frame;
   }
@@ -34,7 +30,7 @@ export class Ring {
     if (cursor && cursor.epoch === this.#epoch && cursor.seq >= baseSeq && cursor.seq <= headSeq) {
       return { mode: "resume", fromSeq: cursor.seq + 1, headSeq, frames: this.#frames.slice(cursor.seq - baseSeq) };
     }
-    return { mode: "snapshot" as never, fromSeq: baseSeq, headSeq, frames: [this.#base, ...this.#frames] };
+    return { mode: "view", fromSeq: baseSeq, headSeq, frames: [this.#base, ...this.#frames] };
   }
 
   shouldRebase(runEnd: boolean): boolean {
@@ -43,7 +39,7 @@ export class Ring {
   }
 
   rebase(view: unknown): Frame {
-    this.#base = stubView(this.#epoch, this.head + 1, view);
+    this.#base = { type: "view", epoch: this.#epoch, seq: this.head + 1, view };
     this.#frames = [];
     return this.#base;
   }

@@ -13,7 +13,6 @@ import type { Write } from "../durable-host/turn.ts";
 type Root = {
   readonly id: unknown;
   abort(ctx: typeof BACKGROUND_CONTEXT, opts: { background: boolean }): Promise<void>;
-  configure(change: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<void>;
   submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ readonly id: number; status(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: string }>; wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
   context(ctx: typeof BACKGROUND_CONTEXT): Promise<{ entries: unknown }>;
   watch(ctx: typeof BACKGROUND_CONTEXT, window?: unknown): Promise<{ readonly value: unknown; start(listener: (call: ViewCall, ctx: unknown) => Promise<void>): void; stop(): Promise<unknown>; readonly closed: Promise<unknown> }>;
@@ -50,7 +49,8 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
   const r = root as Root;
   return {
     watch: async () => {
-      throw new Error("not implemented");
+      const handle = await r.watch(BACKGROUND_CONTEXT);
+      return { value: handle.value, start: (l) => handle.start((call) => l(call)), stop: () => handle.stop(), closed: handle.closed };
     },
     abort: (opts: { background: boolean }) => r.abort(BACKGROUND_CONTEXT, opts),
     abortSubmission: (id: number) => durable.harness.abortSubmission(id, BACKGROUND_CONTEXT, r.id),
@@ -71,9 +71,7 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
       if (status !== "done") throw new Error(`the write ended ${status}`);
     },
     install: (extension) => registry.install(extension),
-    entries: async () => {
-      throw new Error("not implemented");
-    },
+    entries: async () => (await r.context(BACKGROUND_CONTEXT)).entries as readonly unknown[],
     compact: (instructions) => r.compact(instructions, BACKGROUND_CONTEXT),
     configure: (change) => r.configure(change, BACKGROUND_CONTEXT),
     agent: () => r.agent(BACKGROUND_CONTEXT),

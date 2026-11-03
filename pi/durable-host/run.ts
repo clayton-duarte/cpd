@@ -99,11 +99,12 @@ export type Deps = {
   log(line: string): void;
 };
 
-/** `conversation.closed` settles with a pi-durable `SessionEnd`: `{ reason: 'closed' } | { reason: 'failed', error }`. */
+/** A `WatchEnd` (`{ kind: 'stopped' | 'aborted' | 'ended' } | { kind: 'listener_error' | 'failed', error }`) or a `SessionEnd` (`{ reason }`). */
 function endText(end: unknown): string {
   if (typeof end !== "object" || end === null) return String(end);
-  const { reason, error } = end as { reason?: unknown; error?: unknown };
-  if (reason !== "failed") return String(reason ?? "closed");
+  const { kind, reason, error } = end as { kind?: unknown; reason?: unknown; error?: unknown };
+  if (kind !== undefined && kind !== "failed" && kind !== "listener_error") return String(kind);
+  if (kind === undefined && reason !== "failed") return String(reason ?? "closed");
   return `failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
@@ -548,11 +549,36 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       clientId: () => (from = `c${++nextClient}`),
     });
     server = srv;
-    // STUB (state-tests): the listener and the end of the watch are not implemented.
+    const hasRun = (view: unknown): boolean => {
+      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
+      return live?.run !== undefined && live.run !== null;
+    };
+    let lastView: unknown = first.value;
     const attachStream = (s: ViewStream): void => {
-      s.start(async (_call: ViewCall) => {
-        throw new Error("not implemented");
+      s.start(async (call: ViewCall) => {
+        if (call.kind === "failed") {
+          failed("the watch", call.error);
+          end(1, "storage_failed");
+          return;
+        }
+        srv.frame(ring.append([...call.ops]));
+        const runEnd = hasRun(lastView) && !hasRun(call.value);
+        lastView = call.value;
+        if (ring.shouldRebase(runEnd)) srv.frame(ring.rebase(call.value));
       });
+      // pi-durable 1.5.0 (chord watch.d.ts): `stop()` idempotently stops future callbacks and settles `closed` with `{ kind: 'stopped' }`; any other kind is the watch ending on its own.
+      s.closed.then(
+        (e) => {
+          if (over || (e as { kind?: unknown } | undefined)?.kind === "stopped") return;
+          failed("the watch ended", endText(e));
+          end(1, "storage_failed");
+        },
+        (e) => {
+          if (over) return;
+          failed("the watch ended", e);
+          end(1, "storage_failed");
+        },
+      );
     };
     attachStream(first);
     listener = await deps.listen(sock, (conn) => {

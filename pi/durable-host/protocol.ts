@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSIONS = [1] as const;
+export const PROTOCOL_VERSIONS = [2] as const;
 export const LIMITS = {
   clientLine: 1048576,
   hostLine: 67108864,
