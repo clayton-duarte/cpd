@@ -23,6 +23,9 @@ mod distill_git_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
 pub mod engine;
+mod fts;
+#[cfg(test)]
+mod fts_tests;
 pub mod inforce;
 pub(crate) mod legacy;
 mod list;
