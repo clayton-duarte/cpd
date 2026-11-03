@@ -2,7 +2,7 @@
 //! list inline under its row, the buttons) and the footer. The body is built as lines that know what a click on
 //! each column lands on, so what is drawn and what is hit are one thing.
 
-use super::model::{Model, Row, RowView};
+use super::model::{Feature, Model, Row, RowView};
 use crate::box_widget::SectionTitle;
 use crate::dialog::scroll::Scroll;
 use crate::palette;
@@ -18,6 +18,8 @@ use ratatui::widgets::Paragraph;
 pub enum Hit {
     /// A row's value.
     Value(Row),
+    /// An Experimental row: a click flips it.
+    Flip(Feature),
     /// An entry of the open list.
     Entry(usize),
     Load,
@@ -82,6 +84,25 @@ fn header(name: &str, hint: &str) -> BodyLine {
         Style::default().add_modifier(Modifier::BOLD),
     )
     .text(format!("  {hint}"), palette::muted_text());
+    b.done()
+}
+
+/// An Experimental row: the key padded to the longest key and two spaces, then `on` or `off`; no list, no arrow.
+fn switch_line(rv: &RowView, feature: Feature) -> BodyLine {
+    let width = Feature::ALL
+        .iter()
+        .map(|f| f.key().len())
+        .max()
+        .unwrap_or(0);
+    let mut b = Builder::default();
+    b.text(if rv.focused { "   ▸ " } else { "     " }, Style::default());
+    b.text(format!("{:<width$}  ", rv.label), Style::default());
+    let suffix = if rv.changed { "*" } else { "" };
+    b.hit(
+        format!("{}{suffix}", rv.value),
+        Style::default(),
+        Hit::Flip(feature),
+    );
     b.done()
 }
 
@@ -178,6 +199,26 @@ fn body(model: &Model) -> Body {
             focus = (first, last);
         }
     }
+    // an open Tier list hides the section, as it hides the Tier rows below it
+    if hidden_to < rows.len() {
+        lines.push(blank());
+        let mut b = Builder::default();
+        b.text(
+            " Experimental",
+            Style::default().add_modifier(Modifier::BOLD),
+        );
+        lines.push(b.done());
+        for rv in model.switches() {
+            let Row::Experimental(f) = rv.row else {
+                continue;
+            };
+            let first = lines.len();
+            lines.push(switch_line(&rv, f));
+            if rv.focused {
+                focus = (first, first);
+            }
+        }
+    }
     lines.push(blank());
     let mut b = Builder::default();
     let save = if model.blocked().is_some() {
@@ -190,6 +231,11 @@ fn body(model: &Model) -> Body {
     b.text("  ", Style::default());
     b.hit("[ Cancel ]", palette::clickable_text(), Hit::Cancel);
     lines.push(b.done());
+    // a change that Save can write is written by the buttons: following keeps them in view too (the focus stays in
+    // view first); a footer (a refusal, or the reason Save is blocked) is what the User reads then
+    if model.footer().is_none() && !model.steps().is_empty() {
+        focus.1 = focus.1.max(lines.len() - 1);
+    }
     Body { lines, focus }
 }
 
@@ -216,7 +262,12 @@ pub fn draw(f: &mut Frame, model: &Model, scroll: &mut Scroll, follow: bool) {
     let body = body(model);
     scroll.resize(body.lines.len(), usize::from(body_rect.height));
     if follow {
-        scroll.show(body.focus.0, body.focus.1);
+        // what fits from the top is shown from the top
+        if body.focus.1 < usize::from(body_rect.height) {
+            scroll.show(0, 0);
+        } else {
+            scroll.show(body.focus.0, body.focus.1);
+        }
     }
     for (i, bl) in body
         .lines

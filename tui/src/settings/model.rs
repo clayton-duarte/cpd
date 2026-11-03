@@ -38,6 +38,39 @@ pub enum Row {
     Provider,
     Model(Letter),
     Tier(Role),
+    Experimental(Feature),
+}
+
+/// An Experimental Feature's switch, in the order of docs/commands.md §14.2b.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    DurableWorkers,
+    WriteCuration,
+    FailureTriage,
+    TurnQuestionGuard,
+}
+
+impl Feature {
+    pub const ALL: [Feature; 4] = [
+        Feature::DurableWorkers,
+        Feature::WriteCuration,
+        Feature::FailureTriage,
+        Feature::TurnQuestionGuard,
+    ];
+
+    /// The key in `[experimental]` and the argument of `cpd config experimental`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Feature::DurableWorkers => "durable_workers",
+            Feature::WriteCuration => "write_curation",
+            Feature::FailureTriage => "failure_triage",
+            Feature::TurnQuestionGuard => "turn_question_guard",
+        }
+    }
+
+    fn at(self) -> usize {
+        Feature::ALL.iter().position(|f| *f == self).unwrap_or(0)
+    }
 }
 
 /// What a row shows: `label` ("Preset", "Provider", "O  opus", "S  sonnet", "H  haiku", "G  gemini", then
@@ -83,6 +116,8 @@ pub enum Step {
     PresetSet([String; 4]),
     /// `cpd config tiers set`.
     TiersSet(RoleTiers),
+    /// `cpd config experimental <feature> <on|off>`.
+    Experimental(Feature, bool),
     /// `cpd session retier --all`.
     Retier,
 }
@@ -137,6 +172,25 @@ fn text<'a>(v: &'a Value, key: &str, what: &str) -> Result<&'a str, CpdError> {
     v.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| shape(&format!("{what}.{key} is not a string")))
+}
+
+fn flag(v: &Value, key: &str) -> Result<bool, CpdError> {
+    v.get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| shape(&format!("config.experimental.{key} is not a boolean")))
+}
+
+/// Parses the `experimental` object of `cpd config`: the four switches, in [`Feature::ALL`] order.
+pub fn experimental(config: &Value) -> Result<[bool; 4], CpdError> {
+    let obj = config
+        .get("config")
+        .and_then(|c| c.get("experimental"))
+        .ok_or_else(|| shape("config.experimental is missing"))?;
+    let mut on = [false; 4];
+    for f in Feature::ALL {
+        on[f.at()] = flag(obj, f.key())?;
+    }
+    Ok(on)
 }
 
 fn tier_model(v: &Value, letter: Letter) -> Result<cpd_core::config::TierModel, CpdError> {
@@ -259,6 +313,8 @@ pub struct Model {
     saved_provider: String,
     base_models: [Option<String>; 4],
     base_tiers: RoleTiers,
+    experimental: [bool; 4],
+    base_experimental: [bool; 4],
     retier_pending: bool,
     focus: usize,
     open: Option<OpenList>,
@@ -267,7 +323,9 @@ pub struct Model {
 }
 
 impl Model {
-    const ROWS: [Row; 10] = [
+    /// The rows before the Experimental ones.
+    const TIERS_END: usize = 10;
+    const ROWS: [Row; 14] = [
         Row::Preset,
         Row::Provider,
         Row::Model(Letter::O),
@@ -278,6 +336,10 @@ impl Model {
         Row::Tier(Role::Worker),
         Row::Tier(Role::Lead),
         Row::Tier(Role::Manager),
+        Row::Experimental(Feature::DurableWorkers),
+        Row::Experimental(Feature::WriteCuration),
+        Row::Experimental(Feature::FailureTriage),
+        Row::Experimental(Feature::TurnQuestionGuard),
     ];
 
     pub fn new(reads: Reads) -> Model {
@@ -294,12 +356,32 @@ impl Model {
             base_tiers: reads.tiers,
             tiers: reads.tiers,
             catalog: reads.catalog,
+            experimental: [false; 4],
+            base_experimental: [false; 4],
             retier_pending: false,
             focus: 0,
             open: None,
             reread_error: None,
             refusal: None,
         }
+    }
+
+    /// The switches as `cpd config` read them: the baseline of the Experimental rows.
+    pub fn with_experimental(mut self, on: [bool; 4]) -> Model {
+        self.experimental = on;
+        self.base_experimental = on;
+        self
+    }
+
+    /// Flips an Experimental row's switch, and focuses it.
+    pub fn flip(&mut self, feature: Feature) {
+        self.open = None;
+        self.refusal = None;
+        self.focus = Self::ROWS
+            .iter()
+            .position(|r| *r == Row::Experimental(feature))
+            .unwrap_or(0);
+        self.experimental[feature.at()] = !self.experimental[feature.at()];
     }
 
     fn id_of(&self, letter: Letter) -> Option<String> {
@@ -324,13 +406,32 @@ impl Model {
             Row::Provider => Some(self.provider.clone()),
             Row::Model(l) => self.id_of(l),
             Row::Tier(r) => Some(tier_of(&self.tiers, r).to_string()),
+            Row::Experimental(f) => Some(
+                if self.experimental[f.at()] {
+                    "on"
+                } else {
+                    "off"
+                }
+                .to_owned(),
+            ),
         }
     }
 
+    /// The Models and Tiers rows.
     pub fn rows(&self) -> Vec<RowView> {
-        Self::ROWS
+        self.views(0..Self::TIERS_END)
+    }
+
+    /// The Experimental rows, in the order of [`Feature::ALL`].
+    pub fn switches(&self) -> Vec<RowView> {
+        self.views(Self::TIERS_END..Self::ROWS.len())
+    }
+
+    fn views(&self, range: std::ops::Range<usize>) -> Vec<RowView> {
+        Self::ROWS[range.clone()]
             .iter()
-            .enumerate()
+            .zip(range)
+            .map(|(row, at)| (at, row))
             .map(|(at, &row)| {
                 let dimmed = self.dimmed(row);
                 let (label, range, changed, invalid) = match row {
@@ -355,6 +456,12 @@ impl Model {
                             self.models[index(l)].is_none(),
                         )
                     }
+                    Row::Experimental(f) => (
+                        f.key().to_owned(),
+                        String::new(),
+                        self.experimental[f.at()] != self.base_experimental[f.at()],
+                        false,
+                    ),
                     Row::Tier(r) => {
                         let range = if r == Role::Auxiliar {
                             "default only".to_owned()
@@ -408,7 +515,10 @@ impl Model {
             match key.code {
                 KeyCode::Up => self.focus = self.focus.saturating_sub(1),
                 KeyCode::Down => self.focus = (self.focus + 1).min(Self::ROWS.len() - 1),
-                KeyCode::Enter => self.open(Self::ROWS[self.focus]),
+                KeyCode::Enter => match Self::ROWS[self.focus] {
+                    Row::Experimental(f) => self.flip(f),
+                    row => self.open(row),
+                },
                 KeyCode::Esc | KeyCode::Char('q') => return Effect::Close,
                 _ => {}
             }
@@ -506,6 +616,7 @@ impl Model {
                 .map(|p| p.ids.clone())
                 .unwrap_or_default(),
             Row::Tier(r) => self.tier_offers(r).iter().map(Tier::to_string).collect(),
+            Row::Experimental(_) => Vec::new(),
         }
     }
 
@@ -535,6 +646,7 @@ impl Model {
                 self.models[index(l)] = Some(format!("{}/{entry}", self.provider));
                 self.reread()
             }
+            Row::Experimental(_) => Effect::None,
             Row::Tier(r) => {
                 if let Ok(t) = Tier::parse(&entry) {
                     set_tier(&mut self.tiers, r, t);
@@ -607,7 +719,14 @@ impl Model {
         if self.tiers != self.base_tiers {
             steps.push(Step::TiersSet(self.tiers));
         }
-        if !steps.is_empty() || self.retier_pending {
+        // an Experimental switch changes no Tier, so it needs no retier; it runs before the retier
+        let retier = !steps.is_empty() || self.retier_pending;
+        for (i, f) in Feature::ALL.into_iter().enumerate() {
+            if self.experimental[i] != self.base_experimental[i] {
+                steps.push(Step::Experimental(f, self.experimental[i]));
+            }
+        }
+        if retier {
             steps.push(Step::Retier);
         }
         steps
@@ -624,6 +743,7 @@ impl Model {
                 self.base_tiers = *tiers;
                 self.retier_pending = true;
             }
+            Step::Experimental(f, on) => self.base_experimental[f.at()] = *on,
             Step::Retier => self.retier_pending = false,
         }
         self.refusal = None;
