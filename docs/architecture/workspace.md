@@ -117,4 +117,4 @@ on worktrees and branches only and touch no remote branch ([commands §23](../co
 - [CONTEXT — Lead worktree](../CONTEXT.md), [CONTEXT — Attempt](../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 7
-- `hs-d802` — the model
+- `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model

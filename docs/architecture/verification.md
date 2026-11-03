@@ -158,4 +158,4 @@ Every arrow above is a documented claim: push by rule P and the merge at [contra
   Mechanical checks](../CONTEXT.md), [CONTEXT — CI](../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 6
-- `hs-d802` — the model
+- `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model
