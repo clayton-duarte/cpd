@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod agent_forbidden;
 mod agent_key_names;
 mod agent_key_worker;
 mod ask;
