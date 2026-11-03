@@ -207,7 +207,7 @@ export type TranscriptItem = UserItem | AssistantItem | ToolItem | FoldItem | Co
 ```ts
 export type Cursor = string; // opaque to the browser; echoed back in `session.loadEarlier`
 // pi:   `pi:<byteOffset>`  the file offset of the first byte of the earliest loaded line
-// durable: `dur:<id>`      the item id of the first item of the window in the server-side transcript (6.4 backend); `dur:` alone names the start of the cache
+// durable: `dur:<id>`      the item id of the first item of the window in the server-side transcript (6.4 backend); `dur:` alone names the end of the cache (used when it holds no item)
 
 export interface Window {
   readonly items: readonly TranscriptItem[]; // oldest first
@@ -228,7 +228,7 @@ export interface FooterStats {
   readonly tier: Stat<string>;
   readonly thinking: Stat<string>; // thinking level, e.g. "high"; "off" is a value
   readonly contextPercent: Stat<number>; // 0..100
-  readonly cost: Stat<number>; // USD, sum of assistant usage.cost.total
+  readonly cost: Stat<number>; // USD: durable, the sum of docs['pi.usage'] models' cost.total (6.4, cumulative); pi, unknown (6.5)
   readonly branch: Stat<string>; // git branch of the session cwd
 }
 ```
@@ -1070,12 +1070,12 @@ export interface DialectOutput {
   replaced?: boolean; // the transcript was rebuilt: the backend sends a new tail window and ignores append, update and deltas
 }
 export function createDialect(): Dialect;
-export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }>, transcript: readonly TranscriptItem[]): Dialog | { kind: "editor"; id: string } | { kind: "unsupported"; id: string; method: string; purpose: string }; // 3.8 table, unchanged
+export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }>, transcript: readonly TranscriptItem[]): Dialog | { kind: "editor"; id: string } | { kind: "unsupported"; id: string; method: string; purpose: string }; // 3.8 table
 ```
 
 **The cache.** Each entry is normalised once, when it is first seen (by its `id`, in a `view`, an `ops` batch or a history page), and kept for the attachment. A window moving past an entry never removes it. Entries never change once committed (pi-durable `transcript.js`, verified by reading), so a cached entry is never normalised again. `transcript.items` is the items of the cached entries in id order, followed by the live tail (below).
 
-**Replacement and gap.** `applyView` (every call) and an ops batch whose first op is `['r', …]` replace the replica. Let `n` be the newest cached entry id before the new value's entries are merged (undefined for an empty cache). If the new value's `before` is defined, `n` is defined and `before > n`, then `gap = {after: n, upTo: before}`: the entries with ids in (`n`, `before`] were never seen (the rule of pi-durable's `ConversationTranscript`, `transcript.js` `#cover`, verified by reading). `applyHistory` clears the gap when the page's oldest entry id is at most `after`, or when the page has no `next`. A gap is an open item of the backend, which fills it before it shows anything (6.4 backend).
+**Replacement and gap.** `applyView` (every call) and an ops batch whose first op is `['r', …]` replace the replica. Let `n` be the newest cached entry id before the new value's entries are merged (undefined for an empty cache). If the new value's `before` is defined, `n` is defined and `before > n`, then `gap = {after: n, upTo: before}`: the entries with ids in (`n`, `before`] were never seen (the rule of pi-durable's `ConversationTranscript`, `transcript.js` `#cover`, verified by reading). `applyHistory` clears the gap when the page's oldest entry id is at most `after`, or when the page has no `next`. The backend fills an open gap before it shows anything (6.4 backend).
 
 **`applyView`.** Replaces the replica with the view, merges its entries (the cache rule), and recomputes the live tail (below). It emits no output: `transcript.facts` carries the same busy, queued, model and thinking values that a batch's `DialectOutput` carries. Throws `protocol_error` when the value is not an object with an `entries` array and a `docs` object.
 
@@ -1108,7 +1108,7 @@ export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }
 - **L4 entry replaces live.** A `pi.assistant` entry merged in this batch (step 5) takes the place of the live assistant item when one exists: its assistant item keeps the live id (`live:<n>`, not `a:<id>`), `streaming: false`, and goes to `update`; the entry's tool items take the ids `tool:<callId>` of the live tool items they match (`update` when present, else `append`). The live state is then cleared. Without a live item, the entry is normalised as an ordinary `pi.assistant` entry (`a:<id>`, `append`).
 - **L5 tool slots.** `docs['pi.live'].tools` (absent: `[]`) is read per slot by `callId`; a slot `status` outside `pending|running|done` is `protocol_error`.
   - A slot with no tool item yet creates one: `tool:<callId>`, `name` = the slot's `name`, `args` `{}` unless a toolCall block gave arguments, status `running`, `append`.
-  - `pending` and `running` slots keep the item `running`. Their `output`, `droppedBytes`, `droppedLines` and `details` are not shown: a running tool has an empty body, as today.
+  - `pending` and `running` slots keep the item `running`. Their `output`, `droppedBytes`, `droppedLines` and `details` are not shown: a running tool has an empty body (6.8, ToolRow).
   - A `done` slot with an `entry` completes the item with that `pi.tool-result` entry (rule T), when that entry is cached.
   - A `done` slot without an `entry` makes the item `failed` with `result {text: "", isError: true}`, `update`.
   - `unoffered` is not special-cased. A slot is `update`d when its status changed since the last value.
@@ -1154,19 +1154,19 @@ A `protocol_error` from any of these ends the attachment (`backend.ts`, Failure)
 export function createDurableBackend(deps: { connect: (socketPath: string) => Promise<HostClient>; cpd: Cpd; git: GitBoundary; scheduler: Scheduler; windowSize?: number }): SessionBackend;
 ```
 
-**Frame order.** Every host frame of an attachment (`view`, `ops`, `host_state`, `ui_request`, `ui_resolved`) is processed one at a time, in arrival order, by one serial queue. A frame that needs a `history` call (a gap fill, a loadEarlier) waits for that call; frames arriving meanwhile queue behind it. Nothing is emitted out of order.
+**Frame order.** Every host frame of an attachment (`view`, `ops`, `host_state`, `ui_request`, `ui_resolved`) and every `loadEarlier` call is processed one at a time, in arrival order, by one serial queue. A job that needs a `history` call (a gap fill, a loadEarlier page) waits for that call; the jobs arriving meanwhile queue behind it. Nothing is emitted out of order.
 
 **First-frame gate.** The attach sends no cursor. `attached.mode` must be `"view"`; `"resume"` is `protocol_error` (no cursor was sent). The first frame after `attached` must be a `view`: an `ops` frame or any other data frame before it is `protocol_error`. The first `view` is applied as soon as it arrives; the frames after it wait until the attach messages below are out, then replay in order.
 
-**Cache and window ("Cache and window").** The transcript is `dialect.transcript.items` (6.4 frames, the cache and the live tail). The backend adds two pieces of state per attachment:
+**Cache and window.** The transcript is `dialect.transcript.items` (6.4 frames, the cache and the live tail). The backend adds two pieces of state per attachment:
 - `older`: `undefined` until a history page is needed, a page cursor (opaque `next`) while more history exists, `null` once the host has no older entries. At the base `view`, `older` is `null` when `transcript.before` is absent (the window starts the transcript) and `undefined` otherwise.
 - the gap of `dialect.gap`, which the backend fills (below).
 
 A window is a slice of `transcript.items`:
-- **Cursor.** `session.window` cursors are `dur:<id>`, where `<id>` is the item id of the first item of the window (3.4). `dur:` with an empty id names the start of the cache (no item). A cursor is `dur:<id>` only: an id that is not an item of the transcript (cache or live tail) is `invalid_message`.
+- **Cursor.** `session.window` cursors are `dur:<id>`, where `<id>` is the item id of the first item of the window (3.4). `dur:` with an empty id names the end of the cache (no item; used when the cache holds no item). A cursor is `dur:<id>` only: an id that is not an item of the transcript (cache or live tail) is `invalid_message`.
 - **Tail** (`mode "tail"`): the last `windowSize` (default `WINDOW_SIZE`) items of the transcript. `hasEarlier` = the tail does not start at index 0, or `older !== null`. `cursor` = `dur:<id of the first item>` when `hasEarlier` (the empty id when the tail holds no item), else `null`.
-- **Earlier** (`loadEarlier("dur:<id>")`): let `p` be the index of the cursor's item (0 for the empty id). While `p < windowSize` and `older !== null`, fetch the next history page (`client.history(older ?? undefined)`, which for `older === undefined` is the newest page), `dialect.applyHistory(page)`, and set `older` to the page's `next` or `null` when there is none; recompute `p` (the item keeps its id, so the index moves with the prepends). The page is `items.slice(max(0, p - windowSize), p)`. Emit `session.window {mode:"earlier"}` with `hasEarlier` and `cursor` computed as in the tail. Items past the cursor are never repeated.
-- An entry already cached is skipped by `applyHistory`, so a page that holds only known entries is not an error: the loop goes on until `p >= windowSize` or `older === null`.
+- **Earlier** (`loadEarlier("dur:<id>")`): let `p` be the number of items before the cursor: the index of the cursor's item, or `items.length` for the empty id. While `p < windowSize` and `older !== null`, fetch the next history page (`client.history(older ?? undefined)`, which for `older === undefined` is the newest page), `dialect.applyHistory(page)`, and set `older` to the page's `next` or `null` when there is none; recompute `p` (the item keeps its id, so the index moves with the prepends). The page is `items.slice(max(0, p - windowSize), p)`. Emit `session.window {mode:"earlier"}` with `hasEarlier` and `cursor` computed as in the tail. Items past the cursor are never repeated.
+- An entry already cached is skipped by `applyHistory`, so a page that holds only known entries is not an error: the loop goes on until `p >= windowSize` or `older === null`. The page is sliced after the loop, so an empty cache is filled from history alone.
 
 **Gap fill.** After a replacement (a `view` after the first, or an ops batch with `replaced: true`) whose `dialect.gap` is defined, the backend fills the gap before it emits anything for that frame: it calls `client.history(undefined)` (the newest page), `dialect.applyHistory(page)`, and repeats with the page's `next` while `dialect.gap` is still defined. Then it emits the replacement. No `session.append`, `session.update` or `session.delta` is sent before the fill is complete.
 
@@ -1184,7 +1184,7 @@ A window is a slice of `transcript.items`:
 
 **Dialogs.** A `ui_request` becomes `session.dialog` via `dialogFromRequest`, a `ui_resolved` becomes `session.dialogResolved`, `respond` answers per 3.8. The plan-review title and summary are read from the cached transcript.
 
-**Failure.** A `protocol_error` from `applyView`, `applyOps`, `applyHistory` or the gap rule is sent as `session.error {sessionId, error}`, and the attachment ends: the handle rejects every method with that error until disposed, and the client is closed (`client.detach()` best effort). A replica that missed a batch cannot be trusted, so the attachment does not continue (Phase 2 choice, fail loud). Socket close (`onClose`/`bye`) → `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` detaches (`client.detach()` best effort), closes the client and drops every listener.
+**Failure.** A `protocol_error` from `applyView`, `applyOps` or `applyHistory` is sent as `session.error {sessionId, error}`, and the attachment ends: the handle rejects every method with that error until disposed, and the client is closed (`client.detach()` best effort). A replica that missed a batch cannot be trusted, so the attachment does not continue (Phase 2 choice, fail loud). Socket close (`onClose`/`bye`) → `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` detaches (`client.detach()` best effort), closes the client and drops every listener.
 
 **Behaviours to test.** `attached.mode` `resume` and an `ops` frame before the first `view` each raise `protocol_error`; the attach emits in the order above; a tail window holds the last `windowSize` items with `dur:<id>`; `loadEarlier` answers from the cache first and then from `history` pages (already-held entries skipped), with the cursor of the page; a gap is filled by `history` before the replacement window is emitted, and no append precedes it; a `replaced` ops batch emits a tail window and no append; a rejected `ops` batch ends the attachment with `session.error`; `submit` queues while busy and drops the queued entry when the inbox no longer holds it; `host_state` changes the agent but not busy; the cost and context facts follow 6.4 frames; `configure` tier runs `cpd session retier`.
 
