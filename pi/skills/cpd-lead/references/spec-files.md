@@ -16,7 +16,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
     "`timeout 300 node --test test/routes/health.test.ts` passes",
     "The repo's quick check passes"
   ],
-  "out_of_scope": ["Do not change the existing routes", "Do not add a dependency"]
+  "out_of_scope": ["The existing routes stay unchanged", "No new dependency"]
 }
 ```
 
@@ -37,7 +37,7 @@ The Worker's submit runs only the tamper check and, for a test or implementation
 
 - An Attempt gets `attempt_minutes` of active time (the configured `attempt_minutes`); the timeout is that value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
-- Prefer many small Jobs that run in parallel. Do not split below a unit that has its own acceptance check.
+- Prefer many small Jobs that run in parallel. Split down to a unit that has its own acceptance check, no further.
 - A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
 
 ## Bounded commands
@@ -137,7 +137,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
     "The file names the developer command, the script behind it and the CI job that runs it",
     "Each fact cites its file and line, for example scripts/cargo.sh:12"
   ],
-  "out_of_scope": ["Do not change the repo", "Do not run the test suite"]
+  "out_of_scope": ["The repo stays unchanged", "The test suite is not run"]
 }
 ```
 
@@ -149,7 +149,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
     "The file states whether the call exists in the current major version, with the URL that says so",
     "The file names the version that changed it, or says that no source names one"
   ],
-  "out_of_scope": ["Do not change the repo", "Do not install packages"]
+  "out_of_scope": ["The repo stays unchanged", "No package is installed"]
 }
 ```
 
