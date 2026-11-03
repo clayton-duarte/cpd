@@ -234,6 +234,13 @@ fn context_manager_on_an_ordinary_missing_context_is_still_context_not_found() {
 fn a_plan_in_a_permanent_context_archives_like_any_other() {
     let fx = Fx::with_ports();
     world(&fx, "cpd");
+    // The archive rule wants the Plan `done`.
+    fx.env.sql(
+        "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'",
+    );
     fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     assert_eq!(
         fx.env.query::<i64>(

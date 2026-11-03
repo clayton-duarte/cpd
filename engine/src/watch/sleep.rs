@@ -13,16 +13,15 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::close_lead;
 
 /// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
-/// visible Inbox item. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
-/// Both queries alias the Session `s` and its Plan `p`, and pass `?1` = `now`.
+/// undismissed Inbox item (snoozed or not), and no Job of the Plan is `failed`. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
+/// Both queries alias the Session `s` and its Plan `p`, and bind no parameter.
 pub(super) const LEAD_FINISHED: &str = "
        p.phase = 'done'
        AND NOT EXISTS (SELECT 1 FROM workflows r WHERE r.plan = p.id AND r.status NOT IN ('merged', 'cancelled'))
-       AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running'))
+       AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running', 'failed'))
        AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
        AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')
-       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
-                          AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))";
+       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL)";
 
 /// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
 /// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is

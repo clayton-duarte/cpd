@@ -22,6 +22,7 @@ mod session_resume;
 mod session_retier;
 mod session_retier_tier;
 mod session_send;
+mod session_shutdown;
 mod session_switch;
 mod session_titles;
 mod session_titles_glance;

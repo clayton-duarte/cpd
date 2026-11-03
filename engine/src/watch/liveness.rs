@@ -551,7 +551,11 @@ fn stop_and_clean(
             session.name, pane.pane
         ));
     }
-    if changed && session.state != "stopped" && matches!(session.role.as_str(), "lead" | "manager")
+    // A `stopped` Session that still had a pane is the OS shutdown case: pi reports `stopped` before tmux dies and the
+    // pane stays recorded. `session close` clears the pane, so a closed Session stays stopped.
+    if changed
+        && (session.state != "stopped" || session.pane.is_some())
+        && matches!(session.role.as_str(), "lead" | "manager")
     {
         restart(engine, session)?;
     }
@@ -616,13 +620,13 @@ fn write_restart(engine: &mut Engine, id: &str, now: OffsetDateTime) {
     }
 }
 
-/// Restarts `session` in a parked window, unless it is archived, its Lead's Plan is `done` or archived, or the engine restarted it
+/// Restarts `session` in a parked window, unless it is archived, asleep, its Lead's Plan is `done` or archived, or the engine restarted it
 /// less than [`RESTART_GUARD`] ago: then it stays `stopped` and the step fails `session_restart_loop`.
 fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
     let id = session.id.as_str();
     let live: bool = engine.store.read(|conn| {
         let (archived, plan): (bool, Option<String>) = conn.query_row(
-            "SELECT archived_at IS NOT NULL, plan FROM sessions WHERE id = ?1",
+            "SELECT archived_at IS NOT NULL OR asleep_at IS NOT NULL, plan FROM sessions WHERE id = ?1",
             [id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;

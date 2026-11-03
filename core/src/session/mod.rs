@@ -59,7 +59,7 @@ use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use archive::{Blocker, archive_blocked, archive_ended_workers, blockers};
+pub use archive::{Blocker, archive_blocked, archive_blockers, archive_ended_workers, blockers};
 pub(crate) use moves::lead_spawn;
 pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub use resume::LOOP_GUARD_LABEL;

@@ -13,7 +13,6 @@ use nix::errno::Errno;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
-use super::archive::archive_on_quit;
 use super::fork_wait::wait_for_source_with;
 use super::moves::first_message;
 use super::reload::{adapter_missing_with, may_exec, reload_due_with, reload_with, stop_pi_with};
@@ -91,12 +90,12 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         let mut recorded = row.file.is_some();
         let started = clock.now();
         let mut watched = started;
-        let status = loop {
+        loop {
             let exited = pi.try_wait_with(&*ports.spawn).map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}."))
                     .with("pid", pi.id())
             })?;
-            if let Some(status) = exited {
+            if exited.is_some() {
                 // A new install: restart before any store write (§6.7 "Reload on install").
                 if exe.replaced() && may_exec(&exe) {
                     return Err(reload_with(&ports, &exe, &row.id, None));
@@ -106,7 +105,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                         record_file(&mut env, &dirs, &row.id)
                     })?;
                 }
-                break status;
+                break;
             }
             pi_stale = pi_stale || pi_install.as_ref().is_some_and(Watched::changed);
             // A new cpd: re-exec at once, before any store access, and keep pi running (§6.7 "Reload on install").
@@ -162,7 +161,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 }
             }
             clock.sleep(file_poll);
-        };
+        }
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = patiently_with(&*clock, "reporting the Session stopped", || {
             state::set(&mut env.store, "session run", &row.id, State::Stopped, None)
@@ -174,14 +173,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 e.message()
             );
         }
-        // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here. A Manager is archived only
-        // with its Context (§3.8), so its quit is not archived.
-        if status.success() && row.role == Role::Lead {
-            match archive_on_quit(&mut env, &row.id) {
-                Ok(()) => return Ok(Output::Owned),
-                Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
-            }
-        }
+        // Every exit, 0 included, leaves the Session `stopped`: the User resumes it here or closes the pane.
         let name = patiently_with(&*clock, "reading the Session", || {
             env.store.read(|conn| row::load(conn, &args.id))
         })?
