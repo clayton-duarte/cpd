@@ -15,7 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{PlanId, SessionId, WorkflowKey};
+use crate::ids::{ContextId, JobKey, PlanId, SessionId, WorkflowKey};
 use crate::plan::WorkflowRow;
 
 /// `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2).
@@ -116,7 +116,8 @@ impl SessionArg {
 }
 
 /// A Session as typed (commands.md §1.3, hs-a3): a Session id, a Plan id, a
-/// bare id prefix, or `<plan>·<prefix>` / `<plan>.<prefix>`. It is only
+/// bare id prefix, `<plan>·<prefix>` / `<plan>.<prefix>`, or an agent key
+/// `<context>:<plan>[:<job>]`. It is only
 /// syntactically valid; `session::resolve` turns it into a [`SessionId`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionRef {
@@ -131,6 +132,23 @@ pub enum SessionRef {
 impl FromStr for SessionRef {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<SessionRef, CpdError> {
+        if s.contains(':') {
+            let segments: Vec<&str> = s.split(':').collect();
+            let valid = match segments.as_slice() {
+                [c, p] => ContextId::parse(c).is_ok() && PlanId::parse(p).is_ok(),
+                [c, p, j] => {
+                    ContextId::parse(c).is_ok()
+                        && PlanId::parse(p).is_ok()
+                        && JobKey::parse(j).is_ok()
+                }
+                _ => false,
+            };
+            return if valid {
+                Ok(SessionRef::Key(s.to_owned()))
+            } else {
+                Err(SessionId::parse(s).expect_err("a value with `:` is no Session id"))
+            };
+        }
         let Some((plan, prefix)) = s.split_once(['·', '.']) else {
             return SessionId::parse(s).map(SessionRef::Plain);
         };
