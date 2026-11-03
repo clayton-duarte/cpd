@@ -350,6 +350,12 @@ error_codes! {
     LeadBranchMoved = "lead_branch_moved" => Refused,
     HeadMoved = "head_moved" => Refused,
     WorkflowNotFound = "workflow_not_found" => NotFound,
+    ClassifierUnreachable = "classifier_unreachable" => Failure,
+    ClassifierRefused = "classifier_refused" => Failure,
+    ClassifierBadReply = "classifier_bad_reply" => Failure,
+    EmbeddingUnreachable = "embedding_unreachable" => Failure,
+    EmbeddingRefused = "embedding_refused" => Failure,
+    EmbeddingBadReply = "embedding_bad_reply" => Failure,
 }
 
 impl fmt::Display for ErrorCode {
