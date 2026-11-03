@@ -111,6 +111,11 @@ pub(crate) fn stored_pull(rig: &Rig, number: i64, state: &str) {
 /// A cancelled Workflow `key` of `plan` on Lead Branch `cpd/pay/<key>` with no worktree. With `kept` it still has its pull request
 /// `acme/pay#n` (stored `closed`, as `workflow cancel` required), else it is a legacy row with no pull request.
 pub(crate) fn cancelled(rig: &Rig, plan: &str, key: &str, kept: Option<i64>) {
+    cancelled_on(rig, plan, key, kept, &format!("cpd/{plan}/{key}"));
+}
+
+/// [`cancelled`] on Lead Branch `branch`.
+fn cancelled_on(rig: &Rig, plan: &str, key: &str, kept: Option<i64>, branch: &str) {
     let repo = rig.repo.dir().display();
     let (number, url, opened, pull) = match kept {
         Some(n) => {
@@ -127,9 +132,22 @@ pub(crate) fn cancelled(rig: &Rig, plan: &str, key: &str, kept: Option<i64>) {
     rig.sql(&format!(
         "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                                 pr_number, pr_url, pr_opened_at, pull_request)
-           VALUES ('{plan}', '{key}', '{repo}', 'pay', 'main', 'cancelled', 'cpd/pay/{key}', NULL, cpd_txn(), 't', NULL,
+           VALUES ('{plan}', '{key}', '{repo}', 'pay', 'main', 'cancelled', '{branch}', NULL, cpd_txn(), 't', NULL,
                    {number}, {url}, {opened}, {pull});"
     ));
+}
+
+/// Two legacy cancelled Workflows of one repo on the same Lead Branch `cpd/pay`: `pay`/`api` (the legacy `cpd/<plan>` form) and
+/// `cpd`/`pay` (`<plan>/<key>`). The `lead_branch` CHECK allows nothing else to collide.
+pub(crate) fn twins(rig: &Rig) {
+    rig.sql(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead2', 'lead', 'ctx', 'cpd', 'Lead2', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('cpd', 'ctx', 'Cpd', 'deploy', 'lead2', 't', 't');",
+    );
+    cancelled_on(rig, "pay", "api", None, "cpd/pay");
+    cancelled_on(rig, "cpd", "pay", None, "cpd/pay");
 }
 
 /// Reopens `plan`/`key` on the rig's ports.
@@ -322,18 +340,10 @@ fn reopen_matches_a_legacy_cancelled_workflow_by_lead_branch_only_when_unique() 
     );
 
     let rig_two = rig("deploy");
-    rig_two.sql(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead2', 'lead', 'ctx', 'pay2', 'Lead2', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-           VALUES ('pay2', 'ctx', 'Pay2', 'deploy', 'lead2', 't', 't');",
-    );
-    cancelled(&rig_two, "pay", "api", None);
-    cancelled(&rig_two, "pay2", "api", None);
-    rig_two.sql("UPDATE workflows SET lead_branch = 'cpd/pay/api' WHERE plan = 'pay2'");
+    twins(&rig_two);
     stored_pull(&rig_two, 801, "open");
-    gh(&rig_two, &[("cpd/pay/api", 801, "OPEN")]);
-    publish(&rig_two, "cpd/pay/api");
+    gh(&rig_two, &[("cpd/pay", 801, "OPEN")]);
+    publish(&rig_two, "cpd/pay");
     let before = snapshot(&rig_two);
 
     let refused = run(&rig_two, "pay", "api").unwrap_err();
