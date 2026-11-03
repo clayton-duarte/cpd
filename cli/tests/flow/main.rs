@@ -15,6 +15,7 @@ mod attempt_abort_teardown;
 mod config;
 mod context;
 mod context_curation;
+mod context_dedupe;
 mod context_distill;
 mod context_docs_gone;
 mod context_engine;
