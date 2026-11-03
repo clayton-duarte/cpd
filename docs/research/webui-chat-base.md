@@ -802,3 +802,62 @@ Fixture rules for S2 and S3 (r7 §8, read): at least 5,000 messages and at least
 | `webui-native-chat` | Option A: `PiClient`, the cpd runtime, the virtual thread, cards, compaction, `QuestionnaireCard`, plan review, slash and `@file`; passes the C list in a repeatable trace | 8-12 PRs, 2,400-3,000 lines (d2 §8, guess) | `webui-host-relay`, S2 |
 
 The order that follows from the ranked reasons: `chat-spike` and `webui-panes` first (both are unconditional and independent), then `webui-theme`, then `webui-terminal-chat` or `webui-host-relay` and `webui-native-chat` as the spike decides.
+
+## 9. Risks and unverified
+
+Everything here is a risk to the recommendation or a fact a finding marked unverified. Items keep their finding's label.
+
+### 9.1 Nothing was measured
+
+- **No candidate was built, run or profiled** (r2, r3, d1, d2, d3, d4, d6, r5; r6 ran only a headless parser). Every C1..C12 cell in 5.9 is read or inferred. The only measured numbers in the whole report are cpd's own (section 2.3, from `chat-render-cost.md`, single runs at load average 5-26, and a doc's 209.1 ms JSONL tick on a 29.6 MB file, single run on host `hs`), the r6 parser run (103.7 MB/s, parser only), and counts from `wc -l`, `grep`, `npm view` and the GitHub API.
+- r7 forbade synthetic benchmarks, no virtualiser, markdown or highlighter has a published per-token number, and r7 could not extract framework numbers from the krausest benchmark page (JS-rendered). Rankings are by documented chat contract, not by speed.
+- The 5,000-message fixture probably does not exist locally: the largest file is about 3,750-4,350 messages (estimate, s4 §4).
+
+### 9.2 Contradictions and drift between findings
+
+| # | Item | Detail | Label |
+|---|---|---|---|
+| R1 | `cpd_plan_review` schema mismatch | The lib variant enforces the 72-character title limit only in the description (`pi/lib/review.ts:175-182`); the durable-host variant enforces `maxLength: 72` (`pi/durable-host/tools.ts:121`). Which one pi registers was not traced (s3 open item 3). s2: the durable tool opens no dialog itself; the dialog's wire shape is unknown (D13) | read; runtime unverified |
+| R2 | Inbox id: string or integer | The web types `id` as `string \| null` with `engine-down` as `null` (`readmodel.ts:101`, `views/inbox.tsx:3`); the TUI uses an integer with `engine-down` as 0 (`tui/src/read/tree.rs:31-32`, `widgets/inbox.rs:380`). `cpd inbox list` was never run | read; unresolved (s5 §4.4) |
+| R3 | Indexed versus truecolour | s3: cpd paints indices 0-15, never RGB. r6: pi paints Dango in truecolour so the terminal "needs zero work". Opposite consequences for the hex map (5.8, 6.1) | read; unresolved |
+| R4 | pi-durable-cloudflare size | Part A's survey row says about 870 lines (r1). d6 measured the client at 2,694 lines (r1's 870 = `Transcript.tsx` 334 + `ChatSession.tsx` 535 only). Part A is unchanged; d6's figure is the later one. d6's own header also gives package `0.87.1` and §6 gives `1.4.0` | read; d6 later |
+| R5 | Method counts | `PiClient` has 14 methods plus `subscribe` (d2 §2.1); the Job brief said 14; s2 §8 lists 23 host gaps where the Job brief said 16 (section 3.3) | read |
+| R6 | Adapter size | r5: a `PiClient` is 150-300 lines (inferred). d2 §8: 2,400-3,000 lines for the whole job (guess). Not a conflict, different scope, but the smaller number must not be quoted alone | guess |
+| R7 | t3code commit | d1 downloaded a tarball with no `.git`; the API reported `12ec17ce...` four minutes earlier; same or one commit newer is a guess | unverified |
+| R8 | OpenCode npm lineage | npm `@opencode-ai/*` 1.19.5 is the old lineage and does not match the v2 source; `session-ui` and `app` return E404 (measured, r3) | measured |
+| R9 | s5's stale comments | Several `web/` comments and docs are stale (`App.tsx:3-4`, `plan.tsx:1-2`, `app-sidebar.tsx:15-16`, `tui/src/tree/rows.rs:5`) and `web/src/api/readmodel.ts:133-141` casts without validating (s5 §4); s2 §0 says several research docs cite stale line numbers: use the code as truth | read |
+
+### 9.3 Unread or unverified source material
+
+- **`dist` `.d.ts` files were not read** by s1 (docs only, no process started): every pi RPC claim is a doc claim; the `edit` result's diff schema is undocumented (s1 G13, unverified) and whether the wire carries `details.diff` is not opened (r5, d2).
+- **Host internals unread by s2:** `ring.ts`, `net.ts`, `held.ts`, `main.ts`, `sockets.ts`. Unverified because of that: the slow-client loop for a snapshot over 8 MiB (D5), the full-snapshot rebase to all viewers (D6), the `ui_resolved` outcome `aborted` broadcast (D14), the error-code mapping (D21), the socket mode check (D16), and the code that forwards payloads unchanged.
+- **Hex for the 16 Dango slots** (`docs/contract.md` section 6.1.1), the P57-P59 rows (pi-core sources), `compact-tools.ts:700-996`, and P42 (derived, not run) (s3 open items).
+- **pi version skew.** cpd runs pi 1.3.0 and upstream is 1.5.0. Candidates target elsewhere: pimote pins and patches 1.4.0; pi-pocket pins exactly 1.4.0 and its schema migration blocks older Durable; jmfederico dev dependencies `^1.4.0`; assistant-ui peer `>=0.80.8`, example `^1.4.0`; t3code floor 0.80.5; pi-web-ui `^0.75.3` (0.x semver, `<0.76.0`). None was tested against 1.3.0; for the assistant-ui browser entry it touches only message shapes, whether 1.5.0 changes them is unverified (d2 §6).
+- **r4's parity cells** come from file names and dependencies, not from running; which ACP web clients render pi well is unverified.
+- **Not read in depth:** t3code `useTimelineFollow.ts`, `ChatComposer.tsx`, the LegendList patch, the `guest` page, whether visited threads stay hot (d1); pimote's Android wrapper, `PerSessionState`, density, PWA caching (d4); pi-pocket `pi-sessions.ts` (so the import cost of a big pi JSONL is unknown), and the search for grouping and transcript search in pimote is a grep, not exhaustive (d6, d4); OpenCode's plugin pane slots, per-session cost meter and custom-element build (r3); whether jmfederico's shell can keep a side panel next to chat on desktop (d3).
+- **boring-ui was not deep-dived** though d6 judges it a closer parts candidate than pi-pocket (an embeddable React `PiChat` with paged history); it needs the host to emit `ConversationView` Chord ops. It is the one candidate this report skipped that the findings point at.
+- **Shadcn/ui's replacement of AI Elements** was unverified (JS-rendered docs, r5); AI Elements deprecates at the end of November 2026.
+- **pi-durable has no TUI client.** r6 read this from `docs/research/pi-durable.md:52-66`; it is the fact that makes B a partial answer, and it was not re-read here.
+
+### 9.4 Bus factor and churn
+
+| Candidate | Fact (measured by the finding) |
+|---|---|
+| jmfederico pi-web | bus factor 1: 1,772 commits by one author, the next four 5-7 each; 41 versions in six months |
+| pimote | bus factor 1: single author, 0 stars; five releases in five days |
+| pi-pocket | 92% of 1,815 commits by one author; 58 releases in 30 days; internal protocol |
+| pi-web-ui | 89 of 100 commits by one author who then removed it |
+| assistant-ui react-pi | two active humans; `0.0.x`; 31 releases in 128 days; `unstable_` APIs |
+| t3code | about two core authors; nightly releases about every 6 hours; every package private |
+| OpenCode | very active, but a v2 rewrite with a moving internal API; unpublished `session-ui` |
+
+A fork of any of these diverges within days to weeks (d1, d3, d6). Pinning an exact version is not enough for the ones that publish nothing stable.
+
+### 9.5 Risks to the recommendation itself
+
+1. **The spike may not be run, or may use a weak fixture.** The thresholds are only as good as the session and the trace; S2 and S3 need a longer real transcript than any local file (9.1).
+2. **A split by runner doubles the chat code** (7.4); the alternative shape needs the spike to choose.
+3. **A windowed attach is a change in another Plan's protocol** (durable-leads) and is on the critical path of every web-native option for first paint (D2, D3, section 3.3).
+4. **Shift+Enter** may need a proxy that answers the Kitty query: a build, not a configuration (r6 §3).
+5. **Dialogs in a tmux Session have no side channel** (r6 §8): for pi-runner Sessions the previews and the plan review stay terminal-native until the extension exposes the dialog's data separately (inferred).
+6. **The cost estimates are guesses of guesses.** Each size in sections 7 and 8 is a finding's guess or this report's; none was built.
