@@ -35,8 +35,6 @@ pub const ALLOW: &[&str] = &[
 pub const DEBT: &[(&str, &str, usize)] = &[
     // the engine watch test inits a real repo through TestEnv
     ("cli/tests/engine/watch.rs", "git", 2),
-    // a flow test runs the real python3
-    ("cli/tests/flow/context_engine.rs", "python3", 1),
     // the gate flow test builds a real repo through TestEnv
     ("cli/tests/flow/gate.rs", "git", 5),
     // the git-layer test runs real git on temporary repos
