@@ -3,4 +3,5 @@
 
 pub mod context_engine;
 pub mod git;
+pub mod judge;
 pub mod tmux;
