@@ -1105,4 +1105,6 @@ mod worker_runner_tests;
 #[cfg(test)]
 mod workflow_rename_tests;
 #[cfg(test)]
+mod workflow_reopen_tests;
+#[cfg(test)]
 mod working_pr_tests;

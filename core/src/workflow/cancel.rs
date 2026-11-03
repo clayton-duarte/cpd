@@ -45,6 +45,11 @@ enum Decision {
 }
 
 pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
+    cancel_in(&mut Env::open()?, args)
+}
+
+/// [`cancel`] on an opened `env`: what a test hands in.
+fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     // The superseding Workflow as a reference of the Plan (§2.2): the bare key in the Plan itself, else `<plan>/<key>`.
@@ -53,7 +58,6 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
         .map(|r| Ok::<_, CpdError>(needs_refs(&plan, &[r])?.remove(0)))
         .transpose()?;
     let superseded = superseded.as_deref();
-    let mut env = Env::open()?;
     let mut moved_to = None;
     let mut released = None;
     let already = match env.store.read(|conn| decide(conn, &plan, &key, superseded))? {
@@ -483,6 +487,10 @@ fn decide_open(
         superseded_by: None,
     })
 }
+
+#[cfg(test)]
+#[path = "cancel_tests.rs"]
+mod cancel_tests;
 
 #[cfg(test)]
 mod tests {
