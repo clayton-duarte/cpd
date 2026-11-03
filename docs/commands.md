@@ -3370,7 +3370,7 @@ The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled
 cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--limit <n>]
 ```
 
-`--since` is exclusive and defaults to 0; `--limit` defaults to 500 (1–5000). Effects: none.
+`--session <id>` takes any form of §1.3. `--since` is exclusive and defaults to 0; `--limit` defaults to 500 (1–5000). Effects: none.
 
 ```json
 {"ok": true, "events": [{"id": 48214, "at": "…", "kind": "job-merged", "context": "building-cpd", "plan": "cpd2", "job": "contract-core", "attempt": "contract-core-a1", "session": null,
@@ -3385,7 +3385,7 @@ cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]�
 cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--until-idle]
 ```
 
-§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+`--session <id>` takes any form of §1.3. §5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
 
 **Stale Events** (pro-d214): a `--session` follower drops a `plan-done`, `pr-feedback`, `job-failed`, `escalation`, `error` or `attempt-nudge` Event whose condition a later Event or the Workflow's stored state proves over; the table, the fail-open rule and the cursor are in contract §5.4 and `--plan`, `--context`, unscoped follows and `events list` are unchanged.
 
