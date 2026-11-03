@@ -36,6 +36,7 @@ export interface HubDeps {
 export interface HubConnection { handle(raw: unknown): Promise<void>; close(): Promise<void> }
 
 // ---- validation: the one parse of client data (CONTRACT 4.3, 5.5) ----
+// local per CONTRACT 4.3/5.5; moves to protocol in cleanup
 type Obj = Readonly<Record<string, unknown>>;
 const bad = (message: string, field?: string): WebError => new WebError("invalid_message", message, field === undefined ? undefined : { field });
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
