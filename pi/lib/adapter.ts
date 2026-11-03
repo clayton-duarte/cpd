@@ -3,7 +3,7 @@ import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
-import { registerQuestionGuard } from "./question-guard.ts";
+import { noteQuestionTool, registerQuestionGuard } from "./question-guard.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { exploreGuard } from "./explore.ts";
@@ -69,6 +69,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // §15.11, §15.12, §15.16: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
   pi.on("tool_call", async (event, ctx) => {
+    noteQuestionTool(host, event.toolName);
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return { block: true, reason: looped };
     const role = host.run?.info.role;

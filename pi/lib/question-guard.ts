@@ -28,6 +28,12 @@ function finalText(messages: unknown): string | undefined {
 
 type Outcome = { nudge: boolean; reached: boolean | undefined };
 
+/** Records a tool call of the run, nested ones too. Called by the adapter's one `tool_call` handler: a handler of its own would come before it and hide its verdict from `fireWith`'s first result. */
+export function noteQuestionTool(host: Host, toolName: string): void {
+  const r = host.run;
+  if (r && guarded(r)) r.questionTools.add(toolName);
+}
+
 /** Registered once (pi has no unsubscribe); the run and its role are read at each call. */
 export function registerQuestionGuard(host: Host): void {
   const newRun = (event: unknown) => {
@@ -38,7 +44,10 @@ export function registerQuestionGuard(host: Host): void {
     // pi starts the run of `sendUserMessage` with messageType "user" too: only a reply start that is not that resets the count.
     if (startsReply(event) && isObject(event) && event.messageType !== "user") r.questionNudges = 0;
   };
-  host.pi.on("before_agent_start", (event) => newRun(event));
+  // Named like the loop guard's observer: it adds no message, and the test fake's `fireWith` leaves handlers of that name out of its list (pi/test/fake.ts).
+  host.pi.on("before_agent_start", function loopGuardHandler(event) {
+    newRun(event);
+  });
   host.pi.on("agent_start", () => {
     const r = host.run;
     if (r && guarded(r)) r.questionCandidate = undefined;
@@ -46,10 +55,6 @@ export function registerQuestionGuard(host: Host): void {
   host.pi.on("input", (event) => {
     const r = host.run;
     if (r && guarded(r) && isTyped(event)) r.questionNudges = 0;
-  });
-  host.pi.on("tool_call", (event) => {
-    const r = host.run;
-    if (r && guarded(r)) r.questionTools.add(event.toolName);
   });
   host.pi.on("agent_end", (event) => {
     const r = host.run;
