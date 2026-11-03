@@ -3,6 +3,7 @@ import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
+import { registerQuestionGuard } from "./question-guard.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { exploreGuard } from "./explore.ts";
@@ -41,6 +42,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReloadCommand(host);
   registerReminderCheck(host);
   registerLoopGuard(host);
+  registerQuestionGuard(host);
 
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {
