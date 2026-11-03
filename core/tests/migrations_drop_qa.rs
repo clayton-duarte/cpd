@@ -281,7 +281,11 @@ fn drop_qa_deletes_inbox_items_naming_a_deleted_record() {
     let conn = raw(&home);
     for (subject, record, closed) in [
         ("on a question", "cx-q1", None),
-        ("on an answer, closed", "cx-a1", Some("2026-11-03T13:00:00Z")),
+        (
+            "on an answer, closed",
+            "cx-a1",
+            Some("2026-11-03T13:00:00Z"),
+        ),
         ("on a decision", "cx-d1", None),
     ] {
         conn.execute(

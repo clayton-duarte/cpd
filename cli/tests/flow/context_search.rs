@@ -234,33 +234,12 @@ fn kind_selects_the_searched_kinds_and_plan_is_selectable() {
     let (fx, bridge) = env();
     let n1 = note(&fx, "A note.");
     let d1 = decide(&fx, "A decision.", None);
-    let q1 = fx
-        .cpd(&["context", "ask", "A question?", "--context", CTX])
-        .ok()["record"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let a1 = fx
-        .cpd(&["context", "answer", &q1, "An answer.", "--context", CTX])
-        .ok()["record"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     fx.env.sql(&format!(
         "INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) \
          VALUES ('{CTX}', 'hs-p1', 'plan', '2026-01-01T00:00:00.000Z', 'hs', 'A Plan record.', 'p1', 'hs');"
     ));
     bridge.reply("stats", &synced(5));
-    bridge.reply(
-        "search",
-        &hits(&[
-            (&n1, 0.9),
-            (&d1, 0.8),
-            (&q1, 0.7),
-            (&a1, 0.6),
-            ("hs-p1", 0.5),
-        ]),
-    );
+    bridge.reply("search", &hits(&[(&n1, 0.9), (&d1, 0.8), ("hs-p1", 0.5)]));
 
     let default = fx.cpd(&["context", "search", "a", "--context", CTX]).ok();
     let kinds: Vec<&str> = default["records"]
@@ -271,7 +250,7 @@ fn kind_selects_the_searched_kinds_and_plan_is_selectable() {
         .collect();
     assert_eq!(
         kinds,
-        ["note", "decision", "question", "answer"],
+        ["note", "decision"],
         "the default kinds, never plan: {default}"
     );
 

@@ -1527,53 +1527,6 @@ mod tests {
         }
     }
 
-    // ---- question ----
-
-    /// A record of `kind` in `context` (made if need be); an `answer` answers `hs-q1`.
-    fn record(f: &mut Fixture, context: &str, id: &str, kind: &str) {
-        let a = if kind == "answer" { "'hs-q1'" } else { "NULL" };
-        f.sql(&format!(
-            "INSERT OR IGNORE INTO contexts (id, title, created_at, created_on) VALUES ('{context}', 'C', '{T}', 'm1');
-             INSERT INTO context_records (context, id, kind, at, machine, text, question)
-             VALUES ('{context}', '{id}', '{kind}', '{T}', 'hs', 't', {a});"
-        ));
-    }
-
-    #[test]
-    fn an_open_context_question_yields_no_condition() {
-        let mut f = fixture("dispatch");
-        record(&mut f, "ctx", "hs-q1", "question");
-        record(&mut f, "ctx", "hs-d1", "decision");
-        assert!(f.of(Kind::Question).is_empty());
-        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
-    }
-
-    /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
-    /// next reconcile, its condition no longer holding. The kind stays in the table's check for such history rows.
-    #[test]
-    fn an_open_question_item_an_older_engine_opened_is_closed_by_the_next_reconcile() {
-        let mut f = fixture("dispatch");
-        record(&mut f, "ctx", "hs-q1", "question");
-        f.sql(&format!(
-            "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
-             VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
-        ));
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
-        let open: i64 = f
-            .store
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT count(*) FROM inbox_items WHERE closed_at IS NULL",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .unwrap();
-        assert_eq!(open, 0);
-    }
-
     // ---- pull requests ----
 
     /// An open, authored, non-draft pull request `acme/shop#n` with the given checks, mergeable and review values.

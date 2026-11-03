@@ -30,8 +30,6 @@ fn context_show_and_search_list_worker_among_their_callers() {
         "context reindex",
         "context decide",
         "context note",
-        "context ask",
-        "context answer",
         "context pending",
         "context owner",
     ] {
