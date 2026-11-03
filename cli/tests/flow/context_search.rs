@@ -81,9 +81,14 @@ fn hits_owned(hits: &[(String, f64)]) -> String {
 
 /// Writes a curation (the `short` a search lists) for `id` through the real `propose`, as a distill run does.
 fn curate(fx: &Fx, id: &str, short: &str) {
+    curate_topic(fx, id, "engine", short);
+}
+
+/// [`curate`] with a chosen topic.
+fn curate_topic(fx: &Fx, id: &str, topic: &str, short: &str) {
     let curations = [Curation {
         record: id.parse().unwrap(),
-        topic: "engine".into(),
+        topic: topic.into(),
         short: short.into(),
     }];
     propose(
@@ -147,6 +152,7 @@ fn the_result_is_the_design_frame_with_the_short_line() {
     let record = &out["records"][0];
     assert_eq!(record["id"], n1.as_str(), "{out}");
     assert_eq!(record["short"], "engine ranks the hits", "{out}");
+    assert_eq!(record["topic"], "engine", "{out}");
     assert_eq!(record["kind"], "note", "{out}");
     assert!(record["at"].is_string(), "{out}");
     assert_eq!(record["seq"], 1, "{out}");
@@ -157,7 +163,45 @@ fn the_result_is_the_design_frame_with_the_short_line() {
     assert_eq!(record["in_force"], true, "{out}");
     assert_eq!(
         out["markdown"],
-        format!("- [{n1}] engine ranks the hits"),
+        format!("- [{n1}] [engine] engine ranks the hits"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_curated_hit_carries_its_topic() {
+    let (fx, bridge) = env();
+    let n1 = note(&fx, "The store keeps the rows.");
+    curate_topic(&fx, &n1, "store", "store keeps rows");
+    bridge.reply("stats", &synced(1));
+    bridge.reply("search", &hits(&[(&n1, 0.5)]));
+
+    let out = fx
+        .cpd(&["context", "search", "store", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["topic"], "store", "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] [store] store keeps rows"),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_uncurated_hit_has_a_null_topic() {
+    let (fx, bridge) = env();
+    let n1 = note(&fx, "An uncurated note.");
+    bridge.reply("stats", &synced(1));
+    bridge.reply("search", &hits(&[(&n1, 0.5)]));
+
+    let out = fx
+        .cpd(&["context", "search", "note", "--context", CTX])
+        .ok();
+    let record = out["records"][0].as_object().expect("a record");
+    assert_eq!(record.get("topic"), Some(&Value::Null), "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] An uncurated note."),
         "{out}"
     );
 }
