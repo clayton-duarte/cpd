@@ -213,8 +213,8 @@ fn migrated() -> (tempfile::TempDir, Store) {
 
 fn session(id: &str, tier: &str) -> String {
     format!(
-        "INSERT INTO sessions (id, role, context, plan, name, forked_from, cwd, tier, state, state_at, created_at)
-           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', 'lead', '/', '{tier}', 'idle', 't', 't');"
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', '/', '{tier}', 'idle', 't', 't', 'lead');"
     )
 }
 

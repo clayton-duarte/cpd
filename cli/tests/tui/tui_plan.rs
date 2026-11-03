@@ -322,17 +322,30 @@ fn bare_plan(phase: &str) -> String {
         + &in_chat("ctx", "ship", "lead-ship")
 }
 
-/// A Lead; `plan` is empty for a Context's grounded Lead.
+/// A Lead; `plan` is empty for a Context's grounded Lead, which has no Plan and so (contract §4.4) is a fork: of itself.
 fn lead_row(id: &str, context: &str, plan: &str, created: &str) -> String {
+    let forked_from = (plan.is_empty()).then_some(id);
+    lead_row_of(id, context, plan, created, forked_from)
+}
+
+/// A Lead that forks `forked_from`, if any.
+fn lead_row_of(
+    id: &str,
+    context: &str,
+    plan: &str,
+    created: &str,
+    forked_from: Option<&str>,
+) -> String {
+    let forked_from = forked_from.map_or("NULL".to_owned(), |f| format!("'{f}'"));
     let plan = if plan.is_empty() {
         "NULL".to_owned()
     } else {
         format!("'{plan}'")
     };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from)
          VALUES ('{id}', 'lead', '{context}', {plan}, NULL, 'name of {id}', '/sessions/{id}.jsonl', '/repo', 'O3',
-                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '{created}');"
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '{created}', {forked_from});"
     )
 }
 
@@ -894,14 +907,19 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     ));
     // a second Lead of the Context with a pane: it used to be a tab
     fx.env.sql(
-        &(lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z")
-            + &event(
-                "session-moved",
-                "ctx",
-                Some("ship"),
-                Some("fork-ship"),
-                r#"{"pane":"%2","window":"@2","place":"parked"}"#,
-            )),
+        &(lead_row_of(
+            "fork-ship",
+            "ctx",
+            "ship",
+            "2026-01-02T00:00:09.000Z",
+            Some("lead-ship"),
+        ) + &event(
+            "session-moved",
+            "ctx",
+            Some("ship"),
+            Some("fork-ship"),
+            r#"{"pane":"%2","window":"@2","place":"parked"}"#,
+        )),
     );
     let screen = rows(&draw(&fx));
     // one row of margin, then the box's top border, its one chart row and its bottom border

@@ -9,10 +9,12 @@ use common::tree::{self as drive, Tree, engine, fx};
 const WHEN: &str = "2026-02-01T00:00:00.000Z";
 
 fn fork(id: &str, extra_column: &str, extra_value: &str, created: &str) -> String {
+    // `l-ship` is the Plan's one Lead; the others fork it (contract §4.4)
+    let forked_from = if id == "l-ship" { "NULL" } else { "'l-ship'" };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at{extra_column})
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from{extra_column})
          VALUES ('{id}', 'lead', 'alpha', 'ship', NULL, 'name of {id}', '/sessions/{id}.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
-                 '2026-01-03T00:00:00.000Z', '{created}'{extra_value});"
+                 '2026-01-03T00:00:00.000Z', '{created}', {forked_from}{extra_value});"
     )
 }
 
