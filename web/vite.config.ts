@@ -1,8 +1,8 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { cpdWebPlugin } from "./src/server/plugin.ts";
 
-// The cpd dev-server plugin is added later by another Job.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cpdWebPlugin()],
   server: { port: 5173, strictPort: true },
 });
