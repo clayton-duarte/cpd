@@ -599,7 +599,7 @@ fn the_footer_shows_a_refusal_in_red() {
     let run = popup(&commands, acts);
     let snap = &run.snaps[0];
     let rows = snap.rows();
-    assert_eq!(rows[6], "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
+    assert_eq!(rows[5], "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
     assert_eq!(
         rows[23],
         "preset_model_unoffered: bifrost does not offer O's model"
