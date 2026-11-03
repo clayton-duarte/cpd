@@ -513,8 +513,8 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
         ])
     );
     // Esc closed the list only: the view is still open and the first screen is back, the focus on the lead row.
-    assert_eq!(run.snaps[1].rows()[14], "   ▸ lead      S4 ▾  S4..O2");
-    assert!(run.snaps[1].rows()[12].starts_with("     auxiliar"));
+    assert_eq!(run.snaps[1].rows()[13], "   ▸ lead      S4 ▾  S4..O2");
+    assert!(run.snaps[1].rows()[11].starts_with("     auxiliar"));
 }
 
 #[test]
@@ -591,6 +591,7 @@ fn the_footer_shows_a_refusal_in_red() {
             "( ) vertex/claude-sonnet-5-5",
             "( ) vertex/claude-sonnet-5-5",
         ),
+        Act::Wheel(MouseEventKind::ScrollDown),
         Act::Click("[ Save ]", "[ Save ]"),
         Act::Snap,
         Act::Key(KeyCode::Esc),
@@ -703,6 +704,13 @@ fn change_manager_and_o_then(finish: Act) -> Vec<Act> {
     ]
 }
 
+/// [`change_manager_and_o_then`], the body scrolled to the buttons first.
+fn change_manager_and_o_then_scrolled(finish: Act) -> Vec<Act> {
+    let mut acts = change_manager_and_o_then(Act::Wheel(MouseEventKind::ScrollDown));
+    acts.push(finish);
+    acts
+}
+
 fn candidate_call() -> Vec<String> {
     candidates(BIFROST[1])
 }
@@ -739,7 +747,7 @@ fn a_click_on_save_runs_the_steps_through_the_commands_in_order_and_closes() {
     // no key after the click: the view closes by itself
     let run = popup(
         &commands,
-        change_manager_and_o_then(Act::Click("[ Save ]", "[ Save ]")),
+        change_manager_and_o_then_scrolled(Act::Click("[ Save ]", "[ Save ]")),
     );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     let mut want = reads();
@@ -754,8 +762,12 @@ fn a_refused_step_keeps_the_view_open_and_a_second_save_retries_only_that_step()
         1,
         refusal(ErrorCode::TierInvalid, "worker is not below lead"),
     );
-    let mut acts = change_manager_and_o_then(Act::Click("[ Save ]", "[ Save ]"));
-    acts.extend([Act::Snap, Act::Click("[ Save ]", "[ Save ]")]);
+    let mut acts = change_manager_and_o_then_scrolled(Act::Click("[ Save ]", "[ Save ]"));
+    acts.extend([
+        Act::Snap,
+        Act::Wheel(MouseEventKind::ScrollDown),
+        Act::Click("[ Save ]", "[ Save ]"),
+    ]);
     let run = popup(&commands, acts);
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(
@@ -783,6 +795,7 @@ fn a_click_on_cancel_closes_without_running_a_write_command() {
     let acts = vec![
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
+        Act::Wheel(MouseEventKind::ScrollDown),
         Act::Click("[ Cancel ]", "[ Cancel ]"),
     ];
     let run = popup(&commands, acts);

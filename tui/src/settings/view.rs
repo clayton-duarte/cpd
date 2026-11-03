@@ -231,11 +231,6 @@ fn body(model: &Model) -> Body {
     b.text("  ", Style::default());
     b.hit("[ Cancel ]", palette::clickable_text(), Hit::Cancel);
     lines.push(b.done());
-    // a change that Save can write is written by the buttons: following keeps them in view too (the focus stays in
-    // view first); a footer (a refusal, or the reason Save is blocked) is what the User reads then
-    if model.footer().is_none() && !model.steps().is_empty() {
-        focus.1 = focus.1.max(lines.len() - 1);
-    }
     Body { lines, focus }
 }
 
@@ -262,12 +257,7 @@ pub fn draw(f: &mut Frame, model: &Model, scroll: &mut Scroll, follow: bool) {
     let body = body(model);
     scroll.resize(body.lines.len(), usize::from(body_rect.height));
     if follow {
-        // what fits from the top is shown from the top
-        if body.focus.1 < usize::from(body_rect.height) {
-            scroll.show(0, 0);
-        } else {
-            scroll.show(body.focus.0, body.focus.1);
-        }
+        scroll.show(body.focus.0, body.focus.1);
     }
     for (i, bl) in body
         .lines
