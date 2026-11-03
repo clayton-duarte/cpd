@@ -193,40 +193,9 @@ export function createDurableBackend(deps: {
 
       const onLive = (frame: HostFrame): void => {
         switch (frame.type) {
-          case "events": {
-            let out: ReturnType<typeof dialect.applyEvents>;
-            try {
-              out = dialect.applyEvents(frame);
-            } catch (e) {
-              fail(e);
-              return;
-            }
-            if (out.replaced === true) send({ type: "session.window", sessionId, mode: "tail", window: tailWindow() });
-            else {
-              if (out.append.length > 0) send({ type: "session.append", sessionId, items: out.append });
-              if (out.update.length > 0) send({ type: "session.update", sessionId, items: out.update });
-              for (const d of out.deltas) send({ type: "session.delta", sessionId, ...d });
-            }
-            if (out.busy !== undefined) busy = out.busy;
-            if (out.agent?.model !== undefined) agentModel = out.agent.model;
-            if (out.agent?.thinking !== undefined) agentThinking = out.agent.thinking;
-            if (out.queued !== undefined) {
-              const ids = new Set(out.queued.map((q) => q.id));
-              queued = queued.filter((q) => q.submissionId !== undefined && ids.has(q.submissionId));
-            }
-            emitFooter(false);
-            emitStatus(false);
-            return;
-          }
-          case "snapshot":
-            try {
-              dialect.applySnapshot(frame);
-            } catch (e) {
-              fail(e);
-              return;
-            }
-            send({ type: "session.window", sessionId, mode: "tail", window: tailWindow() });
-            emitFooter(false);
+          case "view":
+          case "ops":
+            fail(new Error("not implemented"));
             return;
           case "host_state": {
             busy = frame.state !== "idle";
@@ -258,10 +227,10 @@ export function createDurableBackend(deps: {
         client.onFrame((frame) => {
           if (disposed) return;
           if (ready) return onLive(frame);
-          if (frame.type === "snapshot" && !applied) {
+          if (frame.type === "view" && !applied) {
             applied = true;
             try {
-              dialect.applySnapshot(frame);
+              dialect.applyView(frame);
             } catch (e) {
               snapshotError = e;
             }

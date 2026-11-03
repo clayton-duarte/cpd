@@ -11,14 +11,14 @@ export interface SocketLike {
 export interface SocketFactory {
   connect(path: string): Promise<SocketLike>;
 }
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const CLIENT_NAME = "cpd-web";
 
 export type HostFrame =
   | { type: "welcome"; protocol: number; host_version: string; pi_durable: string; session: string; role: string; epoch: string; client_id: string; cwd: string; limits: { client_line: number } }
-  | { type: "attached"; req: string; mode: "snapshot" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
-  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
-  | { type: "events"; epoch: string; seq: number; events: unknown[] }
+  | { type: "attached"; req: string; mode: "view" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
+  | { type: "view"; epoch: string; seq: number; view: unknown }
+  | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
   | { type: "result"; req: string; data: Record<string, unknown> }
   | { type: "error"; req?: string; code: string; message: string; details?: unknown }
   | { type: "host_state"; state: "idle" | "working" | "waiting" | "blocked"; name?: string; clients: number; held_ui: number; agent?: { model?: { provider: string; model_id: string }; thinking_level?: string | null } }
@@ -32,8 +32,8 @@ export type HostFrame =
 const FRAME_TYPES: ReadonlySet<string> = new Set([
   "welcome",
   "attached",
-  "snapshot",
-  "events",
+  "view",
+  "ops",
   "result",
   "error",
   "host_state",
@@ -72,6 +72,7 @@ export interface HostClient {
   compact(instructions?: string): Promise<{ taskId: number }>;
   configure(change: { model: string } | { thinkingLevel: string | null }): Promise<Record<string, unknown>>;
   listModels(): Promise<{ provider: string; model_id: string; name: string; thinking_levels: string[]; context_window: number }[]>;
+  history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>;
   abort(): Promise<void>;
   abortSubmission(submissionId: number): Promise<{ outcome: unknown }>;
   respond(id: string, answer: { value: string } | { confirmed: boolean } | { answer: object } | { cancelled: true }): Promise<void>;
@@ -244,6 +245,9 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       const { models } = await data("list_models", {});
       if (!Array.isArray(models)) return bad("list_models", "models");
       return models as Awaited<ReturnType<HostClient["listModels"]>>;
+    },
+    history() {
+      return Promise.reject(new Error("not implemented"));
     },
     async abort() {
       await data("abort", { background: false });
