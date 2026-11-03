@@ -115,6 +115,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `workflow_required` | 2 | the command needs a Workflow, `--workflow` is omitted and the Plan does not have exactly one Workflow that is not `cancelled` (R34) |
 | `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
+| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive` or `session unarchive` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: archive is the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
@@ -481,10 +482,13 @@ Archives the Context with its Plans, all their Sessions and its Manager (contrac
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Context is not a Permanent Context (`cpd`, `host`, `codereview`), checked first; `details.context` | `context_permanent` | 3 |
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
+| the Context is not a Permanent Context (`cpd`, `host`, `codereview`), checked after the agent check above; `details.context` | `context_permanent` | 3 |
 | the Context exists | `context_not_found` | 4 |
 | no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued`, `running` or `draft` (§4.10, hs-d731), no open Escalation, no pending Plan review and no Workflow of a Plan of the Context that a Workflow of a Plan outside it names as base Workflow or need (a Context's Plans archive together; contract §2.2 "Archived"); `details.blockers` lists each as `{kind, id, reason}` | `archive_blocked` | 3 |
 | no Lead of the cascade is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Effects, in this order (all or nothing):
 1. **Check** every object of the cascade. If any blocks, nothing is written and nothing is closed.
@@ -507,7 +511,10 @@ Clears `archived_at` on the Context and, with the same cascade as `context archi
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
 | the Context exists | `context_not_found` | 4 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Effects: **rows**, one transaction: `archived_at = NULL` on the Context and every archived Plan and Session of the cascade; one **Event** per object changed (`context-archived`, `plan-archived`, `session-archived`, each with `{archived: false}`). No tmux: no pane is touched and `session open` resumes a Lead later (§10.4). No archive rule applies.
 
@@ -1169,10 +1176,13 @@ Archives the Plan with its Lead and its side forks (contract §2.2 "Archived").
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
 | the Plan exists | `plan_not_found` | 4 |
 | no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review and no Workflow of the Plan, not `merged` or `cancelled`, that a Workflow of another Plan (itself not `merged` or `cancelled`) names as base Workflow or need (`kind` `workflow`, `id` `<plan>/<key>` of the Workflow named; contract §2.2 "Archived", hs-d324); `details.blockers` lists each as `{kind, id, reason}`. The phase does not matter: a Plan in `deploy` is archivable and the engine keeps polling its pull request | `archive_blocked` | 3 |
 | the Plan has no `draft` Job (hs-d731, contract §2.2 "Archived"); `details.blockers` has `{kind: "job", id: "<plan>/<key>", reason: "draft"}` for each and the message says `cpd plan cancel` abandons a Plan and `cpd job cancel` one draft | `archive_blocked` | 3 |
 | neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Since the migration `review-superseded` and its enforcement rule, a Plan that is `done` has no pending review: every pending review of the Plan is closed `superseded` when the Plan reaches `done`.
 
@@ -1197,8 +1207,11 @@ Clears `archived_at` on the Plan and its Sessions.
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
 | the Plan exists | `plan_not_found` | 4 |
 | the Plan's Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Effects: **rows**, one transaction: `archived_at = NULL` on the Plan and each archived Session of it; one **Event** per object (`plan-archived`, `session-archived`, each `{archived: false}`). No tmux and no archive rule.
 
@@ -2891,11 +2904,14 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` (a Worker's Session is archived only by its Plan's cascade) | `not_a_lead` | 3 |
 | it is not its Plan's own Lead (`plans.lead_session`); `details.next` = `cpd plan archive --plan <p>` | `archive_blocked` | 3 |
 | its state is not `working`, `waiting` or `blocked`; `details.blockers` lists it | `archive_blocked` | 3 |
 | it is not in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
@@ -2918,9 +2934,12 @@ cpd session unarchive <id>
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller is not an agent: neither `CPD_SESSION` nor `CPD_ATTEMPT` is set and non-empty (checked first, before the Ledger is opened); `details` `{command, session, attempt}`, `session` and `attempt` the values of those variables or `null` | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` | `not_a_lead` | 3 |
 | its Plan is not archived (nor its Context); `details.next` = `cpd plan unarchive --plan <p>` or `cpd context unarchive <c>` | `archived` | 3 |
+
+The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep, contract §3.7); the User archives from the cockpit or the CLI.
 
 Effects: **rows**, one transaction: `sessions.archived_at = NULL`, `sessions.asleep_at = NULL` (hs-d515); **Event** `session-archived` `{archived: false}`. No tmux: no pane is started; `session open` resumes the Lead (§10.4).
 
