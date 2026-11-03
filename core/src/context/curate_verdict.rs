@@ -14,8 +14,12 @@ pub enum Gate {
     Neighbours,
 }
 
-pub fn gate(_kind: RecordKind) -> Gate {
-    todo!()
+pub fn gate(kind: RecordKind) -> Gate {
+    match kind {
+        RecordKind::Decision | RecordKind::Note => Gate::Neighbours,
+        RecordKind::Question | RecordKind::Answer => Gate::LabelOnly,
+        _ => Gate::Skip,
+    }
 }
 
 /// kev-4b's answer for one pair.
@@ -31,8 +35,14 @@ pub enum Screened {
     Escalate(Option<Screen>),
 }
 
-pub fn screen(_kev: Result<Screen, ()>) -> Screened {
-    todo!()
+pub fn screen(kev: Result<Screen, ()>) -> Screened {
+    match kev {
+        Ok(k) if k.verdict == Verdict::Independent && k.confidence >= GATE => {
+            Screened::AcceptIndependent
+        }
+        Ok(k) => Screened::Escalate(Some(k)),
+        Err(()) => Screened::Escalate(None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +85,43 @@ pub struct Side<'a> {
     pub text: &'a str,
 }
 
-pub fn confirm(_new: Side, _neighbour: Side, _kev: Option<Screen>, _judged: Judged) -> Outcome {
-    todo!()
+pub fn confirm(new: Side, neighbour: Side, kev: Option<Screen>, judged: Judged) -> Outcome {
+    let independent = |why| Outcome::Independent { why };
+    if judged.verdict == Verdict::Independent {
+        return independent(None);
+    }
+    if kev.is_some_and(|k| k.verdict != judged.verdict) {
+        return independent(Some(Why::Disagreed));
+    }
+    let quote = judged.quote.trim();
+    if quote.is_empty() || !(new.text.contains(quote) || neighbour.text.contains(quote)) {
+        return independent(Some(Why::QuoteNotFound));
+    }
+    let (record, target, reason) = match judged.verdict {
+        Verdict::Contradicts => {
+            return Outcome::Contradicts {
+                neighbour: neighbour.id.clone(),
+                quote: judged.quote,
+                reason: judged.reason,
+            };
+        }
+        Verdict::Duplicate if new.seq > neighbour.seq => (new.id, neighbour.id, Reason::Duplicate),
+        Verdict::Duplicate if new.seq < neighbour.seq => (neighbour.id, new.id, Reason::Duplicate),
+        Verdict::Supersedes if new.seq > neighbour.seq => {
+            (neighbour.id, new.id, Reason::Superseded)
+        }
+        _ => {
+            return independent(Some(Why::Rejected(
+                "the retired record must be the later one (duplicate) or the older one (superseded)"
+                    .into(),
+            )));
+        }
+    };
+    Outcome::Retire {
+        record: record.clone(),
+        target: target.clone(),
+        reason,
+        topic: judged.topic,
+        short: judged.short,
+    }
 }
