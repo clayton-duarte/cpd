@@ -524,3 +524,94 @@ Labels are those of sections 5.1-5.8. Speed is the count of C1..C12 cells by lab
 | pimote (d4) | reference | no grouping; preview falls back; no plan review | 1 pass, 4 partial, 6 fail, 1 inferred fail risk | about 1.5k + 1,000-3,000 client | Svelte; singletons | best token guard; density tens of places | bus factor 1; pins and patches pi 1.4.0 |
 | pi-pocket (d6) | reference | closest compact look; no preview, no plan review | 5 pass, 3 partial, 2 fail, 2 unk | 2,500-4,000 + fork | no (global store, own server) | strong layers; density built in | 92% one author; pins pi-durable 1.4.0 |
 | terminal-in-web (r6) | parts | exact by construction; Shift+Enter, images, durable sessions break | n/a to the web layer; C1, C7 to take from pi's TUI | 150-300 relay (this report's guess) | yes, trivially | 16-colour `ITheme` only; density is pi's | xterm 6.0.0 (2025-12-22); Kitty keyboard in unreleased 7.0.0 |
+
+## 6. Theming and the three cpd panes
+
+### 6.1 The Dango v3 mapping
+
+**What s3 found (read, s3-parity-checklist, answer 3).** The cpd look is not read from `dango.json`. compact-tools paints with hard-coded palette indices (`compact-tools-indices.ts:52-66`); `pi/themes/dango.json` feeds only pi's own Theme. Example: `accent` is 4 in the JSON and 6 in code; `mdLink` is 15 in the JSON and 4 in code. The 16 slots have no hex in the paths s3 read; the hex values are in `docs/contract.md` section 6.1.1, which no finding read, so **no hex value appears in this report**.
+
+**What that implies (inferred).**
+
+1. A web chat cannot "load Dango". It needs a **hex map of the 16 palette slots**, written once, plus a **port of the index map** in `compact-tools-indices.ts` (which meaning uses which slot) and the `pill-spec.json` meanings the TUI already shares (`tui/src/palette.rs:113-128`, read, s5). The hex map is one small file; the index map is the real work, because it decides the colour of every dot, pill, status and balloon.
+2. The web shell already hard-codes four Dango values as CSS variables (`--dango-mizu #67ada7`, `--dango-anko #e17f6e`, `--dango-plain #aba3af`, `--dango-dim #87808c`, `web/src/index.css:119-122`, read, s5), so two palettes already exist in the repo. The hex map should become the single source (DRY) and feed both.
+3. Colour is the cheap half. Shape is the expensive half: the pad, rounded input with state colour (P05), balloons with `HH:MM` on the border (P14, P15), pills with powerline caps (P04), the `╰` closing rows (P20, P21), and the moon loader (P22) are character-grid decisions. In CSS they are re-drawn, not mapped (inferred).
+4. The contradiction on indexed versus truecolour (5.8) matters only for the terminal option: if the pty carries indices, the 16 `ITheme` hex values are the whole theme; the same hex map serves both.
+
+**Per candidate, how hard** (labels as in section 5):
+
+| Candidate | Mechanism | Dango effort | Density |
+|---|---|---|---|
+| pi-web-ui | about 15 oklch variables on `:root` | variable override of a few dozen lines (inferred) | not a token; overrides or fork |
+| OpenCode | `DesktopTheme` JSON, `palette` plus `overrides` | one JSON file; syntax via `overrides` | CSS-file edits in `session-ui` |
+| t3code | about 50 palette roles, custom themes first-class | 100-200 lines of mapping (guess); plus a Shiki or `@pierre` theme | none; class edits across `Timeline*Row.tsx` |
+| assistant-ui | shadcn variables; 430 palette-named colours in 74 files | variables plus edits to copied files; plus a Shiki theme | not a token; edit copied components |
+| jmfederico | `--pi-*` in a cascade layer; 17 hex literals | about half a day (guess) | no token; brittle shadow-root overrides |
+| pimote | `layout.css` tokens with a build-failing guard | one file plus an 18-line highlight theme | no setting; tens of places (guess) |
+| pi-pocket | layers plus `colors.toml`, 41 hex in `style.css` | about 25-line `colors.toml` (guess) | **built in** (`comfortable`, `compact`, `tight`) |
+| xterm.js | `ITheme`: 16 ANSI plus fg, bg, cursor, selection | 16 hex values | pi's own; cells only |
+
+**Density, summarised (read).** Only pi-pocket ships a density setting; every React or Svelte candidate except it hard-codes spacing in components. For a cockpit chat that wants pad and balloon-level density, expect to edit component source in any web-native option (assistant-ui's copied files are the designed place, d2 §5.1). The terminal option gets density free, because it is pi's.
+
+### 6.2 What the three panes need (s5-three-panes)
+
+**Where data comes from today (read, s5 §0).** The TUI reads the SQLite store in process (`tui/src/read/mod.rs:1-25`), is woken by a commit watcher on `cpd.db` and `cpd.db-wal` (`tui/src/read/watch.rs:11-51`) with a 2 s safety read (`tui/src/pump.rs:19`), and follows an Event cursor (`tui/src/read/follow.rs:59-89`). Every action is a `cpd` subprocess followed by the watcher (`tui/src/tree/actions.rs:1-3`). The web reads `/__cpd/*` JSON routes that shell out to `cpd` (13.6-16.3 ms each, `vite.config.ts:174-285`, read, s4), **once on mount with no timer** (`web/src/app/App.tsx:155-198`), so a stale rail stays stale until reload (inferred), and has no POST for any pane action (`web/src/api/actions.ts:9-35`).
+
+**Pane 1: Context tree.**
+
+| Aspect | Facts (read, s5 §1) |
+|---|---|
+| Data | Contexts, their Plans, their Lead Sessions, side forks (`tui/src/read/tree.rs:1-4`); Context dot is the live Manager's, or Stopped; Plan row: Lead dot, id, four Job counters (planned = draft + queued, active = running + merging, failed, merged; cancelled not counted, `read/shared.rs:130-159`); cost; Standing section of Permanent Contexts; Archive section; the dot shows the most urgent open Inbox item (`read/dot.rs:37-59`) |
+| Commands | `cpd context list`; `cpd plan list [--context] [--phase]`; `cpd session list [--context] [--plan] [--role] [--state] [--archived]` |
+| Refresh | TUI: commit watcher or Event, 2 s safety. Web: once on mount |
+| Actions | Open Session (`session open`), open a Context's Manager (`context manager --by-user`), park, close, new Plan, fork, archive and unarchive, rename, delete, resume, history, copy id (`tui/src/tree/actions.rs:161-244`). Web: select a Session only |
+| Gaps in `web/` | No Standing or Archive section, no Inbox-urgency dot, no Context cost, the Manager's `asleep_at` never reaches the Context dot (`app-sidebar.tsx:410`) |
+
+**Pane 2: Plan view.**
+
+| Aspect | Facts (read, s5 §2) |
+|---|---|
+| Data | The Plan of the Lead in the chat slot (Event `session-moved` with `place: "chat"`, `tui/src/read/flow.rs:769-800`); one box per Workflow (key, repo, base, PR number and state, elapsed, cost); Job pills with tier and attempt; `needs` edges reduced transitively; escalations; review; Pulse (a separate read) |
+| Commands | `cpd plan show [--plan <id>]`, shape `{plan, prs, jobs, escalations, review, counts, tamper, events_cursor}` (`readmodel.ts:35-58`); no `/__cpd/plan` route exists |
+| Refresh | TUI: snapshot at most once per frame after a commit or a relevant Event. Web: the view is **not mounted** (`web/src/views/plan.tsx`, only its test imports it) |
+| Actions | Open a Lead (tab, Pulse row, PR link), merge a PR (`cpd pr merge`), post a Workflow (`post --workflow --plan`). **Retry a failed Job (`cpd job retry --tier <T> <key>`) is in neither UI.** Job pills are not clickable |
+
+**Pane 3: Attention Inbox.**
+
+| Aspect | Facts (read, s5 §3) |
+|---|---|
+| Data | Item fields `id`, `kind`, `urgency`, `subject`, `label`, `url`, `context`, `plan`, `job`, `session`, `record`, `event`, timestamps (`tui/src/read/tree.rs:110-130`); 18 kinds (inferred from an exhaustive match, the enum was not read); six urgency colours (`palette.rs:457-470`); `engine-down` first when no engine runs |
+| Commands | `cpd inbox list [--context] [--all] [--closed] [--limit]`, shape `{ok, engine:{running}, items, hidden, events_cursor}`; `cpd inbox show|snooze|dismiss|claim|approve` |
+| Refresh | TUI: commit or safety poll, at most one read per frame. Web: once on mount |
+| Actions | Click by kind (open Session, Manager, Lead; `session resume`; ensure the engine; copy url). Right-click: Approve (Deploy), Claim (ReviewRequested), Snooze 15 min / 1 h / tomorrow, Dismiss, Merge or Post and Go to Lead for PR items (`tui/src/widgets/inbox.rs:353-452`). Web: read-only; the `ApprovalDialog` exists but is not rendered (`App.tsx:35-47`) |
+| Unresolved | `id` is `string \| null` in the web (`readmodel.ts:101`) and an integer, with `engine-down` as `0`, in the TUI (`tui/src/read/tree.rs:31-32`, `widgets/inbox.rs:380`); `cpd inbox list` was not run (unverified) |
+
+**What the panes need from a base (inferred).** They are three ordinary read-and-act views over `cpd` JSON, with no streaming and no virtualisation need. A React or any component shell serves them. The new work is the live refresh (a pull on an Event cursor or the commit signal, instead of once on mount), the action POSTs, and the stale `web/` code (s5 §4 lists 14 discrepancies, including an unvalidated cast at the read-model boundary, `readmodel.ts:133-141`). None of it depends on the chat base, which is why the layout stays secondary (pro-d2).
+
+**The minimal chat-to-shell contract (s5 §5, read; "Today" is the state of `web/`).**
+
+| Name | Direction | Type | Why the shell needs it | Today |
+|---|---|---|---|---|
+| `session` | shell → chat (prop) | `{id, role, runner: "pi" \| "durable", name?, state?, asleep_at?, context?}` | one selected Session; `runner` picks the transport | present (`live-chat.tsx:66`) |
+| `api` | shell → chat (prop) | `subscribe(id, onFrame)`, `send(id, text)`, `history?(id, before?, limit?)` | injected transport | present (`live.ts:13-31`) |
+| session change | shell → chat (effect) | re-subscribe and clear | opening a Session is a state change | present (`live-chat.tsx:363-372`) |
+| `onState` | chat → shell | `{id, busy, pendingUi}` | Tree dot and Inbox need working or waiting per Session | **missing** |
+| `onFocus` | chat → shell | `{id}` | keyboard and highlight routing (TUI: tmux `select-pane`) | **missing** |
+| `send(text)` | chat → api | text plus `when_busy: followUp \| steer \| reject` | steer and follow-up | partial (`when_busy` unwired) |
+| `abort` | chat → api | `abort(id)` | stop button | **missing** |
+| errors | chat → shell | `{id, error}` | a failed send is dropped silently today (`live-chat.tsx:416-417`) | **missing** |
+
+(`openSession(id)` is deliberately not on the chat: the shell owns selection, as `session open` does in the TUI.) A terminal chat satisfies this table at the tmux level: the shell selects a Session by attaching a different pane, and `onState` comes from cpd's own data (the Tree dot), not from the terminal.
+
+**Which candidate lets the chat sit as a component beside the panes** (from section 5):
+
+| Candidate | Beside three custom panes? |
+|---|---|
+| assistant-ui + react-pi | **yes**: provider plus any `Thread` subtree; hooks feed side panes (read, d2 §1.2; multi-pane use inferred) |
+| xterm.js terminal | **yes**: one element; panes are siblings (r6) |
+| pi-web-ui | `AgentInterface` yes, `ChatPanel` no (r2 §5) |
+| OpenCode | `SessionTimeline` only, as a Solid island; the app shell is not embeddable; plugin pane slots unverified (r3 §6) |
+| t3code | no, not without its shell, router, atoms and WebSocket RPC (d1 §1) |
+| jmfederico pi-web | no: plugin panels are tabs (d3 §1) |
+| pimote | only with its singleton stores and protocol (d4 §1) |
+| pi-pocket | no: panes would be pocket browser modules on its server (d6 §1.3) |
