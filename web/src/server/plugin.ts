@@ -40,14 +40,21 @@ export function createServices(b: PluginBoundaries): Services {
   const cpd = createCpd(b.cpdExec);
   const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler });
   const registry = createRegistry({ snapshot: () => cockpit.snapshot(), cpdHome: b.cpdHome });
+  // lazy: a backend is built on first attach so a host without sockets or files starts cleanly
+  const lazy = (build: () => SessionBackend): SessionBackend => {
+    let backend: SessionBackend | null = null;
+    return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
+  };
   const backends: Record<Runner, SessionBackend> = {
-    pi: createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git }),
-    durable: createDurableBackend({
-      connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
-      cpd,
-      git: b.git,
-      scheduler: b.scheduler,
-    }),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git })),
+    durable: lazy(() =>
+      createDurableBackend({
+        connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
+        cpd,
+        git: b.git,
+        scheduler: b.scheduler,
+      }),
+    ),
   };
   return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send }) };
 }
