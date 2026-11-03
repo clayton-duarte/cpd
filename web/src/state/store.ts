@@ -1,9 +1,13 @@
+import { useSyncExternalStore } from "react";
 import type {
   Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError,
 } from "../protocol/domain.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
-import { emptyTranscript, type TranscriptState } from "./transcript.ts";
+import { toWireError } from "../protocol/domain.ts";
+import {
+  appendItems, applyDelta, emptyTranscript, prependEarlier, setTail, updateItems, type TranscriptState,
+} from "./transcript.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -61,10 +65,105 @@ export const initialState: AppState = {
   session: null,
   lastError: null,
 };
-void emptyTranscript;
+const emptySession = (id: string): SessionView => ({
+  id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
+  busy: false, queued: [], pending: [], dialog: null, models: null, error: null,
+});
 
-export function reduce(_state: AppState, _action: StoreAction): AppState {
-  throw new Error("not implemented");
+function reduceSession(state: AppState, session: SessionView, message: ServerMessage): AppState {
+  const set = (patch: Partial<SessionView>): AppState => ({ ...state, session: { ...session, ...patch } });
+  switch (message.type) {
+    case "session.attached":
+      return set({ attached: true, capabilities: message.capabilities, title: message.title, ref: message.meta.ref, footer: message.meta.footer });
+    case "session.window":
+      return set({
+        transcript: message.mode === "tail" ? setTail(message.window) : prependEarlier(session.transcript, message.window),
+      });
+    case "session.append":
+      return set({ transcript: appendItems(session.transcript, message.items) });
+    case "session.update":
+      return set({ transcript: updateItems(session.transcript, message.items) });
+    case "session.delta":
+      return set({ transcript: applyDelta(session.transcript, message) });
+    case "session.status":
+      return set({ busy: message.busy, queued: message.queued });
+    case "session.footer":
+      return set({ footer: message.footer });
+    case "session.title":
+      return set({ title: message.title });
+    case "session.models":
+      return set({ models: message.models });
+    case "session.dialog":
+      return set({ dialog: message.dialog });
+    case "session.dialogResolved":
+      return session.dialog !== null && session.dialog.id === message.dialogId ? set({ dialog: null }) : state;
+    case "session.submitAck":
+      return set({ pending: session.pending.filter((p) => p.clientSubmissionId !== message.clientSubmissionId) });
+    case "session.error": {
+      const id = message.clientSubmissionId;
+      if (id === undefined) return set({ error: message.error });
+      return set({
+        pending: session.pending.map((p) =>
+          p.clientSubmissionId === id ? { ...p, state: "failed" as const, error: message.error } : p),
+      });
+    }
+    default:
+      return state;
+  }
+}
+
+function reduceServer(state: AppState, message: ServerMessage): AppState {
+  switch (message.type) {
+    case "cockpit.snapshot":
+      return { ...state, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: message.inbox, error: null } };
+    case "cockpit.patch":
+      return { ...state, cockpit: { ...state.cockpit, [message.pane]: message.data } };
+    case "cockpit.error":
+      return { ...state, cockpit: { ...state.cockpit, error: message.error } };
+    case "action.result":
+      return message.ok ? state : { ...state, lastError: message.error };
+    default: {
+      if (message.sessionId === null) {
+        return message.type === "session.error" ? { ...state, lastError: message.error } : state;
+      }
+      if (state.session === null || message.sessionId !== state.selectedSessionId) return state;
+      return reduceSession(state, state.session, message);
+    }
+  }
+}
+
+export function reduce(state: AppState, action: StoreAction): AppState {
+  switch (action.type) {
+    case "connection":
+      return { ...state, connection: action.status, retryAttempt: action.retryAttempt ?? state.retryAttempt };
+    case "server":
+      try {
+        return reduceServer(state, action.message);
+      } catch (e) {
+        return { ...state, lastError: toWireError(e) };
+      }
+    case "selectSession":
+      if (action.sessionId === state.selectedSessionId) return state;
+      return {
+        ...state,
+        selectedSessionId: action.sessionId,
+        session: action.sessionId === null ? null : emptySession(action.sessionId),
+      };
+    case "selectPlan":
+      return { ...state, cockpit: { ...state.cockpit, selectedPlanId: action.planId } };
+    case "submitPending":
+      if (state.session === null) return state;
+      return {
+        ...state,
+        session: { ...state.session, pending: [...state.session.pending, { ...action.submission, state: "sending" }] },
+      };
+    case "dismissPending":
+      if (state.session === null) return state;
+      return {
+        ...state,
+        session: { ...state.session, pending: state.session.pending.filter((p) => p.clientSubmissionId !== action.clientSubmissionId) },
+      };
+  }
 }
 
 export interface Store {
@@ -72,9 +171,25 @@ export interface Store {
   subscribe(listener: () => void): () => void;
   dispatch(action: StoreAction): void;
 }
-export function createStore(_initial?: AppState): Store {
-  throw new Error("not implemented");
+export function createStore(initial: AppState = initialState): Store {
+  let state = initial;
+  const listeners = new Set<() => void>();
+  return {
+    getState: () => state,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispatch(action) {
+      const next = reduce(state, action);
+      if (next === state) return;
+      state = next;
+      for (const l of [...listeners]) l();
+    },
+  };
 }
-export function useStore<T>(_store: Store, _select: (s: AppState) => T): T {
-  throw new Error("not implemented");
+export function useStore<T>(store: Store, select: (s: AppState) => T): T {
+  return useSyncExternalStore(store.subscribe, () => select(store.getState()));
 }
