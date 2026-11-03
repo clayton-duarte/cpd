@@ -131,6 +131,7 @@ test("the client sends hello then attach and resolves the view", async () => {
     "attached",
     "view",
     "ops",
+    "host_state",
   ]);
 
   close();
