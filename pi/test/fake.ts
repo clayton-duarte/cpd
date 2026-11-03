@@ -234,6 +234,19 @@ import(entry).then((m) => {
 });
 `;
 
+/** Defaults of the key surfaces: a `session show` carries `key` (the name of a keyed role, null for a fork: `forked_from` set), a taken post carries `from_name` (null for the User). A test that sets the field keeps it. */
+function withKeyFields(key: string, stdout: unknown): unknown {
+  const o = stdout as Record<string, any> | null;
+  if (key === "session-show" && o && typeof o === "object" && o.session && typeof o.session === "object" && !("key" in o.session)) {
+    const s = o.session;
+    return { ...o, session: { ...s, key: s.forked_from ? null : (s.name ?? null) } };
+  }
+  if (key === "board-take" && o && Array.isArray(o.taken)) {
+    return { ...o, taken: o.taken.map((p: any) => ("from_name" in p ? p : { ...p, from_name: p.from_session === null ? null : `name-of-${p.from_session}` })) };
+  }
+  return stdout;
+}
+
 export { ID, policyShow, sessionShow, shown };
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
@@ -294,7 +307,7 @@ export class Fixture {
 
   /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with, and how long (`delay`, ms of the fake's timers) it stays in flight. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
-    this.cpd.responses.set(key, { stdout, ...extra });
+    this.cpd.responses.set(key, { stdout: withKeyFields(key, stdout), ...extra });
   }
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
