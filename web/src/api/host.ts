@@ -13,15 +13,13 @@ export type HostFrame =
   | {
       type: "attached";
       req: string;
-      mode: "view" | "resume" | "snapshot";
+      mode: "view" | "resume";
       epoch: string;
       from_seq: number;
       head_seq: number;
     }
   | { type: "view"; epoch: string; seq: number; view: unknown }
   | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
-  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
-  | { type: "events"; epoch: string; seq: number; events: unknown[] }
   | { type: "host_state"; state: "idle" | "working" | "waiting" | "blocked" }
   | { type: "error"; code: string; message: string }
   | { type: "bye"; reason: string; reconnect: boolean };
@@ -45,14 +43,14 @@ export interface HostClient {
 const BACKOFF_START_MS = 100;
 const BACKOFF_CAP_MS = 1000;
 const BACKOFF_DEADLINE_MS = 30_000;
-/** The client's hello: the highest protocol it speaks and its floor (protocol 1). It sends nothing else. */
-const HELLO = { type: "hello", protocol: 1, min_protocol: 1, client: "cpd web chat" } as const;
+/** The client's hello: the highest protocol it speaks and its floor (protocol 2). It sends nothing else. */
+const HELLO = { type: "hello", protocol: 2, min_protocol: 2, client: "cpd web chat" } as const;
 /** The frames a hello/attach-only reader accepts; a frame outside this subset is refused. */
 const ALLOWED_FRAMES: ReadonlySet<string> = new Set([
   "welcome",
   "attached",
-  "snapshot",
-  "events",
+  "view",
+  "ops",
   "host_state",
   "error",
   "bye",
@@ -127,7 +125,7 @@ export function createHostClient(connect: HostConnect): HostClient {
           }
           // The cursor is the last applied stream frame; the reconnect sends it.
           if (
-            (type === "snapshot" || type === "events") &&
+            (type === "view" || type === "ops") &&
             typeof frame["epoch"] === "string" &&
             typeof frame["seq"] === "number"
           ) {

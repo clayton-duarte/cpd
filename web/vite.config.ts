@@ -137,7 +137,7 @@ function readHostOnce(hostClient: HostClient, id: string): Promise<readonly Tran
     stop = hostClient.attach(
       id,
       (frame) => {
-        if (frame.type === "snapshot" || frame.type === "events") {
+        if (frame.type === "view" || frame.type === "ops") {
           state = applyHostFrame(state, frame);
           finish(state.messages);
         } else if (frame.type === "bye") {

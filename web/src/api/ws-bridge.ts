@@ -126,8 +126,15 @@ function streamDurable(
   };
 
   const apply = (frame: HostFrame): void => {
-    if (frame.type === "snapshot" || frame.type === "events") {
-      state = applyHostFrame(state, frame);
+    if (frame.type === "view" || frame.type === "ops") {
+      try {
+        state = applyHostFrame(state, frame);
+      } catch {
+        // A frame the fold refuses: drop the state (no cursor) and re-attach, as a lost connection does.
+        state = { messages: [], cursor: undefined };
+        reattach();
+        return;
+      }
       emit(wireMessages(state.messages));
       return;
     }
@@ -144,7 +151,18 @@ function streamDurable(
     }
   };
 
-  stop(deps.host.attach(session.id, apply));
+  let close = (): void => {};
+  let stopped = false;
+  const reattach = (): void => {
+    close();
+    if (stopped || isClosed()) return;
+    close = deps.host.attach(session.id, apply);
+  };
+  close = deps.host.attach(session.id, apply);
+  stop(() => {
+    stopped = true;
+    close();
+  });
 }
 
 /** Builds the injected-dependency bridge. */

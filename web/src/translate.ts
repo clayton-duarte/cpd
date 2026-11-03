@@ -2,6 +2,7 @@
 // frame translation", hs-d819/chat-host). It folds host frames onto the same `TranscriptMessage[]`
 // the CLI path produces (the fold of docs/contract.md §6.20, in TS), so a durable Session read over
 // the socket renders exactly like one read through `cpd session tail`.
+import { applyImmutable } from "@earendil-works/chord/delta";
 import type { TranscriptMessage } from "./transcript.ts";
 import type { HostFrame } from "./api/host.ts";
 
@@ -78,12 +79,44 @@ export function appendEntry(messages: TranscriptMessage[], entry: unknown): void
   }
 }
 
-/** Applies one frame; pure: returns the next state. */
+/** The entries of a view with id greater than `after`, in order. */
+function newEntries(view: unknown, after: number | undefined): Array<{ id: number; entry: unknown }> {
+  const entries = (view as { entries?: unknown } | null)?.entries;
+  if (!Array.isArray(entries)) return [];
+  const out: Array<{ id: number; entry: unknown }> = [];
+  for (const entry of entries) {
+    const id = (entry as { id?: unknown } | null)?.id;
+    if (typeof id !== "number") continue;
+    if (after === undefined || id > after) out.push({ id, entry });
+  }
+  return out;
+}
+
+/** Applies one frame; pure: returns the next state. Throws on an ops frame before any view or an op the delta rules refuse. */
 export function applyHostFrame(state: HostState, frame: HostFrame): HostState {
   switch (frame.type) {
     case "view":
-    case "ops":
-      throw new Error("not implemented");
+    case "ops": {
+      let view: unknown;
+      if (frame.type === "view") view = frame.view;
+      else {
+        if (state.view === undefined) throw new Error("ops frame before any view");
+        view = applyImmutable(state.view as never, frame.ops as never);
+      }
+      const messages = [...state.messages];
+      let lastEntryId = state.lastEntryId;
+      for (const { id, entry } of newEntries(view, state.lastEntryId)) {
+        appendEntry(messages, entry);
+        lastEntryId = id;
+      }
+      const next: HostState = {
+        view,
+        messages,
+        cursor: { epoch: frame.epoch, seq: frame.seq },
+      };
+      if (lastEntryId !== undefined) next.lastEntryId = lastEntryId;
+      return next;
+    }
     default:
       // welcome, attached, host_state, error and bye leave the state unchanged.
       return state;

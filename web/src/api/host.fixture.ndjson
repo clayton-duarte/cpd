@@ -2,4 +2,3 @@
 {"type":"attached","req":"r1","mode":"view","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","from_seq":1,"head_seq":2,"client_id":"c1"}
 {"type":"view","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","seq":1,"view":{"conversation":{"id":1},"entries":[{"id":1,"conversationId":1,"kind":"pi.user","model":[{"role":"user","content":"run the checks"}]},{"id":2,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"on it"}]}]}],"docs":{"pi.agent":{},"pi.live":{},"pi.inbox":{},"pi.provider":{},"pi.usage":{}}}}
 {"type":"ops","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","seq":2,"ops":[["p",["entries"],2,0,[{"id":3,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"done"}]}]}]]]}
-{"type":"host_state","state":"idle"}
