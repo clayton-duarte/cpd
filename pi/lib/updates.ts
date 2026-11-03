@@ -60,7 +60,7 @@ export type PlanEvent = { event: number; at: string; plan: string; text: string;
 /** A Plan Event whose `kind` and `data` are known: what the per-Plan counts read. */
 export type PlanKindEvent = PlanEvent & { kind: string; data: Record<string, unknown> };
 /** An unread board post, as `cpd board take` prints it: `from` is the sending Session, null for the User. */
-export type BoardPost = { at: string; from: string | null; text: string };
+export type BoardPost = { at: string; from: string | null; fromName: string | null; text: string };
 /** A `pr-opened` Event of a Plan: its Workflow key, its pull request number and URL. */
 export type PrOpened = { event: number; plan: string; workflow: string; number: number | null; url: string };
 /** An `error` Event: its Event id and `data.code`. */
@@ -136,8 +136,8 @@ export function parseErrorEvents(out: Record<string, unknown>): ErrorEvent[] {
 export function parseTaken(out: Record<string, unknown>): BoardPost[] {
   if (!Array.isArray(out.taken)) throw bad("board take", "`taken` is not a list");
   return out.taken.map((p) => {
-    if (!isObject(p) || typeof p.at !== "string" || typeof p.text !== "string" || (p.from_session !== null && typeof p.from_session !== "string")) throw bad("board take", "a post lacks at, from_session or text");
-    return { at: p.at, from: p.from_session, text: p.text };
+    if (!isObject(p) || typeof p.at !== "string" || typeof p.text !== "string" || (p.from_session !== null && typeof p.from_session !== "string") || (p.from_name !== null && typeof p.from_name !== "string")) throw bad("board take", "a post lacks at, from_session, from_name or text");
+    return { at: p.at, from: p.from_session, fromName: p.from_name, text: p.text };
   });
 }
 
@@ -201,11 +201,11 @@ const line = (r: ContextRecord): string =>
     : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-const sender = (from: string | null) => (from === null ? "User" : from);
+const sender = (p: BoardPost) => (p.from === null ? "Board post from the User" : `Board post from ${p.fromName ?? p.from} (${p.from})`);
 
 /** The `Board:` section: each post in full with its sender. Empty when there is none. */
 function boardSection(posts: readonly BoardPost[]): string[] {
-  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p.from)} (${proseTime(p.at)}): ${p.text}`)];
+  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p)} (${proseTime(p.at)}): ${p.text}`)];
 }
 
 /** The Event kinds of a Plan's line, in their fixed order, with how each is counted. */

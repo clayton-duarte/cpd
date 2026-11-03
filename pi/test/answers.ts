@@ -10,7 +10,7 @@ export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 
 export const sessionShow = (over: Record<string, unknown> = {}) => ({
   ok: true,
-  session: { id: ID, role: "lead", context: "ctx", plan: "p1", attempt: null, name: "the lead", state: "stopped", plan_lead: true, grounded_lead: false, registered_event: 100, ...over },
+  session: { id: ID, role: "lead", context: "ctx", plan: "p1", attempt: null, name: "the lead", key: "the lead", state: "stopped", plan_lead: true, grounded_lead: false, registered_event: 100, ...over },
   open_escalations: [],
 });
 

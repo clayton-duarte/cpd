@@ -10,6 +10,7 @@ core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait
 core/src/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/mod.rs 1  # m-units: sleep or wall-clock wait
+pi/test/agent-key.test.ts 1  # m-pi: sleep or wall-clock wait (guarded test written by surfaces-tests-pi; its one wait is counted)
 pi/test/askguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/chat-pad.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait

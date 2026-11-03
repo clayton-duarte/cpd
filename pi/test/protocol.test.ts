@@ -28,7 +28,7 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
 });
 
 test("hs-d634, pro-d8: the protocol is 15, the incident kinds and mcp-attached are known", () => {
-  assert.equal(PROTOCOL, 20); // the Workflow rename raised it to 20; context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; workflow-described raised it to 17; hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
+  assert.equal(PROTOCOL, 21); // agent keys raised it to 21; the Workflow rename raised it to 20; context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; workflow-described raised it to 17; hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
   for (const kind of ["incident-started", "incident-ended", "mcp-attached"]) {
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
   }
