@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::fx::Fx;
-use common::{FakeBridge, Run, TestEnv};
+use common::{Run, TestEnv};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::store::Store;
@@ -18,7 +18,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 16] = [
+const NAMES: [&str; 15] = [
     "config",
     "store",
     "tamper",
@@ -34,7 +34,6 @@ const NAMES: [&str; 16] = [
     "host_runner",
     "lead_packages",
     "watch",
-    "holographic",
 ];
 
 /// The deadline of each probe (`doctor::DEADLINE`, commands.md §14.1): a probe that takes this long is `tool_timeout`.
@@ -64,12 +63,9 @@ fn write_config(fx: &Fx, extra: &str) {
     let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
-    // Every config keeps the healthy fake engine, so a test that changes another key still passes `holographic`.
-    let bridge = FakeBridge::new(&fx.env);
     let text = format!(
-        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n{}\n",
-        adapter.display(),
-        bridge.config()
+        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n",
+        adapter.display()
     );
     fx.env.write_config(&text);
     machine_models(fx, ["p/m-opus", "p/m-sonnet", "p/m-low", "p/m-aux"]);
@@ -167,6 +163,17 @@ fn open_store(env: &TestEnv) -> Store {
 }
 
 // ------------------------------------------------------------------ success
+
+/// pro-d1: the holographic engine is removed: no check of that name, and a config without engine keys is healthy.
+#[test]
+fn doctor_has_no_holographic_check() {
+    let fx = healthy();
+    let run = doctor(&fx);
+    run.ok();
+    let all = checks(&run);
+    assert!(all.iter().all(|c| c["name"] != "holographic"), "{all:?}");
+    assert!(all.iter().all(|c| c["ok"] == true), "{all:?}");
+}
 
 #[test]
 fn a_healthy_machine_passes_every_check_in_order() {
