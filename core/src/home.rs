@@ -181,6 +181,11 @@ impl CpdHome {
         self.root.join("run")
     }
 
+    /// `run/quit/<session>`: the marker the User's `/quit` leaves for `session run` (pro-d361). Stub: not yet the path.
+    pub fn quit_marker(&self, session: &SessionId) -> PathBuf {
+        self.run_dir().join(session.as_str())
+    }
+
     /// `run/secret/`: the grants of `cpd secret` (contract §8.4, §1.4).
     pub fn secret_dir(&self) -> PathBuf {
         self.run_dir().join("secret")

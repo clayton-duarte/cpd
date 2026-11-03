@@ -53,3 +53,15 @@ impl HasCpdHome for Home {
         self.dir.path().join("cpd-home")
     }
 }
+
+/// pro-d361: the marker a Lead's `/quit` leaves is one file per Session under `run/quit/`.
+#[test]
+fn the_quit_marker_path_is_under_run_quit_session_id() {
+    let home = Home::empty();
+    let resolved = CpdHome::resolve(Some(home.cpd_home().into()), None).unwrap();
+    let session = cpd_core::ids::SessionId::parse("lead2").unwrap();
+    assert_eq!(
+        resolved.quit_marker(&session),
+        home.cpd_home().join("run").join("quit").join("lead2")
+    );
+}
