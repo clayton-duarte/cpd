@@ -266,6 +266,12 @@ Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH
 | 21 | Run `find web/dist -name Info.plist -path '*cpd.app*'`, then `/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' <that path>`. | The bundle identifier is `com.cpd.desktop`. |
 | 22 | In the packaged app's `Contents/Resources/`, list `icon.png`, `icon.icns` (or `Assets.car`) and `tray/`. | `tray/trayTemplate.png` and `tray/trayAttentionTemplate.png` are present. `icon.png` is present too, so the packaged Dock icon can load. If `icon.png` is missing, this check fails: record it in Notes. |
 
+| **Terminal fixes (pro-d25)** | | |
+| 23 | In TUI, hover over a tmux pane border, then click-drag it. | Hover does not drag the border. Click-drag still resizes the pane. |
+| 24 | Drag the window edge to resize, then release. | The TUI layout grows to the final window size. |
+| 25 | Move the pointer over the terminal. | The pointer is an arrow, not a text cursor. |
+| 26 | Look at the tmux status line and Powerline caps. | Powerline caps and status icons render. |
+
 ### 7.2 Results
 
 | # | Area | Result | Notes |
@@ -278,3 +284,4 @@ Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH
 | 14 to 17 | Live TUI and WebUI switch | [ ] | |
 | 18, 19 | WebUI in the window: links, About, dark theme | [ ] | |
 | 20 to 22 | Packaging | [ ] | |
+| 23 to 26 | Terminal fixes: hover, resize, pointer, Nerd Fonts | [ ] | |

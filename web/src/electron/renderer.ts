@@ -1,5 +1,5 @@
 import { FitAddon, Ghostty, Terminal } from "@aurigax-ai/ghostty-web";
-import { DANGO_THEME, TERMINAL_FONT, startTerminalHost } from "./terminal.ts";
+import { DANGO_THEME, TERMINAL_FONT, fitToContainer, startTerminalHost } from "./terminal.ts";
 import type { TerminalEngine } from "./terminal.ts";
 import { createViewToggle } from "./view.ts";
 import { mountWebui } from "./webui.tsx";
@@ -18,6 +18,11 @@ function boolHidden(el: HTMLElement): { hidden: boolean } {
   } as { hidden: boolean };
 }
 
+let buttons = 0;
+for (const type of ["mousedown", "mouseup", "mousemove"] as const) {
+  window.addEventListener(type, (e: MouseEvent) => { buttons = e.buttons; }, true);
+}
+
 async function boot(): Promise<void> {
   const bridge = window.cpdElectron;
   const container = element("terminal");
@@ -29,7 +34,7 @@ async function boot(): Promise<void> {
   term.loadAddon(fit);
   const engine: TerminalEngine = {
     open: () => term.open(container),
-    fit: () => fit.fit(),
+    fit: () => fitToContainer(fit, term),
     size: () => ({ cols: term.cols, rows: term.rows }),
     write: (data) => term.write(data),
     focus: () => term.focus(),
@@ -41,6 +46,7 @@ async function boot(): Promise<void> {
     },
     dispose: () => term.dispose(),
   };
+  await document.fonts?.ready;
   await startTerminalHost({
     engine,
     bridge,
@@ -51,7 +57,7 @@ async function boot(): Promise<void> {
         return () => observer.disconnect();
       },
     },
-    pointer: { buttons: () => 0 },
+    pointer: { buttons: () => buttons },
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     view: { showTerminal: createViewToggle(boolHidden(container), boolHidden(webuiRoot)) },
     onError: (error) => console.error(error),

@@ -29,6 +29,7 @@ export class Terminal {
   dispose(): void;
   loadAddon(addon: ITerminalAddon): void;
   setPaused(paused: boolean): void;
+  resize(cols: number, rows: number): void;
   onData(listener: (data: string) => void): { dispose(): void };
   onResize(listener: (size: { cols: number; rows: number }) => void): { dispose(): void };
 }
@@ -36,4 +37,5 @@ export class FitAddon implements ITerminalAddon {
   activate(terminal: Terminal): void;
   dispose(): void;
   fit(): void;
+  proposeDimensions(): { cols: number; rows: number } | undefined;
 }
