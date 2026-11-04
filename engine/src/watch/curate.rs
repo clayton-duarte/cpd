@@ -6,5 +6,5 @@ use super::engine::Engine;
 use cpd_core::ids::ContextId;
 
 pub(super) fn run(engine: &mut Engine, contexts: &[ContextId], now: OffsetDateTime) {
-    let _ = (engine, contexts, now);
+    let _ = (&engine.curating, &engine.curate_backoff, contexts, now);
 }
