@@ -82,6 +82,9 @@ mod rename;
 pub(crate) mod render;
 mod search;
 mod show;
+pub mod stats;
+#[cfg(test)]
+mod stats_tests;
 #[cfg(test)]
 mod supersedes_tests;
 mod topics;
@@ -148,6 +151,8 @@ pub enum Command {
     Retire(curation::RetireArgs),
     /// List the Context records Sessions have read or cited (§3.18)
     Reads(reads::ReadsArgs),
+    /// Report a Context's sizes, writing and curation cost, and reads (§3.20)
+    Stats(stats::StatsArgs),
 }
 
 /// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -396,6 +401,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Curation(args) => curation::curation(args),
         Command::Retire(args) => curation::retire(args),
         Command::Reads(args) => reads::reads(args),
+        Command::Stats(args) => stats::stats(args),
     }
 }
 
