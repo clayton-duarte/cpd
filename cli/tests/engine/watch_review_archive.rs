@@ -1,7 +1,7 @@
 //! Engine step E14 for a review Plan (contract §3.7 E14, §3.1 phase `done`; commands.md §31.1): a finished (`done`) Plan of
-//! Context `codereview` is archived as soon as its Lead is `idle` or `stopped`, without waiting for sleep. The engine runs
-//! in-process on virtual time, its `cpd pr poll` answered, with the fake tmux of the tmux route. The Leads here never slept
-//! (`asleep_at` NULL): that is the point.
+//! Context `codereview` follows E13 then E14 like every Plan: it is archived only once its Lead has slept past
+//! `timeouts.archive_sleep_seconds` (24h). The engine runs in-process on virtual time, its `cpd pr poll` answered, with the
+//! fake tmux of the tmux route. A Lead's `asleep_at` is set by `sleep_past_threshold`.
 
 use crate::common;
 
@@ -82,6 +82,14 @@ impl Fx {
         pane
     }
 
+    /// Lead `lead` has slept for longer than `timeouts.archive_sleep_seconds` (24h).
+    fn sleep_past_threshold(&self, lead: &str) {
+        let at = self.env.stamp_ago(86_400_000 + 60_000);
+        self.fixture(&format!(
+            "UPDATE sessions SET asleep_at = '{at}' WHERE id = '{lead}';"
+        ));
+    }
+
     fn run(&self, ticks: usize) {
         self.env.watch_ticks(ticks).unwrap();
     }
@@ -127,9 +135,16 @@ impl Fx {
 }
 
 #[test]
-fn review_done_plan_is_archived_when_its_lead_is_idle() {
+fn review_done_plan_is_archived_when_its_lead_is_idle_and_asleep_past_the_threshold() {
     let fx = fx();
     let pane = fx.plan("codereview", "rv", "done", "idle");
+    fx.run(1);
+    assert!(
+        !fx.archived("plans", "rv"),
+        "not archived before its Lead sleeps"
+    );
+    assert!(fx.pane_alive(&pane));
+    fx.sleep_past_threshold("rv-lead");
     fx.run(1);
     assert!(fx.archived("plans", "rv"), "the Plan is archived");
     assert!(fx.archived("sessions", "rv-lead"), "its Lead is archived");
@@ -141,6 +156,7 @@ fn review_done_plan_is_archived_when_its_lead_is_idle() {
 fn review_done_plan_waits_while_its_lead_is_working_then_is_archived() {
     let fx = fx();
     let pane = fx.plan("codereview", "rv", "done", "working");
+    fx.sleep_past_threshold("rv-lead");
     fx.run(LATER_TICKS);
     assert!(!fx.archived("plans", "rv"), "a working Lead keeps its Plan");
     assert!(fx.pane_alive(&pane), "its pane stays");
@@ -165,6 +181,7 @@ fn review_done_plan_in_the_chat_slot_is_tried_again_next_tick() {
         .expect("the chat placeholder")
         .pane;
     fx.tmux_ok(&["swap-pane", "-d", "-s", &pane, "-t", &placeholder]);
+    fx.sleep_past_threshold("rv-lead");
     fx.run(1);
     assert!(
         !fx.archived("plans", "rv"),
@@ -237,6 +254,18 @@ fn review_done_plan_that_is_not_finished_is_kept() {
     // Control: a finished Plan next to them is archived, so the engine did run E14 for the review Context.
     let control = fx.plan("codereview", "control", "done", "idle");
 
+    // Every Lead has slept past the threshold: only what is left of the Plan keeps it.
+    for plan in [
+        "inbox",
+        "running",
+        "escalated",
+        "reviewed",
+        "ground",
+        "control",
+    ] {
+        fx.sleep_past_threshold(&format!("{plan}-lead"));
+    }
+
     fx.run(LATER_TICKS);
     assert!(
         fx.archived("plans", "control"),
@@ -264,10 +293,11 @@ fn review_archive_never_messages_or_wakes_the_manager() {
     let fx = fx();
     let pane = fx.plan("codereview", "rv", "done", "idle");
     let manager = "SELECT state || '|' || state_at || '|' || coalesce(tmux_pane, '') || '|' || coalesce(asleep_at, '') || '|' || coalesce(archived_at, '') FROM sessions WHERE id = 'mgr-review'";
-    let before: String = fx.env.env.query(manager);
     let leads = "SELECT count(*) FROM sessions WHERE role = 'lead'";
     let rows = fx.count(leads);
     let panes = fx.env.panes().len();
+    fx.sleep_past_threshold("rv-lead");
+    let before: String = fx.env.env.query(manager);
     fx.run(1);
     assert!(fx.archived("plans", "rv"), "the Plan is archived");
     assert!(!fx.pane_alive(&pane));
@@ -295,6 +325,7 @@ fn done_plan_of_another_context_is_not_archived_before_it_sleeps() {
 fn an_archived_review_plan_is_not_selected_again() {
     let fx = fx();
     fx.plan("codereview", "rv", "done", "idle");
+    fx.sleep_past_threshold("rv-lead");
     fx.run(LATER_TICKS);
     let after_first = fx.written();
     fx.run(LATER_TICKS);

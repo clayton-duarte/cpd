@@ -3215,7 +3215,7 @@ How the pi adapter reports its agent state (§3.6, D4). `--session <id>` takes a
 |---|---|---|
 | the transition is in §3.6's table | `illegal_transition` | 3 |
 
-Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. No tmux.
+Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6), so it opens no `replied` Item. No tmux.
 
 ```json
 {"ok": true, "session": "596d007f-…", "state": "waiting", "label": "φ: Worker question", "from": "working"}
@@ -3847,7 +3847,7 @@ cpd watch [--ensure | --check]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the Workflow start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515; E14, archive asleep Sessions and finished `codereview` Plans, hs-d630, FR10) (E23 is retired, pro-d388, contract §3.7; no Step sends a Slack message by itself) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the Workflow start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515; E14, archive asleep Sessions and their Plans, hs-d630, pro-d391) (E23 is retired, pro-d388, contract §3.7; no Step sends a Slack message by itself) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
@@ -6198,7 +6198,7 @@ Read `<home>/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and 
 1. Turn 1: run `~/cpd-codereview/cpd-code-review/prefetch.sh "<url>" "/tmp/$CPD_PLAN"`.
 2. Never run `cpd context show --context codereview`; never message any Manager or Lead (`cpd session send` / `cpd board post`).
 3. Use `<home>/projects/<repo_name>` (`git show`/`git grep`) and `H2` `scout` Jobs (`cpd job add --kind scout --tier H2`) if wide/cross-repo/multi-branch exploration is needed.
-4. After the User answers the `Verdict` `ask_user_question`, run 1 bash call (`cpd review submit ... --slack <channel>/<ts_raw> && cpd context note ...`) and stop.
+4. After the User answers the `Verdict` `ask_user_question`, run 1 bash call (`cpd review submit ... --slack <channel>/<ts_raw> && cpd context note ...`) and stop. Emit no report after the submit (pro-d391).
 ```
 
 Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.

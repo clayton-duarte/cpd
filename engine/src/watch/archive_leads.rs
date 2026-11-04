@@ -1,7 +1,6 @@
 //! E14, the archive of finished Plans (contract §3.7, §2.2 "Archived"; hs-d630, hs-d633): archives the done Plan of
-//! each Lead whose `asleep_at` is older than `timeouts.archive_sleep_seconds`, and at once every finished `done` Plan
-//! of Context `codereview` whose Lead is `idle` or `stopped`, taking the whole Plan through the
-//! `plan archive` cascade. A refusal (`archive_blocked`, `in_chat_slot`) is not an error: the Plan is skipped this
+//! each Lead whose `asleep_at` is older than `timeouts.archive_sleep_seconds`, taking the whole Plan through the
+//! `plan archive` cascade. A finished codereview Plan follows E13 then E14 like every Plan. A refusal (`archive_blocked`, `in_chat_slot`) is not an error: the Plan is skipped this
 //! tick and its Lead stays asleep. Idempotent: after the archive the Lead is not selected again.
 
 use time::OffsetDateTime;
@@ -17,21 +16,14 @@ use cpd_core::plan::archive::{self, Objects};
 /// Every Plan with a Lead asleep past the threshold whose Plan is still finished (contract §3.7; hs-d630). `?1` is
 /// `now`, `?2` the cut-off `now - timeouts.archive_sleep_seconds`; E13's [`LEAD_FINISHED`] is shared so "finished"
 /// cannot drift. A Plan with `deleted_at` set (a tombstone, §2.2 "Deleted") is never a candidate (hs-d716).
-/// The second selection is every finished Plan of Context `codereview` whose own Lead (`p.lead_session`, never a
-/// side fork) is `idle` or `stopped`: archived at once, no cut-off. `UNION` keeps the result distinct: a Plan's side
-/// forks are Leads too, and its Plan is archived once.
+/// A finished codereview Plan is no special case: it sleeps via E13 and is archived here after the cut-off, like every Plan.
 fn archivable() -> String {
     format!(
         "SELECT p.id FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role = 'lead' AND s.archived_at IS NULL AND s.asleep_at IS NOT NULL AND s.asleep_at <= ?2
             AND p.deleted_at IS NULL
             AND {LEAD_FINISHED}
-         UNION
-         SELECT p.id FROM plans p JOIN sessions s ON s.id = p.lead_session
-          WHERE p.context = 'codereview' AND p.archived_at IS NULL AND p.deleted_at IS NULL
-            AND s.state IN ('idle', 'stopped')
-            AND {LEAD_FINISHED}
-          ORDER BY 1"
+         ORDER BY 1"
     )
 }
 
