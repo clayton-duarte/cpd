@@ -78,10 +78,14 @@ test("installQuitMarker editor draws the working pill in the top border", (t) =>
   t.after(() => setWorkingWords(undefined));
   const ui = { requestRender: () => {}, terminal: { rows: 40, columns: 60 } };
   const editor = factory(ui, { borderColor: (s: string) => s }, { matches: () => false }) as unknown as {
-    workingStatusIndicator?: unknown;
+    embedWorkingStatus?: boolean;
+    setWorkingStatusIndicator?: (indicator: unknown) => void;
     render(width: number): string[];
   };
-  editor.workingStatusIndicator = { kind: "compaction" };
+  // pi mounts the indicator only on an embedded editor (interactive-mode.js isEmbeddedStatus, :95-100).
+  if (editor.embedWorkingStatus === true && typeof editor.setWorkingStatusIndicator === "function") {
+    editor.setWorkingStatusIndicator({ kind: "compaction" });
+  }
   const row = editor.render(60)[0]!.replace(/\x1b\[[0-9;]*m/gu, "");
   assert.match(row, /^╭─\ue0b6.*Compacting….*\ue0b4─+╮$/u);
   assert.equal(visibleWidth(row), 60);
