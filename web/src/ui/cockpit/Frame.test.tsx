@@ -91,21 +91,19 @@ const shellParts = (c: HTMLElement) => Array.from(c.querySelector("[data-shell]"
   expect(c.querySelector("[data-emblem]")?.textContent).toBe("C-P-D");
 });
 
-it("StatusBar shows runner, state and version", () => {
-  const c = show(<StatusBar runner="pi" state="idle" version={{ state: "known", value: "0.21.102" }} />);
-  expect(c.querySelector('[data-part="runner"]')?.textContent).toBe("Runner: pi");
-  expect(c.querySelector('[data-part="state"]')?.textContent).toBe("State: idle");
+it("StatusBar shows the runner pill and version, without State", () => {
+  const status = { runner: "pi", preview: null, incident: null, workers: null, version: "0.21.102", hostAlert: false } as const;
+  const c = show(<StatusBar status={status} costsOn={false} onReset={() => {}} onLegend={() => {}} onLogs={() => {}} onCosts={() => {}} onSettings={() => {}} />);
+  expect(c.querySelector('[data-part="runner"]')?.textContent).toBe("pi");
+  expect(c.querySelector('[data-part="state"]')).toBeNull();
   expect(c.querySelector('[data-part="version"]')?.textContent).toBe("cpd: 0.21.102");
 });
 
-it("StatusBar shows unknown version and none for no session", () => {
-  const c = show(<StatusBar runner={null} state={null} version={{ state: "unknown", reason: "r" }} />);
-  expect(c.querySelector('[data-part="runner"]')?.textContent).toBe("Runner: none");
-  expect(c.querySelector('[data-part="state"]')?.textContent).toBe("State: none");
-  expect(c.querySelector('[data-part="version"]')?.textContent).toBe("cpd: unknown");
-  mounted?.unmount();
-  const c2 = show(<StatusBar runner={null} state={null} version={null} />);
-  expect(c2.querySelector('[data-part="version"]')?.textContent).toBe("cpd: unknown");
+it("StatusBar omits runner and version while unknown", () => {
+  const status = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false } as const;
+  const c = show(<StatusBar status={status} costsOn={false} onReset={() => {}} onLegend={() => {}} onLogs={() => {}} onCosts={() => {}} onSettings={() => {}} />);
+  expect(c.querySelector('[data-part="runner"]')).toBeNull();
+  expect(c.querySelector('[data-part="version"]')).toBeNull();
 });
 
 it("Shell renders header and status slots around the panes", () => {

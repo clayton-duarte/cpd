@@ -276,8 +276,11 @@ export function ContextTree(props: {
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
   onNewContext?: () => void;
+  /** Costs by Context id and Plan id; drawn only while `costsOn`. */
+  costsOn?: boolean;
+  costs?: { readonly contexts: Readonly<Record<string, number>>; readonly plans: Readonly<Record<string, number>> };
 }): ReactElement {
-  const { tree, onNewContext, ...handlers } = props;
+  const { tree, onNewContext, costsOn: _costsOn, costs: _costs, ...handlers } = props;
   const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
   const [standingOpen, setStandingOpen] = usePersistedBoolean("section:standing", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);

@@ -2,10 +2,29 @@ import type { ReactElement } from "react";
 import type { Runner, SessionState, Stat } from "../../protocol/domain.ts";
 import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
 
+/** The machine status the server sends (pro-d40). Wire shape fixed by bar-t-ui's tests. */
+export interface StatusModel {
+  readonly runner: "pi" | "durable" | null;
+  readonly preview: string | null;
+  /** Elapsed text of an open incident (`5m`, `2h 5m`, `3d`); null when no incident is on. */
+  readonly incident: string | null;
+  readonly workers: { readonly queued: number; readonly ready: number; readonly tenants: number; readonly concurrency: number } | null;
+  readonly version: string | null;
+  readonly hostAlert: boolean;
+}
+
 export interface StatusBarProps {
-  readonly runner: Runner | null;
-  readonly state: SessionState | null;
-  readonly version: Stat<string> | null;
+  // Old props stay optional until the implementation Job moves App to `status`.
+  readonly runner?: Runner | null;
+  readonly state?: SessionState | null;
+  readonly version?: Stat<string> | null;
+  readonly status?: StatusModel;
+  readonly costsOn?: boolean;
+  readonly onReset?: () => void;
+  readonly onLegend?: () => void;
+  readonly onLogs?: () => void;
+  readonly onCosts?: () => void;
+  readonly onSettings?: () => void;
   readonly showCost?: boolean;
   readonly onToggleCost?: () => void;
   readonly onResetLayout?: () => void;
@@ -14,7 +33,7 @@ export interface StatusBarProps {
 const BTN = "h-[22px] rounded-[4px] px-2 text-fg-strong hover:bg-row-hover";
 
 export function StatusBar(props: StatusBarProps): ReactElement {
-  const { runner, state, version, showCost = false, onToggleCost, onResetLayout } = props;
+  const { runner = null, state = null, version = null, showCost = false, onToggleCost, onResetLayout } = props;
   const d = state === null ? null : sessionDisplay[dotDisplay({ state, attention: null })];
   return (
     <div data-part="status-bar" className="flex h-full w-full items-center gap-1 overflow-hidden px-2 text-[11.5px]">
