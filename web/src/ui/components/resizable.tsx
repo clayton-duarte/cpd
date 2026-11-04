@@ -4,10 +4,22 @@ import { cn } from "../../lib/utils.ts";
 
 function ResizablePanelGroup({
   className,
+  id,
+  defaultLayout: defaultLayoutProp,
+  onLayoutChanged: onLayoutChangedProp,
   ...props
 }: ResizablePrimitive.GroupProps): React.ReactElement {
+  const persisted = ResizablePrimitive.useDefaultLayout({
+    id: id ?? "cpd-resizable",
+  });
   return (
     <ResizablePrimitive.Group
+      id={id}
+      defaultLayout={defaultLayoutProp ?? (id ? persisted.defaultLayout : undefined)}
+      onLayoutChanged={(layout, meta) => {
+        if (id) persisted.onLayoutChanged(layout, meta);
+        onLayoutChangedProp?.(layout, meta);
+      }}
       data-slot="resizable-panel-group"
       className={cn(
         "flex h-full w-full aria-[orientation=vertical]:flex-col",

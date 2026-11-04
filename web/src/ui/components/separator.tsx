@@ -1,6 +1,25 @@
-import type { ReactElement } from "react";
+import { Separator as SeparatorPrimitive } from "radix-ui";
+import * as React from "react";
+import { cn } from "../../lib/utils.ts";
 
-/** Stub: the shadcn Separator is not implemented yet. */
-export function Separator(_props: { orientation?: "horizontal" | "vertical"; className?: string }): ReactElement {
-  return <div />;
+function Separator({
+  className,
+  orientation = "horizontal",
+  decorative = true,
+  ...props
+}: React.ComponentProps<typeof SeparatorPrimitive.Root>): React.ReactElement {
+  return (
+    <SeparatorPrimitive.Root
+      data-slot="separator"
+      decorative={decorative}
+      orientation={orientation}
+      className={cn(
+        "bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
+
+export { Separator };

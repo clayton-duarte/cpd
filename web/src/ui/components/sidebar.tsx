@@ -30,7 +30,7 @@ export function SidebarMenuButton({ className, ...p }: ComponentProps<"button">)
   return <button type="button" data-slot="sidebar-menu-button" data-sidebar="menu-button" className={cn("flex h-7 w-full items-center gap-2 overflow-hidden rounded-sm px-2 pr-8 text-left text-sm outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring", className)} {...p} />;
 }
 export function SidebarMenuAction({ className, ...p }: ComponentProps<"button">) {
-  return <button type="button" data-slot="sidebar-menu-action" data-sidebar="menu-action" className={cn("absolute right-1 top-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring", className)} {...p} />;
+  return <button type="button" className={cn("absolute right-1.5 top-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring", className)} {...p} data-slot="sidebar-menu-action" data-sidebar="menu-action" />;
 }
 export function SidebarMenuSub({ className, ...p }: ComponentProps<"ul">) {
   return <ul data-slot="sidebar-menu-sub" data-sidebar="menu-sub" className={cn("flex min-w-0 flex-col gap-0.5 pl-4", className)} {...p} />;
