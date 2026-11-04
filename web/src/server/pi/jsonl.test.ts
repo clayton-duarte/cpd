@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WebError } from "../../protocol/domain.ts";
 import type { FoldItem, ToolItem } from "../../protocol/domain.ts";
-import { createNormalizer, normalizeText, parseLine } from "./jsonl.ts";
+import { countItems, createNormalizer, normalizeText, parseLine } from "./jsonl.ts";
 
 const line = (o: unknown): string => JSON.stringify(o);
 const userMsg = (id: string, content: unknown) =>
@@ -122,10 +122,80 @@ describe("pi jsonl normalisation", () => {
       custom("h1", "cpd-first-message", "x", {}, false),
       custom("h2", "cpd-reminder", "x", {}),
       custom("h3", "cpd-context", "hidden by display", {}, false),
-      custom("h4", "cpd", "session message", {}),
       custom("h5", "something-else", "x", {}),
     ].join("\n");
     expect(normalizeText(text).items).toEqual([]);
+  });
+
+  const cpdMsg = (id: string, content: string, details: unknown, display: boolean = true) =>
+    line({ type: "custom_message", id, customType: "cpd", content, display, details, timestamp: "2026-11-03T20:28:42.748Z" });
+  const fromNull = cpdMsg(
+    "d0c4d136",
+    "Message from the User (15:28 EST): Drafts of Plan x are parked",
+    { id: 96920, at: "2026-11-03T20:28:42.459Z", kind: "session-message", text: "Message from the User: Drafts", data: { from: null, text: "Drafts of Plan x are parked", wake: true } },
+  );
+  const fromSession = cpdMsg(
+    "e1",
+    "Message from cpd-context (75b61f97) (16:03 EST): From the Manager hello",
+    { kind: "session-message", text: "Message from cpd-context: From the Manager hello", data: { from: "75b61f97-8377-4feb-97e6-2f1c1d1ed439", text: "From the Manager hello" } },
+  );
+  const engine = cpdMsg("e2", "Job scout-merge (scout) merged: findings in x.md.\nSummary: s", {
+    kind: "job-merged",
+    text: "Job scout-merge (scout) merged: findings in x.md.\nSummary: s",
+    data: { artefact: "x.md" },
+  });
+
+  it("cpd session-message from null becomes a user item", () => {
+    const { items } = normalizeText(fromNull);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "user",
+      id: "u:d0c4d136",
+      text: "Drafts of Plan x are parked",
+      at: "2026-11-03T20:28:42.459Z",
+      attachments: [],
+    });
+  });
+
+  it("cpd session-message from a session becomes a cpd fold titled by sender", () => {
+    const { items } = normalizeText(fromSession);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "fold",
+      id: "f:e1",
+      foldKind: "cpd",
+      defaultOpen: false,
+      title: "Message from 75b61f97-8377-4feb-97e6-2f1c1d1ed439",
+      body: "Message from cpd-context (75b61f97) (16:03 EST): From the Manager hello",
+    });
+  });
+
+  it("cpd engine event becomes a collapsed cpd fold", () => {
+    const { items } = normalizeText(engine);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "fold",
+      id: "f:e2",
+      foldKind: "cpd",
+      defaultOpen: false,
+      title: "Job scout-merge (scout) merged: findings in x.md.",
+    });
+  });
+
+  it("cpd custom messages count as one item each for the window", () => {
+    const counts = [fromNull, fromSession, engine].map((l, i) => countItems(parseLine(l, { offset: i })));
+    expect(counts).toEqual([1, 1, 1]);
+  });
+
+  it("cpd custom message with display false is dropped", () => {
+    const hidden = cpdMsg("x1", "hidden", { kind: "job-merged", text: "hidden", data: {} }, false);
+    expect(normalizeText([hidden, engine].join("\n")).items.map((i) => i.id)).toEqual(["f:e2"]);
+    expect(countItems(parseLine(hidden, { offset: 0 }))).toBe(0);
+  });
+
+  it("cpd session-message from null sets lastRole user", () => {
+    const text = [assistantMsg("a1", [{ type: "text", text: "hi" }]), fromNull].join("\n");
+    expect(normalizeText(text).facts.lastRole).toBe("user");
   });
 
   it("malformed lines raise a typed error with the line number", () => {

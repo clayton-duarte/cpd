@@ -88,6 +88,8 @@ function foldTitle(kind: FoldKind, body: string, details: Obj): string {
       return `Plan review ${String(details.review)} ${details.approved === true ? "approved" : "rejected"}`;
     case "cpd-skills":
       return firstLine(body);
+    case "cpd":
+      return firstLine(body);
   }
 }
 

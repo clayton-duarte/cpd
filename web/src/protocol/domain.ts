@@ -72,7 +72,7 @@ export interface ToolItem {
   readonly diff?: string; // edit only: `details.patch` when it is a string, else `details.diff` when it is a string; absent otherwise (unverified in a real file, O3)
 }
 
-export type FoldKind = "cpd-context" | "cpd-plan-decision" | "cpd-plan-summary" | "cpd-skills";
+export type FoldKind = "cpd-context" | "cpd-plan-decision" | "cpd-plan-summary" | "cpd-skills" | "cpd";
 export interface FoldItem {
   readonly kind: "fold";
   readonly id: ItemId;
