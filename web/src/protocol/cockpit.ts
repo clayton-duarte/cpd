@@ -17,6 +17,7 @@ export interface SessionNode {
   readonly jobKey: string | null; // third segment of `key` for a Worker; null otherwise
   readonly archived: boolean; // archived_at !== null
   readonly dot: SessionDot;
+  readonly createdAt?: string;
 }
 export interface PlanNode {
   readonly id: string;
@@ -27,6 +28,7 @@ export interface PlanNode {
   readonly counts: PlanCounts;
   readonly leadSessionId: string | null;
   readonly sessions: readonly SessionNode[]; // the Plan's sessions: the Lead first, then Workers in `session list` order
+  readonly createdAt?: string;
 }
 export interface ContextNode {
   readonly id: string;
@@ -36,6 +38,7 @@ export interface ContextNode {
   readonly openQuestions: number;
   readonly sessions: readonly SessionNode[]; // sessions of the Context with plan === null (Manager, forks)
   readonly plans: readonly PlanNode[];
+  readonly createdAt?: string;
 }
 export interface ContextTreeModel {
   readonly contexts: readonly ContextNode[];

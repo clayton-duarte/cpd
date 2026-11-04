@@ -85,9 +85,17 @@ it("context tree renders sections glyphs and counters", () => {
   expect(ctxRow?.querySelector('[data-part="aggregate"]')).toBeNull();
   const planRow = c.querySelector('[data-plan="p1"] button[data-select="plan"]');
   const planDot = planRow?.querySelector('[role="img"][data-dot]');
-  expect(planDot?.getAttribute("data-glyph")).toBe("active");
-  expect(planDot?.getAttribute("data-tone")).toBe("active");
-  expect(planDot?.className).toContain("glyph-active");
+  // pro-d45: p1 has failed jobs and a working Lead: the red fixing loader, a lucide icon with no glyph-* class
+  expect(planDot?.getAttribute("data-dot")).toBe("fixing");
+  expect(planDot?.getAttribute("data-tone")).toBe("blocked");
+  expect(planDot?.tagName.toLowerCase()).toBe("svg");
+  expect(planDot?.children.length).toBe(1);
+  expect(planDot?.children[0]?.tagName.toLowerCase()).toBe("path");
+  expect(planDot?.classList.contains("animate-spin")).toBe(true);
+  expect(planDot?.classList.contains("text-status-blocked-bright")).toBe(true);
+  expect(planDot?.classList.contains("shrink-0")).toBe(true);
+  expect(planDot?.classList.contains("!size-3.5")).toBe(true);
+  expect(Array.from(planDot?.classList ?? []).some((c) => c.startsWith("glyph"))).toBe(false);
   const stopped = c.querySelector('[data-plan="p2"] button[data-select="plan"] [role="img"][data-dot]');
   expect(stopped?.getAttribute("data-dot")).toBe("stopped");
   const counts = planRow?.querySelector('[data-part="counters"]');
@@ -134,6 +142,6 @@ it("context tree marks the selected plan", () => {
   expect(c.querySelector('[data-context="c1"] > button[data-select="context"]')?.getAttribute("aria-current")).toBe("true");
   expect(c.querySelector('[data-session="s-lead"]')).toBeNull();
   expect(c.querySelectorAll('[role="img"][data-dot]')).toHaveLength(3);
-  expect(c.querySelector('[data-dot="working"]')?.getAttribute("data-tone")).toBe("active");
+  expect(c.querySelector('[data-dot="fixing"]')?.getAttribute("data-tone")).toBe("blocked");
   m.unmount();
 });

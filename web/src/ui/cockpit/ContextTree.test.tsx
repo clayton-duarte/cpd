@@ -122,7 +122,7 @@ it("a Plan is one row that selects the Plan and its Lead session", () => {
   const p = props();
   const m = mount(<ContextTree {...p} />);
   const btn = q(m.container, '[data-plan="p1"] button[data-select="plan"]');
-  expect(btn?.querySelector('[role="img"][data-dot]')?.getAttribute("data-dot")).toBe("working");
+  expect(btn?.querySelector('[role="img"][data-dot]')?.getAttribute("data-dot")).toBe("fixing");
   expect(q(m.container, 'button[data-session="s-lead"]')).toBeNull();
   click(btn);
   expect(p.onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
@@ -401,4 +401,158 @@ it("a closed section stays closed after a remount", () => {
   const closed = mount(<ContextTree {...props({ tree: layered })} />);
   expect(q(closed.container, '[data-context="hot"]')).toBeNull();
   closed.unmount();
+});
+
+// pro-d45: the dot of a row is a lucide icon; hooks data-dot, data-tone, data-work.
+type Dot = SessionNode["dot"];
+const dotMgr = (state: Dot["state"], attention: Dot["attention"] = null): SessionNode => session("m", "c1", state, null, { dot: { state, attention } });
+const zero = { draft: 0, queued: 0, running: 0, merging: 0, merged: 0, failed: 0, cancelled: 0 };
+
+function dotTree(opts: { dot?: Dot; archived?: boolean; plan?: { phase?: string; counts?: Partial<typeof zero>; dot: Dot } }): ContextTreeModel {
+  const ctx: ContextNode = {
+    id: "c1", title: "C", archived: opts.archived ?? false, records: 0, openQuestions: 0,
+    sessions: [dotMgr(opts.dot?.state ?? "idle", opts.dot?.attention ?? null)],
+    plans: opts.plan === undefined ? [] : [{
+      id: "p1", contextId: "c1", title: "P", phase: opts.plan.phase ?? "dispatch", archived: false,
+      counts: { ...zero, ...opts.plan.counts }, leadSessionId: "l",
+      sessions: [session("l", "c1:p1", opts.plan.dot.state, null, { planId: "p1", role: "lead", dot: opts.plan.dot })],
+    }],
+  };
+  return { cursor: 1, contexts: [ctx] };
+}
+const dotOf = (c: ParentNode, sel: string): Element => {
+  const el = c.querySelector(`${sel} [role="img"][data-dot]`);
+  if (el === null) throw new Error("dot not found");
+  return el;
+};
+const ctxDot = (c: ParentNode) => dotOf(c, '[data-context="c1"] > button[data-select="context"]');
+const planDot = (c: ParentNode) => dotOf(c, '[data-plan="p1"] button[data-select="plan"]');
+// lucide-react 1.65 sets no lucide-* class: tell the icons apart by their SVG children.
+const shape = (el: Element): string => {
+  const kids = Array.from(el.children).map((k) => k.tagName.toLowerCase());
+  if (kids.length === 1 && kids[0] === "circle") return "circle";
+  if (kids.length === 1 && kids[0] === "path") return "loader-circle";
+  if (kids.length > 1 && kids.every((k) => k === "path")) return "circle-dashed";
+  return `unknown:${kids.join(",")}`;
+};
+const icon = (el: Element, name: string): void => {
+  expect(el.tagName.toLowerCase()).toBe("svg");
+  expect(shape(el)).toBe(name);
+  expect(el.classList.contains("!size-3.5")).toBe(true);
+  expect(el.classList.contains("shrink-0")).toBe(true);
+};
+const has = (el: Element, ...cls: string[]): void => {
+  for (const c of cls) expect(el.classList.contains(c), c).toBe(true);
+};
+const lacks = (el: Element, ...cls: string[]): void => {
+  for (const c of cls) expect(el.classList.contains(c), c).toBe(false);
+};
+function dotsOf(model: ContextTreeModel, pick: (c: ParentNode) => Element, check: (el: Element) => void): void {
+  const m = mount(<ContextTree {...props({ tree: model })} />);
+  check(pick(m.container));
+  m.unmount();
+}
+
+it("a needs-you row shows a filled circle in the colour of its attention", () => {
+  const colours = {
+    red: "text-status-blocked-bright",
+    yellow: "text-status-landing-bright",
+    magenta: "text-status-decision-bright",
+    cyan: "text-status-active-bright",
+    white: "text-fg-strong",
+  } as const;
+  for (const [attention, colour] of Object.entries(colours)) {
+    dotsOf(dotTree({ dot: { state: "waiting", attention: attention as Dot["attention"] } }), ctxDot, (el) => {
+      icon(el, "circle");
+      has(el, "fill-current", colour);
+      lacks(el, "animate-spin");
+      expect(el.getAttribute("data-dot")).toBe("waiting");
+    });
+  }
+});
+
+it("a working Plan row shows a spinning loader coloured by its work state", () => {
+  const working: Dot = { state: "working", attention: null };
+  const cases: Array<[string, string, Partial<typeof zero>, string, string]> = [
+    ["plan", "plan", { draft: 1 }, "planning", "text-status-decision-bright"],
+    ["grounding", "grounding", {}, "planning", "text-status-decision-bright"],
+    ["done", "done", {}, "planning", "text-status-decision-bright"],
+    ["dispatch", "dispatch", { running: 1 }, "dispatch", "text-status-active-bright"],
+    ["deploy", "deploy", {}, "review", "text-status-landing-bright"],
+    ["merging", "dispatch", { merging: 1 }, "review", "text-status-landing-bright"],
+  ];
+  for (const [, phase, counts, work, colour] of cases) {
+    dotsOf(dotTree({ plan: { phase, counts, dot: working } }), planDot, (el) => {
+      icon(el, "loader-circle");
+      has(el, "animate-spin", colour);
+      expect(el.getAttribute("data-dot")).toBe("working");
+      expect(el.getAttribute("data-work")).toBe(work);
+    });
+  }
+});
+
+it("a working Plan with failed jobs shows the fixing loader", () => {
+  dotsOf(dotTree({ plan: { counts: { failed: 2 }, dot: { state: "working", attention: null } } }), planDot, (el) => {
+    icon(el, "loader-circle");
+    has(el, "animate-spin", "text-status-blocked-bright");
+    expect(el.getAttribute("data-dot")).toBe("fixing");
+    expect(el.getAttribute("data-tone")).toBe("blocked");
+  });
+  // not working: no fixing loader
+  dotsOf(dotTree({ plan: { counts: { failed: 2 }, dot: { state: "idle", attention: null } } }), planDot, (el) => {
+    expect(el.getAttribute("data-dot")).toBe("idle");
+    lacks(el, "animate-spin");
+  });
+});
+
+it("a working Manager or Fork row shows a strong-foreground loader", () => {
+  dotsOf(dotTree({ dot: { state: "working", attention: null } }), ctxDot, (el) => {
+    icon(el, "loader-circle");
+    has(el, "animate-spin", "text-fg-strong");
+    expect(el.getAttribute("data-dot")).toBe("working");
+    expect(el.getAttribute("data-work")).toBe("session");
+  });
+});
+
+it("a waiting row shows a dashed circle", () => {
+  dotsOf(dotTree({ dot: { state: "waiting", attention: null } }), ctxDot, (el) => {
+    icon(el, "circle-dashed");
+    has(el, "text-status-active-bright");
+    lacks(el, "animate-spin", "fill-current");
+    expect(el.getAttribute("data-dot")).toBe("waiting");
+  });
+});
+
+it("an idle row shows a hollow circle", () => {
+  dotsOf(dotTree({ dot: { state: "idle", attention: null } }), ctxDot, (el) => {
+    icon(el, "circle");
+    has(el, "text-fg-strong");
+    lacks(el, "fill-current", "animate-spin");
+    expect(el.getAttribute("data-dot")).toBe("idle");
+  });
+});
+
+it("a stopped or archived row shows a dim circle and never spins", () => {
+  dotsOf(dotTree({ dot: { state: "stopped", attention: null } }), ctxDot, (el) => {
+    icon(el, "circle");
+    has(el, "text-fg-dim");
+    lacks(el, "fill-current", "animate-spin");
+    expect(el.getAttribute("data-dot")).toBe("stopped");
+  });
+  const archived = (dot: Dot): Element => {
+    const m = mount(<ContextTree {...props({ tree: dotTree({ dot, archived: true }) })} />);
+    const toggle = m.container.querySelector('[data-archived] [data-slot="sidebar-group-label"] button');
+    act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const el = ctxDot(m.container).cloneNode(true) as Element;
+    m.unmount();
+    return el;
+  };
+  const spinning = archived({ state: "working", attention: null });
+  icon(spinning, "circle");
+  has(spinning, "text-fg-dim");
+  lacks(spinning, "animate-spin", "fill-current");
+  const attentive = archived({ state: "waiting", attention: "red" });
+  icon(attentive, "circle");
+  has(attentive, "text-fg-dim", "fill-current");
+  lacks(attentive, "animate-spin", "text-status-blocked-bright");
 });
