@@ -63,3 +63,7 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
 ## Limits
 
 A preview costs one release build of the worktree. The engine's pi chat (pi/lib/render.ts) is not reached by the view, so messages there don't appear in the preview. A branch missing a breaking migration of main is refused by the install guard; merge main first.
+
+## Server hot reload (pro-d46)
+
+Skeleton: the SIGUSR1 extension follows.

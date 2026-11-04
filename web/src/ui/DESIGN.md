@@ -888,3 +888,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 | `app.css.test.ts` 1, 2 | none |
 | `app.css.test.ts` 3 | **changed** by 2a and 3c: the selector regex for the tree and inbox asides matches `[data-shell] aside` (not `[data-shell] > aside`); the `declsMatching(/plan/i)` assertion drops `max-height` |
 | `AppMemo.test.tsx` | none |
+
+### 3g. Tree context menus, live update and hot reload (pro-d46)
+
+Skeleton: the sections of pro-d46 follow. Records: pro-d46 (User approved live, 2026-11-04 17:38 EST).
