@@ -80,3 +80,16 @@ pub fn topics(conn: &Connection, context: &ContextId) -> Result<Vec<String>, Cpd
         .into_iter()
         .collect())
 }
+
+/// The curated records in force per topic, sorted by topic: `(topic, count)`.
+pub fn topic_counts(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<Vec<(String, usize)>, CpdError> {
+    let loaded = load(conn, context)?;
+    let mut counts = std::collections::BTreeMap::new();
+    for (_, topic, _) in curated(&loaded) {
+        *counts.entry(topic.to_owned()).or_insert(0) += 1;
+    }
+    Ok(counts.into_iter().collect())
+}

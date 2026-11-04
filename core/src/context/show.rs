@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{ContextRow, Record, ShowArgs, curated, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -21,12 +21,12 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         return show_topic(&mut store, &id, topic);
     }
     if let Some(record) = args.record.as_ref().or(args.record_positional.as_ref()) {
-        return show_record(&mut store, &id, record);
+        return show_record(&mut store, &id, record, &config.machine);
     }
     let since = args
         .since
         .map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
-    let (row, records, repos, retired) = store.read(|conn| {
+    let (row, records, repos, retired, done, topics) = store.read(|conn| {
         let row = ContextRow::require(conn, &id)?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq",
@@ -37,19 +37,44 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let repos = plan_repos(conn, &config.machine, &records)?;
         let retired = retired_labels(conn, &id)?;
-        Ok((row, records, repos, retired))
+        let (done, topics) = if args.all || args.since.is_some() {
+            Default::default()
+        } else {
+            (
+                done_plans(conn, &config.machine, &records)?,
+                curated::topic_counts(conn, &id)?,
+            )
+        };
+        Ok((row, records, repos, retired, done, topics))
     })?;
-    let markdown = render::markdown_retired(
-        &row.title,
-        row.jira.as_deref(),
-        &records,
-        since,
-        &repos,
-        &retired,
-    );
+    let bounded = (!args.all && args.since.is_none()).then(|| {
+        render::bounded(
+            &row.title,
+            row.jira.as_deref(),
+            &records,
+            &repos,
+            &retired,
+            &done,
+            &topics,
+        )
+    });
+    let markdown = match &bounded {
+        Some(b) => b.markdown.clone(),
+        None => render::markdown_retired(
+            &row.title,
+            row.jira.as_deref(),
+            &records,
+            since,
+            &repos,
+            &retired,
+        ),
+    };
     let records: Vec<Value> = records
         .iter()
-        .filter(|(seq, _)| *seq > since)
+        .filter(|(seq, _)| match &bounded {
+            Some(b) => b.shown.contains(seq),
+            None => *seq > since,
+        })
         .map(|(seq, record)| {
             let mut v = record.to_json_listed();
             v["seq"] = json!(seq);
@@ -59,11 +84,45 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
             v
         })
         .collect();
-    Ok(Output::success(json!({
+    let mut out = json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
-    })))
+    });
+    if let Some(b) = &bounded {
+        out["omitted"] = json!({
+            "superseded_decisions": b.omitted.superseded_decisions,
+            "answered_questions": b.omitted.answered_questions,
+            "superseded_notes": b.omitted.superseded_notes,
+            "older_notes": b.omitted.older_notes,
+            "done_plans": b.omitted.done_plans,
+        });
+    }
+    Ok(Output::success(out))
+}
+
+/// The Plans of `records` that are done on this machine (`plans.done_at` set), by [`render::plan_key`]; a Plan of
+/// another machine or with no row here is not.
+fn done_plans(
+    conn: &rusqlite::Connection,
+    machine: &crate::ids::MachineName,
+    records: &[render::Indexed],
+) -> Result<std::collections::HashSet<String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT done_at IS NOT NULL FROM plans WHERE id = ?1")?;
+    let mut done = std::collections::HashSet::new();
+    for (_, record) in records {
+        let Some(plan) = record.plan().filter(|p| p.machine == *machine) else {
+            continue;
+        };
+        if stmt
+            .query_row([plan.id.as_str()], |r| r.get::<_, bool>(0))
+            .optional()?
+            .unwrap_or(false)
+        {
+            done.insert(render::plan_key(plan));
+        }
+    }
+    Ok(done)
 }
 
 /// The approved retirements of `context`, as `render` labels them: `<reason> <target>` by record id.
@@ -117,7 +176,12 @@ fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Out
 }
 
 /// `context show --record <id>` (§3.3): that one record in full.
-fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<Output, CpdError> {
+fn show_record(
+    store: &mut Store,
+    context: &ContextId,
+    id: &RecordId,
+    machine: &MachineName,
+) -> Result<Output, CpdError> {
     let (row, found) = store.read(|conn| {
         let row = ContextRow::require(conn, context)?;
         let found = conn
@@ -133,12 +197,25 @@ fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<
         Ok((row, found))
     })?;
     let (seq, record) = found.ok_or_else(|| {
-        CpdError::new(
-            ErrorCode::RecordNotFound,
-            format!("Context {context} has no record {id}."),
-        )
-        .with("context", context.as_str())
-        .with("record", id.to_string())
+        let err = if id.machine() == machine {
+            CpdError::new(
+                ErrorCode::RecordNotFound,
+                format!("Context {context} has no record {id}."),
+            )
+        } else {
+            CpdError::new(
+                ErrorCode::RecordNotFound,
+                format!(
+                    "Context {context} has no record {id}. {id} belongs to machine {}; this machine is {}, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.",
+                    id.machine(),
+                    machine
+                ),
+            )
+            .with("record_machine", id.machine().as_str())
+            .with("local_machine", machine.as_str())
+        };
+        err.with("context", context.as_str())
+            .with("record", id.to_string())
     })?;
     let markdown = render::single(&row.title, row.jira.as_deref(), &record);
     let mut v = record.to_json();
