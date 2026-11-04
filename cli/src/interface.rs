@@ -22,6 +22,7 @@ pub const TABLE: &[Entry] = &[
     ("context new", &[Lead], true),
     ("context list", &[Lead, Manager], false),
     ("context show", &[Lead, Manager, Worker], false),
+    ("context topics", &[Lead, Manager, Worker], false),
     ("context search", &[Lead, Manager, Worker], false),
     ("context decide", &[Lead, Manager], false),
     ("context note", &[Lead, Manager], false),
