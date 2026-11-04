@@ -8,7 +8,7 @@ Sources: the design handoff (`HANDOFF.md`, `COMPONENTS.md`, `app/globals.css`, `
 
 **File boundary (pro-n15).** The Plan touches only `web/src/ui/**`, `web/src/lib/**`, `web/vite.config.ts` and `web/VERIFY.md`, plus the one field of 3d (`PlanCounts.merging`, pro-d43). No dependency is added; only what `web/package.json` on main already has is used: `@shadcn/react` 0.3.1, `@tailwindcss/vite` 4.3.3, `tailwindcss` 4.3.3, `radix-ui`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`, `tw-animate-css`, `react-resizable-panels` 4.15.3.
 
-**No backend change (A6).** No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`, except the one field `PlanCounts.merging?: number` in `web/src/protocol/cockpit.ts`, parsed by the read model (`web/src/server/cockpit/readmodel.ts`), pro-d43 (3d); and, pro-d40, the status snapshot the server sends to the Status Bar (its sources are in 3b, "Data sources") and the optional cost of a Context or Plan row (3d). Their wire shape is set by the implementation Job's tests, not here. A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
+**No backend change (A6).** *Superseded in part by pro-d46 (3g): the menu action kinds, `readmodel.ts` and `events.ts` change.* No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`, except the one field `PlanCounts.merging?: number` in `web/src/protocol/cockpit.ts`, parsed by the read model (`web/src/server/cockpit/readmodel.ts`), pro-d43 (3d); and, pro-d40, the status snapshot the server sends to the Status Bar (its sources are in 3b, "Data sources") and the optional cost of a Context or Plan row (3d). Their wire shape is set by the implementation Job's tests, not here. A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
 
 ---
 
@@ -458,7 +458,7 @@ Written by hand (A2) from `https://ui.shadcn.com/r/styles/radix-rhea/<name>.json
 | `attachment.tsx` | `Attachment`, `AttachmentGroup`, `AttachmentMedia`, `AttachmentContent`, `AttachmentTitle`, `AttachmentDescription`, `AttachmentActions`, `AttachmentAction`, `AttachmentTrigger` | `size`: `default`, `sm`, `xs`; `orientation`: `horizontal`, `vertical`; `data-state`: `idle`, `done`, `error`; `AttachmentMedia` `variant`: `icon`, `image`. | registry `attachment` (uses `./button.tsx`) |
 | `trace.tsx` | `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger`, `TraceCollapsibleContent` | `TraceLine` `status`: `running` \| `error` \| `pending`. | registry `trace` (uses `./collapsible.tsx`, `ChevronRightIcon`) |
 | `resizable.tsx` | `ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle`, `usePanelRef` | thin wrappers over `react-resizable-panels` 4.15.3 (`Group`, `Panel`, `Separator`, `usePanelRef`), no new dependency. `ResizablePanelGroup` is `flex h-full w-full` and turns vertical with `aria-[orientation=vertical]`; `ResizablePanel` is `min-h-0 min-w-0`; `ResizableHandle` `withHandle` draws a grip (`h-6 w-1`, `rounded-lg`) on a 1px `bg-border` bar with a 8px hit area. Every resizable split in the Shell uses these parts (3c). `data-slot` `resizable-panel-group`, `resizable-panel`, `resizable-handle`. | shadcn/ui `resizable`, hand-written as above |
-| `context-menu.tsx` | `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `ContextMenuItem`, `ContextMenuSeparator` | shadcn/ui `context-menu`, hand-written as above, over the `ContextMenu` primitive of `radix-ui` (already in `web/package.json`; the export is **unverified** until the part compiles). Used by the Inbox row (DESIGN-panes 2d). `data-slot` `context-menu-*`. | shadcn/ui `context-menu`, hand-written as above |
+| `context-menu.tsx` | `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `ContextMenuItem`, `ContextMenuSeparator` | shadcn/ui `context-menu`, hand-written as above, over the `ContextMenu` primitive of `radix-ui` (already in `web/package.json`; the export is **unverified** until the part compiles). Used by the Inbox row (DESIGN-panes 2d) and the tree rows (3g). `data-slot` `context-menu-*`. | shadcn/ui `context-menu`, hand-written as above |
 | `dialog.tsx` | `Dialog`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter` | wrap the `radix-ui` `Dialog` primitive (already in `web/package.json`), hand-written as above; `data-slot` `dialog`, `dialog-content`. The three popups of the Status Bar (3b) use it. Not yet in `components/` (pro-d40). | shadcn/ui `dialog`, hand-written as above |
 | `sidebar.tsx` | `Sidebar`, `SidebarContent`, `SidebarGroup`, `SidebarGroupAction`, `SidebarGroupContent`, `SidebarGroupLabel`, `SidebarMenu`, `SidebarMenuAction`, `SidebarMenuBadge`, `SidebarMenuButton`, `SidebarMenuItem`, `SidebarMenuSub`, `SidebarMenuSubButton`, `SidebarMenuSubItem` | styled wrappers only, no state and no context: no `SidebarProvider`, no `useSidebar`, no cookie or storage. `Sidebar` `collapsible`: `offcanvas`, `icon`, `none` (the Context Tree uses `none`). Uses `radix-ui` `Slot` (`asChild`) and `class-variance-authority`, both already in `web/package.json`. `data-slot` and `data-sidebar` on each part. The Context Tree (3d) is the only consumer. | shadcn/ui `sidebar`, hand-written as above |
 | `message-scroller.tsx` | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton`, `useMessageScroller`, `useMessageScrollerScrollable`, `useMessageScrollerVisibility` | built on `@shadcn/react/message-scroller` (namespace `Provider`, `Root`, `Viewport`, `Content`, `Item`, `Button`). Props that matter: provider `autoScroll`, `defaultScrollPosition: "start" \| "end" \| "last-anchor"`, `scrollEdgeThreshold`; viewport `preserveScrollOnPrepend`; item `messageId`, `scrollAnchor`; button `direction: "start" \| "end"`. The file is provided for `DESIGN-chat.md`; the Phase 2 `Transcript` windowing and sticky auto-scroll (`data-row-key`, `data-at-bottom`) are **not** replaced by it. | registry `message-scroller` (uses `./button.tsx`, `ArrowDownIcon`) |
@@ -854,7 +854,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
 - Scrolling: the column `aside` scrolls (`overflow-y: auto`); the `tree-header` is sticky.
 
-Not built: Active/Standing sections, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+Not built: Active/Standing sections, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
 ### 3e. `App.tsx` wiring
 
@@ -891,4 +891,104 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 
 ### 3g. Tree context menus, live update and hot reload (pro-d46)
 
-Skeleton: the sections of pro-d46 follow. Records: pro-d46 (User approved live, 2026-11-04 17:38 EST).
+Record: pro-d46 (User approved live, 2026-11-04 17:38 EST). It supersedes "Not built: ... row context menus" in 3d and the A6 paragraph, for the wiring named here. The TUI is the contract: `tui/src/tree/menu.rs` (items and labels per kind), `tui/src/tree/actions.rs` (argv), `tui/src/tree/ask.rs` (prompts), `tui/src/tree/slug.rs` (ids) and `docs/commands.md` sections 3.8 to 3.15, 4.1 to 4.14 and 10.3 to 10.11 (argv).
+
+**Context menus.** Every tree row is a shadcn `ContextMenu` (2f), opened by a right click (`contextmenu`). The trigger is the row's button (`data-select` or `data-session`). The content is `ContextMenuContent[data-menu-kind="<kind>"]`, with kind `context`, `permanent`, `plan`, `fork` or `archived`. Items are `ContextMenuItem` (`role="menuitem"`), in the TUI's order, with the TUI's labels (`…` where the TUI has it). The menu closes when an item is picked.
+
+The tables below give, per row kind, each item, its web action kind (the `CockpitAction` kind of `web/src/protocol/cockpit.ts`), the cpd argv that `actionArgs` (`web/src/server/cockpit/actions.ts`) passes to `cpd.json`, and the TUI item it matches. `—` means no cpd call. `<planId>` is derived from the title (Prompts, below).
+
+**Context row** (`data-menu-kind="context"`, a live Context, its button is the Manager)
+
+| Item | Web action kind | cpd argv | TUI item |
+|---|---|---|---|
+| New Plan… | `plan.new` | `plan new <planId> --context=<contextId> --title=<title> --by-user` | `NewPlan` |
+| Rename… | `context.rename` | `context rename <contextId> --title=<title>` | `Rename` |
+| Copy id | — (clipboard) | none: `navigator.clipboard.writeText(contextId)` | `CopyId` |
+| Archive | `context.archive` | `context archive <contextId>` | `Archive` |
+| Delete, when quiet, last | `context.delete` | `context delete <contextId> --yes`, after the confirm | `Delete` (appended by `Menu::new`) |
+
+Delete is offered when the Context is not Standing and it is archived, or it has Plans and every Plan is quiet (archived, or its Lead's dot is `stopped`, or it has no Lead).
+
+**Standing Context row** (`data-menu-kind="permanent"`, the Contexts `cpd`, `host` and `codereview`)
+
+| Item | Web action kind | cpd argv | TUI item |
+|---|---|---|---|
+| New Plan… | `plan.new` | as above | `NewPlan` |
+| Copy id | — (clipboard) | none | `CopyId` |
+
+No Rename, Archive or Delete. The TUI's Permanent menu has the same two items (`Kind::Permanent`); whether the TUI could append Delete to one is **unverified**.
+
+**Plan row** (`data-menu-kind="plan"`, a live Plan, its button is the Lead)
+
+| Item | Web action kind | cpd argv | TUI item |
+|---|---|---|---|
+| New session… | `session.fork` (source: the Plan's Lead) | `session fork <leadSessionId> --name=<name>` | `NewSession` (a fork of the Lead) |
+| Rename… | `plan.rename` | `plan rename --plan=<planId> --title=<title>` | `Rename` |
+| Copy id | — (clipboard) | none | `CopyId` |
+| Archive | `plan.archive` | `plan archive --plan=<planId>` | `Archive` |
+| Delete, when quiet, last | `plan.delete` | `plan delete <planId> --yes`, after the confirm | `Delete` (appended) |
+
+Delete is offered when the Plan is archived, or its Lead's dot is `stopped`, or it has no Lead (the TUI does not count a Plan without a Lead as quiet; see Divergences).
+
+**Fork row** (`data-menu-kind="fork"`, a live fork Session row)
+
+| Item | Web action kind | cpd argv | TUI item |
+|---|---|---|---|
+| Open | — (client: selects the Session and attaches it, as a row click does) | none | `Open` (the TUI runs `session open <id>`) |
+| Rename… | `session.rename` | `session rename --session=<sessionId> -- <name>` | `Rename` |
+| Fork… | `session.fork` (source: the row's Session) | `session fork <sessionId> --name=<name>` | `Fork` |
+| Copy id | — (clipboard) | none | `CopyId` |
+| Close | `session.close` | `session close <sessionId>` | `Close` |
+| Archive | `session.archive` | `session archive <sessionId>` | `Archive` |
+
+**Archived row** (`data-menu-kind="archived"`, a row inside the Archived group: a Context, a Plan, or a fork Session)
+
+| Item | Web action kind | cpd argv | TUI item |
+|---|---|---|---|
+| Rename… | `context.rename`, `plan.rename` or `session.rename` | as above for the object | `Rename` |
+| Copy id | — (clipboard) | none | `CopyId` |
+| Unarchive | `context.unarchive`, `plan.unarchive` or `session.unarchive` | `context unarchive <contextId>`, `plan unarchive --plan=<planId>` or `session unarchive <sessionId>` | `Unarchive` |
+| Delete (archived Context and Plan only) | `context.delete` or `plan.delete` | as above for the object | `Delete` (always offered: an archived row is deletable) |
+
+An archived fork Session has no Delete.
+
+**Not offered.** No menu on the Manager (it has no row of its own on the web; the Context row above is its row), on the empty tree area (`New Context…` is not built: `CockpitAction` has no context-create kind and `data-action="new-context"` is never rendered), on the toggle, on the `New Plan` tree row, on the Archive tree row or on the Standing header (the TUI has no menu on these either).
+
+**Prompts.** One `TreeModal` (a shadcn `Dialog` (2f) with an `Input`). The `DialogTitle` is the title, the `DialogDescription` is the prompt, the `Input` has `aria-label` set to the prompt and `aria-invalid` on error, its error text sits under it, and the footer has `Cancel` and `OK`. The field is focused and holds its initial value when the dialog opens. The `Input` part (`web/src/ui/components/input.tsx`, shadcn/ui `input` on the Dango tokens) is not on this base; the implementation Job adds it.
+
+| Action | Title | Prompt | Initial value | Checks before the command runs |
+|---|---|---|---|---|
+| New Plan… | New Plan | `Title:` | empty | trimmed; empty gives `Title is required.`; the id is derived from the title (below); no id gives `NO_ID_ERROR` in the dialog |
+| Rename… (Context, Plan) | Rename | `Title:` | the current title | trimmed; empty gives `Title is required.` |
+| Rename… (fork, archived fork) | Rename | `Name:` | the current label | trimmed; empty gives `Name is required.` |
+| New session…, Fork… | New session, Fork | `Name:` | empty | trimmed; empty gives `Name is required.` |
+| Delete… | Delete | (none) | (none) | text `Delete <id>?`; `Cancel` and `Delete` (destructive); `--yes` is sent at once |
+
+**Plan id.** Derived from the title by the TUI's rules (`slug.rs`): keep ASCII letters and digits; every other run of characters becomes one `-`; drop leading non-letters; lowercase; cut to 24 characters and drop a trailing `-`. Fewer than 2 characters left gives no id. If the id is taken (a Plan id in any Context), try `<cut(base, 23 - len(n))>-<n>` for n = 2, 3, and so on; the web stops at n = 9999 and refuses.
+
+**Chat slot.** Archive (Context, Plan, fork) and Close (fork) run their command. If it fails with `cpd_failed` whose `details.cpdCode` is `in_chat_slot`, the server runs `cpd session park` (no id: the chat-slot Session) and then the same argv once more. Any other error, and an error of the retry, is returned as it is (`runAction` in `actions.ts`).
+
+**After a create.** On an `action.result` with `ok`, when the output has `plan.id`, the new Plan is selected. Its Session (`output.lead.session` for `plan.new`, `output.session.id` for `session.fork`) is selected and attached too when it differs from the selected one (`connection.ts`).
+
+**Copy id.** `navigator.clipboard.writeText(id)`. Tests mock the clipboard.
+
+**Divergences from the TUI (accepted, recorded so they are not mistaken for parity).**
+
+- Archive and Close of the object in the chat slot: the TUI first opens the next live Session (or parks) and then archives, and it refuses Close (`switch to another session first`). The web parks and retries once, as above, so a Close can close the Session that held the slot. `docs/commands.md` section 10.9 says the chat-slot Lead is never closed; the web does not follow that line.
+- New session… and Fork… start empty; the TUI pre-fills `<label> (fork)`.
+- No length checks (the TUI: Title 1 to 200 characters, Name 1 to 80).
+- Delete shows no preview counts; the TUI shows them (`delete_text`).
+- Quiet: a Plan with no Lead counts as quiet on the web, not in the TUI. The web's `stopped` dot stands in for the TUI's asleep, since the web session list carries no `asleep_at`.
+- Copy id uses the clipboard; the TUI uses `tmux set-buffer -w`.
+- No New Context… (see Not offered).
+- A Manager row gets the Context menu on the web; the TUI gives its Manager row the Fork menu.
+
+**Live update** (`web/src/server/cockpit/events.ts`, `readmodel.ts`). Every event kind listed in `TREE_KINDS` (72 kinds) refreshes the tree, every kind in `INBOX_KINDS` (21 kinds) refreshes the inbox, and `panesFor` maps each kind to its panes. The lists are the source; this section does not repeat them.
+
+- **Safety refresh.** Every `SAFETY_REFRESH_MS` (30 s) the tree and the inbox are refreshed, and the Plan too when a Plan is selected.
+- **Queued refreshes.** One load runs at a time. A refresh that arrives while a load runs adds its panes to one pending set; the running loop takes that set as the next batch when the current one ends. A failed batch is reported and the loop goes on.
+- **After an action.** A successful `runAction` refreshes the tree and the inbox at once, and the Plan when one is selected. A failed action refreshes nothing; its error goes back to the caller.
+- **Null tolerance.** `buildPlanView` reads the `repo` and `base` of a workflow, and the `tier` of a Job and of an attempt, as nullable, and turns null into `""`. Draft and cancelled Jobs have a null tier.
+- **Error isolation.** In `loadPanes`, a failing `plan show` does not drop the tree or inbox of the same batch: the Plan becomes `null` and the other panes apply. When the Plan is the only pane asked for, its error is thrown. A failure while building the Plan view is handled the same way.
+
+**Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).

@@ -52,7 +52,11 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
 
 - **Load order (pro-d37).** The window loads only after `startAutoUpdate` returns and `startServices` has run, so the IPC handlers `ghostty:wasm` and `webui:send` exist before the renderer loads. Accepted cost: the window stays blank during a first-run CLI bootstrap; `start.ts` waits for it.
 - **Name (pro-d38).** The app is named CPD. `productName` is `CPD` in `web/package.json` and `web/electron-builder.yml`. `app.setName('CPD')` runs before `app.whenReady()`, and the BrowserWindow title is `CPD`. `<title>CPD</title>` is in `web/electron.html` and `web/index.html`. The `electron` script patches `CFBundleName` and `CFBundleDisplayName` to `CPD` in `Electron.app/Contents/Info.plist` with `plutil` on darwin.
-- **Reload on SIGUSR1 (pro-d39).** The main process reloads the renderer in place on `SIGUSR1` (`reloadIgnoringCache`, when the webContents is not destroyed). Live patches reload without closing or focusing the window.
+- **Reload on SIGUSR1 (pro-d39, pro-d46).** The main process reloads the WebUI in place on `SIGUSR1`, so a new build applies without a restart. Send the signal with `kill -USR1 <pid>` to the Electron main process. Live patches reload without closing or focusing the window. The handler runs two steps, in this order:
+  1. **Server (pro-d46).** The Electron build emits the server entry next to the main process. `web/vite.electron.config.ts` gives Rollup two inputs, `main` (`src/electron/main.ts`) and `server` (`src/server/plugin.ts`), with `entryFileNames: "[name].js"`, so the output directory holds `main.js` and `server.js`. The handler imports `server.js` again from its file URL with a fresh `?t=<Date.now()>` query, which evaluates the entry as a new module. It then disposes the running WebUI services and starts those of the new module: the WebUI IPC handlers, the cockpit service and the attention watch. The PTY handlers are not restarted. The import runs before the dispose, so a failed import leaves the running services in place.
+  2. **Renderer.** It reloads the window with `reloadIgnoringCache`, when the webContents is not destroyed.
+
+  If the import throws, the error is logged and the renderer still reloads. The `?t=` query re-evaluates only the `server.js` entry: a module that `server.js` imports, including one the build puts in a shared chunk, keeps its cached instance until the app restarts. `server.js` exists only in an Electron build output.
 - **Live sync (pro-d39).** `syncCheckout` (`web/src/electron/update/checkout.ts`) syncs a live preview worktree when `origin/main` advances:
   - It no longer requires the branch `main`: any branch whose HEAD is an ancestor of `origin/main` fast-forwards.
   - It no longer skips a dirty tree.
@@ -63,7 +67,3 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
 ## Limits
 
 A preview costs one release build of the worktree. The engine's pi chat (pi/lib/render.ts) is not reached by the view, so messages there don't appear in the preview. A branch missing a breaking migration of main is refused by the install guard; merge main first.
-
-## Server hot reload (pro-d46)
-
-Skeleton: the SIGUSR1 extension follows.
