@@ -164,7 +164,7 @@ export function Transcript(props: {
   sessionKey?: string;
   thinking?: "folded" | "expanded";
   tools?: "grouped" | "expanded";
-  busy?: boolean; // stub: the working cue is not implemented yet
+  busy?: boolean;
 }): JSX.Element {
   const defaultSizes = useMemo(() => browserSizes(), []);
   const sizes = props.sizes ?? defaultSizes;
@@ -184,7 +184,12 @@ export function Transcript(props: {
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
   const topRef = useRef(0); // scrollTop relative to virtual-space
-  const prev = useRef({ layout, tailEpoch: props.tailEpoch, pending: props.pending.length });
+  const lastScrollTop = useRef(0);
+  const busy = props.busy === true;
+  const last = props.items[props.items.length - 1];
+  const showCue = busy && !(last?.kind === "assistant" && last.streaming === true);
+  const cueText = last?.kind === "tool" && last.status === "running" ? `Using ${last.name}…` : "Thinking…";
+  const prev = useRef({ layout, tailEpoch: props.tailEpoch, pending: props.pending.length, pinned: false, busy: props.busy === true, cue: showCue });
 
   // the log is position: relative (app.css), so offsetTop is relative to its scrolling content
   const spaceTop = (): number => spaceRef.current?.offsetTop ?? 0;
@@ -231,9 +236,14 @@ export function Transcript(props: {
         setScrollTop(top);
       }
     }
-    prev.current = { layout, tailEpoch: props.tailEpoch, pending: props.pending.length };
+    const grew = layout.total !== p.layout.total || !epochSame || props.pending.length > p.pending || (busy && !p.busy) || showCue !== p.cue;
+    const justPinned = pinned && !p.pinned;
+    prev.current = { layout, tailEpoch: props.tailEpoch, pending: props.pending.length, pinned, busy, cue: showCue };
     if (repin && !pinned) setPinned(true);
-    if (pinned && log !== null) log.scrollTop = log.scrollHeight;
+    if (pinned && log !== null && (grew || justPinned)) {
+      log.scrollTop = log.scrollHeight;
+      lastScrollTop.current = log.scrollTop;
+    }
   });
 
   const jump = (): void => {
@@ -251,7 +261,9 @@ export function Transcript(props: {
           const log = e.currentTarget;
           topRef.current = log.scrollTop - spaceTop();
           setScrollTop(topRef.current);
-          setPinned(isNearBottom({ scrollTop: log.scrollTop, clientHeight: log.clientHeight, scrollHeight: log.scrollHeight }));
+          if (log.scrollTop < lastScrollTop.current - 1) setPinned(false);
+          else setPinned(isNearBottom({ scrollTop: log.scrollTop, clientHeight: log.clientHeight, scrollHeight: log.scrollHeight }));
+          lastScrollTop.current = log.scrollTop;
         }}
       >
         {props.hasEarlier ? (
@@ -273,6 +285,12 @@ export function Transcript(props: {
             ))}
           </div>
         </div>
+        {showCue ? (
+          <div role="status" data-part="working-cue" className="flex h-[26px] items-center gap-2.5 px-6 text-[12px] text-mizu-bright">
+            <span aria-hidden="true" className={glyphClass.active} />
+            {cueText}
+          </div>
+        ) : null}
         {props.queued.length === 0 && props.pending.length === 0 ? null : (
           <ul aria-label="Queued messages" className="m-0 flex list-none flex-col gap-0 p-0 px-4 pb-2.5">
             {props.queued.map((q) => (

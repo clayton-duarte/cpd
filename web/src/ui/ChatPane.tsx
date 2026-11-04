@@ -49,6 +49,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
+  const isBusy = view.busy || view.ref?.state === "working" || view.pending.some((p) => p.state === "sending");
   return (
     <div
       data-chat-dropzone
@@ -63,7 +64,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         title={view.title}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
-        busy={view.busy}
+        busy={isBusy}
         thinking={toggles.thinking}
         onToggleThinking={toggles.toggleThinking}
         tools={toggles.tools}
@@ -79,6 +80,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         thinking={toggles.thinking}
         tools={toggles.tools}
+        busy={isBusy}
       />
       {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
@@ -97,7 +99,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
       <Composer
         ref={composer}
         capabilities={view.capabilities}
-        busy={view.busy}
+        busy={isBusy}
         queued={view.queued}
         reader={reader}
         onSubmit={({ text, attachments, whenBusy }) => {
