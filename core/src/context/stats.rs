@@ -1,5 +1,5 @@
 //! `cpd context stats` (commands.md §3.20; Plan `ctx-observability`, pro-d13): sizes, writing and curation, and
-//! cost of a Context. The `retrieval` section is zeroed here (filled by `obs-impl-ret`).
+//! cost of a Context.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -78,8 +78,12 @@ fn sized(count: i64, bytes: i64) -> Value {
     json!({"count": count, "bytes": bytes})
 }
 
-fn sizes_of(conn: &Connection, home: &CpdHome, context: &ContextId) -> Result<Value, CpdError> {
-    let ctx = context.as_str();
+/// `(id, kind, text bytes, status)` of every record of `ctx`. Status is exclusive with precedence
+/// retired_approved > superseded > retired_pending > in_force.
+fn classified(
+    conn: &Connection,
+    ctx: &str,
+) -> Result<Vec<(String, String, i64, &'static str)>, CpdError> {
     let mut stmt =
         conn.prepare("SELECT id, kind, text, supersedes FROM context_records WHERE context = ?1")?;
     let rows = stmt
@@ -107,20 +111,30 @@ fn sizes_of(conn: &Connection, home: &CpdHome, context: &ContextId) -> Result<Va
         .flat_map(|s| s.split(','))
         .map(str::trim)
         .collect();
+    Ok(rows
+        .iter()
+        .map(|(id, kind, text, _)| {
+            let status = if approved.contains(id) {
+                "retired_approved"
+            } else if superseded.contains(id.as_str()) {
+                "superseded"
+            } else if pending.contains(id) {
+                "retired_pending"
+            } else {
+                "in_force"
+            };
+            (id.clone(), kind.clone(), text.len() as i64, status)
+        })
+        .collect())
+}
+
+fn sizes_of(conn: &Connection, home: &CpdHome, context: &ContextId) -> Result<Value, CpdError> {
+    let ctx = context.as_str();
     let mut by_kind: HashMap<&str, (i64, i64)> = HashMap::new();
     let mut by_status: HashMap<&str, (i64, i64)> = HashMap::new();
-    for (id, kind, text, _) in &rows {
-        let bytes = text.len() as i64;
-        let status = if approved.contains(id) {
-            "retired_approved"
-        } else if superseded.contains(id.as_str()) {
-            "superseded"
-        } else if pending.contains(id) {
-            "retired_pending"
-        } else {
-            "in_force"
-        };
-        for (map, key) in [(&mut by_kind, kind.as_str()), (&mut by_status, status)] {
+    let all = classified(conn, ctx)?;
+    for (_, kind, bytes, status) in &all {
+        for (map, key) in [(&mut by_kind, kind.as_str()), (&mut by_status, *status)] {
             let e = map.entry(key).or_default();
             e.0 += 1;
             e.1 += bytes;
@@ -218,6 +232,111 @@ fn search_cost(home: &CpdHome, ctx: &str, since: Option<&str>) -> Result<Value, 
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     Ok(json!({"searches": n, "embed_tokens": tokens, "embed_ms": embed_ms, "fts_ms": fts_ms}))
+}
+
+/// Reads, citations, unread in-force records and `search_log` aggregates (shadow reads are not counted).
+fn retrieval_of(
+    conn: &Connection,
+    home: &CpdHome,
+    ctx: &str,
+    since: Option<&str>,
+) -> Result<Value, CpdError> {
+    let mut by_channel = [0i64; 3];
+    let mut stmt = conn.prepare(
+        "SELECT channel, COUNT(*) FROM context_reads
+          WHERE context = ?1 AND channel IN ('pushed', 'search', 'show') AND (?2 IS NULL OR read_at >= ?2)
+          GROUP BY channel",
+    )?;
+    let rows = stmt
+        .query_map(params![ctx, since], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (channel, n) in rows {
+        let i = ["pushed", "search", "show"]
+            .iter()
+            .position(|c| *c == channel)
+            .unwrap_or(0);
+        by_channel[i] = n;
+    }
+    let (sessions, used): (i64, i64) = conn.query_row(
+        "SELECT COUNT(DISTINCT session), COALESCE(SUM(used = 1), 0) FROM context_reads
+          WHERE context = ?1 AND channel IN ('pushed', 'search', 'show') AND (?2 IS NULL OR read_at >= ?2)",
+        params![ctx, since],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let total: i64 = by_channel.iter().sum();
+    let read: HashSet<String> = conn
+        .prepare("SELECT DISTINCT record FROM context_reads WHERE context = ?1")?
+        .query_map([ctx], |r| r.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
+    let unread = classified(conn, ctx)?
+        .iter()
+        .filter(|(id, _, _, st)| {
+            matches!(*st, "in_force" | "retired_pending") && !read.contains(id)
+        })
+        .count();
+    Ok(json!({
+        "reads": {"pushed": by_channel[0], "search": by_channel[1], "show": by_channel[2]},
+        "reading_sessions": sessions,
+        "cited": {"used": used, "conversion": if total == 0 { 0.0 } else { used as f64 / total as f64 }},
+        "unread_in_force": unread,
+        "searches": searches_of(home, ctx, since)?,
+    }))
+}
+
+fn searches_of(home: &CpdHome, ctx: &str, since: Option<&str>) -> Result<Value, CpdError> {
+    let mut out = json!({"total": 0, "hybrid": 0, "fts": 0, "zero_hit": 0, "recent_zero_hit_queries": [],
+                         "fts_ms": {"mean": null, "max": 0}, "embed_ms": {"mean": null, "max": 0}});
+    let Some(conn) = open_vectors(home)? else {
+        return Ok(out);
+    };
+    if !has_table(&conn, "search_log")? {
+        return Ok(out);
+    }
+    #[allow(clippy::type_complexity)]
+    let (total, hybrid, fts, zero, fts_mean, fts_max, embed_mean, embed_max): (
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<f64>,
+        i64,
+        Option<f64>,
+        i64,
+    ) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(mode = 'hybrid'), 0), COALESCE(SUM(mode = 'fts'), 0),
+                COALESCE(SUM(hits = 0), 0), AVG(fts_ms), COALESCE(MAX(fts_ms), 0), AVG(embed_ms), COALESCE(MAX(embed_ms), 0)
+           FROM search_log WHERE context = ?1 AND (?2 IS NULL OR at >= ?2)",
+        params![ctx, since],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+            ))
+        },
+    )?;
+    let queries = conn
+        .prepare(
+            "SELECT query FROM search_log WHERE context = ?1 AND hits = 0 AND (?2 IS NULL OR at >= ?2)
+              ORDER BY at DESC, id DESC LIMIT 10",
+        )?
+        .query_map(params![ctx, since], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    out["total"] = json!(total);
+    out["hybrid"] = json!(hybrid);
+    out["fts"] = json!(fts);
+    out["zero_hit"] = json!(zero);
+    out["recent_zero_hit_queries"] = json!(queries);
+    out["fts_ms"] = json!({"mean": fts_mean, "max": fts_max});
+    out["embed_ms"] = json!({"mean": embed_mean, "max": embed_max});
+    Ok(out)
 }
 
 fn writing_of(
@@ -336,14 +455,7 @@ pub fn compute(
                 "ms": distill_ms + curate_ms + embed_ms,
             },
         },
-        "retrieval": {
-            "reads": {"pushed": 0, "search": 0, "show": 0},
-            "reading_sessions": 0,
-            "cited": {"used": 0, "conversion": 0},
-            "unread_in_force": 0,
-            "searches": {"total": 0, "hybrid": 0, "fts": 0, "zero_hit": 0, "recent_zero_hit_queries": [],
-                         "fts_ms": {"mean": null, "max": 0}, "embed_ms": {"mean": null, "max": 0}},
-        },
+        "retrieval": retrieval_of(conn, home, ctx, since_ts)?,
     }))
 }
 
