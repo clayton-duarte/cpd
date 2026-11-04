@@ -350,6 +350,19 @@ pub(super) fn upsert(
     }))
 }
 
+/// Resets the pull request row linked to the Workflow (`plan`, `key`) after cpd pushed new commits to it:
+/// `checks` pending, `mergeable` and `merge_state` unknown (pro-d384). A Workflow with no linked row changes nothing.
+#[allow(dead_code)] // called by the push paths once fix-impl lands
+pub(super) fn reset_after_push(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &WorkflowKey,
+) -> Result<(), CpdError> {
+    let _ = (tx, plan, key);
+    // stub: implemented by fix-impl
+    Ok(())
+}
+
 /// The row of `polled`'s pull request: inserted when absent (the User's own: `authored`
 /// 1, `review_requested` 0), else **kept as it is** (`pr open`: a poll may have stored it
 /// first, D6). Its id.
