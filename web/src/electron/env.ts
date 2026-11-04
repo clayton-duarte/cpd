@@ -7,9 +7,19 @@ export interface LoginPathOptions {
   currentPath: string | undefined;
   run: ShellRunner;
 }
-export function parseMarkedPath(_stdout: string): string {
-  throw new Error("not implemented");
+export function parseMarkedPath(stdout: string): string {
+  const begin = stdout.indexOf(PATH_BEGIN);
+  const end = begin === -1 ? -1 : stdout.indexOf(PATH_END, begin + PATH_BEGIN.length);
+  if (begin === -1 || end === -1) {
+    throw new Error("login shell printed no PATH marker");
+  }
+  return stdout.slice(begin + PATH_BEGIN.length, end);
 }
-export function resolveLoginPath(_options: LoginPathOptions): Promise<string> {
-  throw new Error("not implemented");
+export async function resolveLoginPath(options: LoginPathOptions): Promise<string> {
+  if (options.platform !== "darwin") {
+    return options.currentPath ?? "";
+  }
+  const script = `printf '%s' '${PATH_BEGIN}'; printf '%s' "$PATH"; printf '%s' '${PATH_END}'`;
+  const stdout = await options.run(options.shell ?? "/bin/zsh", ["-ilc", script]);
+  return parseMarkedPath(stdout);
 }
