@@ -148,16 +148,17 @@ export function parsePlanShow(reply: Reply): RawPlanShow {
 
 // ---- builders ------------------------------------------------------------
 
-const RANK: readonly string[] = ["red", "yellow", "magenta", "blue", "cyan", "white"];
-const LEAD_KINDS = ["plan-review", "job-stuck", "pr-closed"];
+const RANK: readonly string[] = ["red", "yellow", "magenta", "cyan", "white"];
+const LEAD_KINDS = ["plan-review", "job-stuck", "drafts-parked"];
 
 function visible(i: RawInboxItem): boolean {
   return i.snoozed_until === null && i.dismissed_at === null && i.claimed_at === null;
 }
 function linked(s: RawSession, i: RawInboxItem): boolean {
+  if (i.urgency === "blue") return false;
   if (i.session === s.id) return true;
   if (!s.plan_lead || i.plan === null || i.plan !== s.plan) return false;
-  return LEAD_KINDS.includes(i.kind) || (i.kind === "pr-ready" && (i.urgency === "red" || i.urgency === "yellow"));
+  return LEAD_KINDS.includes(i.kind);
 }
 function sessionNode(s: RawSession, inbox: RawInboxItem[]): SessionNode {
   const key = s.key !== null && s.key !== "" ? s.key : s.name ?? s.id;

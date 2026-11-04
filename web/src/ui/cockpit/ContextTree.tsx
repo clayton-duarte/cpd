@@ -1,9 +1,9 @@
-import { MinusIcon, PlusIcon } from "lucide-react";
+import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
-import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
+import { dotDisplay, sessionDisplay } from "../dango-status.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { Separator } from "../components/separator.tsx";
@@ -51,13 +51,50 @@ function Counters({ counts }: { counts: PlanCounts }): ReactElement | null {
 
 const STOPPED: SessionDot = { state: "stopped", attention: null };
 
-function Dot({ dot }: { dot: SessionDot }): ReactElement {
-  const { state, attention } = dot;
+function planWork(plan: PlanNode): "planning" | "dispatch" | "review" {
+  if (plan.counts.draft > 0) return "planning";
+  if ((plan.counts.merging ?? 0) > 0 || plan.phase === "deploy") return "review";
+  if (plan.phase === "dispatch") return "dispatch";
+  return "planning";
+}
+
+const ATTENTION_COLOUR: Record<string, string> = {
+  red: "text-status-blocked-bright",
+  yellow: "text-status-landing-bright",
+  magenta: "text-status-decision-bright",
+  cyan: "text-status-active-bright",
+};
+const WORK_COLOUR = {
+  planning: "text-status-decision-bright",
+  dispatch: "text-status-active-bright",
+  review: "text-status-landing-bright",
+} as const;
+
+function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode; archived?: boolean }): ReactElement {
+  const { state } = dot;
+  const attention = dot.attention === "blue" ? null : dot.attention;
   const label = attention === null ? state : `${state}, needs you (${attention})`;
   const d = sessionDisplay[dotDisplay(dot)];
-  return (
-    <span role="img" data-dot={state} data-attention={attention ?? "none"} data-tone={d.tone} data-glyph={d.glyph} aria-label={label} className={glyphClass[d.glyph]} />
-  );
+  const base = "!size-3.5 shrink-0";
+  const hooks = { role: "img", "data-dot": state, "data-attention": attention ?? "none", "data-tone": d.tone, "data-glyph": d.glyph, "aria-label": label } as const;
+
+  if (archived) {
+    const filled = state !== "working" && attention !== null;
+    return <CircleIcon {...hooks} data-tone="neutral" data-attention={filled ? attention : "none"} className={cn(base, "text-fg-dim", filled && "fill-current")} />;
+  }
+  if (plan !== undefined && plan.counts.failed > 0 && state === "working") {
+    return <LoaderCircleIcon {...hooks} data-dot="fixing" data-tone="blocked" data-glyph="active" aria-label="fixing failed job" className={cn(base, "animate-spin text-status-blocked-bright")} />;
+  }
+  if (state === "working") {
+    const work = plan !== undefined ? planWork(plan) : null;
+    return <LoaderCircleIcon {...hooks} data-work={work ?? "session"} data-attention="none" className={cn(base, "animate-spin", work === null ? "text-fg-strong" : WORK_COLOUR[work])} />;
+  }
+  if (attention !== null) {
+    return <CircleIcon {...hooks} className={cn(base, "fill-current", ATTENTION_COLOUR[attention] ?? "text-fg-strong")} />;
+  }
+  if (state === "waiting") return <CircleDashedIcon {...hooks} className={cn(base, "text-status-active-bright")} />;
+  if (state === "idle" || state === "blocked") return <CircleIcon {...hooks} className={cn(base, "text-fg-strong")} />;
+  return <CircleIcon {...hooks} className={cn(base, "text-fg-dim")} />;
 }
 
 /** TUI Dot::tier: red 0, yellow 1, magenta 2, cyan 3, everything else (and working) 4. */
@@ -94,7 +131,7 @@ function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactE
         aria-current={current ? "true" : undefined}
         onClick={() => props.onSelectSession(node.ref.id)}
       >
-        <Dot dot={node.dot} />
+        <Dot dot={node.dot} archived={node.archived} />
         <span className="min-w-0 flex-1 truncate font-mono">{props.label}</span>
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>
@@ -123,7 +160,7 @@ function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
           if (lead !== undefined) props.onSelectSession(lead.ref.id);
         }}
       >
-        <Dot dot={lead === undefined ? STOPPED : lead.dot} />
+        <Dot dot={lead === undefined ? STOPPED : lead.dot} plan={plan} archived={plan.archived} />
         <span data-part="plan-id" title={plan.title} className="min-w-0 flex-1 truncate font-mono text-key">{plan.id}</span>
         <Counters counts={plan.counts} />
       </SidebarMenuSubButton>
@@ -161,7 +198,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
           }}
           className={hasChildren ? "pr-7" : undefined}
         >
-          {props.allPlans ? null : <Dot dot={manager === undefined ? STOPPED : manager.dot} />}
+          <Dot dot={manager === undefined ? STOPPED : manager.dot} archived={props.allPlans || context.archived} />
           <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
         </SidebarMenuButton>
         {hasChildren ? (
