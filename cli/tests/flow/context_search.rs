@@ -481,3 +481,211 @@ fn a_curated_hit_shows_the_curated_topic_not_the_provisional_one() {
         "{out}"
     );
 }
+
+// ---- search_log (vectors.db user_version 3; contract §4.6 "The search log") ----
+
+/// One `search_log` row: the columns the tests assert.
+#[derive(Debug)]
+struct Logged {
+    at: String,
+    context: String,
+    session: Option<String>,
+    query: String,
+    mode: String,
+    candidates: i64,
+    floor_dropped: i64,
+    pending_hidden: i64,
+    hits: i64,
+    fts_ms: i64,
+    embed_ms: Option<i64>,
+    embed_tokens: Option<i64>,
+}
+
+/// Every `search_log` row of `$CPD_HOME/vectors.db`, oldest first; none when the file or the table is absent.
+fn search_log(fx: &Fx) -> Vec<Logged> {
+    let path = fx.env.cpd_home().join("vectors.db");
+    if !path.exists() {
+        return Vec::new();
+    }
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let Ok(mut st) = conn.prepare(
+        "SELECT at, context, session, query, mode, candidates, floor_dropped, pending_hidden, hits, fts_ms, embed_ms, embed_tokens FROM search_log ORDER BY id",
+    ) else {
+        return Vec::new();
+    };
+    st.query_map([], |r| {
+        Ok(Logged {
+            at: r.get(0)?,
+            context: r.get(1)?,
+            session: r.get(2)?,
+            query: r.get(3)?,
+            mode: r.get(4)?,
+            candidates: r.get(5)?,
+            floor_dropped: r.get(6)?,
+            pending_hidden: r.get(7)?,
+            hits: r.get(8)?,
+            fts_ms: r.get(9)?,
+            embed_ms: r.get(10)?,
+            embed_tokens: r.get(11)?,
+        })
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+/// `at` is an ISO 8601 UTC string.
+fn assert_iso_utc(at: &str) {
+    assert!(
+        at.len() >= 20
+            && at.ends_with('Z')
+            && at.as_bytes()[4] == b'-'
+            && at.as_bytes()[10] == b'T',
+        "not an ISO utc time: {at}"
+    );
+}
+
+fn run_search(fx: &Fx, query: &str, vars: &[(&str, &str)]) -> serde_json::Value {
+    fx.cpd_with(
+        fx.env.root(),
+        &["context", "search", query, "--context", CTX],
+        vars,
+    )
+    .ok()
+}
+
+#[test]
+fn search_log_records_a_zero_hit_query() {
+    let fx = env();
+    note(&fx, "The engine ranks the hits.");
+    let out = run_search(&fx, "  zebra  ", &[]);
+    assert_eq!(out["records"].as_array().unwrap().len(), 0, "{out}");
+    let rows = search_log(&fx);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row.query, "zebra", "the query as trimmed");
+    assert_eq!(row.context, CTX);
+    assert_eq!(row.mode, "fts");
+    assert_eq!(
+        (
+            row.candidates,
+            row.floor_dropped,
+            row.pending_hidden,
+            row.hits
+        ),
+        (0, 0, 0, 0)
+    );
+    assert!(row.fts_ms >= 0);
+    assert_eq!((row.embed_ms, row.embed_tokens), (None, None));
+    assert_iso_utc(&row.at);
+}
+
+#[test]
+fn search_log_records_fts_mode_and_counts() {
+    let fx = env();
+    note(&fx, "Cache invalidation rules for the engine.");
+    note(&fx, "Cache warming runs at night.");
+    note(&fx, "Unrelated words entirely.");
+    let hidden = note(&fx, "Cache duplicate of the first.");
+    fx.env.sql(&format!(
+        "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at, decided_at, decided_by) \
+         VALUES ('{CTX}', '{hidden}', 'duplicate', 'hs-n1', 'pending', '2026-01-01T00:00:00.000Z', NULL, NULL);"
+    ));
+    let out = run_search(&fx, "cache", &[]);
+    let shown = out["records"].as_array().unwrap().len() as i64;
+    assert_eq!(shown, 2, "{out}");
+    let rows = search_log(&fx);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row.mode, "fts");
+    assert_eq!(row.pending_hidden, 1, "{row:?}");
+    assert_eq!(row.hits, shown, "{row:?}");
+    assert_eq!(row.candidates - row.floor_dropped, shown, "{row:?}");
+    assert!(
+        row.candidates >= 2 && row.floor_dropped <= row.candidates,
+        "{row:?}"
+    );
+    assert_eq!((row.embed_ms, row.embed_tokens), (None, None));
+}
+
+/// Machine `hs`, pi installed (so the embedder resolves), Context `building-cpd`.
+fn hybrid_env() -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    fx.install_pi();
+    fx.cpd(&[
+        "context",
+        "new",
+        CTX,
+        "--title",
+        "Building cpd",
+        "--owner",
+        "acme",
+    ])
+    .ok();
+    fx
+}
+
+#[test]
+fn search_log_records_hybrid_mode_with_embed_tokens() {
+    use cpd_core::context::curate_vectors::VectorStore;
+    use cpd_core::home::CpdHome;
+    use cpd_core::host::runner::Reply;
+    use cpd_core::ids::RecordId;
+
+    const MODEL: &str = "vertex/gemini-embedding-2";
+    let fx = hybrid_env();
+    let n1 = note(&fx, "Cache invalidation rules.");
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into_os_string()), None).unwrap();
+    let mut seeded = vec![0.0_f32; 768];
+    seeded[0] = 1.0;
+    VectorStore::at(&home)
+        .put_hashed(
+            &ContextId::parse(CTX).unwrap(),
+            MODEL,
+            &RecordId::parse(&n1).unwrap(),
+            &seeded,
+            "hash",
+        )
+        .unwrap();
+    let reply = json!({"ok": true, "vector": seeded, "model": MODEL, "tokens": 7});
+    fx.fake("node", Reply::ok(&format!("{reply}\n")));
+    let out = run_search(&fx, "cache", &[]);
+    assert_eq!(out["mode"], "hybrid", "{out}");
+    let rows = search_log(&fx);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row.mode, "hybrid");
+    assert_eq!(row.query, "cache");
+    assert_eq!(row.embed_tokens, Some(7), "{row:?}");
+    assert!(row.embed_ms.is_some_and(|ms| ms >= 0), "{row:?}");
+    assert!(row.hits >= 1, "{row:?}");
+    assert_iso_utc(&row.at);
+}
+
+#[test]
+fn search_log_records_a_row_without_a_session() {
+    let fx = env();
+    note(&fx, "The engine ranks the hits.");
+    run_search(&fx, "engine", &[("CPD_SESSION", ""), ("PI_SESSION_ID", "")]);
+    let rows = search_log(&fx);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].session, None);
+    assert_eq!(rows[0].hits, 1, "{rows:?}");
+    assert_eq!(rows[0].context, CTX);
+}
+
+#[test]
+fn search_log_failure_does_not_fail_the_search() {
+    let fx = env();
+    let n1 = note(&fx, "The engine ranks the hits.");
+    // A directory where vectors.db belongs: no write can succeed.
+    std::fs::create_dir(fx.env.cpd_home().join("vectors.db")).unwrap();
+    let out = run_search(&fx, "engine", &[]);
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+    assert_eq!(out["query"], "engine", "{out}");
+    // Red against the stub: a row is written when the file is usable, so a second, normal search must log.
+    std::fs::remove_dir(fx.env.cpd_home().join("vectors.db")).unwrap();
+    run_search(&fx, "engine", &[]);
+    assert_eq!(search_log(&fx).len(), 1);
+}

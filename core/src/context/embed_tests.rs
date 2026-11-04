@@ -3,7 +3,8 @@
 use tempfile::TempDir;
 
 use super::curate_vectors::{VectorStore, content_hash};
-use super::embed::{EmbedReport, embed_records};
+use super::embed::{EmbedReport, embed_records, embed_run};
+use crate::clock::{Clock, ManualClock};
 use crate::embedding::Embedded;
 use crate::error::{CpdError, ErrorCode};
 use crate::fakes::embedding::FakeEmbedding;
@@ -72,7 +73,9 @@ fn embed_records_embeds_only_missing_and_changed_rows() {
         EmbedReport {
             embedded: 2,
             skipped: 1,
-            remaining: 0
+            remaining: 0,
+            embed_tokens: 0,
+            ms: 0
         }
     );
     let texts: Vec<String> = fake.calls().into_iter().map(|(t, _)| t).collect();
@@ -83,7 +86,9 @@ fn embed_records_embeds_only_missing_and_changed_rows() {
         EmbedReport {
             embedded: 0,
             skipped: 3,
-            remaining: 0
+            remaining: 0,
+            embed_tokens: 0,
+            ms: 0
         }
     );
 }
@@ -99,7 +104,9 @@ fn embed_records_stops_at_the_limit_and_reports_remaining() {
         EmbedReport {
             embedded: 2,
             skipped: 0,
-            remaining: 1
+            remaining: 1,
+            embed_tokens: 0,
+            ms: 0
         }
     );
     assert_eq!(fake.calls().len(), 2);
@@ -112,7 +119,9 @@ fn embed_records_stops_at_the_limit_and_reports_remaining() {
         EmbedReport {
             embedded: 1,
             skipped: 2,
-            remaining: 0
+            remaining: 0,
+            embed_tokens: 0,
+            ms: 0
         }
     );
 }
@@ -143,4 +152,60 @@ fn embed_records_writes_the_hash_of_the_embedded_text() {
     for (id, text) in records() {
         assert_eq!(hashes[&id], content_hash(&text), "{id}");
     }
+}
+
+const STEP: std::time::Duration = std::time::Duration::from_millis(5);
+
+fn metered() -> Embedded {
+    Embedded {
+        tokens: Some(4),
+        ..embedded()
+    }
+}
+
+#[test]
+fn embed_report_has_tokens_and_ms() {
+    let (_dir, home) = home();
+    let store = VectorStore::at(&home);
+    let clock = ManualClock::new();
+    let fake = FakeEmbedding::answering(metered()).advancing(&clock, STEP);
+    let report = embed_run(&home, &clock, &store, &fake, &cid(), &records(), 0).unwrap();
+    assert_eq!(
+        report,
+        EmbedReport {
+            embedded: 3,
+            skipped: 0,
+            remaining: 0,
+            embed_tokens: 12,
+            ms: 15
+        }
+    );
+}
+
+#[test]
+fn embed_appends_one_curate_runs_line() {
+    let (_dir, home) = home();
+    let store = VectorStore::at(&home);
+    let clock = ManualClock::new();
+    let fake = FakeEmbedding::answering(metered()).advancing(&clock, STEP);
+    let started = crate::clock::timestamp(clock.utc());
+    embed_run(&home, &clock, &store, &fake, &cid(), &records(), 2).unwrap();
+    let path = home.context_digest_dir(&cid()).join("curate-runs.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    let finished = crate::clock::timestamp(clock.utc());
+    let at = lines[0]["at"].as_str().unwrap().to_owned();
+    assert!(started <= at && at <= finished, "{at}");
+    assert_eq!(
+        lines[0],
+        serde_json::json!({
+            "kind": "embed", "at": at, "context": "cpd", "ms": 10, "embed_tokens": 8,
+            "kev_tokens_in": 0, "kev_tokens_out": 0, "judge_tokens_in": 0, "judge_tokens_out": 0,
+            "cost": null, "embedded": 2, "skipped": 0, "remaining": 1
+        })
+    );
 }

@@ -14,12 +14,30 @@ use crate::store::{cache_setup_lock, configure};
 /// `PRAGMA application_id` of `vectors.db` (§4.6): "cpvc".
 const APPLICATION_ID: i32 = 1_668_703_587;
 /// `PRAGMA user_version` of `vectors.db`; a file with a higher one is refused.
-const VERSION: i32 = 2;
+const VERSION: i32 = 3;
 /// How long the first open waits for `locks/store.lock` and for SQLite.
 const BUSY_MS: u64 = 5000;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;";
+CREATE TABLE IF NOT EXISTS context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS search_log (id INTEGER PRIMARY KEY, at TEXT NOT NULL, context TEXT NOT NULL, session TEXT, query TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('fts', 'hybrid')), candidates INTEGER NOT NULL, floor_dropped INTEGER NOT NULL, pending_hidden INTEGER NOT NULL, hits INTEGER NOT NULL, fts_ms INTEGER NOT NULL, embed_ms INTEGER, embed_tokens INTEGER) STRICT;
+CREATE INDEX IF NOT EXISTS search_log_context_at ON search_log (context, at);";
+
+/// One `search_log` row.
+pub struct SearchLogRow<'a> {
+    pub at: &'a str,
+    pub context: &'a ContextId,
+    pub session: Option<&'a str>,
+    pub query: &'a str,
+    pub hybrid: bool,
+    pub candidates: u64,
+    pub floor_dropped: u64,
+    pub pending_hidden: u64,
+    pub hits: u64,
+    pub fts_ms: u64,
+    pub embed_ms: Option<u64>,
+    pub embed_tokens: Option<u64>,
+}
 
 /// The vector cache file.
 pub struct VectorStore {
@@ -152,6 +170,31 @@ impl VectorStore {
         conn.pragma_update(None, "user_version", VERSION)
             .map_err(|e| failed(path, "set user_version of", e))?;
         Ok(conn)
+    }
+
+    /// Appends one `search_log` row (contract §4.6 "The search log").
+    pub fn log_search(&self, row: &SearchLogRow<'_>) -> Result<(), CpdError> {
+        let conn = self.writer()?;
+        conn.execute(
+            "INSERT INTO search_log (at, context, session, query, mode, candidates, floor_dropped, pending_hidden, hits, fts_ms, embed_ms, embed_tokens) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                row.at,
+                row.context.as_str(),
+                row.session,
+                row.query,
+                if row.hybrid { "hybrid" } else { "fts" },
+                row.candidates as i64,
+                row.floor_dropped as i64,
+                row.pending_hidden as i64,
+                row.hits as i64,
+                row.fts_ms as i64,
+                row.embed_ms.map(|v| v as i64),
+                row.embed_tokens.map(|v| v as i64)
+            ],
+        )
+        .map_err(|e| failed(&self.path, "write", e))?;
+        Ok(())
     }
 
     pub fn put(

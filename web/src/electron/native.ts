@@ -1,6 +1,8 @@
 import type { AttentionCounts } from "./attention.ts";
 import { join } from "node:path";
 import type { UiMode } from "./channels.ts";
+import { updateMenuItem } from "./update/menu.ts";
+import type { UpdateState } from "./update/types.ts";
 
 export interface AssetPaths { icon: string; tray: string; trayAttention: string }
 
@@ -25,18 +27,18 @@ export interface NativeShellDeps {
   nativeTheme: { themeSource: "system" | "light" | "dark" };
   nativeImage: { createFromPath(path: string): ImageLike };
   createTray(image: ImageLike): TrayLike;
-  buildMenu(template: { label?: string; type?: "separator"; click?: () => void }[]): unknown;
+  buildMenu(template: { label?: string; type?: "separator"; enabled?: boolean; click?: () => void }[]): unknown;
   isWindowFocused(): boolean;
   assets: AssetPaths;
   actions: { openCockpit(): void; setMode(mode: UiMode): void; quit(): void };
 }
-export interface NativeShell { setAttention(c: AttentionCounts): void; dispose(): void }
+export interface NativeShell { setAttention(c: AttentionCounts): void; setUpdateState(state: UpdateState, onRestart: () => void): void; dispose(): void }
 
 export function setupNativeShell(deps: NativeShellDeps): NativeShell {
   const { app, actions } = deps;
   deps.nativeTheme.themeSource = "dark";
   app.setAboutPanelOptions({ applicationName: "cpd", applicationVersion: app.getVersion(), credits: "Continuous Parallel Delivery" });
-  if (deps.platform !== "darwin") return { setAttention() {}, dispose() {} };
+  if (deps.platform !== "darwin") return { setAttention() {}, setUpdateState() {}, dispose() {} };
 
   app.dock?.setIcon(deps.assets.icon);
   const normal = deps.nativeImage.createFromPath(deps.assets.tray);
@@ -45,13 +47,17 @@ export function setupNativeShell(deps: NativeShellDeps): NativeShell {
   attention.setTemplateImage(true);
   const tray = deps.createTray(normal);
   tray.setToolTip("cpd");
-  tray.setContextMenu(deps.buildMenu([
-    { label: "Open cockpit", click: () => actions.openCockpit() },
-    { label: "Switch to TUI", click: () => actions.setMode("tui") },
-    { label: "Switch to WebUI", click: () => actions.setMode("webui") },
-    { type: "separator" },
-    { label: "Quit cpd", click: () => actions.quit() },
-  ]));
+  const buildTrayMenu = (update: { label: string; enabled: boolean; click?: () => void } | null): void => {
+    tray.setContextMenu(deps.buildMenu([
+      { label: "Open cockpit", click: () => actions.openCockpit() },
+      { label: "Switch to TUI", click: () => actions.setMode("tui") },
+      { label: "Switch to WebUI", click: () => actions.setMode("webui") },
+      ...(update ? [update] : []),
+      { type: "separator" },
+      { label: "Quit cpd", click: () => actions.quit() },
+    ]));
+  };
+  buildTrayMenu(null);
 
   let previousBlocking: number | null = null;
   let destroyed = false;
@@ -62,6 +68,9 @@ export function setupNativeShell(deps: NativeShellDeps): NativeShell {
       tray.setImage(needsYou > 0 ? attention : normal);
       if (previousBlocking !== null && c.blocking > previousBlocking && !deps.isWindowFocused()) app.dock?.bounce("informational");
       previousBlocking = c.blocking;
+    },
+    setUpdateState(state, onRestart) {
+      if (!destroyed) buildTrayMenu(updateMenuItem(state, onRestart));
     },
     dispose() {
       if (destroyed) return;

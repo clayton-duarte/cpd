@@ -13,3 +13,6 @@ minimumReleaseAgeExclude:
 
 packages:
   - 'web/'
+
+patchedDependencies:
+  '@aurigax-ai/ghostty-web@0.3.9': patches/@aurigax-ai__ghostty-web@0.3.9.patch

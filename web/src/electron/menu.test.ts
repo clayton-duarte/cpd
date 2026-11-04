@@ -12,9 +12,9 @@ function viewItems(template: ReturnType<typeof build>) {
 
 test("buildMenuTemplate puts appMenu first on darwin only", () => {
   const darwin = build("tui", "darwin");
-  expect(darwin.map((i) => i.role ?? i.label)).toEqual(["appMenu", "View", "windowMenu"]);
+  expect(darwin.map((i) => i.role ?? i.label)).toEqual(["appMenu", "editMenu", "View", "windowMenu"]);
   for (const platform of ["linux", "win32"] as const) {
-    expect(build("tui", platform).map((i) => i.role ?? i.label)).toEqual(["View", "windowMenu"]);
+    expect(build("tui", platform).map((i) => i.role ?? i.label)).toEqual(["editMenu", "View", "windowMenu"]);
   }
 });
 

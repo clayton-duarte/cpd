@@ -25,10 +25,50 @@ export const DANGO_THEME = {
   brightWhite: "#f3ead9",
 };
 
-export const TERMINAL_FONT: { fontFamily: string; fontSize: number } = {
+export const TERMINAL_FONT: { fontFamily: string; fontSize: number; fontWeight: number } = {
   fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace',
   fontSize: 13,
+  fontWeight: 300,
 };
+
+export const FONT_SIZE_MIN = 9;
+export const FONT_SIZE_MAX = 28;
+export const FONT_SIZE_DEFAULT = 13;
+export interface KeyEventLike { key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }
+export interface WheelEventLike { deltaY: number; deltaMode: number; clientX: number; clientY: number }
+
+export function shiftEnterSequence(event: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }): string | null {
+  const plain = event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing;
+  return event.key === "Enter" && plain ? "\x1b[13;2u" : null;
+}
+export function zoomAction(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "in" | "out" | "reset" | null {
+  if (!event.metaKey || event.ctrlKey || event.altKey) return null;
+  if (event.key === "=" || event.key === "+") return "in";
+  if (event.key === "-" || event.key === "_") return "out";
+  if (event.key === "0") return "reset";
+  return null;
+}
+export function nextFontSize(current: number, action: "in" | "out" | "reset"): number {
+  if (action === "reset") return FONT_SIZE_DEFAULT;
+  const next = current + (action === "in" ? 1 : -1);
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, next));
+}
+export function createWheelAccumulator(): { push(deltaY: number, deltaMode: number, cellHeight: number): number } {
+  let remainder = 0;
+  return {
+    push(deltaY, deltaMode, cellHeight) {
+      const px = deltaMode === 1 ? deltaY * cellHeight : deltaMode === 2 ? deltaY * 10 * cellHeight : deltaY;
+      if (px !== 0 && Math.sign(px) !== Math.sign(remainder)) remainder = 0;
+      remainder += px;
+      const steps = Math.trunc(remainder / Math.max(24, 1.5 * cellHeight)) + 0;
+      remainder -= steps * Math.max(24, 1.5 * cellHeight);
+      return steps;
+    },
+  };
+}
+export function isCmdV(event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
+  return event.code === "KeyV" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+}
 
 export interface TerminalEngine {
   open(): void;
@@ -40,6 +80,15 @@ export interface TerminalEngine {
   onData(cb: (data: string) => void): void;
   onResize(cb: (size: PtySize) => void): void;
   setClipboardWriteHandler(handler: (text: string) => boolean): void;
+  fontSize(): number;
+  setFontSize(px: number): void;
+  cellHeight(): number;
+  setKeyHandler(handler: (event: KeyEventLike) => boolean): void;
+  setWheelHandler(handler: (event: WheelEventLike) => boolean): void;
+  appOwnsWheel(): boolean;
+  wheelStep(direction: "up" | "down", clientX: number, clientY: number): string;
+  input(data: string): void;
+  paste(text: string): void;
   dispose(): void;
 }
 export interface ResizeSource {
@@ -49,7 +98,7 @@ export interface TerminalHostDeps {
   engine: TerminalEngine;
   bridge: CpdElectronBridge;
   resize: ResizeSource;
-  clipboard: { writeText(text: string): Promise<void> };
+  clipboard: { writeText(text: string): Promise<void>; readText(): Promise<string> };
   view: { showTerminal(visible: boolean): void };
   pointer: { buttons(): number };
   onError(error: unknown): void;
@@ -84,6 +133,36 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
   unsubscribes.push(deps.resize.observe(() => engine.fit()));
   engine.setClipboardWriteHandler((text) => {
     deps.clipboard.writeText(text).catch(deps.onError);
+    return true;
+  });
+  const wheel = createWheelAccumulator();
+  engine.setKeyHandler((event) => {
+    const sequence = shiftEnterSequence(event);
+    if (sequence !== null) {
+      engine.input(sequence);
+      return true;
+    }
+    const action = zoomAction(event);
+    if (action !== null) {
+      engine.setFontSize(nextFontSize(engine.fontSize(), action));
+      engine.fit();
+      return true;
+    }
+    if (isCmdV(event)) {
+      deps.clipboard.readText().then((text) => {
+        if (text !== "") engine.paste(text);
+      }).catch(deps.onError);
+      return true;
+    }
+    return false;
+  });
+  engine.setWheelHandler((event) => {
+    if (!engine.appOwnsWheel()) return false;
+    const steps = wheel.push(event.deltaY, event.deltaMode, engine.cellHeight());
+    if (steps !== 0) {
+      const step = engine.wheelStep(steps < 0 ? "up" : "down", event.clientX, event.clientY);
+      engine.input(step.repeat(Math.abs(steps)));
+    }
     return true;
   });
   const apply = (mode: UiMode): void => {

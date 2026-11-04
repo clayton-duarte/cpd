@@ -1,6 +1,6 @@
 # Electron app
 
-The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
+The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
 
 ## Run
 
@@ -133,7 +133,7 @@ export interface MenuTemplateOptions { mode: UiMode; platform: NodeJS.Platform; 
 export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate;
 ```
 
-- Result, in order: `{ role: "appMenu" }` only when `platform === "darwin"`; then `{ label: "View", submenu: [...] }`; then `{ role: "windowMenu" }`.
+- Template order of `buildMenuTemplate`, on every platform: `{ role: "appMenu" }` only when `platform === "darwin"`; then `{ role: "editMenu" }`, on every platform (it is there so Cmd+C, Cmd+V, Cmd+X, Cmd+A and Cmd+Z work in WebUI; TUI ignores menu shortcuts, so the terminal's own key handler does its paste, see terminal.ts); then `{ label: "View", submenu: [...] }`; then `{ role: "windowMenu" }`. The template is therefore `[appMenu (darwin only), editMenu, View, windowMenu]`.
 - The View submenu is exactly two items in this order: `{ label: "TUI", type: "radio", checked: mode === "tui", click }` and `{ label: "WebUI", type: "radio", checked: mode === "webui", accelerator: "CmdOrCtrl+Shift+M", click }`. TUI has no accelerator. The `click` of each calls `onSelect("tui")` / `onSelect("webui")` (the click arguments are ignored).
 
 ### mode.ts (UI mode persistence and controller)
@@ -191,7 +191,22 @@ export const DANGO_THEME: {
   black: string; red: string; green: string; yellow: string; blue: string; magenta: string; cyan: string; white: string;
   brightBlack: string; brightRed: string; brightGreen: string; brightYellow: string; brightBlue: string; brightMagenta: string; brightCyan: string; brightWhite: string;
 };
-export const TERMINAL_FONT: { fontFamily: string; fontSize: number };
+export const TERMINAL_FONT: { fontFamily: string; fontSize: number; fontWeight: number };
+
+// Pinned pure helpers (pro-d30, pro-d32). Exact names and signatures; tests call them directly.
+export const FONT_SIZE_MIN = 9;
+export const FONT_SIZE_MAX = 28;
+export const FONT_SIZE_DEFAULT = 13;
+export function shiftEnterSequence(event: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }): string | null;
+export function zoomAction(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "in" | "out" | "reset" | null;
+export function nextFontSize(current: number, action: "in" | "out" | "reset"): number;
+export function createWheelAccumulator(): { push(deltaY: number, deltaMode: number, cellHeight: number): number };
+export function isCmdV(event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean;
+
+// Event shapes handed to the handlers below. A KeyboardEvent or WheelEvent satisfies them structurally.
+export interface KeyEventLike { key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }
+export interface WheelEventLike { deltaY: number; deltaMode: number; clientX: number; clientY: number }
+
 export interface TerminalEngine {
   open(): void;                       // mounts into its container
   fit(): void;                        // recomputes cols and rows from the container size
@@ -202,22 +217,46 @@ export interface TerminalEngine {
   onData(cb: (data: string) => void): void;       // keyboard input from the user
   onResize(cb: (size: PtySize) => void): void;    // fires when cols or rows change
   setClipboardWriteHandler(handler: (text: string) => boolean): void;   // OSC 52 writes
+  fontSize(): number;                                                   // term.options.fontSize
+  setFontSize(px: number): void;                                        // term.options.fontSize = px; does not resize the pty, the caller calls fit()
+  cellHeight(): number;                                                 // renderer cell height in px
+  setKeyHandler(handler: (event: KeyEventLike) => boolean): void;       // term.attachCustomKeyEventHandler
+  setWheelHandler(handler: (event: WheelEventLike) => boolean): void;   // term.attachCustomWheelEventHandler
+  appOwnsWheel(): boolean;                                              // true when mouse tracking is on or the alternate screen is active
+  wheelStep(direction: "up" | "down", clientX: number, clientY: number): string;
+    // alternate screen: "\x1b[A" / "\x1b[B"; mouse tracking: SGR "\x1b[<64;col;rowM" / "\x1b[<65;col;rowM" for the cell under (clientX, clientY)
+  input(data: string): void;                                            // term.input(data, true): fires onData, so the bytes reach bridge.writePty
+  paste(text: string): void;                                            // term.paste(text): bracketed when the app asked
   dispose(): void;
 }
 export interface ResizeSource { observe(cb: () => void): () => void }   // returns the unobserve function
 export interface TerminalHostDeps {
   engine: TerminalEngine; bridge: CpdElectronBridge; resize: ResizeSource;
-  clipboard: { writeText(text: string): Promise<void> };
+  clipboard: { writeText(text: string): Promise<void>; readText(): Promise<string> };
   view: { showTerminal(visible: boolean): void };
   onError(error: unknown): void;
 }
 export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): void }>;
 ```
 
-- `DANGO_THEME` values (Dango v3, from dotfiles themes/Dango): foreground `#d8d2cc`, background `#1c1a20`, cursor `#ecaec7`, cursorAccent `#1c1a20`, selectionBackground `#5a504a`, selectionForeground `#d8d2cc`; black `#5a504a`, red `#e17f6e`, green `#8da96e`, yellow `#c29653`, blue `#7aa2ce`, magenta `#ca88a3`, cyan `#67ada7`, white `#aba3af`; brightBlack `#87808c`, brightRed `#ffa796`, brightGreen `#b3cd96`, brightYellow `#e4bb7f`, brightBlue `#a1c6ef`, brightMagenta `#ecaec7`, brightCyan `#92d1ca`, brightWhite `#f3ead9`. `TERMINAL_FONT` = `{ fontFamily: '"Maple Mono", monospace', fontSize: 13 }` (ligatures: ghostty-web has no ligature option and draws per cell).
-- `startTerminalHost`, in this order: `engine.open()`; `engine.fit()`; register `bridge.onPtyData(engine.write)`; register `bridge.onPtyExit(code => engine.write("\r\n[cpd tui exited with code " + code + "]\r\n"))`; `engine.onData(bridge.writePty)`; `resize.observe(() => engine.fit())`; `engine.setClipboardWriteHandler(text => { deps.clipboard.writeText(text).catch(deps.onError); return true; })`; `const mode = await bridge.getMode()` and apply it; `bridge.onMode(apply)`; `await bridge.startPty(engine.size())`; and only then `engine.onResize(size => bridge.resizePty(size))`. Every listener is registered before `startPty` is called, so no pty data is lost, and no resize reaches main before the pty exists.
+- `DANGO_THEME` values (Dango v3, from dotfiles themes/Dango): foreground `#d8d2cc`, background `#1c1a20`, cursor `#ecaec7`, cursorAccent `#1c1a20`, selectionBackground `#5a504a`, selectionForeground `#d8d2cc`; black `#5a504a`, red `#e17f6e`, green `#8da96e`, yellow `#c29653`, blue `#7aa2ce`, magenta `#ca88a3`, cyan `#67ada7`, white `#aba3af`; brightBlack `#87808c`, brightRed `#ffa796`, brightGreen `#b3cd96`, brightYellow `#e4bb7f`, brightBlue `#a1c6ef`, brightMagenta `#ecaec7`, brightCyan `#92d1ca`, brightWhite `#f3ead9`. `TERMINAL_FONT` = `{ fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace', fontSize: 13, fontWeight: 300 }` (ligatures: ghostty-web has no ligature option and draws per cell). `fontSize` stays 13; zoom changes it at runtime only (see below) and nothing persists it.
+- `startTerminalHost`, in this order: `engine.open()`; `engine.fit()`; register `bridge.onPtyData(engine.write)`; register `bridge.onPtyExit(code => engine.write("\r\n[cpd tui exited with code " + code + "]\r\n"))`; `engine.onData(bridge.writePty)`; `resize.observe(() => engine.fit())`; `engine.setClipboardWriteHandler(text => { deps.clipboard.writeText(text).catch(deps.onError); return true; })`; `engine.setKeyHandler(handleKey)` and `engine.setWheelHandler(handleWheel)` (below); `const mode = await bridge.getMode()` and apply it; `bridge.onMode(apply)`; `await bridge.startPty(engine.size())`; and only then `engine.onResize(size => bridge.resizePty(size))`. Every listener is registered before `startPty` is called, so no pty data is lost, and no resize reaches main before the pty exists.
 - Apply mode `m`: `engine.setPaused(m !== "tui")`; `view.showTerminal(m === "tui")`; `engine.focus()` only when `m === "tui"`.
 - The returned `dispose()` calls every unsubscribe function it got (bridge listeners, the resize unobserve) and `engine.dispose()`.
+- Key handler `handleKey(e: KeyEventLike): boolean`, first match wins, otherwise `false` so ghostty-web handles the key (Cmd+C, copy of its selection, is unchanged):
+  1. `shiftEnterSequence(e)` is not `null`: `engine.input(seq)` writes the CSI-u sequence `\x1b[13;2u` to the pty (through `onData`); return `true`. Plain Enter is untouched.
+  2. `isCmdV(e)`: `deps.clipboard.readText()`, then `engine.paste(text)` when the text is not empty (an empty clipboard pastes nothing); return `true` at once, so ghostty calls `preventDefault` and the browser's native paste does not run a second time. A read rejection goes to `deps.onError`; the key stays consumed.
+  3. `zoomAction(e)` is not `null`: `engine.setFontSize(nextFontSize(engine.fontSize(), action))`, then `engine.fit()` so `term.resize` fires `onResize` and the pty resizes; return `true`. Zoom is not persisted. It acts only while the terminal handles keys (TUI, focused), because the terminal is paused and hidden in WebUI.
+- Wheel handler `handleWheel(e: WheelEventLike): boolean`:
+  - `engine.appOwnsWheel()` is `false` (plain scrollback): return `false`, so ghostty-web scrolls its scrollback as today.
+  - Otherwise (mouse tracking or alternate screen): `steps = wheel.push(e.deltaY, e.deltaMode, engine.cellHeight())` with `const wheel = createWheelAccumulator()` made once per host. When `steps !== 0`, `engine.input(engine.wheelStep(steps < 0 ? "up" : "down", e.clientX, e.clientY).repeat(Math.abs(steps)))`. Return `true` even when `steps` is `0`, so ghostty does not also scroll for a sub-threshold delta.
+- Pinned semantics of the helpers:
+  - `shiftEnterSequence`: returns `"\x1b[13;2u"` for `key === "Enter"` with `shiftKey` only (no ctrl, alt or meta) and `isComposing` false; otherwise `null`.
+  - `zoomAction`: needs `metaKey` and no `ctrlKey` or `altKey`. `key` `"="` or `"+"` is `"in"` (Cmd+Shift+= types `+`, so shift is ignored); `"-"` or `"_"` is `"out"`; `"0"` is `"reset"`; anything else `null`.
+  - `nextFontSize`: `"in"` adds 1, `"out"` subtracts 1, both clamped to `FONT_SIZE_MIN` (9) through `FONT_SIZE_MAX` (28); `"reset"` returns `FONT_SIZE_DEFAULT` (13).
+  - `createWheelAccumulator().push`: converts `deltaY` to px (`deltaMode` 0 = px; 1 = lines, `deltaY * cellHeight`; 2 = pages, treated as 10 lines, `10 * deltaY * cellHeight`). Threshold is `max(24, 1.5 * cellHeight)` px. It returns the signed number of whole steps (negative = up, same sign as `deltaY`) and keeps the sub-threshold remainder. A delta of the opposite sign first zeroes the remainder.
+  - `isCmdV`: `code === "KeyV"` with `metaKey` and no `ctrlKey`, `altKey` or `shiftKey`.
+- Menu accelerators do not fire in TUI (menu.ts section), so the key handler, not the editMenu, does Cmd+V in TUI. The editMenu roles serve WebUI.
 
 ### Composition roots (not unit-tested, thin)
 
@@ -231,6 +270,17 @@ export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): 
 - Resize: `FitAddon.fit()` ignores calls within 50 ms of one, so the final size was dropped. `fitToContainer` uses `proposeDimensions()` and calls `term.resize` once.
 - Fonts: `TERMINAL_FONT` falls back to Symbols Nerd Font Mono and MesloLGS, and renderer.ts awaits `document.fonts.ready` before opening the terminal.
 - Pointer: electron.html forces `cursor: default` on `#terminal` and its canvas.
+
+#### Terminal polish (pro-d30, pro-d32)
+
+User bug reports pro-d30 and pro-d32, and decision pro-d33. Each item is pinned above; this list is the index.
+
+- Shift+Enter sends the CSI-u sequence `\x1b[13;2u` to the pty (`handleKey`), not a plain Enter.
+- Zoom: Cmd+= / Cmd++ / Cmd+- / Cmd+0 step the font 1px within 9..28, reset to 13, and refit the pty. Not persisted.
+- Wheel: when the app owns the wheel (mouse tracking or alternate screen), one step per `max(24, 1.5 * cellHeight)` px of accumulated delta, sent to the pty; plain scrollback stays with ghostty-web.
+- Cmd+V in TUI reads the clipboard and pastes (bracketed when the app asked). Cmd+C is unchanged (ghostty-web).
+- Menu: `editMenu` is on every platform, so Cmd+C, Cmd+V, Cmd+X, Cmd+A and Cmd+Z work in WebUI.
+- `TERMINAL_FONT` is `fontWeight: 300`, `fontSize: 13`.
 
 ## Assets (web/build/)
 
@@ -289,6 +339,179 @@ The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (rend
 - TUI mode: the terminal is shown, resumed, refitted to its container and focused. Menu shortcuts are ignored, so the keys reach cpd.
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
 - The chosen mode persists in `$CPD_HOME/run/ui-mode.json` (see Module contract, mode.ts).
+
+## Auto-update and CLI bootstrap
+
+### Overview
+
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, fast-forwards the checkout, builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
+
+Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
+
+### Contract
+
+All modules live in `web/src/electron/update/`. Each takes every external effect (process, file system, timer, focus, idle time, log) as an injected dependency. Tests use injected fakes only: no test starts a real process, timer or socket. The 11 interface names of `web/src/types-unique.test.ts` are not redeclared.
+
+#### types.ts
+
+```ts
+export interface UpdateExecResult { code: number; stdout: string; stderr: string }
+export type UpdateExec = (cmd: string, args: string[], opts: { cwd: string; env?: Record<string, string> }) => Promise<UpdateExecResult>;
+export interface UpdateFs { exists(p: string): boolean; readText(p: string): string | null; writeText(p: string, text: string): void; rename(from: string, to: string): void; remove(p: string): void }
+export interface UpdateTimers { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
+export type BootstrapStatus = { state: 'ready' } | { state: 'installing' } | { state: 'failed'; error: string; logPath: string };
+export type UpdateState = { phase: 'idle' } | { phase: 'syncing' } | { phase: 'building' } | { phase: 'waiting' } | { phase: 'restart-needed' } | { phase: 'error'; message: string };
+```
+
+#### outdir.ts
+
+```ts
+export function electronOutDir(env: Record<string, string | undefined>): string
+```
+
+Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js` and `preload.cjs` under this directory; the default is unchanged.
+
+#### checkout.ts
+
+```ts
+export function resolveCheckout(deps: { env: Record<string, string | undefined>; bundleDir: string; fs: Pick<UpdateFs, 'exists'> }): string | null
+export type SyncResult = { kind: 'current'; sha: string } | { kind: 'updated'; from: string; to: string; lockfileChanged: boolean } | { kind: 'skipped'; reason: 'branch' | 'dirty' | 'fetch-failed' | 'diverged' };
+export function syncCheckout(exec: UpdateExec, root: string): Promise<SyncResult>
+```
+
+The root is `env.CPD_CHECKOUT`, else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns the root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`.
+
+`syncCheckout` fast-forwards only a clean checkout on branch `main` (A4). Every call is `exec('git', args, { cwd: root })`, and stdout is trimmed. The steps run in this order; each is skipped once an earlier step has returned:
+
+1. `rev-parse --abbrev-ref HEAD` is not `main`: skipped, `branch`.
+2. `status --porcelain` is non-empty: skipped, `dirty`.
+3. `fetch origin` exits non-zero: skipped, `fetch-failed`.
+4. `rev-parse HEAD` and `rev-parse origin/main` are equal: `current` with that `sha`.
+5. `merge-base --is-ancestor HEAD origin/main` exits non-zero: skipped, `diverged`.
+6. `merge --ff-only origin/main` exits non-zero: skipped, `diverged`.
+7. `diff --name-only <from> <to>`: `updated`, with `lockfileChanged` true when the list contains `pnpm-lock.yaml`.
+
+#### bundle.ts
+
+Paths are relative to the `root` argument.
+
+```ts
+export const BUILT_SHA_FILE = '.built-sha';
+export function buildBundle(deps: { exec: UpdateExec; fs: UpdateFs }, root: string, opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>
+export function readBuiltSha(fs: UpdateFs, root: string): string | null
+export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
+```
+
+`buildBundle` removes `<root>/web/dist-electron.next` first. When `lockfileChanged` is true it runs `exec('pnpm', ['install', '--frozen-lockfile'], { cwd: root })` (A9). Then it runs `exec('pnpm', ['--filter', 'cpd-web-client', 'run', 'build:electron'], { cwd: root, env: { CPD_ELECTRON_OUT: 'dist-electron.next' } })`. A non-zero exit returns `{ ok: false, log }`, where `log` is that command's stderr and stdout, and stops. On success it writes `opts.sha` to `<root>/web/dist-electron.next/.built-sha`.
+
+`readBuiltSha` reads `<root>/web/dist-electron/.built-sha`, trimmed, and returns `null` when it is missing.
+
+`swapBundle` sets `mainChanged` to true when the text of `main.js` or of `preload.cjs` differs between `web/dist-electron` and `web/dist-electron.next`; a missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
+
+#### cli.ts
+
+```ts
+export function countRunningAttempts(exec: UpdateExec, root: string): Promise<number>
+export function installCli(deps: { exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; log: (line: string) => void; retryMs?: number }, root: string, sha: string): Promise<{ ok: true } | { ok: false; log: string }>
+export function readInstalledSha(fs: UpdateFs, root: string): string | null
+```
+
+`countRunningAttempts` runs `exec('cpd', ['plan','list'], { cwd: root })`, which prints JSON `{ plans: [{ id }] }`. For each plan it runs `exec('cpd', ['attempt','list','--active','--plan', id], { cwd: root })`, which prints JSON `{ attempts: [{ status }] }`. It counts the attempts whose status is `running`. A non-zero exit or invalid JSON throws an `Error` that names the command.
+
+`installCli` runs in three steps:
+
+1. `exec('scripts/cargo.sh', ['build','--release','--locked','-p','cpd'], { cwd: root })`. Non-zero: returns `{ ok: false, log }`.
+2. Loop: `countRunningAttempts`. When the count is above 0, it logs a line through `deps.log` and waits `retryMs` (default 60000) with `timers.setTimeout`, then counts again. A throw from counting returns `{ ok: false, log: <its message> }`.
+3. When the count is 0: `exec('scripts/install-cpd.sh', [], { cwd: root })` (A7). Non-zero: returns `{ ok: false, log }`. Success writes `sha` to `<root>/target/.cli-installed-sha` and returns `{ ok: true }`.
+
+`readInstalledSha` reads `<root>/target/.cli-installed-sha`, trimmed, and returns `null` when it is missing.
+
+#### bootstrap.ts
+
+```ts
+export function ensureCli(deps: { platform: string; home: string; root: string | null; exec: UpdateExec; fs: UpdateFs; onStatus: (s: BootstrapStatus) => void }): Promise<BootstrapStatus>
+```
+
+The first case that applies is taken:
+
+- `platform` is not `'darwin'`, or `fs.exists(<home>/.local/bin/cpd)`: `onStatus({ state: 'ready' })`, return it, run nothing.
+- `root` is `null`: `failed` with error `cpd checkout not found: set CPD_CHECKOUT` and `logPath` `<home>/.cpd/run/cli-bootstrap.log`.
+- Otherwise: `onStatus({ state: 'installing' })`, then `exec('scripts/install-cpd.sh', [], { cwd: root })`. A non-zero exit writes stdout and stderr to `logPath` with `fs.writeText` and returns `failed`, with `error` set to the last non-empty line of stderr. An exit 0 with `<home>/.local/bin/cpd` still missing returns `failed`. Otherwise it returns `ready`.
+
+`onStatus` receives every status returned, in order (A8).
+
+#### follow.ts
+
+```ts
+export function parseEventId(line: string): number
+export interface FollowProcess { onLine(cb: (line: string) => void): void; onExit(cb: (code: number | null) => void): void; kill(): void }
+export type SpawnFollow = (args: string[]) => FollowProcess;
+export function followMerges(deps: { spawn: SpawnFollow; timers: UpdateTimers; onMerged: () => void; onError: (e: Error) => void; restartMs?: number }): { stop(): void }
+```
+
+`parseEventId` accepts a JSON line with kind `pr-merged` and a numeric `id`, and returns the id. Any other line throws an `Error`.
+
+`followMerges` spawns `['events','follow','--kind','pr-merged']` at once and calls `onMerged()` once, as the launch catch-up. For each line it calls `parseEventId`; a throw goes to `onError` and following continues. A parsed line records the last id and calls `onMerged()`. When the process exits and `stop()` was not called, it spawns again after `restartMs` (default 5000) through `timers.setTimeout`. The arguments are `['events','follow','--kind','pr-merged','--since',String(lastId)]` when an id was seen, else `['events','follow','--kind','pr-merged']`; it calls `onMerged()` as well. `stop()` kills the process, clears the pending restart and prevents any further spawn.
+
+#### idle.ts
+
+```ts
+export function whenApplicable(deps: { isFocused: () => boolean; systemIdleSeconds: () => number; timers: UpdateTimers; pollMs?: number; idleSeconds?: number }): Promise<void>
+```
+
+Resolves when `!isFocused()` or `systemIdleSeconds() >= idleSeconds` (default 300). It checks at once, then every `pollMs` (default 30000) through `timers.setTimeout`.
+
+#### controller.ts
+
+```ts
+export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; onState(s: UpdateState): void; log(line: string): void }
+export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> }
+```
+
+`SyncResult` is imported from `checkout.ts`. One run of `check()`:
+
+1. `onState({ phase: 'syncing' })`, then `sync()`. A `skipped` result logs the reason, calls `onState({ phase: 'idle' })` and ends: no build and no CLI install.
+2. `sha = headSha()`.
+3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, or `restart-needed` was already set earlier in this process (sticky), it calls `onState({ phase: 'restart-needed' })` and does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
+4. CLI flow, concurrent with the bundle flow, when `cliSha() !== sha`: `installCli(sha)`. A failure is only logged; it never sets the `error` state.
+
+`check()` is single-flight. A call made during a run returns that run's promise, and queues exactly one trailing run after it.
+
+#### menu.ts
+
+```ts
+export function updateMenuItem(state: UpdateState, onRestart: () => void): { label: string; enabled: boolean; click?: () => void }
+```
+
+`restart-needed` gives `{ label: 'Restart to Apply Update', enabled: true, click: onRestart }`. `syncing`, `building` and `waiting` give `{ label: 'Updating…', enabled: false }`. `error` gives `{ label: 'Update Failed (see log)', enabled: false }`. `idle` gives `{ label: 'Up to Date', enabled: false }`.
+
+#### start.ts
+
+```ts
+export interface AutoUpdateDeps { env: Record<string, string | undefined>; bundleDir: string; home: string; platform: string; exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; spawnFollow: SpawnFollow; isFocused: () => boolean; systemIdleSeconds: () => number; reloadRenderer: () => void; onState: (s: UpdateState) => void; onBootstrap: (s: BootstrapStatus) => void; log: (line: string) => void }
+export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: BootstrapStatus; stop(): void }>
+```
+
+`startAutoUpdate` runs `resolveCheckout`, then `ensureCli` (awaited; its statuses are forwarded to `onBootstrap`). When the bootstrap is not `ready`, it returns without following. When the root is `null` and the CLI is present, it logs one line and returns `ready` with a no-op `stop`. Otherwise it composes `createUpdater` from the real modules: `headSha` is `git rev-parse HEAD` through `exec`, `builtSha` is `readBuiltSha`, `cliSha` is `readInstalledSha`, `build` is `buildBundle`, `swap` is `swapBundle`, and `installCli` is `installCli`. It then starts `followMerges`, whose `onMerged` runs `updater.check()`. A rejection of `check()` is logged, never thrown.
+
+#### Renderer and main-process behaviour
+
+- `ipc.ts`: the first `pty:start` is unchanged. A second `pty:start` on a live session never spawns another pty. It calls `session.resize(cols - 1, rows)` at once and `session.resize(cols, rows)` after 50 ms, through the injected `UpdateTimers` in `registerIpc`'s deps. The one-column nudge makes tmux redraw a freshly loaded renderer, whose terminal starts blank.
+- Selection survives a reload. The selected plan id and session key are saved in `sessionStorage` under `'cpd.selection'` as JSON `{planId, sessionKey}` (`web/src/ui/state/selection.ts`: `SelectionStorage`, `PersistedSelection`, `SELECTION_KEY`, `saveSelection(storage, sel)`, `loadSelection(storage): PersistedSelection | null`). `loadSelection` returns `null` for missing, malformed or wrong-shape data. The renderer reselects it after the first cockpit snapshot of a connection.
+- Bootstrap overlay: `web/src/ui/state/bootstrap-view.ts` exports `bootstrapView(status: BootstrapStatus): { visible: boolean; title: string; detail: string }`. `ready` gives `visible` false. `installing` gives `visible` true, title `Installing the cpd command tool`, and detail `Runs once in the background; the cockpit starts when it finishes.`. `failed` gives `visible` true, title `cpd command tool install failed`, and detail `${error} (log: ${logPath})`. The overlay is fed by the IPC channel `update:bootstrap`. Main publishes `UpdateState` on `update:state`, and its menu item comes from `updateMenuItem`.
+
+### Failure modes
+
+| Failure | What the User sees | Where the log is |
+|---|---|---|
+| Sync skipped (`branch`, `dirty`, `fetch-failed`, `diverged`) | Nothing in the cockpit. The menu item reads `Up to Date`. The app keeps the bundle it has. | The updater's `log` line with the reason. |
+| Build failed (`pnpm install` or `build:electron` exits non-zero) | The menu item reads `Update Failed (see log)`, disabled. The old bundle stays and the renderer is not reloaded. | The updater's `log` line: the failing command's stdout and stderr. The last line is the menu's message. |
+| CLI install failed (`cargo build`, the attempt count, or `install-cpd.sh` fails) | Nothing. A CLI failure never sets the error state, and the bundle update is unaffected. `target/.cli-installed-sha` is not written, so the next run retries. | The updater's `log` line: the failing command's output, or the counting error's message. |
+| Bootstrap failed: no checkout, `install-cpd.sh` exits non-zero, or `~/.local/bin/cpd` is still missing after exit 0 | The overlay `cpd command tool install failed`, with the error and the log path. | `~/.cpd/run/cli-bootstrap.log` holds the stdout and stderr of `install-cpd.sh`. The file is written only when the script exits non-zero, so with no checkout the overlay text is the only report. |
+
+The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
+
+A changed `main.js` or `preload.cjs` never reloads the renderer: it shows `Restart to Apply Update` in the menu, and only the User's click applies it. That click is the only path that loads new main-process or preload code. The restart-needed state is sticky for the rest of the process.
 
 ## Verification checklist
 

@@ -1,6 +1,10 @@
 //! An in-process [`EmbeddingPort`]: scripted replies, no network.
 
 use std::sync::Mutex;
+use std::time::Duration;
+
+use super::judge::Tick;
+use crate::clock::ManualClock;
 
 use crate::embedding::{Embedded, EmbeddingPort};
 use crate::error::CpdError;
@@ -10,6 +14,7 @@ use crate::error::CpdError;
 pub struct FakeEmbedding {
     replies: Mutex<Vec<Result<Embedded, CpdError>>>,
     calls: Mutex<Vec<(String, usize)>>,
+    tick: Option<Tick>,
 }
 
 impl FakeEmbedding {
@@ -18,12 +23,22 @@ impl FakeEmbedding {
         FakeEmbedding {
             replies: Mutex::new(replies),
             calls: Mutex::new(Vec::new()),
+            tick: None,
         }
     }
 
     /// A fake whose every `embed` answers this.
     pub fn answering(embedded: Embedded) -> FakeEmbedding {
         FakeEmbedding::new(vec![Ok(embedded)])
+    }
+
+    /// Each `embed` advances the fake clock by `step`.
+    pub fn advancing(mut self, clock: &ManualClock, step: Duration) -> FakeEmbedding {
+        self.tick = Some(Tick {
+            clock: clock.clone(),
+            step,
+        });
+        self
     }
 
     /// Every `(text, dims)`, in order.
@@ -37,6 +52,7 @@ impl FakeEmbedding {
 
 impl EmbeddingPort for FakeEmbedding {
     fn embed(&self, text: &str, dims: usize) -> Result<Embedded, CpdError> {
+        Tick::fire(&self.tick);
         if let Ok(mut calls) = self.calls.lock() {
             calls.push((text.to_string(), dims));
         }

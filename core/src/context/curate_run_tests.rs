@@ -4,18 +4,20 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::datetime;
 
-use super::curate::{Judged, Verdict};
+use super::curate::{JudgeUsage, Judged, Verdict};
 use super::curate_run::{DIMS, FILL, Models, WINDOW_HOURS, curate_with, next_record};
 use super::curate_vectors::VectorStore;
 use super::curation::{Approval, Curation, Proposal, Reason as CurationReason, propose};
 use super::distill::State;
 use super::{By, Draft, PlanRef, Record};
-use crate::classifier::Chosen;
+use crate::classifier::{Chosen, Usage};
+use crate::clock::{Clock, ManualClock};
 use crate::config::Config;
 use crate::embedding::Embedded;
 use crate::error::{CpdError, ErrorCode};
@@ -157,6 +159,15 @@ impl Fx {
     }
 
     fn run(&mut self, ports: &Ports, only: Option<&RecordId>) -> Result<Value, CpdError> {
+        self.run_on(ports, &ManualClock::new(), only)
+    }
+
+    fn run_on(
+        &mut self,
+        ports: &Ports,
+        clock: &ManualClock,
+        only: Option<&RecordId>,
+    ) -> Result<Value, CpdError> {
         let models = Models {
             classifier: &ports.classifier,
             embedding: &ports.embedding,
@@ -169,6 +180,7 @@ impl Fx {
             &context(),
             &models,
             NOW,
+            clock,
             only,
         )
     }
@@ -212,6 +224,7 @@ fn judged(verdict: Verdict, quote: &str) -> Judged {
         reason: "the same decision".into(),
         topic: "postgres-store".into(),
         short: "Use Postgres for the store".into(),
+        usage: None,
     }
 }
 
@@ -1048,4 +1061,165 @@ fn a_record_with_a_provisional_topic_is_not_classified_again() {
         ),
         "store|kev-4b|2026-11-03T11:00:00.000Z"
     );
+}
+
+// ---- observability: tokens, cost, ms and the curate-runs.jsonl log -------------------------------------------
+
+const KEV_STEP: Duration = Duration::from_millis(3);
+const EMBED_STEP: Duration = Duration::from_millis(5);
+const JUDGE_STEP: Duration = Duration::from_millis(7);
+
+/// kev answers `duplicate` with usage 11/2; the judge says duplicate with usage 100/20 and cost 0.002; the embedder
+/// reports 4 tokens; every call takes virtual time on `clock`.
+fn metered(clock: &ManualClock) -> Ports {
+    let kev = Ok(Chosen {
+        label: "duplicate".into(),
+        confidence: Some(0.9),
+        usage: Some(Usage {
+            input_tokens: 11,
+            output_tokens: 2,
+        }),
+        model: "kev-4b".into(),
+    });
+    let embedding = Ok(Embedded {
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        model: "m".into(),
+        tokens: Some(4),
+    });
+    let mut answer = judged(Verdict::Duplicate, QUOTE);
+    answer.usage = Some(JudgeUsage {
+        tokens_in: 100,
+        tokens_out: 20,
+        cost: Some(0.002),
+    });
+    Ports {
+        classifier: FakeClassifier::new(vec![kev]).advancing(clock, KEV_STEP),
+        embedding: FakeEmbedding::new(vec![embedding]).advancing(clock, EMBED_STEP),
+        judge: FakeJudge::answering(answer).advancing(clock, JUDGE_STEP),
+    }
+}
+
+fn runs_lines(f: &Fx) -> Vec<Value> {
+    let path = f
+        .home
+        .context_digest_dir(&context())
+        .join("curate-runs.jsonl");
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn curate_report_sums_embed_kev_and_judge_tokens() {
+    let mut f = Fx::pair();
+    let clock = ManualClock::new();
+    let p = metered(&clock);
+    let out = f.run_on(&p, &clock, None).unwrap();
+    let (kev, embeds, judges) = (
+        p.classifier.calls().len() as u64,
+        p.embedding.calls().len() as u64,
+        p.judge.calls().len() as u64,
+    );
+    assert!(
+        kev > 0 && embeds > 0 && judges > 0,
+        "{kev} {embeds} {judges}"
+    );
+    assert_eq!(out["embed_tokens"], json!(4 * embeds));
+    assert_eq!(out["kev_tokens_in"], json!(11 * kev));
+    assert_eq!(out["kev_tokens_out"], json!(2 * kev));
+    assert_eq!(out["judge_tokens_in"], json!(100 * judges));
+    assert_eq!(out["judge_tokens_out"], json!(20 * judges));
+    let cost = out["cost"].as_f64().expect("a judge cost was reported");
+    assert!((cost - 0.002 * judges as f64).abs() < 1e-9, "{cost}");
+}
+
+#[test]
+fn curate_report_has_ms_from_the_clock() {
+    let mut f = Fx::pair();
+    let clock = ManualClock::new();
+    let p = metered(&clock);
+    let out = f.run_on(&p, &clock, None).unwrap();
+    let expect =
+        3 * p.classifier.calls().len() + 5 * p.embedding.calls().len() + 7 * p.judge.calls().len();
+    assert!(expect > 0);
+    assert_eq!(out["ms"], json!(expect));
+    assert_eq!(clock.elapsed().as_millis() as usize, expect);
+}
+
+#[test]
+fn curate_appends_one_curate_runs_line() {
+    let mut f = Fx::pair();
+    let clock = ManualClock::new();
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run_on(&p, &clock, None).unwrap();
+    let lines = runs_lines(&f);
+    assert_eq!(lines.len(), 1);
+    let line = lines[0].as_object().unwrap();
+    let mut keys: Vec<&str> = line.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "at",
+            "context",
+            "contradicts",
+            "cost",
+            "disagreed",
+            "embed_tokens",
+            "free",
+            "judge_tokens_in",
+            "judge_tokens_out",
+            "judged",
+            "kev_tokens_in",
+            "kev_tokens_out",
+            "kev_unreachable",
+            "kind",
+            "ms",
+            "quote_failed",
+            "retire"
+        ]
+    );
+    assert_eq!(line["kind"], json!("curate"));
+    assert_eq!(line["at"], json!(crate::clock::timestamp(clock.utc())));
+    assert_eq!(line["context"], json!("ctx"));
+    assert_eq!(line["ms"], json!(0));
+    assert_eq!(line["embed_tokens"], json!(0));
+    assert_eq!(line["cost"], Value::Null);
+    assert_eq!(line["free"], out["free"]);
+    assert_eq!(line["judged"], out["judged"]);
+    assert_eq!(line["retire"], json!(1));
+    assert_eq!(line["contradicts"], json!(0));
+    assert_eq!(line["disagreed"], out["disagreed"]);
+    assert_eq!(line["quote_failed"], out["quote_failed"]);
+    assert_eq!(line["kev_unreachable"], out["kev_unreachable"]);
+    // a second run appends a second line
+    f.add("hs-d3", HOURS, "Another decision.");
+    f.run_on(&p, &clock, Some(&id("hs-d3"))).unwrap();
+    assert_eq!(runs_lines(&f).len(), 2);
+}
+
+#[test]
+fn curate_runs_log_failure_does_not_fail_the_run() {
+    let mut f = Fx::pair();
+    // A file where the digest directory should be: the append cannot succeed.
+    let digest = f.home.context_digest_dir(&context());
+    std::fs::create_dir_all(digest.parent().unwrap()).unwrap();
+    std::fs::write(&digest, "not a directory").unwrap();
+    let clock = ManualClock::new();
+    let p = metered(&clock);
+    let out = f.run_on(&p, &clock, None).unwrap();
+    assert_eq!(out["record"], json!("hs-d2"));
+    assert!(
+        out["ms"].as_u64().unwrap() > 0,
+        "the report keeps its figures"
+    );
+    assert!(out["embed_tokens"].as_u64().unwrap() > 0);
+    assert_eq!(f.rows().1, 1, "the retirement is still written");
+    assert!(f.checked().contains(&id("hs-d2")));
+    assert!(digest.is_file());
 }

@@ -34,3 +34,59 @@ Match needs a side-by-side screenshot to confirm each; none has been done.
 
 - Ligatures: lib draws text by batches with `letterSpacing` (`lib/renderer.ts:736,783,908-910`), and in WebGL per-glyph atlas entries; ligature use is not set anywhere (guess: Maple Mono's `calt` ligatures may be off in the atlas path, but Ghostty enables `calt` by default; unverified either way).
 - Fallback order: canvas font-family lists the same first two families as Ghostty (`Maple Mono`, `Symbols Nerd Font Mono`), so Nerd glyphs come from the same font. Differences: the list adds `MesloLGS Nerd Font Mono`, `MesloLGS NF`, `monospace` after; Ghostty falls back through CoreText's own cascade. Per-glyph fallback inside canvas follows Chromium's rules, not Ghostty's; only glyphs missing from both fonts differ.
+
+## Patch: ghostty-web 0.3.9 (pro-d33)
+
+The patch itself is not written yet; a later Job creates it under `patches/`. Line numbers are for `@aurigax-ai/ghostty-web` 0.3.9 (`lib/…`) as read in this repo. Evidence: `$CPD_HOME/run/electron-tui-polish/explore/scout-render.md` (§1, §2.3, §3) and `scout-glyphs.md` (§4, §5). Decisions: pro-d30 (`padX = ceil(cellW)`) and pro-d33 (geometry for Powerline U+E0B0-E0B7). Accepted assumption A5: bugs 4 and 5 are fixed by this one patch, pinned in `web/package.json`.
+
+### Why
+
+- **Bug 4, wide glyphs clipped.** The WebGL glyph atlas clips each glyph to its slot. The slot pads each side by `padX = Math.ceil(cellW / 2)` (`lib/webgl-renderer.ts:399`; slot width `slotW` in `glyphFor`, `:643`). Ink beyond 1.5 cells from the glyph origin is cut when the glyph is rasterised, and the cut result is cached. Measured on Symbols Nerd Font Mono icons (scout-glyphs §4): about 11 % of a 13 px icon's right edge is lost. The canvas renderer does not clip glyphs (`lib/renderer.ts:945`).
+- **Bug 5, dark line on top of pills.** Powerline caps U+E0B0-E0BF are not drawn from geometry. `isBoxGlyph` covers only U+2500-U+259F (`lib/box-glyphs.ts:112-115`), so the font draws them. Maple Mono's cap measures 35 device rows at 13 px, DPR 2, against a 34-row cell (scout-glyphs §5). The cap overshoots the cell top by one row, and the pill body shows a dark step. Both renderers draw the font glyph, so both show the step.
+
+### The two changes
+
+1. **`padX` in `WebglRenderer.measureCellPixels()`**, `lib/webgl-renderer.ts:399`:
+
+   ```ts
+   this.padX = Math.ceil(this.cellW / 2);   // before
+   this.padX = Math.ceil(this.cellW);       // after
+   ```
+
+   The slot in `glyphFor` (`:643`) grows, so the clip now sits at 2 cells from the origin instead of 1.5. Cost: a 1-cell glyph's slot goes from about 2 cells wide to 3 (1.5x, my arithmetic on `:643`; scout-render §4.1 says ~2x, unreconciled). **CanvasRenderer needs nothing:** it has no atlas and no per-glyph clip (`lib/renderer.ts:945`). Its one clip is the block-cursor redraw (`lib/renderer.ts:1018-1024`), which keeps the glyph under a block cursor inside its cell by design; the patch does not touch it.
+
+2. **Powerline geometry in `lib/box-glyphs.ts`**: add U+E0B0-E0B7 to `isBoxGlyph` (`:112`) and draw them in `drawBoxGlyph` (`:121`), inside the cell box `[0,w] x [0,h]` with full height and no overshoot:
+
+   | Codepoint | Glyph | Geometry |
+   |---|---|---|
+   | U+E0B0 | solid right-pointing triangle | (0,0), (w,h/2), (0,h) |
+   | U+E0B1 | right chevron, outline | same points, stroked |
+   | U+E0B2 | solid left-pointing triangle | (w,0), (0,h/2), (w,h) |
+   | U+E0B3 | left chevron, outline | same points, stroked |
+   | U+E0B4 | solid right half-ellipse | flat side at x=0, centre (0,h/2), radii w and h/2 |
+   | U+E0B5 | right half-ellipse, outline | same arc, stroked |
+   | U+E0B6 | solid left half-ellipse | flat side at x=w, centre (w,h/2), radii w and h/2 |
+   | U+E0B7 | left half-ellipse, outline | same arc, stroked |
+
+   - Outline stroke width is the file's existing convention: `light = Math.max(1, Math.round(Math.min(w, h) / 9))` (`:133`), set as `ctx.lineWidth` as `drawArc` does (`:220`). `drawArc` also clips to the cell rectangle (`:217-218`); the outline must do the same so a centred stroke cannot overshoot the cell.
+   - No other code changes. WebGL reaches the new branch through `isBoxGlyph` (`lib/webgl-renderer.ts:647`) and `drawBoxGlyph` (`:652`). Canvas reaches it because non-ASCII cells go through `renderCellText` (`lib/renderer.ts:831`), which calls `isBoxGlyph` and `drawBoxGlyph` (`:956-960`).
+
+### How to regenerate
+
+Run from the repo root. The pnpm version is `pnpm@12.6.0` (`package.json:6`).
+
+1. `pnpm patch @aurigax-ai/ghostty-web@0.3.9`: prints the edit directory (`--edit-dir <dir>` to choose it).
+2. Edit `lib/webgl-renderer.ts` (line 399) and `lib/box-glyphs.ts` (`isBoxGlyph`, `drawBoxGlyph`) in that directory, and nothing else.
+3. `pnpm patch-commit <edit-dir>`: writes the patch file under `patches/` and records it in `pnpm-workspace.yaml` under `patchedDependencies`, keyed `'@aurigax-ai/ghostty-web@0.3.9'`. **Unverified:** the exact file name. I expect pnpm to write `patches/@aurigax-ai__ghostty-web@0.3.9.patch` (scoped `/` becomes `__`); `pnpm patch --help` and `pnpm patch-commit --help` do not state it. Confirm on the patching Job, and confirm that the lockfile is updated too.
+4. Commit the patch file, `pnpm-workspace.yaml` and the lockfile together.
+
+The package is pinned exactly at `"@aurigax-ai/ghostty-web": "0.3.9"` (`web/package.json:22`). **Bumping that version** means regenerating the patch against the new source, not just editing the pin. Re-check that both anchors still exist (`this.padX = Math.ceil(this.cellW / 2)` and the `isBoxGlyph`/`drawBoxGlyph` code), and that the patch still applies. Unit tests pin the patched source and geometry; the pixels are checked by hand (accepted assumption A7).
+
+### When to remove
+
+Remove the patch when the ghostty-web version we run does both:
+
+- draws Powerline caps U+E0B0-E0BF from geometry (today only U+2500-U+259F is, `lib/box-glyphs.ts:112-115`), and
+- has no half-cell atlas padding (today `padX = ceil(cellW / 2)`, `lib/webgl-renderer.ts:399`).
+
+To remove: delete the file under `patches/`, remove the `patchedDependencies` entry from `pnpm-workspace.yaml`, update the lockfile, and check the pills and wide icons by hand.

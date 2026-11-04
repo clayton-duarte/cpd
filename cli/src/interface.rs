@@ -37,6 +37,7 @@ pub const TABLE: &[Entry] = &[
     ("context owner", &[Lead, Manager], false),
     ("context delete", &[], true),
     ("context reads", &[Lead, Manager, Worker], false),
+    ("context stats", &[Lead, Manager], false),
     ("plan new", &[Lead, Manager], true),
     ("plan list", &[Lead, Manager], false),
     ("plan show", &[Lead, Manager], false),

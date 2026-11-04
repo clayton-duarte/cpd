@@ -1,8 +1,10 @@
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReactElement } from "react";
 import type { Scheduler, Transport } from "../protocol/runtime.ts";
 import { createConnection } from "../state/connection.ts";
 import { createStore, useStore } from "../state/store.ts";
+import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
+import { loadSelection, saveSelection } from "./state/selection.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { ContextTree } from "./cockpit/ContextTree.tsx";
 import { Header } from "./cockpit/Header.tsx";
@@ -37,7 +39,24 @@ export function App(props: AppProps): ReactElement {
   const onSelectPlan = useCallback((id: string) => connection.selectPlan(id), [connection]);
   const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => { connection.action(a); }, [connection]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
+  const selectedPlanId = cockpit.selectedPlanId;
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!live) { restored.current = false; return; }
+    if (restored.current) return;
+    restored.current = true;
+    const saved = loadSelection(window.sessionStorage);
+    if (saved === null) return;
+    connection.selectPlan(saved.planId);
+    connection.selectSession(saved.sessionKey);
+  }, [live, connection]);
+  useEffect(() => {
+    if (!live || !restored.current || selectedPlanId === null || selectedSessionId === null) return;
+    saveSelection(window.sessionStorage, { planId: selectedPlanId, sessionKey: selectedSessionId });
+  }, [live, selectedPlanId, selectedSessionId]);
   return (
+    <>
+    <BootstrapOverlay />
     <Shell
       header={
         <Header
@@ -71,5 +90,6 @@ export function App(props: AppProps): ReactElement {
         />
       }
     />
+    </>
   );
 }

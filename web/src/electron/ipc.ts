@@ -1,5 +1,6 @@
 import { CHANNELS } from "./channels.ts";
 import type { PtySize, UiMode } from "./channels.ts";
+import type { UpdateTimers } from "./update/types.ts";
 import type { PtySession, PtySinks } from "./pty.ts";
 
 export type IpcListener = (event: unknown, ...args: unknown[]) => unknown;
@@ -15,6 +16,7 @@ export interface IpcDeps {
   sinks: PtySinks;
   readWasm(): Promise<Uint8Array>;
   getMode(): UiMode;
+  timers: UpdateTimers;
 }
 function isSizeValue(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1000;
@@ -48,8 +50,11 @@ export function registerIpc(deps: IpcDeps): { dispose(): void } {
   };
   const start: IpcListener = (_event, payload) => {
     const size = parsePtySize(payload);
-    if (session) session.resize(size);
-    else session = deps.startPty(size, sinks);
+    if (session) {
+      const live = session;
+      live.resize({ cols: size.cols - 1, rows: size.rows });
+      deps.timers.setTimeout(() => live.resize(size), 50);
+    } else session = deps.startPty(size, sinks);
     return undefined;
   };
   const write: IpcListener = (_event, payload) => {
