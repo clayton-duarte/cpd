@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "The cpd web client (browser UI with cockpit parity) against the typed API mock (hs-d780)",
+  "main": "dist-electron/main.js",
   "keywords": [
     "pi-package"
   ],
@@ -12,7 +13,9 @@
     "build": "vite build",
     "test": "vitest run",
     "test:run": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:electron": "CPD_ELECTRON_TARGET=renderer vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=main vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=preload vite build -c vite.electron.config.ts",
+    "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && electron ."
   },
   "dependencies": {
     "@aurigax-ai/ghostty-web": "0.3.9",
