@@ -1267,6 +1267,39 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     assert_eq!(merged.len(), 1, "{merged:?}");
 }
 
+/// pro-d384: an update Job's merge pushes new commits to the open pull request, so it resets the linked pull_requests row to what a
+/// fresh push means until the next poll: checks pending, mergeable and merge_state unknown.
+#[test]
+fn update_job_merge_resets_stored_checks_mergeable_and_merge_state() {
+    let live = open_pr_live();
+    live.add_cpd_job("up-repo", "update");
+    live.fixture(
+        "UPDATE pull_requests SET checks = 'failed', mergeable = 'conflicting', merge_state = 'dirty'",
+    );
+    live.commit(&live.lead, "README.md", "mine\n", "mine");
+    live.advance_base("README.md", "theirs\n");
+    let (first, _) = live.run_job("up-repo", submit_only);
+    assert_eq!(first["cause"], json!("merge_conflict"), "{first}");
+
+    let (attempt, _) = live.run_job("up-repo", merge_the_base_and_submit);
+
+    assert_eq!(attempt["outcome"], json!("merged"), "{attempt}");
+    let row: (String, String, String) = store(&live.fx.env)
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT checks, mergeable, merge_state FROM pull_requests",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        row,
+        ("pending".into(), "unknown".into(), "unknown".into()),
+        "the merge's push resets the stored row"
+    );
+}
+
 /// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`
 /// Job adopts it. Its submit runs no Gate; its merge runs both Gates (step 6, before the adoption: #425 moved the adoption after them,
 /// hs-d679) but pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
