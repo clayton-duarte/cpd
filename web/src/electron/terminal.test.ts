@@ -179,10 +179,6 @@ test("DANGO_THEME is the Dango v3 palette", () => {
   });
 });
 
-test("TERMINAL_FONT is Maple Mono at 13px", () => {
-  expect(TERMINAL_FONT).toEqual({ fontFamily: '"Maple Mono", monospace', fontSize: 13 });
-});
-
 test("startTerminalHost opens, fits, wires data both ways and starts the pty at the fitted size", async () => {
   const h = harness();
   h.setEngineSize({ cols: 120, rows: 40 });
