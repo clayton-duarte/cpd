@@ -357,3 +357,34 @@ it("only plan-review job-stuck and drafts-parked items colour a Lead dot", async
   });
   expect(owned["l1"]).toBe("yellow");
 });
+
+describe("plan view resilience", () => {
+  it("a plan with draft and cancelled jobs whose tier is null builds a plan view", async () => {
+    const show = planShow();
+    (show["jobs"] as Obj[]).push(
+      { key: "d", title: "Draft", kind: "code", status: "draft", tier: null, attempts: [] },
+      { key: "k", title: "Cancelled", kind: "code", status: "cancelled", tier: null, attempts: [{ id: "at9", number: 1, tier: null, status: "cancelled", outcome: null, cause: null, worker_session: null }] },
+    );
+    const { cpd } = fakeCpd({ show });
+    const update = await createReadModel(cpd).loadPanes(new Set(["plan"]), "p1");
+    expect(update.plan!.jobs.map((j) => j.key)).toEqual(["a", "b", "x", "d", "k"]);
+  });
+
+  it("null repo and base on a workflow do not throw", async () => {
+    const show = planShow();
+    show["workflows"] = [{ key: "w", title: "WF", repo: null, base: null, status: "open", needs: [], jobs: ["a"], pr: null, pull_request: null }];
+    const { cpd } = fakeCpd({ show });
+    const update = await createReadModel(cpd).loadPanes(new Set(["plan"]), "p1");
+    expect(update.plan!.workflows.map((w) => w.key)).toEqual(["w"]);
+  });
+
+  it("a failing plan show does not drop the tree and inbox panes", async () => {
+    const { cpd } = fakeCpd(
+      { context: [context("c1")], inbox: [item(1)] },
+      { "plan show --plan p1": async () => { throw new WebError("cpd_failed", "plan show failed"); } },
+    );
+    const update = await createReadModel(cpd).loadPanes(new Set(["tree", "inbox", "plan"]), "p1");
+    expect(update.tree?.contexts.map((c) => c.id)).toEqual(["c1"]);
+    expect(update.inbox?.openCount).toBe(1);
+  });
+});

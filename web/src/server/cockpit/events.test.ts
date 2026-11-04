@@ -4,7 +4,7 @@ import type { Disposable } from "../../protocol/runtime.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
 import type { Cpd, FollowBoundary, FollowProcess } from "./cli.ts";
 import type { PaneSet, ReadModel } from "./readmodel.ts";
-import { COALESCE_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate } from "./events.ts";
+import { COALESCE_MS, SAFETY_REFRESH_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate } from "./events.ts";
 
 const tree = (cursor: number): ContextTreeModel => ({ contexts: [], cursor });
 const inbox: InboxModel = { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 };
@@ -22,7 +22,7 @@ class FakeFollow implements FollowProcess {
   exit(code: number | null): void { for (const h of [...this.exitHandlers]) h({ code, stderr: "" }); }
 }
 
-function setup() {
+function setup(gate?: () => Promise<void>) {
   const scheduler = new FakeScheduler();
   const procs: FakeFollow[] = [];
   const follow: FollowBoundary = { start: (args) => { const p = new FakeFollow(args); procs.push(p); return p; } };
@@ -32,6 +32,7 @@ function setup() {
     async loadAll() { all++; return { tree: tree(40), plan: null, inbox }; },
     async loadPanes(panes: PaneSet, planId) {
       loads.push({ panes: [...panes].sort(), planId });
+      if (gate !== undefined) await gate();
       const out: { tree?: ContextTreeModel; plan?: PlanViewModel | null; inbox?: InboxModel } = {};
       if (panes.has("tree")) out.tree = tree(41);
       if (panes.has("inbox")) out.inbox = inbox;
@@ -110,5 +111,79 @@ describe("cockpit service events", () => {
     expect(loads).toEqual([]);
     expect(updates).toEqual([]);
     expect(scheduler.pending()).toBe(0);
+  });
+});
+
+const TREE_EVENT_KINDS = "context-created context-grounded context-record context-renamed context-archived context-curated context-owner context-deleted plan-created plan-phase plan-done plan-renamed plan-archived plan-review plan-outlined plan-deleted job-added job-addendum job-blocked job-cancel-requested job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status attempt-ended attempt-aborted attempt-nudge all-merged workflow-added workflow-base-changed workflow-described workflow-edited workflow-cancelled workflow-started pr-added pr-base-changed pr-cancelled pr-described pr-edited pr-feedback pr-opened pr-started pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep session-message session-resumed session-retiered inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed watch-started watch-stopped incident-started incident-ended incident-plans error".split(" ");
+const INBOX_EVENT_KINDS = "inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed session-state session-message session-resumed plan-created plan-review job-failed job-blocked pr-opened pr-merged pr-feedback watch-started watch-stopped incident-started incident-ended session-registered session-moved".split(" ");
+
+describe("cockpit service live updates", () => {
+  it("every tree event kind refreshes the tree", async () => {
+    expect(TREE_EVENT_KINDS).toHaveLength(72);
+    const missing: string[] = [];
+    for (const kind of TREE_EVENT_KINDS) {
+      const { service, procs, scheduler, loads } = setup();
+      await service.start();
+      procs[0]!.emit(ev(41, kind));
+      scheduler.advance(COALESCE_MS);
+      await flush();
+      if (!loads.some((l) => l.panes.includes("tree"))) missing.push(kind);
+      service.stop();
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("every inbox event kind refreshes the inbox", async () => {
+    expect(INBOX_EVENT_KINDS).toHaveLength(21);
+    const missing: string[] = [];
+    for (const kind of INBOX_EVENT_KINDS) {
+      const { service, procs, scheduler, loads } = setup();
+      await service.start();
+      procs[0]!.emit(ev(41, kind));
+      scheduler.advance(COALESCE_MS);
+      await flush();
+      if (!loads.some((l) => l.panes.includes("inbox"))) missing.push(kind);
+      service.stop();
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("the safety refresh includes tree and inbox", async () => {
+    const { service, scheduler, loads } = setup();
+    await service.start();
+    scheduler.advance(SAFETY_REFRESH_MS);
+    await flush();
+    expect(loads).toEqual([{ panes: ["inbox", "tree"], planId: null }]);
+    service.stop();
+  });
+
+  it("overlapping refreshes are queued and none is dropped", async () => {
+    const releases: (() => void)[] = [];
+    const { service, procs, scheduler, loads } = setup(() => new Promise<void>((r) => { releases.push(r); }));
+    await service.start();
+    procs[0]!.emit(ev(41, "plan-done"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(loads).toEqual([{ panes: ["tree"], planId: null }]);
+    procs[0]!.emit(ev(42, "session-state"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(loads).toHaveLength(1);
+    releases[0]!();
+    await flush();
+    expect(loads).toEqual([{ panes: ["tree"], planId: null }, { panes: ["inbox", "tree"], planId: null }]);
+    releases[1]!();
+    await flush();
+    service.stop();
+  });
+
+  it("a refresh runs right after an action completes", async () => {
+    const { service, loads } = setup();
+    await service.start();
+    const out = await service.runAction({ kind: "inbox.dismiss", itemId: 7 });
+    await flush();
+    expect(out).toEqual({ ok: true });
+    expect(loads).toEqual([{ panes: ["inbox", "tree"], planId: null }]);
+    service.stop();
   });
 });
