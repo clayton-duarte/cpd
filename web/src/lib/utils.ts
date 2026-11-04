@@ -1,6 +1,6 @@
-import type { ClassValue } from "clsx";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
-/** Stub: the implementation merges with clsx + tailwind-merge. */
-export function cn(..._inputs: ClassValue[]): string {
-  throw new Error("not implemented");
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs));
 }
