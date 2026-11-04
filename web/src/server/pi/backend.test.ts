@@ -4,7 +4,9 @@ import { PI_SEND_TEXT_MAX } from "../../protocol/domain.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import { createPiBackend } from "./backend.ts";
-import type { Cpd, GitBoundary, SessionHandle } from "./backend.ts";
+import type { GitBoundary } from "../../protocol/runtime.ts";
+import type { Cpd } from "../cockpit/cli.ts";
+import type { SessionHandle } from "../hub/connection.ts";
 import type { WatchBoundary } from "./watch.ts";
 import type { FileBoundary } from "./window.ts";
 

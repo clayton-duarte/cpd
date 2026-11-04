@@ -26,7 +26,7 @@ describe("transcript", () => {
     expect(replaced.hasEarlier).toBe(false);
     expect(replaced.cursor).toBeNull();
     expect(ids(old.items)).toEqual(["u:old"]);
-    expect(emptyTranscript).toEqual({ items: [], hasEarlier: false, cursor: null });
+    expect(emptyTranscript).toEqual({ items: [], hasEarlier: false, cursor: null, tailEpoch: 0 });
   });
 
   it("loadEarlier prepends older items without duplicates", () => {
@@ -86,5 +86,41 @@ describe("transcript", () => {
     expect(ids(adopted.items)).toEqual(["tool:c2"]);
     expect((adopted.items[0] as ToolItem).status).toBe("failed");
     expect((adopted.items[0] as ToolItem).result?.text).toBe("late");
+  });
+
+  it("setTail increments tailEpoch", () => {
+    const first = setTail(win([user("u:1")], null));
+    const second = setTail(win([user("u:2")], null), first);
+    const third = setTail(win([user("u:3")], null), second);
+    expect(first.tailEpoch).toBe(1);
+    expect(second.tailEpoch).toBe(2);
+    expect(third.tailEpoch).toBe(3);
+  });
+
+  it("prependEarlier keeps tailEpoch", () => {
+    const base = setTail(win([user("u:3")], "pi:3"), setTail(win([], null)));
+    expect(base.tailEpoch).toBe(2);
+    expect(prependEarlier(base, win([user("u:2")], null)).tailEpoch).toBe(2);
+  });
+
+  it("applyDelta appends text without copying other items", () => {
+    // The streaming item is last: the search runs from the END, so an earlier item with the same id is untouched.
+    const first = assistant("a:1", "old");
+    const other = user("u:1");
+    const last = assistant("a:1", "Hel");
+    const base = setTail(win([first, other, last], null));
+    const s = applyDelta(base, { itemId: "a:1", blockIndex: 0, blockType: "text", text: "lo" });
+    expect(s.items[0]).toBe(first);
+    expect(s.items[1]).toBe(other);
+    expect((s.items[2] as AssistantItem).blocks).toEqual([{ type: "text", text: "Hello" }]);
+    expect(s.tailEpoch).toBe(base.tailEpoch);
+  });
+
+  it("appendItems of several items keeps order and replaces by id", () => {
+    const base = setTail(win([user("u:1", "a"), user("u:2", "b")], null), setTail(win([], null)));
+    const s = appendItems(base, [user("u:3", "c"), user("u:2", "B"), user("u:4", "d"), user("u:1", "A")]);
+    expect(ids(s.items)).toEqual(["u:1", "u:2", "u:3", "u:4"]);
+    expect(s.items.map((i) => (i as UserItem).text)).toEqual(["A", "B", "c", "d"]);
+    expect(s.tailEpoch).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
-# web/ Phase 1 contract
+# web/ Phase 1 contract (amended for Phase 2 by section 10)
 
-The complete contract of the clean-slate `web/` package, Plan `webui-phase1-work` (Phase 1, "make it work", of cpd-webui). Workers write tests from this file alone. Where two statements conflict, the later section of this file does not win silently: ask the Lead (`cpd ask`).
+The complete contract of the clean-slate `web/` package, Plan `webui-phase1-work` (Phase 1, "make it work", of cpd-webui). Workers write tests from this file alone. Where two statements conflict, the later section of this file does not win silently: ask the Lead (`cpd ask`). Section 10 (Phase 2, pro-d20) is the exception: where a statement of sections 1 to 9 says "superseded by 10.x", section 10 wins and the older statement is void.
 
 Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore artefacts of this Plan (`$CPD_HOME/run/webui-phase1-work/explore/`), cited as `scout-<x> §n`. Repo paths are relative to the repo root. `node_modules/@earendil-works/pi-durable/dist/...` and `.../pi-ai/dist/types.d.ts` are the installed typings (pi-durable 1.5.0, read by reading, not run). Every unconfirmed fact is tagged `(unverified, O<n>)` and listed once in section 9 "Open items". A value this file does not cite is a decision of this contract, called a **Phase 1 choice**.
 
@@ -31,8 +31,8 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | Id | Assumption |
 |---|---|
 | A1 | Browser to server transport is Vite `server.ws` custom events `cpd:c2s` (client to server) and `cpd:s2c` (server to client), through `import.meta.hot.send/on` in the browser. Dev bench only; no auth beyond Vite's localhost bind. |
-| A2 | Only existing dependencies (plus the one lifted line of pro-d17 and A7, `@earendil-works/chord` 1.5.0, used by the durable dialect for `applyImmutable`): react 19, react-dom, react-markdown, remark-gfm, vite, @vitejs/plugin-react, vitest, jsdom, typescript. No Tailwind, shadcn, radix, router. Unstyled semantic HTML plus one small plain CSS file (`web/src/ui/app.css`). UI tests use `react-dom/client` + `act` from `react` under `// @vitest-environment jsdom`, no testing-library. |
-| A3 | The durable backend speaks pi-durable **1.5.0** host protocol 2 only: a `view` base frame and `ops` frames (Chord ops applied with `applyImmutable`) of the `ConversationView` state (section 6.4), with full parity in live text, tool rows, busy, queue, folds, footer, paging by the host `history` command and dialogs. The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the thinking and tool-argument append paths are unverified (O20). The code keeps ONE dialect seam (`web/src/server/durable/frames.ts`). An unknown host version or frame shape fails loud with a typed `unsupported_host_version` / `protocol_error`, never a silent fallback. |
+| A2 | Only existing dependencies (plus the one lifted line of pro-d17 and A7, `@earendil-works/chord` 1.5.0, used by the durable dialect for `applyImmutable`): react 19, react-dom, react-markdown, remark-gfm, vite, @vitejs/plugin-react, vitest, jsdom, typescript. No Tailwind, shadcn, radix, router. Unstyled semantic HTML plus one small plain CSS file (`web/src/ui/app.css`). UI tests use `react-dom/client` + `act` from `react` under `// @vitest-environment jsdom`, no testing-library. | **Superseded by 10.8 and 10.9:** Phase 2 adds no dependency (`web/package.json` and `pnpm-lock.yaml` stay byte-identical, A1 of Plan webui-phase2-fast); the durable v2 dialect applies ops with its own `applyOps` in `ops.ts`, not `applyImmutable`.
+| A3 | The durable backend speaks pi-durable **1.5.0** host protocol 2 only: a `view` base frame and `ops` frames (Chord ops applied with `applyImmutable`) of the `ConversationView` state (section 6.4), with full parity in live text, tool rows, busy, queue, folds, footer, paging by the host `history` command and dialogs. The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the thinking and tool-argument append paths are unverified (O20). The code keeps ONE dialect seam (`web/src/server/durable/frames.ts`). An unknown host version or frame shape fails loud with a typed `unsupported_host_version` / `protocol_error`, never a silent fallback. | **Superseded by 10.8:** web/ supports two dialects chosen by `welcome.protocol`: v1 (protocol 1, pi-durable 1.3.0, `snapshot`/`events` frames) and v2 (protocol 2, pi-durable 1.5.0, `view`/`ops` frames). v2 is tested only against mocked frames (A2 of Plan webui-phase2-fast).
 | A4 | pi-runner sessions: transcript read from the session JSONL (`file` of `cpd session list`), live by file watch, prompts through `cpd session send`, Tier through `cpd session retier`. There is NO `cpd session abort` and no way to answer a TUI dialog from outside (scout-cockpit §3, scout-pi §6), so for pi sessions abort, steer, images and interactive dialogs are declared unsupported in typed `capabilities` with a human reason; dialogs are shown read-only, reconstructed from the transcript; the UI disables those controls and shows the reason. |
 | A5 | Window size is **40** transcript items for the tail and for each `loadEarlier` page (`WINDOW_SIZE`). |
 | A6 | Every timer or clock is an injected `Scheduler`. No test uses real time, a real socket, a real file watcher, a real `cpd`/`git` process or the real network: all externals are injected boundaries, faked in the test. No test leaks a file, process, socket, handle or timer. |
@@ -40,10 +40,10 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 
 ### 1.4 Limitations (stated plainly)
 
-- **A3, durable is 1.5.0 protocol 2 only.** A host whose `welcome.pi_durable` is not exactly `"1.5.0"`, or whose `welcome.protocol` is not 2, is refused with `unsupported_host_version` (version). A `view` or `ops` frame that does not match the shapes of section 6.4, or an op the applier refuses, is `protocol_error` (shape). The session shows that error; nothing is guessed.
+- **A3, durable is 1.5.0 protocol 2 only.** A host whose `welcome.pi_durable` is not exactly `"1.5.0"`, or whose `welcome.protocol` is not 2, is refused with `unsupported_host_version` (version). A `view` or `ops` frame that does not match the shapes of section 6.4, or an op the applier refuses, is `protocol_error` (shape). The session shows that error; nothing is guessed. **Superseded by 10.8:** durable is no longer 1.5.0-only: `assertSupportedHost` accepts (protocol 1, pi_durable "1.3.0") and (protocol 2, pi_durable "1.5.0") and refuses every other pair with `unsupported_host_version`.
 - **A4, pi sessions cannot be driven fully.** For a pi session: no abort (no `cpd session abort` exists), no steer, no image attachments, no answering of dialogs, no model/thinking selection (the Tier decides, see 6.5), no compaction. Each is `{supported:false, reason}` in `capabilities`. Dialogs are read-only reconstructions. A queued-submission list does not exist (`queued` is always `[]`).
 - Footer: pi sessions report cost and context % as `unknown` with a reason (a full-file scan is forbidden by 6.5; the window size of the model is not known). Durable cost is the cumulative cost of the Session's models (`docs['pi.usage']`, 6.4), so it keeps the cost of turns that a compaction removed from the transcript. No value is faked.
-- Phase 1 does not render `cpd` session messages (`customType` `cpd`, `cpd-error`) or other custom message types: they are dropped. Only the four fold kinds of 3.2 render.
+- Phase 1 does not render `cpd` session messages (`customType` `cpd`, `cpd-error`) or other custom message types: they are dropped. Only the four fold kinds of 3.2 render. **Superseded by 10.1:** `cpd` custom messages are no longer dropped: a session-message from `null` is a User message, every other displayed `cpd` message is a collapsed fold of fold kind `cpd`; `cpd-error`, `cpd-first-message`, `cpd-reminder` and `display === false` stay dropped, and the durable entry kind `cpd-chat` is a user item (10.2).
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
 - No visual design (pro-d16).
 - **Status bar, Phase 1 (pro-d18).** No cpd version reaches the web: `CockpitSnapshot` (6.3, 5) has no version field, so the StatusBar shows `cpd: unknown`. This is a stated limitation, not a wire change (unverified source, O19). The runner and state come from the selected session's `SessionNode.ref` in `cockpit.tree` (6.11), so a selected session absent from the tree (archived, or removed by a patch) shows `none`. The header and status bar show no other data: no host stats, workers summary or balloons (pro-d16, pro-d18).
@@ -52,17 +52,18 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 
 | Module | Implementation | Tests |
 |---|---|---|
-| protocol | `web/src/protocol/domain.ts`, `wire.ts`, `cockpit.ts`, `runtime.ts` | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
+| protocol | `web/src/protocol/domain.ts`, `wire.ts` (also `parseClientMessage`, 10.9), `cockpit.ts` (also `parseCockpitAction`, 10.9), `runtime.ts` (also `GitBoundary`, 10.9) | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
 | state | `web/src/state/transcript.ts`, `store.ts`, `connection.ts` | `transcript.test.ts`, `store.test.ts`, `connection.test.ts` |
 | cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts` | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts` |
-| durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `backend.ts` | `client.test.ts`, `frames.test.ts`, `backend.test.ts` |
+| durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `ops.ts` (Phase 2, 10.8), `backend.ts` | `client.test.ts`, `frames.test.ts`, `ops.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
 | ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `Inbox.tsx`, `Shell.tsx`, `Header.tsx`, `StatusBar.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx`, `Header.test.tsx`, `StatusBar.test.tsx` |
-| ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx` | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx` |
+| ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx`, and Phase 2: `rows.ts` (10.4), `virtual.ts` (10.4), `Markdown.tsx` (10.6) | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx`, `rows.test.ts`, `virtual.test.ts`, `Markdown.test.tsx` |
 | ui-composer | `web/src/ui/composer/attachments.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx`, `TierSelector.test.tsx` |
 | ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx` |
 | app | `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`, `web/src/ui/app.css` | `web/src/ui/App.test.tsx` |
+| ui-chat (Phase 2) | see the ui-chat row | the Phase 2 pure modules `rows.ts`, `virtual.ts` and the `splitMarkdown` function are tested without a DOM |
 | test helpers | `web/src/testing/render.tsx`, `web/src/testing/scheduler.ts` | (helpers; used by the tests above) |
 | config | `web/vite.config.ts` (registers `react()` and the cpd plugin only; the Tailwind import is removed, the dependency stays installed because `package.json` is byte-identical) | none |
 
@@ -165,7 +166,7 @@ export interface ToolItem {
   readonly diff?: string; // edit only: `details.patch` when it is a string, else `details.diff` when it is a string; absent otherwise (unverified in a real file, O3)
 }
 
-export type FoldKind = "cpd-context" | "cpd-plan-decision" | "cpd-plan-summary" | "cpd-skills";
+export type FoldKind = "cpd-context" | "cpd-plan-decision" | "cpd-plan-summary" | "cpd-skills" | "cpd"; // "cpd" added by 10.1 (superseded by 10.1: the older four-kind union)
 export interface FoldItem {
   readonly kind: "fold";
   readonly id: ItemId;
@@ -181,7 +182,8 @@ export interface FoldItem {
 //  cpd-plan-decision: `Plan review <details.review> approved` when details.approved === true, else `... rejected`
 //  cpd-skills:        the first line of body cut to FOLD_TITLE_MAX
 // `details` is `details` of a pi `custom_message` line, or `data` of a durable entry of that kind.
-// Dropped (no item): customType `cpd-first-message`, `cpd-reminder`, any message with display === false, and every other customType (section 1.4).
+// Fold kind "cpd" (10.1): title rules and defaultOpen false are in 10.1; the cpd fold is the only kind with `defaultOpen` false by construction.
+// Dropped (no item): customType `cpd-first-message`, `cpd-reminder`, `cpd-error`, any message with display === false, and every other customType except `cpd` (superseded by 10.1: "and every other customType" no longer includes `cpd`, section 1.4).
 
 export interface CompactionItem {
   readonly kind: "compaction";
@@ -473,7 +475,7 @@ Message semantics (server behaviour):
 ### 4.3 Validation (parsed once at each edge)
 
 ```ts
-export function parseClientMessage(raw: unknown): ClientMessage; // used ONLY by server/hub/connection.ts
+export function parseClientMessage(raw: unknown): ClientMessage; // used ONLY by server/hub/connection.ts. Superseded by 10.9: declared in protocol/wire.ts (this section), imported by server/hub/connection.ts
 export function parseServerMessage(raw: unknown): ServerMessage; // used ONLY by state/connection.ts
 ```
 
@@ -485,7 +487,7 @@ Both are pure and throw `WebError`:
 - `session.configure`: exactly one `change.kind` of `model|thinking|tier`;
 - `dialog.respond`: `response.method`/`outcome` pair from `DialogResponse`; `changes` needs `feedback.trim() !== ""`;
 - `cockpit.action`: the action goes through `parseCockpitAction` (section 5.5), whose failures are `unknown_action` (unknown kind) and `invalid_message` (bad field of a known kind);
-- `Dialog` objects, `Window`s (`cursor === null` iff `!hasEarlier`) and `TranscriptItem`s are checked structurally (kind discriminator, required fields, FoldItem `foldKind` in the four kinds).
+- `Dialog` objects, `Window`s (`cursor === null` iff `!hasEarlier`) and `TranscriptItem`s are checked structurally (kind discriminator, required fields, FoldItem `foldKind` in the five kinds (superseded by 10.1: the four kinds, `"cpd"` is the fifth)).
 
 Extra unknown properties are ignored by the parsers and dropped from the parsed value. Inside the program the parsed types are trusted; no later code re-validates.
 
@@ -663,7 +665,7 @@ Pi prompt sending is not a cockpit action: it is `sessionSendArgs` (6.3, `action
 ### 5.5 Parser
 
 ```ts
-export function parseCockpitAction(raw: unknown): CockpitAction;
+export function parseCockpitAction(raw: unknown): CockpitAction; // superseded by 10.9: lives in protocol/cockpit.ts and is imported by server/cockpit/actions.ts
 ```
 Unknown or missing `kind` -> `WebError("unknown_action")`; a known kind with a missing or mistyped field -> `WebError("invalid_message", ..., {field})`. `itemId` is an integer >= 0 (the synthetic `-1` is rejected); `duration` in the three values; strings non-empty.
 
@@ -722,6 +724,8 @@ The real browser transport (`main.tsx`, NOT tested): `send` = `import.meta.hot.s
 Test helpers (`web/src/testing/scheduler.ts`): `class FakeScheduler implements Scheduler { advance(ms: number): void /* runs due timers in time order, synchronously */; pending(): number; }` and `class FakeTransport implements Transport { sent: unknown[]; connects: number; emitMessage(raw): void; emitStatus(s): void; closed: boolean }`. `web/src/testing/render.tsx`: `render(element): { container: HTMLElement; rerender(el): void; unmount(): void }` using `createRoot` + `act`, and `click(el)`, `type(el, text)` helpers that dispatch real DOM events inside `act`.
 
 ### 6.2 State module `web/src/state/`
+
+> **Superseded by 10.3:** `PendingSubmission.state` gains `"sent"`; `session.submitAck` no longer always removes the row; `TranscriptState` gains `tailEpoch`; `setTail` takes an optional previous state; `applyDelta` searches from the end; `StoreAction` gains `serverBatch`; `connection.ts` coalesces frames (`FRAME_MS`) and schedules `PENDING_ECHO_MS`. Where the text below says "removes the pending submission" for `session.submitAck` or "`setTail(window)`", 10.3 wins.
 
 #### `transcript.ts` (pure)
 
@@ -962,6 +966,8 @@ Behaviours: inbox snooze, dismiss, approve and claim map to the `inbox` commands
 
 ### 6.4 durable-srv `web/src/server/durable/`
 
+> **Superseded by 10.8:** this section describes the v2 dialect (protocol 2, pi-durable 1.5.0) only. Phase 2 adds the v1 dialect, `hello {protocol: 2, min_protocol: 1}`, `assertSupportedHost` for both pairs, the `Dialect` interface `{transcript, applyBase, applyIncrement}` with `createDialect(protocol)`, and `ops.ts` (`applyOps`, `createReplica`, replacing `applyImmutable`). `hello {protocol: 2, min_protocol: 2, ...}`, `SUPPORTED_PI_DURABLE`, `PROTOCOL = 2`, and `applyView`/`applyOps` as Dialect methods below are superseded by 10.8; the `cpd-chat` row of the entry table is superseded by 10.2.
+
 Protocol facts: pi-durable **1.5.0** host protocol 2. Host side: `docs/contract.md` §6.14 (the `ToHost`/`ToClient` tables, rules 1 to 11, `ring.ts` rules 1 to 5) and §6.17 (`history`), `pi/durable-host/protocol.ts` and `pi/durable-host/ring.ts`, all read by reading, not run. Pi-durable and chord shapes: `node_modules/@earendil-works/pi-durable/dist/harness/view.d.ts` (`ConversationView`, `ConversationWindow`), `dist/harness/live.d.ts` (`LiveState`, `ToolSlot`, `CompactionStatus`), `dist/harness/transcript.d.ts` and `transcript.js` (the reference client transcript: the `before` rule, the gap rule, descending pages), `dist/types.d.ts` (`EntryRecord`), `@earendil-works/pi-ai/dist/types.d.ts` (message shapes), `@earendil-works/chord/dist/delta/index.d.ts` (the ops). The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the window past five entries, its bounds and `before` after an overflow are **unverified** (O23). Every other claim of this section is verified by reading, not run, or is **unverified** and tagged with its O-item (section 9).
 
 **Transcript dialect (A3).** The durable backend consumes the host's `view` base frame and its `ops` frames. The host window holds the newest 50 to 100 entries (`ConversationView.entries`); older entries come from the `history` command. The backend keeps a transcript cache of every entry it has seen, so the window moving never drops an item (6.4 backend, "Cache and window").
@@ -1190,6 +1196,8 @@ A window is a slice of `transcript.items`:
 
 ### 6.5 pi-srv `web/src/server/pi/`
 
+> **Superseded by 10.1:** the `custom_message` row and `countItems` of `jsonl.ts` below: `customType` `cpd` is normalised (User item or `cpd` fold) instead of dropped.
+
 Facts: scout-pi §1-§6 (sample file of 24 lines, source reads), `cpd session show` fields (scout-cockpit §1.1). A pi session is a JSONL file, one JSON object per line, each `{"type": ..., ...}`.
 
 #### `jsonl.ts`: line normalisation
@@ -1377,6 +1385,8 @@ export function StatusBar(props: { runner: Runner | null; state: string | null; 
 
 ### 6.8 ui-chat `web/src/ui/chat/`
 
+> **Superseded by 10.4, 10.5 and 10.6:** the `Transcript` signature (new props `tailEpoch`, `sizes`; `PendingSubmission` imported from `state/store.ts`), the Transcript DOM (virtual space and window, `data-row-key`, the `Jump to bottom` button, `data-at-bottom`), tool grouping (a `tools` row of `groupRows` replaces the `tool-group` `<details>` wrapper), and the text rendering of assistant blocks, `FoldRow` and `CompactionRow` (through `Markdown`, 10.6). The `FoldRow` text "`cpd-context`, `cpd-plan-decision`, `cpd-skills` are closed by default" also holds for fold kind `cpd` (closed).
+
 ```ts
 export function Transcript(props: { items: readonly TranscriptItem[]; hasEarlier: boolean; queued: readonly QueuedSubmission[]; pending: readonly PendingSubmission[]; onLoadEarlier(): void }): JSX.Element;
 export function ToolRow(props: { tool: ToolItem }): JSX.Element;
@@ -1500,6 +1510,8 @@ export function PlanReviewCard(props: { dialog: Extract<Dialog, { method: "cpd_p
 
 ### 6.11 app `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`
 
+> **Superseded by 10.5 and 10.7:** `app.css` is no longer only "the Shell grid, side-by-side preview, diff colours, disabled styling": it also carries the structural scroll CSS of 10.5; `App` subscribes with separate selectors and wraps `ContextTree`, `PlanView` and `Inbox` in `memo` (10.7).
+
 ```ts
 export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string }
 export function App(props: AppProps): JSX.Element; // creates ONE store and ONE connection (effect: start on mount, close on unmount)
@@ -1526,6 +1538,8 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 ## 7. Error codes (typed, exhaustive)
 
+> **Superseded by 10.8:** the `unsupported_host_version` row: the condition is "the pair (`welcome.protocol`, `welcome.pi_durable`) is neither (1, "1.3.0") nor (2, "1.5.0")".
+
 `ErrorCode` of 3.9; every `WebError` and every `WireError` uses exactly these codes. Where raised and what `details` carries:
 
 | Code | Raised by | When | `details` |
@@ -1550,6 +1564,8 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 ## 8. Capabilities: durable vs pi
 
+> **Superseded by 10.8:** the column header "durable (host socket, pi-durable 1.5.0 protocol 2)" holds for both dialects (v1 pi-durable 1.3.0 and v2 pi-durable 1.5.0); the "transcript source" row is v2 only (v1: `snapshot` and `events` frames).
+
 `Capabilities` values per runner (fixed by the backends; `reason` strings are human text, tests match the `supported` flag and that `reason` is a non-empty string):
 
 | Capability | durable (host socket, pi-durable 1.5.0 protocol 2) | pi (session JSONL) |
@@ -1573,6 +1589,8 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | plan review Reject | `cpd plan decide --reject` via `CpdExec` (O9) | not available (read-only) |
 
 ## 9. Open items
+
+> **Amended by 10.9:** the unverified v2 items of Phase 2 are listed in 10.9 and are not renumbered here. O13 (the 1.5.0 shapes) additionally holds for the v2 dialect of 10.8, which is tested only against mocked frames.
 
 Every unverified item of this file, listed once. A Job that needs one of them settles it (read the source, run the command) and amends this file through the Lead; no Job guesses.
 
@@ -1605,3 +1623,137 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O25 | Whether `busy` (`docs['pi.live'].run`) matches `host_state.state` while a dialog is held and the run waits on a `ui_request` | 6.4 backend (status) | not run |
 
 Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O25 inline or is this section.
+
+## 10. Phase 2 (pro-d20)
+
+Normative. Scope decision pro-d20 (User, 2026-11-03 EST), Plan `webui-phase2-fast`. It fixes the exact seams of Phase 2 and supersedes the older statements marked "superseded by 10.x" in sections 1 to 9. Phase 2 touches only `web/**`; `web/package.json` and `pnpm-lock.yaml` stay byte-identical (pro-d17; `cpd:pi-1-5-upgrade` edits them). Visual polish is Phase 3/4 (pro-d16, pro-d19). Survey artefacts cited: `$CPD_HOME/run/webui-phase2-fast/explore/scout-web.md` (Phase 1 code map), `scout-v2shape.md` (durable v2 frames), `scout-dur.md`.
+
+Accepted assumptions of Phase 2:
+
+| Id | Assumption |
+|---|---|
+| P2-A1 | Transcript virtualization is hand-rolled: pure module `web/src/ui/chat/virtual.ts` plus a `ResizeObserver` boundary (`SizeObserver`); no new dependency. |
+| P2-A2 | durable-host protocol v2 (`view`/`ops` frames, pi-durable 1.5.0) exists only on the unmerged branch `origin/pi-1-5-upgrade/state`. web/ supports v1 and v2 as two dialects chosen by `welcome.protocol`; v2 is tested only against mocked frames; v2 `history` paging beyond the host's newest-50 view window is out of scope. |
+| P2-A3 | Every `cpd` session-message with `details.data.from === null` is shown as a User message (the engine also writes from-null nudges; known imprecision, a stated limitation), and durable `cpd-chat` entries (what the host writes for web-typed text) are user items. |
+| P2-A4 | Every other `display: true` `cpd` custom_message (session-message from a session, job-merged, plan-done, escalation, ...) is a collapsed fold of fold kind `cpd`; `cpd-error` stays dropped. |
+| P2-A5 | A sent message stays visible as a pending row until a matching user item arrives, a tail window replaces the transcript, or 30 s pass. |
+| P2-A6 | Only `web/**` is touched; add only the structural CSS that makes the panes scroll. |
+| P2-A7 | Streaming markdown without a new dependency: text is split into top-level segments and each segment is a memoized renderer, so only the last open segment re-parses per token. |
+| P2-A8 | Out of scope, stated as Phase 2 limitations: keep-mounted rows for selection, in-app search, persisting fold open state across unmount, v2 `history` paging. |
+
+### 10.1 cpd messages in the pi transcript (`web/src/server/pi/jsonl.ts`, `web/src/protocol/domain.ts`)
+
+A `custom_message` with `customType` `"cpd"` and `display !== false`:
+
+- (a) `details.kind === "session-message"` and `details.data.from === null` and `details.data.text` a non-empty string -> `UserItem` with id `u:<entry.id>`, `text` = `details.data.text`, `at` = `details.at` (else `entry.timestamp`), `attachments` `[]`, and `facts.lastRole = "user"`.
+- (b) every other such entry -> `FoldItem` with id `f:<entry.id>`, `foldKind` `"cpd"`, `defaultOpen` false, `body` = the text of `content`, and `title`: for a session-message with `data.from` a string, `Message from <data.from>`; otherwise the first line of `details.text` (else of `body`) cut to `FOLD_TITLE_MAX`.
+
+`FoldKind` gains `"cpd"` (3.3). `countItems` counts each of these entries as 1 (window sizing). An entry without an id is a parse error (`malformed_line`) like the other custom messages. `customType` `"cpd-error"`, `"cpd-first-message"`, `"cpd-reminder"` and `display === false` stay dropped.
+
+Stated limitation (P2-A3): the engine also writes from-null nudges (messages with `data.from === null` that are not typed by the User); they show as User messages. Imprecise by design, not fixed in Phase 2.
+
+### 10.2 Durable user messages
+
+In both dialects an entry of kind `"cpd-chat"` (the host writes it for text typed in a web chat: `pi/durable-host/run.ts` submit with entry kind `cpd-chat`) is normalised exactly like kind `"pi.user"` (`UserItem` id `u:<entry.id>`). Entry kinds `cpd-event`, `cpd-first-message`, `cpd-error`, `cpd-plan-review` stay dropped (limitation).
+
+### 10.3 State layer (`web/src/state/*`)
+
+1. `PendingSubmission.state` is `"sending" | "sent" | "failed"`. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
+2. `TranscriptState` gains `tailEpoch: number` (`emptyTranscript` has 0): `setTail(window, previous?)` returns `(previous?.tailEpoch ?? 0) + 1`; `prependEarlier`, `appendItems`, `updateItems` and `applyDelta` keep it.
+3. `applyDelta` locates its item searching from the END of the list (the streaming item is last) and copies only the changed item; every other item keeps reference identity. `mergeById` uses one id->index `Map`.
+4. Frame coalescing: `StoreAction` gains `{type: "serverBatch"; messages: ServerMessage[]}` which reduces the messages in order and produces ONE new state (one listener notification). `createConnection` buffers messages of type `session.append`, `session.update` and `session.delta` whose `sessionId` is the selected session; the first buffered message arms `scheduler.after(FRAME_MS, flush)` (`FRAME_MS = 16`, exported); `flush` dispatches one `serverBatch`. Adjacent buffered `session.delta` messages with the same `sessionId`, `itemId`, `blockIndex` and `blockType` are merged by concatenating `text`. Any other server message flushes the buffer synchronously first (order is preserved) and is then dispatched as before. `selectSession` and `close` drop the buffer and dispose the timer. A parse failure of a buffered message surfaces as `session.error` exactly as in Phase 1 (parse happens before buffering).
+
+### 10.4 Transcript view (`web/src/ui/chat/Transcript.tsx`, `rows.ts`, `virtual.ts`)
+
+**`web/src/ui/chat/rows.ts`** (pure):
+
+```ts
+export type Row =
+  | { kind: "item"; key: string; item: TranscriptItem }
+  | { kind: "tools"; key: string; tools: readonly ToolItem[] };
+export function groupRows(items: readonly TranscriptItem[]): Row[];
+```
+
+A run of two or more consecutive tool items is one `tools` row keyed `group:<first tool id>`; a lone tool item is an `item` row keyed by its id; every other item is an `item` row keyed by `item.id`.
+
+**`web/src/ui/chat/virtual.ts`** (pure) exports:
+
+```ts
+export const ESTIMATED_ROW_PX = 96; export const OVERSCAN_PX = 400; export const PIN_THRESHOLD_PX = 48; export const DEFAULT_VIEWPORT_PX = 800;
+export interface Layout { keys: readonly string[]; offsets: readonly number[] /* length keys.length + 1, offsets[0] = 0 */; total: number }
+export function layoutRows(keys: readonly string[], heights: ReadonlyMap<string, number>, estimate = ESTIMATED_ROW_PX): Layout; // measured height when known, else estimate
+export function visibleRange(layout: Layout, scrollTop: number, viewport: number, overscanPx = OVERSCAN_PX): { start: number; end: number };
+export interface Anchor { key: string; intra: number }
+export function findAnchor(layout: Layout, scrollTop: number): Anchor | null;
+export function scrollTopForAnchor(layout: Layout, anchor: Anchor): number | null;
+export interface Metrics { scrollTop: number; clientHeight: number; scrollHeight: number }
+export function isNearBottom(m: Metrics, threshold = PIN_THRESHOLD_PX): boolean;
+export interface SizeObserver { observe(el: Element, onHeight: (height: number) => void): Disposable } // Disposable from protocol/runtime.ts
+export function browserSizes(): SizeObserver;
+```
+
+- `visibleRange`: `end` is exclusive; the range holds the rows whose `[offset, offset + height)` intersects `[scrollTop - overscanPx, scrollTop + viewport + overscanPx]`; `scrollTop` is clamped to `[0, total]`; an empty layout gives `{start: 0, end: 0}`.
+- `findAnchor`: the row containing `scrollTop`, `intra = scrollTop - its offset`; `null` for an empty layout. `scrollTopForAnchor`: the offset of the anchor key plus `intra`; `null` when the key is absent.
+- `isNearBottom`: `scrollHeight - scrollTop - clientHeight <= threshold`.
+- `SizeObserver.observe`: `onHeight` gets the element's border-box height; the callback fires on observe and on every change. `browserSizes()` is `ResizeObserver` based; when the global `ResizeObserver` is undefined it returns an observer whose `observe` is a no-op `Disposable`, so `DEFAULT_VIEWPORT_PX` and the estimates apply.
+- Documented bound: a 1000-row layout at viewport <= 1600 px with no measured heights mounts at most 60 rows (`MAX_MOUNTED_ROWS` is not a runtime cap).
+
+**`Transcript` props:** `{items, hasEarlier, queued, pending, onLoadEarlier(), tailEpoch: number, sizes?: SizeObserver}` with `sizes` defaulting to `browserSizes()`; `PendingSubmission` is imported from `state/store.ts` (no local copy).
+
+**DOM.** `<div data-part="transcript">` wraps `<div role="log" aria-label="Transcript" data-at-bottom="true|false">` and, after it, `<button type="button" data-action="jump-to-bottom">Jump to bottom</button>` rendered only while not at bottom. Inside the log, in order: the Load earlier button (when `hasEarlier`); `<div data-part="virtual-space" style="height:<total>px; position:relative">` holding `<div data-part="virtual-window" style="transform:translateY(<offset of first mounted row>px)">` with one `<div data-row-key="<row key>">` per mounted row (the Phase 1 row markup inside); then the `<ul aria-label="Queued messages">` (queued + pending rows) when non-empty. All offset math uses `scrollTop` relative to the top of `virtual-space` (the Load earlier button above it is excluded).
+
+**Heights.** A `Map<rowKey, number>` in a ref, filled by `sizes.observe(rowElement, ...)` for every mounted row; an update below 1 px of difference is ignored; a change re-lays out. The log element is observed too and gives the viewport height (`DEFAULT_VIEWPORT_PX` until observed).
+
+**Sticky bottom.** `pinned` starts true. On every scroll event of the log `pinned = isNearBottom(log metrics)` and `data-at-bottom` mirrors it. After each commit (layout effect) while pinned the log's `scrollTop` is set to its `scrollHeight`. Pin (and scroll) also happens when `tailEpoch` changes, when `pending.length` increases, and on a click of Jump to bottom. While not pinned, a new item, a streaming change or a height change at or below the viewport does not change `scrollTop`.
+
+**Anchor on prepend.** When the first row key changes, the previous first row key still exists in the new rows and `tailEpoch` is unchanged, `scrollTop` is restored with `scrollTopForAnchor` from the `Anchor` found before the commit (Load earlier never moves the visible row). While not pinned, when the measured height of a row whose bottom edge is above the viewport top changes, `scrollTop` changes by the same delta.
+
+**Memoization.** Row components are memoized (`React.memo`): `Item`, `ToolRow`, `OrphanRow`, `FoldRow`, `CompactionRow` and the tools-row component (compared by its `tools` array elementwise), so a change to one item re-renders only its row (rows are keyed by `Row.key`). This supersedes the `tool-group` `<details>` wrapper of 6.8: a `tools` row renders its `ToolRow`s directly under the row's `data-row-key` div.
+
+### 10.5 Structural CSS (`web/src/ui/app.css`, `Shell.tsx`)
+
+- The shell grid fills 100vh with `overflow: hidden`, `grid-template-rows: auto minmax(0, 1fr) auto` (header, body, status bar; rows that are absent are dropped) and every grid child has `min-height: 0`.
+- The Context tree column, the Plan pane section (own max-height share, `overflow-y: auto`) and the Inbox column each `overflow-y: auto`. The center column is a flex column with `min-height: 0`.
+- `[data-chat-dropzone]` is a flex column, 100% height, `min-height: 0`, `overflow: hidden`.
+- `[data-part="transcript"]` is `position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column`; `[role="log"]` is `flex: 1; min-height: 0; overflow-y: auto`; the Jump to bottom button is `position: absolute` at the bottom centre of `[data-part="transcript"]`.
+- No colours, fonts or spacing beyond this (Phase 3/4).
+
+### 10.6 Streaming markdown (`web/src/ui/chat/Markdown.tsx`)
+
+`splitMarkdown(text: string): string[]` splits at blank lines (runs of two or more newlines) that are outside a fenced code block (` ``` ` or `~~~`); a fence that never closes keeps the rest of the text in the last segment; text with no blank line is one segment; segments joined with `"\n\n"` re-form the text modulo extra blank lines; empty text -> `[]`.
+
+`Markdown({text})` renders each segment with a memoized component (`React.memo` compared by its text string, keyed by segment index) that wraps `react-markdown` with `remark-gfm`. Assistant text blocks, `FoldRow` and `CompactionRow` render through `Markdown`. Limitation: reference-style link definitions in another segment do not resolve.
+
+### 10.7 App (`web/src/ui/App.tsx`)
+
+`App` subscribes with separate selectors (`cockpit`, `session`, `selectedSessionId`) instead of the whole state. `ContextTree`, `PlanView` and `Inbox` are used through module-level `memo(...)` wrappers with props that are stable between renders (handlers from `useCallback` bound to the connection), so streaming transcript updates do not re-render them.
+
+### 10.8 Durable protocol v1 and v2 (`web/src/server/durable/{client,frames,ops,backend}.ts`)
+
+- Hello is `{type: "hello", protocol: 2, min_protocol: 1, client: "cpd-web"}`; the host answers with the negotiated `welcome.protocol` (a v1 host picks 1, a v2 host 2).
+- `assertSupportedHost` accepts (protocol 1, `pi_durable` "1.3.0") and (protocol 2, `pi_durable` "1.5.0") only, else `unsupported_host_version`.
+- `HostFrame` gains `{type: "view"; epoch; seq; view: unknown}` and `{type: "ops"; epoch; seq; ops: unknown[]}`; `attached.mode` is `"snapshot" | "view" | "resume"`.
+- New pure module `ops.ts`: `applyOps(root: unknown, ops: readonly unknown[]): unknown` implements the Chord ops `r`, `s`, `d`, `a`, `t`, `p`, `m` exactly as written in `$CPD_HOME/run/webui-phase2-fast/explore/scout-v2shape.md` sections a4 and b1 (immutable with structural sharing, all-or-nothing; refuses the path segments `__proto__`, `constructor`, `prototype`, out-of-range indices, wrong-type targets and unknown ops with `WebError` `protocol_error`). `createReplica(): Replica` with `view(frame)`, `ops(frame)`, `value: unknown | null` and `cursor: HostCursor | null`: a view frame replaces the value and sets the cursor; an ops frame needs a non-null value, the same epoch and `seq === cursor.seq + 1`, else `protocol_error` (the replica is unchanged when it throws).
+- The `Dialect` interface becomes `{readonly transcript; applyBase(frame: {type: "snapshot"; snapshot: unknown} | {type: "view"; epoch: string; seq: number; view: unknown}); applyIncrement(frame: {type: "events"; events: unknown[]} | {type: "ops"; epoch: string; seq: number; ops: unknown[]}): DialectOutput}`; `createDialect(protocol: 1 | 2): Dialect` (v1 behaviour byte-identical to Phase 1; the old `applySnapshot`/`applyEvents` are renamed).
+- The v2 dialect follows `scout-v2shape.md` sections b and c: committed entries are folded from `replica.entries` by id (known ids are never re-normalised except a tool item gaining its result); the live assistant item comes from `docs["pi.live"].generation.message` (id `live:<epoch>:<n>`, replaced under the same item id by the committed `a:<entry id>` when the pass that adds the entry removes the live message); `busy` = `docs["pi.live"].run` is present; `queued` = `docs["pi.inbox"].items` mapped to `{id, mode}`; footer facts: model/thinking from `docs["pi.agent"]`, cost from `docs["pi.usage"]` models+tools `cost.total`, last context tokens from the last `pi.assistant` `usage.totalTokens`; a present-but-malformed doc is `protocol_error`, an absent doc is `unknown` as in v1. Window drops (`["p", ["entries"], 0, n, []]`) never delete known items.
+- The backend picks `createDialect(client.welcome.protocol)` and routes `snapshot` | `view` to `applyBase` and `events` | `ops` to `applyIncrement`.
+- Supersedes 6.4 where it fixes protocol 2 only (hello `min_protocol: 2`, `SUPPORTED_PI_DURABLE`, `applyView`/`applyOps` on `Dialect`, the `applyImmutable` dependency of A2, the single replica/cache path); the v2 cache-and-window and `history` gap behaviour of 6.4 is unchanged but untested against a real host (unverified, see 10.9).
+
+### 10.9 Type single-sourcing and Phase 2 limitations
+
+Canonical homes (each declared exactly once under `web/src`, imported elsewhere):
+
+| Type | Home |
+|---|---|
+| `Cpd`, `CpdExec`, `CpdResult` | `server/cockpit/cli.ts` |
+| `GitBoundary` | `protocol/runtime.ts` |
+| `ResolvedSession` | `server/hub/registry.ts` |
+| `SessionEmit`, `SessionHandle`, `SessionBackend` | `server/hub/connection.ts` |
+| `CockpitUpdate`, `CockpitSnapshot` | `server/cockpit/events.ts` |
+| `PendingSubmission` | `state/store.ts` |
+
+`CockpitService` stays declared in both places on purpose: the hub declares the narrower consumer interface. `parseClientMessage` moves to `protocol/wire.ts` and `parseCockpitAction` to `protocol/cockpit.ts` (their `WebError` codes unchanged: `invalid_message`, `unknown_action`); `server/hub/connection.ts` and `server/cockpit/actions.ts` import them.
+
+Phase 2 limitations (P2-A8): no keep-mounted rows for selection (selected text in an unmounted row is lost); no in-app search; fold open state is not persisted across unmount; no v2 `history` paging beyond the host's newest-50 view window; reference-style link definitions across Markdown segments do not resolve (10.6); from-null `cpd` nudges show as User messages (10.1); durable entry kinds `cpd-event`, `cpd-first-message`, `cpd-error`, `cpd-plan-review` stay dropped (10.2).
+
+Unverified without a running v2 host (unverified, tested only against mocked frames): tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title.

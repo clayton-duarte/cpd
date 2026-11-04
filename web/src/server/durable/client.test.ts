@@ -88,10 +88,10 @@ async function codeOf(p: Promise<unknown>): Promise<unknown> {
 }
 
 describe("durable client", () => {
-  it("hello handshake sends protocol 2 and client name", async () => {
+  it("hello offers protocol 2 with min_protocol 1", async () => {
     const { socket, client, paths } = await open();
     expect(paths).toEqual(["/run/host/s1.sock"]);
-    expect(socket.lines[0]).toBe('{"type":"hello","protocol":2,"min_protocol":2,"client":"cpd-web"}\n');
+    expect(socket.lines[0]).toBe('{"type":"hello","protocol":2,"min_protocol":1,"client":"cpd-web"}\n');
     expect(client.welcome.pi_durable).toBe("1.5.0");
   });
 
@@ -192,5 +192,21 @@ describe("durable client", () => {
     expect(closes).toEqual(["host_disconnected"]);
     socket.emitClose(null);
     expect(closes).toEqual(["host_disconnected"]);
+  });
+
+  it("attach parses view-mode attached frames and view and ops frames", async () => {
+    const { socket, client } = await open();
+    const frames: HostFrame[] = [];
+    client.onFrame((f) => frames.push(f));
+    const p = client.attach();
+    await tick();
+    socket.emitFrame({ type: "attached", req: socket.last().req, mode: "view", epoch: "e1", from_seq: 1, head_seq: 2, client_id: "c1" });
+    expect(await p).toMatchObject({ mode: "view", from_seq: 1, head_seq: 2 });
+    const view = { type: "view", epoch: "e1", seq: 1, view: { entries: [], docs: {} } };
+    const ops = { type: "ops", epoch: "e1", seq: 2, ops: [["d", ["docs", "pi.live", "run"]]] };
+    const snapshot = { type: "snapshot", snapshot: { type: "snapshot", entries: [] } };
+    const events = { type: "events", events: [{ type: "run_start" }] };
+    for (const f of [view, ops, snapshot, events]) socket.emitFrame(f);
+    expect(frames).toEqual([view, ops, snapshot, events]);
   });
 });
