@@ -6796,7 +6796,7 @@ A server that uses OAuth needs the User to sign in once on the machine (pro-d10)
 cpd janitor
 ```
 
-Removes the worktrees and branches of merged and cancelled Workflows (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live Workflows (contract §7.2). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
+Removes the worktrees and branches of merged and cancelled Workflows (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live Workflows (contract §7.2). It also prunes (pro-d378) the `target` directory of the Lead of each idle Workflow in status `open`, `merged` or `cancelled`, and the `durable` directory of each archived or deleted Plan whose Attempts are all ended (§4a). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
 
 | Flag | Meaning |
 |---|---|
@@ -6829,9 +6829,16 @@ When the Lead worktree is dirty (output of `git --no-optional-locks status --por
 
 A stop (kill, crash, failing call) at (a) leaves the worktree whole and untouched. A stop at (b), (c) or (d) leaves the worktree gone (`<path>` absent) with `<path>.removing` as the marker (the directory is present from the rename, empty of tracked files). A pass that finds `<path>` absent and `<path>.removing` present retries (b), (c), (d) again; every step is idempotent. A failure in (b), (c) or (d) is outcome `failed`: the path is gone and later passes retry (a contract violation: the marker stays; the worktree can never be recovered). Renamed but uncleaned paths show in the log (§5).
 
+**§4a. Prune of `target` and `durable`** (pro-d378; contract §3.7 E16 "Prune"). It runs first in the pass, before the Workflow clean-up of §3, so a Lead's `target` is reported even when that clean-up then removes the whole Lead. Both steps remove a whole directory and are idempotent: a missing directory is no entry. Neither step raises an Event.
+
+- **(T) Lead `target`**: for each Workflow of any Plan (archived included) in status `open`, `merged` or `cancelled` that has no Job of its Plan with `workflow` equal to its key in status `queued` or `running`, and no Attempt of those Jobs in status `starting`, `running` or `merging`: remove `<lead_worktree>/target` if it exists. `<lead_worktree>` is the Workflow's `lead_worktree`, or for a `cancelled` Workflow (column null) the path `workflow_lead_worktree_path` derives. The entry's `workflow` is the key. The Lead worktree, its Lead Branch, its sources and every Attempt worktree stay. A `cancelled` Workflow whose stored pull request is `open` (A8) is included: pro-d378 supersedes A8 for `target` only.
+- **(D) `durable`**: for each Plan with `archived_at` or `deleted_at` not null and no Attempt in a status other than `ended`: remove `run/<plan>/durable` (`CpdHome::durable_dir`) if it exists. The entry's `workflow` is `null`. Nothing else under `run/<plan>` is removed.
+
+A Job in any other status (`draft`, `merged`, `failed`, `cancelled`) and an `ended` Attempt do not block a removal. A removal that fails is outcome `failed`; the pass goes on with the next entry.
+
 **§5. Output and Log**:
 
-One JSON value: `{"ok":true,"outcomes":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `outcomes` is one entry per pending Workflow path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
+One JSON value: `{"ok":true,"outcomes":[...],"pruned":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `pruned` (§4a) has one entry per Prune removal that found its directory, in the order the steps ran, and is `[]` when nothing was pruned. Each `pruned` entry is `{"plan", "workflow", "path", "outcome", "reason"}`: `path` is the absolute path; `workflow` is the key for (T) and `null` for (D); `outcome` is `pruned` (the directory was removed whole) or `failed` (it was not; the next pass tries again); `reason` is present only for `failed`. The output `{"ok":true,"skipped":"running"}` has no `pruned` key. `outcomes` is one entry per pending Workflow path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
 
 ```json
 {"plan": "pay-4521", "workflow": "api", "status": "cancelled", "path": "/home/clayton/projects/pay.pay-4521.api", "outcome": "removed", "reason": null}
@@ -6849,13 +6856,20 @@ or:
 {"plan": "pay-4521", "workflow": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
 ```
 
+and, for the Prune (§4a):
+
+```json
+{"plan": "pay-4521", "workflow": "api", "path": "/home/clayton/projects/pay.api/target", "outcome": "pruned"}
+{"plan": "pay-4521", "workflow": null, "path": "/home/clayton/.cpd/run/pay-4521/durable", "outcome": "failed", "reason": "permission denied"}
+```
+
 `status` is `cancelled`, `merged`, `dispatch` or `open` (the last two for an Attempt swept under contract §7.2 'Ended Attempts of merged Jobs on a live Workflow'), read from the Workflow's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the Workflow is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
 
-The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). The engine's watch.log reads events from that file (§12 "The watch loop").
+The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). Each `pruned` entry adds one line in the same format, before the pass's own line, where `<pass id>` is the process id and `<status>` is `prune pruned plan=<plan> workflow=<key or -> path=<path>`, or `prune failed plan=<plan> workflow=<key or -> path=<path> reason=<reason>` for `failed`. The engine's watch.log reads events from that file (§12 "The watch loop").
 
 **§6. Events**:
 
-One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that Workflow yet (later passes retry silently, as `fresh` does today for a cancelled Workflow; a merged Workflow now works the same way). Never for `pending` or `removed` paths. **Text** (pro-d72):
+One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that Workflow yet (later passes retry silently, as `fresh` does today for a cancelled Workflow; a merged Workflow now works the same way). Never for `pending` or `removed` paths. Prune (§4a) raises no Event, `failed` included. **Text** (pro-d72):
 
 - `kept`: `The clean-up of the <status> Workflow <workflow> of Plan <plan> kept <path> untouched: <reason>`
 - `failed` (after rename at step (a) in §4): `The clean-up of the <status> Workflow <workflow> of Plan <plan> removed <path>, but not everything: <reason>. The next janitor pass retries.`
@@ -6865,14 +6879,14 @@ Each Event also has `details`: `{plan, workflow, status, outcome, path, reason}`
 
 **§7. Exit codes**:
 
-- `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`).
+- `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`; a `failed` `pruned` entry does not change it).
 - `2` when the store cannot be read (as `prune`, §27: `store_too_new`, `migration_failed`, `migration_changed`, `migration_order`).
 - `1` for other store errors (as `prune`, §27: `store_failed`, `store_tampered`).
 - `1` when a git or tmux call fails unexpectedly (details `{argv, exit, stderr}`); the pass continues for the next Workflow.
 
-**Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`.
+**Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`, `janitor_pass_prunes_idle_lead_targets`, `janitor_pass_keeps_busy_lead_targets`, `janitor_pass_prunes_durable_of_archived_and_deleted_plans`, `janitor_pass_keeps_durable_while_an_attempt_is_not_ended`, `janitor_pass_reports_a_failed_prune_and_goes_on`, `janitor_pass_prune_is_idempotent_and_logs_each_entry`.
 
-Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and writes nothing; rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
+Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and an empty `pruned` list, and writes nothing (a Prune whose directory is gone is no entry, §4a); rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
 
 ## 30. `resource`
 
