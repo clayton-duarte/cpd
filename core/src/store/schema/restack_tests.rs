@@ -90,10 +90,6 @@ fn prs_locked_still_refuses_every_other_base_change_of_a_pr_after_the_lock() {
     )
     .unwrap();
     for sql in [
-        "UPDATE workflows SET base = 'develop' WHERE plan = 'pay' AND key = 'b'",
-        "UPDATE workflows SET base = 'pay/o' WHERE plan = 'pay' AND key = 'b'",
-        "UPDATE workflows SET base = 'oth/x' WHERE plan = 'pay' AND key = 'b'",
-        "UPDATE workflows SET base = 'pay/a' WHERE plan = 'pay' AND key = 'd'",
         "UPDATE workflows SET repo = '/other' WHERE plan = 'pay' AND key = 'b'",
         "UPDATE workflows SET lead_branch = 'pay/a' WHERE plan = 'pay' AND key = 'b'",
     ] {

@@ -80,6 +80,15 @@ struct Rig {
 /// The store and the Lead worktree of a linear Attempt whose commit `attempt_tree` is `submitted`,
 /// optionally followed by a sibling's commit `sibling_tree` on top (the Lead Branch tip is past `submitted`).
 fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> Rig {
+    rig_of_kind(attempt_tree, sibling_tree, "work")
+}
+
+/// `rig` whose Job has kind `kind`.
+fn rig_of_kind(
+    attempt_tree: &[(&str, &str)],
+    sibling_tree: Option<&[(&str, &str)]>,
+    kind: &str,
+) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let fakes = Fakes::new();
@@ -144,8 +153,8 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
                  INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"f.txt\"]', '[\"b\"]', '[]', 'running', 0, '{placeholder}', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"f.txt\"]', '[\"b\"]', '[]', 'running', 0, '{kind}', '{placeholder}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, submitted_sha, submitted_at, driver_pid, started_at)
                    VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'merging', '{lead}', '{}', '{}', '{}', 't', 4242, 't');",
                 worktree.display(),
@@ -320,6 +329,66 @@ fn a_linear_merge_records_the_submitted_commit() {
     assert!(
         !verbs.iter().any(|a| a == "update-ref"),
         "a linear merge never fast-forwards: {verbs:?}"
+    );
+}
+
+#[test]
+fn r_ends_a_linear_open_attempt_with_no_recorded_pull_request_crashed() {
+    // An `open` Job's Attempt whose Workflow has no recorded pull request cannot have merged: R2 does not apply (pro-d375).
+    let attempt = [("f.txt", "attempt\n"), ("protected.txt", "safe\n")];
+    let sibling = [
+        ("f.txt", "attempt\n"),
+        ("protected.txt", "safe\n"),
+        ("other.txt", "sibling\n"),
+    ];
+    let mut rig = rig_of_kind(&attempt, Some(&sibling), "open");
+    let _submitted = rig
+        .store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT submitted_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    // R's A9 kills the Attempt's tmux window: the fake lists none.
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .on("tmux", |_| true, Reply::ok(""));
+    let config = config();
+    let catalog = catalog();
+    let metrics = |_a: &Attempt| None;
+    let ctx = merge_ctx(
+        &rig.home,
+        &config,
+        &catalog,
+        &metrics,
+        merge::no_verdict_classifier(),
+    );
+    let ports = Ports {
+        clock: rig.fakes.ports.clock.clone(),
+        runner: rig.fakes.ports.runner.clone(),
+        spawn: rig.fakes.ports.spawn.clone(),
+        ..Ports::real()
+    };
+    let _ = Ports::scope(&ports, || {
+        merge::recover_attempt(&mut rig.store, &ctx, &rig.plan, &rig.id)
+    });
+    let (outcome, cause, merged): (Option<String>, Option<String>, Option<String>) = rig
+        .store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT outcome, cause, merged_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        (outcome.as_deref(), cause.as_deref(), merged),
+        (Some("failed"), Some("crashed"), None),
+        "an open Attempt with no recorded pull request ends failed/crashed, never merged"
     );
 }
 

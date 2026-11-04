@@ -1557,7 +1557,7 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
         .sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let writes = fx.writes();
     let error = fx.refused(
-        &fx.pr(&["edit", "api", "--base", "main"]),
+        &fx.pr(&["edit", "api", "--base", "main", "--no-needs"]),
         "workflow_locked",
         3,
         writes,
@@ -1613,7 +1613,6 @@ fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_workflow() {
     let fx = restack_fixture();
     let web = fx.web.to_str().unwrap().to_owned();
     let cases: Vec<Vec<&str>> = vec![
-        vec!["edit", "b", "--base", "main"],
         vec!["edit", "b", "--base", "a"],
         vec!["edit", "b", "--no-needs"],
         vec!["edit", "b", "--needs", "a"],
@@ -1632,6 +1631,72 @@ fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_workflow() {
         3,
         fx.writes(),
     );
+}
+
+#[test]
+fn edit_after_the_lock_retargets_a_dispatch_workflow_base_to_a_branch() {
+    // The trigger forbids a base write after the lock: stage the stale base before it.
+    let fx = crud("plan");
+    let web = fx.web.to_str().unwrap().to_owned();
+    fx.add("a", &fx.pay, &["--no-needs"]).ok();
+    fx.add("c", &fx.pay, &["--no-needs"]).ok();
+    fx.add("b2", &fx.pay, &["--needs", "a,c"]).ok();
+    fx.git(
+        &fx.pay,
+        &["update-ref", "refs/remotes/origin/release", "main"],
+    );
+    fx.env
+        .sql("UPDATE workflows SET base = 'gone' WHERE key IN ('a', 'c')");
+    fx.env
+        .sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
+    fx.env.sql("UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'c'");
+    let fingerprint = fx.fingerprint();
+    let out = fx.pr(&["edit", "c", "--base", "main"]).ok();
+    assert_eq!(out["fields"], json!(["base"]));
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT base FROM workflows WHERE key = 'c'"),
+        "main"
+    );
+    assert_eq!(
+        fx.events("workflow-edited").last().unwrap()["data"],
+        json!({"workflow": "c", "fields": ["base"]})
+    );
+    assert_eq!(fx.fingerprint(), fingerprint);
+
+    let writes = fx.writes();
+    let out = fx.pr(&["edit", "c", "--base", "main"]).ok();
+    assert_eq!(out["already"], json!(true));
+    assert_eq!(fx.writes(), writes);
+
+    // A waiting Workflow with no needs retargets the same way.
+    let out = fx.pr(&["edit", "a", "--base", "release"]).ok();
+    assert_eq!(out["fields"], json!(["base"]));
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT base FROM workflows WHERE key = 'a'"),
+        "release"
+    );
+
+    // Any other flag beside the branch, or a non-restack Workflow key, stays refused.
+    let refused: Vec<Vec<&str>> = vec![
+        vec!["edit", "c", "--base", "dev", "--needs", "a"],
+        vec!["edit", "c", "--base", "dev", "--no-needs"],
+        vec!["edit", "c", "--base", "dev", "--repo", &web],
+        vec!["edit", "b2", "--base", "a", "--no-needs"],
+    ];
+    for args in refused {
+        fx.refused(&fx.pr(&args), "workflow_locked", 3, fx.writes());
+    }
+
+    // A cancelled Workflow stays refused (`dispatch>merged` is no transition, so only `cancelled` is staged).
+    fx.env.sql(
+        "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'c'",
+    );
+    let writes = fx.writes();
+    let got = fx.pr(&["edit", "c", "--base", "dev"]);
+    assert_eq!(got.exit, 3, "{got:?}");
+    assert_eq!(fx.writes(), writes, "cancelled wrote something");
 }
 
 #[test]
@@ -1716,7 +1781,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
 
     // After the lock the other flags are refused, the title is not.
     fx.refused(
-        &fx.pr(&["edit", "api", "--base", "main"]),
+        &fx.pr(&["edit", "api", "--base", "main", "--no-needs"]),
         "workflow_locked",
         3,
         fx.writes(),
