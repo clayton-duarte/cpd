@@ -30,6 +30,7 @@ class FakeFile implements FileBoundary {
     if (this.failStat) return Promise.reject(new Error("EIO"));
     return Promise.resolve({ size: this.bytes.length, identity: this.identity });
   }
+  async write(): Promise<void> {}
   read(_p: string, start: number, end: number): Promise<Uint8Array> {
     this.reads.push([start, end]);
     return Promise.resolve(this.bytes.slice(start, end));
