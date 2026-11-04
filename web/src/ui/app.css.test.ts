@@ -63,9 +63,16 @@ it("the transcript log scrolls on its own", () => {
 });
 
 it("the context tree, plan and inbox scroll independently", () => {
-  expect(declsMatching(/Context tree column|data-pane="tree"|data-part="tree"|\[data-shell\] > aside/).get("overflow-y"), "context tree column: overflow-y").toBe("auto");
+  const aside = declsMatching(/\[data-shell\] aside/);
+  expect(aside.get("overflow-y"), "shell aside: overflow-y").toBe("auto");
+  expect(aside.get("height"), "shell aside: height").toBe("100%");
   const plan = declsMatching(/plan/i);
   expect(plan.get("overflow-y"), "plan pane: overflow-y").toBe("auto");
-  expect(declsMatching(/Inbox column|data-pane="inbox"|data-part="inbox"|\[data-shell\] > aside/).get("overflow-y"), "inbox column: overflow-y").toBe("auto");
   expect(decls('[data-column="center"]').get("min-height"), "center column: min-height").toBe("0");
 });
+
+it("the shell grid is a single minmax column and the column fills its panel", () => {
+  expect(decls("[data-shell]").get("grid-template-columns"), "shell: grid-template-columns").toBe("minmax(0, 1fr)");
+  expect(decls("[data-column]").get("height"), "column: height").toBe("100%");
+});
+
