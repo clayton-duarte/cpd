@@ -6,9 +6,9 @@ Sources: the design handoff (`HANDOFF.md`, `COMPONENTS.md`, `app/globals.css`, `
 
 **Contradiction rule.** Where the handoff files contradict each other, or a file contradicts a board, the board's rendered value wins, and the resolution is stated in one line marked **Resolution**. Where the handoff or a board contradicts Phase 2 behaviour (data, ARIA, tests), Phase 2 behaviour wins unless this file says otherwise.
 
-**File boundary (pro-n15).** The Plan touches only `web/src/ui/**`, `web/src/lib/**`, `web/vite.config.ts` and `web/VERIFY.md`. No dependency is added; only what `web/package.json` on main already has is used: `@shadcn/react` 0.3.1, `@tailwindcss/vite` 4.3.3, `tailwindcss` 4.3.3, `radix-ui`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`, `tw-animate-css`, `react-resizable-panels` 4.15.3.
+**File boundary (pro-n15).** The Plan touches only `web/src/ui/**`, `web/src/lib/**`, `web/vite.config.ts` and `web/VERIFY.md`, plus the one field of 3d (`PlanCounts.merging`, pro-d43). No dependency is added; only what `web/package.json` on main already has is used: `@shadcn/react` 0.3.1, `@tailwindcss/vite` 4.3.3, `tailwindcss` 4.3.3, `radix-ui`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`, `tw-animate-css`, `react-resizable-panels` 4.15.3.
 
-**No backend change (A6).** No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`. A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
+**No backend change (A6).** No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`, except the one field `PlanCounts.merging?: number` in `web/src/protocol/cockpit.ts`, parsed by the read model (`web/src/server/cockpit/readmodel.ts`), pro-d43 (3d). A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
 
 ---
 
@@ -104,7 +104,7 @@ Cursor is `#ecaec7` (`--sakura-bright`) and selection is `#5a504a` (`--line`) (r
 | `button:disabled, textarea:disabled, select:disabled { opacity:.5; cursor:not-allowed }` | **kept** | |
 | `[data-shell] > header { grid-row:1; grid-column:1 / -1 }`, `[data-shell] > footer { grid-row:3; grid-column:1 / -1 }` | **kept** | |
 
-Not wired (CSS that stays): there is no responsive layout. The board's `@media (max-width: 980px)` stacking and the `Sheet` drawers of COMPONENTS §2 are not built; below 980px the shell scrolls nothing and clips. Panel sizes are not persisted across reloads.
+Not built (CSS that stays): there is no responsive layout. The board's `@media (max-width: 980px)` stacking and the `Sheet` drawers of COMPONENTS §2 are not built; below 980px the shell scrolls nothing and clips. Panel sizes are not persisted across reloads (3c).
 
 The tests for new CSS (`web/src/ui/dango.css.test.ts`) read `app.css` as text: they assert the first non-comment line is `@import "tailwindcss";`, that every token of 2b and every glyph rule of 2c exists with exactly the values given there, and that `main.tsx` still imports only `./ui/app.css`.
 
@@ -397,6 +397,8 @@ export function parsePhase(raw: string): Resolved<Phase>;
 | `cyan` | 5 | `in flight` | active | active | `in flight` |
 | `white` | 6 | `unread` | unread | unread | `unread` |
 
+**Resolution (Inbox, DESIGN-panes 2):** the Inbox draws no tier groups, no per-tier counts and no tier labels. It uses `tone` and `glyph` only, so `tier` and `tierLabel` stay as data and are not drawn by the Inbox.
+
 Every `(urgency, kind)` pair: the 11 kinds known from `web/src/protocol/cockpit.ts` (seen live: `pr-ready`, `dialog`, `unread`, `curate-retire`; documented: `plan-review`, `loop-guard`, `drafts-parked`, `pr-closed`, `review-requested`, `deploy`, `engine-down`) crossed with the six urgencies give 66 pairs, and **every pair `(u, k)` resolves to `urgencyDisplay[u]`**. The "expected urgency" below is what cpd is expected to send for that kind (from the handoff tiers; only `red` and `magenta` are seen live, `docs/commands.md:3910` for the rest; unverified) and fixes the glyph a person sees for a kind in practice:
 
 | `kind` | expected urgency | resolves to (tone / glyph / tier) |
@@ -455,6 +457,9 @@ Written by hand (A2) from `https://ui.shadcn.com/r/styles/radix-rhea/<name>.json
 | `marker.tsx` | `Marker`, `MarkerIcon`, `MarkerContent`, `markerVariants` | `variant`: `default`, `separator`, `border`. | registry `marker` |
 | `attachment.tsx` | `Attachment`, `AttachmentGroup`, `AttachmentMedia`, `AttachmentContent`, `AttachmentTitle`, `AttachmentDescription`, `AttachmentActions`, `AttachmentAction`, `AttachmentTrigger` | `size`: `default`, `sm`, `xs`; `orientation`: `horizontal`, `vertical`; `data-state`: `idle`, `done`, `error`; `AttachmentMedia` `variant`: `icon`, `image`. | registry `attachment` (uses `./button.tsx`) |
 | `trace.tsx` | `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger`, `TraceCollapsibleContent` | `TraceLine` `status`: `running` \| `error` \| `pending`. | registry `trace` (uses `./collapsible.tsx`, `ChevronRightIcon`) |
+| `resizable.tsx` | `ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle`, `usePanelRef` | thin wrappers over `react-resizable-panels` 4.15.3 (`Group`, `Panel`, `Separator`, `usePanelRef`), no new dependency. `ResizablePanelGroup` is `flex h-full w-full` and turns vertical with `aria-[orientation=vertical]`; `ResizablePanel` is `min-h-0 min-w-0`; `ResizableHandle` `withHandle` draws a grip (`h-6 w-1`, `rounded-lg`) on a 1px `bg-border` bar with a 8px hit area. Every resizable split in the Shell uses these parts (3c). `data-slot` `resizable-panel-group`, `resizable-panel`, `resizable-handle`. | shadcn/ui `resizable`, hand-written as above |
+| `context-menu.tsx` | `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `ContextMenuItem`, `ContextMenuSeparator` | shadcn/ui `context-menu`, hand-written as above, over the `ContextMenu` primitive of `radix-ui` (already in `web/package.json`; the export is **unverified** until the part compiles). Used by the Inbox row (DESIGN-panes 2d). `data-slot` `context-menu-*`. | shadcn/ui `context-menu`, hand-written as above |
+| `sidebar.tsx` | `Sidebar`, `SidebarContent`, `SidebarGroup`, `SidebarGroupAction`, `SidebarGroupContent`, `SidebarGroupLabel`, `SidebarMenu`, `SidebarMenuAction`, `SidebarMenuBadge`, `SidebarMenuButton`, `SidebarMenuItem`, `SidebarMenuSub`, `SidebarMenuSubButton`, `SidebarMenuSubItem` | styled wrappers only, no state and no context: no `SidebarProvider`, no `useSidebar`, no cookie or storage. `Sidebar` `collapsible`: `offcanvas`, `icon`, `none` (the Context Tree uses `none`). Uses `radix-ui` `Slot` (`asChild`) and `class-variance-authority`, both already in `web/package.json`. `data-slot` and `data-sidebar` on each part. The Context Tree (3d) is the only consumer. | shadcn/ui `sidebar`, hand-written as above |
 | `message-scroller.tsx` | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton`, `useMessageScroller`, `useMessageScrollerScrollable`, `useMessageScrollerVisibility` | built on `@shadcn/react/message-scroller` (namespace `Provider`, `Root`, `Viewport`, `Content`, `Item`, `Button`). Props that matter: provider `autoScroll`, `defaultScrollPosition: "start" \| "end" \| "last-anchor"`, `scrollEdgeThreshold`; viewport `preserveScrollOnPrepend`; item `messageId`, `scrollAnchor`; button `direction: "start" \| "end"`. The file is provided for `DESIGN-chat.md`; the Phase 2 `Transcript` windowing and sticky auto-scroll (`data-row-key`, `data-at-bottom`) are **not** replaced by it. | registry `message-scroller` (uses `./button.tsx`, `ArrowDownIcon`) |
 | `questionnaire.tsx` | `Questionnaire`, `QuestionnaireActions`, `QuestionnaireChoice`, `QuestionnaireChoiceDescription`, `QuestionnaireChoices`, `QuestionnaireDescription`, `QuestionnaireError`, `QuestionnaireInput`, `QuestionnaireItem`, `QuestionnaireNext`, `QuestionnairePrevious`, `QuestionnaireProgress`, `QuestionnaireSkip`, `QuestionnaireSubmit`, `QuestionnaireTitle` | built on `@shadcn/react/questionnaire`; `shortcuts: "letters" \| "numbers"`; item `multiple`. | registry `questionnaire` (uses `./button.tsx`, `CheckIcon`) |
 
@@ -491,7 +496,7 @@ Applied by `Markdown.tsx` (`web/src/ui/chat/Markdown.tsx`): the root element of 
 
 Files: `web/src/ui/cockpit/Header.tsx`, `StatusBar.tsx`, `ContextTree.tsx`, `Shell.tsx`, `web/src/ui/App.tsx`. All imports relative. Tests: `shell.dango.test.tsx`, `tree.dango.test.tsx` (new) and the updated Phase 2 tests (`App.test.tsx`, `AppMemo.test.tsx`, `Frame.test.tsx`, `Shell.test.tsx`, `ContextTree.test.tsx`, `app.css.test.ts`).
 
-Layout, outside in: `div[data-shell]` is a CSS grid, 3 columns `272px | minmax(0,1fr) | 340px`, 3 rows `auto | minmax(0,1fr) | auto`, `height: 100vh`, `overflow: hidden`, no gap, background `bg-background`, text `text-foreground text-body font-sans`. Header spans the top (row 1, 44px), Status Bar the bottom (row 3, 30px), the three columns are row 2. The page never scrolls; each column scrolls on its own.
+Layout, outside in: `div[data-shell]` is a CSS grid with one column `minmax(0,1fr)` and 3 rows `auto | minmax(0,1fr) | auto`, `height: 100vh`, `overflow: hidden`, no gap, background `bg-background`, text `text-foreground text-body font-sans`. Header spans the top (row 1, 44px), Status Bar the bottom (row 3, 30px). Row 2 is one horizontal resizable group, `cpd-columns`, with three panels: the Context tree (20%), the centre (58%) and the Inbox (22%), separated by two resizable handles. The centre panel holds a vertical resizable group, `cpd-center`, with the Plan over the chat. The page never scrolls; each column scrolls on its own.
 
 ### 3a. Header (44px)
 
@@ -581,9 +586,9 @@ div[data-part="status-bar"]                                  flex h-full w-full 
 - Keyboard: both buttons are native, Enter and Space activate, standard focus ring. No shortcut keys.
 - Not wired (omitted, never faked): Legend `?`, Logs, Tiers, the `pi | durable` segmented control (the runner is shown, not chosen), the Incident pill, the Workers `52 → 13 → 10/10` meter, version `HoverCard`, host `cpu / ram / disk`. `App` passes none of `showCost`, `onToggleCost`, `onResetLayout`: the cost toggle is meaningless without cost data in the tree or plan models, and layout reset needs the Shell's group handle (not exposed).
 
-### 3c. Shell and the plan/chat split
+### 3c. Shell and the resizable split
 
-File `web/src/ui/cockpit/Shell.tsx`.
+File `web/src/ui/cockpit/Shell.tsx`. The resizable parts are `web/src/ui/components/resizable.tsx` (2f).
 
 ```ts
 export function Shell(props: {
@@ -592,40 +597,54 @@ export function Shell(props: {
 }): ReactElement;
 ```
 
-DOM. Children of `div[data-shell]`, in order, KEPT (Frame.test 4 and 5): `header[aria-label="Cockpit header"]` (only when `header !== undefined`), `aside[aria-label="Context tree column"]`, `div[data-column="center"]`, `aside[aria-label="Inbox column"]`, `footer[aria-label="Status bar"]` (only when `status !== undefined`).
+**Every resizable split in the Shell is a shadcn/ui resizable group** (`ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle` with `withHandle`, `usePanelRef`), over `react-resizable-panels` 4.15.3 (pro-d41). There are two groups. The outer horizontal group `cpd-columns` holds the three columns (Context tree, centre, Inbox). The inner vertical group `cpd-center` sits in the centre column and holds the Plan over the chat. No other split is drawn with a bespoke Separator.
+
+DOM. Children of `div[data-shell]`, in order: `header[aria-label="Cockpit header"]` (only when `header !== undefined`), the columns group (row 2), `footer[aria-label="Status bar"]` (only when `status !== undefined`). The three columns are **not** direct children of `div[data-shell]`: they are the panels of the columns group.
 
 ```
-header[aria-label="Cockpit header"]      bg-background                          (row 1)
-aside[aria-label="Context tree column"]  border-r border-border                 (row 2, col 1; overflow-y auto from app.css)
-div[data-column="center"][data-part="center-frame"][data-plan-state="open|collapsed|zoomed"]
-│                                        relative flex h-full min-h-0 flex-col   (row 2, col 2; app.css: min-height 0)
-├─ <Group data-part="center-group" orientation="vertical">   h-full min-h-0 flex-1      (renders a div; its direct DOM children are Panel, Separator, Panel)
-│   ├─ <Panel id="plan" data-part="plan-panel">               overflow-y auto (app.css), min-h-0
-│   │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   {plan}    inert while collapsed
-│   ├─ <Separator data-part="split-handle" aria-label="Resize plan view and chat">
-│   └─ <Panel id="chat" data-part="chat-panel">
-│       └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}    inert while zoomed
-└─ div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]   absolute right-4 top-[9px] z-10 flex gap-0.5
-    ├─ button[type="button"][data-action="plan-collapse"]                 26x26, aria-label "Collapse plan view" | "Expand plan view"
-    └─ button[type="button"][data-action="plan-zoom"][aria-pressed]        26x26, aria-label "Zoom plan view"
-aside[aria-label="Inbox column"]         border-l border-border                 (row 2, col 3)
-footer[aria-label="Status bar"]          flex items-center border-t border-border bg-surface-sunken   (row 3)
+div[data-shell]                                                   grid, one column (2a)
+├─ header[aria-label="Cockpit header"]     bg-background           (row 1)
+├─ ResizablePanelGroup id="cpd-columns" data-part="columns-group" orientation="horizontal"   min-h-0 flex-1   (row 2; renders a div)
+│   ├─ ResizablePanel id="tree" data-part="tree-panel"            defaultSize 20% · minSize 12% · maxSize 40% · collapsible · collapsedSize 0%
+│   │   └─ aside[aria-label="Context tree column"]   h-full overflow-y-auto      {tree}   (Sidebar, 3d)
+│   ├─ ResizableHandle id="split-left" data-part="split-left" withHandle aria-label="Resize context tree and center"
+│   ├─ ResizablePanel id="center" data-part="center-panel"        defaultSize 58% · minSize 30%   (not collapsible)
+│   │   └─ div[data-column="center"][data-part="center-frame"][data-plan-state="open|collapsed|zoomed"]   relative flex h-full min-h-0 flex-col
+│   │       ├─ ResizablePanelGroup id="cpd-center" data-part="center-group" orientation="vertical"   h-full min-h-0 flex-1   (renders a div)
+│   │       │   ├─ ResizablePanel id="plan" data-part="plan-panel" panelRef={planRef}   defaultSize 40% · minSize 20% · maxSize 80% · collapsible · collapsedSize 44px
+│   │       │   │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   {plan}   inert while collapsed
+│   │       │   ├─ ResizableHandle id="split" data-part="split-handle" withHandle aria-label="Resize plan view and chat"
+│   │       │   └─ ResizablePanel id="chat" data-part="chat-panel" panelRef={chatRef}   defaultSize 60% · minSize 20% · collapsible · collapsedSize 0%
+│   │       │       └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}   inert while zoomed
+│   │       └─ div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]   absolute right-4 top-[9px] z-10 flex gap-0.5
+│   │           ├─ button[type="button"][data-action="plan-collapse"]   26x26
+│   │           └─ button[type="button"][data-action="plan-zoom"][aria-pressed]   26x26
+│   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
+│   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 22% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
+│       └─ aside[aria-label="Inbox column"]   h-full overflow-y-auto      {inbox}   (DESIGN-panes 2)
+└─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (row 3)
 ```
 
-`div[data-column="center"]` (the grid child, a plain `div`, KEPT hook) has exactly **2** children, the Group and the controls, so `Frame.test` 4 (`[data-column="center"]` has 2 children) is unchanged. The Group is the library's `Group`; `data-part` and `className` are passed through to its `div`. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match (`Shell.test` unchanged). The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; `DESIGN-panes.md` keeps the right 64px of the plan title row free for them.
+`div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **2** children, the centre group and the controls. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; `DESIGN-panes.md` keeps the right 64px of the plan title row free for them.
 
-`react-resizable-panels` 4.15.3 (named imports `Group`, `Panel`, `Separator`, `usePanelRef`), exact props:
+`react-resizable-panels` 4.15.3, through the wrappers of 2f, exact props:
 
 | Element | Props |
 |---|---|
-| `Group` | `orientation="vertical"`, `id="cpd-center"`, no `defaultLayout`, no storage (sizes are not persisted) |
-| plan `Panel` | `id="plan"`, `panelRef={planRef}`, `defaultSize="40%"`, `minSize="20%"`, `maxSize="80%"`, `collapsible`, `collapsedSize="44px"` (the title row stays visible), `onResize={sync}` |
-| chat `Panel` | `id="chat"`, `panelRef={chatRef}`, `defaultSize="60%"`, `minSize="20%"`, `collapsible`, `collapsedSize="0%"`, `onResize={sync}` |
-| `Separator` | `id="split"`, `aria-label="Resize plan view and chat"`, `data-part="split-handle"`; className `grid h-[9px] place-items-center border-t border-border cursor-row-resize`; one child `span[aria-hidden]` `h-[3px] w-9 rounded-[2px] bg-input` |
+| `ResizablePanelGroup` outer (`cpd-columns`) | `orientation="horizontal"`, `id="cpd-columns"`, no `defaultLayout`, no storage (sizes are not persisted) |
+| tree `ResizablePanel` | `id="tree"`, `defaultSize="20%"`, `minSize="12%"`, `maxSize="40%"`, `collapsible`, `collapsedSize="0%"` |
+| `ResizableHandle` left | `id="split-left"`, `withHandle`, `aria-label="Resize context tree and center"`, `data-part="split-left"` |
+| centre `ResizablePanel` | `id="center"`, `defaultSize="58%"`, `minSize="30%"`, not collapsible |
+| `ResizableHandle` right | `id="split-right"`, `withHandle`, `aria-label="Resize center and inbox"`, `data-part="split-right"` |
+| inbox `ResizablePanel` | `id="inbox"`, `defaultSize="22%"`, `minSize="14%"`, `maxSize="45%"`, `collapsible`, `collapsedSize="0%"` |
+| `ResizablePanelGroup` inner (`cpd-center`) | `orientation="vertical"`, `id="cpd-center"`, no `defaultLayout`, no storage |
+| plan `ResizablePanel` | `id="plan"`, `panelRef={planRef}`, `defaultSize="40%"`, `minSize="20%"`, `maxSize="80%"`, `collapsible`, `collapsedSize="44px"` (the title row stays visible), `onResize={sync}` |
+| chat `ResizablePanel` | `id="chat"`, `panelRef={chatRef}`, `defaultSize="60%"`, `minSize="20%"`, `collapsible`, `collapsedSize="0%"`, `onResize={sync}` |
+| `ResizableHandle` inner | `id="split"`, `withHandle`, `aria-label="Resize plan view and chat"`, `data-part="split-handle"`. The part's own classes and grip replace the Phase 2 bar (`h-[9px]`, `border-t`, `span`). |
 
 `planRef`, `chatRef` come from `usePanelRef()`. `sync()` recomputes `mode` from `planRef.current?.isCollapsed()` and `chatRef.current?.isCollapsed()`: both false → `open`; plan collapsed → `collapsed`; chat collapsed → `zoomed`. Both collapsed cannot happen (the sizes sum to 100%).
 
-Separator semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation="horizontal"` (a vertical group has a horizontal bar; unverified), `aria-valuenow`/`aria-valuemin`/`aria-valuemax` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the separator exists with `role="separator"` and the `aria-label` above, and is focusable. Double-click on it resets the panels to their default sizes (library default). The label `Resize plan view and chat` is the board's.
+Handle semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation` and `aria-value*` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the handle exists with `role="separator"` and its `aria-label`, and is focusable. Double-click on a handle resets the panels to their default sizes (library default).
 
 **Plan controls.** Buttons: both `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icons lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`, `MaximizeIcon`, `MinimizeIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
 
@@ -635,19 +654,19 @@ Separator semantics come from the library, not written by cpd: `role="separator"
 | `collapsed` | label `Expand plan view`, `ChevronDownIcon`, enabled; click → `planRef.expand()` | label `Zoom plan view`, `aria-pressed="false"`, **disabled** |
 | `zoomed` | label `Collapse plan view`, `ChevronUpIcon`, **disabled** | label `Zoom plan view`, `aria-pressed="true"`, `MinimizeIcon`, enabled; click → `chatRef.expand()` (restores the previous split) |
 
-- After a click the state hooks update through `onResize → sync()`: `data-plan-state` on the center element, `data-state` on `section[aria-label="Plan pane"]` (`open` | `collapsed` | `zoomed`) and on `main[aria-label="Chat"]` (`open` | `zoomed`; `main` never reads `collapsed`).
+- After a click the state hooks update through `onResize → sync()`: `data-plan-state` on the centre element, `data-state` on `section[aria-label="Plan pane"]` (`open` | `collapsed` | `zoomed`) and on `main[aria-label="Chat"]` (`open` | `zoomed`; `main` never reads `collapsed`).
 - `Enter` / `Space` on a focused button activates it (native). No global shortcut.
 - When `collapsed`, the plan `section` gets the `inert` attribute (its content below the 44px title row is clipped and must not take focus); when `zoomed`, `main[aria-label="Chat"]` gets `inert` (its Panel is 0% high). The controls are outside both, so they stay operable.
-- Dragging the separator below the plan `minSize` collapses the plan (library behaviour for a `collapsible` panel), above it expands it again; the same for the chat. Both use the same `sync()`.
-- jsdom has no layout: a test mocks `react-resizable-panels` (external dependency) and asserts the props table above and that each button calls `collapse()` / `expand()` on the right ref; it does not assert pixel sizes.
+- Dragging an inner handle below the plan `minSize` collapses the plan (library behaviour for a `collapsible` panel), above it expands it again; the same for the chat. Both use the same `sync()`.
+- jsdom has no layout: a test mocks `react-resizable-panels` (external dependency) and asserts the props tables above and that each button calls `collapse()` / `expand()` on the right ref; it does not assert pixel sizes.
 
-Columns: the Context Tree column is `272px`, the Inbox `340px` (CSS only, 2a). Tree, plan panel, chat and inbox scroll independently (`overflow-y: auto` on both asides and on the plan panel; the transcript `[role="log"]` scrolls itself).
+**Columns.** The tree panel starts at 20% of the row width (12% to 40%), the centre at 58% (min 30%), the Inbox at 22% (14% to 45%). The tree and inbox panels collapse when dragged below their minimum (library behaviour, `collapsedSize="0%"`). The handles resize; sizes are not persisted. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently (`overflow-y: auto` on both asides and on the plan panel; the transcript `[role="log"]` scrolls itself).
 
-Not wired: persisted panel sizes, `Reset layout` (Status Bar), resizable tree and inbox columns, narrow-screen drawers, the board's `Resize` double-click custom behaviour.
+Not built: persisted panel sizes, `Reset layout` (Status Bar), narrow-screen drawers, the board's `Resize` double-click custom behaviour.
 
-### 3d. Context Tree (272px column)
+### 3d. Context Tree (sidebar, 20% panel)
 
-File `web/src/ui/cockpit/ContextTree.tsx`. Props **KEPT**, unchanged:
+File `web/src/ui/cockpit/ContextTree.tsx`. The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props **KEPT**, unchanged:
 
 ```ts
 export function ContextTree(props: {
@@ -656,58 +675,57 @@ export function ContextTree(props: {
   selectedPlanId: string | null;
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
-  /** New context. The "+" button is rendered only when passed (Not wired). */
+  /** New context. The "+" button is rendered only when passed (Not built). */
   onNewContext?: () => void;
 }): ReactElement;
 ```
 
-Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`).
+Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
-**Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (`nav` > `ul[role="tree"]`); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks, cursor or costs (Not wired).
+**Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks, cursor or costs (Not built).
 
 **Read model rules** (the read model keeps these; the component may rely on them):
 - At most one live Manager per Context: role `manager`, `archived_at` null. When several match, the one with `file !== null` wins, then the newest.
 - At most one Lead per Plan: `plan.lead_session`; else the newest live `plan_lead` session.
 - The live lists drop sessions with role `worker` and archived sessions.
 - A live non-lead Lead (a live session of role `lead` that is not its Plan's Lead) is listed once, as a fork under its Context (below).
+- `PlanCounts.merging` is parsed by the read model (pro-d43). An absent count reads as 0.
 - The Archived group is `details[data-archived]`, closed by default, with summary `Archived (n)`, where n is the archived Contexts in the group plus the archived Plans they contain. **Assumption:** the addendum's "Contexts + Plans in it" is read as this sum; a per-Context archived-Plans group keeps `Archived (n)` with n = its archived Plans.
 
 DOM:
 
 ```
-nav[aria-label="Context tree"]                                  KEPT   flex min-h-full flex-col
-├─ div[data-part="tree-header"]                                 KEPT   sticky top-0 z-10 flex h-9 items-center gap-2 bg-background px-[14px]
-│   ├─ span  "Contexts"                                         text-[11px] font-semibold uppercase tracking-[.08em] text-muted-foreground
-│   ├─ span.flex-1
-│   └─ button[data-action="new-context"][aria-label="New context"][type="button"]   only when onNewContext; size-6 grid place-items-center rounded-[5px] text-fg-strong; PlusIcon 14
-├─ (tree === null)   p[data-part="loading"]  "Loading contexts…"                 px-[14px] text-fg-dim
-├─ (no live and no archived contexts)   p[data-part="empty"]  "No contexts"      px-[14px] text-fg-dim
-├─ ul[role="tree"]                                              KEPT   flex flex-col gap-0.5 px-1.5 pb-2.5   (live contexts)
-│   └─ li[role="treeitem"][data-context="<id>"]                 KEPT   mb-1
-│       ├─ button[type="button"][data-select="context"][aria-current="true"?][disabled]   NEW (replaces the Phase 2 context-row div)
-│       │     flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left; hover:bg-row-hover (not when disabled); aria-current → bg-sidebar-accent text-fg-strong
-│       │   ├─ span[aria-hidden="true"]  "▾"                    font-mono text-[10px] w-[10px] text-fg-dim   (static, decorative)
-│       │   ├─ DOT (the Manager)                                 see Dot below
-│       │   ├─ span[data-part="context-id"][title]  {context.id}   font-mono text-key font-semibold text-fg-strong flex-1 min-w-0 truncate
-│       │   │     title attribute = the context title, only when it differs from the id
-│       │   └─ span[data-part="counters"]                       Counters of its live Plans; font-mono text-meta text-right
-│       ├─ ul[role="group"]   live plan items, then Archived plans (details)     KEPT
-│       │   └─ li[role="treeitem"][data-plan="<id>"]            KEPT
-│       │       └─ button[type="button"][data-select="plan"][aria-current="true"?]   KEPT   flex h-[26px] w-full items-center gap-2 rounded-sm pl-8 pr-2 text-left; hover:bg-row-hover; aria-current → bg-sidebar-accent text-fg-strong
-│       │           ├─ DOT (the Lead)                           see Dot below
-│       │           ├─ span[data-part="plan-id"][title={plan.title}]  {plan.id}   font-mono text-key flex-1 min-w-0 truncate
-│       │           └─ span[data-part="counters"]               Counters of this Plan; font-mono text-meta text-right
-│       │     archived Plans inside a Context: li > details[data-archived] > summary "Archived (n)" (n = its archived Plans), KEPT
-│       └─ ul  fork rows (no role)                              after the Plans
-│           └─ li
-│               └─ span[data-part="session-row"]                flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2   (KEPT wrapper)
-│                   ├─ DOT (the fork's own dot)
-│                   └─ button[type="button"][data-session="<ref.id>"][aria-current="true"?]   text-left font-mono text-key truncate
-│                         label: `<plan id>·<first 4 characters of ref.id>` (a Plan fork) or `ref.key` (a Context fork)
-└─ details[data-archived]  (only when archived contexts exist)  KEPT   closed by default
-    ├─ summary  "Archived (<n>)"                                 KEPT copy; n as in the read model rules above
-    └─ ul[role="tree"]  archived contexts, same item structure
+div[aria-label="Context tree"]                                    Sidebar collapsible="none"   bg-sidebar text-sidebar-foreground flex h-full w-full flex-col min-h-full bg-background
+└─ SidebarContent                                                 the only child
+   ├─ SidebarGroup
+   │   ├─ SidebarGroupLabel[data-part="tree-header"]  "Contexts"   text-[11px] font-semibold uppercase tracking-[.08em] text-muted-foreground
+   │   ├─ SidebarGroupAction[type="button"][data-action="new-context"][aria-label="New context"]   only when onNewContext; PlusIcon 14
+   │   └─ SidebarGroupContent
+   │       ├─ p[data-part="loading"]  "Loading contexts…"           (tree === null)   px-2 text-fg-dim
+   │       ├─ p[data-part="empty"]  "No contexts"                  (no live and no archived contexts)   px-2 text-fg-dim
+   │       └─ SidebarMenu[role="tree"]                               KEPT   (the live contexts)
+   │           └─ SidebarMenuItem[role="treeitem"][data-context="<id>"]     KEPT   one per live Context
+   │               ├─ SidebarMenuButton[type="button"][data-select="context"][aria-current="true"?]   the Manager row
+   │               │     ├─ DOT (the Manager)                      see Dot below
+   │               │     └─ span[data-part="context-id"][title]  {context.id}   font-mono text-key font-semibold text-fg-strong truncate
+   │               │         title = the context title, only when it differs from the id
+   │               ├─ CollapsibleTrigger asChild → SidebarMenuAction[type="button"][aria-label="Toggle <id>"]   the ">" chevron (ChevronRightIcon); rendered only when the Context has Plans or forks
+   │               └─ CollapsibleContent → SidebarMenuSub[role="group"]   the Plans and Forks of the Context; no border-l; pl-4 (1rem) more than the Manager row
+   │                   ├─ SidebarMenuSubItem[role="treeitem"][data-plan="<id>"][data-part="plan-row"]   one per live Plan, model order
+   │                   │     └─ SidebarMenuSubButton[type="button"][data-select="plan"][aria-current="true"?]
+   │                   │           ├─ DOT (the Lead)               see Dot below
+   │                   │           ├─ span[data-part="plan-id"][title={plan.title}]  {plan.id}   font-mono text-key truncate
+   │                   │           └─ span[data-part="counters"]    Counters of this Plan (see Counters)
+   │                   └─ SidebarMenuSubItem[data-part="session-row"]    one per fork (see Forks)
+   │                         └─ SidebarMenuSubButton[type="button"][data-session="<ref.id>"][aria-current="true"?]
+   │                               ├─ DOT (the fork's own dot)
+   │                               └─ span  {label}   font-mono text-key truncate
+   └─ details[data-archived]  (only when archived contexts exist)   KEPT   closed by default
+       ├─ summary  "Archived (<n>)"                                  n as in the read model rules above
+       └─ ul[role="tree"]  archived contexts, same item structure
 ```
+
+The Manager row carries **no counters**: a Context row shows its Manager's dot, its id and the chevron, nothing else (pro-d43). Only Plan rows show counts.
 
 **Dot** (`span[role="img"][data-dot="<state>"][data-attention="<urgency>|none"][data-tone][data-glyph][aria-label]`, className `glyphClass[g]`, KEPT hooks):
 - `data-dot` = `dot.state`; `data-attention` = `attention ?? "none"`; `aria-label` = `state` when `attention === null`, else `` `${state}, needs you (${attention})` `` (KEPT; the Phase 2 test pins `aria-label="waiting"`).
@@ -715,26 +733,28 @@ nav[aria-label="Context tree"]                                  KEPT   flex min-
 - Source: a Context row shows its Manager's `dot`; a Plan row shows its Lead's `dot`; a fork row shows its own `dot`. A missing Manager or Lead draws `{ state: "stopped", attention: null }` (**assumption:** the TUI draws a Stopped dot with no live Manager, `sc-tree-tui.md` section 4; I infer the same for a missing Lead).
 - Exactly one `[role="img"][data-dot]` per row: one on each Context row, Plan row and fork row, none elsewhere.
 
-**Counters** (`span[data-part="counters"]`, `font-mono text-meta`):
-- Numbers only, no words. Each non-zero bucket is `span[data-count="<key>"]`, the buckets in the order `planned, active, failed, done`, joined by a ` · ` text node in `text-line`. A zero bucket is omitted; with every bucket zero the span renders empty.
-- `planned` = draft + queued (`text-muted-foreground`); `active` = running (`text-status-active`); `failed` (`text-status-blocked`); `done` = merged (`text-status-done`). `cancelled` is not shown.
-- A Context row sums its live (non-archived) Plans; a Plan row shows its own counts. Example: queued 2, running 1, failed 1, merged 13 renders `2 · 1 · 1 · 13`.
-- **Resolution:** the TUI's `active` also counts `merging`; the protocol has no `merging` field (`sc-tree-tui.md` section 10, item 5), so `active` is running only. The old per-Plan `Session` sub-row and the old count words (`merged 13 · running 1`) are removed.
+**Counters** (`span[data-part="counters"]` on a Plan row only, `ml-auto shrink-0 font-mono text-meta`) (pro-d43):
+- Numbers only, no words. Each non-zero bucket is `span[data-count="<key>"]`, in the order `draft, queued, running, merging, failed, merged`. Colour per bucket: `draft` `text-status-decision`; `queued` `text-muted-foreground`; `running` `text-status-active`; `merging` `text-status-landing`; `failed` `text-status-blocked`; `merged` `text-status-done`.
+- Buckets are separated by **one space** (a single text node, never ` · `).
+- `cancelled` is not shown. Zero and absent buckets are omitted. With every bucket zero the span is not rendered.
+- Example: queued 2, running 1, failed 1, merged 13 renders `2 1 1 13`.
+- **Resolution (pro-d43):** the TUI's `active` counted `merging`. The web gives `merging` its own bucket, so the Phase 2 mapping (`planned` = draft + queued, `active` = running, `done` = merged) and the keys `planned`, `active` and `done` no longer apply.
 
 **Order.** Live Contexts first, then `details[data-archived]`. Inside a live Context: the live Plans in model order, then the archived Plans (`details`), then the fork rows: the Context's own forks first, then the forks of each Plan in Plan order, archived Plans included.
 
 **Forks.** Only forks have their own rows. A fork is a live session that is (a) not the Manager and has no Plan, labelled `ref.key`; or (b) not the Lead of its Plan and has `jobKey === null`, labelled `<plan id>·<first 4 characters of ref.id>`; or (c) a live non-lead Lead (see the read model rules). Each session is listed once. Workers (`jobKey !== null`), archived sessions and the Manager are never rows.
 
-**Selection.** `aria-current="true"` marks the selected row (KEPT): the Plan button when `selectedPlanId === plan.id`; a Context button or a fork button when `selectedSessionId` is the Manager's id or the fork's `ref.id`. The selected Context and Plan button and the selected fork's `session-row` take `bg-sidebar-accent text-fg-strong`.
+**Selection.** `aria-current="true"` marks the selected row (KEPT): the Plan button when `selectedPlanId === plan.id`; a Context button or a fork button when `selectedSessionId` is the Manager's id or the fork's `ref.id`. The selected row takes `bg-sidebar-accent text-fg-strong` (`SidebarMenuButton` and `SidebarMenuSubButton` with `isActive`).
 
-**Clicks.**
-- Context button: `onSelectSession(manager.ref.id)`. Without a Manager the button is `disabled` and calls nothing.
+**Clicks.** Clicking the Manager, a Plan or a Fork opens its chat (pro-d42).
+- Manager row (the Context button): `onSelectSession(manager.ref.id)`. Without a Manager the button is `disabled` and calls nothing (Phase 2).
+- Chevron (`SidebarMenuAction`): toggles the Plans and Forks of its Context. It does not select. **Assumption:** the Context is expanded by default, so the rows that Phase 2 always showed stay visible.
 - Plan button: `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` where `lead` is the session of `plan.sessions` whose `ref.id === plan.leadSessionId`. **Assumption:** with no such Lead only `onSelectPlan(plan.id)` is called.
 - Fork button: `onSelectSession(ref.id)`.
-- Keyboard: every row is a native `button`: Tab order is document order, Enter and Space select. The `role="tree"` has no arrow-key navigation (Not wired).
+- Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
 - Scrolling: the column `aside` scrolls (`overflow-y: auto`); the `tree-header` is sticky.
 
-Not wired: Active/Standing sections, per-context and per-plan cost, `▾ N more` overflow rows (all rows render), collapse and expand of a context (the `▾` caret is static and decorative), the `Archive` count row of the board (replaced by `Archived (n)` details), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+Not built: Active/Standing sections, per-context and per-plan cost, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
 ### 3e. `App.tsx` wiring
 
@@ -752,7 +772,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 - Chat slot when no session is selected: `<p data-empty>Select a session</p>` (KEPT copy and hook), restyled `grid h-full place-items-center text-muted-foreground`.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
 - `version={null}` stays (the cpd version is not in the store): the Status Bar shows `cpd: unknown`.
-- Not wired in `App`: `onOpenSearch`, `onNewContext`, `showCost`/`onToggleCost`, `onResetLayout`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is absent for a Manager-only selection.
+- Not built in `App`: `onOpenSearch`, `onNewContext`, `showCost`/`onToggleCost`, `onResetLayout`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is absent for a Manager-only selection.
 
 ### 3f. Phase 2 tests this section changes (owner `ui-impl-shell`)
 
@@ -760,10 +780,11 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 |---|---|
 | `Frame.test.tsx` 1 | none (`[data-emblem]` text `C-P-D`, now `sr-only`) |
 | `Frame.test.tsx` 2, 3, 6 | none (text and hooks KEPT); the `state` prop is typed `SessionState | null` so a test literal like `"idle"` still type-checks |
-| `Frame.test.tsx` 4, 5 | none (`labels(c)` of `[data-shell]` children; `[data-column="center"]` has 2 children: Group and controls) |
+| `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are `header`, the columns group (no `aria-label`) and `footer`; the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
 | `Shell.test.tsx` | none (descendant selectors still match) |
-| `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager is no longer a `button[data-session]` row (its dot and selection move to the Context button); the counts are `data-count` spans without words (`merged 13 · running 1` is gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
-| `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of the fixture is `2 · 1 · 1 · 13` (planned 2, active 1, failed 1, done 13); the selected Manager is the Context button; the `Archived (1)` summary and `button[data-action="new-context"]` are KEPT |
+| `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager row is the Context button (its dot and selection); a Context row has no `data-part="counters"`; a Plan row's counts are `data-count` spans in the keys `draft, queued, running, merging, failed, merged`, separated by one space (`planned`, `active`, `done` and ` · ` are gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
+| `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of a Plan row is its non-zero buckets separated by one space; the selected Manager is the Context button; the Context row has no counts; the `Archived (1)` summary and `button[data-action="new-context"]` are KEPT |
+| `App.test.tsx` (line 108) | **changed** by 3d: the tree root is `div[aria-label="Context tree"]` (the Sidebar), not `nav` |
 | `app.css.test.ts` 1, 2 | none |
-| `app.css.test.ts` 3 | the `declsMatching(/plan/i)` assertion drops `max-height` (2a) |
-| `AppMemo.test.tsx`, `App.test.tsx` | none |
+| `app.css.test.ts` 3 | **changed** by 2a and 3c: the selector regex for the tree and inbox asides matches `[data-shell] aside` (not `[data-shell] > aside`); the `declsMatching(/plan/i)` assertion drops `max-height` |
+| `AppMemo.test.tsx` | none |
