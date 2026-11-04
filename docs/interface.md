@@ -145,6 +145,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd config tiers` | Set the four Tier keys of config.toml (§14.2a) | | |
 | `cpd config tiers set` | Set the four Tier keys of config.toml (§14.2a) | | yes |
+| `cpd config experimental` | Print or set the Experimental Features (§14.2b) | | yes |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
 | `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
 | `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |

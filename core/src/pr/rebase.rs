@@ -786,12 +786,15 @@ pub(crate) fn settle_in(
                 *catalog = Some(config::load_catalog(&env.config, &models)?);
             }
             let catalog = catalog.as_ref().expect("loaded above");
+            let classifier =
+                merge::real_classifier(&env.config, &env.home, &crate::ports::Ports::current());
             let ctx = merge::Ctx {
                 home: &env.home,
                 config: &env.config,
                 catalog,
                 source: COMMAND,
                 metrics: &|_| None,
+                classifier: &*classifier,
             };
             merge::recover_attempt(&mut env.store, &ctx, plan, attempt)?;
         }
