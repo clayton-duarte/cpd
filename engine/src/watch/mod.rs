@@ -10,7 +10,7 @@
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
 //! - [`auto_merge`] E18: turns on squash auto-merge for posted Workflows whose request is pending (deferred while stacked);
-//! - [`bump`] E23: replies `Bibbidi-bobbidi-bump!` in the thread of a PR post every 24 h while its PR is open and unreviewed;
+//! - [`bump`] E23: sends nothing (decision pro-d386);
 //! - [`jira`] E19: moves the Jira ticket of the oldest queued transition through the helper `pi/lib/jira-transition.ts`;
 //! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;
