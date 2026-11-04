@@ -2,6 +2,7 @@
 //! condition per open authored pull request, its urgency and label by the STATUS table.
 
 use rusqlite::Connection;
+use time::OffsetDateTime;
 
 use super::model::{Condition, Item, Kind, Urgency};
 use super::rules::id;
@@ -87,6 +88,23 @@ impl Status {
     }
 }
 
+/// Row 1's tail while the post is overdue (contract §2.2, OVERDUE).
+pub const OVERDUE_TEXT: &str = "review overdue";
+
+/// The urgency and Row 1 tail of a pull request row's status; `OVERDUE_TEXT` replaces `waiting for peer review` when overdue.
+#[must_use]
+pub fn row(status: Status, overdue: bool) -> (Urgency, &'static str) {
+    let _ = (status, overdue);
+    todo!("pr-post-bump: the overdue label")
+}
+
+/// A `pr-ready` item whose Row 1 tail is `OVERDUE_TEXT`.
+#[must_use]
+pub fn is_overdue(item: &Item) -> bool {
+    let _ = item;
+    todo!("pr-post-bump: the overdue label")
+}
+
 /// What the table reads of a pull request besides its row.
 struct Facts<'a> {
     row: &'a PullRequest,
@@ -141,7 +159,12 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
 
 /// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
 /// that points to it). A policy that does not resolve counts as post disabled.
-pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+pub fn conditions(
+    conn: &Connection,
+    home: &CpdHome,
+    now: OffsetDateTime,
+) -> Result<Vec<Condition>, CpdError> {
+    let _ = now; // stub: the overdue set is read here once implemented
     let columns: Vec<String> = pulls::COLUMNS
         .split(", ")
         .map(|c| format!("r.{c}"))
