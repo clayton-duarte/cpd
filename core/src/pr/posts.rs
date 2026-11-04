@@ -98,6 +98,33 @@ pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
         .optional()?)
 }
 
+/// A post due for a repeat bump: the thread (`ts`) of the first post in `channel`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bump {
+    pub plan: String,
+    pub workflow: String,
+    pub channel: String,
+    pub ts: String,
+}
+
+/// The due, eligible post with the smallest `COALESCE(last_posted_at, posted_at)` not in `skip` (contract §4.4).
+pub fn next_bump(
+    _conn: &Connection,
+    _due_before: &str,
+    _skip: &[(String, String)],
+) -> Result<Option<Bump>, CpdError> {
+    todo!()
+}
+
+/// Sets `last_posted_at` of the post to the transaction's time; `false` when no row has that key (contract §4.4).
+pub fn mark_bumped(_tx: &WriteTxn<'_>, _plan: &str, _workflow: &str) -> Result<bool, CpdError> {
+    todo!()
+}
+
+#[cfg(test)]
+#[path = "posts_bump_tests.rs"]
+mod posts_bump_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

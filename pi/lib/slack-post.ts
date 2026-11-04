@@ -10,7 +10,9 @@ export const SEND_TIMEOUT_MS = 30_000;
 export type Posted = { channel: string; ts: string; link: string };
 
 /** Sends `message`; the answer must be the message JSON for `channel`, else `slack_unparseable` (it may have been posted). */
-export async function postMessage(call: CallTool, channel: string, message: string): Promise<Posted> {
+export type Thread = { threadTs?: string; replyBroadcast?: boolean };
+export async function postMessage(call: CallTool, channel: string, message: string, thread?: Thread): Promise<Posted> {
+  if (thread !== undefined) throw new Error("not implemented");
   const text = await call("slack_send_message", { channel_id: channel, message, unfurl_app_links: false }, SEND_TIMEOUT_MS);
   const unparseable = () =>
     new Refusal("slack_unparseable", `Slack's answer to the send was not the message JSON (${text.length} bytes): the message may have been posted, so check the channel before running again.`, { bytes: text.length });

@@ -105,3 +105,50 @@ test("run as a script it reads the message from stdin and prints one JSON line",
   assert.equal(out.ok, false);
   assert.equal(out.error.code, "slack_helper_failed");
 });
+
+const ARGV = ["--coding-agent", "/x/index.js", "--channel", CHANNEL];
+const ENV = { PI_CODING_AGENT_DIR: "/agent" };
+async function run(extra: string[]) {
+  const f = fake(REAL);
+  const open = (async () => ({ call: f.call, close: async () => {} })) as any;
+  const r = await main([...ARGV, ...extra], ENV, "/cwd", "Bibbidi-bobbidi-bump!", open);
+  return { f, r };
+}
+
+test("a thread reply sends thread_ts", async () => {
+  const { f, r } = await run(["--thread-ts", TS]);
+  assert.equal(r.exit, 0);
+  assert.deepEqual(f.calls[0]!.args, { channel_id: CHANNEL, message: "Bibbidi-bobbidi-bump!", unfurl_app_links: false, thread_ts: TS });
+});
+
+test("reply broadcast true sends reply_broadcast true with the thread", async () => {
+  const { f, r } = await run(["--thread-ts", TS, "--reply-broadcast", "true"]);
+  assert.equal(r.exit, 0);
+  assert.deepEqual(f.calls[0]!.args, { channel_id: CHANNEL, message: "Bibbidi-bobbidi-bump!", unfurl_app_links: false, thread_ts: TS, reply_broadcast: true });
+});
+
+test("reply broadcast false sends no reply_broadcast", async () => {
+  const { f, r } = await run(["--thread-ts", TS, "--reply-broadcast", "false"]);
+  assert.equal(r.exit, 0);
+  assert.deepEqual(f.calls[0]!.args, { channel_id: CHANNEL, message: "Bibbidi-bobbidi-bump!", unfurl_app_links: false, thread_ts: TS });
+});
+
+test("reply broadcast without thread ts is a usage error", async () => {
+  const { f, r } = await run(["--reply-broadcast", "true"]);
+  assert.equal(r.exit, 2);
+  assert.equal((r.value as any).error.code, "usage");
+  assert.equal(f.calls.length, 0);
+});
+
+test("a reply broadcast value other than true or false is a usage error", async () => {
+  const { f, r } = await run(["--thread-ts", TS, "--reply-broadcast", "yes"]);
+  assert.equal(r.exit, 2);
+  assert.equal((r.value as any).error.code, "usage");
+  assert.equal(f.calls.length, 0);
+});
+
+test("without the thread flags the call is unchanged", async () => {
+  const f = fake(REAL);
+  await postMessage(f.call, CHANNEL, "hi", {});
+  assert.deepEqual(f.calls, [{ name: "slack_send_message", args: { channel_id: CHANNEL, message: "hi", unfurl_app_links: false }, timeoutMs: 30000 }]);
+});
