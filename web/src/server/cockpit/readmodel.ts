@@ -71,7 +71,7 @@ function oneOf<T extends string>(o: Obj, f: string, c: string, set: readonly T[]
 }
 function counts(o: Obj, c: string): PlanCounts {
   const k = obj(o["counts"], c, "counts");
-  return { draft: num(k, "draft", c), queued: num(k, "queued", c), running: num(k, "running", c), merged: num(k, "merged", c), failed: num(k, "failed", c), cancelled: num(k, "cancelled", c) };
+  return { draft: num(k, "draft", c), queued: num(k, "queued", c), running: num(k, "running", c), merged: num(k, "merged", c), failed: num(k, "failed", c), cancelled: num(k, "cancelled", c), ...(typeof k["merging"] === "number" && Number.isFinite(k["merging"]) ? { merging: k["merging"] } : {}) };
 }
 const cursorOf = (r: Reply, c: string): number => num(r, "events_cursor", c);
 
