@@ -1242,7 +1242,7 @@ fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
     assert_eq!(curated_ids(&fx), ["hs-d2"]);
     assert_eq!(
         retirement_rows(&fx),
-        [(s("hs-d2"), s("documented"), own, s("pending"))]
+        [(s("hs-d2"), s("documented"), own, s("approved"))]
     );
 }
 
