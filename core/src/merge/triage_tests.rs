@@ -126,6 +126,7 @@ fn rig(hook: Reply) -> Rig {
     let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
     std::fs::create_dir_all(home.root().join("policy/acme")).unwrap();
     std::fs::write(home.root().join("policy/acme/owner.toml"), OWNER_POLICY).unwrap();
+    std::fs::write(home.root().join("policy/acme/r.toml"), REPO_POLICY).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     let placeholder = "f".repeat(64);
     store
@@ -136,8 +137,8 @@ fn rig(hook: Reply) -> Rig {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '{}', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
-                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
-                   VALUES ('pay', 'api', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
+                 INSERT INTO workflows (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                   VALUES ('pay', 'api', 'r', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
                  INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"f.txt\", \"src/**\"]', '[\"b\"]', '[]', 'running', 0, '{placeholder}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, submitted_sha, submitted_at, driver_pid, started_at)
@@ -163,9 +164,12 @@ fn rig(hook: Reply) -> Rig {
 }
 
 /// cpd's compiled default policy, as a complete owner scope (so `policy_of_job` resolves).
+/// The repo scope: the merge Gate is local and its `pre-commit` is `make check`.
+const REPO_POLICY: &str = "[gate]\nmerge = \"local\"\n\n[hooks]\npre-commit = \"make check\"\n";
+
 const OWNER_POLICY: &str = "\
 [gate]
-merge = \"local\"
+merge = \"none\"
 pr = \"none\"
 text = \"\"
 
@@ -180,9 +184,6 @@ text = \"\"
 
 [code]
 text = \"\"
-
-[hooks]
-pre-commit = \"make check\"
 
 [tests]
 text = \"\"
@@ -373,6 +374,14 @@ fn the_flag_off_makes_no_classifier_call_and_retries() {
     assert_retried(&o);
     assert!(c.calls().is_empty(), "no classifier call with the flag off");
     assert!(o.retried[0].1.get("triage").is_none());
+    // The control: the same Gate failure with the flag on does ask the classifier.
+    let on = FakeClassifier::answering(chosen("spec_or_scope_violation", Some(0.99)));
+    run(failing(3), true, &on);
+    assert_eq!(
+        on.calls().len(),
+        1,
+        "with the flag on the classifier is asked once"
+    );
 }
 
 #[test]
