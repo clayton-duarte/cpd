@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { fakeExec, fakeFs, fakeTimers } from './fakes';
 import type { FollowProcess } from './follow';
 import { startAutoUpdate, type AutoUpdateDeps } from './start';
@@ -60,65 +60,63 @@ function setup(opts: { table?: Record<string, object>; files?: Record<string, st
   return { deps, fx, timers, spawned, logs, states, bootstraps, fetches };
 }
 
-describe('startAutoUpdate', () => {
-  it('returns bootstrap ready and starts following', async () => {
-    const t = setup();
-    const r = await startAutoUpdate(t.deps);
-    await flush();
-    expect(r.bootstrap).toEqual({ state: 'ready' });
-    expect(t.bootstraps).toEqual([{ state: 'ready' }]);
-    expect(t.spawned.map((s) => s.args)).toEqual([BASE]);
-    expect(t.fetches()).toBe(1);
-  });
+it('startAutoUpdate returns bootstrap ready and starts following', async () => {
+  const t = setup();
+  const r = await startAutoUpdate(t.deps);
+  await flush();
+  expect(r.bootstrap).toEqual({ state: 'ready' });
+  expect(t.bootstraps).toEqual([{ state: 'ready' }]);
+  expect(t.spawned.map((s) => s.args)).toEqual([BASE]);
+  expect(t.fetches()).toBe(1);
+});
 
-  it('does not follow when the bootstrap failed', async () => {
-    const t = setup({ files: {}, platform: 'darwin', env: {} });
-    const r = await startAutoUpdate(t.deps);
-    expect(r.bootstrap.state).toBe('failed');
-    expect(t.bootstraps.at(-1)?.state).toBe('failed');
-    expect(t.spawned).toEqual([]);
-    expect(t.fx.calls).toEqual([]);
-  });
+it('startAutoUpdate does not follow when the bootstrap failed', async () => {
+  const t = setup({ files: {}, platform: 'darwin', env: {} });
+  const r = await startAutoUpdate(t.deps);
+  expect(r.bootstrap.state).toBe('failed');
+  expect(t.bootstraps.at(-1)?.state).toBe('failed');
+  expect(t.spawned).toEqual([]);
+  expect(t.fx.calls).toEqual([]);
+});
 
-  it('stays off when no checkout is found but the cli exists', async () => {
-    const t = setup({ files: { '/home/u/.local/bin/cpd': '' }, platform: 'darwin', env: {} });
-    const r = await startAutoUpdate(t.deps);
-    expect(r.bootstrap).toEqual({ state: 'ready' });
-    expect(t.logs).toHaveLength(1);
-    expect(t.spawned).toEqual([]);
-    expect(t.fx.calls).toEqual([]);
-    expect(() => r.stop()).not.toThrow();
-  });
+it('startAutoUpdate stays off when no checkout is found but the cli exists', async () => {
+  const t = setup({ files: { '/home/u/.local/bin/cpd': '' }, platform: 'darwin', env: {} });
+  const r = await startAutoUpdate(t.deps);
+  expect(r.bootstrap).toEqual({ state: 'ready' });
+  expect(t.logs).toHaveLength(1);
+  expect(t.spawned).toEqual([]);
+  expect(t.fx.calls).toEqual([]);
+  expect(() => r.stop()).not.toThrow();
+});
 
-  it('runs a check for each pr-merged line', async () => {
-    const t = setup();
-    await startAutoUpdate(t.deps);
-    await flush();
-    expect(t.fetches()).toBe(1);
-    t.spawned[0]?.line(JSON.stringify({ kind: 'pr-merged', id: 7 }));
-    await flush();
-    expect(t.fetches()).toBe(2);
-    t.spawned[0]?.line(JSON.stringify({ kind: 'pr-merged', id: 8 }));
-    await flush();
-    expect(t.fetches()).toBe(3);
-  });
+it('startAutoUpdate runs a check for each pr-merged line', async () => {
+  const t = setup();
+  await startAutoUpdate(t.deps);
+  await flush();
+  expect(t.fetches()).toBe(1);
+  t.spawned[0]?.line(JSON.stringify({ kind: 'pr-merged', id: 7 }));
+  await flush();
+  expect(t.fetches()).toBe(2);
+  t.spawned[0]?.line(JSON.stringify({ kind: 'pr-merged', id: 8 }));
+  await flush();
+  expect(t.fetches()).toBe(3);
+});
 
-  it('logs a failed check instead of throwing', async () => {
-    const t = setup({ table: {} });
-    const r = await startAutoUpdate(t.deps);
-    await flush();
-    expect(r.bootstrap).toEqual({ state: 'ready' });
-    expect(t.logs.some((l) => l.includes('unexpected exec'))).toBe(true);
-  });
+it('startAutoUpdate logs a failed check instead of throwing', async () => {
+  const t = setup({ table: {} });
+  const r = await startAutoUpdate(t.deps);
+  await flush();
+  expect(r.bootstrap).toEqual({ state: 'ready' });
+  expect(t.logs.some((l) => l.includes('unexpected exec'))).toBe(true);
+});
 
-  it('stop stops following', async () => {
-    const t = setup();
-    const r = await startAutoUpdate(t.deps);
-    await flush();
-    r.stop();
-    expect(t.spawned[0]?.killed).toBe(true);
-    t.spawned[0]?.exit(0);
-    expect(t.timers.pending).toEqual([]);
-    expect(t.spawned).toHaveLength(1);
-  });
+it('startAutoUpdate stop stops following', async () => {
+  const t = setup();
+  const r = await startAutoUpdate(t.deps);
+  await flush();
+  r.stop();
+  expect(t.spawned[0]?.killed).toBe(true);
+  t.spawned[0]?.exit(0);
+  expect(t.timers.pending).toEqual([]);
+  expect(t.spawned).toHaveLength(1);
 });
