@@ -757,10 +757,14 @@ pub(super) fn with_a_record(fx: &mut Fx, at: &str) {
 
 pub(super) const CURATION: &str = "context_curation_min_records = 1\n";
 
+/// Distill's E9 tests are not about curation: the curate tick is off.
+const DISTILL_ONLY: &str =
+    "context_curation_min_records = 1\n[experimental]\nwrite_curation = false\n";
+
 /// A world and an engine with a record that is quiet: written 11 minutes before the clock's now.
 fn quiet_context() -> (World, Fx) {
     let w = world();
-    let mut fx = fx_on(&w, CURATION);
+    let mut fx = fx_on(&w, DISTILL_ONLY);
     w.advance(SECS(11 * 60));
     with_a_record(&mut fx, &w.stamp(0));
     (w, fx)
@@ -862,7 +866,7 @@ fn e9_takes_the_next_smaller_batch_when_a_run_exited_and_the_state_did_not_chang
 #[test]
 fn e9_waits_until_the_newest_record_is_ten_minutes_old_on_the_clock() {
     let w = world();
-    let mut fx = fx_on(&w, CURATION);
+    let mut fx = fx_on(&w, DISTILL_ONLY);
     with_a_record(&mut fx, &w.stamp(0));
     w.advance(MILLIS(599_999));
     tick_e9(&mut fx);
