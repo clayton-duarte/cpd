@@ -50,14 +50,14 @@ fn targets_of(
     Ok(targets)
 }
 
-/// The Context's read rows and records (the rows that point at a record go before it).
+/// The Context's rows that point at a record (its reads and provisional topics): they go before the records.
 pub(super) fn delete_records(tx: &rusqlite::Connection, id: &ContextId) -> Result<(), CpdError> {
     tx.execute(
         "DELETE FROM context_reads WHERE context = ?1",
         [id.as_str()],
     )?;
     tx.execute(
-        "DELETE FROM context_records WHERE context = ?1",
+        "DELETE FROM record_topics WHERE context = ?1",
         [id.as_str()],
     )?;
     Ok(())
@@ -186,6 +186,7 @@ pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
                     delete_rows(tx, plan)?;
                 }
                 delete_records(tx, &id)?;
+                tx.execute("DELETE FROM context_records WHERE context = ?1", [id.as_str()])?;
                 tx.execute("DELETE FROM sessions WHERE context = ?1 AND role = 'manager'", [id.as_str()])?;
                 let text = format!(
                     "Context {id} deleted: {} Plans, {} Jobs, {} Attempts, {} Sessions, {} worktrees, ~{} MB.",

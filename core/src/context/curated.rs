@@ -17,6 +17,8 @@ struct Loaded {
     records: Vec<Indexed>,
     retired: HashSet<RecordId>,
     curations: HashMap<String, (String, String)>,
+    /// `record_topics`: record to its provisional topic.
+    provisional: HashMap<String, String>,
 }
 
 fn load(conn: &Connection, context: &ContextId) -> Result<Loaded, CpdError> {
@@ -37,7 +39,14 @@ fn load(conn: &Connection, context: &ContextId) -> Result<Loaded, CpdError> {
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare("SELECT record, topic FROM record_topics WHERE context = ?1")?;
+    let provisional = stmt
+        .query_map([context.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     Ok(Loaded {
+        provisional,
         records,
         retired: retired(conn, context)?,
         curations,
@@ -70,8 +79,8 @@ pub fn by_topic(
         .collect())
 }
 
-/// The curated topics in force with their record counts, sorted by topic.
-pub fn topic_counts(
+/// The curated topics in force with their record counts, sorted by topic: curations only (`context show`).
+pub fn curated_topic_counts(
     conn: &Connection,
     context: &ContextId,
 ) -> Result<Vec<(String, usize)>, CpdError> {
@@ -79,6 +88,27 @@ pub fn topic_counts(
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for (_, topic, _) in curated(&loaded) {
         *counts.entry(topic.to_owned()).or_default() += 1;
+    }
+    Ok(counts.into_iter().collect())
+}
+
+/// The topics in force with their record counts, sorted by topic: a record in force counts once, under its curated
+/// topic, else its provisional topic (decision pro-d11).
+pub fn topic_counts(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<Vec<(String, usize)>, CpdError> {
+    let loaded = load(conn, context)?;
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for (_, record) in in_force_without(&loaded.records, i64::MAX, &loaded.retired) {
+        let id = record.id.to_string();
+        let topic = match loaded.curations.get(&id) {
+            Some((topic, _)) => Some(topic),
+            None => loaded.provisional.get(&id),
+        };
+        if let Some(topic) = topic {
+            *counts.entry(topic.clone()).or_default() += 1;
+        }
     }
     Ok(counts.into_iter().collect())
 }

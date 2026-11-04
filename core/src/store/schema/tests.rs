@@ -2744,8 +2744,8 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
         assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
-            Some(26)
-        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda` and `context_reads`
+            Some(27)
+        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda`, `context_reads` and `record_topics`
         let (txns_before, txns_after) = (
             rows_before.remove("txns").unwrap(),
             rows_after.remove("txns").unwrap(),
@@ -2795,6 +2795,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         // `20261103T0400-job-addenda` made `job_addenda`, and it is empty.
         assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         assert_eq!(rows_after.remove("context_reads"), Some(Vec::new())); // `context-reads`: a new empty table
+        assert_eq!(rows_after.remove("record_topics"), Some(Vec::new())); // `record-topics`: a new empty table
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));

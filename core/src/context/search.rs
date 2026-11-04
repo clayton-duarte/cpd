@@ -52,6 +52,8 @@ struct Snapshot {
     pub retired: HashMap<String, String>,
     pub successor: HashMap<String, String>,
     pub curations: HashMap<String, Curation>,
+    /// `record_topics`: record to its provisional topic (shown until a curation exists).
+    pub provisional: HashMap<String, String>,
     pub hidden: HashSet<String>,
 }
 
@@ -81,6 +83,7 @@ fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapshot, CpdError
             retired: retired_labels(conn, context)?,
             successor: successors(conn, context)?,
             curations: curated,
+            provisional: provisional(conn, context)?,
             hidden: pending_hidden(conn, context)?,
         })
     })
@@ -132,6 +135,26 @@ fn successors(conn: &Connection, context: &ContextId) -> Result<HashMap<String, 
         .collect())
 }
 
+/// The provisional topic of every record of `context` that has one.
+fn provisional(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<HashMap<String, String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT record, topic FROM record_topics WHERE context = ?1")?;
+    let rows = stmt.query_map([context.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The topic of a record: its curation's, else its provisional one.
+fn topic_of(snap: &Snapshot, id: &str) -> Option<String> {
+    match snap.curations.get(id) {
+        Some((topic, _, _)) => Some(topic.clone()),
+        None => snap.provisional.get(id).cloned(),
+    }
+}
+
 /// The curation (topic, short and clock) of every curated record of `context`.
 fn curations(
     conn: &Connection,
@@ -172,10 +195,11 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         .iter()
         .map(|(_, record)| {
             let id = record.id.to_string();
-            let (topic, short) = snap
+            let topic = topic_of(&snap, &id).unwrap_or_default();
+            let short = snap
                 .curations
                 .get(&id)
-                .map(|(topic, short, _)| (topic.clone(), short.clone()))
+                .map(|(_, short, _)| short.clone())
                 .unwrap_or_default();
             Doc {
                 id,
@@ -340,10 +364,7 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
                 seq: *seq,
                 score: hit.score,
                 in_force: snap.in_force.contains(&hit.id),
-                topic: snap
-                    .curations
-                    .get(&hit.id)
-                    .map(|(topic, _, _)| topic.clone()),
+                topic: topic_of(&snap, &hit.id),
                 id: hit.id,
             })
         })
