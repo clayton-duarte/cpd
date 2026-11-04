@@ -1,6 +1,6 @@
 // The Slack send helper of `cpd pr post` (docs/commands.md §21.8).
 //
-//   node pi/lib/slack-post.ts --coding-agent <…/pi-coding-agent/dist/index.js> --channel <C…>   (message on stdin)
+//   node pi/lib/slack-post.ts --coding-agent <…/pi-coding-agent/dist/index.js> --channel <C…> [--thread-ts <ts> [--reply-broadcast <true|false>]]   (message on stdin)
 //
 // Posts one message through pi's own MCP client and sign-in; prints one JSON line.
 import { connect, parseArgs, Refusal, type CallTool } from "./slack-channel.ts";
@@ -10,8 +10,12 @@ export const SEND_TIMEOUT_MS = 30_000;
 export type Posted = { channel: string; ts: string; link: string };
 
 /** Sends `message`; the answer must be the message JSON for `channel`, else `slack_unparseable` (it may have been posted). */
-export async function postMessage(call: CallTool, channel: string, message: string): Promise<Posted> {
-  const text = await call("slack_send_message", { channel_id: channel, message, unfurl_app_links: false }, SEND_TIMEOUT_MS);
+export type Thread = { threadTs?: string; replyBroadcast?: boolean };
+export async function postMessage(call: CallTool, channel: string, message: string, thread?: Thread): Promise<Posted> {
+  const params: Record<string, unknown> = { channel_id: channel, message, unfurl_app_links: false };
+  if (thread?.threadTs !== undefined) params.thread_ts = thread.threadTs;
+  if (thread?.replyBroadcast === true) params.reply_broadcast = true;
+  const text = await call("slack_send_message", params, SEND_TIMEOUT_MS);
   const unparseable = () =>
     new Refusal("slack_unparseable", `Slack's answer to the send was not the message JSON (${text.length} bytes): the message may have been posted, so check the channel before running again.`, { bytes: text.length });
   let parsed: any;
@@ -30,7 +34,10 @@ export async function postMessage(call: CallTool, channel: string, message: stri
 export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, stdin: string, open: typeof connect = connect): Promise<{ value: unknown; exit: number }> {
   let close: (() => Promise<void>) | undefined;
   try {
-    const args = parseArgs(argv, ["coding-agent", "channel"]);
+    const args = parseArgs(argv, ["coding-agent", "channel"], ["thread-ts", "reply-broadcast"]);
+    const broadcast = args["reply-broadcast"];
+    if (broadcast !== undefined && broadcast !== "true" && broadcast !== "false") throw new Refusal("usage", `--reply-broadcast ${JSON.stringify(broadcast)} must be true or false.`);
+    if (broadcast !== undefined && args["thread-ts"] === undefined) throw new Refusal("usage", "--reply-broadcast needs --thread-ts.");
     if (!/^C[A-Z0-9]+$/.test(args.channel!)) throw new Refusal("usage", `--channel ${JSON.stringify(args.channel)} is not a Slack channel id.`);
     const agentDir = env.PI_CODING_AGENT_DIR;
     if (!agentDir) throw new Refusal("usage", "PI_CODING_AGENT_DIR is not set: it names the agent directory of the pi release.");
@@ -38,7 +45,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, 
     if (length < 1 || length > MESSAGE_LIMIT) throw new Refusal("usage", `The message on stdin has ${length} characters; it must have 1 to ${MESSAGE_LIMIT}.`, { characters: length });
     const connection = await open(args["coding-agent"]!, agentDir, cwd);
     close = connection.close;
-    const posted = await postMessage(connection.call, args.channel!, stdin);
+    const posted = await postMessage(connection.call, args.channel!, stdin, args["thread-ts"] === undefined ? undefined : { threadTs: args["thread-ts"], replyBroadcast: broadcast === "true" });
     return { value: { ok: true, ...posted }, exit: 0 };
   } catch (e) {
     const refusal = e instanceof Refusal ? e : new Refusal("slack_helper_failed", `The helper failed: ${(e as Error).message}`, { message: (e as Error).message });
