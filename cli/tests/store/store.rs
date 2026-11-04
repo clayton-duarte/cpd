@@ -340,7 +340,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        31,
+        32,
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {

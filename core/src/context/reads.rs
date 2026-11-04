@@ -32,11 +32,11 @@ use crate::clock;
 use crate::error::ErrorCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum Channel {
     Pushed,
     Search,
     Show,
+    #[allow(dead_code)] // in the table's CHECK; no command writes it yet
     Shadow,
 }
 
@@ -59,7 +59,6 @@ pub(crate) struct Read {
 }
 
 /// The reads of a search page: 1-based rank in page order, the hit's score.
-#[allow(dead_code)]
 pub(crate) fn search_reads(hits: &[(RecordId, f64)]) -> Vec<Read> {
     hits.iter()
         .zip(1u32..)
@@ -147,7 +146,6 @@ pub(crate) fn env_session(store: &mut Store) -> Option<SessionId> {
 }
 
 /// Best-effort: log the reads of the environment's Session; every error is swallowed.
-#[allow(dead_code)]
 pub(crate) fn log_reads(store: &mut Store, context: &ContextId, channel: Channel, reads: &[Read]) {
     if let Some(session) = env_session(store) {
         let _ = log_reads_for(store, context, &session, channel, reads, &clock::now());
@@ -155,7 +153,7 @@ pub(crate) fn log_reads(store: &mut Store, context: &ContextId, channel: Channel
 }
 
 /// Best-effort: mark used what `text` cites; every error is swallowed.
-#[allow(dead_code)]
+#[allow(dead_code)] // the best-effort wrapper of mark_used_for, called by the best-effort tests only
 pub(crate) fn mark_used(store: &mut Store, context: &ContextId, text: &str, exclude: &[RecordId]) {
     if let Some(session) = env_session(store) {
         let _ = mark_used_for(store, context, &session, text, exclude);
