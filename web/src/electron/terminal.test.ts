@@ -529,9 +529,9 @@ test("host consumes wheel events and writes one step per threshold when the app 
   expect(h.wheel({ deltaY: 10, deltaMode: 0, clientX: 5, clientY: 6 })).toBe(true);
   expect(h.sentWrites).toEqual([]);
   expect(h.wheel({ deltaY: 40, deltaMode: 0, clientX: 5, clientY: 6 })).toBe(true);
-  expect(h.sentWrites).toEqual(["<D5,6>"]);
+  expect(h.sentWrites).toEqual(["<D5,6>".repeat(2)]);
   expect(h.wheel({ deltaY: -100, deltaMode: 0, clientX: 1, clientY: 2 })).toBe(true);
-  expect(h.sentWrites).toEqual(["<D5,6>", "<U1,2>".repeat(4)]);
+  expect(h.sentWrites).toEqual(["<D5,6>".repeat(2), "<U1,2>".repeat(4)]);
 });
 
 test("host leaves wheel events to the engine when the app does not own the wheel", async () => {
