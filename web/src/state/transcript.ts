@@ -28,16 +28,18 @@ function adopt(items: readonly TranscriptItem[]): readonly TranscriptItem[] {
 
 function mergeById(items: readonly TranscriptItem[], incoming: readonly TranscriptItem[]): TranscriptItem[] {
   const out = [...items];
+  const index = new Map<string, number>();
+  out.forEach((i, at) => index.set(i.id, at));
   for (const item of incoming) {
-    const at = out.findIndex((i) => i.id === item.id);
-    if (at >= 0) out[at] = item;
-    else out.push(item);
+    const at = index.get(item.id);
+    if (at !== undefined) out[at] = item;
+    else index.set(item.id, out.push(item) - 1);
   }
   return out;
 }
 
-export function setTail(window: Window, _previous?: TranscriptState): TranscriptState {
-  return { items: adopt(window.items), hasEarlier: window.hasEarlier, cursor: window.cursor, tailEpoch: 0 };
+export function setTail(window: Window, previous?: TranscriptState): TranscriptState {
+  return { items: adopt(window.items), hasEarlier: window.hasEarlier, cursor: window.cursor, tailEpoch: (previous?.tailEpoch ?? 0) + 1 };
 }
 export function prependEarlier(state: TranscriptState, window: Window): TranscriptState {
   const known = new Set(state.items.map((i) => i.id));
@@ -57,7 +59,13 @@ export function applyDelta(
   state: TranscriptState,
   d: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string },
 ): TranscriptState {
-  const at = state.items.findIndex((i) => i.id === d.itemId);
+  let at = -1;
+  for (let k = state.items.length - 1; k >= 0; k--) {
+    if (state.items[k]?.id === d.itemId) {
+      at = k;
+      break;
+    }
+  }
   if (at < 0) return state;
   const item = state.items[at];
   if (item === undefined || item.kind !== "assistant") {

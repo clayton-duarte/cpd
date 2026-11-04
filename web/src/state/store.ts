@@ -4,6 +4,7 @@ import type {
 } from "../protocol/domain.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
+import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
 import {
   appendItems, applyDelta, emptyTranscript, prependEarlier, setTail, updateItems, type TranscriptState,
@@ -71,19 +72,45 @@ const emptySession = (id: string): SessionView => ({
   busy: false, queued: [], pending: [], dialog: null, models: null, error: null,
 });
 
+/** Removes the oldest matching "sent" row per new user item (id not in `before`). */
+function echoed(pending: readonly PendingSubmission[], before: TranscriptState, incoming: readonly TranscriptItem[]): readonly PendingSubmission[] {
+  let rows = pending;
+  const known = new Set(before.items.map((i) => i.id));
+  for (const item of incoming) {
+    if (item.kind !== "user" || known.has(item.id)) continue;
+    const text = item.text.trim();
+    const at = rows.findIndex((p) => p.state === "sent" && p.text.trim() === text);
+    if (at >= 0) rows = rows.filter((_, k) => k !== at);
+  }
+  return rows;
+}
+
 function reduceSession(state: AppState, session: SessionView, message: ServerMessage): AppState {
   const set = (patch: Partial<SessionView>): AppState => ({ ...state, session: { ...session, ...patch } });
   switch (message.type) {
     case "session.attached":
       return set({ attached: true, capabilities: message.capabilities, title: message.title, ref: message.meta.ref, footer: message.meta.footer });
     case "session.window":
+      if (message.mode === "tail") {
+        return set({
+          transcript: setTail(message.window, session.transcript),
+          pending: session.pending.filter((p) => p.state !== "sent"),
+        });
+      }
       return set({
-        transcript: message.mode === "tail" ? setTail(message.window) : prependEarlier(session.transcript, message.window),
+        transcript: prependEarlier(session.transcript, message.window),
+        pending: echoed(session.pending, session.transcript, message.window.items),
       });
     case "session.append":
-      return set({ transcript: appendItems(session.transcript, message.items) });
+      return set({
+        transcript: appendItems(session.transcript, message.items),
+        pending: echoed(session.pending, session.transcript, message.items),
+      });
     case "session.update":
-      return set({ transcript: updateItems(session.transcript, message.items) });
+      return set({
+        transcript: updateItems(session.transcript, message.items),
+        pending: echoed(session.pending, session.transcript, message.items),
+      });
     case "session.delta":
       return set({ transcript: applyDelta(session.transcript, message) });
     case "session.status":
@@ -99,7 +126,11 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
     case "session.dialogResolved":
       return session.dialog !== null && session.dialog.id === message.dialogId ? set({ dialog: null }) : state;
     case "session.submitAck":
-      return set({ pending: session.pending.filter((p) => p.clientSubmissionId !== message.clientSubmissionId) });
+      return set({
+        pending: message.queued
+          ? session.pending.filter((p) => p.clientSubmissionId !== message.clientSubmissionId)
+          : session.pending.map((p) => (p.clientSubmissionId === message.clientSubmissionId ? { ...p, state: "sent" as const } : p)),
+      });
     case "session.error": {
       const id = message.clientSubmissionId;
       if (id === undefined) return set({ error: message.error });
@@ -158,8 +189,11 @@ export function reduce(state: AppState, action: StoreAction): AppState {
         ...state,
         session: { ...state.session, pending: [...state.session.pending, { ...action.submission, state: "sending" }] },
       };
-    case "serverBatch":
-      return state;
+    case "serverBatch": {
+      let next = state;
+      for (const message of action.messages) next = reduce(next, { type: "server", message });
+      return next;
+    }
     case "dismissPending":
       if (state.session === null) return state;
       return {
