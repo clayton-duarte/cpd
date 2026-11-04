@@ -1,10 +1,9 @@
 //! Read logging of `context show` (record, topic, pushed) and `context search` (decision pro-d10 item 5): a Session
-//! that reads leaves `context_reads` rows; the output never changes. Red until the logging exists.
+//! that reads leaves `context_reads` rows; the output never changes.
 
 use crate::common;
 
 use crate::context_on_demand::{CTX, curate, fast};
-use common::FakeBridge;
 use common::fx::Fx;
 use serde_json::Value;
 
@@ -144,33 +143,30 @@ fn pi_session_id_alone_is_honoured() {
     assert_eq!(rows(&fx), [row("m1-n3", "show")]);
 }
 
-/// The fake bridge the search tests use: the engine answers with `hits`.
+/// A search logs one `search` read per returned hit: rank its 1-based place in the page, score the hit's own.
 #[test]
 fn a_search_logs_ranked_search_reads() {
     let fx = fixture();
-    let bridge = FakeBridge::new(&fx.env);
-    fx.env.write_config(&format!(
-        "version = 1\nmachine = \"m1\"\n{}",
-        bridge.config()
-    ));
-    bridge.reply(
-        "stats",
-        r#"{"ok":true,"facts":3,"indexed_seq":1000000,"curated_at":"2999-01-01T00:00:00.000Z"}"#,
-    );
-    bridge.reply(
-        "search",
-        r#"{"ok":true,"hits":[{"fact_id":1,"record":"m1-n3","score":0.9},{"fact_id":2,"record":"m1-n1","score":0.4}]}"#,
-    );
-    let args = ["context", "search", "note", "--context", CTX];
+    let args = ["context", "search", "one OR two OR three", "--context", CTX];
     let plain: Value = fx.cpd(&args).ok();
     assert_eq!(rows(&fx), []);
     let logged = fx.cpd_with(fx.env.root(), &args, &as_session()).ok();
     assert_eq!(logged, plain, "the output is unchanged");
-    assert_eq!(
-        rows(&fx),
-        [
-            ("m1-n1".into(), "search".into(), Some(2), Some(0.4), None),
-            ("m1-n3".into(), "search".into(), Some(1), Some(0.9), None),
-        ]
-    );
+    let hits = logged["records"].as_array().expect("records");
+    assert!(hits.len() >= 2, "{logged}");
+    let mut expected: Vec<Row> = hits
+        .iter()
+        .enumerate()
+        .map(|(place, hit)| {
+            (
+                hit["id"].as_str().expect("id").into(),
+                "search".into(),
+                Some(place as i64 + 1),
+                Some(hit["score"].as_f64().expect("score")),
+                None,
+            )
+        })
+        .collect();
+    expected.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(rows(&fx), expected);
 }
