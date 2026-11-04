@@ -35,7 +35,7 @@ it("assistant thinking blocks are collapsed behind Thinking…", () => {
   const m = mount(<Transcript {...base} items={[assistant]} />);
   const d = m.container.querySelector('details[data-kind="thinking"]') as HTMLDetailsElement;
   expect(d.open).toBe(false);
-  expect(d.querySelector("summary")?.textContent).toBe("Thinking…");
+  expect(d.querySelector("summary")?.textContent).toBe("▸Thinking");
   expect(d.textContent).toContain("pondering");
   m.unmount();
 });
@@ -69,8 +69,8 @@ it("compaction renders as a fold", () => {
   const m = mount(<Transcript {...base} items={[item]} />);
   const d = m.container.querySelector('details[data-kind="compaction"]') as HTMLDetailsElement;
   expect(d.open).toBe(false);
-  expect(d.querySelector("summary")?.textContent).toContain("Compaction");
-  expect(d.querySelector("summary")?.textContent).toContain("1234");
+  expect(d.querySelector("summary")?.textContent).toContain("Context compacted");
+  expect(d.querySelector("summary")?.textContent).toContain("1.2k tokens");
   expect(d.textContent).toContain("earlier work summarised");
   m.unmount();
 });

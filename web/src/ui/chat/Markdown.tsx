@@ -43,10 +43,10 @@ export function Markdown(props: { text: string }): ReactElement | null {
   const segments = splitMarkdown(props.text);
   if (segments.length === 0) return null;
   return (
-    <>
+    <div className="typeset typeset-chat">
       {segments.map((s, i) => (
         <Segment key={i} text={s} />
       ))}
-    </>
+    </div>
   );
 }
