@@ -1073,20 +1073,27 @@ fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
     .with("pr", key.as_str())
 }
 
+/// Whether a stored open review thread is no longer among the polled open threads (a thread beyond the first 100 polled counts as closed).
+fn stored_thread_closed(row: &pulls::PullRequest, open_threads: &[String]) -> bool {
+    row.feedback.iter().flatten().any(|item| {
+        item.kind == super::comments::Kind::Thread && !open_threads.contains(&item.id)
+    })
+}
+
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
-/// whose stored feedback holds an open item (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
+/// whose stored feedback holds a review thread that is no longer open (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
 fn due_reads(
     owned: &[(PlanId, WorkflowKey, pulls::PullRequest)],
     seen: &[Listed],
 ) -> Vec<(String, i64)> {
     let mut due: Vec<(String, i64)> = Vec::new();
     for (_, _, row) in owned {
-        let open_feedback = row.feedback.as_ref().is_some_and(|items| !items.is_empty());
         let is_due = seen.iter().any(|l| {
             l.pr.repo == row.repo
                 && l.pr.number == row.number
                 && l.pr.state == PrState::Open
-                && (open_feedback || row.updated_at.as_deref() != Some(l.pr.updated_at.as_str()))
+                && (row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
+                    || stored_thread_closed(row, &l.pr.open_threads))
         });
         if is_due && !due.contains(&(row.repo.clone(), row.number)) {
             due.push((row.repo.clone(), row.number));
@@ -1166,6 +1173,7 @@ mod due_reads_tests {
                 merged_at: None,
                 base_ref: None,
                 default_branch: None,
+                open_threads: vec![],
             },
             membership: Default::default(),
         }

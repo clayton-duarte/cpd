@@ -809,7 +809,8 @@ pub fn inline_comments(
 macro_rules! pr_fields {
     () => {
         "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
-         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+         reviewThreads(first: 100) { nodes { id isResolved } }"
     };
 }
 
@@ -849,6 +850,8 @@ pub struct PolledPr {
     pub base_ref: Option<String>,
     /// The repo's default branch (`defaultBranchRef.name`); `None` when GitHub has none.
     pub default_branch: Option<String>,
+    /// The ids of the first 100 review threads that are not resolved: resolving one does not move `updatedAt` (pro-d231), so `due_reads` compares them with the stored open threads.
+    pub open_threads: Vec<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -985,6 +988,8 @@ struct RawPr {
     #[serde(rename = "mergeStateStatus")]
     merge_state: String,
     commits: RawCommits,
+    #[serde(rename = "reviewThreads")]
+    review_threads: RawThreads,
     /// Selected by the direct read only (`read_absent`); `None` when the reply has no such key, `Some(Null)` for a null.
     #[serde(rename = "viewerDidAuthor", default)]
     viewer_did_author: Option<bool>,
@@ -994,6 +999,18 @@ struct RawPr {
         deserialize_with = "present"
     )]
     viewer_review_request: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawThreads {
+    nodes: Vec<RawThread>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawThread {
+    id: String,
+    #[serde(rename = "isResolved")]
+    resolved: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1135,6 +1152,13 @@ impl Reply<'_> {
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             merged_at: raw.merged_at,
+            open_threads: raw
+                .review_threads
+                .nodes
+                .into_iter()
+                .filter(|t| !t.resolved)
+                .map(|t| t.id)
+                .collect(),
         })
     }
 }
