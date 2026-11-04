@@ -4,12 +4,16 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, shell as electronShell, Tray } from "electron";
 import * as nodePty from "node-pty";
+import { createServices, realBoundaries } from "../server/plugin.ts";
+import { watchAttention } from "./attention.ts";
 import { CHANNELS } from "./channels.ts";
+import { registerWebuiIpc } from "./cockpit-ipc.ts";
 import { resolveLoginPath } from "./env.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController, modeFilePath } from "./mode.ts";
+import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
 import type { MenuTemplate } from "./menu.ts";
 import { startPty } from "./pty.ts";
 import type { PtyBackend } from "./pty.ts";
@@ -39,7 +43,47 @@ async function main(): Promise<void> {
   const env = { ...process.env, PATH: loginPath };
   const cpdHome = process.env["CPD_HOME"] ?? path.join(os.homedir(), ".cpd");
 
-  const win = new BrowserWindow({
+  const assets = resolveAssetPaths({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
+  let win!: BrowserWindow;
+  // Assigned after the controller exists; the native shell is set up before the window.
+  let controllerRef: ReturnType<typeof createModeController> | undefined;
+  const nativeShell = setupNativeShell({
+    platform: process.platform,
+    app,
+    nativeTheme,
+    nativeImage,
+    createTray: (image) => {
+      const tray = new Tray(image as Electron.NativeImage);
+      return {
+        setImage: (next) => tray.setImage(next as Electron.NativeImage),
+        setToolTip: (text) => tray.setToolTip(text),
+        setContextMenu: (menu) => tray.setContextMenu(menu as Electron.Menu),
+        destroy: () => tray.destroy(),
+      };
+    },
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    isWindowFocused: () => win?.isFocused() ?? false,
+    assets,
+    actions: {
+      openCockpit: () => {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        controllerRef?.setMode("webui").catch((error: unknown) => console.error(error));
+      },
+      setMode: (mode) => {
+        controllerRef?.setMode(mode).catch((error: unknown) => console.error(error));
+      },
+      quit: () => app.quit(),
+    },
+  });
+
+  win = new BrowserWindow({
+    icon: assets.icon,
     width: 1200,
     height: 800,
     backgroundColor: "#1c1a20",
@@ -76,7 +120,30 @@ async function main(): Promise<void> {
     platform: process.platform,
     onError: (error) => console.error(error),
   });
+  controllerRef = controller;
   await controller.init();
+
+  const openExternal = (url: string): unknown => electronShell.openExternal(url);
+  win.webContents.setWindowOpenHandler(createExternalLinkHandler(openExternal));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url === win.webContents.getURL()) return;
+    event.preventDefault();
+    void openExternal(url);
+  });
+
+  const services = createServices(realBoundaries(env));
+  const started = services.cockpit.start().catch((error: unknown) => {
+    console.error(error);
+    throw error;
+  });
+  const webuiIpc = registerWebuiIpc({
+    ipc: ipcMain,
+    newConnection: services.newConnection,
+    started,
+    onError: (error) => console.error(error),
+  });
+  const attention = started.then(() => watchAttention(services.cockpit, nativeShell.setAttention));
+  attention.catch(() => undefined);
 
   const sinks = {
     data: (chunk: string) => send(CHANNELS.ptyData, chunk),
@@ -91,7 +158,13 @@ async function main(): Promise<void> {
     readWasm: async () => new Uint8Array(await fs.readFile(wasmPath)),
     getMode: controller.getMode,
   });
-  app.on("before-quit", () => ipc.dispose());
+  app.on("before-quit", () => {
+    ipc.dispose();
+    void webuiIpc.dispose();
+    void attention.then((watch) => watch.dispose()).catch(() => undefined);
+    nativeShell.dispose();
+    void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
+  });
   app.on("window-all-closed", () => app.quit());
 
   const devUrl = process.env["CPD_ELECTRON_DEV_URL"];

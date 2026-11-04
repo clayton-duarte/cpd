@@ -1,4 +1,6 @@
 import { builtinModules } from "node:module";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // One config, three builds selected by CPD_ELECTRON_TARGET (see build:electron).
@@ -10,6 +12,7 @@ export default defineConfig(
   target === "renderer"
     ? {
         base: "./",
+        plugins: [react(), tailwindcss()],
         build: {
           outDir: "dist-electron/renderer",
           emptyOutDir: true,
