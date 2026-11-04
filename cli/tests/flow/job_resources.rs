@@ -333,7 +333,7 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
 #[test]
 fn resource_list_shows_job_tenants_and_command_tenants() {
     let (fx, repo) = resource::tenancy_world("[resources.e2e-port]\nslots = 3\n");
-    let _command = resource::hold(&fx, "e2e-port", resource::COMMAND_RECORD);
+    let _command = resource::hold(&fx, "e2e-port", &common::command_record());
     resource::job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", resource::API_AT);
     // A Job of another repo's pool of the same name is no tenant of this pool.
     resource::job_tenant(
@@ -345,7 +345,7 @@ fn resource_list_shows_job_tenants_and_command_tenants() {
 
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
-    let command: Value = serde_json::from_str(resource::COMMAND_RECORD).unwrap();
+    let command: Value = serde_json::from_str(&common::command_record()).unwrap();
     assert_eq!(
         resource::declared_only(&out),
         json!([{
