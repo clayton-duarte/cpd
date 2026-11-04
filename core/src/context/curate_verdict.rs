@@ -1,6 +1,7 @@
 //! Write-time curation: the kind gate, the kev-4b screen and the judge confirmation rule.
 
 use super::curate::{Judged, Verdict};
+use super::curation::Approval;
 use crate::ids::{RecordId, RecordKind};
 
 /// The confidence kev-4b needs to accept an independent pair.
@@ -68,6 +69,7 @@ pub enum Outcome {
         reason: Reason,
         topic: String,
         short: String,
+        approval: Approval,
     },
     Contradicts {
         neighbour: RecordId,
@@ -121,5 +123,10 @@ pub fn confirm(new: Side, neighbour: Side, kev: Option<Screen>, judged: Judged) 
         reason,
         topic: judged.topic,
         short: judged.short,
+        approval: if kev.is_some() {
+            Approval::Models
+        } else {
+            Approval::Pending
+        },
     }
 }

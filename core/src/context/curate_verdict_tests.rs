@@ -4,6 +4,7 @@ use super::curate::{Judged, Verdict};
 use super::curate_verdict::{
     GATE, Gate, Outcome, Reason, Screen, Screened, Side, Why, confirm, gate, screen,
 };
+use super::curation::Approval;
 use crate::ids::{RecordId, RecordKind};
 
 fn id(s: &str) -> RecordId {
@@ -191,6 +192,7 @@ fn confirm_duplicate_retires_the_new_record_and_keeps_the_older() {
             reason: Reason::Duplicate,
             topic: "the topic".into(),
             short: "the short".into(),
+            approval: Approval::Pending,
         }
     );
     // The neighbour is the newer one: it is retired, the new record is kept.
@@ -203,6 +205,7 @@ fn confirm_duplicate_retires_the_new_record_and_keeps_the_older() {
             reason: Reason::Duplicate,
             topic: "the topic".into(),
             short: "the short".into(),
+            approval: Approval::Pending,
         }
     );
 }
@@ -219,6 +222,7 @@ fn confirm_supersedes_retires_the_older_neighbour() {
             reason: Reason::Superseded,
             topic: "the topic".into(),
             short: "the short".into(),
+            approval: Approval::Pending,
         }
     );
 }
@@ -268,4 +272,63 @@ fn confirm_independent_from_the_judge_stays_independent() {
         let out = run(9, 3, k, judged(Verdict::Independent, ""));
         assert_eq!(out, Outcome::Independent { why: None });
     }
+}
+
+#[test]
+fn agreement_with_kev_retires_with_models_approval() {
+    let out = run(
+        9,
+        3,
+        Some(kev(Verdict::Duplicate, 0.9)),
+        judged(Verdict::Duplicate, "for the cache"),
+    );
+    let p = pair();
+    assert_eq!(
+        out,
+        Outcome::Retire {
+            record: p.new,
+            target: p.old,
+            reason: Reason::Duplicate,
+            topic: "the topic".into(),
+            short: "the short".into(),
+            approval: Approval::Models,
+        }
+    );
+}
+
+#[test]
+fn supersedes_with_kev_agreement_retires_with_models_approval() {
+    let out = run(
+        9,
+        3,
+        Some(kev(Verdict::Supersedes, 0.9)),
+        judged(Verdict::Supersedes, "sqlite"),
+    );
+    let p = pair();
+    assert_eq!(
+        out,
+        Outcome::Retire {
+            record: p.old,
+            target: p.new,
+            reason: Reason::Superseded,
+            topic: "the topic".into(),
+            short: "the short".into(),
+            approval: Approval::Models,
+        }
+    );
+}
+
+#[test]
+fn no_kev_retires_pending_approval() {
+    let out = run(9, 3, None, judged(Verdict::Duplicate, "postgres"));
+    assert!(
+        matches!(
+            out,
+            Outcome::Retire {
+                approval: Approval::Pending,
+                ..
+            }
+        ),
+        "{out:?}"
+    );
 }

@@ -7,7 +7,7 @@ use crate::common;
 use crate::context_on_demand::{CTX, curate, fast};
 use common::TestEnv;
 use common::fx::Fx;
-use cpd_core::context::curation::{Proposal, Reason, propose};
+use cpd_core::context::curation::{Approval, Proposal, Reason, propose};
 use cpd_core::ids::ContextId;
 use serde_json::Value;
 
@@ -120,6 +120,7 @@ fn a_retired_record_is_gone_from_its_topic() {
             record: "m1-n1".parse().unwrap(),
             reason: Reason::Duplicate,
             target: "m1-n2".into(),
+            approval: Approval::Pending,
         }],
     )
     .unwrap();
@@ -212,11 +213,13 @@ fn topics_counts_only_records_in_force() {
                 record: "m1-n3".parse().unwrap(),
                 reason: Reason::Duplicate,
                 target: "m1-n1".into(),
+                approval: Approval::Pending,
             },
             Proposal {
                 record: "m1-n5".parse().unwrap(),
                 reason: Reason::Duplicate,
                 target: "m1-n1".into(),
+                approval: Approval::Pending,
             },
         ],
     )

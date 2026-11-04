@@ -7,7 +7,7 @@ use std::fs;
 
 use common::fx::Fx;
 use common::refused;
-use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
+use cpd_core::context::curation::{Approval, Curation, Proposal, Reason, propose};
 use cpd_core::ids::ContextId;
 use serde_json::{Value, json};
 
@@ -53,6 +53,7 @@ fn proposal(record: &str, reason: Reason, target: &str) -> Proposal {
         record: record.parse().unwrap(),
         reason,
         target: target.into(),
+        approval: Approval::Pending,
     }
 }
 

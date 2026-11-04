@@ -88,6 +88,111 @@ pub struct Proposal {
     pub record: RecordId,
     pub reason: Reason,
     pub target: String,
+    pub approval: Approval,
+}
+
+/// Who decided a proposal when it is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Approval {
+    Pending,
+    Models,
+    GitGrep,
+}
+
+impl Approval {
+    pub fn decided_by(self) -> Option<&'static str> {
+        match self {
+            Approval::Pending => None,
+            Approval::Models => Some("kev-4b+gemini-3.8-flash"),
+            Approval::GitGrep => Some("git-grep"),
+        }
+    }
+}
+
+/// One sweep decision on a pending retirement.
+#[derive(Clone, Debug)]
+pub struct Sweep {
+    pub record: RecordId,
+    pub approve: bool,
+}
+
+/// A pending duplicate or superseded retirement awaiting the models.
+#[derive(Clone, Debug)]
+pub struct PendingPair {
+    pub record: RecordId,
+    pub target: RecordId,
+    pub reason: Reason,
+}
+
+/// Decides pending rows as the models; returns the (approved, rejected) counts changed. A row no longer pending is
+/// skipped; an approval also needs the record and its target in force. One `records-retired` Event when any changed.
+pub fn decide_pending(
+    store: &mut Store,
+    context: &ContextId,
+    decisions: &[Sweep],
+) -> Result<(usize, usize), CpdError> {
+    let by = Approval::Models.decided_by();
+    store.write("context curate", |tx| {
+        let at = clock::now();
+        let force = State::read(tx, context)?.in_force_ids();
+        let (mut approved, mut rejected) = (Vec::new(), Vec::new());
+        for d in decisions {
+            let record = d.record.to_string();
+            let target: Option<String> = tx
+                .query_row(
+                    "SELECT target FROM record_retirements WHERE context = ?1 AND record = ?2 AND status = 'pending'",
+                    [context.as_str(), record.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(target) = target else { continue };
+            if d.approve && !(force.contains(&record) && force.contains(&target)) {
+                continue;
+            }
+            let status = if d.approve { "approved" } else { "rejected" };
+            tx.execute(
+                "UPDATE record_retirements SET status = ?3, decided_at = ?4, decided_by = ?5 WHERE context = ?1 AND record = ?2",
+                rusqlite::params![context.as_str(), record, status, at, by],
+            )?;
+            if d.approve { &mut approved } else { &mut rejected }.push(record);
+        }
+        if !approved.is_empty() || !rejected.is_empty() {
+            let text = format!("Retirements of {context} decided: {} approved, {} rejected.", approved.len(), rejected.len());
+            append(tx, NewEvent::records_retired(text, context.as_str(), &approved, &rejected).context(context.clone()))?;
+        }
+        Ok((approved.len(), rejected.len()))
+    })
+}
+
+/// The oldest pending duplicate/superseded rows, at most `limit`.
+pub fn pending_pairs(
+    store: &mut Store,
+    context: &ContextId,
+    limit: usize,
+) -> Result<Vec<PendingPair>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT r.record, r.target, r.reason
+               FROM record_retirements r
+               JOIN context_records c ON c.context = r.context AND c.id = r.record
+              WHERE r.context = ?1 AND r.status = 'pending' AND r.reason IN ('duplicate', 'superseded')
+              ORDER BY r.proposed_at, c.seq LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![context.as_str(), limit as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(record, target, reason)| {
+                Ok(PendingPair {
+                    record: RecordId::parse(&record)?,
+                    target: RecordId::parse(&target)?,
+                    reason: if reason == "duplicate" { Reason::Duplicate } else { Reason::Superseded },
+                })
+            })
+            .collect()
+    })
 }
 
 /// Writes `curations` and pending retirements for `proposals` and appends `context-curated`, in one transaction. A record that already has a
@@ -114,8 +219,26 @@ pub fn propose_rejecting(
     proposals: &[Proposal],
     rejected: usize,
 ) -> Result<usize, CpdError> {
+    for p in proposals {
+        let paired = match p.reason {
+            Reason::Documented => p.approval != Approval::Models,
+            _ => p.approval != Approval::GitGrep,
+        };
+        if !paired {
+            return Err(CpdError::new(
+                ErrorCode::Internal,
+                format!(
+                    "Record {} is proposed as {} with an approval that does not fit.",
+                    p.record,
+                    p.reason.as_str()
+                ),
+            )
+            .with("record", p.record.to_string()));
+        }
+    }
     store.write("context curate", |tx| {
         let at = clock::now();
+        let mut auto: Vec<String> = Vec::new();
         for c in curations {
             tx.execute(
                 "INSERT INTO record_curations (context, record, topic, short, curated_at)
@@ -134,11 +257,17 @@ pub fn propose_rejecting(
             })
             .collect();
         for p in &proposals {
-            tx.execute(
-                "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', ?5) ON CONFLICT (context, record) DO NOTHING",
-                rusqlite::params![context.as_str(), p.record.to_string(), p.reason.as_str(), p.target, at],
+            let by = p.approval.decided_by();
+            let status = if by.is_some() { "approved" } else { "pending" };
+            let decided_at = by.map(|_| at.as_str());
+            let inserted = tx.execute(
+                "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at, decided_at, decided_by)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT (context, record) DO NOTHING",
+                rusqlite::params![context.as_str(), p.record.to_string(), p.reason.as_str(), p.target, status, at, decided_at, by],
             )?;
+            if inserted > 0 && by.is_some() {
+                auto.push(p.record.to_string());
+            }
             let curated: bool = tx.query_row(
                 "SELECT EXISTS (SELECT 1 FROM record_curations WHERE context = ?1 AND record = ?2)",
                 [context.as_str(), p.record.to_string().as_str()],
@@ -158,6 +287,10 @@ pub fn propose_rejecting(
             tx,
             NewEvent::context_curated(text, context.as_str(), curations.len() as u64, rejected as u64, proposals.len() as u64).context(context.clone()),
         )?;
+        if !auto.is_empty() {
+            let text = format!("Retirements of {context} decided: {} approved, 0 rejected.", auto.len());
+            append(tx, NewEvent::records_retired(text, context.as_str(), &auto, Vec::<String>::new()).context(context.clone()))?;
+        }
         Ok(proposals.len())
     })
 }
@@ -330,3 +463,7 @@ pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
         json!({"context": context, "approved": approve, "rejected": reject}),
     ))
 }
+
+#[cfg(test)]
+#[path = "curation_auto_tests.rs"]
+mod curation_auto_tests;

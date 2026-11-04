@@ -16,7 +16,10 @@ use super::curate_vectors::{VectorStore, content_hash};
 use super::curate_verdict::{
     Gate, Outcome, Reason, Screen, Screened, Side, Why, confirm, gate, screen,
 };
-use super::curation::{Curation, NotCurable, Proposal, not_curable, propose_rejecting};
+use super::curation::{
+    Approval, Curation, NotCurable, Proposal, Sweep, decide_pending, not_curable, pending_pairs,
+    propose_rejecting,
+};
 use super::distill::{Lock, State};
 use super::{ContextRow, Select};
 use crate::classifier::{Choice, ClassifierPort, Label, PiClassifier};
@@ -37,6 +40,8 @@ pub const DIMS: usize = 768;
 pub(super) const EMBED_MODEL: &str = "vertex/gemini-embedding-2";
 /// Missing vectors embedded per run, newest first.
 pub const FILL: usize = 25;
+/// Pending rows the sweep checks per run, oldest first.
+const SWEEP: usize = 3;
 
 pub struct Models<'a> {
     pub classifier: &'a dyn ClassifierPort,
@@ -102,7 +107,7 @@ pub fn next_record(
 
 /// What one run counted.
 #[derive(Default)]
-struct Tally {
+pub(super) struct Tally {
     free: usize,
     judged: usize,
     disagreed: usize,
@@ -110,6 +115,8 @@ struct Tally {
     rejected: usize,
     kev_unreachable: bool,
     retire: Vec<(RecordId, RecordId, Reason)>,
+    /// The retired records both models agreed on (written approved).
+    approved: HashSet<RecordId>,
     labels: Vec<(RecordId, String, String)>,
     /// `(record, topic, model)`: a provisional topic (`record_topics`).
     provisional: Vec<(RecordId, String, String)>,
@@ -197,7 +204,7 @@ fn topics(store: &mut Store, context: &ContextId) -> Result<HashMap<RecordId, St
 }
 
 /// kev-4b's answer for one pair: `Err(())` for an error or a label that is none of the four.
-fn ask_kev(models: &Models, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()> {
+fn ask_kev(classifier: &dyn ClassifierPort, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()> {
     let part =
         |c: &Candidate| json!({"id": c.id.to_string(), "kind": c.kind.as_str(), "text": c.text});
     let state = json!({"new": part(pair.new), "neighbour": part(pair.other)});
@@ -206,7 +213,7 @@ fn ask_kev(models: &Models, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()
         question: QUESTION,
         labels: &LABELS,
     };
-    let chosen = match models.classifier.choose(&choice) {
+    let chosen = match classifier.choose(&choice) {
         Ok(chosen) => chosen,
         Err(e) => {
             tally.kev_unreachable |= matches!(
@@ -297,6 +304,122 @@ fn provisional_topic(
     Ok(())
 }
 
+/// A pair checked by both models.
+pub(super) struct Verified {
+    pub outcome: Outcome,
+    /// kev-4b could not answer: the judge was not asked and `outcome` means nothing.
+    pub kev_unreachable: bool,
+}
+
+/// kev-4b, the screen, the judge and the confirmation of one pair (`new` the later record, `other` the earlier).
+/// `Err` only from the judge. kev-4b's usage and failure are recorded in `tally`.
+pub(super) fn verify_pair(
+    classifier: &dyn ClassifierPort,
+    judge: &dyn JudgePort,
+    new: &Candidate,
+    other: &Candidate,
+    new_topic: Option<&str>,
+    other_topic: Option<&str>,
+    tally: &mut Tally,
+) -> Result<Verified, CpdError> {
+    let pair = Pair {
+        new,
+        other,
+        new_topic,
+        other_topic,
+    };
+    let kev = ask_kev(classifier, &pair, tally);
+    let kev_unreachable = tally.kev_unreachable;
+    let outcome = match screen(kev) {
+        _ if kev_unreachable => Outcome::Independent { why: None },
+        Screened::AcceptIndependent => Outcome::Independent { why: None },
+        Screened::Escalate(kev) => {
+            let request = JudgeRequest {
+                new: view(new, new_topic),
+                neighbour: Some(view(other, other_topic)),
+            };
+            let judged = judge.judge(&request)?;
+            confirm(side(new), side(other), kev, judged)
+        }
+    };
+    Ok(Verified {
+        outcome,
+        kev_unreachable,
+    })
+}
+
+/// Decides the oldest pending duplicate/superseded rows (at most [`SWEEP`]) as the models; stops at the first kev-4b
+/// failure or judge error. Returns the (approved, rejected) counts decided.
+fn sweep(
+    store: &mut Store,
+    context: &ContextId,
+    models: &Models,
+) -> Result<(usize, usize), CpdError> {
+    let pairs = pending_pairs(store, context, SWEEP)?;
+    if pairs.is_empty() {
+        return Ok((0, 0));
+    }
+    let state = store.read(|conn| State::read(conn, context))?;
+    let all = candidates(&state);
+    let topics = topics(store, context)?;
+    let mut decisions = Vec::new();
+    // The sweep keeps no kev-4b telemetry: it reports only what it decided.
+    let mut tally = Tally::default();
+    for row in pairs {
+        let (Some(a), Some(b)) = (
+            all.iter().find(|c| c.id == row.record),
+            all.iter().find(|c| c.id == row.target),
+        ) else {
+            continue;
+        };
+        let (new, other) = if a.seq > b.seq { (a, b) } else { (b, a) };
+        let topic = |c: &Candidate| topics.get(&c.id).map(String::as_str);
+        let Ok(verified) = verify_pair(
+            models.classifier,
+            models.judge,
+            new,
+            other,
+            topic(new),
+            topic(other),
+            &mut tally,
+        ) else {
+            break;
+        };
+        if verified.kev_unreachable {
+            break;
+        }
+        let approve = match verified.outcome {
+            Outcome::Contradicts { .. } => continue,
+            Outcome::Independent { .. } => false,
+            Outcome::Retire {
+                record,
+                target,
+                reason,
+                approval,
+                ..
+            } => {
+                let same = match reason {
+                    Reason::Duplicate => super::curation::Reason::Duplicate,
+                    Reason::Superseded => super::curation::Reason::Superseded,
+                } == row.reason;
+                if record == row.record && target == row.target && same {
+                    if approval != Approval::Models {
+                        continue;
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        decisions.push(Sweep {
+            record: row.record,
+            approve,
+        });
+    }
+    decide_pending(store, context, &decisions)
+}
+
 fn judge_pair(
     models: &Models,
     pair: &Pair,
@@ -323,8 +446,12 @@ fn judge_pair(
             reason,
             topic,
             short,
+            approval,
         } => {
             if label_ok(&topic, &short) {
+                if approval == Approval::Models {
+                    tally.approved.insert(record.clone());
+                }
                 if !tally.labels.iter().any(|(r, _, _)| *r == record) {
                     tally.labels.push((record.clone(), topic, short));
                 }
@@ -364,7 +491,7 @@ fn check_pairs(
             new_topic: topics.get(&new.id).map(String::as_str),
             other_topic: topics.get(&other.id).map(String::as_str),
         };
-        let kev = ask_kev(models, &pair, tally);
+        let kev = ask_kev(models.classifier, &pair, tally);
         match screen(kev) {
             Screened::AcceptIndependent => tally.free += 1,
             Screened::Escalate(kev) => judge_pair(models, &pair, kev, tally)?,
@@ -457,6 +584,11 @@ fn write(
                 Reason::Superseded => super::curation::Reason::Superseded,
             },
             target: target.to_string(),
+            approval: if tally.approved.contains(record) {
+                Approval::Models
+            } else {
+                Approval::Pending
+            },
         })
         .collect();
     if !curations.is_empty() || !proposals.is_empty() {
@@ -545,6 +677,25 @@ pub fn curate_with(
     if !config.experimental.write_curation {
         return Ok(json!({"context": context.as_str(), "skipped": "off"}));
     }
+    let swept = sweep(store, context, models)?;
+    let mut out = curate_record(store, home, context, models, now, clock, started, only)?;
+    if swept != (0, 0) {
+        out["swept"] = json!({"approved": swept.0, "rejected": swept.1});
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)] // the injected ports, clock and start of one run
+fn curate_record(
+    store: &mut Store,
+    home: &CpdHome,
+    context: &ContextId,
+    models: &Models,
+    now: OffsetDateTime,
+    clock: &dyn Clock,
+    started: std::time::Instant,
+    only: Option<&RecordId>,
+) -> Result<Value, CpdError> {
     let state = store.read(|conn| State::read(conn, context))?;
     let vectors = VectorStore::at(home);
     let (mut checked, mut fts_only) = match vectors.checked(context) {

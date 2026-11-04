@@ -17,11 +17,18 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::curation::{Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting};
+use super::curate::Candidate;
+use super::curate_judge::{BifrostJudge, JudgePort};
+use super::curate_run::{Tally, verify_pair};
+use super::curate_verdict::{Outcome, Reason as VerdictReason};
+use super::curation::{
+    Approval, Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting,
+};
 use super::distill_known::known_md;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
-use crate::config::{Config, Letter, Tier};
+use crate::classifier::{ClassifierPort, PiClassifier};
+use crate::config::{Config, Letter, Tier, locate_pi};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -450,11 +457,153 @@ impl Batch<'_> {
             record: id.clone(),
             reason,
             target: retire.target.clone(),
+            approval: match reason {
+                Reason::Documented => Approval::GitGrep,
+                Reason::Duplicate | Reason::Superseded => Approval::Pending,
+            },
         })
     }
 }
 
+/// A checked output after the models verified its duplicate and superseded proposals.
+pub(super) struct Verified {
+    pub(super) checked: Checked,
+    /// Proposals removed because the models did not confirm them.
+    pub(super) dropped: usize,
+}
+
+/// Verifies each duplicate/superseded proposal of `checked` with kev-4b and the judge (the pair rule of curate):
+/// agreed is approved, disagreed or rejected is dropped (its curation kept), and an unreachable kev-4b or a judge
+/// error leaves it pending and ends the asking. A documented proposal is never sent to the models.
+pub(super) fn verify(
+    classifier: &dyn ClassifierPort,
+    judge: &dyn JudgePort,
+    state: &State,
+    mut checked: Checked,
+) -> Result<Verified, CpdError> {
+    let candidate = |id: &RecordId| {
+        state
+            .records
+            .iter()
+            .find(|(_, r)| r.id == *id)
+            .map(|(seq, r)| Candidate {
+                id: r.id.clone(),
+                seq: *seq,
+                kind: r.kind(),
+                at: r.at.clone(),
+                text: r.text.clone(),
+            })
+    };
+    let mut dropped = 0;
+    let mut asking = true;
+    let mut kept = Vec::new();
+    for mut proposal in std::mem::take(&mut checked.proposals) {
+        if proposal.reason == Reason::Documented || !asking {
+            kept.push(proposal);
+            continue;
+        }
+        let (Some(a), Some(b)) = (
+            candidate(&proposal.record),
+            RecordId::parse(&proposal.target)
+                .ok()
+                .and_then(|t| candidate(&t)),
+        ) else {
+            kept.push(proposal);
+            continue;
+        };
+        let (new, other) = if a.seq > b.seq { (&a, &b) } else { (&b, &a) };
+        // distill logs no kev-4b telemetry: each pair's tally is discarded with its verdict.
+        let verified = match verify_pair(
+            classifier,
+            judge,
+            new,
+            other,
+            None,
+            None,
+            &mut Tally::default(),
+        ) {
+            Ok(v) if !v.kev_unreachable => v,
+            _ => {
+                asking = false;
+                kept.push(proposal);
+                continue;
+            }
+        };
+        let agreed = match verified.outcome {
+            Outcome::Retire {
+                record,
+                target,
+                reason,
+                approval,
+                ..
+            } => {
+                let reason = match reason {
+                    VerdictReason::Duplicate => Reason::Duplicate,
+                    VerdictReason::Superseded => Reason::Superseded,
+                };
+                (record == proposal.record
+                    && target.to_string() == proposal.target
+                    && reason == proposal.reason)
+                    .then_some(approval)
+            }
+            Outcome::Independent { .. } | Outcome::Contradicts { .. } => None,
+        };
+        match agreed {
+            Some(approval) => {
+                proposal.approval = approval;
+                kept.push(proposal);
+            }
+            None => dropped += 1,
+        }
+    }
+    checked.proposals = kept;
+    Ok(Verified { checked, dropped })
+}
+
+/// The classifier and the judge, built on demand.
+pub(super) type Models = (Box<dyn ClassifierPort>, Box<dyn JudgePort>);
+
+/// `verify`, with the models built by `build` only when a duplicate/superseded proposal needs them: a run without
+/// one never builds them (so never locates pi).
+pub(super) fn verify_lazy(
+    build: &dyn Fn() -> Result<Models, CpdError>,
+    state: &State,
+    checked: Checked,
+) -> Result<Verified, CpdError> {
+    if checked
+        .proposals
+        .iter()
+        .all(|p| p.reason == Reason::Documented)
+    {
+        return Ok(Verified {
+            checked,
+            dropped: 0,
+        });
+    }
+    let (classifier, judge) = build()?;
+    verify(classifier.as_ref(), judge.as_ref(), state, checked)
+}
+
 impl Run<'_> {
+    /// Builds kev-4b and the judge; fails loud with `pi_not_found` when pi is not installed.
+    fn models(&self) -> Result<Models, CpdError> {
+        let agent_dir = locate_pi()?.agent_dir;
+        let lib = self.config.pi_adapter_dir()?.join("lib");
+        Ok((
+            Box::new(PiClassifier::new(
+                self.ports.runner.clone(),
+                lib.join("classify.ts"),
+                agent_dir,
+                self.home,
+            )),
+            Box::new(BifrostJudge::new(
+                self.home,
+                self.config,
+                self.ports.runner.clone(),
+            )),
+        ))
+    }
+
     /// The run (contract §4.6 "The distill run"), the lock held.
     fn run(mut self, state: &State, batch_size: usize) -> Result<Value, CpdError> {
         let uncurated = state.uncurated();
@@ -493,6 +642,12 @@ impl Run<'_> {
             Err(Fault::Invalid(problems, kept)) => return Err(self.invalid(upto, &problems, &kept)),
             Err(Fault::Pi(failure, tail)) => return Err(self.pi_failed(upto, &failure, tail)),
         };
+        let Verified { checked, dropped } = verify_lazy(&|| self.models(), state, checked)?;
+        let approved = checked
+            .proposals
+            .iter()
+            .filter(|p| p.approval != Approval::Pending)
+            .count();
         let curated = checked.curations.len();
         let retire = propose_rejecting(
             self.store,
@@ -514,6 +669,8 @@ impl Run<'_> {
             "curated": curated,
             "rejected": rejected_json(&checked.rejected),
             "retire": retire,
+            "approved": approved,
+            "dropped": dropped,
             "remaining": uncurated.len() - curated,
             "run": ran.figures(),
         }))
@@ -1241,6 +1398,10 @@ fn tail_of(log: &Path, offset: u64) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
+
+#[cfg(test)]
+#[path = "distill_verify_tests.rs"]
+mod distill_verify_tests;
 
 #[cfg(test)]
 mod tests {

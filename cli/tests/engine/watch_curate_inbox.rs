@@ -6,7 +6,7 @@ use crate::common;
 use std::fs;
 
 use common::fx::Fx;
-use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
+use cpd_core::context::curation::{Approval, Curation, Proposal, Reason, propose};
 use cpd_core::context::{By, Draft, Record};
 use cpd_core::ids::{ContextId, RecordId};
 use serde_json::Value;
@@ -75,6 +75,7 @@ impl Curate {
                 record: RecordId::parse(id).unwrap(),
                 reason: Reason::Duplicate,
                 target: ids.last().unwrap().to_string(),
+                approval: Approval::Pending,
             })
             .collect();
         propose(

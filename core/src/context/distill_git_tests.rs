@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
+use super::curation::Approval;
 use super::distill::{Batch, grep_hits_with};
 use super::render::Indexed;
 use super::{By, Draft, Record};
@@ -321,6 +322,66 @@ fn a_documented_target_that_is_a_grep_hit_of_the_record_in_a_second_repo_is_acce
         (0, 1),
         "{:?}",
         checked.rejected
+    );
+}
+
+fn line(text_id: &str, reason: &str, target: &str) -> String {
+    format!(
+        r#"{{"id":"{text_id}","topic":"t-{text_id}","short":"s","retire":{{"reason":"{reason}","target":"{target}"}}}}"#
+    )
+}
+
+/// A batch of `hs-d1..hs-d4` (seq 1..4) whose only grep hit is `hs-d4`'s `/r/a:docs/d4.md`.
+fn mixed_checked() -> super::distill::Checked {
+    let records = [
+        decision(1, "hs-d1"),
+        decision(2, "hs-d2"),
+        decision(3, "hs-d3"),
+        decision(4, "hs-d4"),
+    ];
+    let refs: Vec<&Indexed> = records.iter().collect();
+    let batch = Batch {
+        records: &refs,
+        in_force: refs.iter().map(|(seq, r)| (r.id.clone(), *seq)).collect(),
+        hits: HashMap::from([(id("hs-d4"), vec!["/r/a:docs/d4.md".to_owned()])]),
+    };
+    let text = [
+        line("hs-d1", "superseded", "hs-d2"),
+        line("hs-d3", "duplicate", "hs-d2"),
+        line("hs-d4", "documented", "/r/a:docs/d4.md"),
+    ]
+    .join("\n");
+    let checked = batch.check(&text);
+    assert!(checked.rejected.is_empty(), "{:?}", checked.rejected);
+    checked
+}
+
+#[test]
+fn a_documented_proposal_carries_the_git_grep_approval() {
+    let checked = mixed_checked();
+    let documented = checked
+        .proposals
+        .iter()
+        .find(|p| p.record == id("hs-d4"))
+        .unwrap();
+    assert_eq!(documented.approval, Approval::GitGrep);
+}
+
+#[test]
+fn a_duplicate_or_superseded_proposal_starts_pending() {
+    let checked = mixed_checked();
+    let approvals: Vec<(String, Approval)> = checked
+        .proposals
+        .iter()
+        .map(|p| (p.record.to_string(), p.approval))
+        .collect();
+    assert_eq!(
+        approvals,
+        [
+            ("hs-d1".to_owned(), Approval::Pending),
+            ("hs-d3".to_owned(), Approval::Pending),
+            ("hs-d4".to_owned(), Approval::GitGrep),
+        ]
     );
 }
 

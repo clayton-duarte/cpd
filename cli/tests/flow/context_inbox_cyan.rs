@@ -7,7 +7,7 @@ use crate::common;
 use std::fs;
 
 use common::TestEnv;
-use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
+use cpd_core::context::curation::{Approval, Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::ContextId;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
@@ -50,6 +50,7 @@ fn fx() -> TestEnv {
         record: "hs-n1".parse().unwrap(),
         reason: Reason::Duplicate,
         target: "hs-n2".into(),
+        approval: Approval::Pending,
     }];
     propose(
         &mut env.store(),
