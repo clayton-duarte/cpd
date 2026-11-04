@@ -79,7 +79,7 @@ describe('installCli', () => {
     expect(pending.map((t) => t.ms)).toEqual([1234]);
     expect(logs.length).toBeGreaterThan(0);
     expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(false);
-    pending[0].fn();
+    pending[0]?.fn();
     expect(await p).toEqual({ ok: true });
     expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(true);
   });
