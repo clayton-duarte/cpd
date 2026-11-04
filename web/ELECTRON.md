@@ -1,6 +1,6 @@
 # Electron app
 
-The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
+The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
 
 ## Run
 
@@ -239,10 +239,24 @@ export interface TerminalHostDeps {
 export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): void }>;
 ```
 
-- `DANGO_THEME` values (Dango v3, from dotfiles themes/Dango): foreground `#d8d2cc`, background `#1c1a20`, cursor `#ecaec7`, cursorAccent `#1c1a20`, selectionBackground `#5a504a`, selectionForeground `#d8d2cc`; black `#5a504a`, red `#e17f6e`, green `#8da96e`, yellow `#c29653`, blue `#7aa2ce`, magenta `#ca88a3`, cyan `#67ada7`, white `#aba3af`; brightBlack `#87808c`, brightRed `#ffa796`, brightGreen `#b3cd96`, brightYellow `#e4bb7f`, brightBlue `#a1c6ef`, brightMagenta `#ecaec7`, brightCyan `#92d1ca`, brightWhite `#f3ead9`. `TERMINAL_FONT` = `{ fontFamily: '"Maple Mono", monospace', fontSize: 13 }` (ligatures: ghostty-web has no ligature option and draws per cell).
-- `startTerminalHost`, in this order: `engine.open()`; `engine.fit()`; register `bridge.onPtyData(engine.write)`; register `bridge.onPtyExit(code => engine.write("\r\n[cpd tui exited with code " + code + "]\r\n"))`; `engine.onData(bridge.writePty)`; `resize.observe(() => engine.fit())`; `engine.setClipboardWriteHandler(text => { deps.clipboard.writeText(text).catch(deps.onError); return true; })`; `const mode = await bridge.getMode()` and apply it; `bridge.onMode(apply)`; `await bridge.startPty(engine.size())`; and only then `engine.onResize(size => bridge.resizePty(size))`. Every listener is registered before `startPty` is called, so no pty data is lost, and no resize reaches main before the pty exists.
+- `DANGO_THEME` values (Dango v3, from dotfiles themes/Dango): foreground `#d8d2cc`, background `#1c1a20`, cursor `#ecaec7`, cursorAccent `#1c1a20`, selectionBackground `#5a504a`, selectionForeground `#d8d2cc`; black `#5a504a`, red `#e17f6e`, green `#8da96e`, yellow `#c29653`, blue `#7aa2ce`, magenta `#ca88a3`, cyan `#67ada7`, white `#aba3af`; brightBlack `#87808c`, brightRed `#ffa796`, brightGreen `#b3cd96`, brightYellow `#e4bb7f`, brightBlue `#a1c6ef`, brightMagenta `#ecaec7`, brightCyan `#92d1ca`, brightWhite `#f3ead9`. `TERMINAL_FONT` = `{ fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace', fontSize: 13, fontWeight: 300 }` (ligatures: ghostty-web has no ligature option and draws per cell). `fontSize` stays 13; zoom changes it at runtime only (see below) and nothing persists it.
+- `startTerminalHost`, in this order: `engine.open()`; `engine.fit()`; register `bridge.onPtyData(engine.write)`; register `bridge.onPtyExit(code => engine.write("\r\n[cpd tui exited with code " + code + "]\r\n"))`; `engine.onData(bridge.writePty)`; `resize.observe(() => engine.fit())`; `engine.setClipboardWriteHandler(text => { deps.clipboard.writeText(text).catch(deps.onError); return true; })`; `engine.setKeyHandler(handleKey)` and `engine.setWheelHandler(handleWheel)` (below); `const mode = await bridge.getMode()` and apply it; `bridge.onMode(apply)`; `await bridge.startPty(engine.size())`; and only then `engine.onResize(size => bridge.resizePty(size))`. Every listener is registered before `startPty` is called, so no pty data is lost, and no resize reaches main before the pty exists.
 - Apply mode `m`: `engine.setPaused(m !== "tui")`; `view.showTerminal(m === "tui")`; `engine.focus()` only when `m === "tui"`.
 - The returned `dispose()` calls every unsubscribe function it got (bridge listeners, the resize unobserve) and `engine.dispose()`.
+- Key handler `handleKey(e: KeyEventLike): boolean`, first match wins, otherwise `false` so ghostty-web handles the key (Cmd+C, copy of its selection, is unchanged):
+  1. `shiftEnterSequence(e)` is not `null`: `engine.input(seq)` writes the CSI-u sequence `\x1b[13;2u` to the pty (through `onData`); return `true`. Plain Enter is untouched.
+  2. `isCmdV(e)`: `deps.clipboard.readText()`, then `engine.paste(text)` when the text is not empty (an empty clipboard pastes nothing); return `true` at once, so ghostty calls `preventDefault` and the browser's native paste does not run a second time. A read rejection goes to `deps.onError`; the key stays consumed.
+  3. `zoomAction(e)` is not `null`: `engine.setFontSize(nextFontSize(engine.fontSize(), action))`, then `engine.fit()` so `term.resize` fires `onResize` and the pty resizes; return `true`. Zoom is not persisted. It acts only while the terminal handles keys (TUI, focused), because the terminal is paused and hidden in WebUI.
+- Wheel handler `handleWheel(e: WheelEventLike): boolean`:
+  - `engine.appOwnsWheel()` is `false` (plain scrollback): return `false`, so ghostty-web scrolls its scrollback as today.
+  - Otherwise (mouse tracking or alternate screen): `steps = wheel.push(e.deltaY, e.deltaMode, engine.cellHeight())` with `const wheel = createWheelAccumulator()` made once per host. When `steps !== 0`, `engine.input(engine.wheelStep(steps < 0 ? "up" : "down", e.clientX, e.clientY).repeat(Math.abs(steps)))`. Return `true` even when `steps` is `0`, so ghostty does not also scroll for a sub-threshold delta.
+- Pinned semantics of the helpers:
+  - `shiftEnterSequence`: returns `"\x1b[13;2u"` for `key === "Enter"` with `shiftKey` only (no ctrl, alt or meta) and `isComposing` false; otherwise `null`.
+  - `zoomAction`: needs `metaKey` and no `ctrlKey` or `altKey`. `key` `"="` or `"+"` is `"in"` (Cmd+Shift+= types `+`, so shift is ignored); `"-"` or `"_"` is `"out"`; `"0"` is `"reset"`; anything else `null`.
+  - `nextFontSize`: `"in"` adds 1, `"out"` subtracts 1, both clamped to `FONT_SIZE_MIN` (9) through `FONT_SIZE_MAX` (28); `"reset"` returns `FONT_SIZE_DEFAULT` (13).
+  - `createWheelAccumulator().push`: converts `deltaY` to px (`deltaMode` 0 = px; 1 = lines, `deltaY * cellHeight`; 2 = pages, treated as 10 lines, `10 * deltaY * cellHeight`). Threshold is `max(24, 1.5 * cellHeight)` px. It returns the signed number of whole steps (negative = up, same sign as `deltaY`) and keeps the sub-threshold remainder. A delta of the opposite sign first zeroes the remainder.
+  - `isCmdV`: `code === "KeyV"` with `metaKey` and no `ctrlKey`, `altKey` or `shiftKey`.
+- Menu accelerators do not fire in TUI (menu.ts section), so the key handler, not the editMenu, does Cmd+V in TUI. The editMenu roles serve WebUI.
 
 ### Composition roots (not unit-tested, thin)
 
@@ -256,6 +270,17 @@ export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): 
 - Resize: `FitAddon.fit()` ignores calls within 50 ms of one, so the final size was dropped. `fitToContainer` uses `proposeDimensions()` and calls `term.resize` once.
 - Fonts: `TERMINAL_FONT` falls back to Symbols Nerd Font Mono and MesloLGS, and renderer.ts awaits `document.fonts.ready` before opening the terminal.
 - Pointer: electron.html forces `cursor: default` on `#terminal` and its canvas.
+
+#### Terminal polish (pro-d30, pro-d32)
+
+User bug reports pro-d30 and pro-d32, and decision pro-d33. Each item is pinned above; this list is the index.
+
+- Shift+Enter sends the CSI-u sequence `\x1b[13;2u` to the pty (`handleKey`), not a plain Enter.
+- Zoom: Cmd+= / Cmd++ / Cmd+- / Cmd+0 step the font 1px within 9..28, reset to 13, and refit the pty. Not persisted.
+- Wheel: when the app owns the wheel (mouse tracking or alternate screen), one step per `max(24, 1.5 * cellHeight)` px of accumulated delta, sent to the pty; plain scrollback stays with ghostty-web.
+- Cmd+V in TUI reads the clipboard and pastes (bracketed when the app asked). Cmd+C is unchanged (ghostty-web).
+- Menu: `editMenu` is on every platform, so Cmd+C, Cmd+V, Cmd+X, Cmd+A and Cmd+Z work in WebUI.
+- `TERMINAL_FONT` is `fontWeight: 300`, `fontSize: 13`.
 
 ## Assets (web/build/)
 
