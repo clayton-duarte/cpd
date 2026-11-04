@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import type { Runner, SessionState, Stat } from "../../protocol/domain.ts";
+import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
 
 export interface StatusBarProps {
   readonly runner: Runner | null;
@@ -10,14 +11,42 @@ export interface StatusBarProps {
   readonly onResetLayout?: () => void;
 }
 
-// Stub: showCost, onToggleCost and onResetLayout are not rendered yet.
+const BTN = "h-[22px] rounded-[4px] px-2 text-fg-strong hover:bg-row-hover";
+
 export function StatusBar(props: StatusBarProps): ReactElement {
-  const { runner, state, version } = props;
+  const { runner, state, version, showCost = false, onToggleCost, onResetLayout } = props;
+  const d = state === null ? null : sessionDisplay[dotDisplay({ state, attention: null })];
   return (
-    <>
-      <span data-part="runner">Runner: {runner ?? "none"}</span>{" "}
-      <span data-part="state">State: {state ?? "none"}</span>{" "}
-      <span data-part="version">cpd: {version !== null && version.state === "known" ? version.value : "unknown"}</span>
-    </>
+    <div data-part="status-bar" className="flex h-full w-full items-center gap-1 overflow-hidden px-2 text-[11.5px]">
+      {onResetLayout === undefined ? null : (
+        <button type="button" data-part="reset-layout" onClick={onResetLayout} className={BTN}>Reset layout</button>
+      )}
+      {onToggleCost === undefined ? null : (
+        <button
+          type="button"
+          data-part="cost-toggle"
+          aria-pressed={showCost}
+          onClick={onToggleCost}
+          className={`${BTN} font-mono ${showCost ? "bg-surface-pressed" : ""}`}
+        >
+          $
+        </button>
+      )}
+      <span className="flex-1" />
+      <span data-part="status-right" className="flex items-center gap-2 font-mono text-meta text-muted-foreground">
+        <span data-part="runner" className={runner === null ? "text-fg-dim" : undefined}>Runner: {runner ?? "none"}</span>
+        <span aria-hidden="true" className="text-line">│</span>
+        <span
+          data-part="state"
+          {...(d === null ? {} : { "data-tone": d.tone, "data-glyph": d.glyph })}
+          className={`flex items-center gap-1.5 ${state === null ? "text-fg-dim" : ""}`}
+        >
+          {d === null ? null : <span aria-hidden="true" className={glyphClass[d.glyph]} />}
+          State: {state ?? "none"}
+        </span>
+        <span aria-hidden="true" className="text-line">│</span>
+        <span data-part="version">cpd: {version !== null && version.state === "known" ? version.value : "unknown"}</span>
+      </span>
+    </div>
   );
 }
