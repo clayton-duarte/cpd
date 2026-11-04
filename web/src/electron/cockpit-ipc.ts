@@ -1,3 +1,4 @@
+import { CHANNELS } from "./channels.ts";
 import type { createServices } from "../server/plugin.ts";
 
 export interface WebContentsLike {
@@ -19,6 +20,35 @@ export interface WebuiIpcDeps {
 }
 
 export function registerWebuiIpc(deps: WebuiIpcDeps): { dispose(): Promise<void> } {
-  void deps;
-  throw new Error("not implemented");
+  const hubs = new Map<WebContentsLike, ReturnType<WebuiIpcDeps["newConnection"]>>();
+  const listener = (event: { sender: WebContentsLike }, payload: unknown): void => {
+    const sender = event.sender;
+    let hub = hubs.get(sender);
+    if (hub === undefined) {
+      const created = deps.newConnection((m) => {
+        if (!sender.isDestroyed()) sender.send(CHANNELS.webS2c, m);
+      });
+      hub = created;
+      hubs.set(sender, created);
+      sender.once("destroyed", () => {
+        hubs.delete(sender);
+        void created.close();
+      });
+    }
+    const target = hub;
+    void deps.started.then(() => target.handle(payload)).catch(deps.onError);
+  };
+  deps.ipc.on(CHANNELS.webC2s, listener);
+  let disposed = false;
+  return {
+    async dispose() {
+      if (!disposed) {
+        disposed = true;
+        deps.ipc.removeListener(CHANNELS.webC2s, listener);
+      }
+      const live = [...hubs.values()];
+      hubs.clear();
+      await Promise.all(live.map((h) => h.close()));
+    },
+  };
 }

@@ -72,7 +72,10 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
   const apply = (mode: UiMode): void => {
     engine.setPaused(mode !== "tui");
     deps.view.showTerminal(mode === "tui");
-    if (mode === "tui") engine.focus();
+    if (mode === "tui") {
+      engine.fit();
+      engine.focus();
+    }
   };
   apply(await bridge.getMode());
   unsubscribes.push(bridge.onMode(apply));
