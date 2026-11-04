@@ -213,6 +213,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -288,6 +289,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
