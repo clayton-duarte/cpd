@@ -466,7 +466,7 @@ impl RecordId {
                 ErrorCode::InvalidRecordId,
                 "Context record id",
                 s,
-                "<machine>-<letter><n>, letter one of d n q a p, n from 1",
+                "<machine>-<letter><n>, letter one of d n q a p b, n from 1",
             )
         };
         // A machine name has no '-', so the separator is the first one.

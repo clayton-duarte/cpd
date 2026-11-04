@@ -245,6 +245,9 @@ pub struct ShowArgs {
     /// Log the shown records as pushed reads (the pi turn start)
     #[arg(long, requires = "since")]
     pushed: bool,
+    /// A record id, as --record
+    #[arg(value_name = "record", conflicts_with_all = ["record", "since", "topic"])]
+    record_positional: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
