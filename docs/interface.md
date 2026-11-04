@@ -9,8 +9,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context list` | List the Contexts (§3.2) | Lead, Manager | |
 | `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager, Worker | |
 | `cpd context topics` | List the curated topics in force with their record counts (§3.3a) | Lead, Manager, Worker | |
-| `cpd context search` | Search the Context's records, ranked by the holographic engine (§3.3) | Lead, Manager, Worker | |
-| `cpd context reindex` | Rebuild the Context's holographic engine index (§3.3) | Lead, Manager | |
+| `cpd context search` | Search the Context's records, ranked by in-process full-text search (§3.4) | Lead, Manager, Worker | |
 | `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
 | `cpd context note` | Record a note (§3.4) | Lead, Manager | |
 | `cpd context ask` | Record a question (§3.4) | Lead, Manager | |

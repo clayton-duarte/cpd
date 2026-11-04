@@ -43,7 +43,9 @@ mod distill_known;
 mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
-pub mod engine;
+mod fts;
+#[cfg(test)]
+mod fts_tests;
 pub mod inforce;
 pub(crate) mod legacy;
 mod list;
@@ -60,7 +62,6 @@ mod query;
 #[cfg(test)]
 mod query_tests;
 mod record;
-mod reindex;
 mod rename;
 pub(crate) mod render;
 mod search;
@@ -97,10 +98,8 @@ pub enum Command {
     Show(ShowArgs),
     /// List the curated topics in force with their record counts (§3.3a)
     Topics(TopicsArgs),
-    /// Search the Context's records, ranked by the holographic engine (§3.3)
+    /// Search the Context's records, ranked by in-process full-text search (§3.4)
     Search(search::SearchArgs),
-    /// Rebuild the Context's holographic engine index (§3.3)
-    Reindex(reindex::ReindexArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
     /// Record a note (§3.4)
@@ -351,7 +350,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Show(args) => show::show(args),
         Command::Topics(args) => topics::topics(args),
         Command::Search(args) => search::search(args),
-        Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
             no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = Draft::Decision {

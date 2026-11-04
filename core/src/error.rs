@@ -122,8 +122,6 @@ error_codes! {
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
-    // The holographic engine rail (contract §4.6, hs-d677).
-    EngineFailed = "engine_failed" => Failure,
     // A `durable` Worker's transcript has not grown for `timeouts.stall_minutes` (contract §3.4 A4, hs-d798):
     // the code of the driver's informational `error` Event. Never a command's failure (like `cleanup_failed`).
     WorkerStalled = "worker_stalled" => Failure,
@@ -266,7 +264,6 @@ error_codes! {
     OwnerInUse = "owner_in_use" => Refused,
     HostApprovalRequired = "host_approval_required" => Refused,
     NotAManager = "not_a_manager" => Refused,
-    EngineDisabled = "engine_disabled" => Refused,
     // The tier-preset switch (commands.md §14.6): the registry refused the preset, before any write.
     PresetProviderUnconfigured = "preset_provider_unconfigured" => Refused,
     PresetModelUnoffered = "preset_model_unoffered" => Refused,
@@ -284,7 +281,6 @@ error_codes! {
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
-    EngineMissing = "engine_missing" => NotFound,
     PresetUnknown = "preset_unknown" => NotFound,
 
     // Exit 5: timeout.
