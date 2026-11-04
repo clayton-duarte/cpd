@@ -276,9 +276,9 @@ const call = async (f: Fixture, toolName: string, input: unknown, nested = false
 };
 const refused = (v: Verdict) => v?.block === true && typeof v.reason === "string" && v.reason.startsWith("φ: loop guard:");
 const READ_REASON =
-  "φ: loop guard: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.";
+  "φ: loop guard: this tool call was NOT executed: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.";
 const TOTAL_REASON =
-  "φ: loop guard: more than 30 tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.";
+  "φ: loop guard: this tool call was NOT executed: more than 30 read-only tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.";
 const bash = (f: Fixture, command: string, nested = false) => call(f, "bash", { command }, nested);
 const reads = async (f: Fixture, n: number, command = "rg foo") => {
   const out: Verdict[] = [];
@@ -410,21 +410,53 @@ test("loop guard intra-turn: every listed state-mutating cpd subcommand resets t
 
 test("loop guard intra-turn: the 31st tool call of a turn is refused with the total calls reason", async (t) => {
   const f = await freshStart(t);
-  for (let i = 1; i <= 30; i++) assert.ok(!refused(await bash(f, "cpd job add x --title t")), `call ${i} passes`);
-  assert.deepEqual(await bash(f, "cpd job add x --title t"), { block: true, reason: TOTAL_REASON });
-  await reset(f);
-
-  // both bounds exceeded: the total-calls reason wins
-  for (let i = 0; i < 18; i++) await bash(f, "cpd job add x --title t");
-  passes(await reads(f, 12), "reads up to 30");
+  for (let i = 1; i <= 30; i++) assert.ok(!refused(await bash(f, i % 10 === 0 ? "cpd job add x --title t" : "rg foo")), `call ${i} passes`);
   assert.deepEqual(await bash(f, "rg foo"), { block: true, reason: TOTAL_REASON });
 });
 
 test("loop guard intra-turn: after the 30th call even a state-mutating call is refused", async (t) => {
   const f = await freshStart(t);
-  for (let i = 0; i < 12; i++) await bash(f, "rg foo");
-  for (let i = 0; i < 18; i++) await bash(f, i % 6 === 5 ? "cpd job add x --title t" : "rg foo");
+  for (let i = 0; i < 30; i++) await bash(f, i % 10 === 9 ? "cpd job add x --title t" : "rg foo");
+  assert.ok(refused(await bash(f, "rg foo")));
   assert.deepEqual(await bash(f, "cpd job add x --title t"), { block: true, reason: TOTAL_REASON });
+});
+
+test("state writes do not count toward the turn tool limit", async (t) => {
+  const f = await freshStart(t);
+  for (let i = 1; i <= 40; i++) {
+    const v = await bash(f, i % 2 ? "rg foo" : "cpd job add x --title t");
+    assert.ok(!refused(v), `call ${i} passes`);
+  }
+});
+
+test("reads interleaved with state writes still stop at the 31st read", async (t) => {
+  const f = await freshStart(t);
+  for (let i = 1; i <= 30; i++) {
+    assert.ok(!refused(await bash(f, "rg foo")), `read ${i} passes`);
+    assert.ok(!refused(await bash(f, "cpd job add x --title t")), `write after read ${i} passes`);
+  }
+  assert.deepEqual(await bash(f, "rg foo"), { block: true, reason: TOTAL_REASON });
+});
+
+test("a state write is refused once 30 reads have passed", async (t) => {
+  const f = await freshStart(t);
+  for (let i = 1; i <= 30; i++) {
+    assert.ok(!refused(await bash(f, "rg foo")), `read ${i} passes`);
+    if (i % 10 === 0 && i < 30) await bash(f, "cpd job add x --title t");
+  }
+  assert.deepEqual(await bash(f, "rg foo"), { block: true, reason: TOTAL_REASON });
+  assert.deepEqual(await bash(f, "cpd job add x --title t"), { block: true, reason: TOTAL_REASON });
+});
+
+test("both refusal texts say the call was not executed", async (t) => {
+  const f = await freshStart(t);
+  passes(await reads(f, 12), "reads");
+  const streak = await bash(f, "rg foo");
+  assert.ok(streak?.reason?.includes("this tool call was NOT executed"), "read streak reason");
+  await reset(f);
+  for (let i = 0; i < 30; i++) await bash(f, i % 10 === 9 ? "cpd job add x --title t" : "rg foo");
+  const total = await bash(f, "rg foo");
+  assert.ok(total?.reason?.includes("this tool call was NOT executed"), "total reason");
 });
 
 test("loop guard intra-turn: a call made inside a codemode script is neither counted nor refused", async (t) => {

@@ -4,7 +4,7 @@ import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
 import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
-import { ev, Fixture, ID, OTHER, planShow, shown, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, sessionShow, shown, stateCalls, waitFor } from "./fake.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
 process.env.TZ = "Asia/Kolkata";
@@ -398,4 +398,70 @@ test("a plan-done without data.turn is a follow-up turn for a Lead", async (t) =
   f.emit(event(101, "plan-done", { data: { workflows: [] } }));
   await f.drain();
   assert.deepEqual(f.pi.delivered().map((s) => [(s.message.details as any).id, s.options]), [[101, { triggerTurn: true, deliverAs: "followUp" }]]);
+});
+
+// ---- commands.md §15.15 L8: a delivery that starts a turn resets the intra-turn counters ----
+
+async function guarded(f: Fixture) {
+  f.respond("session-show", sessionShow({ loop_guard_turns: 20 }));
+  await started(f, "lead");
+}
+let callNo = 0;
+const readCall = async (f: Fixture) =>
+  (await f.pi.fireWith("tool_call", { toolName: "bash", toolCallId: `d${callNo++}`, input: { command: "rg foo" } }))[0] as { block?: boolean } | undefined;
+const readsPass = async (f: Fixture, n: number, what: string) => {
+  for (let i = 1; i <= n; i++) assert.ok(!(await readCall(f))?.block, `${what}: read ${i} passes`);
+};
+
+/** 12 reads, then a delivery of `e`: the counters are fresh when 30 more reads pass. */
+async function resetsOn(t: { after(fn: () => unknown): void }, e: ReturnType<typeof event>) {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await guarded(f);
+  await readsPass(f, 12, "before");
+  f.emit(e);
+  await waitFor("the delivery", () => f.pi.delivered().length === 1);
+  await readsPass(f, 30, "after the delivery");
+  assert.ok((await readCall(f))?.block, "the 31st read is refused");
+}
+
+test("a steered delivery that starts a turn resets the loop guard counters", async (t) => {
+  await resetsOn(t, event(101, "escalation"));
+});
+
+test("a follow-up delivery that starts a turn resets the loop guard counters", async (t) => {
+  await resetsOn(t, event(101, "job-merged", { data: { turn: true } }));
+});
+
+test("a delivery gated to nextTurn does not reset the loop guard counters", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await guarded(f);
+  // control: a delivery that starts a turn resets
+  await readsPass(f, 12, "before");
+  f.emit(event(101, "escalation"));
+  await waitFor("the first delivery", () => f.pi.delivered().length === 1);
+  await readsPass(f, 12, "after the control delivery");
+  // three refusals trip the breaker, so the next delivery is gated
+  for (let i = 0; i < 3; i++) assert.ok((await readCall(f))?.block);
+  await waitFor("the blocked state", () => stateCalls(f).includes("blocked:φ: loop guard"));
+  f.emit(event(102, "escalation"));
+  await waitFor("the gated delivery", () => f.pi.delivered().length === 2);
+  assert.deepEqual(f.pi.delivered()[1]!.options, { triggerTurn: false, deliverAs: "nextTurn" });
+  assert.ok((await readCall(f))?.block, "the streak kept its value");
+});
+
+test("a delivery that starts no turn does not reset the loop guard counters", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await guarded(f);
+  // control: a delivery that starts a turn resets
+  await readsPass(f, 12, "before");
+  f.emit(event(101, "escalation"));
+  await waitFor("the first delivery", () => f.pi.delivered().length === 1);
+  await readsPass(f, 12, "after the control delivery");
+  f.emit(event(102, "job-merged", { data: { turn: false } }), event(103, "plan-done", { data: { workflows: [], turn: false } }));
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 1, "no message, no turn");
+  assert.ok((await readCall(f))?.block, "the streak kept its value");
 });
