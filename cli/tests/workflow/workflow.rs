@@ -4945,6 +4945,73 @@ fn rebase_onto_a_moved_base_gates_and_force_pushes_with_a_lease() {
     assert_eq!(fx.plan_row().0, "deploy");
 }
 
+impl Poll {
+    /// Seeds the PR's row as the poll left it after a red run: failed checks, conflicting, dirty.
+    fn seed_red_pull_request(&self) {
+        self.env.sql(
+            "UPDATE pull_requests SET checks = 'failed', mergeable = 'conflicting', merge_state = 'dirty'
+             WHERE id = (SELECT pull_request FROM workflows WHERE plan = 'pay' AND key = 'repo');",
+        );
+    }
+
+    /// `(checks, mergeable, merge_state)` of the row the Workflow `repo` of Plan `pay` points to.
+    fn pull_request_poll_state(&self) -> (String, String, String) {
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT q.checks, q.mergeable, q.merge_state FROM workflows w JOIN pull_requests q ON q.id = w.pull_request
+                     WHERE w.plan = 'pay' AND w.key = 'repo'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap()
+    }
+}
+
+fn reset_state() -> (String, String, String) {
+    ("pending".into(), "unknown".into(), "unknown".into())
+}
+
+#[test]
+fn pr_rebase_resets_stored_checks_mergeable_and_merge_state() {
+    let fx = rebase_fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    fx.sh_prints_head();
+    fx.advance_base("base.txt", "base\n");
+    fx.seed_red_pull_request();
+
+    let out = fx.pr("rebase").ok();
+
+    assert_eq!(out["pushed"], true, "{out}");
+    assert_eq!(fx.pull_request_poll_state(), reset_state());
+}
+
+#[test]
+fn pr_rebase_adopted_resets_stored_checks_mergeable_and_merge_state() {
+    let fx = rebase_fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    fx.sh_prints_head();
+    // The PR's head `feat/x` is one commit past the base; the Lead Branch lacks it and has its own commits.
+    fx.commit_file(&fx.repo, "head.txt", "the head\n", "the head");
+    fx.git(
+        &fx.repo,
+        &["push", "-q", "origin", "HEAD:refs/heads/feat/x"],
+    );
+    fx.git(&fx.repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    fx.env.sql(
+        "DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feat/x';
+         CREATE TRIGGER workflows_head_ref_fixed BEFORE UPDATE OF head_ref ON workflows\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
+    );
+    fx.seed_red_pull_request();
+
+    let out = fx.pr("rebase").ok();
+
+    assert_eq!(out["pushed"], true, "{out}");
+    assert_eq!(fx.remote_branch("feat/x"), Some(fx.lead_sha()));
+    assert_eq!(fx.pull_request_poll_state(), reset_state());
+}
+
 #[test]
 fn rebase_with_the_base_unmoved_only_gates_and_pushes() {
     let fx = rebase_fx("deploy");
