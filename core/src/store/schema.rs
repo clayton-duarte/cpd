@@ -1063,6 +1063,8 @@ mod claim_tests;
 #[cfg(test)]
 mod context_reads_tests;
 #[cfg(test)]
+mod context_supersedes_list_tests;
+#[cfg(test)]
 mod cyan_tests;
 #[cfg(test)]
 mod deploy_tests;

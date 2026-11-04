@@ -148,6 +148,16 @@
     },
     "required": []
   },
+  "config experimental": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 0
+    },
+    "required": []
+  },
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
@@ -213,6 +223,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -288,6 +299,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },

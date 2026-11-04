@@ -119,12 +119,19 @@ fn successors(conn: &Connection, context: &ContextId) -> Result<HashMap<String, 
     let mut stmt = conn.prepare(
         "SELECT id, supersedes FROM context_records WHERE context = ?1 AND supersedes IS NOT NULL",
     )?;
-    let rows = stmt.query_map([context.as_str()], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?;
+    let rows = stmt
+        .query_map([context.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows
-        .map(|row| row.map(|(id, old)| (old, id)))
-        .collect::<rusqlite::Result<_>>()?)
+        .into_iter()
+        .flat_map(|(id, olds)| {
+            olds.split(',')
+                .map(|old| (old.to_owned(), id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect())
 }
 
 /// The curation (topic, short and clock) of every curated record of `context`.

@@ -1402,12 +1402,15 @@ impl Driver {
         let metrics = |a: &merge::Attempt| -> Option<Value> {
             runner::metrics(runner, dirs, a.worker_session.as_ref(), &report, wall)
         };
+        let classifier =
+            merge::real_classifier(&self.config, &self.home, &crate::ports::Ports::current());
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
             catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
             source: SOURCE,
             metrics: &metrics,
+            classifier: &*classifier,
         };
         let done = merge::merge(&mut self.store, &ctx, &self.plan, &self.id)?;
         let target = self.load()?;

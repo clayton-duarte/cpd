@@ -106,8 +106,8 @@ fn decide_marks_the_read_and_cited_record_used_for_that_session_only() {
     write(&fx, "decide", Some(S1), "Follows pro-d2.", &[]);
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), None);
     assert_eq!(used(&fx, "ctx", "pro-d2", S2), None);
-    // s1 cites pro-d1.
-    let out = write(&fx, "decide", Some(S1), "Follows pro-d1.", &[]);
+    // s1 cites pro-d1. Not the text of the session-less write above: an identical record is a retry (`already`).
+    let out = write(&fx, "decide", Some(S1), "Follows pro-d1 again.", &[]);
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), Some(1));
     assert_eq!(used(&fx, "ctx", "pro-d2", S2), None, "s2's row is s2's");
@@ -154,7 +154,7 @@ fn own_id_and_supersedes_targets_are_not_marked() {
         "Replaces pro-d1.",
         &["--supersedes", "pro-d1"],
     );
-    assert_eq!(out["record"]["supersedes"], "pro-d1", "{out}");
+    assert_eq!(out["record"]["supersedes"], json!(["pro-d1"]), "{out}");
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), None);
     // A later write that cites it marks it.
     write(&fx, "note", Some(S1), "Still on pro-d1.", &[]);
@@ -183,7 +183,7 @@ fn note_marks_like_decide() {
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), None);
     write(&fx, "note", Some(S1), "About pro-d2.", &[]);
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), None);
-    let out = write(&fx, "note", Some(S1), "About pro-d1.", &[]);
+    let out = write(&fx, "note", Some(S1), "About pro-d1 again.", &[]);
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), Some(1));
     assert_eq!(used(&fx, "ctx", "pro-d2", S2), None);

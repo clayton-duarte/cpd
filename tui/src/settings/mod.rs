@@ -3,6 +3,8 @@
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
+#[cfg(test)]
+mod experimental_tests;
 mod model;
 #[cfg(test)]
 mod model_tests;
@@ -105,7 +107,8 @@ fn open(run_command: RunFn) -> Result<Model, CpdError> {
     let config = read(run_command, &["config"])?;
     let tiers = read(run_command, &["tiers"])?;
     let models = read(run_command, &["models", "show"])?;
-    Ok(Model::new(Reads::parse(&config, &tiers, &models)?))
+    Ok(Model::new(Reads::parse(&config, &tiers, &models)?)
+        .with_experimental(model::experimental(&config)?))
 }
 
 /// The words of the command a Save step runs.
@@ -134,6 +137,11 @@ fn words(step: &Step) -> Vec<String> {
                 .into_iter()
                 .flat_map(|(flag, tier)| [flag.to_owned(), tier.to_string()]),
             )
+            .collect(),
+        Step::Experimental(feature, on) => ["config", "experimental", feature.key()]
+            .into_iter()
+            .map(str::to_owned)
+            .chain([if *on { "on" } else { "off" }.to_owned()])
             .collect(),
         Step::Retier => ["session", "retier", "--all"]
             .into_iter()
@@ -208,6 +216,10 @@ fn click(model: &mut Model, hit: view::Hit) -> Effect {
             } else {
                 model.open(row);
             }
+            Effect::None
+        }
+        view::Hit::Flip(feature) => {
+            model.flip(feature);
             Effect::None
         }
         view::Hit::Entry(i) => {

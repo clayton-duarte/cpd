@@ -46,6 +46,8 @@ pub struct Attempt {
     pub kind: String,
     /// The Job's Workflow (R34 A7).
     pub workflow: Option<String>,
+    /// The Job's Spec `touches`.
+    pub touches: Vec<String>,
 }
 
 impl Attempt {
@@ -76,7 +78,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status, j.touches
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
                LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
               WHERE a.plan = ?1 AND a.id = ?2",
@@ -93,7 +95,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, Option<String>>(7)?,
                     (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?),
                     r.get::<_, Option<String>>(11)?,
-                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?),
+                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, String>(16)?),
                 ))
             },
         )
@@ -114,7 +116,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         (repo, lead_worktree, lead_branch),
         submitted_sha,
-        (kind, workflow, head_ref, workflow_status),
+        (kind, workflow, head_ref, workflow_status, touches),
     ) = row;
     // An explore Attempt has no Workflow: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
     let (repo, lead_worktree, lead_branch) =
@@ -152,6 +154,8 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         submitted_sha,
         kind,
         workflow,
+        touches: serde_json::from_str(&touches)
+            .map_err(|_| corrupt(format!("touches {touches:?} of Job {job}")))?,
     })
 }
 
@@ -287,6 +291,9 @@ pub const PROVIDER_RETRIES: u32 = 3;
 /// How many times a Job is retried at the same Tier after a `gate_failed`, counted since its last `job retry` (pro-d280).
 pub const GATE_RETRIES: u32 = 1;
 
+/// The least confidence at which a `spec_or_scope_violation` verdict skips the same-Tier Gate retry.
+pub const TRIAGE_CONFIDENCE: f32 = 0.80;
+
 /// How long E3 holds a Job after an Attempt that ended `provider_error` (pro-d102 A2).
 pub const PROVIDER_RETRY_SECONDS: u64 = 30;
 
@@ -304,7 +311,63 @@ pub enum End {
     /// `failed` / `cause`; `detail` explains it (for `merge_conflict`, the files).
     Failed { cause: Cause, detail: String },
     /// `failed` / `gate_failed`: a Gate that exited non-zero, with the facts written in the same UPDATE as the end.
-    GateFailed { detail: String, facts: GateFacts },
+    GateFailed {
+        detail: String,
+        facts: GateFacts,
+        /// The classifier's verdict, when the flag is on and it answered.
+        triage: Option<Triage>,
+    },
+}
+
+/// Why a Gate failed, as the classifier labels it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriageLabel {
+    CodeOrTestDefect,
+    SpecOrScopeViolation,
+    TransientOrInfra,
+}
+
+impl TriageLabel {
+    /// The label of a classifier answer; `None` for an unknown one.
+    pub fn parse(s: &str) -> Option<TriageLabel> {
+        match s {
+            "code_or_test_defect" => Some(TriageLabel::CodeOrTestDefect),
+            "spec_or_scope_violation" => Some(TriageLabel::SpecOrScopeViolation),
+            "transient_or_infra" => Some(TriageLabel::TransientOrInfra),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TriageLabel::CodeOrTestDefect => "code_or_test_defect",
+            TriageLabel::SpecOrScopeViolation => "spec_or_scope_violation",
+            TriageLabel::TransientOrInfra => "transient_or_infra",
+        }
+    }
+}
+
+/// The verdict of the Gate failure triage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Triage {
+    pub label: TriageLabel,
+    pub confidence: Option<f32>,
+    pub model: String,
+}
+
+// A confidence is a number the classifier reported, never compared as NaN.
+impl Eq for Triage {}
+
+impl Triage {
+    /// Whether the verdict skips the same-Tier retry.
+    pub fn skips_retry(&self) -> bool {
+        self.label == TriageLabel::SpecOrScopeViolation
+            && self.confidence.is_some_and(|c| c >= TRIAGE_CONFIDENCE)
+    }
+
+    pub fn data(&self) -> Value {
+        serde_json::json!({"label": self.label.as_str(), "confidence": self.confidence, "model": self.model})
+    }
 }
 
 /// What a failing Gate leaves on its Attempt (`gate_hook`, `gate_command`, `gate_exit`, `check_tail`).
@@ -625,7 +688,16 @@ pub fn end_opened(
         End::Failed { .. } | End::GateFailed { .. } => {
             let (cause, detail) = end.failure().expect("a failed end");
             let (cause, detail) = (&cause, &detail.to_owned());
-            match next_tier(tx, attempt, *cause, ladder)? {
+            let triage = match end {
+                End::GateFailed { triage, .. } => triage.as_ref(),
+                _ => None,
+            };
+            let next = if triage.is_some_and(Triage::skips_retry) {
+                None
+            } else {
+                next_tier(tx, attempt, *cause, ladder)?
+            };
+            match next {
                 Some(next) => {
                     let said = match cause {
                         Cause::ProviderError => format!(
@@ -650,12 +722,13 @@ pub fn end_opened(
                     (
                         "queued",
                         None,
-                        NewEvent::attempt_retry(
+                        NewEvent::attempt_retry_triaged(
                             text,
                             "failed",
                             cause.as_str(),
                             &next.to_string(),
                             detail,
+                            triage.map(Triage::data),
                         ),
                     )
                 }
@@ -674,9 +747,14 @@ pub fn end_opened(
                     let gate = matches!(cause, Cause::GateFailed | Cause::GateError)
                         .then(|| crate::merge::gate_text_body(detail))
                         .flatten();
+                    let skipped = triage
+                        .filter(|t| t.skips_retry())
+                        .and_then(|t| Some((t.label, t.confidence?)))
+                        .map(|(l, c)| format!("\nTriage: {} ({c:.2}), not retried.", l.as_str()))
+                        .unwrap_or_default();
                     let text = match gate {
                         Some(body) => format!(
-                            "Job {job} failed ({}): {body}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                            "Job {job} failed ({}): {body}{skipped}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                             cause.as_str()
                         ),
                         None => format!(
@@ -687,7 +765,14 @@ pub fn end_opened(
                     (
                         "failed",
                         Some(cause.as_str()),
-                        NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts),
+                        NewEvent::job_failed_triaged(
+                            text,
+                            cause.as_str(),
+                            detail,
+                            &tier,
+                            attempts,
+                            triage.filter(|t| t.skips_retry()).map(Triage::data),
+                        ),
                     )
                 }
             }

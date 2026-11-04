@@ -381,6 +381,7 @@ fn child_merges_the_attempt() {
         catalog: &catalog,
         source: "attempt run",
         metrics: &|_| None,
+        classifier: cpd_core::merge::no_verdict_classifier(),
     };
     let done = merge::merge(
         &mut Store::open(&home, 5000).unwrap(),
