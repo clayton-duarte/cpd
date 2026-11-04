@@ -106,7 +106,7 @@ function open(state: "idle" | "working") {
   mounted = view;
   act(() => transport.emitStatus("open"));
   act(() => transport.emitMessage(snapshot(state)));
-  act(() => { view.container.querySelector<HTMLButtonElement>('[data-session="s1"]')!.click(); });
+  act(() => { view.container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
   act(() => {
     transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref: ref(state), footer } });
     transport.emitMessage({
