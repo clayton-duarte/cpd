@@ -1,7 +1,7 @@
 import type { ComponentProps, ReactElement } from "react";
 
 // Stub: the real shadcn sidebar parts are implemented later.
-type P = ComponentProps<"div">;
+type P = ComponentProps<"div"> & { collapsible?: string };
 const part = ({ children }: P): ReactElement => <>{children}</>;
 
 export const Sidebar = part;
