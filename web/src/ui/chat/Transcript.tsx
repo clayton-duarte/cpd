@@ -1,17 +1,16 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { JSX, ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { QueuedSubmission, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
 import type { PendingSubmission } from "../../state/store.ts";
 import { groupRows } from "./rows.ts";
 import type { Row } from "./rows.ts";
 import { DEFAULT_VIEWPORT_PX, browserSizes, findAnchor, isNearBottom, layoutRows, scrollTopForAnchor, visibleRange } from "./virtual.ts";
 import type { Layout, SizeObserver } from "./virtual.ts";
+import { Markdown } from "./Markdown.tsx";
 import { CompactionRow, FoldRow } from "./Folds.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
 
-function Item(props: { item: Exclude<TranscriptItem, ToolItem> }): JSX.Element {
+const Item = memo(function Item(props: { item: Exclude<TranscriptItem, ToolItem> }): JSX.Element {
   const { item } = props;
   switch (item.kind) {
     case "user":
@@ -30,9 +29,7 @@ function Item(props: { item: Exclude<TranscriptItem, ToolItem> }): JSX.Element {
         <article data-kind="assistant">
           {item.blocks.map((b, i) =>
             b.type === "text" ? (
-              <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>
-                {b.text}
-              </ReactMarkdown>
+              <Markdown key={i} text={b.text} />
             ) : (
               <details key={i} data-kind="thinking">
                 <summary>Thinking…</summary>
@@ -54,19 +51,26 @@ function Item(props: { item: Exclude<TranscriptItem, ToolItem> }): JSX.Element {
     case "compaction":
       return <CompactionRow item={item} />;
   }
-}
+});
 
-function RowBody(props: { row: Row }): JSX.Element {
-  const { row } = props;
-  if (row.kind === "item") return row.item.kind === "tool" ? <ToolRow tool={row.item} /> : <Item item={row.item} />;
+const sameTools = (a: { tools: readonly ToolItem[] }, b: { tools: readonly ToolItem[] }): boolean =>
+  a.tools.length === b.tools.length && a.tools.every((t, i) => t === b.tools[i]);
+
+const ToolsRow = memo(function ToolsRow(props: { tools: readonly ToolItem[] }): JSX.Element {
   return (
     <details open data-kind="tool-group">
-      <summary>{row.tools.length} tool calls</summary>
-      {row.tools.map((t) => (
+      <summary>{props.tools.length} tool calls</summary>
+      {props.tools.map((t) => (
         <ToolRow key={t.id} tool={t} />
       ))}
     </details>
   );
+}, sameTools);
+
+function RowBody(props: { row: Row }): JSX.Element {
+  const { row } = props;
+  if (row.kind === "item") return row.item.kind === "tool" ? <ToolRow tool={row.item} /> : <Item item={row.item} />;
+  return <ToolsRow tools={row.tools} />;
 }
 
 function MeasuredRow(props: { rowKey: string; sizes: SizeObserver; onHeight(key: string, height: number): void; children: ReactNode }): JSX.Element {
