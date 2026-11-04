@@ -174,7 +174,7 @@ async function main(): Promise<void> {
     started.catch(() => undefined);
     const webuiIpc = registerWebuiIpc({
       ipc: ipcMain,
-      newConnection: services.newConnection,
+      newConnection: (...args) => services.newConnection(...args),
       started,
       onError: (error) => console.error(error),
     });
@@ -194,6 +194,18 @@ async function main(): Promise<void> {
     disposers.push(() => {
       void attention.then((watch) => watch.dispose()).catch(() => undefined);
     });
+  };
+
+  // Hot reload: re-import server.js with a fresh query, swap in new services, stop the old ones.
+  const reloadServer = async (): Promise<void> => {
+    const fresh = (await import(/* @vite-ignore */ `${new URL("server.js", import.meta.url).href}?t=${Date.now()}`)) as {
+      createServices: typeof createServices;
+      realBoundaries: typeof realBoundaries;
+    };
+    const old = services;
+    services = fresh.createServices(fresh.realBoundaries(env));
+    await Promise.resolve(old.cockpit.stop());
+    startServices();
   };
 
   let stopUpdate: () => void = () => {};
@@ -264,6 +276,7 @@ async function main(): Promise<void> {
     process,
     startAutoUpdate: startUpdate,
     startServices,
+    reloadServer,
     registerIpc: registerIpcNow,
     registerWebuiIpc: registerWebuiIpcNow,
     loadDevUrl: (w, url) => (w as BrowserWindow).loadURL(url),
