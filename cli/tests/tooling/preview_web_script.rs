@@ -99,18 +99,15 @@ exit 0"#,
     }
 
     fn pnpm_calls(&self) -> Vec<String> {
-        self.env
-            .calls("pnpm")
-            .iter()
-            .map(|c| c.join(" "))
-            .collect()
+        self.env.calls("pnpm").iter().map(|c| c.join(" ")).collect()
     }
 
     /// No call of the fake git is a checkout, a reset or a clean.
     fn assert_git_never_rewrites(&self) {
         for c in self.env.calls("git") {
             assert!(
-                !c.iter().any(|a| ["checkout", "reset", "clean"].contains(&a.as_str())),
+                !c.iter()
+                    .any(|a| ["checkout", "reset", "clean"].contains(&a.as_str())),
                 "{c:?}"
             );
         }
