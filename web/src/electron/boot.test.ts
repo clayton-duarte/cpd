@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { boot, type BootDeps, type BootWindow } from './boot';
 
-function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean } = {}) {
+function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void> } = {}) {
   const log: string[] = [];
   const handlers: Record<string, () => void> = {};
   const titles: unknown[] = [];
@@ -11,7 +11,7 @@ function setup(opts: { env?: Record<string, string>; state?: string; destroyed?:
   let release: () => void = () => {};
   const ready = opts.deferReady ? new Promise<void>((r) => (release = r)) : Promise.resolve();
   class FakeWindow implements BootWindow {
-    webContents = { isDestroyed: () => destroyed, reloadIgnoringCache: () => void (reloads += 1) };
+    webContents = { isDestroyed: () => destroyed, reloadIgnoringCache: () => (log.push('reloadRenderer'), void (reloads += 1)) };
     constructor(options: { title: string }) {
       titles.push(options.title);
       log.push('window');
@@ -29,6 +29,7 @@ function setup(opts: { env?: Record<string, string>; state?: string; destroyed?:
     loadDevUrl: async (_w, url) => void log.push(`loadDevUrl:${url}`),
     loadFile: async (_w, p) => void log.push(`loadFile:${p}`),
     env: opts.env ?? {},
+    reloadServer: opts.reloadServer ?? (async () => void log.push('reloadServer')),
   };
   return { deps, log, handlers, titles, release, reloads: () => reloads, setDestroyed: (v: boolean) => (destroyed = v) };
 }
@@ -72,10 +73,36 @@ describe('boot', () => {
     await boot(s.deps);
     const handler = s.handlers['SIGUSR1'];
     expect(handler).toBeTypeOf('function');
-    handler?.();
+    await Promise.resolve(handler?.());
     expect(s.reloads()).toBe(1);
     s.setDestroyed(true);
-    handler?.();
+    await Promise.resolve(handler?.());
     expect(s.reloads()).toBe(1);
+  });
+  it('SIGUSR1 reloads the server before the renderer', async () => {
+    const s = setup();
+    await boot(s.deps);
+    await Promise.resolve(s.handlers['SIGUSR1']?.());
+    const tail = s.log.filter((l) => l === 'reloadServer' || l === 'reloadRenderer');
+    expect(tail).toEqual(['reloadServer', 'reloadRenderer']);
+  });
+  it('a failing server reload is logged and the renderer still reloads', async () => {
+    const s = setup({ reloadServer: async () => Promise.reject(new Error('boom')) });
+    const errors: unknown[][] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a));
+    await boot(s.deps);
+    await expect(Promise.resolve(s.handlers['SIGUSR1']?.())).resolves.toBeUndefined();
+    spy.mockRestore();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(s.reloads()).toBe(1);
+  });
+  // Assumption: the server reload is independent of the window, so it runs even when the window is destroyed.
+  it('SIGUSR1 does nothing when the window is destroyed', async () => {
+    const s = setup({ destroyed: true });
+    await boot(s.deps);
+    await Promise.resolve(s.handlers['SIGUSR1']?.());
+    expect(s.reloads()).toBe(0);
+    expect(s.log).toContain('reloadServer');
+    expect(s.log).not.toContain('reloadRenderer');
   });
 });
