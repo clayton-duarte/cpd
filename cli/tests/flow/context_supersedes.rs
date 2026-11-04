@@ -36,7 +36,7 @@ fn refused(run: Run, exit: i32, expected: &str) -> Value {
     error
 }
 
-/// Writes a record: `kind` is `decide`, `note` or `ask`.
+/// Writes a record: `kind` is `decide` or `note`.
 fn write(fx: &Fx, kind: &str, text: &str) {
     fx.cpd(&["context", kind, text, "--context", CTX]).ok();
 }
@@ -190,25 +190,25 @@ fn a_repeated_supersedes_naming_an_unknown_record_is_record_not_found_and_writes
 }
 
 #[test]
-fn a_repeated_supersedes_naming_a_question_is_supersedes_invalid_and_writes_nothing() {
+fn a_repeated_supersedes_naming_a_decision_from_a_note_is_supersedes_invalid_and_writes_nothing() {
     let fx = hs();
     write(&fx, "decide", "Old.");
-    write(&fx, "ask", "Why?");
+    write(&fx, "note", "Fact.");
     let run = fx.cpd(&[
         "context",
-        "decide",
+        "note",
         "New.",
         "--supersedes",
-        "hs-d1",
+        "hs-n1",
         "--supersedes",
-        "hs-q1",
+        "hs-d1",
         "--context",
         CTX,
     ]);
     let error = refused(run, 3, "supersedes_invalid");
-    assert_eq!(error["details"]["record"], "hs-q1", "{error}");
-    assert_eq!(error["details"]["kind"], "question", "{error}");
-    assert_eq!(record_ids(&fx), ["hs-d1", "hs-q1"]);
+    assert_eq!(error["details"]["record"], "hs-d1", "{error}");
+    assert_eq!(error["details"]["kind"], "decision", "{error}");
+    assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1"]);
 }
 
 #[test]

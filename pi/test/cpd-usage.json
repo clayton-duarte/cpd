@@ -172,33 +172,9 @@
     },
     "required": []
   },
-  "context answer": {
-    "flags": {
-      "--context": true,
-      "--help": false,
-      "--plan": true
-    },
-    "positionals": {
-      "max": 2,
-      "min": 2
-    },
-    "required": []
-  },
   "context archive": {
     "flags": {
       "--help": false
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
-    },
-    "required": []
-  },
-  "context ask": {
-    "flags": {
-      "--context": true,
-      "--help": false,
-      "--plan": true
     },
     "positionals": {
       "max": 1,
@@ -335,6 +311,21 @@
     },
     "required": []
   },
+  "context reads": {
+    "flags": {
+      "--channel": true,
+      "--context": true,
+      "--help": false,
+      "--min-sessions": true,
+      "--plan": true,
+      "--since": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context rename": {
     "flags": {
       "--help": false,
@@ -381,6 +372,7 @@
       "--context": true,
       "--help": false,
       "--plan": true,
+      "--pushed": false,
       "--record": true,
       "--since": true,
       "--topic": true

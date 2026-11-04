@@ -31,7 +31,7 @@ pub struct PlanRef {
 }
 
 /// What a new record is, beyond its text. Each kind carries exactly the
-/// links it may have, so a decision cannot name a question.
+/// links it may have.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Draft {
     Decision {
@@ -41,10 +41,6 @@ pub enum Draft {
     /// A note that replaces an earlier note (recency wins, §2.2).
     NoteSupersedes {
         supersedes: Vec<RecordId>,
-    },
-    Question,
-    Answer {
-        question: RecordId,
     },
     Plan(PlanRef),
     /// A Plan's brief (B3-A4): `plan` is `{id, machine}`.
@@ -63,8 +59,6 @@ impl Draft {
         match self {
             Draft::Decision { .. } => RecordKind::Decision,
             Draft::Note | Draft::NoteSupersedes { .. } => RecordKind::Note,
-            Draft::Question => RecordKind::Question,
-            Draft::Answer { .. } => RecordKind::Answer,
             Draft::Plan(_) => RecordKind::Plan,
             Draft::Brief(_) => RecordKind::Brief,
         }
@@ -92,13 +86,6 @@ impl Record {
 
     pub fn supersedes(&self) -> &[RecordId] {
         self.draft.supersedes()
-    }
-
-    pub fn question(&self) -> Option<&RecordId> {
-        match &self.draft {
-            Draft::Answer { question } => Some(question),
-            _ => None,
-        }
     }
 
     /// The Plan a `plan` or `brief` record references.
@@ -130,7 +117,7 @@ impl Record {
     }
 
     /// The record as commands print it: `id`, `kind`, `at`, `machine`, `by`,
-    /// `text`, and `supersedes`, `question` or `plan` when the kind has one.
+    /// `text`, and `supersedes` or `plan` when the kind has one.
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert("id".into(), json!(self.id));
@@ -144,9 +131,6 @@ impl Record {
         map.insert("text".into(), json!(self.text));
         if !self.supersedes().is_empty() {
             map.insert("supersedes".into(), json!(self.supersedes()));
-        }
-        if let Some(question) = self.question() {
-            map.insert("question".into(), json!(question));
         }
         if let Some(plan) = self.plan() {
             let mut p = Map::new();
@@ -175,8 +159,6 @@ impl Record {
             text: String,
             #[serde(default)]
             supersedes: Vec<RecordId>,
-            #[serde(default)]
-            question: Option<RecordId>,
             #[serde(default)]
             plan: Option<RawPlan>,
         }
@@ -216,7 +198,7 @@ impl Record {
             machine: p.machine,
             jira: p.jira,
         });
-        let draft = Draft::from_parts(kind, raw.supersedes, raw.question, plan)?;
+        let draft = Draft::from_parts(kind, raw.supersedes, plan)?;
         Ok(Record {
             id: raw.id,
             at: raw.at,
@@ -227,7 +209,7 @@ impl Record {
     }
 
     /// The columns of `context_records` in [`Record::from_row`]'s order, after `seq`.
-    pub const COLUMNS: &'static str = "seq, id, kind, at, machine, by_session, by_plan, text, supersedes, question, \
+    pub const COLUMNS: &'static str = "seq, id, kind, at, machine, by_session, by_plan, text, supersedes, \
                                        plan_id, plan_machine, plan_jira";
 
     /// Reads a row selected with [`Record::COLUMNS`]: its `seq` and the record.
@@ -265,35 +247,24 @@ impl Record {
                 .transpose()
                 .map_err(|e| bad(6, e))?,
         };
-        let record_id = |column| -> rusqlite::Result<Option<RecordId>> {
-            optional(column)?
-                .map(|s| RecordId::parse(&s))
-                .transpose()
-                .map_err(|e| bad(column, e))
-        };
-        let plan = match optional(10)? {
+        let plan = match optional(9)? {
             None => None,
             Some(plan) => Some(PlanRef {
-                id: PlanId::parse(&plan).map_err(|e| bad(10, e))?,
-                machine: MachineName::parse(&row.get::<_, String>(11)?).map_err(|e| bad(11, e))?,
-                jira: optional(12)?,
+                id: PlanId::parse(&plan).map_err(|e| bad(9, e))?,
+                machine: MachineName::parse(&row.get::<_, String>(10)?).map_err(|e| bad(10, e))?,
+                jira: optional(11)?,
             }),
         };
-        let draft = Draft::from_parts(
-            kind,
-            optional(8)?
-                .map(|list| {
-                    list.split(',')
-                        .map(RecordId::parse)
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()
-                .map_err(|e| bad(8, e))?
-                .unwrap_or_default(),
-            record_id(9)?,
-            plan,
-        )
-        .map_err(|m| invalid(2, m))?;
+        let supersedes = optional(8)?
+            .map(|list| {
+                list.split(',')
+                    .map(RecordId::parse)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(|e| bad(8, e))?
+            .unwrap_or_default();
+        let draft = Draft::from_parts(kind, supersedes, plan).map_err(|m| invalid(2, m))?;
         let record = Record {
             id,
             at: row.get(3)?,
@@ -314,9 +285,9 @@ impl Record {
         let plan = self.plan();
         let added = conn.execute(
             "INSERT INTO context_records
-               (context, id, kind, at, machine, by_session, by_plan, text, supersedes, question,
+               (context, id, kind, at, machine, by_session, by_plan, text, supersedes,
                 plan_id, plan_machine, plan_jira)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (context, id) DO NOTHING",
             rusqlite::params![
                 context.as_str(),
@@ -334,7 +305,6 @@ impl Record {
                         .collect::<Vec<_>>()
                         .join(",")
                 }),
-                self.question().map(RecordId::to_string),
                 plan.map(|p| p.id.as_str()),
                 plan.map(|p| p.machine.as_str()),
                 plan.and_then(|p| p.jira.as_deref()),
@@ -346,21 +316,16 @@ impl Record {
 
 impl Draft {
     /// The links a kind may have (§2.2): `supersedes` for a decision (naming a
-    /// decision or a note) or a note (naming a note), `question` for an answer only and required
-    /// (naming a question), `plan` for a plan or a brief only and required.
+    /// decision or a note) or a note (naming a note), `plan` for a plan or a brief only and required.
     fn from_parts(
         kind: RecordKind,
         supersedes: Vec<RecordId>,
-        question: Option<RecordId>,
         plan: Option<PlanRef>,
     ) -> Result<Draft, String> {
         let extra =
             |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
         if !supersedes.is_empty() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
             return Err(extra("supersedes", kind));
-        }
-        if question.is_some() && kind != RecordKind::Answer {
-            return Err(extra("question", kind));
         }
         if plan.is_some() && !matches!(kind, RecordKind::Plan | RecordKind::Brief) {
             return Err(extra("plan", kind));
@@ -375,19 +340,10 @@ impl Draft {
                 s.kind().as_str()
             ));
         }
-        if let Some(q) = &question
-            && q.kind() != RecordKind::Question
-        {
-            return Err(format!("question {q} is not a question"));
-        }
         Ok(match kind {
             RecordKind::Decision => Draft::Decision { supersedes },
             RecordKind::Note if supersedes.is_empty() => Draft::Note,
             RecordKind::Note => Draft::NoteSupersedes { supersedes },
-            RecordKind::Question => Draft::Question,
-            RecordKind::Answer => Draft::Answer {
-                question: question.ok_or("an answer needs its question")?,
-            },
             RecordKind::Plan => Draft::Plan(plan.ok_or("a plan record needs its plan")?),
             RecordKind::Brief => Draft::Brief(plan.ok_or("a brief record needs its plan")?),
         })
@@ -470,8 +426,11 @@ mod tests {
         let m = machine();
         for (bad, why) in [
             (line(r#","extra":1"#), "unknown field"),
-            (line(r#","question":"hs-q1""#), "question on a decision"),
-            (line(r#","supersedes":["hs-q1"]"#), "supersedes a question"),
+            (line(r#","question":"hs-d1""#), "question field"),
+            (
+                line(r#","supersedes":["hs-q1"]"#),
+                "supersedes a retired letter",
+            ),
             (line("").replace(r#""v":1"#, r#""v":2"#), "version"),
             (line("").replace("hs-d1", "hs-n1"), "id letter against kind"),
             (
@@ -487,13 +446,6 @@ mod tests {
         ] {
             assert!(Record::parse_line(&bad, &m).is_err(), "{why}");
         }
-        let answer = line("")
-            .replace("hs-d1", "hs-a1")
-            .replace("decision", "answer");
-        assert!(
-            Record::parse_line(&answer, &m).is_err(),
-            "an answer needs its question"
-        );
         let plan = line("")
             .replace("hs-d1", "hs-p1")
             .replace("decision", "plan");

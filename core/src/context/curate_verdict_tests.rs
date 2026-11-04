@@ -67,12 +67,6 @@ fn gate_skips_plan_and_brief_with_no_port_call() {
 }
 
 #[test]
-fn gate_gives_question_and_answer_topic_and_short_only() {
-    assert_eq!(gate(RecordKind::Question), Gate::LabelOnly);
-    assert_eq!(gate(RecordKind::Answer), Gate::LabelOnly);
-}
-
-#[test]
 fn gate_proceeds_for_decision_and_note() {
     assert_eq!(gate(RecordKind::Decision), Gate::Neighbours);
     assert_eq!(gate(RecordKind::Note), Gate::Neighbours);

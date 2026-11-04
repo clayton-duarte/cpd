@@ -12,8 +12,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context search` | Search the Context's records, ranked by in-process full-text search (§3.4) | Lead, Manager, Worker | |
 | `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
 | `cpd context note` | Record a note (§3.4) | Lead, Manager | |
-| `cpd context ask` | Record a question (§3.4) | Lead, Manager | |
-| `cpd context answer` | Record the answer to a question (§3.5) | Lead, Manager | |
 | `cpd context rename` | Change a Context's title (§3.7) | | yes |
 | `cpd context archive` | Archive the Context with its Plans and their Sessions (§3.8) | | yes |
 | `cpd context unarchive` | Unarchive the Context with its Plans and their Sessions (§3.9) | | yes |
@@ -24,6 +22,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
 | `cpd context curation` | List the pending retirements (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
+| `cpd context reads` | List the Context records Sessions have read or cited (§3.18) | Lead, Manager, Worker | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |

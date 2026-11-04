@@ -193,11 +193,11 @@ fn judge_label_request_has_no_neighbour_and_reads_topic_and_short() {
     let reply = json!({"ok": true, "verdict": "independent", "quote": "", "reason": "",
                        "topic": "storage", "short": "Which store?"});
     let fx = fixture(answer(&reply));
-    let new = id("m1-q3");
+    let new = id("m1-n3");
     let request = JudgeRequest {
         new: RecordView {
             id: &new,
-            kind: RecordKind::Question,
+            kind: RecordKind::Note,
             at: "2026-11-03T12:00:00Z",
             topic: None,
             text: "Which store do we use?",
@@ -214,7 +214,7 @@ fn judge_label_request_has_no_neighbour_and_reads_topic_and_short() {
     let call = &fx.runner.calls()[0];
     let stdin: Value = serde_json::from_slice(call.stdin.as_ref().expect("stdin")).unwrap();
     assert_eq!(stdin["neighbour"], Value::Null);
-    assert_eq!(stdin["new"]["kind"], "question");
+    assert_eq!(stdin["new"]["kind"], "note");
 }
 
 #[test]

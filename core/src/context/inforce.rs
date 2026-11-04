@@ -10,8 +10,7 @@ use crate::error::CpdError;
 use crate::ids::{ContextId, RecordId, RecordKind};
 
 /// The records of `records` (index order, as read) that are in force as of
-/// `as_of`: those with `seq <= as_of` of kind `decision`, `note`, `question`
-/// (open or answered) or `answer` that no decision with `seq <= as_of` names in
+/// `as_of`: those with `seq <= as_of` of kind `decision` or `note` that no decision with `seq <= as_of` names in
 /// its `supersedes`. A `plan` or `brief` record is never in force. The result
 /// keeps the order of `records`.
 pub fn in_force(records: &[Indexed], as_of: i64) -> Vec<&Indexed> {
@@ -42,10 +41,8 @@ pub fn in_force_without<'a>(
     let superseded: HashSet<_> = considered().flat_map(|(_, r)| r.supersedes()).collect();
     considered()
         .filter(|(_, r)| {
-            matches!(
-                r.kind(),
-                RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
-            ) && !superseded.contains(&r.id)
+            matches!(r.kind(), RecordKind::Decision | RecordKind::Note)
+                && !superseded.contains(&r.id)
                 && !retired.contains(&r.id)
         })
         .collect()
@@ -180,30 +177,6 @@ mod tests {
         assert_eq!(ids(&in_force(&records, 1)), ["hs-d1"]);
         assert_eq!(ids(&in_force(&records, 2)), ["hs-d2"]);
         assert!(in_force(&records, 0).is_empty());
-    }
-
-    #[test]
-    fn questions_open_or_answered_and_their_answers_are_in_force() {
-        let records = indexed(vec![
-            record("hs-q1", Draft::Question),
-            record("hs-q2", Draft::Question),
-            record(
-                "hs-a1",
-                Draft::Answer {
-                    question: id("hs-q1"),
-                },
-            ),
-            record("hs-n1", Draft::Note),
-        ]);
-        assert_eq!(
-            ids(&in_force(&records, 4)),
-            ["hs-q1", "hs-q2", "hs-a1", "hs-n1"]
-        );
-        assert_eq!(
-            ids(&in_force(&records, 2)),
-            ["hs-q1", "hs-q2"],
-            "an answer after the seq is not there yet"
-        );
     }
 
     #[test]
