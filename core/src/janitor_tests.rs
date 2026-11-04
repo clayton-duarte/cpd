@@ -688,3 +688,230 @@ fn janitor_keeps_the_lead_worktree_of_a_cancelled_workflow_with_an_open_pull_req
         "the closed one is cleaned"
     );
 }
+
+/// Puts a `target/debug/x.o` file in `lead` and returns the `target` directory.
+fn add_target(lead: &Path) -> PathBuf {
+    let target = lead.join("target");
+    std::fs::create_dir_all(target.join("debug")).unwrap();
+    std::fs::write(target.join("debug").join("x.o"), "object\n").unwrap();
+    target
+}
+
+/// The `pruned` entries of a pass output; none when the output has no `pruned` array yet.
+fn pruned(output: Output) -> Vec<Value> {
+    let map = fields(output);
+    map.get("pruned")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn janitor_log(rig: &Rig) -> String {
+    std::fs::read_to_string(janitor::log_path(&rig.home)).unwrap_or_default()
+}
+
+/// Inserts a Job `key` of status `status` in Workflow `workflow`.
+fn insert_job(rig: &Rig, workflow: &str, key: &str, status: &str) {
+    rig.sql(&format!(
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', '{workflow}', '{key}', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{fp}', cpd_txn(), 't');",
+        fp = "e".repeat(64)
+    ));
+}
+
+/// Inserts a non-ended Attempt `id` of status `status` for Job `job`.
+fn insert_attempt(rig: &Rig, job: &str, id: &str, status: &str) {
+    rig.sql(&format!(
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at, submitted_sha, submitted_at)
+           VALUES ('pay', '{id}', '{job}', 2, 'S2', 'ladder', '{status}', 'cpd/pay--{id}', '/nowhere/{id}', 'sha', 't', 'sub', 't');"
+    ));
+}
+
+#[test]
+fn janitor_pass_prunes_target_of_an_idle_open_workflow() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    let lead = rig.workflows[0].lead.clone();
+    let target = add_target(&lead);
+    std::fs::write(lead.join("src.rs"), "tracked source\n").unwrap();
+    let pruned = pruned(rig.pass());
+    assert!(!target.exists(), "the target directory is removed");
+    assert!(lead.join("src.rs").exists(), "the Lead's sources stay");
+    assert!(lead.join("f.txt").exists(), "the Lead worktree stays");
+    assert_eq!(
+        rig.left(&rig.workflows[0])[..3],
+        [true; 3],
+        "the Lead worktree, registration and branch stay"
+    );
+    assert_eq!(pruned.len(), 1, "{pruned:?}");
+    assert_eq!(pruned[0]["plan"], "pay");
+    assert_eq!(pruned[0]["workflow"], "api");
+    assert_eq!(pruned[0]["path"], target.display().to_string());
+    assert_eq!(pruned[0]["outcome"], "pruned");
+    assert!(pruned[0].get("reason").is_none(), "{pruned:?}");
+    assert!(
+        janitor_log(&rig).contains(&target.display().to_string()),
+        "janitor.log has a line for the entry: {}",
+        janitor_log(&rig)
+    );
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_prunes_target_of_a_kept_dirty_merged_workflow() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "merged");
+    let lead = rig.workflows[0].lead.clone();
+    std::fs::write(lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
+    let target = add_target(&lead);
+    let pruned = pruned(rig.pass());
+    assert!(!target.exists(), "the target of the kept Lead is removed");
+    assert!(lead.join("dirty.txt").exists(), "the dirty file stays");
+    assert_eq!(pruned.len(), 1, "{pruned:?}");
+    assert_eq!(pruned[0]["workflow"], "api");
+    assert_eq!(pruned[0]["path"], target.display().to_string());
+    assert_eq!(pruned[0]["outcome"], "pruned");
+}
+
+#[test]
+fn janitor_pass_prunes_target_of_a_cancelled_workflow() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "cancelled");
+    let lead = rig.workflows[0].lead.clone();
+    std::fs::write(lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
+    let target = add_target(&lead);
+    let pruned = pruned(rig.pass());
+    assert!(
+        !target.exists(),
+        "the target under the derived Lead path is removed"
+    );
+    assert!(lead.join("dirty.txt").exists(), "the dirty file stays");
+    assert_eq!(pruned.len(), 1, "{pruned:?}");
+    assert_eq!(pruned[0]["workflow"], "api");
+    assert_eq!(pruned[0]["path"], target.display().to_string());
+    assert_eq!(pruned[0]["outcome"], "pruned");
+}
+
+#[test]
+fn janitor_pass_keeps_target_while_a_job_is_queued_or_running() {
+    for status in ["queued", "running"] {
+        let mut rig = Rig::new();
+        rig.workflow("api", "open");
+        insert_job(&rig, "api", "extra", status);
+        let target = add_target(&rig.workflows[0].lead);
+        let pruned = pruned(rig.pass());
+        assert!(target.exists(), "a {status} Job keeps the target");
+        assert_eq!(pruned, Vec::<Value>::new(), "{status}");
+    }
+}
+
+#[test]
+fn janitor_pass_keeps_target_while_an_attempt_is_starting_running_or_merging() {
+    for status in ["starting", "running", "merging"] {
+        let mut rig = Rig::new();
+        rig.workflow("api", "open");
+        insert_attempt(&rig, "api", "api-a2", status);
+        let target = add_target(&rig.workflows[0].lead);
+        let pruned = pruned(rig.pass());
+        assert!(target.exists(), "a {status} Attempt keeps the target");
+        assert_eq!(pruned, Vec::<Value>::new(), "{status}");
+    }
+}
+
+#[test]
+fn janitor_pass_keeps_target_of_a_dispatch_workflow() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "dispatch");
+    let target = add_target(&rig.workflows[0].lead);
+    let pruned = pruned(rig.pass());
+    assert!(target.exists(), "a dispatch Workflow keeps its target");
+    assert_eq!(pruned, Vec::<Value>::new());
+}
+
+#[test]
+fn janitor_pass_prune_of_target_is_idempotent() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    let lead = rig.workflows[0].lead.clone();
+    let target = add_target(&lead);
+    assert_eq!(pruned(rig.pass()).len(), 1, "the first pass prunes");
+    assert!(!target.exists());
+    let second = pruned(rig.pass());
+    assert_eq!(
+        second,
+        Vec::<Value>::new(),
+        "a missing target reports nothing"
+    );
+    assert!(lead.exists(), "the Lead worktree stays");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+/// Plan `pay` with `run/pay/durable/<attempt>.sqlite` and `run/pay/explore/x.md`; returns `(durable, explore file)`.
+fn add_durable(rig: &Rig) -> (PathBuf, PathBuf) {
+    let plan = PlanId::parse("pay").unwrap();
+    let durable = rig.home.plan_dir(&plan).join("durable");
+    std::fs::create_dir_all(&durable).unwrap();
+    std::fs::write(durable.join("pay-a1.sqlite"), "db").unwrap();
+    let explore = rig.home.plan_dir(&plan).join("explore");
+    std::fs::create_dir_all(&explore).unwrap();
+    std::fs::write(explore.join("x.md"), "notes\n").unwrap();
+    (durable, explore.join("x.md"))
+}
+
+fn durable_is_pruned(column: &str) {
+    let rig = Rig::new();
+    rig.sql(&format!(
+        "UPDATE plans SET {column} = 't' WHERE id = 'pay';"
+    ));
+    let (durable, note) = add_durable(&rig);
+    let pruned = pruned(rig.pass());
+    assert!(!durable.exists(), "durable is removed");
+    assert!(note.exists(), "the rest of run/pay stays");
+    assert_eq!(pruned.len(), 1, "{pruned:?}");
+    assert_eq!(pruned[0]["plan"], "pay");
+    assert_eq!(pruned[0]["workflow"], Value::Null);
+    assert_eq!(pruned[0]["path"], durable.display().to_string());
+    assert_eq!(pruned[0]["outcome"], "pruned");
+    assert!(
+        janitor_log(&rig).contains(&durable.display().to_string()),
+        "janitor.log has a line: {}",
+        janitor_log(&rig)
+    );
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_prunes_durable_of_an_archived_plan() {
+    durable_is_pruned("archived_at");
+}
+
+#[test]
+fn janitor_pass_prunes_durable_of_a_deleted_plan() {
+    durable_is_pruned("deleted_at");
+}
+
+#[test]
+fn janitor_pass_keeps_durable_of_a_live_plan() {
+    let rig = Rig::new();
+    let (durable, note) = add_durable(&rig);
+    let pruned = pruned(rig.pass());
+    assert!(durable.join("pay-a1.sqlite").exists());
+    assert!(note.exists());
+    assert_eq!(pruned, Vec::<Value>::new());
+}
+
+#[test]
+fn janitor_pass_keeps_durable_while_an_attempt_of_an_archived_plan_is_active() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    insert_attempt(&rig, "api", "api-a2", "running");
+    rig.sql("UPDATE plans SET archived_at = 't' WHERE id = 'pay';");
+    let (durable, _) = add_durable(&rig);
+    let pruned = pruned(rig.pass());
+    assert!(durable.join("pay-a1.sqlite").exists());
+    assert!(
+        pruned.iter().all(|p| p["workflow"] != Value::Null),
+        "no durable entry: {pruned:?}"
+    );
+}
