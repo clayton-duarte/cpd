@@ -143,7 +143,7 @@ test("a Manager's run with 3 new records by others gets one cpd-context message,
   assert.deepEqual(m.details.records, ["hs-n1", "hs-n2", "hs-n3"]);
   assert.deepEqual(recordCalls(f), [
     ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "100"],
-    ["context", "show", "--context", "ctx", "--since", String(SEQ0)],
+    ["context", "show", "--context", "ctx", "--since", String(SEQ0), "--pushed"],
   ]);
   assert.deepEqual(f.pi.sent, [], "it only returns the message: nothing is sent, so no turn");
 });

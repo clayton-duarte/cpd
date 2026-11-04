@@ -13,12 +13,13 @@ use serde_json::{Value, json};
 
 use super::fts::{self, Doc, Scored};
 use super::inforce;
+use super::reads::{self, Channel};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select};
 use crate::args::Text;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, RecordKind};
+use crate::ids::{ContextId, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -208,6 +209,16 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         .map(|hit| hit.line(&snap))
         .collect::<Vec<_>>()
         .join("\n");
+    let page_hits: Vec<(RecordId, f64)> = page
+        .iter()
+        .filter_map(|hit| Some((hit.id.parse().ok()?, hit.score)))
+        .collect();
+    reads::log_reads(
+        &mut store,
+        &context,
+        Channel::Search,
+        &reads::search_reads(&page_hits),
+    );
     Ok(Output::success(json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
         "query": query,

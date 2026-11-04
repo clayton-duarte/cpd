@@ -226,6 +226,8 @@ There is **no per-repo lock** (hs-d243): merges, `pr open`, `pr rebase`, `pr pus
 
 Within a Plan, Jobs, Attempts and Escalations are addressed by their id plus the Plan; across Plans, by the pair. An invalid id is a usage error (`invalid_<thing>_id`, exit 2).
 
+**Record ids in free text** (`RecordId::scan`, Plan ctx-reads). A Context record id is found in free text by `RecordId::scan`, which takes its letters from `RecordKind::ALL` (the rows of `record_kinds`, §4.4), never from a fixed list, so a kind that is removed later drops out of the scan by itself. A match is `<machine>-<letter><n>` in the form above, `<n>` one or more digits, and the character before it and the one after it are each either absent (the edge of the text) or not a letter, digit, `_` or `-`. So `hs-d3` is found in `see hs-d3.` and `(hs-d3)`, and an id is not found inside `xhs-d3`, `hs-d30` or `hs-d3-x` (there `hs-d3` is not a match). The scan only finds ids; that an id names a record of the Context is checked by its caller.
+
 ### 2.2 Objects
 
 Types: `text`, `int`, `bool`, `time` (§1.3), `json` (a JSON value of the stated shape), `?` = nullable. The storage of each field is the DDL in §4.4.
@@ -641,7 +643,7 @@ Context and Plan carry `deleted_at` (hs-d527). A delete is permanent and cannot 
   - **Not in the chat slot:** the Plan's Lead (Plan delete) or the Context's Manager (Context delete), as `archive` requires (`in_chat_slot`).
   Which of these hold is **re-read inside the delete's transaction**, before the tombstone is written (safety on a race).
 
-- **What goes, in one transaction** (hs-d527): after the re-check, (1) `deleted_at` is set on the Plan (for a Context: on every Plan not yet deleted, then on the Context); (2) the rows go, in an order that keeps every foreign key whole: the board posts of the Sessions, the Inbox items, then the Events (an Inbox item points to an Event); then the Escalations, Attempts, Dependencies and Jobs, the Workflow needs, Workflows and Plan reviews, and the Sessions but the Lead. A Plan delete does this for its Plan. A Context delete does the Inbox items and Events for the whole Context (every Plan of it, those deleted earlier included, and the rows that have no Plan), the rest for each Plan, and then the `record_retirements` and `record_curations` rows of the Context and its `context_records` (each through the exception; `context_records_immutable` keeps refusing every update) and the Manager's Session; (3) one `plan-deleted` or `context-deleted` Event is appended **after** the row deletes, in the same transaction, carrying the counts. It is **never deleted by its own delete** (it is appended once the deletes are over); a later Context delete deletes the `plan-deleted` Events of its Plans with the other Events of the Context. A `pull_requests` row (§4.4) is no Plan's: the poll does not delete rows (hs-d565, §7.6 step 5). **Context records are kept by a Plan delete and deleted by a Context delete** (hs-d527), whose records go with the Context.
+- **What goes, in one transaction** (hs-d527): after the re-check, (1) `deleted_at` is set on the Plan (for a Context: on every Plan not yet deleted, then on the Context); (2) the rows go, in an order that keeps every foreign key whole: the board posts of the Sessions, the Inbox items, then the Events (an Inbox item points to an Event); then the Escalations, Attempts, Dependencies and Jobs, the Workflow needs, Workflows and Plan reviews, and the Sessions but the Lead. A Plan delete does this for its Plan. A Context delete does the Inbox items and Events for the whole Context (every Plan of it, those deleted earlier included, and the rows that have no Plan), the rest for each Plan, and then the `context_reads` rows of the Context (no exception: no_delete 0, §4.5), then the `record_retirements` and `record_curations` rows of the Context and its `context_records` (each through the exception; `context_records_immutable` keeps refusing every update) and the Manager's Session; (3) one `plan-deleted` or `context-deleted` Event is appended **after** the row deletes, in the same transaction, carrying the counts. It is **never deleted by its own delete** (it is appended once the deletes are over); a later Context delete deletes the `plan-deleted` Events of its Plans with the other Events of the Context. A `pull_requests` row (§4.4) is no Plan's: the poll does not delete rows (hs-d565, §7.6 step 5). **Context records are kept by a Plan delete and deleted by a Context delete** (hs-d527), whose records go with the Context.
 
 - **The vector cache is left alone.** A Context delete does not touch `$CPD_HOME/vectors.db` (§4.6): its orphan rows are never read, because every read is filtered by the in-force ids the caller passes.
 - **Files, after the transaction:** (4) the Sessions' session files (the Lead's included), (5) the run files (`$CPD_HOME/run/<plan>/`, and `$CPD_HOME/run/context-digests/<context>/` for a Context; never the `history` rows), (6) every Attempt worktree and Workflow Lead worktree with its `target/`, then the local branches (`cpd/<plan>--<attempt>` and the stored `lead_branch` of each Workflow, `<plan>/<key>` or `cpd/<plan>/<key>` for legacy ones; §4.5; not on the remote), then the directories. A path that is already gone is skipped.
@@ -1660,6 +1662,21 @@ CREATE TABLE record_curations (              -- a record's topic and short form;
   FOREIGN KEY (context, record) REFERENCES context_records(context, id)
 ) STRICT;
 
+-- ---------- Context reads (Plan ctx-reads) ----------
+CREATE TABLE context_reads (                 -- a Session's read of a Context record, or the citation of it by a later write of that Session (§4.6 "Reads"); telemetry, best-effort
+  context      TEXT NOT NULL REFERENCES contexts(id),
+  record       TEXT NOT NULL,
+  session      TEXT NOT NULL CHECK (length(session) >= 1),
+  channel      TEXT NOT NULL CHECK (channel IN ('pushed','search','show','shadow')),
+  read_at      TEXT NOT NULL,
+  rank         INTEGER CHECK (rank IS NULL OR rank >= 1),
+  score        REAL,
+  used         INTEGER CHECK (used IN (0,1)),
+  PRIMARY KEY (context, record, session, channel),
+  FOREIGN KEY (context, record) REFERENCES context_records(context, id)
+) STRICT;
+CREATE INDEX context_reads_record ON context_reads(context, record, read_at);
+
 -- ---------- Plans ----------
 CREATE TABLE plans (
   id            TEXT PRIMARY KEY CHECK (length(id) BETWEEN 2 AND 24),
@@ -2170,6 +2187,8 @@ INSERT INTO history_tables (name, no_delete) VALUES
   ('sessions', 1), ('inbox_items', 1), ('tier_catalog', 1), ('event_kinds', 1), ('record_kinds', 1), ('history_tables', 1);
 -- what the named migration `curation` inserts (hs-d549, hs-d551):
 INSERT INTO history_tables (name, no_delete) VALUES ('record_retirements', 1), ('record_curations', 1);
+-- what the named migration of Plan ctx-reads inserts (its name is its author's): telemetry, so no_delete 0 and no history triggers (the reconcile writes none for it). A Context delete removes its rows first, before its context_records; the delete exception of no_delete 1 tables (above) does not apply.
+INSERT INTO history_tables (name, no_delete) VALUES ('context_reads', 0);
 ```
 
 Only lists that an older binary can ignore are lookup tables (hs-d178 D1): the Event kinds and the record kinds. State-machine columns (`plans.phase`, `jobs.status`, `workflows.status`, `attempts.status`, `attempts.cause`, `sessions.role` and `state`, …) stay `CHECK`s, with their transition triggers: a new state changes what old code must handle, so changing one is a breaking migration. No other column becomes a lookup table without an amendment of this paragraph. The other `CHECK`s of `context_records` stay, since they name specific kinds. The three lookup tables are themselves in `history_tables` with `no_delete` 1: a row cannot be deleted, every change is recorded in `history`, and an insert from the `sqlite3` shell fails on `cpd_txn()` like any other table (§4.3).
@@ -2666,6 +2685,7 @@ Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the databa
 - **In-force dedupe** (E1, Plan `ctx-supersedes-multi`; User, Context record pro-d10, 2026-11-03 EST). Right after the retry check and before the links and the prose check, a `decision` or `note` whose trimmed text and whole `supersedes` list (same ids, same order) equal those of any in-force record of this Context of the same kind, whatever machine or session wrote it, inserts nothing and returns that record as `already`. Another kind, list or text, or a record out of force (superseded or retired), does not dedupe. A `note` still can never supersede a `decision`, also when the decision is one of several targets: `supersedes_invalid`, nothing written.
 - **Prose supersession** (D4, Plan `ctx-supersedes-multi`; User, Context records pro-d4 and pro-d1, 2026-11-03 EST). A write whose `text` says it replaces records without listing them is refused, so every supersession is linked. The check runs after the retry (an identical latest record of this machine, with the same `kind`, `text`, `supersedes` and session, is returned as `already` and writes nothing) and before the insert. The text is scanned for **phrases**: one of the verbs `supersedes`, `overrules` or `replaces` (case-insensitive), then one or more record ids (§2.1) joined by `,`, `and` or `&`; the ids of a phrase are those directly after its verb, up to the first word that is neither an id nor one of those joiners. An id of a phrase is **unlinked** when it is an in-force record ("Records in force" below) of this Context whose kind the new record may supersede (a decision or a note for a `decide`; a note for a `note`) and the write's `supersedes` does not list it. Any unlinked id fails the write `supersedes_unlinked`, exit 3, `details.ids` the unlinked ids in text order, and nothing is written. Not matched: an id of another Context, an id that is not in force, an id of a kind the record may not supersede, and a partial amendment (`supersedes A1 of pro-d342` names no record id after its verb). `--no-supersedes` (commands.md §3.5) skips the check.
 - **Positions are machine-local**: `context_records.seq` belongs to this database.
+- **Reads** (Plan ctx-reads; `context_reads`, §4.4; the Session of a command is the rule of commands.md §3.3). Telemetry is best-effort: a failed log never fails or changes a command's output, exit status or primary writes, and it runs after the result is built or committed. One row per (context, record, session, channel); the first read wins. `used` is set to 1 by a later write of the same Session whose text cites the record id (`RecordId::scan`, §2.1), and never set back to 0. Channel `shadow` is reserved for later: nothing writes it here.
 - **Old stores.** A `$CPD_HOME/contexts/<id>/` folder of an earlier version is imported and archived by migration 0007 (§4.5, §1.4). Nothing reads `archive/contexts/` afterwards.
 - **Record kinds are the rows of `record_kinds`** (§4.4, §4.5): a kind exists when its row does. Every binary parses a record's kind into a closed type, so a migration that inserts a record kind is declared `breaking` (§4.5: a new value that old code parses into a closed type; hs-d178 D1), unlike an Event kind.
 

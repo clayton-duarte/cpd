@@ -2620,7 +2620,7 @@ fn fresh_canonical_hash() -> String {
 /// its migrations, converts twice to the same store, and ends with the schema
 /// of a fresh store. One test per version (below): each takes a fraction of
 /// what all of them take, and they run side by side.
-fn converts_keeping_every_row_and_id(n: usize) {
+fn converts_keeping_every_row_and_id_at(n: usize) {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     write_store(&home, &legacy_stores(n).pop().unwrap());
@@ -2744,8 +2744,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
         assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
-            Some(25)
-        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools` and `job_addenda`
+            Some(26)
+        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda` and `context_reads`
         let (txns_before, txns_after) = (
             rows_before.remove("txns").unwrap(),
             rows_after.remove("txns").unwrap(),
@@ -2794,6 +2794,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
         // `20261103T0400-job-addenda` made `job_addenda`, and it is empty.
         assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
+        assert_eq!(rows_after.remove("context_reads"), Some(Vec::new())); // `context-reads`: a new empty table
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -2873,12 +2874,18 @@ fn converts_keeping_every_row_and_id(n: usize) {
     );
 }
 
+/// Pins the last-version branch, where the `history_tables` count and the `context_reads` rows are asserted.
+#[test]
+fn converts_keeping_every_row_and_id() {
+    converts_keeping_every_row_and_id_at(LEGACY.len());
+}
+
 macro_rules! conversion_tests {
     ($($name:ident: $n:literal,)*) => {
         $(
             #[test]
             fn $name() {
-                converts_keeping_every_row_and_id($n);
+                converts_keeping_every_row_and_id_at($n);
             }
         )*
         // A version added to `LEGACY` without its test does not compile.

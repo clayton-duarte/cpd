@@ -101,7 +101,7 @@ async function contextMessage(port: TurnPort, state: TurnState, stored: readonly
   const since = String(cursor);
   const events = parseRecordEvents(await cpd(["events", "list", "--context", context, "--kind", "context-record", "--since", since]));
   const first = Math.min(...events.map((e) => e.seq));
-  const records = events.length === 0 ? [] : parseRecords(await cpd(["context", "show", "--context", context, "--since", String(first - 1)]));
+  const records = events.length === 0 ? [] : parseRecords(await cpd(["context", "show", "--context", context, "--since", String(first - 1), "--pushed"]));
   if (seat.role === "lead") {
     const plan = seat.plan;
     const workflows = plan === null ? [] : parsePrOpened(await cpd(["events", "list", "--context", context, "--kind", "pr-opened", "--since", since])).filter((p) => p.plan === plan);
