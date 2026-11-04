@@ -11,6 +11,7 @@ import { CompactionRow, FoldRow, formatClock } from "./Folds.tsx";
 import { FileTextIcon, ImageIcon } from "lucide-react";
 import { Button } from "../components/button.tsx";
 import { glyphClass } from "../dango-status.ts";
+import { ToolGroup } from "./ToolGroup.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
 
 const BTN_PILL = "[&::-webkit-details-marker]:hidden";
@@ -113,21 +114,7 @@ const Item = memo(function Item(props: {
   }
 });
 
-const sameTools = (a: { tools: readonly ToolItem[] }, b: { tools: readonly ToolItem[] }): boolean =>
-  a.tools.length === b.tools.length && a.tools.every((t, i) => t === b.tools[i]);
-
-const ToolsRow = memo(function ToolsRow(props: { tools: readonly ToolItem[] }): JSX.Element {
-  return (
-    <details open data-kind="tool-group">
-      <summary>{props.tools.length} tool calls</summary>
-      {props.tools.map((t) => (
-        <ToolRow key={t.id} tool={t} />
-      ))}
-    </details>
-  );
-}, sameTools);
-
-function RowBody(props: { row: Row; sessionKey: string | undefined; thinking: "folded" | "expanded" }): JSX.Element {
+function RowBody(props: { row: Row; sessionKey: string | undefined; thinking: "folded" | "expanded"; tools: "grouped" | "expanded" }): JSX.Element {
   const { row } = props;
   const body =
     row.kind === "item" ? (
@@ -139,7 +126,7 @@ function RowBody(props: { row: Row; sessionKey: string | undefined; thinking: "f
         <Item item={row.item} sessionKey={props.sessionKey} thinking={props.thinking} />
       )
     ) : (
-      <ToolsRow tools={row.tools} />
+      <ToolGroup key={props.tools} tools={row.tools} mode={props.tools} />
     );
   return (
     <div data-part="row-body" className="py-[3px]">
@@ -280,7 +267,7 @@ export function Transcript(props: {
           <div data-part="virtual-window" className="px-4" style={{ transform: `translateY(${layout.offsets[start] ?? 0}px)` }}>
             {rows.slice(start, end).map((row) => (
               <MeasuredRow key={row.key} rowKey={row.key} sizes={sizes} onHeight={onHeight}>
-                <RowBody row={row} sessionKey={props.sessionKey} thinking={props.thinking ?? "folded"} />
+                <RowBody row={row} sessionKey={props.sessionKey} thinking={props.thinking ?? "folded"} tools={props.tools ?? "grouped"} />
               </MeasuredRow>
             ))}
           </div>
