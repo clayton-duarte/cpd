@@ -1,5 +1,5 @@
-// Cockpit read models and actions (web/CONTRACT.md section 5). Types only; parsers belong to the cockpit Job.
-import type { SessionRef, SessionState } from "./domain.ts";
+// Cockpit read models and actions (web/CONTRACT.md section 5). Types, plus the action parser (parseCockpitAction).
+import { WebError, type SessionRef, type SessionState } from "./domain.ts";
 
 export type Urgency = "red" | "yellow" | "magenta" | "blue" | "cyan" | "white"; // seen live: red, magenta; the rest from docs/commands.md:3910 (unverified, O15)
 
@@ -101,6 +101,30 @@ export type CockpitAction =
   | { kind: "plan.reject"; planId: string; review: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
 
-export function parseCockpitAction(_raw: unknown): CockpitAction {
-  throw new Error("not implemented");
+const DURATIONS: readonly string[] = ["15m", "1h", "tomorrow"];
+
+function field(o: Record<string, unknown>, name: string, kind: string): void {
+  const v = o[name];
+  const ok = name === "itemId" ? Number.isInteger(v) && (v as number) >= 0
+    : name === "duration" ? typeof v === "string" && DURATIONS.includes(v)
+    : typeof v === "string" && v !== "";
+  if (!ok) throw new WebError("invalid_message", `action ${kind}: bad field ${name}`, { field: name });
+}
+
+export function parseCockpitAction(raw: unknown): CockpitAction {
+  if (typeof raw !== "object" || raw === null) throw new WebError("unknown_action", "action is not an object");
+  const o = raw as Record<string, unknown>;
+  const kind = o["kind"];
+  const fields: Record<string, readonly string[]> = {
+    "inbox.snooze": ["itemId", "duration"],
+    "inbox.dismiss": ["itemId"],
+    "inbox.claim": ["itemId"],
+    "inbox.approve": ["itemId"],
+    "pr.post": ["planId", "workflow"],
+    "session.retier": ["sessionId", "tier"],
+    "plan.reject": ["planId", "review"],
+  };
+  if (typeof kind !== "string" || !Object.hasOwn(fields, kind)) throw new WebError("unknown_action", `unknown action kind ${String(kind)}`);
+  for (const f of fields[kind]!) field(o, f, kind);
+  return o as unknown as CockpitAction;
 }

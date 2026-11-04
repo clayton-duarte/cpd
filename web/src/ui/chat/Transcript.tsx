@@ -1,19 +1,10 @@
 import type { JSX } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { QueuedSubmission, ToolItem, TranscriptItem, WhenBusy, WireError } from "../../protocol/domain.ts";
+import type { QueuedSubmission, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
+import type { PendingSubmission } from "../../state/store.ts";
 import { CompactionRow, FoldRow } from "./Folds.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
-
-// Structural copy of PendingSubmission (web/src/state/store.ts, contract 6.2), which does not exist yet.
-export interface PendingSubmission {
-  readonly clientSubmissionId: string;
-  readonly text: string;
-  readonly imageCount: number;
-  readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "sent" | "failed";
-  readonly error?: WireError;
-}
 
 function Item(props: { item: Exclude<TranscriptItem, ToolItem> }): JSX.Element {
   const { item } = props;

@@ -14,3 +14,5 @@ export interface Transport {
   onMessage(handler: (raw: unknown) => void): Disposable;
   onStatus(handler: (status: "open" | "closed") => void): Disposable;
 }
+
+export interface GitBoundary { branch(cwd: string): Promise<string | null> }

@@ -3,7 +3,9 @@ import type { Disposable } from "../../protocol/runtime.ts";
 import type { Capabilities, Dialog, FooterStats, ModelChoice, Window } from "../../protocol/domain.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
-import { createDurableBackend, type ResolvedSession, type SessionHandle } from "./backend.ts";
+import { createDurableBackend } from "./backend.ts";
+import type { SessionHandle } from "../hub/connection.ts";
+import type { ResolvedSession } from "../hub/registry.ts";
 import type { HostClient, HostFrame } from "./client.ts";
 
 type Obj = Record<string, unknown>;

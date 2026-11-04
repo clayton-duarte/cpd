@@ -1,34 +1,6 @@
-import type { ActionOutput, CockpitAction, SnoozeDuration } from "../../protocol/cockpit.ts";
+import { parseCockpitAction, type ActionOutput, type CockpitAction, type SnoozeDuration } from "../../protocol/cockpit.ts";
 import { WebError } from "../../protocol/domain.ts";
 import type { Cpd } from "./cli.ts";
-
-const DURATIONS: readonly string[] = ["15m", "1h", "tomorrow"];
-
-function field(o: Record<string, unknown>, name: string, kind: string): void {
-  const v = o[name];
-  const ok = name === "itemId" ? Number.isInteger(v) && (v as number) >= 0
-    : name === "duration" ? typeof v === "string" && DURATIONS.includes(v)
-    : typeof v === "string" && v !== "";
-  if (!ok) throw new WebError("invalid_message", `action ${kind}: bad field ${name}`, { field: name });
-}
-
-export function parseCockpitAction(raw: unknown): CockpitAction {
-  if (typeof raw !== "object" || raw === null) throw new WebError("unknown_action", "action is not an object");
-  const o = raw as Record<string, unknown>;
-  const kind = o["kind"];
-  const fields: Record<string, readonly string[]> = {
-    "inbox.snooze": ["itemId", "duration"],
-    "inbox.dismiss": ["itemId"],
-    "inbox.claim": ["itemId"],
-    "inbox.approve": ["itemId"],
-    "pr.post": ["planId", "workflow"],
-    "session.retier": ["sessionId", "tier"],
-    "plan.reject": ["planId", "review"],
-  };
-  if (typeof kind !== "string" || !Object.hasOwn(fields, kind)) throw new WebError("unknown_action", `unknown action kind ${String(kind)}`);
-  for (const f of fields[kind]!) field(o, f, kind);
-  return o as unknown as CockpitAction;
-}
 
 export function actionArgs(action: CockpitAction): readonly string[] {
   switch (action.kind) {

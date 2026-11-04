@@ -4,7 +4,7 @@ import { connect } from "node:net";
 import { promises as fsp, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
 import type { Runner } from "../protocol/domain.ts";
-import type { Scheduler } from "../protocol/runtime.ts";
+import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { createCpd, type CpdExec, type FollowBoundary } from "./cockpit/cli.ts";
 import { createCockpitService, type CockpitService } from "./cockpit/events.ts";
@@ -17,7 +17,6 @@ import { createPiBackend } from "./pi/backend.ts";
 import type { FileBoundary } from "./pi/window.ts";
 import type { WatchBoundary } from "./pi/watch.ts";
 
-export interface GitBoundary { branch(cwd: string): Promise<string | null> }
 export interface PluginBoundaries {
   cpdExec: CpdExec;
   follow: FollowBoundary;
