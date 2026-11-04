@@ -242,7 +242,9 @@ fn pending_only_proposals_append_no_records_retired_event() {
         1
     );
     assert_eq!(f.retired_events(), 0);
-    assert_eq!(f.row("hs-n2").0, "pending");
+    let (status, at, by, _) = f.row("hs-n2");
+    assert_eq!((status.as_str(), at, by), ("pending", None, None));
+    assert_eq!(Approval::Pending.decided_by(), None);
 }
 
 #[test]
@@ -257,23 +259,25 @@ fn a_proposal_with_an_existing_row_of_any_status_writes_nothing_new() {
             "2026-11-01T01:00:00.000Z",
         );
         let before = f.row("hs-n2");
+        // hs-n3 is a fresh control: the same call writes it approved, so the event names it and not hs-n2.
         propose(
             &mut f,
-            &[proposal(
-                "hs-n2",
-                Reason::Duplicate,
-                "hs-n1",
-                Approval::Models,
-            )],
+            &[
+                proposal("hs-n2", Reason::Duplicate, "hs-n1", Approval::Models),
+                proposal("hs-n3", Reason::Duplicate, "hs-n1", Approval::Models),
+            ],
         )
         .unwrap();
         assert_eq!(
             f.count("SELECT count(*) FROM record_retirements"),
-            1,
+            2,
             "{status}"
         );
         assert_eq!(f.row("hs-n2"), before, "{status}");
-        assert_eq!(f.retired_events(), 0, "{status}");
+        assert_eq!(f.row("hs-n3").0, "approved", "{status}");
+        assert_eq!(f.retired_events(), 1, "{status}");
+        let named = f.count("SELECT count(*) FROM events WHERE kind = 'records-retired' AND payload LIKE '%hs-n3%' AND payload NOT LIKE '%hs-n2%'");
+        assert_eq!(named, 1, "{status}");
     }
 }
 
