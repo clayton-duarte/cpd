@@ -1,5 +1,6 @@
 import { CHANNELS } from "./channels.ts";
 import type { PtySize, UiMode } from "./channels.ts";
+import type { UpdateTimers } from "./update/types.ts";
 import type { PtySession, PtySinks } from "./pty.ts";
 
 export type IpcListener = (event: unknown, ...args: unknown[]) => unknown;
@@ -15,6 +16,7 @@ export interface IpcDeps {
   sinks: PtySinks;
   readWasm(): Promise<Uint8Array>;
   getMode(): UiMode;
+  timers?: UpdateTimers;
 }
 function isSizeValue(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1000;

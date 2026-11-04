@@ -2,6 +2,7 @@ import { CHANNELS } from "./channels.ts";
 import type { PtySize } from "./channels.ts";
 import { parsePtySize, parsePtyWrite, registerIpc } from "./ipc.ts";
 import type { IpcDeps, IpcListener, IpcMainLike } from "./ipc.ts";
+import { fakeTimers } from "./update/fakes.ts";
 import type { PtySession, PtySinks } from "./pty.ts";
 
 function fakeIpc() {
@@ -34,6 +35,7 @@ function setup() {
   const spawnedSinks: PtySinks[] = [];
   const spawnedSizes: PtySize[] = [];
   const events: string[] = [];
+  const timers = fakeTimers();
   const wasm = new Uint8Array([1, 2, 3]);
   const deps: IpcDeps = {
     ipc: f.ipc,
@@ -50,12 +52,13 @@ function setup() {
     },
     readWasm: () => Promise.resolve(wasm),
     getMode: () => "webui",
+    timers,
   };
   const reg = registerIpc(deps);
   const start = (p: unknown) => f.handlers.get(CHANNELS.ptyStart)?.({}, p);
   const write = (p: unknown) => f.listeners.get(CHANNELS.ptyWrite)?.({}, p);
   const resize = (p: unknown) => f.listeners.get(CHANNELS.ptyResize)?.({}, p);
-  return { ...f, reg, sessions, spawnedSinks, spawnedSizes, events, wasm, start, write, resize };
+  return { ...f, timers, reg, sessions, spawnedSinks, spawnedSizes, events, wasm, start, write, resize };
 }
 
 test("parsePtySize accepts integer cols and rows from 1 to 1000", () => {
@@ -89,14 +92,45 @@ test("registerIpc registers every channel", () => {
   expect([...t.listeners.keys()].sort()).toEqual([CHANNELS.ptyWrite, CHANNELS.ptyResize].sort());
 });
 
-test("ptyStart spawns once and resizes on a second start", async () => {
+test("ptyStart spawns once", async () => {
   const t = setup();
   expect(await t.start({ cols: 80, rows: 24 })).toBeUndefined();
   expect(t.sessions).toHaveLength(1);
   expect(t.spawnedSizes[0]).toEqual({ cols: 80, rows: 24 });
+});
+
+test("ipc first pty:start does not nudge", async () => {
+  const t = setup();
+  await t.start({ cols: 80, rows: 24 });
+  expect(t.sessions[0]?.calls).toEqual([]);
+  expect(t.timers.pending).toEqual([]);
+  await t.start({ cols: 80, rows: 24 });
+  expect(t.sessions[0]?.calls).toEqual(["resize:79x24"]);
+});
+
+test("ipc second pty:start resizes one column narrower first", async () => {
+  const t = setup();
+  await t.start({ cols: 80, rows: 24 });
   expect(await t.start({ cols: 100, rows: 30 })).toBeUndefined();
+  expect(t.sessions[0]?.calls).toEqual(["resize:99x30"]);
+  expect(t.timers.pending.map((p) => p.ms)).toEqual([50]);
+});
+
+test("ipc second pty:start restores the size after the redraw delay", async () => {
+  const t = setup();
+  await t.start({ cols: 80, rows: 24 });
+  await t.start({ cols: 100, rows: 30 });
+  t.timers.fire();
+  expect(t.sessions[0]?.calls).toEqual(["resize:99x30", "resize:100x30"]);
+});
+
+test("ipc second pty:start never spawns a second pty", async () => {
+  const t = setup();
+  await t.start({ cols: 80, rows: 24 });
+  await t.start({ cols: 100, rows: 30 });
+  await t.start({ cols: 100, rows: 30 });
   expect(t.sessions).toHaveLength(1);
-  expect(t.sessions[0]?.calls).toEqual(["resize:100x30"]);
+  expect(t.sessions[0]?.calls).toEqual(["resize:99x30", "resize:99x30"]);
 });
 
 test("ptyStart spawns again after the pty exited", async () => {
