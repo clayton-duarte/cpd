@@ -1,6 +1,6 @@
-# Electron TUI app
+# Electron app
 
-The Electron TUI app is a standalone Electron desktop app in `web/` that runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), and a native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). Decisions: pro-d21 (D5, D6, D7) and pro-d22.
+The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
 
 ## Run
 
