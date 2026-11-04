@@ -680,6 +680,61 @@ Failures, after the lock is taken. Each appends **one** `error` Event `{source: 
 
 Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
+### 3.13a `context curate`
+
+```
+cpd context curate [--context <c>] [--record <id>]
+```
+
+Experimental Feature `write_curation` (contract §4.6 "Write-time neighbour curation"; pro-d366, pro-d370, pro-a1). Curates **one** record of the Context: the oldest unchecked in-force record of kind `decision`, `note`, `question` or `answer` written in the last 24 hours (the batch distiller keeps the older ones; there is no catch-up of old records). Engine E9 starts it detached for a Context that has a due record (contract §3.7); anyone may run it on demand, in the caller's process. The Context is `--context`, else the selected Plan's (§1.3). Callers: Lead only, not cockpit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+| no other distill or curate run of this Context is alive: `locks/distill-<context>.lock` is free | `distill_running` | 3 |
+| with `--record`, the id names a record of the Context | `record_not_found` | 3 |
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+| `--record <id>` | curate that record, whatever its age and checked marker (a manual smoke) |
+
+Effects:
+- **Flag off**: with `experimental.write_curation` false the command returns `{"context": "<c>", "skipped": "off"}` with no port call and no file created (not even `vectors.db`).
+- **Not curable**: as §3.13, `"skipped": "archived"` or `"skipped": "young"`, and nothing else.
+- **The pick**: `--record`, else the oldest due record. With none due: `"already": true`, `"remaining": 0`.
+- **The gate**: `question` and `answer` records take no neighbour lookup, no embedder and no classifier: one judge call, and its `topic` and `short` are written as one `record_curations` row when they pass the bounds of §3.13 (else counted `rejected`, nothing written). `decision` and `note` records continue to the neighbours (contract §4.6): at most 8, FTS5 plus embedding cosine. An unreachable embedder, or a corrupt `vectors.db`, degrades the run to FTS5 only (`fts_only`).
+- **The pair verdict**: `kev-4b` first; `independent` at the confidence bar is accepted free (`free`), no judge call. Every other result goes to the judge; a confirmed retirement needs agreement and a verbatim quote, else the pair counts `disagreed`, `quote_failed` or `rejected`. An unreachable or unusable classifier falls back to the judge alone (`kev_unreachable`).
+- **The write**: all confirmed retirements are written once, through `propose_rejecting` (a `record_retirements` row `pending`, and a `record_curations` row for a retired record that has none; an existing curation is never overwritten). An independent pair writes nothing; with no retirement and no label there is no write and no Event.
+- **`contradicts`** is listed in the JSON and retires nothing.
+- **The checked marker**: a record whose run finished is entered in `context_checked` of `vectors.db`.
+- **tmux:** none. **git:** none.
+
+Failures. The record is left unchecked and nothing is written:
+
+| Failure | Code | Exit |
+|---|---|---|
+| the judge could not be reached | `judge_unreachable` | 1 |
+| the judge refused | `judge_refused` | 1 |
+| the judge's reply was not usable | `judge_bad_reply` | 1 |
+| `vectors.db` cannot be marked | `store_failed` | 1 |
+
+An unreachable embedder or classifier is **not** a failure: the run finishes, exits 0 and says `fts_only` or `kev_unreachable` in the JSON. The engine backs off only after a failed run.
+
+```json
+{"ok": true, "context": "building-cpd", "record": "pro-d371", "kind": "decision",
+ "gate": "neighbours", "neighbours": 8, "fts_only": false, "kev_unreachable": false,
+ "free": 6, "judged": 2,
+ "retire": [{"record": "pro-d371", "target": "pro-d120", "reason": "duplicate"}],
+ "contradicts": [{"neighbour": "pro-d200", "quote": "...", "reason": "..."}],
+ "disagreed": 0, "quote_failed": 0, "rejected": 0, "remaining": 3}
+```
+
+`gate` is `label_only` or `neighbours`; `remaining` is the count of records still due.
+
+Idempotent: yes. A second run picks the next record, or says `"already": true`.
+
 ### 3.14 `context owner`
 
 ```
