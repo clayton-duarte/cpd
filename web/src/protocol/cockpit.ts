@@ -79,7 +79,7 @@ export interface InboxRow {
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;
-  readonly workflow?: string | null; // the Workflow key for PR kinds (optional until the read model fills it)
+  readonly workflow?: string | null; // the Workflow key for PR kinds, from the item's data; null when none
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
 }
