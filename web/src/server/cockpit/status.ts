@@ -11,6 +11,33 @@ export interface Status {
   readonly version: string | null;
   readonly hostAlert: boolean;
 }
-export async function readStatus(_deps: StatusDeps): Promise<Status> {
-  return { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false };
+
+const obj = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+async function attempt<T>(f: () => Promise<T | null>): Promise<T | null> {
+  try { return await f(); } catch { return null; }
+}
+const json = (text: string): Record<string, unknown> | null => { try { return obj(JSON.parse(text)); } catch { return null; } };
+
+export async function readStatus(deps: StatusDeps): Promise<Status> {
+  const home = process.env["CPD_HOME"] ?? `${process.env["HOME"] ?? ""}/.cpd`;
+  const tmuxOpt = (name: string): Promise<string | null> => attempt(async () => (await deps.tmux(["show-options", "-qv", name])).trim() || null);
+  const [version, incident, runner, workers, preview, install] = await Promise.all([
+    attempt(async () => { const v = json(await deps.cpd(["--version"]))?.["version"]; return typeof v === "string" ? v : null; }),
+    attempt(async () => {
+      const o = json(await deps.cpd(["incident", "show"]));
+      const at = obj(o?.["incident"])?.["started_at"];
+      return o?.["on"] === true && typeof at === "string" ? { startedAt: at } : null;
+    }),
+    attempt(async () => {
+      const d = obj(obj(json(await deps.cpd(["config", "show"]))?.["config"])?.["experimental"])?.["durable_workers"];
+      return typeof d === "boolean" ? (d ? "durable" : "pi") : null;
+    }),
+    tmuxOpt("@cpd_workers").then((raw) => {
+      const m = raw === null ? null : /^workers (\d+)\u{f0798}(\d+)\u{f0798}(\d+)\/(\d+)$/u.exec(raw);
+      return m === null ? null : { queued: Number(m[1]), waiting: Number(m[2]), tenants: Number(m[3]), limit: Number(m[4]) };
+    }),
+    tmuxOpt("@cpd_preview"),
+    attempt(async () => { const t = await deps.readFile(`${home}/run/cpd-install.json`); return t === null ? null : json(t); }),
+  ]);
+  return { runner, preview, incident, workers, version, hostAlert: install?.["status"] === "skipped" };
 }

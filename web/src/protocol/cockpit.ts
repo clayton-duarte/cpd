@@ -136,3 +136,15 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
   for (const f of fields[kind]!) field(o, f, kind);
   return o as unknown as CockpitAction;
 }
+
+export interface StatusModel {
+  readonly runner: string | null;
+  readonly preview: string | null;
+  readonly incident: { readonly startedAt: string } | null;
+  readonly workers: { readonly queued: number; readonly waiting: number; readonly tenants: number; readonly limit: number } | null;
+  readonly version: string | null;
+  readonly hostAlert: boolean;
+}
+/** Dollar totals keyed by Plan id and Context id. */
+export type CostModel = Readonly<Record<string, number>>;
+export interface LogRow { readonly id: number; readonly at: string; readonly kind: string; readonly text: string; readonly tone: "error" | "lead-error" | "normal" }

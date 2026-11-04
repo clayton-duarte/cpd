@@ -8,7 +8,7 @@ import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from ".
 import { runAction } from "./actions.ts";
 import type { PaneUpdate, ReadModel } from "./readmodel.ts";
 
-export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string }
+export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string; readonly data: Readonly<Record<string, unknown>> }
 function malformed(line: string, field: string): never {
   throw new WebError("cpd_malformed_json", `event line: missing or mistyped field ${field}`, { field, command: line.slice(0, 200) });
 }
@@ -20,7 +20,7 @@ export function parseEventLine(line: string): CpdEvent {
   if (typeof o["id"] !== "number") return malformed(line, "id");
   if (typeof o["kind"] !== "string") return malformed(line, "kind");
   const s = (f: string): string | null => (typeof o[f] === "string" ? (o[f] as string) : null);
-  return { id: o["id"], kind: o["kind"], plan: s("plan"), context: s("context"), session: s("session"), job: s("job"), attempt: s("attempt"), at: s("at") ?? "", text: s("text") ?? "" };
+  return { id: o["id"], kind: o["kind"], plan: s("plan"), context: s("context"), session: s("session"), job: s("job"), attempt: s("attempt"), at: s("at") ?? "", text: s("text") ?? "", data: (typeof o["data"] === "object" && o["data"] !== null && !Array.isArray(o["data"]) ? o["data"] : {}) as Record<string, unknown> };
 }
 
 const TREE_KINDS = new Set("context-created context-grounded context-record context-renamed context-archived plan-created plan-phase plan-done plan-renamed plan-archived plan-review job-added job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status all-merged workflow-added workflow-edited workflow-cancelled workflow-started pr-opened pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep plan-deleted context-deleted inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed".split(" "));
