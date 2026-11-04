@@ -599,7 +599,7 @@ div[data-part="status-bar"]                                flex h-full w-full it
 - **Logs** opens the Logs dialog (below).
 - **Costs** flips the cost display of the Context and Plan rows (3d). It opens no popup. The flag is React state of `App`, off at every load, and is never stored (not in `sessionStorage`, unlike the selection). `aria-pressed` shows it.
 - **Settings** opens the Agent Tiers dialog (below).
-- Keyboard: the buttons are native; Enter and Space activate them; standard focus ring. No shortcut keys are built (the TUI's `?` that opens the Legend is Not wired).
+- Keyboard: the buttons are native; Enter and Space activate them; standard focus ring. No shortcut keys are built; the TUI's `?` key for the Legend is not built (see the bar's list of not built items below).
 
 **Legend dialog** (`LegendDialog`, `data-part="legend-dialog"`). Title `Legend: What The Cockpit's Colours And Icons Mean (Any Key Closes)`. Static: no props, no data, no live values. Its sections, in this order, carry the TUI's legend content (`tui/src/widgets/legend.rs`, colours from `pi/lib/pill-spec.json` and `tui/src/palette.rs`):
 
@@ -675,9 +675,9 @@ The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `confi
 - **The three cpd calls per refresh:** `cpd context list` (Plan ids); `cpd session list --archived` (`role`, `plan`, `context`, `attempt`, `file`); `cpd events list --kind attempt-ended --since <cursor> --limit 5000` (stored Attempt costs; repeated while a page is full). Today's read model calls `session list` without `--archived`; the cost needs it.
 - **Format** (`core/src/metrics/mod.rs:244-253`): `NaN` or below `0.0005` → `$0.000`; below `9.9995` → `$` and 3 decimals (`$0.120`); below `99.995` → 2 decimals; below `999.95` → 1 decimal; below `9995` → thousands, 2 decimals and `k` (`$1.23k`); below `99950` → thousands, 1 decimal and `k`; otherwise thousands, 0 decimals and `k`. Exact ties round to even, as Rust's formatting does (JavaScript's `toFixed` does not).
 
-**Not wired** (omitted, never faked): the runner choice (the `pi | durable` segmented control; the TUI runner pill flips `durable_workers`, and the Context does not decide that for the web), clicks on the runner, incident and version pills (the TUI's `incident` and `host` actions; not decided), the `?` key that opens the Legend, the version `HoverCard`, host `cpu / ram / disk` (not in the TUI bar), the TUI's short workers form and its drop of segments on a narrow client (the bar clips with `overflow-hidden`).
+**Not wired** (omitted, never faked): the runner choice (the `pi | durable` segmented control; the TUI runner pill flips `durable_workers`, and the Context does not decide that for the web), clicks on the runner, incident and version pills (the TUI's `incident` and `host` actions; not decided), the `?` key binding (TUI only), the version `HoverCard`, host `cpu / ram / disk` (not in the TUI bar), the TUI's short workers form and its drop of segments on a narrow client (the bar clips with `overflow-hidden`).
 
-**Built by pro-d40** (were Not wired in Phase 2): the Reset layout, Legend, Logs, Costs and Settings buttons (the Settings button is the Agent Tiers dialog, formerly "Tiers"); the Incident pill; the Workers pill (the Q·W·N/M meter); the Preview pill; the Runner pill as the machine's runner; the Version pill's host-alert colour.
+**Built by pro-d40** (absent in Phase 2): the Reset layout, Legend, Logs, Costs and Settings buttons (the Settings button is the Agent Tiers dialog, formerly "Tiers"); the Incident pill; the Workers pill (the Q·W·N/M meter); the Preview pill; the Runner pill as the machine's runner; the Version pill's host-alert colour.
 
 **Changed from Phase 2:** the `State:` segment is removed; `Runner: <x>` is `<x>`, and is absent when unknown (was `Runner: none`); `cpd: unknown` is absent when the version is unknown; the reset and `$` buttons are replaced by the five buttons; `App` passes the status data and the handlers (3e). The Phase 2 tests this changes are in 3f.
 
