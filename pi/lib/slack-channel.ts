@@ -161,14 +161,14 @@ export async function connect(codingAgentEntry: string, agentDir: string, cwd: s
   return { call, close: () => connection.close() };
 }
 
-/** `--name value` pairs; every one of `names` must be present, and nothing else is accepted. */
-export function parseArgs(argv: string[], names: readonly string[]): Record<string, string> {
+/** `--name value` pairs; every one of `names` must be present, `optional` ones may be, and nothing else is accepted. */
+export function parseArgs(argv: string[], names: readonly string[], optional: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
     const name = argv[i]?.replace(/^--/, "");
     const value = argv[i + 1];
-    if (!argv[i]?.startsWith("--") || name === undefined || !names.includes(name) || value === undefined || value.startsWith("--")) {
-      throw new Refusal("usage", `Unexpected argument ${JSON.stringify(argv[i])}. Usage: slack-channel.ts ${names.map((n) => `--${n} <${n}>`).join(" ")}`);
+    if (!argv[i]?.startsWith("--") || name === undefined || !(names.includes(name) || optional.includes(name)) || value === undefined || value.startsWith("--")) {
+      throw new Refusal("usage", `Unexpected argument ${JSON.stringify(argv[i])}. Usage: slack-channel.ts ${[...names.map((n) => `--${n} <${n}>`), ...optional.map((n) => `[--${n} <${n}>]`)].join(" ")}`);
     }
     out[name] = value;
   }

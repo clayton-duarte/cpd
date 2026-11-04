@@ -46,7 +46,7 @@ pub fn insert(
     post: &PostRecord,
 ) -> Result<bool, CpdError> {
     let rows = tx.execute(
-        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, last_posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, 'pending')
          ON CONFLICT (plan, workflow) DO NOTHING",
         rusqlite::params![plan, workflow, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
     )?;
@@ -108,17 +108,37 @@ pub struct Bump {
 }
 
 /// The due, eligible post with the smallest `COALESCE(last_posted_at, posted_at)` not in `skip` (contract §4.4).
+/// Due: that time is at or before `due_before`. Eligible: open Workflow, unarchived Plan, open non-draft PR with no review decision.
 pub fn next_bump(
-    _conn: &Connection,
-    _due_before: &str,
-    _skip: &[(String, String)],
+    conn: &Connection,
+    due_before: &str,
+    skip: &[(String, String)],
 ) -> Result<Option<Bump>, CpdError> {
-    todo!()
+    let mut stmt = conn.prepare(
+        "SELECT p.plan, p.workflow, p.channel, p.ts
+         FROM pr_posts p JOIN workflows r ON r.plan = p.plan AND r.key = p.workflow
+           JOIN plans l ON l.id = p.plan JOIN pull_requests q ON q.id = r.pull_request
+         WHERE COALESCE(p.last_posted_at, p.posted_at) <= ?1 AND r.status = 'open' AND l.archived_at IS NULL
+           AND q.state = 'open' AND q.draft = 0 AND q.review_decision = 'none'
+         ORDER BY COALESCE(p.last_posted_at, p.posted_at), p.plan, p.workflow",
+    )?;
+    let rows = stmt.query_map([due_before], |r| Ok(Bump { plan: r.get(0)?, workflow: r.get(1)?, channel: r.get(2)?, ts: r.get(3)? }))?;
+    for row in rows {
+        let bump = row?;
+        if !skip.iter().any(|(p, w)| *p == bump.plan && *w == bump.workflow) {
+            return Ok(Some(bump));
+        }
+    }
+    Ok(None)
 }
 
 /// Sets `last_posted_at` of the post to the transaction's time; `false` when no row has that key (contract §4.4).
-pub fn mark_bumped(_tx: &WriteTxn<'_>, _plan: &str, _workflow: &str) -> Result<bool, CpdError> {
-    todo!()
+pub fn mark_bumped(tx: &WriteTxn<'_>, plan: &str, workflow: &str) -> Result<bool, CpdError> {
+    let rows = tx.execute(
+        "UPDATE pr_posts SET last_posted_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND workflow = ?2",
+        [plan, workflow],
+    )?;
+    Ok(rows == 1)
 }
 
 #[cfg(test)]
