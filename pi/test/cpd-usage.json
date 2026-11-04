@@ -362,7 +362,7 @@
       "--topic": true
     },
     "positionals": {
-      "max": 0,
+      "max": 1,
       "min": 0
     },
     "required": []
