@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { connect } from "node:net";
 import { promises as fsp, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
@@ -156,8 +156,9 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
         }),
     },
     fs: {
-      write: () => {
-        throw new Error("not implemented");
+      write: async (path, bytes) => {
+        await fsp.mkdir(dirname(path), { recursive: true });
+        await fsp.writeFile(path, bytes, { mode: 0o600 });
       },
       stat: async (path) => {
         const s = await fsp.stat(path);

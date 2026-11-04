@@ -289,7 +289,7 @@ export function createNormalizer(): PiNormalizer {
             method: "cpd_plan_review",
             title: planTitle ?? `Plan review ${String(review)}`,
             summary: planSummary,
-            interactive: false,
+            interactive: true,
           });
         } else if (status === "approved" || status === "rejected" || status === "superseded" || status === "lost") {
           if (pendingReviews.delete(dialogId)) r.dialogsResolved.push(dialogId);
