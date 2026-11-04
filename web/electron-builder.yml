@@ -2,7 +2,7 @@
 # Dango v3 · icon v1 (Anonymous Pro φ, shiro on kuronuri)
 
 appId: com.cpd.desktop
-productName: cpd                  # name under the icon, in the menu bar and in Finder
+productName: CPD                  # name under the icon, in the menu bar and in Finder
 copyright: Copyright © cpd
 
 directories:

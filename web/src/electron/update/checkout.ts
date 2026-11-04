@@ -8,9 +8,17 @@ export function resolveCheckout(deps: { env: Record<string, string | undefined>;
 export type SyncResult =
   | { kind: 'current'; sha: string }
   | { kind: 'updated'; from: string; to: string; lockfileChanged: boolean }
-  | { kind: 'skipped'; reason: 'branch' | 'dirty' | 'fetch-failed' | 'diverged' };
+  | { kind: 'skipped'; reason: 'fetch-failed' | 'diverged' };
 export async function syncCheckout(exec: UpdateExec, root: string): Promise<SyncResult> {
   const git = (...args: string[]) => exec('git', args, { cwd: root });
   if ((await git('fetch', 'origin')).code !== 0) return { kind: 'skipped', reason: 'fetch-failed' };
-  throw new Error('not implemented');
+  const from = (await git('rev-parse', 'HEAD')).stdout.trim();
+  const to = (await git('rev-parse', 'origin/main')).stdout.trim();
+  if (from === to) return { kind: 'current', sha: from };
+  if ((await git('merge-base', '--is-ancestor', 'HEAD', 'origin/main')).code !== 0) return { kind: 'skipped', reason: 'diverged' };
+  const changed = (await git('diff', '--name-only', 'HEAD', 'origin/main')).stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (changed.length > 0 && (await git('checkout', 'HEAD', '--', ...changed)).code !== 0) return { kind: 'skipped', reason: 'diverged' };
+  if ((await git('merge', '--ff-only', 'origin/main')).code !== 0) return { kind: 'skipped', reason: 'diverged' };
+  const files = (await git('diff', '--name-only', from, to)).stdout.split('\n').map((l) => l.trim());
+  return { kind: 'updated', from, to, lockfileChanged: files.includes('pnpm-lock.yaml') };
 }
