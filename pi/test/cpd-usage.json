@@ -1097,6 +1097,18 @@
       "--to"
     ]
   },
+  "pr repost": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--workflow": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "pr rerun": {
     "flags": {
       "--help": false,

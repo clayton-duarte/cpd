@@ -406,6 +406,8 @@ pub enum Entry {
     /// A merge of the pull request runs: the `Merge` entry with the spinner, not selectable.
     Merging,
     Post,
+    /// `cpd pr repost`: on a `review overdue` row, in place of Post.
+    RePost,
     GoToLead,
     CopyLink,
     Choice(Choice),
@@ -426,6 +428,9 @@ impl Entry {
             }
         }
         if item.kind == Kind::PrReady {
+            if item.plan.is_some() && is_overdue(item) {
+                entries.push(Entry::RePost);
+            }
             match Status::of_item(item) {
                 Some(Status::ReadyToMerge) => entries.push(if merging {
                     Entry::Merging
@@ -452,6 +457,7 @@ impl crate::menu::Entry for Entry {
         match self {
             Entry::Merge | Entry::Merging => "Merge",
             Entry::Post => "Post",
+            Entry::RePost => "RePost",
             Entry::GoToLead => "Go to Lead",
             Entry::CopyLink => "Copy Link",
             Entry::Choice(choice) => crate::menu::Entry::label(choice),
@@ -461,6 +467,15 @@ impl crate::menu::Entry for Entry {
     fn busy(self) -> bool {
         self == Entry::Merging
     }
+}
+
+/// Whether the `pr-ready` row of `item` is labelled `review overdue` (its status word, after the subject).
+fn is_overdue(item: &Item) -> bool {
+    item.label
+        .split('\n')
+        .next()
+        .and_then(|first| first.split_once(' '))
+        .is_some_and(|(_, text)| text == "review overdue")
 }
 
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
