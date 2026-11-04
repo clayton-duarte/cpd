@@ -80,7 +80,7 @@ export function parseContextList(reply: Reply): RawContext[] {
   cursorOf(reply, c);
   return arr(reply, "contexts", c).map((v) => {
     const o = obj(v, c, "contexts[]");
-    return { id: str(o, "id", c), title: str(o, "title", c), archived_at: strN(o, "archived_at", c), records: num(o, "records", c), open_questions: num(o, "open_questions", c) };
+    return { id: str(o, "id", c), title: str(o, "title", c), archived_at: strN(o, "archived_at", c), records: num(o, "records", c), open_questions: typeof o["open_questions"] === "number" && Number.isFinite(o["open_questions"]) ? o["open_questions"] : 0 };
   });
 }
 export function parsePlanList(reply: Reply): RawPlan[] {
