@@ -47,7 +47,7 @@ fn as_session(fx: &Fx, kind: &str, text: &str, session: &str) -> Value {
 }
 
 fn record_ids(fx: &Fx) -> Vec<String> {
-    let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = fx.cpd(&["context", "show", "--all", "--context", CTX]).ok();
     shown["records"]
         .as_array()
         .unwrap()
@@ -209,6 +209,6 @@ fn a_note_superseding_a_valid_note_and_a_decision_is_supersedes_invalid_and_writ
     refused(&run, "supersedes_invalid", 3);
     assert_eq!(record_ids(&fx), rows);
     assert_eq!(recorded_events(&fx), events);
-    let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = fx.cpd(&["context", "show", "--all", "--context", CTX]).ok();
     assert_eq!(shown["records"][0]["id"], json!("hs-n1"));
 }

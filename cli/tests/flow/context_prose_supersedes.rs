@@ -47,7 +47,7 @@ fn decide(fx: &Fx, text: &str, extra: &[&str]) -> Run {
 }
 
 fn record_ids(fx: &Fx) -> Vec<String> {
-    fx.cpd(&["context", "show", "--context", CTX]).ok()["records"]
+    fx.cpd(&["context", "show", "--all", "--context", CTX]).ok()["records"]
         .as_array()
         .unwrap()
         .iter()
