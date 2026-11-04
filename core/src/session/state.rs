@@ -87,6 +87,17 @@ pub(super) fn set(
     set_reply(store, command, id, to, label, false)
 }
 
+/// Whether the Session is in Context `codereview` and its Plan is `done`: its idle reply is not recorded (pro-d391).
+fn is_done_codereview_plan(conn: &rusqlite::Connection, read: &Row) -> Result<bool, CpdError> {
+    let Some(plan) = read.plan.as_ref() else {
+        return Ok(false);
+    };
+    if read.context.as_str() != "codereview" {
+        return Ok(false);
+    }
+    Ok(crate::pr::plan_phase(conn, plan)? == crate::plan::row::Phase::Done)
+}
+
 /// [`set`], with `reply` (only with `idle`) as `reply: true` in the Event's `data` (§5.2), as `session state idle --reply` gives it.
 pub(super) fn set_reply(
     store: &mut Store,
@@ -123,6 +134,7 @@ pub(super) fn set_reply(
             Some(label) => format!("Session {} is {} ({label}).", read.name, to.as_str()),
             None => format!("Session {} is {}.", read.name, to.as_str()),
         };
+        let reply = reply && !(to == State::Idle && is_done_codereview_plan(tx, &read)?);
         let event = NewEvent::session_state(text, read.state.as_str(), to.as_str(), label, reply);
         append(tx, scoped(event, &read))?;
         Ok(())
