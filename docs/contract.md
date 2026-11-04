@@ -112,7 +112,7 @@ $CPD_HOME/
       <repo>.toml                 a repo's policy; optional
   bin/git                         the `git` wrapper first on every Session's `PATH`: refuses `git stash` (§6.5, hs-d310); an executable `sh` script
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
-  vectors.db, vectors.db-wal, vectors.db-shm  the derived vector cache of write-time neighbour curation (§4.6); not the source of truth, safe to delete
+  vectors.db, vectors.db-wal, vectors.db-shm  the derived vector cache of write-time neighbour curation and of the vector leg of `context search` (§4.6); not the source of truth, safe to delete
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
@@ -2709,13 +2709,31 @@ Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the databa
 - **Retired records stay queryable**: `context show --record <id>` prints one, and `context show` labels it `retired (<reason> <target>)`, as it labels a superseded one; it is never in a digest.
 - **Out of scope here**: memory providers (hs-n417), physical deletes, and applying a retirement without the User's approval.
 
-**The search rail** (pro-d9, pro-d10 item 2). `context search` answers from the Context's own records, through an in-memory full-text index built per call. **cpd.db stays the source of truth.** Each call builds an in-memory SQLite FTS5 table (rusqlite's bundled SQLite, FTS5 compiled in; `Connection::open_in_memory()`, so the store is only read) from the Context's records: virtual table `fts` with the columns `id`, `topic`, `short` and `text`, tokenizer `porter unicode61`. `topic` and `short` come from `record_curations` (above, "The distiller curates"); an uncurated record has an empty `topic` and an empty `short`. Nothing persists, nothing is rebuilt, no process is spawned and no migration exists, so a record written or deleted is seen on the next call and a deleted record can never be found. The query text becomes the MATCH string through `query::sanitise` (commands §3.4): an id such as `hs-d655`, a dotted or slashed token or an apostrophe is quoted text, never FTS5 syntax. A malformed query is `usage` (exit 2), with `details.query` (the typed text) and `details.message` (SQLite's message); it is never a silent no-hit.
+**The search rail** (pro-d9, pro-d10 item 2). `context search` answers from the Context's own records, through an in-memory full-text index built per call. **cpd.db stays the source of truth.** Each call builds an in-memory SQLite FTS5 table (rusqlite's bundled SQLite, FTS5 compiled in; `Connection::open_in_memory()`, so the store is only read) from the Context's records: virtual table `fts` with the columns `id`, `topic`, `short` and `text`, tokenizer `porter unicode61`. `topic` and `short` come from `record_curations` (above, "The distiller curates"); an uncurated record has an empty `topic` and an empty `short`. Nothing persists, nothing is rebuilt and no migration exists, so a record written or deleted is seen on the next call and a deleted record can never be found. The one process a search may start is the embedder call of the vector leg (below). The query text becomes the MATCH string through `query::sanitise` (commands §3.4): an id such as `hs-d655`, a dotted or slashed token or an apostrophe is quoted text, never FTS5 syntax. A malformed query is `usage` (exit 2), with `details.query` (the typed text) and `details.message` (SQLite's message); it is never a silent no-hit.
 - **Ranking.** `bm25(fts, 10.0, 2.0, 2.0, 1.0)` ordered ascending: the id column weighs most. A hit's score is `-bm25`, higher is better. Equal scores put the newer record (the higher `seq`) first.
 - **An exact record id ranks first.** A record whose id equals the trimmed query, compared case-insensitively, is always first, with a score of at least the top score, so `search pro-d300` returns `pro-d300` itself first even though other records quote its id.
 - **Candidate selection** (pro-d10 item 2), two rules, with the kind filter (`--kind`) and the force filter applied to the candidates:
   - (a) **Before ranking**, without `--all`, a record out of force (a superseded record, or one with an approved retirement, §4.6 "Records in force") is hidden, as before, and so is a record with a `pending` `record_retirements` row whose reason is `duplicate` or `superseded`: its target stays. A `pending` `documented` row hides nothing. A record whose id is the typed query is exempt from the pending rule. `--all` includes both kinds of hidden record, labelled as `context show` labels them.
   - (b) **After ranking**, a relative score floor: a hit whose score is below `0.35` times the top hit's score is dropped (a top score of 0 or less drops nothing). The id-named record is exempt. Zero hits is a valid answer. `--limit` applies after the floor (`0` is every hit that remains).
-- **One later plug-in point.** A vector leg, when it lands (its own Workflow), joins here: the lexical list may be fused with an embedding list by Reciprocal Rank Fusion, k = 60; absent embeddings the lexical order stands.
+- **The vector leg** (pro-d10 item 2, pro-d12; Plan `vecrrf`). The mode of a search is decided before the embedder is called, from `vectors.db` (the vector cache above; read only, and never created by a search):
+  - **`fts`**: the Context has no vectors for the embedder's model. The embedder is **never called**, and the result is the lexical list alone, as above.
+  - **`hybrid`**: the Context has vectors for the model. The query is embedded **once**. The **semantic list** is the cosine similarity of the query with each vector of that Context and model with the same dimension, over the records that survive rule (a) and the kind filter; a record is a semantic hit only when its cosine is at least **0.60** (`SEM_FLOOR`, a first value, not measured), the list is sorted by cosine with ties by id, and it keeps the top **25** (`SEM_TOP`). The **lexical list** is the ranking after rule (b)'s floor (0.35 times the top score; the id-named record exempt). The two lists are fused by **Reciprocal Rank Fusion, k = 60**: score(id) is the sum, over the lists that hold the id, of 1 / (60 + rank), rank from 1, the constant `RRF_C` = 60 of `curate_neighbours.rs`. The fused list is sorted by score with ties by id, and **the record named by the typed id stays first** when it is in either list. A Context whose semantic list is empty gets the lexical order with RRF scores. `--limit` applies after fusion.
+  - **`fts-only`**: the Context has vectors, but the query could not be embedded. The result is the lexical list alone, with `semantic_error` set to the embedder's error code (one of the codes of "The Bifrost embedder and its error codes" below).
+- **The result** carries `mode` (`fts`, `hybrid` or `fts-only`). `semantic_error` is present only with `fts-only`. **Hybrid scores are RRF scores**, about 0.01 to 0.03 (sums of 1 / (60 + rank)): a consumer must not compare them with the `bm25` scores of `fts` or `fts-only`.
+- **The embedder never fails the search.** Its error degrades the search to `fts-only`. **Search never embeds records and never writes `vectors.db`**; only `context curate` and `context embed` write it.
+- **Cost.** A `hybrid` search pays one embedder call, about 0.4 s plus a node start (an estimate, not measured here), bounded by the helper's 10 s timeout; the Rust side's deadline is 30 s.
+
+**Backfill** (Plan `vecrrf`; `cpd context embed`, commands §3.19). `cpd context embed` fills the vector cache of one Context, so that `hybrid` search has vectors to fuse. It embeds the Context's in-force decisions and notes, newest first, at most `--limit` records per run (default 100; `0` is all). A record whose row's `content_hash` equals the SHA-256 of its text is skipped; any other record is embedded at 768 dims and its row is written with the hash at once, so an interrupted run resumes. Plan and brief records are never embedded (the kind gate above). It is not gated by `experimental.write_curation`. The first embedder error stops the run and is returned; the rows already written stay.
+
+##### The Bifrost embedder and its error codes
+
+The embedder is `EmbeddingPort` (§3.7a); the real one runs `pi/lib/embed.ts` through the Runner, with the text on stdin and no key in argv, env, output or error. Its failures, all exit 1:
+
+| Code | Meaning |
+|---|---|
+| `embedding_unreachable` | the helper timed out (10 s in the helper, 30 s in Rust), cannot be run, or failed with no answer; retryable |
+| `embedding_refused` | the gateway answered a non-2xx; `details.status` is the status |
+| `embedding_bad_reply` | the reply is not one JSON line, has no vector or no model, its vector is not of the asked dimension, or the helper reports an error of no known code |
 
 
 **The distiller curates** (hs-d549, hs-d551; Plan curate, PR `distill`). The Context is a shared working memory (above, "Retirement"), so the distiller does not summarise it: for each record in force that is not yet curated it **classifies** it (a topic), **compresses** it for machines (a short form), **proposes retirements** (delete duplicates, superseded and documented records). This replaces the old validation 2 of this section, that every decision in force be cited in the digest (hs-d244), which is removed with the repair turn, the `## Contradictions` section and the `## Record index`; it does not return. Recency still wins (§2.2): a contradiction is a supersession by the User's later record, and the distiller's role there is to propose a `superseded` retirement. **A Context that is not curable** (R2 of hs-d592: archived, deleted, or under the floor) **gets no run and no Event** (R8).
@@ -2909,14 +2927,15 @@ A derived cache, **not the source of truth**: it holds no history, is never sync
 
 ```sql
 PRAGMA application_id = 1668703587;
-PRAGMA user_version = 1;
-CREATE TABLE context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
+PRAGMA user_version = 2;
+CREATE TABLE context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
 CREATE TABLE context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;
 ```
 
-- `vector` is `dims` little-endian `f32`.
+- `vector` is `dims` little-endian `f32`. `content_hash` is the lowercase hex SHA-256 of the exact text the embedder was sent for that row; `cpd context curate` writes it. An empty hash means unknown.
 - A read of a missing file is empty and creates nothing. The first open takes `locks/store.lock`, sets the pragmas of `Store::connect` and WAL, and creates the tables.
-- A file with a foreign `application_id`, or a `user_version` above 1, is refused. A corrupt file is `store_failed` with the path; curation then runs FTS5-only and says so.
+- **Upgrade in place.** The writer, under `locks/store.lock`, upgrades a version 1 file with `ALTER TABLE context_embeddings ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''` and then sets `user_version = 2`; its rows keep their vectors, with hash ''. A new file is made at version 2. The reader opens read-only and accepts versions 1 and 2 without upgrading (a version 1 row reads as hash '').
+- A file with a foreign `application_id`, or a `user_version` above 2, is refused. A corrupt file is `store_failed` with the path; curation then runs FTS5-only and says so.
 - It has no migration (§4.5): its own `user_version` is its version.
 
 ##### The Bifrost judge and its error codes
