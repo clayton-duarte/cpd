@@ -17,12 +17,14 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::curate_judge::JudgePort;
 use super::curation::{
     Approval, Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting,
 };
 use super::distill_known::known_md;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
+use crate::classifier::ClassifierPort;
 use crate::config::{Config, Letter, Tier};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -455,6 +457,28 @@ impl Batch<'_> {
             approval: Approval::Pending,
         })
     }
+}
+
+/// A checked output after the models verified its duplicate and superseded proposals.
+#[allow(dead_code)] // stub: `Run::run` calls `verify` once implemented
+pub(super) struct Verified {
+    pub(super) checked: Checked,
+    /// Proposals removed because the models did not confirm them.
+    pub(super) dropped: usize,
+}
+
+/// Stub: verifies each duplicate/superseded proposal of `checked` with kev-4b and the judge.
+#[allow(dead_code)] // stub: `Run::run` calls it once implemented
+pub(super) fn verify(
+    _classifier: &dyn ClassifierPort,
+    _judge: &dyn JudgePort,
+    _state: &State,
+    checked: Checked,
+) -> Result<Verified, CpdError> {
+    Ok(Verified {
+        checked,
+        dropped: 0,
+    })
 }
 
 impl Run<'_> {
@@ -1244,6 +1268,10 @@ fn tail_of(log: &Path, offset: u64) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
+
+#[cfg(test)]
+#[path = "distill_verify_tests.rs"]
+mod distill_verify_tests;
 
 #[cfg(test)]
 mod tests {
