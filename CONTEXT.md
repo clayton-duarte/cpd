@@ -320,7 +320,7 @@ The single source of "needs you": the open Inbox items, shown by `cpd inbox` and
 _Avoid_: notifications, alerts, to-do list
 
 **Inbox item** (entity):
-One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and closed after; the User can snooze or dismiss it. Its kind `deploy` and the policy domain `deploy` keep that name; they are not the Deploying step.
+One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User (labelled `review overdue` when its Slack post is 24 hours old and unreviewed; the User's RePost action sends the reminder), a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and closed after; the User can snooze or dismiss it. Its kind `deploy` and the policy domain `deploy` keep that name; they are not the Deploying step.
 _Avoid_: notification, alert, task (as a word for an item)
 
 **Cockpit** (entity, pro-d145):

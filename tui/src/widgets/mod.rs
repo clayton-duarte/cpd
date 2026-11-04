@@ -314,7 +314,17 @@ impl Opener {
     /// `Post`: `pr post --workflow <key> --plan <plan>`, `<key>` read now from the workflow row of the item's Plan that points at the item's
     /// pull request; no popup; it runs on a `Background` job, off the view's thread. A refusal, or no such row, is the failure dialog.
     fn post(&self, item: &Item) {
-        const TITLE: &str = "Post Pull Request";
+        self.pr_command(item, "post", "Post Pull Request");
+    }
+
+    /// `RePost`: `pr repost --workflow <key> --plan <plan>`, found and run as [`Self::post`] does.
+    fn repost(&self, item: &Item) {
+        self.pr_command(item, "repost", "RePost Pull Request");
+    }
+
+    /// `pr <verb> --workflow <key> --plan <plan>` for the item's pull request.
+    fn pr_command(&self, item: &Item, verb: &str, title: &str) {
+        let title: &str = title;
         let (Some(plan), Some(pull)) =
             (item.plan.as_ref(), inbox::Pull::from_subject(&item.subject))
         else {
@@ -337,22 +347,22 @@ impl Opener {
             })
         });
         match key {
-            Err(e) => dialog::report(&self.tmux, &self.log, TITLE, &e),
+            Err(e) => dialog::report(&self.tmux, &self.log, title, &e),
             Ok(None) => dialog::report_why(
                 &self.tmux,
                 &self.log,
-                TITLE,
+                title,
                 format!("No Workflow of Plan {plan} has the pull request {pull}."),
             ),
             Ok(Some(key)) => {
-                let argv = ["post", "--workflow", &key, "--plan", plan.as_str()];
+                let argv = [verb, "--workflow", &key, "--plan", plan.as_str()];
                 let all = std::iter::once(PROGRAM)
                     .chain(["pr"])
                     .chain(argv)
                     .map(std::ffi::OsString::from)
                     .collect();
                 if let Err(e) = (self.run_command)(all) {
-                    dialog::report(&self.tmux, &self.log, TITLE, &e);
+                    dialog::report(&self.tmux, &self.log, title, &e);
                 }
             }
         }
@@ -533,6 +543,7 @@ fn show<B: Backend>(
                                         }
                                     }
                                     InboxEntry::Post => opener.post(&item),
+                                    InboxEntry::RePost => opener.repost(&item),
                                     InboxEntry::GoToLead => opener.jump(&item, &now),
                                     InboxEntry::CopyLink => opener.copy_link(&item),
                                     InboxEntry::Merging => {}

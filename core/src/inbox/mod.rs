@@ -25,6 +25,8 @@ mod dialog_tests;
 #[cfg(test)]
 mod follow_tests;
 #[cfg(test)]
+mod overdue_tests;
+#[cfg(test)]
 mod pr_tests;
 #[cfg(test)]
 mod reopen_tests;

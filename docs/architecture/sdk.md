@@ -62,10 +62,10 @@ The ledger is written under a **single-writer discipline**:
 
 The engine is the tick loop: the one `cpd watch` per machine
 ([contract §3.7](../contract.md); [CONTEXT — Engine](../CONTEXT.md)). Every
-`tick_seconds` it runs its ordered steps, E1–E23 — scheduling Jobs under one
+`tick_seconds` it runs its ordered steps, E1–E22 (E23 is retired) — scheduling Jobs under one
 concurrency limit, watching liveness and timeouts, polling pull requests,
-reconciling the Inbox, curating Context records, and the rest (E23 holds the
-repeat bump of unreviewed posted pull requests, which sends nothing, pro-d386)
+reconciling the Inbox, curating Context records, and the rest (no Step sends a
+Slack message by itself: E8 only labels an overdue post `review overdue`, pro-d388)
 ([contract §3.7](../contract.md)). One per machine is the rule (D5): the engine
 is not a daemon per Plan or a scheduler per Workflow
 ([CONTEXT — Engine](../CONTEXT.md)).
