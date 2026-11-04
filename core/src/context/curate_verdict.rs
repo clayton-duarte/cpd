@@ -123,7 +123,10 @@ pub fn confirm(new: Side, neighbour: Side, kev: Option<Screen>, judged: Judged) 
         reason,
         topic: judged.topic,
         short: judged.short,
-        // Stub: neither Models nor Pending, so the new tests fail for the right reason.
-        approval: Approval::GitGrep,
+        approval: if kev.is_some() {
+            Approval::Models
+        } else {
+            Approval::Pending
+        },
     }
 }
