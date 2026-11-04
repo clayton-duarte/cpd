@@ -294,6 +294,7 @@ fn judge_pair(
             reason,
             topic,
             short,
+            approval: _,
         } => {
             if label_ok(&topic, &short) {
                 if !tally.labels.iter().any(|(r, _, _)| *r == record) {
@@ -424,6 +425,7 @@ fn write(
                 Reason::Superseded => super::curation::Reason::Superseded,
             },
             target: target.to_string(),
+            approval: super::curation::Approval::Pending,
         })
         .collect();
     if !curations.is_empty() || !proposals.is_empty() {

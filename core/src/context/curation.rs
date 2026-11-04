@@ -88,6 +88,54 @@ pub struct Proposal {
     pub record: RecordId,
     pub reason: Reason,
     pub target: String,
+    pub approval: Approval,
+}
+
+/// Who decided a proposal when it is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Approval {
+    Pending,
+    Models,
+    GitGrep,
+}
+
+impl Approval {
+    pub fn decided_by(self) -> Option<&'static str> {
+        todo!("stub: Pending None, Models kev-4b+gemini-3.8-flash, GitGrep git-grep")
+    }
+}
+
+/// One sweep decision on a pending retirement.
+#[derive(Clone, Debug)]
+pub struct Sweep {
+    pub record: RecordId,
+    pub approve: bool,
+}
+
+/// A pending duplicate or superseded retirement awaiting the models.
+#[derive(Clone, Debug)]
+pub struct PendingPair {
+    pub record: RecordId,
+    pub target: RecordId,
+    pub reason: Reason,
+}
+
+/// Decides pending rows; returns the (approved, rejected) counts changed.
+pub fn decide_pending(
+    _store: &mut Store,
+    _context: &ContextId,
+    _decisions: &[Sweep],
+) -> Result<(usize, usize), CpdError> {
+    todo!("stub")
+}
+
+/// The oldest pending duplicate/superseded rows, at most `limit`.
+pub fn pending_pairs(
+    _store: &mut Store,
+    _context: &ContextId,
+    _limit: usize,
+) -> Result<Vec<PendingPair>, CpdError> {
+    todo!("stub")
 }
 
 /// Writes `curations` and pending retirements for `proposals` and appends `context-curated`, in one transaction. A record that already has a
@@ -330,3 +378,7 @@ pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
         json!({"context": context, "approved": approve, "rejected": reject}),
     ))
 }
+
+#[cfg(test)]
+#[path = "curation_auto_tests.rs"]
+mod curation_auto_tests;

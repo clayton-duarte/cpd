@@ -17,7 +17,9 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::curation::{Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting};
+use super::curation::{
+    Approval, Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting,
+};
 use super::distill_known::known_md;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
@@ -450,6 +452,7 @@ impl Batch<'_> {
             record: id.clone(),
             reason,
             target: retire.target.clone(),
+            approval: Approval::Pending,
         })
     }
 }

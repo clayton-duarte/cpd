@@ -7,7 +7,7 @@ use crate::common;
 
 use common::fx::Fx;
 use common::{Run, refused};
-use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
+use cpd_core::context::curation::{Approval, Curation, Proposal, Reason, propose};
 use cpd_core::ids::ContextId;
 use serde_json::{Value, json};
 
@@ -168,6 +168,7 @@ fn the_dedupe_does_not_match_a_retired_record() {
             record: "hs-n2".parse().unwrap(),
             reason: Reason::Duplicate,
             target: "hs-n3".into(),
+            approval: Approval::Pending,
         }],
     )
     .unwrap();
