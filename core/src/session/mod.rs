@@ -43,6 +43,8 @@ pub(crate) mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;
+#[cfg(test)]
+mod state_codereview_tests;
 mod switch;
 pub mod tail;
 #[cfg(test)]

@@ -180,3 +180,43 @@ fn the_configured_threshold_decides() {
     assert!(session_asleep_at(&mut default, "past-lead").is_some());
     assert!(event_column(&mut default, "plan", "plan-archived").is_empty());
 }
+
+/// Like [`plan`], but in Context `codereview`, its Lead and fork asleep `asleep_seconds` ago (`None`: never asleep, the Lead `idle`).
+fn codereview_plan(fx: &mut Fx, plan_id: &str, asleep_seconds: Option<i64>) {
+    fx.fixture("INSERT OR IGNORE INTO contexts (id, title, owner, created_at, created_on) VALUES ('codereview', 'Code review', 'acme', 't', 'm1');");
+    let (state, asleep) = match asleep_seconds {
+        Some(s) => ("stopped", format!("'{}'", ago_seconds(s))),
+        None => ("idle", "NULL".to_owned()),
+    };
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, asleep_at)
+           VALUES ('{plan_id}-lead', 'lead', 'codereview', '{plan_id}', 'Lead {plan_id}', '/', 'O3', '{state}', '{at}', 't', {asleep});
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('{plan_id}', 'codereview', '{plan_id}', 'done', '{plan_id}-lead', 't', 't', '{done}');",
+        at = ago_seconds(120 * 60),
+        done = ago_seconds(120 * 60)
+    ));
+}
+
+/// Decision pro-d391: a finished codereview Plan sleeps via E13 like any other and is archived only after the sleep threshold.
+#[test]
+fn a_finished_codereview_lead_is_not_archived_before_it_sleeps() {
+    let mut fx = fx(None);
+    codereview_plan(&mut fx, "rev", None);
+    for _ in 0..4 {
+        tick(&mut fx);
+    }
+    assert_eq!(plan_archived_at(&mut fx, "rev"), None);
+    assert_eq!(session_archived_at(&mut fx, "rev-lead"), None);
+}
+
+#[test]
+fn a_codereview_lead_asleep_past_the_threshold_archives_its_done_plan() {
+    let mut fx = fx(None);
+    codereview_plan(&mut fx, "rev", Some(2 * 24 * 3600));
+    for _ in 0..4 {
+        tick(&mut fx);
+    }
+    assert!(plan_archived_at(&mut fx, "rev").is_some());
+    assert!(session_archived_at(&mut fx, "rev-lead").is_some());
+}

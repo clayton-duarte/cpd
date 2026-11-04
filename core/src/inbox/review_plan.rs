@@ -178,7 +178,7 @@ mod tests {
         ));
         assert!(text.contains("3. Use `/h/projects/pay` (`git show`"));
         assert!(text.ends_with(
-            "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop."
+            "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message."
         ));
     }
 }
