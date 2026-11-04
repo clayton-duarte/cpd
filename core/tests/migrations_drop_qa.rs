@@ -10,7 +10,7 @@ use cpd_core::store::Store;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, params};
 
-const MIGRATION: &str = "20261103T1200-drop-question-answer";
+const MIGRATION: &str = "20261103T2200-drop-question-answer";
 const CONTEXT: &str = "cx";
 
 fn home_in(dir: &tempfile::TempDir) -> CpdHome {
@@ -259,7 +259,7 @@ fn drop_qa_is_idempotent_on_a_clean_store() {
     assert_eq!(
         count(
             &conn,
-            "SELECT count(*) FROM schema_migrations WHERE name = '20261103T1200-drop-question-answer'"
+            "SELECT count(*) FROM schema_migrations WHERE name = '20261103T2200-drop-question-answer'"
         ),
         1,
         "the migration is recorded as applied"

@@ -232,12 +232,18 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
 fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog_of_attempt(&active.plan, &active.id)?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
+    let classifier = merge::real_classifier(
+        &engine.config,
+        &engine.home,
+        &cpd_core::ports::Ports::current(),
+    );
     let ctx = merge::Ctx {
         home: &engine.home,
         config: &engine.config,
         catalog: &catalog,
         source: SOURCE,
         metrics: &metrics,
+        classifier: &*classifier,
     };
     let recovered = merge::recover_attempt(&mut engine.store, &ctx, &active.plan, &active.id)?;
     if let Some(r) = recovered {

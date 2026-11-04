@@ -38,7 +38,7 @@ pub fn in_force_without<'a>(
     retired: &HashSet<RecordId>,
 ) -> Vec<&'a Indexed> {
     let considered = || records.iter().filter(|(seq, _)| *seq <= as_of);
-    let superseded: HashSet<_> = considered().filter_map(|(_, r)| r.supersedes()).collect();
+    let superseded: HashSet<_> = considered().flat_map(|(_, r)| r.supersedes()).collect();
     considered()
         .filter(|(_, r)| {
             matches!(r.kind(), RecordKind::Decision | RecordKind::Note)
@@ -75,7 +75,7 @@ mod tests {
         record(
             s,
             Draft::Decision {
-                supersedes: supersedes.map(id),
+                supersedes: supersedes.map(id).into_iter().collect(),
             },
         )
     }
@@ -126,7 +126,12 @@ mod tests {
     #[test]
     fn a_note_or_a_decision_supersedes_a_note() {
         let note = |s: &str, over: Option<&str>| match over {
-            Some(o) => record(s, Draft::NoteSupersedes { supersedes: id(o) }),
+            Some(o) => record(
+                s,
+                Draft::NoteSupersedes {
+                    supersedes: vec![id(o)],
+                },
+            ),
             None => record(s, Draft::Note),
         };
         let records = indexed(vec![

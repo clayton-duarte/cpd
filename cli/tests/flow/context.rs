@@ -472,7 +472,7 @@ fn decide_and_note_write_records() {
         ])
         .ok();
     assert_eq!(d2["record"]["id"], "hs-d2");
-    assert_eq!(d2["record"]["supersedes"], "hs-d1");
+    assert_eq!(d2["record"]["supersedes"], json!(["hs-d1"]));
     assert_eq!(d2["seq"], 3);
     assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1", "hs-d2"]);
 
@@ -618,7 +618,7 @@ fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() 
         .ok();
     assert_eq!(n2["record"]["id"], "hs-n2", "{n2}");
     assert_eq!(n2["record"]["kind"], "note");
-    assert_eq!(n2["record"]["supersedes"], "hs-n1");
+    assert_eq!(n2["record"]["supersedes"], json!(["hs-n1"]));
     assert_eq!(n2["seq"], 2);
     assert_eq!(events(&fx, "context-record").len(), 2);
 
@@ -627,7 +627,7 @@ fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() 
     let records = shown["records"].as_array().unwrap();
     assert_eq!(records.len(), 2, "{shown}");
     assert!(records[0].get("supersedes").is_none());
-    assert_eq!(records[1]["supersedes"], "hs-n1");
+    assert_eq!(records[1]["supersedes"], json!(["hs-n1"]));
 
     // Markdown: the older note is listed, labelled superseded and naming its successor, after the active one.
     let md = shown["markdown"].as_str().unwrap();
@@ -676,9 +676,9 @@ fn a_decision_supersedes_a_note_which_is_then_labelled_superseded() {
         ])
         .ok();
     assert_eq!(d1["record"]["id"], "hs-d1", "{d1}");
-    assert_eq!(d1["record"]["supersedes"], "hs-n1");
+    assert_eq!(d1["record"]["supersedes"], json!(["hs-n1"]));
     let shown = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
-    assert_eq!(shown["records"][1]["supersedes"], "hs-n1");
+    assert_eq!(shown["records"][1]["supersedes"], json!(["hs-n1"]));
     let md = shown["markdown"].as_str().unwrap();
     let old = item_line(md, "hs-n1");
     assert!(
@@ -844,21 +844,23 @@ fn a_retry_returns_the_existing_record() {
     assert_eq!(record_ids(&fx), ["hs-n1"]);
     assert_eq!(events(&fx, "context-record").len(), 1);
 
-    // Only the latest record counts: after another write, the same text is new.
+    // An in-force record of the same text dedupes, whatever the latest record is.
     fx.cpd(&["context", "note", "Other.", "--context", CTX])
         .ok();
     let third = fx.cpd(&["context", "note", "Same.", "--context", CTX]).ok();
-    assert!(third.get("already").is_none());
-    assert_eq!(third["record"]["id"], "hs-n3");
+    assert_eq!(third["already"], true);
+    assert_eq!(third["record"]["id"], "hs-n1");
 
-    // A different session is a different write.
+    // A different session dedupes too.
     let out = fx.cpd_with(
         fx.env.root(),
         &["context", "note", "Same.", "--context", CTX],
         &[("CPD_SESSION", "other-session")],
     );
     let out: Value = serde_json::from_str(&out.stdout).unwrap();
-    assert_eq!(out["record"]["id"], "hs-n4");
+    assert_eq!(out["already"], true);
+    assert_eq!(out["record"]["id"], "hs-n1");
+    assert_eq!(record_ids(&fx), ["hs-n1", "hs-n2"]);
 }
 
 #[test]
@@ -960,7 +962,7 @@ fn show_renders_the_records() {
     let records = out["records"].as_array().unwrap();
     assert_eq!(records.len(), 3);
     assert_eq!(records[0]["seq"], 1);
-    assert_eq!(records[1]["supersedes"], "hs-d1");
+    assert_eq!(records[1]["supersedes"], json!(["hs-d1"]));
     let md = out["markdown"].as_str().unwrap();
     assert!(md.starts_with("# Building cpd\n"), "{md}");
     let positions: Vec<usize> = ["## Decisions", "## Superseded decisions", "## Notes"]

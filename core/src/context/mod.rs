@@ -38,6 +38,9 @@ mod delete;
 pub mod distill;
 #[cfg(test)]
 mod distill_git_tests;
+mod distill_known;
+#[cfg(test)]
+mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
 pub mod engine;
@@ -50,6 +53,9 @@ mod pending;
 pub mod permanent;
 #[cfg(test)]
 mod permanent_tests;
+pub mod prose_supersedes;
+#[cfg(test)]
+mod prose_supersedes_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
@@ -59,6 +65,8 @@ mod rename;
 pub(crate) mod render;
 mod search;
 mod show;
+#[cfg(test)]
+mod supersedes_tests;
 mod write;
 
 use std::fmt;
@@ -241,8 +249,11 @@ pub struct DecideArgs {
     /// The decision
     text: Text,
     /// The decision or note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -252,8 +263,11 @@ pub struct NoteArgs {
     /// The note
     text: Text,
     /// The note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -288,6 +302,17 @@ pub struct DeleteArgs {
     yes: bool,
 }
 
+/// `--no-supersedes` with `--supersedes` is `args_invalid`.
+fn no_supersedes_alone(supersedes: &[RecordId], no_supersedes: bool) -> Result<(), CpdError> {
+    if no_supersedes && !supersedes.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            "--no-supersedes conflicts with --supersedes.",
+        ));
+    }
+    Ok(())
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
@@ -296,17 +321,34 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Search(args) => search::search(args),
         Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = Draft::Decision {
                 supersedes: args.supersedes,
             };
-            write::write("context decide", &args.select, &args.text, draft)
+            write::write(
+                "context decide",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
         Command::Note(args) => {
-            let draft = match args.supersedes {
-                Some(supersedes) => Draft::NoteSupersedes { supersedes },
-                None => Draft::Note,
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
+            let draft = if args.supersedes.is_empty() {
+                Draft::Note
+            } else {
+                Draft::NoteSupersedes {
+                    supersedes: args.supersedes,
+                }
             };
-            write::write("context note", &args.select, &args.text, draft)
+            write::write(
+                "context note",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),

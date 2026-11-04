@@ -171,6 +171,7 @@ impl Fx {
             catalog: &catalog,
             source: "gate test",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         merge::merge(&mut self.store(), &ctx, &plan(), &attempt())
     }

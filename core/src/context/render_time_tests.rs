@@ -14,7 +14,7 @@ fn record() -> Record {
             plan: None,
         },
         text: "Use local time.".into(),
-        draft: Draft::Decision { supersedes: None },
+        draft: Draft::Decision { supersedes: vec![] },
     }
 }
 

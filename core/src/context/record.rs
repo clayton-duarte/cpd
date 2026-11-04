@@ -35,12 +35,12 @@ pub struct PlanRef {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Draft {
     Decision {
-        supersedes: Option<RecordId>,
+        supersedes: Vec<RecordId>,
     },
     Note,
     /// A note that replaces an earlier note (recency wins, §2.2).
     NoteSupersedes {
-        supersedes: RecordId,
+        supersedes: Vec<RecordId>,
     },
     Plan(PlanRef),
     /// A Plan's brief (B3-A4): `plan` is `{id, machine}`.
@@ -48,11 +48,10 @@ pub enum Draft {
 }
 
 impl Draft {
-    pub fn supersedes(&self) -> Option<&RecordId> {
+    pub fn supersedes(&self) -> &[RecordId] {
         match self {
-            Draft::Decision { supersedes } => supersedes.as_ref(),
-            Draft::NoteSupersedes { supersedes } => Some(supersedes),
-            _ => None,
+            Draft::Decision { supersedes } | Draft::NoteSupersedes { supersedes } => supersedes,
+            _ => &[],
         }
     }
 
@@ -85,7 +84,7 @@ impl Record {
         self.id.machine()
     }
 
-    pub fn supersedes(&self) -> Option<&RecordId> {
+    pub fn supersedes(&self) -> &[RecordId] {
         self.draft.supersedes()
     }
 
@@ -130,8 +129,8 @@ impl Record {
             json!({"session": self.by.session, "plan": self.by.plan}),
         );
         map.insert("text".into(), json!(self.text));
-        if let Some(supersedes) = self.supersedes() {
-            map.insert("supersedes".into(), json!(supersedes));
+        if !self.supersedes().is_empty() {
+            map.insert("supersedes".into(), json!(self.supersedes()));
         }
         if let Some(plan) = self.plan() {
             let mut p = Map::new();
@@ -159,7 +158,7 @@ impl Record {
             by: By,
             text: String,
             #[serde(default)]
-            supersedes: Option<RecordId>,
+            supersedes: Vec<RecordId>,
             #[serde(default)]
             plan: Option<RawPlan>,
         }
@@ -248,12 +247,6 @@ impl Record {
                 .transpose()
                 .map_err(|e| bad(6, e))?,
         };
-        let record_id = |column| -> rusqlite::Result<Option<RecordId>> {
-            optional(column)?
-                .map(|s| RecordId::parse(&s))
-                .transpose()
-                .map_err(|e| bad(column, e))
-        };
         let plan = match optional(9)? {
             None => None,
             Some(plan) => Some(PlanRef {
@@ -262,7 +255,16 @@ impl Record {
                 jira: optional(11)?,
             }),
         };
-        let draft = Draft::from_parts(kind, record_id(8)?, plan).map_err(|m| invalid(2, m))?;
+        let supersedes = optional(8)?
+            .map(|list| {
+                list.split(',')
+                    .map(RecordId::parse)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(|e| bad(8, e))?
+            .unwrap_or_default();
+        let draft = Draft::from_parts(kind, supersedes, plan).map_err(|m| invalid(2, m))?;
         let record = Record {
             id,
             at: row.get(3)?,
@@ -296,7 +298,13 @@ impl Record {
                 self.by.session.as_ref().map(SessionId::as_str),
                 self.by.plan.as_ref().map(PlanId::as_str),
                 self.text,
-                self.supersedes().map(RecordId::to_string),
+                (!self.supersedes().is_empty()).then(|| {
+                    self.supersedes()
+                        .iter()
+                        .map(RecordId::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }),
                 plan.map(|p| p.id.as_str()),
                 plan.map(|p| p.machine.as_str()),
                 plan.and_then(|p| p.jira.as_deref()),
@@ -311,20 +319,21 @@ impl Draft {
     /// decision or a note) or a note (naming a note), `plan` for a plan or a brief only and required.
     fn from_parts(
         kind: RecordKind,
-        supersedes: Option<RecordId>,
+        supersedes: Vec<RecordId>,
         plan: Option<PlanRef>,
     ) -> Result<Draft, String> {
         let extra =
             |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
-        if supersedes.is_some() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
+        if !supersedes.is_empty() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
             return Err(extra("supersedes", kind));
         }
         if plan.is_some() && !matches!(kind, RecordKind::Plan | RecordKind::Brief) {
             return Err(extra("plan", kind));
         }
-        if let Some(s) = &supersedes
-            && !may_supersede(kind, s.kind())
-        {
+        for s in &supersedes {
+            if may_supersede(kind, s.kind()) {
+                continue;
+            }
             return Err(format!(
                 "a {} record cannot supersede {s}, a {}",
                 kind.as_str(),
@@ -333,10 +342,8 @@ impl Draft {
         }
         Ok(match kind {
             RecordKind::Decision => Draft::Decision { supersedes },
-            RecordKind::Note => match supersedes {
-                Some(supersedes) => Draft::NoteSupersedes { supersedes },
-                None => Draft::Note,
-            },
+            RecordKind::Note if supersedes.is_empty() => Draft::Note,
+            RecordKind::Note => Draft::NoteSupersedes { supersedes },
             RecordKind::Plan => Draft::Plan(plan.ok_or("a plan record needs its plan")?),
             RecordKind::Brief => Draft::Brief(plan.ok_or("a brief record needs its plan")?),
         })
@@ -378,8 +385,8 @@ mod tests {
 
     #[test]
     fn a_record_survives_its_line() {
-        let record = Record::parse_line(&line(r#","supersedes":"hs-d9""#), &machine()).unwrap();
-        assert_eq!(record.supersedes().unwrap().to_string(), "hs-d9");
+        let record = Record::parse_line(&line(r#","supersedes":["hs-d9"]"#), &machine()).unwrap();
+        assert_eq!(record.supersedes()[0].to_string(), "hs-d9");
         let mut value = record.to_json();
         value["v"] = json!(VERSION);
         let again = Record::parse_line(&value.to_string(), &machine()).unwrap();
@@ -420,6 +427,10 @@ mod tests {
         for (bad, why) in [
             (line(r#","extra":1"#), "unknown field"),
             (line(r#","question":"hs-d1""#), "question field"),
+            (
+                line(r#","supersedes":["hs-q1"]"#),
+                "supersedes a retired letter",
+            ),
             (line("").replace(r#""v":1"#, r#""v":2"#), "version"),
             (line("").replace("hs-d1", "hs-n1"), "id letter against kind"),
             (

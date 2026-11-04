@@ -73,10 +73,7 @@ pub fn markdown_retired(
         of_kind(RecordKind::Decision)
             .filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r))
             .map(|(_, r)| {
-                let replaces = r
-                    .supersedes()
-                    .map(|s| format!(" (supersedes {s})"))
-                    .unwrap_or_default();
+                let replaces = supersedes_label(r);
                 item(r, &format!("{}{replaces}", r.text))
             }),
     );
@@ -95,10 +92,7 @@ pub fn markdown_retired(
     let active = of_kind(RecordKind::Note)
         .filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r))
         .map(|(_, r)| {
-            let replaces = r
-                .supersedes()
-                .map(|s| format!(" (supersedes {s})"))
-                .unwrap_or_default();
+            let replaces = supersedes_label(r);
             item(r, &format!("{}{replaces}", r.text))
         });
     let superseded = of_kind(RecordKind::Note).filter_map(|(_, r)| {
@@ -120,11 +114,20 @@ pub fn markdown_retired(
     out
 }
 
+/// ` (supersedes a, b)` for a record that supersedes any, else empty.
+fn supersedes_label(r: &Record) -> String {
+    if r.supersedes().is_empty() {
+        return String::new();
+    }
+    let ids: Vec<String> = r.supersedes().iter().map(ToString::to_string).collect();
+    format!(" (supersedes {})", ids.join(", "))
+}
+
 /// The record that supersedes each superseded record, by record id.
 fn successors(records: &[Indexed]) -> HashMap<String, &Record> {
     let mut successor = HashMap::new();
     for (_, record) in records {
-        if let Some(old) = record.supersedes() {
+        for old in record.supersedes() {
             successor.insert(old.to_string(), record);
         }
     }
@@ -257,11 +260,6 @@ pub fn bounded(
     let in_force = |r: &Record| {
         !successor.contains_key(&r.id.to_string()) && !retired.contains_key(&r.id.to_string())
     };
-    let replaces = |r: &Record| {
-        r.supersedes()
-            .map(|s| format!(" (supersedes {s})"))
-            .unwrap_or_default()
-    };
     let of_kind = |kind: RecordKind| records.iter().filter(move |(_, r)| r.kind() == kind);
     let mut shown = HashSet::new();
     let mut omitted = Omitted::default();
@@ -274,7 +272,7 @@ pub fn bounded(
             .filter(|(_, r)| in_force(r))
             .map(|(seq, r)| {
                 shown.insert(*seq);
-                item(r, &format!("{}{}", r.text, replaces(r)))
+                item(r, &format!("{}{}", r.text, supersedes_label(r)))
             })
             .collect::<Vec<_>>()
             .into_iter(),
@@ -298,7 +296,7 @@ pub fn bounded(
             .iter()
             .map(|(seq, r)| {
                 shown.insert(*seq);
-                item(r, &format!("{}{}", r.text, replaces(r)))
+                item(r, &format!("{}{}", r.text, supersedes_label(r)))
             })
             .collect::<Vec<_>>()
             .into_iter(),
@@ -429,7 +427,7 @@ mod tests {
         vec![
             (
                 1,
-                rec("hs-d1", "Old.", Draft::Decision { supersedes: None }),
+                rec("hs-d1", "Old.", Draft::Decision { supersedes: vec![] }),
             ),
             (
                 2,
@@ -437,7 +435,7 @@ mod tests {
                     "hs-d2",
                     "New.",
                     Draft::Decision {
-                        supersedes: d("hs-d1"),
+                        supersedes: d("hs-d1").into_iter().collect(),
                     },
                 ),
             ),
@@ -472,7 +470,7 @@ mod tests {
                     "hs-n2",
                     "New fact.",
                     Draft::NoteSupersedes {
-                        supersedes: RecordId::parse("hs-n1").unwrap(),
+                        supersedes: vec![RecordId::parse("hs-n1").unwrap()],
                     },
                 ),
             ),

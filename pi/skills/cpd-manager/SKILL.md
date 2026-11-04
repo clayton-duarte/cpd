@@ -86,7 +86,7 @@ cpd context note "<fact>" --context <c>
 
 | Record | When |
 |---|---|
-| `decide` | a choice the User settled; `--supersedes` when it replaces an earlier decision |
+| `decide` | a choice the User settled; `--supersedes` when it replaces an earlier decision (it may repeat; a text that says it supersedes a record without linking it is refused, `supersedes_unlinked`) |
 | `note` | a fact: a Requirement, a constraint, where the User's material lives, which Plans exist for what, an order between Plans |
 | `brief` | written by `cpd plan new --brief-file` ([2. Plans](#2-plans)); never by hand |
 
