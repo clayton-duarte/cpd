@@ -42,7 +42,23 @@ sh scripts/preview-web.sh on [<worktree>] | off | status
 - **`off`** respawns the window `web` on the primary checkout, unsets the option `@cpd_web_preview` and removes `web-state`.
 - **`status`** prints the worktree and the sha, or `no web preview`.
 
-The preview worktree is never changed with `git checkout`, `git reset` or `git clean`. The matching scripts in `web/package.json` are `preview:on` and `preview:off`.
+`preview-web.sh` itself never runs `git checkout`, `git reset` or `git clean`. The Electron sync does a scoped `git checkout HEAD -- <files>` in the preview worktree before it fast-forwards (see [Electron app](#electron-app)). The matching scripts in `web/package.json` are `preview:on` and `preview:off`.
+
+## Electron app
+
+(pro-d37, pro-d38, pro-d39)
+
+The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. Four behaviours:
+
+- **Load order (pro-d37).** The window loads only after `startAutoUpdate` returns and `startServices` has run, so the IPC handlers `ghostty:wasm` and `webui:send` exist before the renderer loads. Accepted cost: the window stays blank during a first-run CLI bootstrap; `start.ts` waits for it.
+- **Name (pro-d38).** The app is named CPD. `productName` is `CPD` in `web/package.json` and `web/electron-builder.yml`. `app.setName('CPD')` runs before `app.whenReady()`, and the BrowserWindow title is `CPD`. `<title>CPD</title>` is in `web/electron.html` and `web/index.html`. The `electron` script patches `CFBundleName` and `CFBundleDisplayName` to `CPD` in `Electron.app/Contents/Info.plist` with `plutil` on darwin.
+- **Reload on SIGUSR1 (pro-d39).** The main process reloads the renderer in place on `SIGUSR1` (`reloadIgnoringCache`, when the webContents is not destroyed). Live patches reload without closing or focusing the window.
+- **Live sync (pro-d39).** `syncCheckout` (`web/src/electron/update/checkout.ts`) syncs a live preview worktree when `origin/main` advances:
+  - It no longer requires the branch `main`: any branch whose HEAD is an ancestor of `origin/main` fast-forwards.
+  - It no longer skips a dirty tree.
+  - Before the fast-forward it runs `git checkout HEAD -- <files changed in HEAD..origin/main>`. Landed fixes replace their temporary live patches; other live patches survive.
+  - A fast-forward that cannot apply (a changed file with a conflicting local edit that survived) is reported `skipped: diverged`.
+  - The sync reasons are `fetch-failed` | `diverged`. The `branch` and `dirty` reasons are removed.
 
 ## Limits
 

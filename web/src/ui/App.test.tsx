@@ -107,7 +107,7 @@ describe("App", () => {
     expect(transport.sent).toContainEqual({ type: "cockpit.subscribe" });
     expect(container.querySelector('[aria-label="Context tree"] [data-sidebar="content"], [aria-label="Context tree"] [data-slot="sidebar-content"]')?.textContent).toContain("plan");
     expect(container.querySelector('section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
-    expect(container.querySelector('aside[aria-label="Inbox"]')?.textContent).toContain("Nothing needs you");
+    expect(container.querySelector('aside[aria-label="Inbox"]')?.textContent).toContain("up to date, drink some water");
   });
 
   it("selecting a session attaches and renders its transcript tail", () => {

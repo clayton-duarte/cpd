@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
+import { boot } from "./boot.ts";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
@@ -36,25 +37,40 @@ const backend: PtyBackend = {
 };
 
 async function main(): Promise<void> {
-  await app.whenReady();
+  let win!: BrowserWindow;
+  const send = (channel: string, payload: unknown): void => {
+    if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+  };
+  let env: NodeJS.ProcessEnv = process.env;
+  let cpdHome = "";
+  let assets!: ReturnType<typeof resolveAssetPaths>;
+  let nativeShell!: ReturnType<typeof setupNativeShell>;
+  let controller!: ReturnType<typeof createModeController>;
+  const disposers: (() => void)[] = [];
+  let services!: ReturnType<typeof createServices>;
+  let started!: Promise<void>;
+  let markStarted: () => void = () => {};
+  let failStarted: (error: unknown) => void = () => {};
+
+  // Everything that needs the app to be ready but not the window: runs inside boot's whenReady.
+  const prepare = async (): Promise<void> => {
   const loginPath = await resolveLoginPath({
     platform: process.platform,
     shell: process.env["SHELL"],
     currentPath: process.env["PATH"],
     run,
   });
-  const env = { ...process.env, PATH: loginPath };
-  const cpdHome = process.env["CPD_HOME"] ?? path.join(os.homedir(), ".cpd");
+  env = { ...process.env, PATH: loginPath };
+  cpdHome = process.env["CPD_HOME"] ?? path.join(os.homedir(), ".cpd");
 
-  const assets = resolveAssetPaths({
+  assets = resolveAssetPaths({
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
   });
-  let win!: BrowserWindow;
   // Assigned after the controller exists; the native shell is set up before the window.
   let controllerRef: ReturnType<typeof createModeController> | undefined;
-  const nativeShell = setupNativeShell({
+  nativeShell = setupNativeShell({
     platform: process.platform,
     app,
     nativeTheme,
@@ -85,23 +101,7 @@ async function main(): Promise<void> {
     },
   });
 
-  win = new BrowserWindow({
-    icon: assets.icon,
-    width: 1200,
-    height: 800,
-    backgroundColor: "#1c1a20",
-    webPreferences: {
-      preload: path.join(here, "preload.cjs"),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
-  });
-  const send = (channel: string, payload: unknown): void => {
-    if (!win.webContents.isDestroyed()) win.webContents.send(channel, payload);
-  };
-
-  const controller = createModeController({
+  controller = createModeController({
     fs: {
       readFile: (file) => fs.readFile(file, "utf8"),
       writeFile: (file, data) => fs.writeFile(file, data),
@@ -125,31 +125,29 @@ async function main(): Promise<void> {
   });
   controllerRef = controller;
   await controller.init();
+  };
 
-  const openExternal = (url: string): unknown => electronShell.openExternal(url);
-  win.webContents.setWindowOpenHandler(createExternalLinkHandler(openExternal));
-  win.webContents.on("will-navigate", (event, url) => {
-    if (url === win.webContents.getURL()) return;
-    event.preventDefault();
-    void openExternal(url);
-  });
 
-  const disposers: (() => void)[] = [];
-  const startServices = (): void => {
-    const services = createServices(realBoundaries(env));
-    const started = services.cockpit.start().catch((error: unknown) => {
-      console.error(error);
-      throw error;
-    });
-    const webuiIpc = registerWebuiIpc({
-      ipc: ipcMain,
-      newConnection: services.newConnection,
-      started,
-      onError: (error) => console.error(error),
-    });
-    const attention = started.then(() => watchAttention(services.cockpit, nativeShell.setAttention));
-    attention.catch(() => undefined);
+  class CpdWindow extends BrowserWindow {
+    constructor(options: Electron.BrowserWindowConstructorOptions & { title: string }) {
+      super({
+        ...options,
+        icon: assets.icon,
+        width: 1200,
+        height: 800,
+        backgroundColor: "#1c1a20",
+        webPreferences: {
+          preload: path.join(here, "preload.cjs"),
+          contextIsolation: true,
+          sandbox: true,
+          nodeIntegration: false,
+        },
+      });
+      win = this;
+    }
+  }
 
+  const registerIpcNow = (): void => {
     const sinks = {
       data: (chunk: string) => send(CHANNELS.ptyData, chunk),
       exit: (exitCode: number) => send(CHANNELS.ptyExit, exitCode),
@@ -164,11 +162,37 @@ async function main(): Promise<void> {
       getMode: controller.getMode,
       timers: nodeTimers,
     });
+    disposers.push(() => ipc.dispose());
+  };
+
+  const registerWebuiIpcNow = (): void => {
+    services = createServices(realBoundaries(env));
+    started = new Promise<void>((resolve, reject) => {
+      markStarted = resolve;
+      failStarted = reject;
+    });
+    started.catch(() => undefined);
+    const webuiIpc = registerWebuiIpc({
+      ipc: ipcMain,
+      newConnection: services.newConnection,
+      started,
+      onError: (error) => console.error(error),
+    });
     disposers.push(() => {
-      ipc.dispose();
       void webuiIpc.dispose();
-      void attention.then((watch) => watch.dispose()).catch(() => undefined);
       void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
+    });
+  };
+
+  const startServices = (): void => {
+    services.cockpit.start().then(markStarted, (error: unknown) => {
+      console.error(error);
+      failStarted(error);
+    });
+    const attention = started.then(() => watchAttention(services.cockpit, nativeShell.setAttention));
+    attention.catch(() => undefined);
+    disposers.push(() => {
+      void attention.then((watch) => watch.dispose()).catch(() => undefined);
     });
   };
 
@@ -180,52 +204,72 @@ async function main(): Promise<void> {
   });
   app.on("window-all-closed", () => app.quit());
 
-  let latestBootstrap: BootstrapStatus | undefined;
-  let latestState: UpdateState | undefined;
-  win.webContents.on("did-finish-load", () => {
-    if (latestBootstrap) send(UPDATE_BOOTSTRAP_CHANNEL, latestBootstrap);
-    if (latestState) send(UPDATE_STATE_CHANNEL, latestState);
-  });
-  const updateLog = path.join(cpdHome, "run", "electron-update.log");
+  const updateLog = (): string => path.join(cpdHome, "run", "electron-update.log");
   const log = (line: string): void => {
     console.log(line);
-    fs.mkdir(path.dirname(updateLog), { recursive: true })
-      .then(() => fs.appendFile(updateLog, `${new Date().toISOString()} ${line}\n`))
+    fs.mkdir(path.dirname(updateLog()), { recursive: true })
+      .then(() => fs.appendFile(updateLog(), `${new Date().toISOString()} ${line}\n`))
       .catch((error: unknown) => console.error(error));
   };
 
-  const devUrl = process.env["CPD_ELECTRON_DEV_URL"];
-  if (devUrl) await win.loadURL(devUrl);
-  else await win.loadFile(path.join(here, "renderer", "electron.html"));
+  const startUpdate = async (window: { webContents: unknown }) => {
+    const w = window as BrowserWindow;
+    const openExternal = (url: string): unknown => electronShell.openExternal(url);
+    w.webContents.setWindowOpenHandler(createExternalLinkHandler(openExternal));
+    w.webContents.on("will-navigate", (event, url) => {
+      if (url === w.webContents.getURL()) return;
+      event.preventDefault();
+      void openExternal(url);
+    });
+    let latestBootstrap: BootstrapStatus | undefined;
+    let latestState: UpdateState | undefined;
+    w.webContents.on("did-finish-load", () => {
+      if (latestBootstrap) send(UPDATE_BOOTSTRAP_CHANNEL, latestBootstrap);
+      if (latestState) send(UPDATE_STATE_CHANNEL, latestState);
+    });
+    const update = await startAutoUpdate({
+      env: process.env,
+      bundleDir: here,
+      home: os.homedir(),
+      platform: process.platform,
+      exec: nodeExec,
+      fs: nodeFs,
+      timers: nodeTimers,
+      spawnFollow: nodeSpawnFollow,
+      isFocused: () => w.isFocused(),
+      systemIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      reloadRenderer: () => w.webContents.reloadIgnoringCache(),
+      onState: (state) => {
+        latestState = state;
+        send(UPDATE_STATE_CHANNEL, state);
+        nativeShell.setUpdateState(state, () => {
+          app.relaunch();
+          app.exit(0);
+        });
+      },
+      onBootstrap: (status) => {
+        latestBootstrap = status;
+        send(UPDATE_BOOTSTRAP_CHANNEL, status);
+      },
+      log,
+    });
+    stopUpdate = update.stop;
+    return update;
+  };
 
-  const update = await startAutoUpdate({
+  await boot({
+    app: { setName: (name) => app.setName(name), whenReady: () => app.whenReady().then(prepare) },
+    BrowserWindow: CpdWindow,
+    powerMonitor,
+    process,
+    startAutoUpdate: startUpdate,
+    startServices,
+    registerIpc: registerIpcNow,
+    registerWebuiIpc: registerWebuiIpcNow,
+    loadDevUrl: (w, url) => (w as BrowserWindow).loadURL(url),
+    loadFile: (w) => (w as BrowserWindow).loadFile(path.join(here, "renderer", "electron.html")),
     env: process.env,
-    bundleDir: here,
-    home: os.homedir(),
-    platform: process.platform,
-    exec: nodeExec,
-    fs: nodeFs,
-    timers: nodeTimers,
-    spawnFollow: nodeSpawnFollow,
-    isFocused: () => win.isFocused(),
-    systemIdleSeconds: () => powerMonitor.getSystemIdleTime(),
-    reloadRenderer: () => win.webContents.reloadIgnoringCache(),
-    onState: (state) => {
-      latestState = state;
-      send(UPDATE_STATE_CHANNEL, state);
-      nativeShell.setUpdateState(state, () => {
-        app.relaunch();
-        app.exit(0);
-      });
-    },
-    onBootstrap: (status) => {
-      latestBootstrap = status;
-      send(UPDATE_BOOTSTRAP_CHANNEL, status);
-    },
-    log,
   });
-  stopUpdate = update.stop;
-  if (update.bootstrap.state === "ready") startServices();
 }
 
 main().catch((error: unknown) => {
