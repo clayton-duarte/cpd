@@ -8,6 +8,23 @@ export interface MenuTemplateOptions {
   onSelect(mode: UiMode): void;
 }
 
-export function buildMenuTemplate(_options: MenuTemplateOptions): MenuTemplate {
-  throw new Error("not implemented");
+export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate {
+  const { mode, platform, onSelect } = options;
+  const template: MenuTemplate = [];
+  if (platform === "darwin") template.push({ role: "appMenu" });
+  template.push({
+    label: "View",
+    submenu: [
+      { label: "TUI", type: "radio", checked: mode === "tui", click: () => onSelect("tui") },
+      {
+        label: "WebUI",
+        type: "radio",
+        checked: mode === "webui",
+        accelerator: "CmdOrCtrl+Shift+M",
+        click: () => onSelect("webui"),
+      },
+    ],
+  });
+  template.push({ role: "windowMenu" });
+  return template;
 }
