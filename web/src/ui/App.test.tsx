@@ -105,7 +105,7 @@ describe("App", () => {
   it("app subscribes to the cockpit and renders the three panes", () => {
     const { transport, container } = start();
     expect(transport.sent).toContainEqual({ type: "cockpit.subscribe" });
-    expect(container.querySelector('nav[aria-label="Context tree"]')?.textContent).toContain("plan");
+    expect(container.querySelector('[aria-label="Context tree"] [data-sidebar="content"], [aria-label="Context tree"] [data-slot="sidebar-content"]')?.textContent).toContain("plan");
     expect(container.querySelector('section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
     expect(container.querySelector('aside[aria-label="Inbox"]')?.textContent).toContain("Nothing needs you");
   });

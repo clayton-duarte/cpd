@@ -3,7 +3,7 @@ import { WebError, type SessionRef, type SessionState } from "./domain.ts";
 
 export type Urgency = "red" | "yellow" | "magenta" | "blue" | "cyan" | "white"; // seen live: red, magenta; the rest from docs/commands.md:3910 (unverified, O15)
 
-export interface PlanCounts { draft: number; queued: number; running: number; merged: number; failed: number; cancelled: number }
+export interface PlanCounts { draft: number; queued: number; running: number; merged: number; failed: number; cancelled: number; merging?: number }
 
 export interface SessionDot {
   readonly state: SessionState;

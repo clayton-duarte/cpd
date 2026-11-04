@@ -30,7 +30,7 @@ const live: ContextNode = {
       title: "Plan One",
       phase: "dispatch",
       archived: false,
-      counts: { draft: 0, queued: 2, running: 1, merged: 13, failed: 1, cancelled: 0 },
+      counts: { draft: 0, queued: 2, running: 1, merging: 1, merged: 13, failed: 1, cancelled: 0 },
       leadSessionId: "s-lead",
       sessions: [session("s-lead", "c1:p1", "working", "p1")],
     },
@@ -54,7 +54,7 @@ function props(over: Partial<Parameters<typeof ContextTree>[0]> = {}) {
 }
 
 // Title kept from the Job; DESIGN.md 3d: no Active/Standing sections or cost (no source field). Pins the glyphs and counters.
-it("context tree renders sections, glyphs and job counters", () => {
+it("context tree renders sections glyphs and counters", () => {
   const onNewContext = vi.fn();
   const m = mount(<ContextTree {...props({ onNewContext })} />);
   const c = m.container;
@@ -78,28 +78,29 @@ it("context tree renders sections, glyphs and job counters", () => {
   const stopped = c.querySelector('[data-plan="p2"] button[data-select="plan"] [role="img"][data-dot]');
   expect(stopped?.getAttribute("data-dot")).toBe("stopped");
   const counts = planRow?.querySelector('[data-part="counters"]');
-  expect(counts?.textContent).toBe("2 · 1 · 1 · 13");
-  expect(counts?.querySelector('[data-count="planned"]')?.textContent).toBe("2");
-  expect(counts?.querySelector('[data-count="active"]')?.textContent).toBe("1");
-  expect(counts?.querySelector('[data-count="failed"]')?.textContent).toBe("1");
-  expect(counts?.querySelector('[data-count="done"]')?.textContent).toBe("13");
-  expect(counts?.querySelector('[data-count="draft"]')).toBeNull();
+  expect(counts?.textContent).toBe("2 1 1 1 13");
+  expect(Array.from(counts?.children ?? []).map((e) => e.className)).toEqual([
+    expect.stringContaining("text-muted-foreground"),
+    expect.stringContaining("text-status-active"),
+    expect.stringContaining("text-status-landing"),
+    expect.stringContaining("text-status-blocked"),
+    expect.stringContaining("text-status-done"),
+  ]);
+  expect(ctxRow?.querySelector('[data-part="counters"]')).toBeNull();
+  expect(c.querySelector('[data-plan="p2"] [data-part="counters"]')?.textContent ?? "").toBe("");
   m.unmount();
 });
 
-// Title kept from the Job; DESIGN.md 3d: Archived (n) is a native details, its summary toggles it.
-it("context tree archive section collapses", () => {
+// DESIGN.md 3d: the Archived group is a closed shadcn group, its label toggles it.
+it("context tree archive section collapse", () => {
   const m = mount(<ContextTree {...props()} />);
-  const details = m.container.querySelector<HTMLDetailsElement>("nav > details[data-archived]");
-  const summary = details?.querySelector("summary");
-  expect(summary?.textContent).toBe("Archived (1)");
-  expect(details?.open).toBe(false);
-  expect(summary?.parentElement?.querySelector('[data-context="c2"]')).not.toBeNull();
-  act(() => summary?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(details?.open).toBe(true);
-  act(() => summary?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(details?.open).toBe(false);
-  expect(m.container.querySelector('[role="img"][data-dot]')).not.toBeNull();
+  const group = m.container.querySelector("[data-archived]");
+  expect(group?.textContent).toContain("Archived (1)");
+  expect(m.container.querySelector("details, summary")).toBeNull();
+  expect(m.container.querySelector('[data-context="c2"]')).toBeNull();
+  const toggle = group?.querySelector("button") ?? null;
+  act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  expect(m.container.querySelector('[data-context="c2"]')).not.toBeNull();
   m.unmount();
 });
 
@@ -110,6 +111,7 @@ it("context tree marks the selected plan", () => {
   const item = c.querySelector('li[role="treeitem"][data-plan="p1"]');
   expect(item?.querySelector('button[data-select="plan"]')?.getAttribute("aria-current")).toBe("true");
   expect(item?.querySelector('button[data-select="plan"] [role="img"][data-dot]')).not.toBeNull();
+  expect(item?.closest('[data-slot="sidebar-menu-sub"]')).not.toBeNull();
   const other = c.querySelector('li[data-plan="p2"] button[data-select="plan"]');
   expect(other?.hasAttribute("aria-current")).toBe(false);
   expect(c.querySelector('[data-context="c1"] > button[data-select="context"]')?.getAttribute("aria-current")).toBe("true");

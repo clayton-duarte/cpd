@@ -80,6 +80,15 @@ describe("readmodel", () => {
     expect(tree.cursor).toBe(8);
   });
 
+  it("readmodel parses the merging count into the plan counts", async () => {
+    const { cpd } = fakeCpd({
+      context: [context("c1")],
+      plan: [plan("p1", "c1", { counts: { draft: 0, queued: 1, running: 2, merging: 4, merged: 3, failed: 0, cancelled: 0 } })],
+    });
+    const { tree } = await createReadModel(cpd).loadAll(null);
+    expect(tree.contexts[0]!.plans[0]!.counts.merging).toBe(4);
+  });
+
   it("session state dot derives from state and open inbox items", async () => {
     const { cpd } = fakeCpd({
       context: [context("c1")],
