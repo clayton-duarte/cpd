@@ -460,17 +460,27 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 /// Step 3: `run/<plan>/lead-message.md`: the header, the brief when one exists, then the pointer line
 /// (docs/research/context-retrieval-design.md "First messages").
 fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<(), CpdError> {
-    let message = lead_message(plan, brief.map(Text::as_str));
+    let topics = env
+        .store
+        .read(|conn| crate::context::curated::topic_counts(conn, &plan.context))?;
+    let message = lead_message(plan, brief.map(Text::as_str), &topics);
     write_file(&env.home.lead_message(&plan.id), &message)
 }
 
-/// The Lead's first message: the header, the brief when one exists, then the pointer line, no store read
+/// The Lead's first message: the header, the brief when one exists, the `Topics:` line when `topics` is not
+/// empty, then the pointer line; no store read, the callers pass the topics
 /// (docs/research/context-retrieval-design.md "First messages"). The one rendering `plan new`, the `already`
 /// rerun and `session first-message` share.
-pub fn lead_message(plan: &PlanRow, brief: Option<&str>) -> String {
+pub fn lead_message(plan: &PlanRow, brief: Option<&str>, topics: &[(String, usize)]) -> String {
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.trim_end().to_owned());
+    }
+    if !topics.is_empty() {
+        message.push(format!(
+            "Topics: {}",
+            crate::context::curated::topics_line(topics)
+        ));
     }
     message.push(LEAD_POINTER.to_owned());
     message.join("\n\n") + "\n"

@@ -68,6 +68,7 @@ mod search;
 mod show;
 #[cfg(test)]
 mod supersedes_tests;
+mod topics;
 mod write;
 
 use std::fmt;
@@ -95,16 +96,14 @@ pub enum Command {
     List(ListArgs),
     /// Show a Context and its records (§3.3)
     Show(ShowArgs),
+    /// List the curated topics in force with their record counts (§3.3a)
+    Topics(TopicsArgs),
     /// Search the Context's records, ranked by in-process full-text search (§3.4)
     Search(search::SearchArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
     /// Record a note (§3.4)
     Note(NoteArgs),
-    /// Record a question (§3.4)
-    Ask(AskArgs),
-    /// Record the answer to a question (§3.5)
-    Answer(AnswerArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
     /// Archive the Context with its Plans and their Sessions (§3.8)
@@ -227,6 +226,12 @@ pub struct NewArgs {
 pub struct ListArgs {}
 
 #[derive(Args, Debug)]
+pub struct TopicsArgs {
+    #[command(flatten)]
+    select: Select,
+}
+
+#[derive(Args, Debug)]
 pub struct ShowArgs {
     #[command(flatten)]
     select: Select,
@@ -271,24 +276,6 @@ pub struct NoteArgs {
     /// Confirm the text is not a supersession: skip the prose check
     #[arg(long)]
     no_supersedes: bool,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AskArgs {
-    /// The question
-    question: Text,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AnswerArgs {
-    /// The record id of the question
-    question: RecordId,
-    /// The answer
-    text: Text,
     #[command(flatten)]
     select: Select,
 }
@@ -339,6 +326,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::New(args) => new(args),
         Command::List(_) => list::list(),
         Command::Show(args) => show::show(args),
+        Command::Topics(args) => topics::topics(args),
         Command::Search(args) => search::search(args),
         Command::Decide(args) => {
             no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
@@ -370,22 +358,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
                 args.no_supersedes,
             )
         }
-        Command::Ask(args) => write::write(
-            "context ask",
-            &args.select,
-            &args.question,
-            Draft::Question,
-            false,
-        ),
-        Command::Answer(args) => write::write(
-            "context answer",
-            &args.select,
-            &args.text,
-            Draft::Answer {
-                question: args.question,
-            },
-            false,
-        ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),

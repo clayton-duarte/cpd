@@ -237,7 +237,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 ### 1.5 Text arguments
 
-Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
+Free text (Job `--title`, `--reason`, Context record text, Escalation questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
 
 ## 2. Command index
 
@@ -284,6 +284,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
 | `cpd resource run` (§30) | Manager, Lead, Worker | no | no |
 | `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
+| `cpd context topics` (§3.3a) | Manager, Lead, Worker | no | no |
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
@@ -294,7 +295,7 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 **Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's records for this machine and letter (§2.1). The write transaction makes it race-free; only this machine writes its letter sequence.
 
-**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Also, a `decide` or `note` whose trimmed text and `supersedes` list equal an in-force record of the same kind (any machine or session) returns that record with `"already": true`; a different kind, list or text, or a record out of force does not dedupe. Any other write appends a new record; records are never edited.
+**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes` and `by.session`. Also, a `decide` or `note` whose trimmed text and `supersedes` list equal an in-force record of the same kind (any machine or session) returns that record with `"already": true`; a different kind, list or text, or a record out of force does not dedupe. Any other write appends a new record; records are never edited.
 
 ### 3.1 `context new`
 
@@ -338,7 +339,7 @@ No flags, no preconditions, no effects (one read transaction).
 ```json
 {"ok": true, "contexts": [
   {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "archived_at": null,
-   "records": 57, "open_questions": 2,
+   "records": 57,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
@@ -364,16 +365,15 @@ cpd context show [<record>] [--context <id>] [--since <seq>] [--record <id>] [--
 Effects: none. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
 
 1. `# <title>` with the Jira key, as before.
-2. `## Open questions`: every open question, never capped.
-3. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
-4. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
-5. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
-6. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
-7. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> answered questions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a question under Answered questions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all four counts are zero.
+2. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
+3. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
+4. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
+5. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
+6. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all three counts are zero.
 
-Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the open questions, the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, answered questions with their answers, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "answered_questions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
+Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
 
-`--all` is the former output, byte for byte: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions, Open questions, Answered questions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
+`--all` is the full history: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -403,6 +403,31 @@ Idempotent: read-only.
 ```json
 {"ok": false, "error": {"code": "record_not_found", "message": "Context building-cpd has no record pro-d7. pro-d7 belongs to machine pro; this machine is hs, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.", "details": {"context": "building-cpd", "record": "pro-d7", "record_machine": "pro", "local_machine": "hs"}}}
 ```
+
+### 3.3a `context topics`
+
+```
+cpd context topics [--context <c>] [--plan <id>]
+```
+
+Lists the **curated topics in force** of the Context (contract §4.6): each topic that a curated record in force carries, with the count of those records. The Context is `--context`, else the Context of the selected Plan (`--plan`, or `CPD_PLAN`, §1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+No new error code. **Callers** (as `context show`, §3.3): the Lead, the Manager and the **Worker**.
+
+Effects: none. Output: `topics` sorted by topic (the topic string, ascending), each `{topic, count}`, `count` the number of curated records in force with that topic. `markdown` is one line, the topics comma-separated, each as `<topic> (<count>)` with no `- ` prefix, for example `engine (3), store (1)`; the same line is the `Topics:` line of the first messages (§3.11, §4.1). A Context with no curated record in force gives `topics: []` and `markdown: ""`; that is not an error.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
+ "topics": [{"topic": "engine", "count": 3}, {"topic": "store", "count": 1}],
+ "markdown": "engine (3), store (1)"}
+```
+
+Idempotent: read-only.
 
 ### 3.4 `context search`
 
@@ -439,34 +464,33 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 **Output** (`ok` true, the data):
 
 ```json
-{"context": {"id": "host", "title": "…", "jira": null}, "query": "decision", "records": [{"id": "hs-d7", "short": "one engine per machine", "kind": "decision", "at": "…", "seq": 7, "score": 1.8, "in_force": true}], "markdown": "- [hs-d7] one engine per machine"}
+{"context": {"id": "host", "title": "…", "jira": null}, "query": "decision", "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "…", "seq": 7, "score": 1.8, "in_force": true}], "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-`records` holds the hits in rank order, with `short` the curated short form, else the record's first line at most 120 bytes; `in_force` is false only with `--all`. `markdown` is one `- [<id>] <short>` line per hit, with ` (superseded by <id>)` after a superseded record and ` [retired (<reason> <target>)]` after one with an approved retirement, as `context show` labels them. Both are empty on no hits.
+`records` holds the hits in rank order, with `topic` the record's curated topic as a string, or `null` when it has none; `short` the curated short form, else the record's first line at most 120 bytes; `in_force` is false only with `--all`. `markdown` is one `- [<id>] <short>` line per hit, or `- [<id>] [<topic>] <short>` when the hit has a curated topic, with ` (superseded by <id>)` after a superseded record and ` [retired (<reason> <target>)]` after one with an approved retirement, as `context show` labels them. Both are empty on no hits.
 
 Effects: none. Nothing is written, stored or indexed on disk, and no other process is started.
 
-Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, short, kind, at, seq, score, in_force}`: `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `markdown` is one line per record, `- [<id>] <short>` with the labels above, joined by newlines.
+Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a curated topic and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
 
 ```json
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "query": "engine",
- "records": [{"id": "hs-d7", "short": "one engine per machine", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "seq": 42, "score": 1.5, "in_force": true}],
+ "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "seq": 42, "score": 1.5, "in_force": true}],
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
 Idempotent: yes; a rerun with nothing new to index returns the same records.
 
-### 3.5 `context decide`, `context note`, `context ask`
+### 3.5 `context decide`, `context note`
 
 ```
 cpd context decide <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
 cpd context note <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
-cpd context ask <question> [--context <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
-| `<text>`, `<question>` | the record's `text` (§1.5) |
+| `<text>` | the record's `text` (§1.5) |
 | `--supersedes <record>` | `decide` and `note`: the id of an earlier record this one replaces (recency wins, contract §2.2). Repeatable: `--supersedes hs-d2 --supersedes hs-d5`, or the comma form `--supersedes hs-d2,hs-d5` (ids hold no comma), or both. A decision may replace a decision or a note of the Context; a note may replace a note only |
 | `--no-supersedes` | `decide` and `note`: a bool flag that confirms the text names no record this one replaces, so the prose check below is skipped. Conflicts with `--supersedes` (`usage`) |
 
@@ -488,7 +512,7 @@ cpd context ask <question> [--context <id>]
 - `--no-supersedes` skips the check, whatever the text says.
 - The retry is decided first: an identical latest record is returned as `already` even when its text would fail the check.
 
-Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux.
+Effects: the record write above (one transaction), with kind `decision` (letter `d`) or `note` (`n`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux.
 
 ```json
 {"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": ["hs-d2", "hs-d5"]}, "seq": 58}
@@ -498,26 +522,7 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-### 3.6 `context answer`
-
-```
-cpd context answer <question> <text> [--context <id>]
-```
-
-`<question>` is the record id of the question.
-
-| Precondition | Code | Exit |
-|---|---|---|
-| `<question>` is a record of this Context of kind `question` | `record_not_found` | 3 |
-| no answer in this Context's records names it yet | `question_answered` | 3 |
-
-Effects: the record write with kind `answer` (letter `a`) and `question` = `<question>`; **Event** `context-record`.
-
-```json
-{"ok": true, "record": {"id": "hs-a2", "kind": "answer", "at": "…", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "Yes, per machine.", "question": "hs-q3"}, "seq": 59}
-```
-
-Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
+`context ask` and `context answer` are removed (pro-d8): both are refused as usage errors (exit 2), as any unknown command is.
 
 ### 3.7 `context sync`
 
@@ -621,7 +626,7 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4) and has two parts, a blank line between them: the header `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the on-demand pointer (hs-d655) `Context on demand: cpd context search <query> --context <c> · cpd context show --context <c> --since <seq> · cpd context show --context <c> --record <id>`. No digest and no records are written: the Manager reads the Context on demand. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then, when at least one curated topic is in force, the `Topics:` line between the header and the pointer line (`Topics: engine (3), store (1)`, the same line as `plan new` gives it, §4.1 step 3 and §3.3a; a snapshot at write time, no cap), then the on-demand pointer (hs-d655) `Context on demand: cpd context search <query> --context <c> · cpd context show --context <c> --since <seq> · cpd context show --context <c> --record <id>` (contract §4.6 "Consumers"). No digest and no records are written: the Manager reads the Context on demand. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
@@ -904,7 +909,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name` = `<context>:<plan>`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
-3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
+3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then, when at least one curated topic is in force, the `Topics:` line between the brief (or the header) and the pointer line: `Topics: engine (3), store (1)`, the `markdown` of `context topics` (§3.3a) with the prefix `Topics: `, a snapshot taken when the message is written, with no cap (none is written when no curated topic is in force). Then the pointer line:
    ```
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
    ```
@@ -1997,7 +2002,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ## 8. `ask` and `answer`
 
-Escalations from a Worker to its Lead (§2.2, §3.5). The Context's `context ask` / `context answer` (§3.5, §3.6) are records, not Escalations.
+Escalations from a Worker to its Lead (§2.2, §3.5).
 
 ### 8.1 `ask`
 

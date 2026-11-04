@@ -245,7 +245,8 @@ pub(crate) fn register(
     by_user: bool,
     runner: WorkerRunner,
 ) -> Result<Live, CpdError> {
-    let prepared = prepare(home, config, context, &row.title, by_user)?;
+    let topics = store.read(|conn| crate::context::curated::topic_counts(conn, context))?;
+    let prepared = prepare_with(home, config, context, &row.title, by_user, &topics)?;
     store.write("context manager", |tx| {
         insert(tx, context, &prepared, by_user, runner)
     })?;
@@ -277,7 +278,7 @@ impl Prepared {
     }
 }
 
-/// The cwd, id and name of a new Manager, and its first message written unless `by_user`.
+/// `prepare` for a Context with no curated topics (a Context just created).
 pub(crate) fn prepare(
     home: &crate::home::CpdHome,
     config: &crate::config::Config,
@@ -285,11 +286,24 @@ pub(crate) fn prepare(
     title: &str,
     by_user: bool,
 ) -> Result<Prepared, CpdError> {
+    prepare_with(home, config, context, title, by_user, &[])
+}
+
+/// The cwd, id and name of a new Manager, and its first message written unless `by_user`; `topics` are the
+/// curated topics in force, read once by the caller.
+pub(crate) fn prepare_with(
+    home: &crate::home::CpdHome,
+    config: &crate::config::Config,
+    context: &ContextId,
+    title: &str,
+    by_user: bool,
+    topics: &[(String, usize)],
+) -> Result<Prepared, CpdError> {
     let cwd = crate::session::agent_cwd()?;
     if !by_user {
         write_file(
             &home.manager_message(context),
-            &manager_message(context, title),
+            &manager_message(context, title, topics),
         )?;
     }
     Ok(Prepared {
@@ -328,12 +342,25 @@ pub(crate) fn insert(
     Ok(())
 }
 
-/// A Manager's first message (commands.md §3.10): the header, then the pointer line. Nothing Context-wide is
+/// A Manager's first message (commands.md §3.10): the header, the `Topics:` line when `topics` is not empty,
+/// then the pointer line. No store read: the caller passes the topics. Nothing Context-wide is
 /// pushed; the Manager reads it on demand or at its turn-start message (docs/research/context-retrieval-design.md
 /// "First messages"). The one rendering `context manager` and `session first-message` share.
-pub(crate) fn manager_message(context: &ContextId, title: &str) -> String {
+pub(crate) fn manager_message(
+    context: &ContextId,
+    title: &str,
+    topics: &[(String, usize)],
+) -> String {
+    let topics = if topics.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Topics: {}\n\n",
+            crate::context::curated::topics_line(topics)
+        )
+    };
     format!(
-        "You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n\
+        "You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n{topics}\
          Context on demand: cpd context search <query> --context {context} · cpd context show --context {context} --since <seq> · cpd context show --context {context} --record <id>\n"
     )
 }

@@ -35,7 +35,7 @@ pub struct SearchArgs {
     /// At most this many records; 0 is every match
     #[arg(long, value_name = "n", default_value_t = 20)]
     limit: u32,
-    /// Only these kinds, comma-separated [default: decision,note,question,answer]
+    /// Only these kinds, comma-separated [default: decision,note]
     #[arg(long, value_name = "k,k", value_delimiter = ',')]
     kind: Vec<String>,
     /// Include the records out of force, labelled
@@ -219,15 +219,10 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
 fn kinds(names: &[String]) -> Result<HashSet<&'static str>, CpdError> {
     if names.is_empty() {
-        return Ok([
-            RecordKind::Decision,
-            RecordKind::Note,
-            RecordKind::Question,
-            RecordKind::Answer,
-        ]
-        .into_iter()
-        .map(RecordKind::as_str)
-        .collect());
+        return Ok([RecordKind::Decision, RecordKind::Note]
+            .into_iter()
+            .map(RecordKind::as_str)
+            .collect());
     }
     let mut kinds = HashSet::new();
     for name in names {
@@ -252,6 +247,7 @@ struct Hit {
     seq: i64,
     score: f64,
     in_force: bool,
+    topic: Option<String>,
 }
 
 impl Hit {
@@ -264,12 +260,16 @@ impl Hit {
             "seq": self.seq,
             "score": self.score,
             "in_force": self.in_force,
+            "topic": self.topic,
         })
     }
 
     /// The `- [<id>] <short>` line, with the out-of-force labels of `context show`.
     fn line(&self, snap: &Snapshot) -> String {
-        let mut line = format!("- [{}] {}", self.id, self.short);
+        let mut line = match &self.topic {
+            Some(topic) => format!("- [{}] [{topic}] {}", self.id, self.short),
+            None => format!("- [{}] {}", self.id, self.short),
+        };
         if let Some(successor) = snap.successor.get(&self.id) {
             line.push_str(&format!(" (superseded by {successor})"));
         }
@@ -329,6 +329,10 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
                 seq: *seq,
                 score: hit.score,
                 in_force: snap.in_force.contains(&hit.id),
+                topic: snap
+                    .curations
+                    .get(&hit.id)
+                    .map(|(topic, _, _)| topic.clone()),
                 id: hit.id,
             })
         })
@@ -344,10 +348,7 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
 
 /// Whether a record kind is ever in force (`inforce.rs`).
 fn force_kind(kind: RecordKind) -> bool {
-    matches!(
-        kind,
-        RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
-    )
+    matches!(kind, RecordKind::Decision | RecordKind::Note)
 }
 
 /// The curated short form, else the record's first line at most 120 bytes.

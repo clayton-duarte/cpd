@@ -17,24 +17,13 @@ pub type Repos = HashMap<String, Vec<String>>;
 pub type Retired = HashMap<String, String>;
 
 /// The Context as markdown: title and Jira key; Plans; active decisions;
-/// superseded decisions, each naming its successor; open questions; answered
-/// questions with their answers; notes (those in force, then the superseded ones, each naming its successor). Each item shows its id and date.
+/// superseded decisions, each naming its successor; notes (those in force, then the superseded ones, each naming its successor). Each item shows its id and date.
 ///
 /// A Plan record lists `repos[<record id>]`: the repos of its Workflows, from the
 /// database (commands.md §3.3; the record itself has none).
 ///
-/// Only the records after `since` are listed, but which decision is active and
-/// which question is open is decided from all of `records`. An answer after
-/// `since` is listed with its question, whatever the question's position.
-/// ` (supersedes a, b)` for a record that supersedes any, else empty.
-fn supersedes_label(r: &Record) -> String {
-    if r.supersedes().is_empty() {
-        return String::new();
-    }
-    let ids: Vec<String> = r.supersedes().iter().map(ToString::to_string).collect();
-    format!(" (supersedes {})", ids.join(", "))
-}
-
+/// Only the records after `since` are listed, but which decision is active is
+/// decided from all of `records`.
 #[cfg(test)]
 pub fn markdown(
     title: &str,
@@ -47,7 +36,7 @@ pub fn markdown(
 }
 
 /// [`markdown`] with the retired records labelled `retired (<reason> <target>)`: a retired decision is listed with the
-/// superseded ones, a retired note after the superseded ones, a retired question or answer where it is.
+/// superseded ones, a retired note after the superseded ones.
 pub fn markdown_retired(
     title: &str,
     jira: Option<&str>,
@@ -64,7 +53,7 @@ pub fn markdown_retired(
     };
     let is_retired = |r: &Record| retired.contains_key(&r.id.to_string());
     let shown = |seq: i64| seq > since;
-    let (successor, answers) = links(records);
+    let successor = successors(records);
 
     let mut out = header(title, jira);
 
@@ -99,51 +88,6 @@ pub fn markdown_retired(
             None => is_retired(r).then(|| item(r, &format!("{}{}", r.text, retired_label(r)))),
         }),
     );
-    section(
-        &mut out,
-        "Open questions",
-        of_kind(RecordKind::Question)
-            .filter(|(_, r)| !answers.contains_key(&r.id.to_string()))
-            .map(|(_, r)| item(r, &format!("{}{}", r.text, retired_label(r)))),
-    );
-
-    // A question is listed when it or one of its answers is after `since`.
-    let mut answered: Vec<String> = Vec::new();
-    for (seq, question) in records
-        .iter()
-        .filter(|(_, r)| r.kind() == RecordKind::Question)
-    {
-        let key = question.id.to_string();
-        let Some(given) = answers.get(&key) else {
-            continue;
-        };
-        if !(shown(*seq) || given.iter().any(|(s, _)| shown(*s))) {
-            continue;
-        }
-        let mut entry = item(
-            question,
-            &format!("{}{}", question.text, retired_label(question)),
-        );
-        for (_, answer) in given {
-            entry.push_str(&nested(answer, &retired_label(answer)));
-        }
-        answered.push(entry);
-    }
-    // An answer whose question is not in the index (it should not happen: a
-    // write checks it) is still shown.
-    for (key, given) in &answers {
-        if records.iter().any(|(_, r)| r.id.to_string() == *key)
-            || !given.iter().any(|(s, _)| shown(*s))
-        {
-            continue;
-        }
-        let mut entry = format!("- {key} (question not in this index)\n");
-        for (_, answer) in given {
-            entry.push_str(&nested(answer, &retired_label(answer)));
-        }
-        answered.push(entry);
-    }
-    section(&mut out, "Answered questions", answered.into_iter());
     // Notes in force first, then the superseded ones, each naming its successor (a note or a decision).
     let active = of_kind(RecordKind::Note)
         .filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r))
@@ -170,23 +114,24 @@ pub fn markdown_retired(
     out
 }
 
-type Successors<'a> = HashMap<String, &'a Record>;
-type Answers<'a> = HashMap<String, Vec<&'a Indexed>>;
+/// ` (supersedes a, b)` for a record that supersedes any, else empty.
+fn supersedes_label(r: &Record) -> String {
+    if r.supersedes().is_empty() {
+        return String::new();
+    }
+    let ids: Vec<String> = r.supersedes().iter().map(ToString::to_string).collect();
+    format!(" (supersedes {})", ids.join(", "))
+}
 
-/// The successor of each superseded record and the answers of each question, by record id.
-fn links(records: &[Indexed]) -> (Successors<'_>, Answers<'_>) {
-    let mut successor: Successors = HashMap::new();
-    let mut answers: Answers = HashMap::new();
-    for entry in records {
-        let (_, record) = entry;
+/// The record that supersedes each superseded record, by record id.
+fn successors(records: &[Indexed]) -> HashMap<String, &Record> {
+    let mut successor = HashMap::new();
+    for (_, record) in records {
         for old in record.supersedes() {
             successor.insert(old.to_string(), record);
         }
-        if let Some(question) = record.question() {
-            answers.entry(question.to_string()).or_default().push(entry);
-        }
     }
-    (successor, answers)
+    successor
 }
 
 fn header(title: &str, jira: Option<&str>) -> String {
@@ -287,7 +232,6 @@ const NOTE_CAP: usize = 40;
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Omitted {
     pub superseded_decisions: usize,
-    pub answered_questions: usize,
     pub superseded_notes: usize,
     pub older_notes: usize,
     pub done_plans: usize,
@@ -300,7 +244,7 @@ pub struct Bounded {
     pub omitted: Omitted,
 }
 
-/// The Context bounded to what is active (commands.md §3.3): open questions, decisions in force, the curated
+/// The Context bounded to what is active (commands.md §3.3): decisions in force, the curated
 /// `topics` with their counts, the newest [`NOTE_CAP`] notes in force, the Plans not in `done` (by [`plan_key`]),
 /// then a count line per kind of history left out.
 pub fn bounded(
@@ -312,33 +256,15 @@ pub fn bounded(
     done: &HashSet<String>,
     topics: &[(String, usize)],
 ) -> Bounded {
-    let (successor, answers) = links(records);
+    let successor = successors(records);
     let in_force = |r: &Record| {
         !successor.contains_key(&r.id.to_string()) && !retired.contains_key(&r.id.to_string())
-    };
-    let retired_label = |r: &Record| {
-        retired
-            .get(&r.id.to_string())
-            .map(|why| format!(" [retired ({why})]"))
-            .unwrap_or_default()
     };
     let of_kind = |kind: RecordKind| records.iter().filter(move |(_, r)| r.kind() == kind);
     let mut shown = HashSet::new();
     let mut omitted = Omitted::default();
     let mut out = header(title, jira);
 
-    section(
-        &mut out,
-        "Open questions",
-        of_kind(RecordKind::Question)
-            .filter(|(_, r)| !answers.contains_key(&r.id.to_string()))
-            .map(|(seq, r)| {
-                shown.insert(*seq);
-                item(r, &format!("{}{}", r.text, retired_label(r)))
-            })
-            .collect::<Vec<_>>()
-            .into_iter(),
-    );
     section(
         &mut out,
         "Decisions",
@@ -395,13 +321,11 @@ pub fn bounded(
             .collect::<Vec<_>>()
             .into_iter(),
     );
-    omitted.answered_questions = answers.len();
     omitted.done_plans = of_kind(RecordKind::Plan)
         .filter(|(_, r)| r.plan().is_some_and(|p| done.contains(&plan_key(p))))
         .count();
     let counts = [
         (omitted.superseded_decisions, "superseded decisions"),
-        (omitted.answered_questions, "answered questions"),
         (omitted.superseded_notes, "superseded notes"),
         (omitted.done_plans, "done plans"),
     ];
@@ -461,15 +385,6 @@ fn item(record: &Record, text: &str) -> String {
     )
 }
 
-fn nested(answer: &Record, label: &str) -> String {
-    format!(
-        "  - answer {} ({}): {}{label}\n",
-        answer.id,
-        date(answer),
-        answer.text.replace('\n', "\n    ")
-    )
-}
-
 /// A brief under its Plan: its id and first line only (commands.md §3.3).
 fn nested_brief(brief: &Record) -> String {
     format!(
@@ -514,10 +429,8 @@ mod tests {
                 1,
                 rec("hs-d1", "Old.", Draft::Decision { supersedes: vec![] }),
             ),
-            (2, rec("hs-q1", "Why?", Draft::Question)),
-            (3, rec("hs-q2", "When?", Draft::Question)),
             (
-                4,
+                2,
                 rec(
                     "hs-d2",
                     "New.",
@@ -526,17 +439,7 @@ mod tests {
                     },
                 ),
             ),
-            (
-                5,
-                rec(
-                    "hs-a1",
-                    "Because.",
-                    Draft::Answer {
-                        question: RecordId::parse("hs-q1").unwrap(),
-                    },
-                ),
-            ),
-            (6, rec("hs-n1", "Line one\nline two", Draft::Note)),
+            (3, rec("hs-n1", "Line one\nline two", Draft::Note)),
         ]
     }
 
@@ -548,21 +451,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} in\n{md}"))
         };
         assert!(md.starts_with("# Building (ABC-1)\n"));
-        let order = [
-            "## Decisions",
-            "## Superseded decisions",
-            "## Open questions",
-            "## Answered questions",
-            "## Notes",
-        ];
+        let order = ["## Decisions", "## Superseded decisions", "## Notes"];
         assert!(order.windows(2).all(|w| at(w[0]) < at(w[1])), "{md}");
         assert!(!md.contains("## Plans"));
         assert!(md.contains("- hs-d1 (2026-10-14 UTC): Old. (superseded by hs-d2)"));
         assert!(md.contains("- hs-d2 (2026-10-14 UTC): New. (supersedes hs-d1)"));
-        assert!(md.contains("- hs-q2 (2026-10-14 UTC): When?"));
-        assert!(md.contains(
-            "- hs-q1 (2026-10-14 UTC): Why?\n  - answer hs-a1 (2026-10-14 UTC): Because."
-        ));
+        assert!(!md.contains("questions"));
         assert!(md.contains("Line one\n  line two"));
     }
 
@@ -643,15 +537,9 @@ mod tests {
 
     #[test]
     fn since_lists_later_records_but_judges_from_all() {
-        let md = markdown("Building", None, &all(), 3, &Repos::new());
+        let md = markdown("Building", None, &all(), 1, &Repos::new());
         assert!(md.contains("hs-d2"), "{md}");
         assert!(!md.contains("- hs-d1 ("), "{md}");
-        assert!(!md.contains("hs-q2"), "{md}");
-        // The answer is new, so its older question comes with it.
-        assert!(
-            md.contains("- hs-q1 (2026-10-14 UTC): Why?\n  - answer hs-a1"),
-            "{md}"
-        );
         assert!(md.contains("hs-n1"));
     }
 }

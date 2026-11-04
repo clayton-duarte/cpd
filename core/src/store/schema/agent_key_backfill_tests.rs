@@ -206,9 +206,9 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(3).map(|n| n.name),
+        NAMED.iter().rev().nth(4).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-supersedes-list` and `workflow-base-retarget` come after it"
+        "only `workflow-reopen`, `context-supersedes-list`, `drop-question-answer` and `workflow-base-retarget` come after it"
     );
 }
 

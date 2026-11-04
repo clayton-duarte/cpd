@@ -154,7 +154,7 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   const has = (re: RegExp) => named.some((c) => re.test(c));
   assert.ok(has(/^cpd plan new .*--context .*--title .*--brief-file/), "plan new with --context, --title and --brief-file");
   assert.ok(has(/^cpd session send /), "session send");
-  for (const kind of ["decide", "note", "ask", "answer"]) assert.ok(has(new RegExp(`^cpd context ${kind} `)), `context ${kind}`);
+  for (const kind of ["decide", "note"]) assert.ok(has(new RegExp(`^cpd context ${kind} `)), `context ${kind}`);
   assert.ok(has(/^cpd plan list/) && has(/^cpd plan show/), "plan list and plan show");
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /you never answer a Lead's question in the User's place|Answer a Lead only with what the User said/);
@@ -419,7 +419,7 @@ function factProblems(files: { name: string; text: string }[]): string[] {
   for (const m of section(contractDoc, "### 3.1 Plan phases").matchAll(/^\s+([a-z]+) --> ([a-z]+):/gm)) if (!edges.has(m[1]!)) edges.set(m[1]!, m[2]!);
   const phasePath = ["grounding"]; // the forward path of the state diagram: grounding → plan → dispatch → deploy → done
   while (edges.has(phasePath.at(-1)!) && phasePath.length < 10 && !phasePath.includes(edges.get(phasePath.at(-1)!)!)) phasePath.push(edges.get(phasePath.at(-1)!)!);
-  const recordLetters = /letter `d` decision, `n` note, `q` question, `a` answer, `p` plan/.test(section(contractDoc, "### 2.1 Identifiers")) ? "dnqap" : "";
+  const recordLetters = /letter `d` decision, `n` note, `p` plan, `b` brief/.test(section(contractDoc, "### 2.1 Identifiers")) ? "dnpb" : "";
   assert.ok(recordLetters, "§2.1 record id letters not parsed");
   assert.ok(kinds.size > 40 && codes.size > 60 && hooks.size === 3 && flags.size > 40, `docs not parsed: ${kinds.size} kinds, ${codes.size} codes, ${hooks.size} hooks, ${flags.size} flags`);
 
@@ -682,14 +682,11 @@ test("cpd-manager names the decision of routed decided work and says it needs no
   assert.match(text, /needs no Plan review/);
 });
 
-for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a context ask record (hs-d306)`, () => {
+for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a Context record (hs-d306, pro-d8)`, () => {
   const text = skillFiles(skill)[0]!.text;
   assert.match(text, /To ask the User, use `ask_user_question`/);
-  assert.match(text, /Never use `cpd context ask`: it records an open question in the Context and asks nobody\./);
   assert.match(text, /file outside the repo and point to it in chat/);
-  const ask = text.split("\n").find((l) => l.trim().startsWith("cpd context ask "));
-  assert.ok(ask, "the context ask line exists");
-  assert.match(ask, /\(a record, not a question to the User\)/);
+  assert.doesNotMatch(text, /cpd context (ask|answer)\b/, "context ask and context answer are removed");
 });
 
 test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is one work Job pushed by its own merge; the hand repair pushes through the Gate, never a plain git push or an update Job added by hand (hs-d305, hs-d340, pro-d68)", () => {
