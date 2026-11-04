@@ -28,11 +28,15 @@ fn raw(home: &CpdHome) -> Connection {
 /// The migrations that sort after `MIGRATION`, with the table each one changes and the statement that undoes
 /// its schema change (all are additive): the runner refuses `MIGRATION` while any of them is recorded as applied.
 /// The table's generated triggers name the column, so they are dropped first; the runner's reconcile recreates them.
-const LATER: &[(&str, &str, &str)] = &[(
-    "20261104T1445-bump-last-posted-at",
-    "pr_posts",
-    "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
-)];
+/// A data-only migration has no table and no undo statement (empty strings).
+const LATER: &[(&str, &str, &str)] = &[
+    (
+        "20261104T1445-bump-last-posted-at",
+        "pr_posts",
+        "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
+    ),
+    ("20261104T1600-finish-legacy-review-plans", "", ""),
+];
 
 /// Makes the store as it was before the migration: it and the later ones are not recorded as applied.
 fn rewind(conn: &Connection) {
@@ -53,6 +57,16 @@ fn rewind(conn: &Connection) {
         .unwrap();
     assert_eq!(removed, 1, "{MIGRATION} is in the list of migrations");
     for (name, table, undo) in LATER {
+        if table.is_empty() {
+            let removed = conn
+                .execute(
+                    "DELETE FROM schema_migrations WHERE name = ?1",
+                    params![name],
+                )
+                .unwrap();
+            assert_eq!(removed, 1, "{name} is in the list of migrations");
+            continue;
+        }
         let triggers: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1")
             .unwrap()
