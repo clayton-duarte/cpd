@@ -89,7 +89,7 @@ it("consecutive tool items are grouped under one summary row", () => {
   const t1 = tool({ name: "read", args: { path: "a" }, callId: "c1" });
   const t2 = tool({ name: "read", args: { path: "b" }, callId: "c2" });
   const t3 = tool({ name: "read", args: { path: "c" }, callId: "c3" });
-  const props = { hasEarlier: false, queued: [], pending: [], onLoadEarlier: () => {} };
+  const props = { hasEarlier: false, queued: [], pending: [], onLoadEarlier: () => {}, tailEpoch: 0 };
   const m = mount(<Transcript {...props} items={[t1, t2, t3]} />);
   const g = m.container.querySelectorAll('details[data-kind="tool-group"]');
   expect(g.length).toBe(1);

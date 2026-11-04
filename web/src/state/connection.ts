@@ -31,6 +31,8 @@ export interface Connection {
   action(action: CockpitAction): string;
   close(): void;
 }
+export const FRAME_MS = 16;
+export const PENDING_ECHO_MS = 30000;
 const DEFAULT_BACKOFF = { baseMs: 500, maxMs: 10_000 };
 
 // Required fields per server message type: [field, primitive type] (the full shapes are the server's contract).
@@ -87,6 +89,42 @@ export function createConnection(options: ConnectionOptions): Connection {
   let attempt = 0;
   let closed = false;
   let timer: Disposable | null = null;
+  let buffer: ServerMessage[] = [];
+  let frame: Disposable | null = null;
+  const echoTimers = new Map<string, Disposable>();
+
+  const dropBuffer = (): void => {
+    frame?.dispose();
+    frame = null;
+    buffer = [];
+  };
+  const dropEchoTimers = (): void => {
+    for (const t of echoTimers.values()) t.dispose();
+    echoTimers.clear();
+  };
+  const flush = (): void => {
+    frame?.dispose();
+    frame = null;
+    if (buffer.length === 0) return;
+    const messages = buffer;
+    buffer = [];
+    store.dispatch({ type: "serverBatch", messages });
+  };
+  const enqueue = (message: ServerMessage): void => {
+    const last = buffer[buffer.length - 1];
+    if (
+      message.type === "session.delta" && last?.type === "session.delta" && last.sessionId === message.sessionId &&
+      last.itemId === message.itemId && last.blockIndex === message.blockIndex && last.blockType === message.blockType
+    ) {
+      buffer[buffer.length - 1] = { ...last, text: last.text + message.text };
+    } else {
+      buffer.push(message);
+    }
+    frame ??= scheduler.after(FRAME_MS, () => {
+      frame = null;
+      flush();
+    });
+  };
 
   const send = (message: ClientMessage): void => transport.send(message);
   const selected = (): string => {
@@ -97,10 +135,30 @@ export function createConnection(options: ConnectionOptions): Connection {
 
   transport.onMessage((raw) => {
     if (closed) return;
+    let message: ServerMessage;
     try {
-      store.dispatch({ type: "server", message: parseServerMessage(raw) });
+      message = parseServerMessage(raw);
     } catch (e) {
+      flush();
       store.dispatch({ type: "server", message: { type: "session.error", sessionId: null, error: toWireError(e) } });
+      return;
+    }
+    if (
+      (message.type === "session.append" || message.type === "session.update" || message.type === "session.delta") &&
+      message.sessionId === store.getState().selectedSessionId
+    ) {
+      enqueue(message);
+      return;
+    }
+    flush();
+    store.dispatch({ type: "server", message });
+    if (message.type === "session.submitAck" && !message.queued && message.sessionId === store.getState().selectedSessionId) {
+      const id = message.clientSubmissionId;
+      echoTimers.get(id)?.dispose();
+      echoTimers.set(id, scheduler.after(PENDING_ECHO_MS, () => {
+        echoTimers.delete(id);
+        store.dispatch({ type: "dismissPending", clientSubmissionId: id });
+      }));
     }
   });
   transport.onStatus((status) => {
@@ -132,6 +190,8 @@ export function createConnection(options: ConnectionOptions): Connection {
     selectSession(sessionId) {
       const before = store.getState().selectedSessionId;
       if (before === sessionId) return;
+      dropBuffer();
+      dropEchoTimers();
       store.dispatch({ type: "selectSession", sessionId });
       if (store.getState().connection !== "open") return; // the attach is sent on open
       if (before !== null) send({ type: "session.detach" });
@@ -192,6 +252,8 @@ export function createConnection(options: ConnectionOptions): Connection {
       closed = true;
       timer?.dispose();
       timer = null;
+      dropBuffer();
+      dropEchoTimers();
       store.dispatch({ type: "connection", status: "closed" });
       transport.close();
     },

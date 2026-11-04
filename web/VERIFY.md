@@ -1,4 +1,6 @@
-# Phase 1 manual verification (pro-d15)
+# Phase 2 manual verification (pro-d15, pro-d20)
+
+The Phase 1 checklist (sections 0 to 4) is kept; the Phase 2 checklist is section 5.
 
 Dev bench only: minimal visuals, no auth beyond Vite's localhost bind. Contract: [`CONTRACT.md`](./CONTRACT.md). Tick the results table at the end.
 
@@ -105,14 +107,17 @@ Repeat for the **durable** and the **pi** session.
 | A cpd fold (a cpd-owned message, e.g. the first message) | a collapsed fold with its title; click to open | chat |
 | A compacted session | a `Compaction (<n> tokens)` fold with the summary in Markdown | chat |
 
-## 3. Known limitations of Phase 1
+## 3. Known limitations (Phase 1, amended for Phase 2)
 
-- **Durable 1.3.0 only (A3):** only pi-durable 1.3.0 host frames (`snapshot`/`events`) are understood. A 1.5.0 `ConversationView` is not verifiable yet; an unknown host version or frame shape fails loud with `unsupported_host_version` / `protocol_error`, never a silent fallback.
+- **Durable v1 and v2 (superseded by CONTRACT 10.8):** pi-durable 1.3.0 (protocol 1, `snapshot`/`events`) and 1.5.0 (protocol 2, `view`/`ops`) are both understood; v2 is tested only against mocked frames until `cpd:pi-1-5-upgrade` has merged. An unknown host version or frame shape fails loud with `unsupported_host_version` / `protocol_error`, never a silent fallback.
 - **pi sessions (A4):** read from the session JSONL and written through `cpd session send` / `cpd session retier`. No abort, steer, images, model or thinking change, or compaction (cpd has no command for them); interactive dialogs are read-only. The UI disables each control and shows the reason.
 - **Dev bench:** runs only under `vite serve`; transport is Vite `server.ws` custom events (`cpd:c2s`, `cpd:s2c`); no auth beyond Vite's localhost bind; `vite build` output is not runnable.
+- **Phase 2 (CONTRACT 10.9):** no keep-mounted rows for selection, no in-app search, fold open state is not persisted across unmount, no v2 `history` paging beyond the host's newest-50 window, reference-style Markdown link definitions across segments do not resolve, from-null `cpd` nudges show as User messages, durable `cpd-event`/`cpd-first-message`/`cpd-error`/`cpd-plan-review` entries stay dropped.
+- **Unverified without a running v2 host:** tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title.
+- **Not covered by Phase 2 (docs/research/webui-chat-base.md):** C8 instant session switch, C9 highlighting off the hot path, C10 virtualisation escape hatches (search, keep-mounted, fold state across unmount), C11 heavy rows bounded, C12 hooks exposed by the base.
 - **No visual polish:** unstyled semantic HTML and one small CSS file; the design is Phase 3/4.
 
-## 4. Results
+## 4. Results (Phase 1)
 
 | # | Area | Durable | Pi | Notes |
 |---|---|---|---|---|
@@ -123,3 +128,47 @@ Repeat for the **durable** and the **pi** session.
 | 5 | Tier / model / thinking | [ ] | [ ] (model, thinking disabled as expected) | |
 | 6 | Interactive dialogs | [ ] | [ ] (read-only as expected) | |
 | 7 | Streaming, Thinking…, tools, diffs, cpd and compaction folds | [ ] | [ ] | |
+
+## 5. Phase 2 checklist (pro-d20)
+
+Prerequisite additions: a pi-runner session; a durable v1 session (pi-durable 1.3.0 host); for step 8 a durable v2 session (pi-durable 1.5.0 host); the largest local pi session file, `<your largest ~/.pi/agent/sessions/*.jsonl>` (about 25 MB on the User's machine; find it with `ls -S ~/.pi/agent/sessions/*.jsonl | head -1`).
+
+### 5.1 Steps
+
+| # | Steps | Expected |
+|---|---|---|
+| 1 | pi-runner round trip. (a) Select the pi session, type a message in the chat, press Enter. (b) From another session run `cpd session send <pi-id> "ping" --unblocks "verify"` (or have another session message this one). | (a) Within a second your text appears as a User message in the transcript, exactly once: the pending row (`sending…`, then sent) disappears when the User message arrives, and no duplicate remains after 30 s. (b) The message from the other session shows as a collapsed fold whose summary reads `Message from <key>` (fold kind `cpd`); click opens it. |
+| 2 | Sticky auto-scroll. Attach a session with a long transcript; send a message; let the reply stream. | On attach the view is at the bottom (`data-at-bottom="true"`); after send it scrolls to your message; during streaming the newest text stays in view without jitter. |
+| 3 | Scroll-up opt-out. Scroll up one screen while a reply streams; then click `Jump to bottom`; scroll up again and scroll back to the bottom by hand. | Scrolling up stops following and the view does not move as the last row grows; a `Jump to bottom` button appears (and `data-at-bottom="false"`); clicking it scrolls to the end, hides the button and follows again; returning within about 48 px of the bottom re-pins. |
+| 4 | Load earlier. Scroll to the top of a session with more than 40 items, read a message in the middle of the screen, click `Load earlier`. | The previous page is prepended and the message you were reading stays at the same screen position (moves at most 1 px); the button disappears at the start of the transcript. |
+| 5 | Panes. Wheel-scroll over the Context tree, the Plan pane, the chat and the Inbox in turn, with enough content to overflow each. | Each pane scrolls on its own; the page itself never scrolls (no outer scrollbar); header and status bar stay fixed. |
+| 6 | Large transcript. Start the dev server, select a pi session whose file is `<your largest ~/.pi/agent/sessions/*.jsonl>` (25 MB). In DevTools Elements count `[data-row-key]` nodes; while a Lead streams, type in the composer. | The last messages paint on first load without freezing the tab; the row count stays <= 60 (DOM rows mounted, CONTRACT 10.4) and does not grow while you scroll; typing stays responsive (no visible lag) while a Lead streams. |
+| 7 | Durable v1 session. Repeat steps 1 (without 1b), 2, 3, 4 and Phase 1 section 3 on a durable session whose host is pi-durable 1.3.0. | Everything works as before; a message typed in the web chat appears once as a User message (entry kind `cpd-chat`). |
+| 8 | **Run only after `cpd:pi-1-5-upgrade` has merged.** Durable v2 session (pi-durable 1.5.0 host): same checks as step 7. | Same results as step 7. Not verifiable before the merge (unverified: tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title); record what differs in Notes. Paging beyond the host's newest-50 window is a known limitation. |
+
+### 5.2 Measurements (docs/research/webui-chat-base.md lines 138-149)
+
+Covered by Phase 2: C1 to C7. Measure in Chrome DevTools Performance on the largest session; leave Result empty until measured.
+
+| ID | Check (verbatim from r7-chat-perf §8) | Result |
+|---|---|---|
+| C1 | **Cold open of a 25 MB, 5,000+ message session**: first paint of the last messages ≤ 500 ms, main thread never blocked > 100 ms (Performance trace long-task count = 0 > 100 ms). Fail if it parses/renders all messages before first paint. | |
+| C2 | **Windowed DOM**: with 5,000 messages loaded, live message DOM subtrees ≤ ~100 (window + overscan), and DOM node count does not grow with total N (count at N=500 vs N=5,000 within 10%). | |
+| C3 | **Per-token cost independent of N**: stream 200 tok/s into the last message at N=500 and N=5,000; per-frame scripting time p95 ≤ 8 ms and within 20% between the two N. Fail if cost grows with N (the cpd TUI failure mode: 0.097 ms/component). | |
+| C4 | **Streaming markdown is incremental**: DevTools/Profiler shows only the last open block re-renders per token (earlier blocks of the same message, and all other messages, do not re-render). Fail if the whole message re-parses each token. | |
+| C5 | **Bottom-anchoring**: pinned at the end while streaming (no visible jitter, drift ≤ 1 px/s); scrolling up by one screen stops following and does not move even as the last row grows; returning within threshold re-pins. | |
+| C6 | **Prepend stability**: load older page while reading mid-history; the visible message moves ≤ 1 px; stable message ids (not indexes) as keys. | |
+| C7 | **Typing responsiveness during streaming**: input keydown→paint p95 ≤ 50 ms while streaming at 200 tok/s with N=5,000 (cpd baseline to beat: TUI 54 ms median on 24 MB). | |
+
+### 5.3 Phase 2 results
+
+| # | Area | Durable v1 | Durable v2 | Pi | Notes |
+|---|---|---|---|---|---|
+| 1 | pi round trip, cpd fold | n/a | n/a | [ ] | |
+| 2 | Sticky auto-scroll | [ ] | [ ] | [ ] | |
+| 3 | Scroll-up opt-out, Jump to bottom | [ ] | [ ] | [ ] | |
+| 4 | Load earlier keeps position | [ ] | [ ] | [ ] | |
+| 5 | Panes scroll independently | [ ] | [ ] | [ ] | |
+| 6 | Large transcript | n/a | n/a | [ ] | |
+| 7 | Durable v1 | [ ] | n/a | n/a | |
+| 8 | Durable v2 (after merge) | n/a | [ ] | n/a | |

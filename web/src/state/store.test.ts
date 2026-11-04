@@ -67,7 +67,7 @@ describe("store", () => {
   it("submit adds a pending submission that reconciles on ack", () => {
     const s1 = run(selected(), attached(), { type: "submitPending", submission: pending("c1") });
     expect(s1.session?.pending).toEqual([{ ...pending("c1"), state: "sending" }]);
-    const s2 = run(s1, server({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false }));
+    const s2 = run(s1, server({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: true }));
     expect(s2.session?.pending).toEqual([]);
     const s3 = run(s1, { type: "dismissPending", clientSubmissionId: "c1" });
     expect(s3.session?.pending).toEqual([]);
@@ -113,5 +113,69 @@ describe("store", () => {
     const s2 = run(s1, server({ type: "session.footer", sessionId: "s1", footer: footer("m/2") }), server({ type: "session.title", sessionId: "s1", title: "Second" }));
     expect(s2.session?.footer).toEqual(footer("m/2"));
     expect(s2.session?.title).toBe("Second");
+  });
+
+  const ack = (id: string, queued: boolean): StoreAction =>
+    server({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: id, queued });
+  const userItem = (id: string, text: string) => ({ kind: "user" as const, id, text, attachments: [] });
+  const sentState = (...texts: string[]): AppState => {
+    const submits = texts.map((text, i): StoreAction => ({ type: "submitPending", submission: { ...pending(`c${i + 1}`), text } }));
+    const acks = texts.map((_, i) => ack(`c${i + 1}`, false));
+    return run(selected(), attached(), ...submits, ...acks);
+  };
+
+  it("submitAck of a non-queued submission keeps the pending row as sent", () => {
+    const s = run(selected(), attached(), { type: "submitPending", submission: pending("c1") }, ack("c1", false));
+    expect(s.session?.pending).toEqual([{ ...pending("c1"), state: "sent" }]);
+  });
+
+  it("submitAck of a queued submission removes the pending row", () => {
+    const s = run(
+      selected(), attached(),
+      { type: "submitPending", submission: pending("c1") }, { type: "submitPending", submission: pending("c2") },
+      ack("c1", true), ack("c2", false),
+    );
+    expect(s.session?.pending).toEqual([{ ...pending("c2"), state: "sent" }]);
+  });
+
+  it("a new user item with the same text removes the sent pending row", () => {
+    const s1 = sentState("hi", "other", "hi");
+    expect(s1.session?.pending.map((p) => p.state)).toEqual(["sent", "sent", "sent"]);
+    const s2 = run(s1, server({ type: "session.append", sessionId: "s1", items: [userItem("u:1", "  hi \n")] }));
+    expect(s2.session?.pending.map((p) => p.clientSubmissionId)).toEqual(["c2", "c3"]);
+    const s3 = run(s2, server({ type: "session.update", sessionId: "s1", items: [userItem("u:1", "hi")] }));
+    expect(s3.session?.pending.map((p) => p.clientSubmissionId)).toEqual(["c2", "c3"]);
+    const s4 = run(s3, server({ type: "session.append", sessionId: "s1", items: [userItem("u:2", "hi")] }));
+    expect(s4.session?.pending.map((p) => p.clientSubmissionId)).toEqual(["c2"]);
+  });
+
+  it("a new user item with different text keeps the sent pending row", () => {
+    const s1 = sentState("hi");
+    expect(s1.session?.pending[0]?.state).toBe("sent");
+    const s2 = run(s1, server({ type: "session.append", sessionId: "s1", items: [userItem("u:1", "different")] }));
+    expect(s2.session?.pending).toEqual([{ ...pending("c1"), state: "sent" }]);
+  });
+
+  it("a tail window clears sent pending rows", () => {
+    const s1 = run(sentState("hi", "yo"), { type: "submitPending", submission: pending("c3") });
+    expect(s1.session?.pending.map((p) => p.state)).toEqual(["sent", "sent", "sending"]);
+    const s2 = run(s1, server({ type: "session.window", sessionId: "s1", mode: "tail", window: { items: [], hasEarlier: false, cursor: null } }));
+    expect(s2.session?.pending).toEqual([{ ...pending("c3"), state: "sending" }]);
+  });
+
+  it("serverBatch applies messages in order and notifies once", () => {
+    const store = createStore(run(selected(), attached()));
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.dispatch({
+      type: "serverBatch",
+      messages: [
+        { type: "session.append", sessionId: "s1", items: [userItem("u:1", "a")] },
+        { type: "session.append", sessionId: "s1", items: [userItem("u:2", "b")] },
+        { type: "session.update", sessionId: "s1", items: [userItem("u:1", "A")] },
+      ],
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(store.getState().session?.transcript.items.map((i) => [i.id, (i as { text: string }).text])).toEqual([["u:1", "A"], ["u:2", "b"]]);
   });
 });

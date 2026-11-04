@@ -1,7 +1,6 @@
 import { WebError, type SessionRef } from "../../protocol/domain.ts";
-import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
+import type { CockpitSnapshot } from "../cockpit/events.ts";
 
-export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanViewModel | null; inbox: InboxModel | null }
 export interface ResolvedSession {
   readonly ref: SessionRef;
   readonly file?: string;

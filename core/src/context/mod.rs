@@ -26,6 +26,9 @@ mod curate_judge_tests;
 pub mod curate_neighbours;
 #[cfg(test)]
 mod curate_neighbours_tests;
+pub mod curate_run;
+#[cfg(test)]
+mod curate_run_tests;
 pub mod curate_vectors;
 #[cfg(test)]
 mod curate_vectors_tests;
@@ -121,6 +124,8 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
+    /// Curate the next record with its neighbours (§3.13a)
+    Curate(curate_run::CurateArgs),
     /// Set or change the owner of a Context (§3.13)
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
@@ -374,6 +379,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
+        Command::Curate(args) => curate_run::curate(args),
         Command::Owner(args) => owner::owner(args),
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),

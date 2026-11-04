@@ -21,39 +21,13 @@ import {
 import { sessionRetierArgs } from "../cockpit/actions.ts";
 import { createDialect, dialogFromRequest } from "./frames.ts";
 import type { TranscriptItem } from "../../protocol/domain.ts";
-import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
+import type { Disposable, GitBoundary, Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
+import type { Cpd } from "../cockpit/cli.ts";
+import type { ResolvedSession } from "../hub/registry.ts";
+import type { SessionEmit, SessionHandle, SessionBackend } from "../hub/connection.ts";
 import type { HostClient, HostFrame } from "./client.ts";
 
-// local copy of CONTRACT 6.1/6.3; replaced by imports in the integration cleanup
-export interface Cpd {
-  json(args: readonly string[]): Promise<Readonly<Record<string, unknown>>>;
-}
-export interface GitBoundary {
-  branch(cwd: string): Promise<string | null>;
-}
-export interface ResolvedSession {
-  readonly ref: SessionRef;
-  readonly file?: string;
-  readonly socketPath?: string;
-  readonly tierOptions: readonly string[];
-}
-export type SessionEmit = (message: SessionServerMessage) => void;
-export interface SessionHandle {
-  readonly capabilities: Capabilities;
-  loadEarlier(before: Cursor): Promise<void>;
-  submit(input: { clientSubmissionId: string; text: string; images: WireImage[]; whenBusy: WhenBusy }): Promise<void>;
-  abort(): Promise<void>;
-  abortSubmission(clientSubmissionId: string): Promise<void>;
-  compact(instructions?: string): Promise<void>;
-  configure(change: ConfigureChange): Promise<void>;
-  listModels(): Promise<void>;
-  respond(dialogId: string, response: DialogResponse): Promise<void>;
-  dispose(): Promise<void>;
-}
-export interface SessionBackend {
-  attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle>;
-}
 
 const FIRST_SNAPSHOT_MS = 5000; // same bound as the hello handshake (LIMITS.helloMs)
 const known = <T>(value: T): Stat<T> => ({ state: "known", value });
@@ -93,7 +67,7 @@ export function createDurableBackend(deps: {
       const sessionId = session.ref.id;
       const client = await deps.connect(session.socketPath);
       const capabilities = capabilitiesOf(session.tierOptions);
-      const dialect = createDialect();
+      const dialect = createDialect(client.welcome.protocol === 1 ? 1 : 2); // assertSupportedHost left only 1 and 2
       const subscriptions: Disposable[] = [];
 
       let disposed = false;
@@ -218,16 +192,16 @@ export function createDurableBackend(deps: {
         send({ type: "session.dialog", sessionId, dialog: result });
       };
 
-      // view and ops frames are applied one at a time, in order: a gap fill awaits the host between two of them.
+      // snapshot/events (protocol 1) and view/ops (protocol 2) frames are applied one at a time, in order: a gap fill awaits the host between two of them.
       let frames: Promise<void> = Promise.resolve();
-      const onStream = async (frame: Extract<HostFrame, { type: "view" | "ops" }>): Promise<void> => {
+      const onStream = async (frame: Extract<HostFrame, { type: "snapshot" | "events" | "view" | "ops" }>): Promise<void> => {
         if (disposed) return;
-        let out: ReturnType<typeof dialect.applyOps> = { append: [], update: [], deltas: [] };
-        if (frame.type === "view") {
-          dialect.applyView(frame);
+        let out: ReturnType<typeof dialect.applyIncrement> = { append: [], update: [], deltas: [] };
+        if (frame.type === "snapshot" || frame.type === "view") {
+          dialect.applyBase(frame);
           out = { ...out, replaced: true };
         } else {
-          out = dialect.applyOps(frame);
+          out = dialect.applyIncrement(frame);
         }
         if (dialect.transcript.before === undefined) historyExhausted = true;
         await fillGap();
@@ -252,11 +226,19 @@ export function createDurableBackend(deps: {
         emitStatus(false);
       };
 
+      // A frame the dialect or the ops replica refuses is a session error; protocol 2 also detaches (the replica cannot be trusted).
+      const onStreamError = (error: unknown): void => {
+        fail(error);
+        if (client.welcome.protocol === 2 && !disposed) client.detach().catch(() => {}); // best effort: the host may already be closing
+      };
+
       const onLive = (frame: HostFrame): void => {
         switch (frame.type) {
+          case "snapshot":
+          case "events":
           case "view":
           case "ops":
-            frames = frames.then(() => onStream(frame)).catch(fail);
+            frames = frames.then(() => onStream(frame)).catch(onStreamError);
             return;
           case "host_state": {
             busy = frame.state !== "idle";
@@ -288,10 +270,10 @@ export function createDurableBackend(deps: {
         client.onFrame((frame) => {
           if (disposed) return;
           if (ready) return onLive(frame);
-          if (frame.type === "view" && !applied) {
+          if ((frame.type === "snapshot" || frame.type === "view") && !applied) {
             applied = true;
             try {
-              dialect.applyView(frame);
+              dialect.applyBase(frame);
             } catch (e) {
               snapshotError = e;
             }

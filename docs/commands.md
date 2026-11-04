@@ -753,6 +753,61 @@ Failures, after the lock is taken. Each appends **one** `error` Event `{source: 
 
 Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
+### 3.13a `context curate`
+
+```
+cpd context curate [--context <c>] [--record <id>]
+```
+
+Experimental Feature `write_curation` (contract §4.6 "Write-time neighbour curation"; pro-d366, pro-d370, pro-a1). Curates **one** record of the Context: the oldest unchecked in-force record of kind `decision` or `note` written in the last 24 hours (the batch distiller keeps the older ones; there is no catch-up of old records). Engine E9 starts it detached for a Context that has a due record (contract §3.7); anyone may run it on demand, in the caller's process. The Context is `--context`, else the selected Plan's (§1.3). Callers: Lead only, not cockpit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+| no other distill or curate run of this Context is alive: `locks/distill-<context>.lock` is free | `distill_running` | 3 |
+| with `--record`, the id names a record of the Context | `record_not_found` | 3 |
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+| `--record <id>` | curate that record, whatever its age and checked marker (a manual smoke) |
+
+Effects:
+- **Flag off**: with `experimental.write_curation` false the command returns `{"context": "<c>", "skipped": "off"}` with no port call and no file created (not even `vectors.db`).
+- **Not curable**: as §3.13, `"skipped": "archived"` or `"skipped": "young"`, and nothing else.
+- **The pick**: `--record`, else the oldest due record. With none due: `"already": true`, `"remaining": 0`.
+- **The gate**: `decision` and `note` records continue to the neighbours (contract §4.6): at most 8, FTS5 plus embedding cosine. An unreachable embedder, or a corrupt `vectors.db`, degrades the run to FTS5 only (`fts_only`).
+- **The pair verdict**: `kev-4b` first; `independent` at the confidence bar is accepted free (`free`), no judge call. Every other result goes to the judge; a confirmed retirement needs agreement and a verbatim quote, else the pair counts `disagreed`, `quote_failed` or `rejected`. An unreachable or unusable classifier falls back to the judge alone (`kev_unreachable`).
+- **The write**: all confirmed retirements are written once, through `propose_rejecting` (a `record_retirements` row `pending`, and a `record_curations` row for a retired record that has none; an existing curation is never overwritten). An independent pair writes nothing; with no retirement and no label there is no write and no Event.
+- **`contradicts`** is listed in the JSON and retires nothing.
+- **The checked marker**: a record whose run finished is entered in `context_checked` of `vectors.db`.
+- **tmux:** none. **git:** none.
+
+Failures. The record is left unchecked and nothing is written:
+
+| Failure | Code | Exit |
+|---|---|---|
+| the judge could not be reached | `judge_unreachable` | 1 |
+| the judge refused | `judge_refused` | 1 |
+| the judge's reply was not usable | `judge_bad_reply` | 1 |
+| `vectors.db` cannot be marked | `store_failed` | 1 |
+
+An unreachable embedder or classifier is **not** a failure: the run finishes, exits 0 and says `fts_only` or `kev_unreachable` in the JSON. The engine backs off only after a failed run.
+
+```json
+{"ok": true, "context": "building-cpd", "record": "pro-d371", "kind": "decision",
+ "neighbours": 8, "fts_only": false, "kev_unreachable": false,
+ "free": 6, "judged": 2,
+ "retire": [{"record": "pro-d371", "target": "pro-d120", "reason": "duplicate"}],
+ "contradicts": [{"neighbour": "pro-d200", "quote": "...", "reason": "..."}],
+ "disagreed": 0, "quote_failed": 0, "rejected": 0, "remaining": 3}
+```
+
+`remaining` is the count of records still due.
+
+Idempotent: yes. A second run picks the next record, or says `"already": true`.
+
 ### 3.14 `context owner`
 
 ```
@@ -5143,7 +5198,7 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 **L7 Reload** (L7 of hs-d552). The trip survives a pi reload. At `session_start`, before the follower starts, the adapter reads its pi session's last `cpd-loop-guard` entry; `tripped: true` re-opens the reason and the gate at once. The window is not persisted: a reload empties it.
 
-**L8 Intra-turn tool-call guard** (pro-d352; the pi adapter; for a Lead and a Manager only, never a Worker). L3 to L7 count self-started turns and never bound the tool calls inside one turn, so a Lead or a Manager can loop inside one turn, reading the same files again and again, and burn the User's time and tokens. The run keeps three per-turn counters, `readStreak`, `totalCalls` and `turnRefusals`; all three are 0 when the run starts and are reset to 0 at pi's `before_agent_start` (whatever its `messageType`) and at `agent_end`. They are not persisted: a reload empties them. Three constants, fixed and not configurable (unlike `loop_guard_turns`): `READ_STREAK_LIMIT = 12`, `TURN_TOOL_LIMIT = 30`, `TURN_REFUSAL_TRIP = 3`. The check runs at the start of the adapter's one `tool_call` handler, before the guards of §15.11, §15.12 and §15.16, so every call is counted, also one that another guard would refuse. A call that carries `parentToolCallId` (one that a `codemode` script makes inside its parent call) is neither counted nor refused: only the calls the model itself makes count, and the parent `codemode` call is classified by its own `code` text. On each counted call, in this order: `totalCalls += 1`; then `readStreak = 0` when the call is a STATE WRITE, otherwise `readStreak += 1`. A STATE WRITE is the tool `write`, `edit`, `cpd_plan_review` or `ask_user_question`; or a `bash` call whose `command` text, or a `codemode` call whose `code` text, contains a state-mutating `cpd` command: the word `cpd` (not preceded by a letter, digit, `_`, `-` or `.`), whitespace, then one of these `<group> <subcommand>` pairs, the subcommand not followed by a letter, digit, `_` or `-`: `job add|edit|cancel|retry|steer|addendum|urgent|approve-tests|approve-touches`; `workflow add|edit|describe|cancel|start`; `plan new|phase|outline|lock|review|rename|move|done|cancel|archive`; `pr open|merge|post|rebase|push|describe|reply|rerun`; `context new|decide|note|ask|answer|brief|plan|rename|archive|delete`; `session send|close|resume|rename|fork`; `escalation answer`; `review submit`; `inbox claim`; `preset apply`; `board post`; or the top-level `answer` (`cpd answer <esc-id> ...`). Every other call is a READ: `read`, every other tool, and a `bash` or `codemode` call without such a command (`cpd plan show`, `cpd job show`, `cpd context show`, `cpd context search`, `git`, `ls`, `rg`). A call is refused when, after counting, `totalCalls > 30` (the 31st call of the turn) or `readStreak > 12` (the 13th consecutive read). A refused call does not run: the handler returns `{ block: true, reason }`. A refused call stays counted, so after the 30th call every call of the turn is refused, a state write too, and after the 12th consecutive read every further read is refused until a state write resets the streak; a state write that finds `readStreak > 12` resets it to 0 and runs, unless `totalCalls > 30`. When both bounds are exceeded, the total-calls reason is used. The reasons are exactly, one line each, for the read streak: `φ: loop guard: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.`; and for the total calls: `φ: loop guard: more than 30 tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.` Each refusal does `turnRefusals += 1`. When `turnRefusals >= 3` and the breaker is not tripped, the breaker trips as L4 (a), (b) and (c) say; the call that trips it is still refused, and a refusal while the breaker is already tripped appends no second entry. The adapter does not end the turn: the reason tells the agent to stop. The trip is cleared as L5 (the User's prompt) and L6 (`cpd session resume`) say, and a reload keeps it (L7).
+**L8 Intra-turn tool-call guard** (refines pro-d352; the pi adapter; for a Lead and a Manager only, never a Worker). L3 to L7 count self-started turns and never bound the tool calls inside one turn, so a Lead or a Manager can loop inside one turn, reading the same files again and again, and burn the User's time and tokens. The run keeps three per-turn counters, `readStreak`, `totalCalls` and `turnRefusals`; all three are 0 when the run starts and are reset to 0 at pi's `before_agent_start` (whatever its `messageType`), at `agent_end`, and on every send that starts a turn (the turn-start reset below). They are not persisted: a reload empties them. Three constants, fixed and not configurable (unlike `loop_guard_turns`): `READ_STREAK_LIMIT = 12`, `TURN_TOOL_LIMIT = 30`, `TURN_REFUSAL_TRIP = 3`. The check runs at the start of the adapter's one `tool_call` handler, before the guards of §15.11, §15.12 and §15.16, so every call is counted, also one that another guard would refuse. A call that carries `parentToolCallId` (one that a `codemode` script makes inside its parent call) is neither counted nor refused: only the calls the model itself makes count, and the parent `codemode` call is classified by its own `code` text. On each counted call: a READ (below) increments `totalCalls` and `readStreak`; a STATE WRITE sets `readStreak = 0` and does NOT increment `totalCalls`. Only reads count toward `TURN_TOOL_LIMIT`, because the cap exists to catch read loops: a read loop that interleaves dummy writes still reaches 30 reads, while bulk Job Spec file writes and `cpd job add` or `cpd workflow add` registrations do not use up the cap (after the 30th read a write is refused like any call, see below). A STATE WRITE is the tool `write`, `edit`, `cpd_plan_review` or `ask_user_question`; or a `bash` call whose `command` text, or a `codemode` call whose `code` text, contains a state-mutating `cpd` command: the word `cpd` (not preceded by a letter, digit, `_`, `-` or `.`), whitespace, then one of these `<group> <subcommand>` pairs, the subcommand not followed by a letter, digit, `_` or `-`: `job add|edit|cancel|retry|steer|addendum|urgent|approve-tests|approve-touches`; `workflow add|edit|describe|cancel|start`; `plan new|phase|outline|lock|review|rename|move|done|cancel|archive`; `pr open|merge|post|rebase|push|describe|reply|rerun`; `context new|decide|note|ask|answer|brief|plan|rename|archive|delete`; `session send|close|resume|rename|fork`; `escalation answer`; `review submit`; `inbox claim`; `preset apply`; `board post`; or the top-level `answer` (`cpd answer <esc-id> ...`). Every other call is a READ: `read`, every other tool, and a `bash` or `codemode` call without such a command (`cpd plan show`, `cpd job show`, `cpd context show`, `cpd context search`, `git`, `ls`, `rg`). A call is refused when, after its update above, `totalCalls > 30` (the 31st read of the turn) or `readStreak > 12` (the 13th consecutive read). A refused call does not run: the handler returns `{ block: true, reason }`. A refused read stays counted, so after the 30th read every call of the turn is refused, a state write too, and after the 12th consecutive read every further read is refused until a state write resets the streak; a state write that finds `readStreak > 12` resets it to 0 and runs, unless `totalCalls > 30`. When both bounds are exceeded, the total-calls reason is used. The reasons are exactly, one line each, for the read streak: `φ: loop guard: this tool call was NOT executed: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.`; and for the total calls: `φ: loop guard: this tool call was NOT executed: more than 30 read-only tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.` Each refusal does `turnRefusals += 1`. When `turnRefusals >= 3` and the breaker is not tripped, the breaker trips as L4 (a), (b) and (c) say; the call that trips it is still refused, and a refusal while the breaker is already tripped appends no second entry. **Turn-start reset.** The three counters are also reset to 0 whenever the adapter sends a message that starts a turn, that is one sent with `options.triggerTurn` true after `gated` (`pi/lib/delivery.ts`): `deliverAs` `steer` (and `followUp`) start a new turn inside an active run without firing `before_agent_start`, so the counts of the run before it do not carry over. A message gated to `nextTurn` starts nothing and resets nothing. The reset does not touch the trip. The adapter does not end the turn: the reason tells the agent to stop. The trip is cleared as L5 (the User's prompt) and L6 (`cpd session resume`) say, and a reload keeps it (L7).
 
 **Sends that use the gate** (every send of a message with `triggerTurn: true`): `session-message` Events, `attempt-nudge`, `job-addendum`, the adapter's errors, the Plan review decision message. All of these go through `gated` when the breaker is tripped, so they queue without starting turns. A call that L8 refuses is not a send.
 
@@ -6876,7 +6931,7 @@ A server that uses OAuth needs the User to sign in once on the machine (pro-d10)
 cpd janitor
 ```
 
-Removes the worktrees and branches of merged and cancelled Workflows (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live Workflows (contract §7.2). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
+Removes the worktrees and branches of merged and cancelled Workflows (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live Workflows (contract §7.2). It also prunes (pro-d378) the `target` directory of the Lead of each idle Workflow in status `open`, `merged` or `cancelled`, and the `durable` directory of each archived or deleted Plan whose Attempts are all ended (§4a). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
 
 | Flag | Meaning |
 |---|---|
@@ -6909,9 +6964,16 @@ When the Lead worktree is dirty (output of `git --no-optional-locks status --por
 
 A stop (kill, crash, failing call) at (a) leaves the worktree whole and untouched. A stop at (b), (c) or (d) leaves the worktree gone (`<path>` absent) with `<path>.removing` as the marker (the directory is present from the rename, empty of tracked files). A pass that finds `<path>` absent and `<path>.removing` present retries (b), (c), (d) again; every step is idempotent. A failure in (b), (c) or (d) is outcome `failed`: the path is gone and later passes retry (a contract violation: the marker stays; the worktree can never be recovered). Renamed but uncleaned paths show in the log (§5).
 
+**§4a. Prune of `target` and `durable`** (pro-d378; contract §3.7 E16 "Prune"). It runs first in the pass, before the Workflow clean-up of §3, so a Lead's `target` is reported even when that clean-up then removes the whole Lead. Both steps remove a whole directory and are idempotent: a missing directory is no entry. Neither step raises an Event.
+
+- **(T) Lead `target`**: for each Workflow of any Plan (archived included) in status `open`, `merged` or `cancelled` that has no Job of its Plan with `workflow` equal to its key in status `queued` or `running`, and no Attempt of those Jobs in status `starting`, `running` or `merging`: remove `<lead_worktree>/target` if it exists. `<lead_worktree>` is the Workflow's `lead_worktree`, or for a `cancelled` Workflow (column null) the path `workflow_lead_worktree_path` derives. The entry's `workflow` is the key. The Lead worktree, its Lead Branch, its sources and every Attempt worktree stay. A `cancelled` Workflow whose stored pull request is `open` (A8) is included: pro-d378 supersedes A8 for `target` only.
+- **(D) `durable`**: for each Plan with `archived_at` or `deleted_at` not null and no Attempt in a status other than `ended`: remove `run/<plan>/durable` (`CpdHome::durable_dir`) if it exists. The entry's `workflow` is `null`. Nothing else under `run/<plan>` is removed.
+
+A Job in any other status (`draft`, `merged`, `failed`, `cancelled`) and an `ended` Attempt do not block a removal. A removal that fails is outcome `failed`; the pass goes on with the next entry.
+
 **§5. Output and Log**:
 
-One JSON value: `{"ok":true,"outcomes":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `outcomes` is one entry per pending Workflow path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
+One JSON value: `{"ok":true,"outcomes":[...],"pruned":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `pruned` (§4a) has one entry per Prune removal that found its directory, in the order the steps ran, and is `[]` when nothing was pruned. Each `pruned` entry is `{"plan", "workflow", "path", "outcome", "reason"}`: `path` is the absolute path; `workflow` is the key for (T) and `null` for (D); `outcome` is `pruned` (the directory was removed whole) or `failed` (it was not; the next pass tries again); `reason` is present only for `failed`. The output `{"ok":true,"skipped":"running"}` has no `pruned` key. `outcomes` is one entry per pending Workflow path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
 
 ```json
 {"plan": "pay-4521", "workflow": "api", "status": "cancelled", "path": "/home/clayton/projects/pay.pay-4521.api", "outcome": "removed", "reason": null}
@@ -6929,13 +6991,20 @@ or:
 {"plan": "pay-4521", "workflow": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
 ```
 
+and, for the Prune (§4a):
+
+```json
+{"plan": "pay-4521", "workflow": "api", "path": "/home/clayton/projects/pay.api/target", "outcome": "pruned"}
+{"plan": "pay-4521", "workflow": null, "path": "/home/clayton/.cpd/run/pay-4521/durable", "outcome": "failed", "reason": "permission denied"}
+```
+
 `status` is `cancelled`, `merged`, `dispatch` or `open` (the last two for an Attempt swept under contract §7.2 'Ended Attempts of merged Jobs on a live Workflow'), read from the Workflow's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the Workflow is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
 
-The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). The engine's watch.log reads events from that file (§12 "The watch loop").
+The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). Each `pruned` entry adds one line in the same format, before the pass's own line, where `<pass id>` is the process id and `<status>` is `prune pruned plan=<plan> workflow=<key or -> path=<path>`, or `prune failed plan=<plan> workflow=<key or -> path=<path> reason=<reason>` for `failed`. The engine's watch.log reads events from that file (§12 "The watch loop").
 
 **§6. Events**:
 
-One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that Workflow yet (later passes retry silently, as `fresh` does today for a cancelled Workflow; a merged Workflow now works the same way). Never for `pending` or `removed` paths. **Text** (pro-d72):
+One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that Workflow yet (later passes retry silently, as `fresh` does today for a cancelled Workflow; a merged Workflow now works the same way). Never for `pending` or `removed` paths. Prune (§4a) raises no Event, `failed` included. **Text** (pro-d72):
 
 - `kept`: `The clean-up of the <status> Workflow <workflow> of Plan <plan> kept <path> untouched: <reason>`
 - `failed` (after rename at step (a) in §4): `The clean-up of the <status> Workflow <workflow> of Plan <plan> removed <path>, but not everything: <reason>. The next janitor pass retries.`
@@ -6945,14 +7014,14 @@ Each Event also has `details`: `{plan, workflow, status, outcome, path, reason}`
 
 **§7. Exit codes**:
 
-- `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`).
+- `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`; a `failed` `pruned` entry does not change it).
 - `2` when the store cannot be read (as `prune`, §27: `store_too_new`, `migration_failed`, `migration_changed`, `migration_order`).
 - `1` for other store errors (as `prune`, §27: `store_failed`, `store_tampered`).
 - `1` when a git or tmux call fails unexpectedly (details `{argv, exit, stderr}`); the pass continues for the next Workflow.
 
-**Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`.
+**Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`, `janitor_pass_prunes_idle_lead_targets`, `janitor_pass_keeps_busy_lead_targets`, `janitor_pass_prunes_durable_of_archived_and_deleted_plans`, `janitor_pass_keeps_durable_while_an_attempt_is_not_ended`, `janitor_pass_reports_a_failed_prune_and_goes_on`, `janitor_pass_prune_is_idempotent_and_logs_each_entry`.
 
-Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and writes nothing; rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
+Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and an empty `pruned` list, and writes nothing (a Prune whose directory is gone is no entry, §4a); rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
 
 ## 30. `resource`
 

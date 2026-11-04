@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { JSX } from "react";
 import { TOOL_PREVIEW_LINES } from "../../protocol/domain.ts";
 import type { OrphanResultItem, ToolItem, ToolResult } from "../../protocol/domain.ts";
@@ -103,7 +103,7 @@ function PlainOutput(props: { text: string }): JSX.Element {
   return <Body lines={lines} render={(l) => <>{l}</>} wrap={(c) => <pre data-part="output">{c.map((e, i) => <span key={i}>{i > 0 ? "\n" : ""}{e}</span>)}</pre>} />;
 }
 
-export function ToolRow(props: { tool: ToolItem }): JSX.Element {
+export const ToolRow = memo(function ToolRow(props: { tool: ToolItem }): JSX.Element {
   const { tool } = props;
   const shownName = tool.name.startsWith("mcp__") ? tool.name.slice(5) : tool.name;
   return (
@@ -114,13 +114,13 @@ export function ToolRow(props: { tool: ToolItem }): JSX.Element {
       <Output result={tool.result} {...(tool.name === "edit" && tool.diff !== undefined ? { diff: tool.diff } : {})} />
     </details>
   );
-}
+});
 
-export function OrphanRow(props: { item: OrphanResultItem }): JSX.Element {
+export const OrphanRow = memo(function OrphanRow(props: { item: OrphanResultItem }): JSX.Element {
   return (
     <article data-kind="orphan-result">
       <p>Result of {props.item.name} (call not loaded)</p>
       <PlainOutput text={props.item.result.text} />
     </article>
   );
-}
+});

@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CpdError, isObject, toCpdError } from "./cpd.ts";
-import { FOLLOW_UP, gated } from "./delivery.ts";
+import { FOLLOW_UP, send } from "./delivery.ts";
 import type { EventOf } from "./event.ts";
 import type { Host } from "./host.ts";
 import { DECISION_TYPE, decisionText, ELSEWHERE_CHAT_NOTE, ENTRY_TYPE, reviewNumber, REVIEW_LABEL, SUMMARY_TYPE, type ReviewEntry } from "./plan-review.ts";
@@ -77,7 +77,7 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
 }
 
 const tell = (host: Host, r: Run, content: string, details: Record<string, unknown>) =>
-  host.pi.sendMessage({ customType: DECISION_TYPE, content, display: true, details }, gated(r, FOLLOW_UP(true)));
+  send(host, r, { customType: DECISION_TYPE, content, display: true, details }, FOLLOW_UP(true));
 
 /** Appends the settled entry, closes the blocking reason and tells the Lead (§15.5 "Deciding" steps 2 and 3). */
 function settle(host: Host, r: Run, entry: ReviewEntry, verdict: boolean, text: string | undefined, current: boolean, elsewhere: boolean): void {

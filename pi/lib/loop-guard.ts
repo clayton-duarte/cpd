@@ -79,17 +79,19 @@ export function isStateWrite(toolName: string, input: unknown): boolean {
 }
 
 const READ_STREAK_REASON =
-  "φ: loop guard: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.";
+  "φ: loop guard: this tool call was NOT executed: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.";
 const TOTAL_CALLS_REASON =
-  "φ: loop guard: more than 30 tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.";
+  "φ: loop guard: this tool call was NOT executed: more than 30 read-only tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.";
 
 /** L8: counts a call of the model; the refusal reason, or undefined to let it run. */
 export function toolCallGuard(host: Host, call: { toolName: string; input: unknown; parentToolCallId?: string }): string | undefined {
   const r = host.run;
   if (!r || !guarded(r) || call.parentToolCallId !== undefined) return undefined;
-  r.totalCalls += 1;
   if (isStateWrite(call.toolName, call.input)) r.readStreak = 0;
-  else r.readStreak += 1;
+  else {
+    r.totalCalls += 1;
+    r.readStreak += 1;
+  }
   const reason = r.totalCalls > TURN_TOOL_LIMIT ? TOTAL_CALLS_REASON : r.readStreak > READ_STREAK_LIMIT ? READ_STREAK_REASON : undefined;
   if (reason === undefined) return undefined;
   r.turnRefusals += 1;
@@ -97,7 +99,7 @@ export function toolCallGuard(host: Host, call: { toolName: string; input: unkno
   return reason;
 }
 
-const resetTurn = (r: Run) => {
+export const resetTurn = (r: Run) => {
   r.readStreak = 0;
   r.totalCalls = 0;
   r.turnRefusals = 0;
