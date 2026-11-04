@@ -1,6 +1,8 @@
 import { FitAddon, Ghostty, Terminal } from "@aurigax-ai/ghostty-web";
-import { DANGO_THEME, TERMINAL_FONT, startTerminalHost } from "./terminal.ts";
+import { DANGO_THEME, TERMINAL_FONT, fitToContainer, startTerminalHost } from "./terminal.ts";
 import type { TerminalEngine } from "./terminal.ts";
+import { createViewToggle } from "./view.ts";
+import { mountWebui } from "./webui.tsx";
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -8,17 +10,31 @@ function element(id: string): HTMLElement {
   return found;
 }
 
+// HTMLElement.hidden is typed string | boolean; the toggle only writes booleans.
+function boolHidden(el: HTMLElement): { hidden: boolean } {
+  return {
+    get hidden() { return el.hidden === true; },
+    set hidden(value: boolean) { el.hidden = value; },
+  } as { hidden: boolean };
+}
+
+let buttons = 0;
+for (const type of ["mousedown", "mouseup", "mousemove"] as const) {
+  window.addEventListener(type, (e: MouseEvent) => { buttons = e.buttons; }, true);
+}
+
 async function boot(): Promise<void> {
   const bridge = window.cpdElectron;
   const container = element("terminal");
-  const placeholder = element("webui-placeholder");
+  const webuiRoot = element("webui-root");
+  mountWebui(webuiRoot, bridge);
   const ghostty = await Ghostty.fromBytes(await bridge.readWasm());
   const term = new Terminal({ ghostty, renderer: "webgl", theme: DANGO_THEME, ...TERMINAL_FONT });
   const fit = new FitAddon();
   term.loadAddon(fit);
   const engine: TerminalEngine = {
     open: () => term.open(container),
-    fit: () => fit.fit(),
+    fit: () => fitToContainer(fit, term),
     size: () => ({ cols: term.cols, rows: term.rows }),
     write: (data) => term.write(data),
     focus: () => term.focus(),
@@ -30,6 +46,7 @@ async function boot(): Promise<void> {
     },
     dispose: () => term.dispose(),
   };
+  await document.fonts?.ready;
   await startTerminalHost({
     engine,
     bridge,
@@ -40,13 +57,9 @@ async function boot(): Promise<void> {
         return () => observer.disconnect();
       },
     },
+    pointer: { buttons: () => buttons },
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
-    view: {
-      showTerminal: (visible) => {
-        container.hidden = !visible;
-        placeholder.hidden = visible;
-      },
-    },
+    view: { showTerminal: createViewToggle(boolHidden(container), boolHidden(webuiRoot)) },
     onError: (error) => console.error(error),
   });
 }

@@ -1,6 +1,6 @@
 # Manual verification, phases 1 to 4 (pro-d15, pro-d20, Phase 3/4)
 
-The Phase 1 checklist (sections 0 to 4) is kept; the Phase 2 checklist is section 5; the Phase 3/4 checklist (high-fidelity Dango v3 UI) is section 6.
+The Phase 1 checklist (sections 0 to 4) is kept; the Phase 2 checklist is section 5; the Phase 3/4 checklist (high-fidelity Dango v3 UI) is section 6; the Electron app checklist (Dock, Tray, native shell, live TUI and WebUI switch) is section 7.
 
 Dev bench only: no auth beyond Vite's localhost bind. The UI is the high-fidelity Dango v3 + shadcn/ui design ([`src/ui/DESIGN.md`](./src/ui/DESIGN.md) and its sibling `DESIGN-*.md` files). Contract: [`CONTRACT.md`](./CONTRACT.md). Tick the results table at the end.
 
@@ -224,3 +224,64 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | 18 | Composer and footer | [ ] | [ ] | |
 | 19 | Ask card | [ ] | [ ] (read-only as expected) | |
 | 20 | Plan review card | [ ] | [ ] (read-only as expected) | |
+
+## 7. Electron app checklist (pro-d21, pro-d23, pro-d24)
+
+Specification: [`ELECTRON.md`](./ELECTRON.md). The Dock and Tray visuals are checked by hand here and never in tests. Steps 7.2 to 7.5 are macOS only; Linux and Windows have no Dock and no Tray.
+
+Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH`; a running engine (`cpd watch --check`); Maple Mono installed (ELECTRON.md, Run). For the attention steps, the Inbox must hold at least one `red` row (blocking) and one `magenta` row (decision): a failing Job and a pending question or plan review will do. Start the app with `pnpm --filter cpd-web-client run electron`, and quit it with Cmd-Q or the Tray's `Quit cpd` item.
+
+### 7.1 Steps
+
+| # | Steps | Expected |
+|---|---|---|
+| **Dock icon (dev)** | | |
+| 1 | Start the app. Look at the Dock while the app runs. | The Dock shows the cpd icon, the Shiro phi on Kuronuri `#1c1a20`, not the generic Electron icon. |
+| **Tray and attention image** | | |
+| 2 | With no attention item, look at the menu bar. Switch the system appearance between light and dark. | A φ template icon in the menu bar that follows the appearance. Hovering it shows the tooltip `cpd`. |
+| 3 | Make a `red` row appear in the Inbox (the window may be open or closed). | The Tray icon changes to the attention variant. Resolve or clear the rows: the Tray returns to the normal icon. |
+| **Dock badge** | | |
+| 4 | With the counts from the Prerequisites, read the Dock badge. | The badge shows the blocking count plus the decision count. The Inbox header tier counts agree: the red (blocking) and magenta (decide) counts add up to the badge. |
+| 5 | Clear every red and magenta row. | The badge disappears. |
+| **Bounce** | | |
+| 6 | Unfocus the window (focus another app). Make a new `red` row appear. | The Dock icon bounces once. |
+| 7 | Unfocus the window. Make a new `magenta` row appear, with no new `red` row. | The badge goes up. The Dock does not bounce. |
+| 8 | Focus the window. Make a new `red` row appear. | The badge goes up. The Dock does not bounce. |
+| 9 | Quit the app while a `red` row exists. Relaunch it with the window unfocused. | No bounce at startup: the first count is the baseline. A further new `red` row, while unfocused, bounces the Dock. |
+| **Tray items** | | |
+| 10 | Click the Tray icon. Read the menu. | Items in this order: `Open cockpit`, `Switch to TUI`, `Switch to WebUI`, a separator, `Quit cpd`. |
+| 11 | In TUI mode, choose `Open cockpit`. | The window shows and takes focus, and the app switches to WebUI (View > WebUI is checked). |
+| 12 | Choose `Switch to TUI`, then `Switch to WebUI`. | Each choice matches View > TUI and View > WebUI, and the view changes at once. |
+| 13 | Choose `Quit cpd`. Then run `pgrep -fl 'cpd tui'`. | The app quits and its Tray icon disappears. `pgrep` prints nothing, so no `cpd tui` process remains. |
+| **Live TUI and WebUI switch** | | |
+| 14 | Start in TUI with a `cpd tui` cockpit running. Run `pgrep -fl 'cpd tui'` and note the process id. Choose View > WebUI, then View > TUI. Run `pgrep -fl 'cpd tui'` again. | The terminal hides and the WebUI shows, then the terminal returns with the cursor focused. The process id is the same before and after, so the TUI session was not restarted. |
+| 15 | In WebUI, select a session, scroll its transcript, and type a draft in `Message` without sending. Switch to TUI, then back to WebUI. | The WebUI still shows the same session, the scroll position and the draft. Nothing reloads. |
+| 16 | In TUI, press CmdOrCtrl+Shift+M. Then switch to WebUI with View > WebUI and press CmdOrCtrl+Shift+M again. | In TUI the accelerator does nothing, so the keys reach cpd. In WebUI it switches to TUI. |
+| 17 | Switch to WebUI, wait while cpd prints output in the cockpit, then switch to TUI. | The terminal shows the current cockpit, not a stale frame, and is focused. |
+| **WebUI in the window** | | |
+| 18 | In WebUI, click a link to a PR or a deploy run. | The link opens in the system browser. The app opens no window for it. |
+| 19 | Open the macOS app menu, then About cpd. | The panel shows `cpd`, the app version and `Continuous Parallel Delivery`. The app stays dark when the system appearance is light. |
+| **Packaging (macOS, once per release)** | | |
+| 20 | Run `scripts/prepare-macos-assets.sh`, then `pnpm --filter cpd-web-client run dist:mac`. | A DMG and a zip appear under `web/dist/`. |
+| 21 | Run `find web/dist -name Info.plist -path '*cpd.app*'`, then `/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' <that path>`. | The bundle identifier is `com.cpd.desktop`. |
+| 22 | In the packaged app's `Contents/Resources/`, list `icon.png`, `icon.icns` (or `Assets.car`) and `tray/`. | `tray/trayTemplate.png` and `tray/trayAttentionTemplate.png` are present. `icon.png` is present too, so the packaged Dock icon can load. If `icon.png` is missing, this check fails: record it in Notes. |
+
+| **Terminal fixes (pro-d25)** | | |
+| 23 | In TUI, hover over a tmux pane border, then click-drag it. | Hover does not drag the border. Click-drag still resizes the pane. |
+| 24 | Drag the window edge to resize, then release. | The TUI layout grows to the final window size. |
+| 25 | Move the pointer over the terminal. | The pointer is an arrow, not a text cursor. |
+| 26 | Look at the tmux status line and Powerline caps. | Powerline caps and status icons render. |
+
+### 7.2 Results
+
+| # | Area | Result | Notes |
+|---|---|---|---|
+| 1 | Dock icon (dev) | [ ] | |
+| 2, 3 | Tray and attention image | [ ] | |
+| 4, 5 | Dock badge | [ ] | |
+| 6 to 9 | Bounce | [ ] | |
+| 10 to 13 | Tray items and quit | [ ] | |
+| 14 to 17 | Live TUI and WebUI switch | [ ] | |
+| 18, 19 | WebUI in the window: links, About, dark theme | [ ] | |
+| 20 to 22 | Packaging | [ ] | |
+| 23 to 26 | Terminal fixes: hover, resize, pointer, Nerd Fonts | [ ] | |

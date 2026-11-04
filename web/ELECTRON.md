@@ -1,6 +1,6 @@
-# Electron TUI app
+# Electron app
 
-The Electron TUI app is a standalone Electron desktop app in `web/` that runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), and a native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). Decisions: pro-d21 (D5, D6, D7) and pro-d22.
+The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
 
 ## Run
 
@@ -225,6 +225,71 @@ export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): 
 - `renderer.ts`: reads `window.cpdElectron`, loads `Ghostty.fromBytes(await bridge.readWasm())`, builds a `TerminalEngine` over `@aurigax-ai/ghostty-web` (`new Terminal({ ghostty, renderer: "webgl", theme: DANGO_THEME, ...TERMINAL_FONT })` plus its `FitAddon`; `setPaused`, `clipboardWriteHandler` as in the research file), a `ResizeSource` over `ResizeObserver`, and calls `startTerminalHost`.
 - `main.ts`: the Electron main process (below).
 
+### Terminal fixes (pro-d25)
+
+- Hover: ghostty-web 0.3.9 reports no-button motion as SGR code 32 (a left drag), so hover dragged tmux panes. `fixSgrMouseHover` rewrites `\x1b[<32;c;rM` to code 35 while no button is pressed; the pointer buttons are tracked from capture-phase window mouse listeners in renderer.ts.
+- Resize: `FitAddon.fit()` ignores calls within 50 ms of one, so the final size was dropped. `fitToContainer` uses `proposeDimensions()` and calls `term.resize` once.
+- Fonts: `TERMINAL_FONT` falls back to Symbols Nerd Font Mono and MesloLGS, and renderer.ts awaits `document.fonts.ready` before opening the terminal.
+- Pointer: electron.html forces `cursor: default` on `#terminal` and its canvas.
+
+## Assets (web/build/)
+
+The macOS asset bundle's `build/` directory is copied unchanged to `web/build/`. Every `build/...` path in `electron-builder.yml`, `afterPack.cjs` and the script resolves from `web/`, because electron-builder and the script both resolve from the app root. The Finder `.DS_Store` files are not copied.
+
+- `icon.icns`: the app icon for macOS 15 and earlier, and the fallback (`mac.icon`, `dmg.icon`).
+- `icon.png`: the 1024 px icon the Dock shows at runtime (`app.dock.setIcon`, darwin only).
+- `icon/`: the cpd icon as SVG and PNG sizes (16 to 1024 px). Nothing reads it at runtime.
+- `icon-composer/`: `phi.png` and `phi.svg`, the Icon Composer layers. The script turns them into `cpd.icon/`.
+- `tray/trayTemplate.png` and `tray/trayTemplate@2x.png`: the menu bar icon, a template image (macOS tints it for light and dark menu bars).
+- `tray/trayAttentionTemplate.png` and `tray/trayAttentionTemplate@2x.png`: the menu bar attention variant.
+- `dmg/background.png` and `dmg/background@2x.png`: the DMG window background. The script builds `dmg/background.tiff` from them.
+- `entitlements.mac.plist` and `entitlements.mac.inherit.plist`: hardened-runtime exceptions for the app and its helper processes (JIT, unsigned executable memory, library validation off, because `node-pty` is a dependency).
+- `afterPack.cjs`: the electron-builder hook. It copies `Assets.car` (the macOS 26 Liquid Glass icon) into `Contents/Resources/` when present, otherwise it warns and ships `icon.icns`.
+
+Generated on a Mac by `scripts/prepare-macos-assets.sh` and absent until it runs: `build/cpd.icon/`, `build/Assets.car`, `build/dmg/background.tiff`.
+
+At runtime `native.ts` reads only the two tray images. In dev they come from `app.getAppPath()/build/`; packaged, from `process.resourcesPath/`, which holds `tray/` (the `extraResources` rule) and `icon.png`.
+
+## Packaging
+
+- `web/electron-builder.yml` is the electron-builder config. `appId` is `com.cpd.desktop`; `productName` is `cpd`.
+- `electron-builder` is a pinned devDependency of `web/` (pro-d24).
+- `files` ships the main process output (`dist-electron/**/*`) and `package.json`. `extraResources` copies `build/tray` into `Contents/Resources/tray`.
+- The macOS target is arm64: a DMG and a zip. The build uses the hardened runtime and notarizes, and reads the Apple credentials from the environment.
+- `dist:mac` (`pnpm --filter cpd-web-client run dist:mac`) builds the Electron bundle and runs electron-builder for macOS. The output goes to `web/dist/`.
+- Run `scripts/prepare-macos-assets.sh` once on a Mac before `dist:mac`. The DMG background is `build/dmg/background.tiff`, and the script creates it.
+
+## Native shell
+
+The native shell is `web/src/electron/native.ts` and `web/src/electron/attention.ts`. The main process calls `setupNativeShell` once the app is ready. The Dock and Tray parts run on macOS only. Linux and Windows have no Dock and no Tray, so nothing in this section runs there.
+
+On every platform:
+
+- Dark theme: `nativeTheme.themeSource` is `dark`. The cockpit is dark only.
+- About panel: `cpd`, the app version and the credits `Continuous Parallel Delivery`.
+- External links open in the system browser. A link that asks for a new window (a PR, a deploy run) opens in the browser through `shell.openExternal`, and the app never opens a window for it.
+
+On macOS only:
+
+- Dock icon: `app.dock.setIcon` shows `build/icon.png` in dev, and `icon.png` in `process.resourcesPath` when packaged.
+- Tray: a menu bar item with the tooltip `cpd` and the template image. Its menu, in order: `Open cockpit`, `Switch to TUI`, `Switch to WebUI`, a separator, `Quit cpd`. `Open cockpit` shows and focuses the window and switches to WebUI (A6). The two switch items do what the View menu does.
+- Attention image: the Tray shows `trayAttentionTemplate.png` while there is something to attend to, and `trayTemplate.png` otherwise. Both images are created once at setup.
+- Dock badge: blocking + decisions. The badge is empty when the sum is zero.
+- Counting (A2): the main process counts the rows of the Inbox from the same cockpit service the WebUI reads. A row with urgency `red` is blocking, and a row with urgency `magenta` is a decision. Other urgencies are not counted. The count is recomputed on every cockpit update.
+- Bounce: the Dock bounces once (`informational`) when blocking rises above the previous count and the window is not focused. The first count after startup is the baseline and never bounces. A rise in decisions alone does not bounce, and neither does a fall in blocking, or any rise while the window has focus.
+- Dispose: the shell's `dispose` destroys the Tray. It is idempotent.
+
+## IPC WebUI transport
+
+The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (renderer to main) and `cpd:s2c` (main to renderer). The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createElectronTransport` in the renderer and `registerWebuiIpc` in the main process.
+
+- Main process: the first frame from a window creates one hub connection for that window, through `services.newConnection(send)`. `send` writes to `cpd:s2c` unless the window is destroyed. When the window is destroyed its hub is closed and forgotten. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
+- Renderer: `createElectronTransport` has the same semantics as the browser transport (`createHotTransport`): it opens with status `open`, `send` throws before open or after close, and `close` is final.
+- Both views stay mounted, so a switch is instant and keeps the session state. The WebUI keeps its connection and selection, and the TUI keeps its pty.
+- TUI mode: the terminal is shown, resumed, refitted to its container and focused. Menu shortcuts are ignored, so the keys reach cpd.
+- WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
+- The chosen mode persists in `$CPD_HOME/run/ui-mode.json` (see Module contract, mode.ts).
+
 ## Verification checklist
 
 Run each check against the built app (`pnpm --filter cpd-web-client run electron`). A check passes only when its observable result is seen.
@@ -235,7 +300,7 @@ Run each check against the built app (`pnpm --filter cpd-web-client run electron
 4. Maple Mono is used. Result: glyphs match Maple Mono (for example `0`, `O`, `l`, `1`, `|` are distinct). Uninstalling Maple Mono changes the glyphs, so the check is meaningful only with it installed.
 5. Resizing the window refits the cockpit. Drag the window edges. Result: the cockpit redraws at the new size with no wrapped or stray lines from the old width.
 6. OSC 52 copy from inside pi lands in the macOS clipboard. Copy a message from pi, then run `pbpaste` in a shell. Result: `pbpaste` prints the copied text.
-7. View > WebUI hides the terminal, shows the placeholder and pauses drawing. Result: the terminal disappears, the placeholder is shown, and output stops being drawn.
+7. View > WebUI hides the terminal, shows the WebUI cockpit and pauses drawing. Result: the terminal disappears, the cockpit is shown with its panes, and output stops being drawn.
 8. View > TUI restores the terminal with focus and the pty session intact. Result: the terminal reappears with the cursor focused, and the cockpit state is unchanged (no restart; the `cpd tui` process id is the same).
 9. The choice persists across restarts in `$CPD_HOME/run/ui-mode.json`. Set View > WebUI, quit, relaunch. Result: the app opens in WebUI and the file holds `{"mode":"webui"}`. Set View > TUI and the file holds `{"mode":"tui"}`.
 10. Closing the window quits the app and leaves no orphan process. Close the window, then run `pgrep -fl 'cpd tui'`. Result: no line is printed, so no `node-pty` or `cpd tui` process remains.

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
+    "dist:mac": "pnpm run build:electron && electron-builder --mac",
     "build:electron": "CPD_ELECTRON_TARGET=renderer vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=main vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=preload vite build -c vite.electron.config.ts",
     "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && electron ."
   },
@@ -33,6 +34,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "electron": "45.2.2",
+    "electron-builder": "26.18.0",
     "jsdom": "30.1.3",
     "lucide-react": "1.65.0",
     "nanoid": "6.0.2",

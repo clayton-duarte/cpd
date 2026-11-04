@@ -1,0 +1,61 @@
+# cpd — electron-builder config for macOS
+# Dango v3 · icon v1 (Anonymous Pro φ, shiro on kuronuri)
+
+appId: com.cpd.desktop
+productName: cpd                  # name under the icon, in the menu bar and in Finder
+copyright: Copyright © cpd
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - dist-electron/**/*
+  - package.json
+
+asarUnpack:
+  - node_modules/node-pty/**/*
+
+extraResources:
+  - from: build/tray              # menu bar template icons, read at runtime
+    to: tray
+  - from: build/icon.png          # Dock icon, read at runtime
+    to: icon.png
+
+afterPack: build/afterPack.cjs    # adds the macOS 26 Liquid Glass icon (Assets.car) when present
+
+mac:
+  icon: build/icon.icns           # macOS 15 and earlier, and fallback
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip                 # needed for auto-update
+      arch: [arm64]
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true                  # reads APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER or APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID
+  minimumSystemVersion: "13.0"
+  extendInfo:
+    CFBundleIconName: cpd         # name of the icon inside Assets.car (= cpd.icon); ignored if Assets.car is absent
+    NSRequiresAquaSystemAppearance: false
+    LSApplicationCategoryType: public.app-category.developer-tools
+
+dmg:
+  title: cpd ${version}
+  icon: build/icon.icns           # volume icon
+  background: build/dmg/background.png    # 660×400; the @2x sits beside it
+  iconSize: 128
+  window:
+    width: 660
+    height: 400
+  contents:
+    - x: 180
+      y: 190
+    - x: 480
+      y: 190
+      type: link
+      path: /Applications

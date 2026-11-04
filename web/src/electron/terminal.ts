@@ -26,7 +26,7 @@ export const DANGO_THEME = {
 };
 
 export const TERMINAL_FONT: { fontFamily: string; fontSize: number } = {
-  fontFamily: '"Maple Mono", monospace',
+  fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace',
   fontSize: 13,
 };
 
@@ -51,7 +51,24 @@ export interface TerminalHostDeps {
   resize: ResizeSource;
   clipboard: { writeText(text: string): Promise<void> };
   view: { showTerminal(visible: boolean): void };
+  pointer: { buttons(): number };
   onError(error: unknown): void;
+}
+
+// ghostty-web 0.3.9 reports no-button motion (mode 1003) as code 32 (left drag); 35 is no-button motion.
+export function fixSgrMouseHover(data: string, buttonsPressed: number): string {
+  if ((buttonsPressed & 7) !== 0) return data;
+  return data.replace(/\x1b\[<32;(\d+;\d+)M/g, "\x1b[<35;$1M");
+}
+
+// FitAddon.fit() ignores calls for 50 ms after one, dropping the final size; resize directly instead.
+export function fitToContainer(
+  addon: { proposeDimensions(): { cols: number; rows: number } | undefined },
+  term: { cols: number; rows: number; resize(cols: number, rows: number): void },
+): void {
+  const dims = addon.proposeDimensions();
+  if (!dims || (dims.cols === term.cols && dims.rows === term.rows)) return;
+  term.resize(dims.cols, dims.rows);
 }
 
 export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): void }> {
@@ -63,7 +80,7 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
   unsubscribes.push(
     bridge.onPtyExit((code) => engine.write("\r\n[cpd tui exited with code " + code + "]\r\n")),
   );
-  engine.onData((data) => bridge.writePty(data));
+  engine.onData((data) => bridge.writePty(fixSgrMouseHover(data, deps.pointer.buttons())));
   unsubscribes.push(deps.resize.observe(() => engine.fit()));
   engine.setClipboardWriteHandler((text) => {
     deps.clipboard.writeText(text).catch(deps.onError);
@@ -72,7 +89,10 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
   const apply = (mode: UiMode): void => {
     engine.setPaused(mode !== "tui");
     deps.view.showTerminal(mode === "tui");
-    if (mode === "tui") engine.focus();
+    if (mode === "tui") {
+      engine.fit();
+      engine.focus();
+    }
   };
   apply(await bridge.getMode());
   unsubscribes.push(bridge.onMode(apply));

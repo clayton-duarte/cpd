@@ -1,5 +1,11 @@
 import type { CpdElectronBridge, PtySize, UiMode } from "./channels.ts";
-import { DANGO_THEME, TERMINAL_FONT, startTerminalHost, type TerminalHostDeps } from "./terminal.ts";
+import {
+  DANGO_THEME,
+  TERMINAL_FONT,
+  fitToContainer,
+  fixSgrMouseHover,
+  startTerminalHost,
+  type TerminalHostDeps } from "./terminal.ts";
 
 function harness(mode: UiMode = "tui") {
   const log: string[] = [];
@@ -18,6 +24,7 @@ function harness(mode: UiMode = "tui") {
   const writes: string[] = [];
   const sentWrites: string[] = [];
   const resizes: PtySize[] = [];
+  let pointerButtons = 0;
 
   const deps: TerminalHostDeps = {
     engine: {
@@ -77,6 +84,8 @@ function harness(mode: UiMode = "tui") {
         ptyExit = cb;
         return () => log.push("off onPtyExit");
       },
+      sendWeb: () => {},
+      onWebMessage: () => () => {},
       onMode: (cb) => {
         log.push("onMode");
         modeCb = cb;
@@ -97,6 +106,7 @@ function harness(mode: UiMode = "tui") {
       },
     },
     view: { showTerminal: (v) => log.push(`show ${v}`) },
+    pointer: { buttons: () => pointerButtons },
     onError: (e) => errors.push(e),
   };
   const flush = async () => {
@@ -111,6 +121,9 @@ function harness(mode: UiMode = "tui") {
     resizes,
     clipboardTexts,
     flush,
+    setButtons: (b: number) => {
+      pointerButtons = b;
+    },
     resolveStart: () => resolveStart(),
     setEngineSize: (s: PtySize) => {
       engineSize = s;
@@ -166,10 +179,6 @@ test("DANGO_THEME is the Dango v3 palette", () => {
   });
 });
 
-test("TERMINAL_FONT is Maple Mono at 13px", () => {
-  expect(TERMINAL_FONT).toEqual({ fontFamily: '"Maple Mono", monospace', fontSize: 13 });
-});
-
 test("startTerminalHost opens, fits, wires data both ways and starts the pty at the fitted size", async () => {
   const h = harness();
   h.setEngineSize({ cols: 120, rows: 40 });
@@ -217,7 +226,7 @@ test("startTerminalHost applies the mode from the bridge and later changes", asy
   expect(initial).toEqual(["paused true", "show false"]);
   h.log.length = 0;
   h.fire.mode("tui");
-  expect(h.log).toEqual(["paused false", "show true", "focus"]);
+  expect(h.log).toEqual(["paused false", "show true", "fit", "focus"]);
   h.log.length = 0;
   h.fire.mode("webui");
   expect(h.log).toEqual(["paused true", "show false"]);
@@ -259,4 +268,79 @@ test("startTerminalHost prints the exit code when the pty exits", async () => {
   await started(h);
   h.fire.ptyExit(7);
   expect(h.writes).toEqual(["\r\n[cpd tui exited with code 7]\r\n"]);
+});
+
+test("startTerminalHost fits the engine when the mode becomes tui", async () => {
+  const h = harness("tui");
+  await started(h);
+  const startup = h.log.filter((l) => l === "fit" || l === "focus");
+  expect(startup).toEqual(["fit", "fit", "focus"]);
+  h.log.length = 0;
+  h.fire.mode("webui");
+  expect(h.log).toEqual(["paused true", "show false"]);
+  h.log.length = 0;
+  h.fire.mode("tui");
+  expect(h.log).toEqual(["paused false", "show true", "fit", "focus"]);
+});
+
+const HOVER = "\x1b[<32;10;5M";
+
+test("fixSgrMouseHover rewrites a no-button hover to SGR motion 35", () => {
+  expect(fixSgrMouseHover(HOVER, 0)).toBe("\x1b[<35;10;5M");
+  expect(fixSgrMouseHover(HOVER, 8)).toBe("\x1b[<35;10;5M");
+});
+
+test("fixSgrMouseHover rewrites every hover sequence of a chunk and keeps the rest", () => {
+  expect(fixSgrMouseHover("a\x1b[<32;1;2Mb\x1b[<32;30;40Mc", 0)).toBe("a\x1b[<35;1;2Mb\x1b[<35;30;40Mc");
+});
+
+test("fixSgrMouseHover keeps a real left drag while a button is pressed", () => {
+  for (const b of [1, 2, 4, 5]) expect(fixSgrMouseHover(HOVER, b)).toBe(HOVER);
+});
+
+test("fixSgrMouseHover never rewrites releases, clicks, wheel or typed text", () => {
+  const same = ["\x1b[<32;10;5m", "\x1b[<0;10;5M", "\x1b[<1;10;5M", "\x1b[<2;10;5M", "\x1b[<64;10;5M", "\x1b[<33;10;5M", "\x1b[<35;10;5M", "hello 32;1;2M"];
+  for (const d of same) expect(fixSgrMouseHover(d, 0)).toBe(d);
+});
+
+test("startTerminalHost sends corrected mouse data to the pty using the live pointer buttons", async () => {
+  const h = harness();
+  await started(h);
+  h.fire.engineData(HOVER);
+  h.setButtons(1);
+  h.fire.engineData(HOVER);
+  h.setButtons(0);
+  h.fire.engineData("k");
+  expect(h.sentWrites).toEqual(["\x1b[<35;10;5M", HOVER, "k"]);
+});
+
+function fitFake(dims: { cols: number; rows: number } | undefined, cols = 80, rows = 24) {
+  const calls: [number, number][] = [];
+  return {
+    calls,
+    addon: { proposeDimensions: () => dims },
+    term: { cols, rows, resize: (c: number, r: number) => calls.push([c, r]) },
+  };
+}
+
+test("fitToContainer resizes the terminal once to the proposed dimensions", () => {
+  const f = fitFake({ cols: 100, rows: 30 });
+  fitToContainer(f.addon, f.term);
+  expect(f.calls).toEqual([[100, 30]]);
+});
+
+test("fitToContainer does nothing when the dimensions are unknown or unchanged", () => {
+  const unknown = fitFake(undefined);
+  fitToContainer(unknown.addon, unknown.term);
+  const same = fitFake({ cols: 80, rows: 24 });
+  fitToContainer(same.addon, same.term);
+  expect(unknown.calls).toEqual([]);
+  expect(same.calls).toEqual([]);
+});
+
+test("TERMINAL_FONT falls back to the Nerd Font stack", () => {
+  expect(TERMINAL_FONT).toEqual({
+    fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace',
+    fontSize: 13,
+  });
 });

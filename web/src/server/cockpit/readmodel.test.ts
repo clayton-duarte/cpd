@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Cpd } from "./cli.ts";
-import { createReadModel } from "./readmodel.ts";
+import { createReadModel, parseContextList } from "./readmodel.ts";
 import { WebError } from "../../protocol/domain.ts";
 
 type Obj = Record<string, unknown>;
@@ -164,5 +164,31 @@ describe("readmodel", () => {
   it("malformed cpd JSON is rejected at the boundary", async () => {
     const { cpd } = fakeCpd({ context: [{ id: "c1", title: "t", archived_at: null, records: "many", open_questions: 0 }] });
     await expect(createReadModel(cpd).loadAll(null)).rejects.toMatchObject({ name: "WebError", code: "cpd_malformed_json" });
+  });
+});
+
+const withoutOpenQuestions = (id: string, extra: Obj = {}): Obj => {
+  const { open_questions: _dropped, ...rest } = context(id, extra);
+  return rest;
+};
+
+describe("context list without open_questions", () => {
+  it("parseContextList accepts contexts without open_questions and defaults it to 0", () => {
+    const reply = {
+      events_cursor: 1,
+      contexts: [
+        withoutOpenQuestions("c1"),
+        context("c2", { open_questions: 3 }),
+        context("c3", { open_questions: "x" }),
+        context("c4", { open_questions: Number.POSITIVE_INFINITY }),
+      ],
+    };
+    expect(parseContextList(reply).map((c) => [c.id, c.open_questions])).toEqual([["c1", 0], ["c2", 3], ["c3", 0], ["c4", 0]]);
+  });
+
+  it("createReadModel builds a snapshot from a context list without open_questions", async () => {
+    const { cpd } = fakeCpd({ context: [withoutOpenQuestions("c1"), withoutOpenQuestions("c2")] });
+    const { tree } = await createReadModel(cpd).loadAll(null);
+    expect(tree.contexts.map((c) => [c.id, c.openQuestions])).toEqual([["c1", 0], ["c2", 0]]);
   });
 });
