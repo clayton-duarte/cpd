@@ -228,7 +228,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     );
     assert_eq!(
         NAMED.iter().rev().nth(1).map(|n| n.name),
-        Some("20261104T0900-workflow-base-retarget")
+        Some("20261104T1600-workflow-base-retarget")
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),

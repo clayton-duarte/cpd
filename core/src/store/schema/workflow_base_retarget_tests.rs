@@ -1,11 +1,11 @@
-//! The migration `20261104T0900-workflow-base-retarget` (pro-d379): after the lock a dispatch Workflow's `base` may change to an
+//! The migration `20261104T1600-workflow-base-retarget` (pro-d379): after the lock a dispatch Workflow's `base` may change to an
 //! unrelated value; its `lead_branch` still may not.
 
 use super::*;
 use crate::error::CpdError;
 use crate::store::Store;
 
-const MIGRATION: &str = "20261104T0900-workflow-base-retarget";
+const MIGRATION: &str = "20261104T1600-workflow-base-retarget";
 
 const SEED: &str = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('cpd', 'Cpd', 't', 'm');
      INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
