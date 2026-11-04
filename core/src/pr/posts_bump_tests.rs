@@ -244,8 +244,18 @@ fn mark_bumped_sets_last_posted_at_to_the_transaction_time_and_keeps_posted_at()
     );
     let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
     assert_eq!(post.posted_at, OLDER);
+    let past = "2020-01-01T00:00:00.000Z";
+    store
+        .write("past", |tx| {
+            tx.execute(
+                "UPDATE pr_posts SET last_posted_at = ?1 WHERE workflow = 'a'",
+                [past],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     let second = at(&mut store);
-    assert_ne!(first, second, "the second bump moves it again");
+    assert_ne!(second, past, "the second bump moves it again");
     assert_eq!(
         last_posted_at(&mut store, "a").as_deref(),
         Some(second.as_str())
