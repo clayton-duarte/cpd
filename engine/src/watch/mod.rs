@@ -33,6 +33,9 @@ mod auto_merge;
 mod closed;
 #[cfg(test)]
 mod closed_tests;
+mod curate;
+#[cfg(test)]
+mod curate_tests;
 mod distill;
 #[cfg(test)]
 mod durable_drain_sleep_tests;

@@ -77,6 +77,10 @@ pub(super) struct Engine {
     pub host_alert: Option<String>,
     /// E9: the (highest record `seq`, uncurated count) of each Context's latest distill run in this engine's life, with the batch size it was given.
     pub distill_started: HashMap<ContextId, ((i64, i64), u8)>,
+    /// E9: the `cpd context curate` run in flight of each Context.
+    pub curating: HashMap<ContextId, Pid>,
+    /// E9: the backoff after failed curate runs of each Context.
+    pub curate_backoff: HashMap<ContextId, cpd_core::context::curate_backoff::Backoff>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
     /// E11: the helper's run in flight and when the last one ended.
@@ -154,6 +158,8 @@ impl Engine {
             workers: None,
             host_alert: None,
             distill_started: HashMap::new(),
+            curating: HashMap::new(),
+            curate_backoff: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
             react: react::State::default(),
