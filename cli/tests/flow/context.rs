@@ -1819,3 +1819,38 @@ fn archive_and_unarchive_of_an_unknown_context_are_refused() {
         "context_not_found",
     );
 }
+
+#[test]
+fn show_record_of_another_machine_names_both_machines() {
+    let fx = hs();
+    new_context(&fx);
+    let error = refused(
+        fx.cpd(&["context", "show", "--record", "pro-d1", "--context", CTX]),
+        3,
+        "record_not_found",
+    );
+    assert_eq!(error["details"]["record_machine"], "pro");
+    assert_eq!(error["details"]["local_machine"], "hs");
+    assert_eq!(error["details"]["record"], "pro-d1");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("machine-local"), "{message}");
+    assert!(message.contains("docs/contract.md"), "{message}");
+}
+
+#[test]
+fn show_record_missing_on_this_machine_has_no_machine_details() {
+    let fx = hs();
+    new_context(&fx);
+    let error = refused(
+        fx.cpd(&["context", "show", "--record", "hs-d9", "--context", CTX]),
+        3,
+        "record_not_found",
+    );
+    let details = error["details"].as_object().unwrap();
+    assert!(!details.contains_key("record_machine"), "{error}");
+    assert!(!details.contains_key("local_machine"), "{error}");
+    assert_eq!(
+        error["message"],
+        format!("Context {CTX} has no record hs-d9.")
+    );
+}

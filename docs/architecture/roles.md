@@ -1,7 +1,6 @@
 # Roles
 
-This note documents cpd's agent population as decided in `hs-d802`
-(`cpd context show --record hs-d802`): **exactly four roles — manager, lead,
+This note documents cpd's agent population as decided in `hs-d802` (a record of machine `hs`): **exactly four roles — manager, lead,
 worker, auxiliary** — of which the first three are attached to the phases of the
 CPD flow, and the auxiliary one-shots sit outside that attachment. It carries the
 phase-machine diagram (diagram c). The verification behind it, and every place
@@ -11,7 +10,7 @@ the decided model disagrees with cpd's current docs, is in
 ## The four roles
 
 The fourth role is `auxiliary`, not the User: `auxiliary` is not a Session but a
-category of one-shot pi runs (`hs-d802`, `cpd context show --record hs-d802`).
+category of one-shot pi runs (`hs-d802`).
 
 ### Manager
 
@@ -73,8 +72,7 @@ only `auxiliary` has no row, because no object owns it.
 
 A Plan's stored position is one of five phases, in this order:
 `grounding` → `plan` → `dispatch` → `deploy` → `done`
-([contract §3.1](../contract.md)). Per `hs-d802`
-(`cpd context show --record hs-d802`) the first three phases carry a role:
+([contract §3.1](../contract.md)). Per `hs-d802` the first three phases carry a role:
 `grounding` the Manager, `plan` the Lead, `dispatch` the Worker. The two auxiliary
 one-shots orbit the machine; they are attached to no phase.
 
@@ -98,8 +96,7 @@ Dispatch **stage**, whose last step, Deploying, spans the phases `dispatch` →
 ## The attachment, and what the docs actually say
 
 The decided model attaches the three roles to cpd's phases as **Context →
-Manager, Plan → Lead, Dispatch → Worker** (`hs-d802`,
-`cpd context show --record hs-d802`). The current docs say two things the model
+Manager, Plan → Lead, Dispatch → Worker** (`hs-d802`). The current docs say two things the model
 does not:
 
 - **Context, Plan and Dispatch are stages, not phases.** A **stage** is one of the
