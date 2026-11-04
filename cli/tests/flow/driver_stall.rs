@@ -1,14 +1,15 @@
 //! The durable stall rule (contract §3.4 A4 "Liveness and restart, `durable`", hs-d798; §8.2 `timeouts.stall_minutes`), through the
-//! driver in this process: while a `durable` Attempt runs, the driver watches the size of its transcript
-//! `run/<plan>/durable/<attempt>.sqlite` (§6.12); a transcript that has not grown for `stall_minutes` appends ONE `error` Event —
-//! source `driver`, code `worker_stalled`, `data.details = {attempt, minutes}` — and E8 opens ONE `engine-error` Inbox item (the
-//! existing kind, §2.2) whose label names the remedy. One Event and one item per **stall episode**: a transcript that grows again
-//! re-arms the watch, so a Worker that stalls twice appends twice, and a transcript touched every tick appends nothing.
+//! driver in this process: while a `durable` Attempt runs, the driver watches the identity (latest mtime, summed length) of its
+//! transcript `run/<plan>/durable/<attempt>.sqlite` and its `-wal` sibling `<attempt>.sqlite-wal` (§6.12); a transcript that has
+//! not changed for `stall_minutes` appends ONE `error` Event — source `driver`, code `worker_stalled`,
+//! `data.details = {attempt, minutes}` — and opens NO Inbox item (the Event wakes the Lead). One Event per **stall episode**: a
+//! transcript that grows again re-arms the watch, so a Worker that stalls twice appends twice, and a transcript touched every
+//! tick, in the main file or only in the `-wal`, appends nothing.
 //!
 //! The harness is the durable-driver one of `worker_runner_durable.rs`: the runner is a process of the `FakeSpawn` (nothing runs),
 //! the transcript is a file the test writes (the bytes the Worker's host would append), and time is the `ManualClock` — the driver's
-//! poll naps on it, the hook acts between two polls, no sleep. The one Inbox item is E8's work, so the test runs one tick of the
-//! engine ([`Fx::engine_tick`]) on the same fake ports and reads the `inbox_items` rows.
+//! poll naps on it, the hook acts between two polls, no sleep. That no Inbox item opens is E8's work, so the test runs one tick of
+//! the engine ([`Fx::engine_tick`]) on the same fake ports and reads the `inbox_items` rows.
 
 use std::fs;
 use std::io::Write;
@@ -44,6 +45,19 @@ fn grow(live: &Live, id: &str) {
         .create(true)
         .append(true)
         .open(&path)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+}
+
+/// Appends a byte to the `-wal` sibling only, as SQLite does between checkpoints: the main file stays as it is.
+fn grow_wal(live: &Live, id: &str) {
+    let mut name = transcript(live, id).into_os_string();
+    name.push("-wal");
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(PathBuf::from(name))
         .unwrap()
         .write_all(b"x")
         .unwrap();
@@ -104,7 +118,7 @@ fn work(live: &Live, id: &str) -> Value {
 }
 
 #[test]
-fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
+fn a_quiet_durable_transcript_appends_one_worker_stalled_and_no_inbox_item() {
     let live = durable_live(&format!("[timeouts]\nstall_minutes = {STALL_MINUTES}\n"));
     // 0: the watch has not fired yet. 1: re-armed after the first episode. 2: both episodes seen, the Worker has submitted.
     let mut stage = 0;
@@ -116,7 +130,7 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
             return;
         }
         match stage {
-            // Quiet, until the first stall episode: one Event, then E8's tick opens the one open item.
+            // Quiet, until the first stall episode: one Event, and E8's tick opens no item.
             0 => {
                 if stalled(live).is_empty() {
                     return;
@@ -124,26 +138,12 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
                 assert_one_event(live, id);
                 live.fx.engine_tick();
                 let items = stall_items(live);
-                assert_eq!(items.len(), 1, "one engine-error item: {items:?}");
-                let (subject, label, closed_at) = &items[0];
-                assert_eq!(
-                    subject,
-                    &format!("error:driver/worker_stalled/{id}"),
-                    "{items:?}"
-                );
-                assert!(
-                    label.contains(&format!("cpd job cancel {JOB}")),
-                    "the label names the remedy: {items:?}"
-                );
-                assert_eq!(
-                    closed_at, &None,
-                    "the item is open while the Attempt runs: {items:?}"
-                );
+                assert!(items.is_empty(), "a stall opens no item: {items:?}");
                 stage = 1;
                 // The transcript grows again: the watch re-arms, and the second quiet minute is a second episode.
                 grow(live, id);
             }
-            // The second episode: a second Event, still the one open item (one per stalled Attempt, not per Event).
+            // The second episode: a second Event, still no item.
             1 => {
                 if stalled(live).len() < 2 {
                     return;
@@ -156,10 +156,9 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
                 );
                 live.fx.engine_tick();
                 let items = stall_items(live);
-                assert_eq!(items.len(), 1, "one item per stalled Attempt: {items:?}");
-                assert_eq!(items[0].2, None, "the Attempt still runs: {items:?}");
+                assert!(items.is_empty(), "still no item: {items:?}");
                 stage = 2;
-                // The Worker submits: the Attempt ends, and the item closes with it.
+                // The Worker submits: the Attempt ends.
                 work(live, id);
             }
             _ => {}
@@ -174,14 +173,10 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
         "{attempt}"
     );
     assert_eq!(stalled(&live).len(), 2);
-    // The engine's next reconcile closes the item: the Attempt has ended.
+    // The engine's next reconcile has no item to close either.
     live.fx.engine_tick();
     let items = stall_items(&live);
-    assert_eq!(items.len(), 1, "{items:?}");
-    assert!(
-        items[0].2.is_some(),
-        "the item closed when the Attempt ended: {items:?}"
-    );
+    assert!(items.is_empty(), "{items:?}");
 }
 
 #[test]
@@ -221,5 +216,42 @@ fn a_growing_transcript_appends_nothing() {
         stall_items(&live),
         Vec::<(String, String, Option<String>)>::new(),
         "and opens no item"
+    );
+}
+
+#[test]
+fn a_growing_wal_with_a_frozen_main_file_appends_nothing() {
+    let live = durable_live(&format!("[timeouts]\nstall_minutes = {STALL_MINUTES}\n"));
+    let mut submitted = false;
+
+    // The main file is created once, at nap 1; from then on only the `-wal` grows, as SQLite's does between checkpoints.
+    let (id, _) = live.drive(JOB, |live, id, nap| {
+        if nap == 1 {
+            grow(live, id);
+        } else {
+            grow_wal(live, id);
+        }
+        if nap >= 150 && !submitted {
+            submitted = true;
+            work(live, id);
+        }
+    });
+
+    assert!(submitted, "the Worker never submitted");
+    let attempt = live.attempt(&id);
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("merged"), &json!("merged")),
+        "{attempt}"
+    );
+    assert!(
+        live.fx.fakes.clock.elapsed() >= Duration::from_secs(STALL_MINUTES * 60),
+        "the drive lasted {:?}, not a full stall window",
+        live.fx.fakes.clock.elapsed()
+    );
+    assert_eq!(
+        stalled(&live),
+        Vec::<Value>::new(),
+        "a growing -wal appends no Event"
     );
 }
