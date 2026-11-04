@@ -290,6 +290,10 @@ The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (rend
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
 - The chosen mode persists in `$CPD_HOME/run/ui-mode.json` (see Module contract, mode.ts).
 
+## Auto-update and CLI bootstrap
+
+(Skeleton: in progress.)
+
 ## Verification checklist
 
 Run each check against the built app (`pnpm --filter cpd-web-client run electron`). A check passes only when its observable result is seen.
