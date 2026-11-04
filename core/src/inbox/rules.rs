@@ -101,7 +101,7 @@ pub fn conditions_with(
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
-    all.extend(store.read(|conn| super::pr::conditions(conn, home, now))?);
+    all.extend(store.read(|conn| super::pr::conditions(conn, home))?);
     all.extend(store.read(super::pr::closed_conditions)?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);

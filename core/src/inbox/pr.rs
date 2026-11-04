@@ -2,7 +2,6 @@
 //! condition per open authored pull request, its urgency and label by the STATUS table.
 
 use rusqlite::Connection;
-use time::OffsetDateTime;
 
 use super::model::{Condition, Item, Kind, Urgency};
 use super::rules::id;
@@ -159,12 +158,7 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
 
 /// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
 /// that points to it). A policy that does not resolve counts as post disabled.
-pub fn conditions(
-    conn: &Connection,
-    home: &CpdHome,
-    now: OffsetDateTime,
-) -> Result<Vec<Condition>, CpdError> {
-    let _ = now; // stub: the overdue set is read here once implemented
+pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let columns: Vec<String> = pulls::COLUMNS
         .split(", ")
         .map(|c| format!("r.{c}"))
