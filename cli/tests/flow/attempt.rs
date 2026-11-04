@@ -437,6 +437,7 @@ impl Git {
             catalog: &catalog,
             source: "attempt test",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         in_fakes(&self.fx, || {
             merge::merge(
@@ -2270,6 +2271,7 @@ impl Git {
             catalog: &catalog,
             source: "attempt test",
             metrics: &|_| Some(metrics.clone()),
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         in_fakes(&self.fx, || {
             merge::merge(
