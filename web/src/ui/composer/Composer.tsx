@@ -1,5 +1,5 @@
 import { useImperativeHandle, useRef, useState } from "react";
-import type { ClipboardEvent, DragEvent, KeyboardEvent, Ref } from "react";
+import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode, Ref } from "react";
 import type { Attachment, Capabilities, QueuedSubmission, Support, WhenBusy } from "../../protocol/domain.ts";
 import { addFiles, filesFromClipboard, filesFromDrop } from "./attachments.ts";
 import type { AttachmentRejection, FileLike, FileReaderBoundary } from "./attachments.ts";
@@ -15,6 +15,7 @@ export function Composer(props: {
   onSubmit(input: { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy }): void;
   onAbort(): void; onCancelQueued(clientSubmissionId: string): void;
   ref?: Ref<ComposerHandle>;
+  settings?: ReactNode; label?: string; onEditQueued?(clientSubmissionId: string): void;
 }): React.JSX.Element {
   const { capabilities: caps, busy, queued, reader } = props;
   const [text, setText] = useState("");

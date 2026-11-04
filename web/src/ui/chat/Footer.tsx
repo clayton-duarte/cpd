@@ -16,7 +16,10 @@ function Value<T>(props: { stat: Stat<T>; format: (v: T) => string }): JSX.Eleme
 
 const str = (v: string): string => v;
 
-export function Footer(props: { footer: FooterStats | null }): JSX.Element {
+export function Footer(props: {
+  footer: FooterStats | null; cwd?: string; sessionKey?: string; contextWindow?: number;
+  tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number }; cacheHitPercent?: number;
+}): JSX.Element {
   const f: FooterStats = props.footer ?? {
     model: NOT_ATTACHED,
     tier: NOT_ATTACHED,
