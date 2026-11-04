@@ -364,7 +364,7 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
                 seq: *seq,
                 score: hit.score,
                 in_force: snap.in_force.contains(&hit.id),
-                topic: topic_of(&snap, &hit.id),
+                topic: topic_of(snap, &hit.id),
                 id: hit.id,
             })
         })
