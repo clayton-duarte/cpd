@@ -148,6 +148,16 @@
     },
     "required": []
   },
+  "config experimental": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 0
+    },
+    "required": []
+  },
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
