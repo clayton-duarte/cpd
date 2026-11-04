@@ -15,6 +15,7 @@ import { registerIpc } from "./ipc.ts";
 import { createModeController, modeFilePath } from "./mode.ts";
 import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
 import type { MenuTemplate } from "./menu.ts";
+import { nodeTimers } from "./update/node.ts";
 import { startPty } from "./pty.ts";
 import type { PtyBackend } from "./pty.ts";
 
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
     sinks,
     readWasm: async () => new Uint8Array(await fs.readFile(wasmPath)),
     getMode: controller.getMode,
+    timers: nodeTimers,
   });
   app.on("before-quit", () => {
     ipc.dispose();

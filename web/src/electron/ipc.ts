@@ -16,7 +16,7 @@ export interface IpcDeps {
   sinks: PtySinks;
   readWasm(): Promise<Uint8Array>;
   getMode(): UiMode;
-  timers?: UpdateTimers;
+  timers: UpdateTimers;
 }
 function isSizeValue(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1000;
@@ -50,8 +50,11 @@ export function registerIpc(deps: IpcDeps): { dispose(): void } {
   };
   const start: IpcListener = (_event, payload) => {
     const size = parsePtySize(payload);
-    if (session) session.resize(size);
-    else session = deps.startPty(size, sinks);
+    if (session) {
+      const live = session;
+      live.resize({ cols: size.cols - 1, rows: size.rows });
+      deps.timers.setTimeout(() => live.resize(size), 50);
+    } else session = deps.startPty(size, sinks);
     return undefined;
   };
   const write: IpcListener = (_event, payload) => {
