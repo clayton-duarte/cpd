@@ -545,6 +545,7 @@ it("a stopped or archived row shows a dim circle and never spins", () => {
     act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const el = ctxDot(m.container).cloneNode(true) as Element;
     m.unmount();
+    store.clear();
     return el;
   };
   const spinning = archived({ state: "working", attention: null });
