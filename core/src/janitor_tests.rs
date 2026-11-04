@@ -723,8 +723,8 @@ fn insert_job(rig: &Rig, workflow: &str, key: &str, status: &str) {
 /// Inserts a non-ended Attempt `id` of status `status` for Job `job`.
 fn insert_attempt(rig: &Rig, job: &str, id: &str, status: &str) {
     rig.sql(&format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at, submitted_sha)
-           VALUES ('pay', '{id}', '{job}', 2, 'S2', 'ladder', '{status}', 'cpd/pay--{id}', '/nowhere/{id}', 'sha', 't', 'sub');"
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at, submitted_sha, submitted_at)
+           VALUES ('pay', '{id}', '{job}', 2, 'S2', 'ladder', '{status}', 'cpd/pay--{id}', '/nowhere/{id}', 'sha', 't', 'sub', 't');"
     ));
 }
 
