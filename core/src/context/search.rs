@@ -11,12 +11,16 @@ use clap::Args;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
+use super::curate_vectors::VectorStore;
 use super::fts::{self, Doc, Scored};
+use super::hybrid::{rrf, semantic_list};
 use super::inforce;
 use super::reads::{self, Channel};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select};
 use crate::args::Text;
+use crate::embedding::EmbeddingPort;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, RecordId, RecordKind};
@@ -163,7 +167,13 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         );
     }
     let kinds = kinds(&args.kind)?;
-    let Env { mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ports,
+        ..
+    } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let snap = snapshot(&mut store, &context)?;
 
@@ -191,10 +201,39 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         .iter()
         .map(|(_, record)| record.id.to_string())
         .find(|id| id.eq_ignore_ascii_case(&query));
-    let kept = fts::floor(
+    let visible: Vec<String> = filter(
+        docs.iter()
+            .map(|doc| Scored {
+                id: doc.id.clone(),
+                score: 0.0,
+            })
+            .collect(),
+        &snap,
+        &kinds,
+        args.all,
+        named.as_deref(),
+    )
+    .into_iter()
+    .map(|hit| hit.id)
+    .collect();
+    let lexical = fts::floor(
         filter(ranked, &snap, &kinds, args.all, named.as_deref()),
         named.as_deref(),
     );
+    let (kept, mode, semantic_error) = match semantic(
+        &SemanticInput {
+            home: &home,
+            config: &config,
+            runner: &ports.runner,
+            context: &context,
+            query: &query,
+        },
+        &visible,
+    )? {
+        Semantic::None => (lexical, "fts", None),
+        Semantic::Failed(code) => (lexical, "fts-only", Some(code)),
+        Semantic::List(list) => (rrf(&lexical, &list, named.as_deref()), "hybrid", None),
+    };
     let hits = hits_of(kept, &snap);
 
     let take = if args.limit == 0 {
@@ -219,12 +258,66 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         Channel::Search,
         &reads::search_reads(&page_hits),
     );
-    Ok(Output::success(json!({
+    let mut out = json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
         "query": query,
+        "mode": mode,
         "records": records,
         "markdown": markdown,
-    })))
+    });
+    if let Some(code) = semantic_error {
+        out["semantic_error"] = json!(code);
+    }
+    Ok(Output::success(out))
+}
+
+/// What the vector leg of a search found.
+enum Semantic {
+    /// No vectors for this Context and model: the embedder is never called.
+    None,
+    /// Vectors exist but could not be used; the error code.
+    Failed(String),
+    /// The semantic list over the visible records.
+    List(Vec<Scored>),
+}
+
+/// What the vector leg reads.
+struct SemanticInput<'a> {
+    home: &'a crate::home::CpdHome,
+    config: &'a crate::config::Config,
+    runner: &'a std::sync::Arc<dyn crate::host::runner::Runner>,
+    context: &'a ContextId,
+    query: &'a str,
+}
+
+/// The vector leg: the visible records' vectors, then the embedded query against them.
+/// A foreign or newer vectors.db is an error; any other store or embedder failure degrades to FTS-only.
+fn semantic(input: &SemanticInput<'_>, visible: &[String]) -> Result<Semantic, CpdError> {
+    let ids: Vec<RecordId> = visible.iter().filter_map(|id| id.parse().ok()).collect();
+    let vectors = match VectorStore::at(input.home).get(input.context, EMBED_MODEL, &ids) {
+        Ok(vectors) => vectors,
+        Err(e)
+            if e.details().contains_key("user_version")
+                || e.details().contains_key("application_id") =>
+        {
+            return Err(e);
+        }
+        Err(e) => return Ok(Semantic::Failed(e.code().as_str().to_owned())),
+    };
+    if vectors.is_empty() {
+        return Ok(Semantic::None);
+    }
+    let embedded = bifrost_embedder(input.config, input.runner)
+        .and_then(|embedder| embedder.embed(input.query, DIMS));
+    let query = match embedded {
+        Ok(embedded) => embedded.vector,
+        Err(e) => return Ok(Semantic::Failed(e.code().as_str().to_owned())),
+    };
+    let vectors: Vec<(String, Vec<f32>)> = vectors
+        .into_iter()
+        .map(|(id, v)| (id.to_string(), v))
+        .collect();
+    Ok(Semantic::List(semantic_list(&query, &vectors)))
 }
 
 /// The kinds to keep: the four searchable kinds by default, else the named ones.

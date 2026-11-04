@@ -27,7 +27,7 @@ _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 Checking a new Context record against its nearest in-force records at write time. It proposes pending retirements only; the User approves them. Contract §4.6.
 
 **Vector cache** (entity):
-`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
+`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Each embedding row carries `content_hash`, the SHA-256 (hex) of the text it embedded, so `context embed` can skip a row whose text is unchanged. Written by `context curate` and `context embed`, and also read by `context search`. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
 
 **Permanent Context** (entity, pro-d338):
 One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.

@@ -232,7 +232,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 | `run/<plan>/summary-<review>.md` | `plan review` (§4.6, hs-d502): a copy of the summary that a later render cannot change | the pi adapter, which shows it in the Lead's chat (§15.5) |
 | `run/<plan>/feedback-<review>.md` | the pi adapter: the User's note from the chat dialog's Change, overwritten on a retry | `plan decide --feedback-file` |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
-| `vectors.db` (`$CPD_HOME`, with its `-wal` and `-shm`) | `context curate` (Experimental Feature `write_curation`; contract §4.6): the derived vector cache, safe to delete | `context curate` |
+| `vectors.db` (`$CPD_HOME`, with its `-wal` and `-shm`) | `context embed` (§3.19) and `context curate` (Experimental Feature `write_curation`; contract §4.6): the derived vector cache, safe to delete | `context curate`, `context search` (§3.4), `context embed` (§3.19) |
 | `run/titles/<session>.log` | engine E10: the output of the `session retitle` runs it starts (hs-d257, contract §1.4); `locks/title-<session>.lock` is the run's own lock (§10.14) | the User |
 
 ### 1.5 Text arguments
@@ -286,6 +286,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
 | `cpd context topics` (§3.3a) | Manager, Lead, Worker | no | no |
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
+| `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
@@ -455,28 +456,30 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 | `--kind <k,k>` | only these record kinds, comma-separated; default `decision,note,question,answer` |
 | `--all` | include the records that the selection below would hide (rule (a): out of force, or a pending duplicate or superseded retirement), each labelled as `context show` labels it. Without it they are hidden |
 
-**Ranking.** The index is one FTS5 table over the Context's records, columns `id`, `topic`, `short` and `text` (tokenizer `porter unicode61`). `topic` and `short` are the record's curation (`record_curations`, §4.6 "The distiller curates"); an uncurated record has empty ones. Hits are ordered by `bm25` with the weights 10 for `id`, 2 for `topic`, 2 for `short` and 1 for `text`, lower first; the score shown is `-bm25`, higher is better. A record whose id equals the trimmed query, compared case-insensitively, is always first, with a score at least the top score (so `search pro-d300` returns `pro-d300` first, though other records quote it). Equal scores put the newer record (higher `seq`) first.
+**Ranking.** The index is one FTS5 table over the Context's records, columns `id`, `topic`, `short` and `text` (tokenizer `porter unicode61`). `topic` and `short` are the record's curation (`record_curations`, §4.6 "The distiller curates"); an uncurated record has empty ones. Hits are ordered by `bm25` with the weights 10 for `id`, 2 for `topic`, 2 for `short` and 1 for `text`, lower first; the score shown is `-bm25`, higher is better. A record whose id equals the trimmed query, compared case-insensitively, is always first, with a score at least the top score (so `search pro-d300` returns `pro-d300` first, though other records quote it). Equal scores put the newer record (higher `seq`) first. In `hybrid` mode (below) the order and the scores are the Reciprocal Rank Fusion of the lexical and the semantic lists (contract §4.6 "The vector leg").
 
 **Selection**, two rules (contract §4.6 "The search rail"):
 - **(a) Before ranking, without `--all`:** a record is hidden when it is out of force (a superseded record, or one with an approved retirement) or when it has a `pending` `record_retirements` row whose reason is `duplicate` or `superseded`. Its target stays visible. A `pending` `documented` row hides nothing. A record whose id is the typed query is exempt from the pending rule.
-- **(b) After ranking:** a hit whose score is below `0.35` times the top hit's score is dropped (no hit is dropped when the top score is 0 or less). The record named by the query id is exempt. Zero hits is a valid answer, not an error. `--limit` is applied after this rule.
+- **(b) After ranking:** a hit whose score is below `0.35` times the top hit's score is dropped (no hit is dropped when the top score is 0 or less). The record named by the query id is exempt. Zero hits is a valid answer, not an error. In `hybrid` mode this rule floors the lexical list before the fusion, and `--limit` is applied after the fusion.
 
 **Callers** (Plan `explore-roles`, R10): as `context show` (§3.3): the Lead, the Manager and the **Worker**. An explore Worker (`scout` or `research`) may run it read-only, as its Spec's Deliverable section says; nothing enforces it (§2).
 
 **Output** (`ok` true, the data):
 
 ```json
-{"context": {"id": "host", "title": "…", "jira": null}, "query": "decision", "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "…", "seq": 7, "score": 1.8, "in_force": true}], "markdown": "- [hs-d7] one engine per machine"}
+{"context": {"id": "host", "title": "…", "jira": null}, "query": "decision", "mode": "fts", "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "…", "seq": 7, "score": 1.8, "in_force": true}], "markdown": "- [hs-d7] one engine per machine"}
 ```
 
 `records` holds the hits in rank order, with `topic` the record's curated topic as a string, or `null` when it has none; `short` the curated short form, else the record's first line at most 120 bytes; `in_force` is false only with `--all`. `markdown` is one `- [<id>] <short>` line per hit, or `- [<id>] [<topic>] <short>` when the hit has a curated topic, with ` (superseded by <id>)` after a superseded record and ` [retired (<reason> <target>)]` after one with an approved retirement, as `context show` labels them. Both are empty on no hits.
 
-Effects: no Context record changes. Read log (best-effort, the Session rule of §3.3): with a Session, one `context_reads` row per returned hit, channel `search`, `rank` its 1-based position in the returned list and `score` the hit's score (contract §4.6 "Reads"). The index is built in memory for each search: nothing is written to disk and no other process is started.
+**Mode** (contract §4.6 "The vector leg"): `mode` is `fts` when the Context has no vectors for the embedder's model (the embedder is never called); `hybrid` when it has them and the query was embedded: the lexical and the semantic lists are fused by Reciprocal Rank Fusion, k = 60, and each `score` is then an RRF score, about 0.01 to 0.03, which must not be compared with a bm25 score; `fts-only` when it has them but the query could not be embedded: the result is the lexical list alone and `semantic_error` is the embedder's code (`embedding_unreachable`, `embedding_refused` or `embedding_bad_reply`, contract §4.6). `semantic_error` is present only with `fts-only`. The embedder never fails the search.
 
-Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a curated topic and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
+Effects: no Context record changes. Read log (best-effort, the Session rule of §3.3): with a Session, one `context_reads` row per returned hit, channel `search`, `rank` its 1-based position in the returned list and `score` the hit's score (contract §4.6 "Reads"). The index is built in memory for each search: nothing is written to disk. A `hybrid` search starts one embedder call and writes nothing; search never embeds records and never writes `vectors.db` (contract §4.6 "The vector leg").
+
+Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score (an RRF score in `hybrid` mode, below); `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a curated topic and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
 
 ```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "query": "engine",
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "query": "engine", "mode": "fts",
  "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "seq": 42, "score": 1.5, "in_force": true}],
  "markdown": "- [hs-d7] one engine per machine"}
 ```
@@ -987,6 +990,47 @@ Output: `context` (`{id, title, jira}`), `since`, `channels`, `min_sessions`, `r
 ```
 
 Idempotent: read-only.
+
+### 3.19 `context embed`
+
+```
+cpd context embed [--context <id>] [--limit <n>]
+```
+
+Backfills the Context's vector cache (contract §4.6 "Backfill"): embeds its in-force decisions and notes into `$CPD_HOME/vectors.db` for the embedder's model, so that `context search` can fuse a semantic list (§3.4). Search never embeds records; this command and `context curate` (§3.13a) are the writers of record vectors. The Context is `--context`, else the selected Plan's (§1.3). Callers: Lead; no cockpit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+| `--limit` is not an integer of at least 0 | `usage` | 2 |
+
+| Flag | Meaning |
+|---|---|
+| `--context <id>` | the Context (§1.3) |
+| `--limit <n>` | at most `n` records are embedded in this run; default `100`; `0` is all |
+
+Effects:
+- **Records**: the Context's in-force decisions and notes, newest first. A Plan or brief record is never embedded (contract §4.6 kind gate). A record whose row's `content_hash` equals the lowercase hex SHA-256 of its text is **skipped**; any other record is **embedded**, one embedder call each, at 768 dims.
+- **Each row is written at once** (`context`, `model`, `record`, `dims`, `vector`, `at`, `content_hash`), so an interrupted run resumes: the rows already written stay. A record that is not skipped is the only one sent to the embedder, so when every record is skipped the embedder is not called.
+- **Counts**: `embedded` is the records written in this run, `skipped` the records whose row was current, and `remaining` the records whose row is missing or stale after the run. With `--limit`, the records not yet reached are counted in `remaining`.
+- Writes `$CPD_HOME/vectors.db` (§1.4), under `locks/store.lock`. Not gated by `experimental.write_curation`.
+- **tmux:** none. **git:** none.
+
+Failures. The command fails with the code, exit 1, and the rows already written stay:
+
+| Failure | Code | Exit |
+|---|---|---|
+| the embedder could not be reached, timed out or failed with no answer | `embedding_unreachable` | 1 |
+| the gateway refused the request | `embedding_refused` | 1 |
+| the embedder's reply was not usable | `embedding_bad_reply` | 1 |
+| `vectors.db` is corrupt or cannot be written | `store_failed` | 1 |
+
+```json
+{"ok": true, "context": "building-cpd", "model": "vertex/gemini-embedding-2", "embedded": 60, "skipped": 4, "remaining": 0}
+```
+
+Idempotent: yes. A rerun embeds nothing when every row is current; its `skipped` is the count of current rows.
 
 ## 4. `plan`
 

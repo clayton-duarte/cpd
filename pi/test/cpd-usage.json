@@ -246,6 +246,19 @@
     },
     "required": []
   },
+  "context embed": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--limit": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context list": {
     "flags": {
       "--help": false
