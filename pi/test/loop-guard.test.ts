@@ -410,13 +410,19 @@ test("loop guard intra-turn: every listed state-mutating cpd subcommand resets t
 
 test("loop guard intra-turn: the 31st tool call of a turn is refused with the total calls reason", async (t) => {
   const f = await freshStart(t);
-  for (let i = 1; i <= 30; i++) assert.ok(!refused(await bash(f, i % 10 === 0 ? "cpd job add x --title t" : "rg foo")), `call ${i} passes`);
+  for (let i = 1; i <= 30; i++) {
+    assert.ok(!refused(await bash(f, "rg foo")), `read ${i} passes`);
+    if (i % 10 === 0 && i < 30) assert.ok(!refused(await bash(f, "cpd job add x --title t")), `write after read ${i} passes`);
+  }
   assert.deepEqual(await bash(f, "rg foo"), { block: true, reason: TOTAL_REASON });
 });
 
 test("loop guard intra-turn: after the 30th call even a state-mutating call is refused", async (t) => {
   const f = await freshStart(t);
-  for (let i = 0; i < 30; i++) await bash(f, i % 10 === 9 ? "cpd job add x --title t" : "rg foo");
+  for (let i = 1; i <= 30; i++) {
+    await bash(f, "rg foo");
+    if (i % 10 === 0 && i < 30) await bash(f, "cpd job add x --title t");
+  }
   assert.ok(refused(await bash(f, "rg foo")));
   assert.deepEqual(await bash(f, "cpd job add x --title t"), { block: true, reason: TOTAL_REASON });
 });
@@ -454,7 +460,10 @@ test("both refusal texts say the call was not executed", async (t) => {
   const streak = await bash(f, "rg foo");
   assert.ok(streak?.reason?.includes("this tool call was NOT executed"), "read streak reason");
   await reset(f);
-  for (let i = 0; i < 30; i++) await bash(f, i % 10 === 9 ? "cpd job add x --title t" : "rg foo");
+  for (let i = 1; i <= 30; i++) {
+    await bash(f, "rg foo");
+    if (i % 10 === 0 && i < 30) await bash(f, "cpd job add x --title t");
+  }
   const total = await bash(f, "rg foo");
   assert.ok(total?.reason?.includes("this tool call was NOT executed"), "total reason");
 });

@@ -386,7 +386,7 @@ test("a plan-done with data.turn false is no message and no turn for a Lead", as
   t.after(() => f.close());
   await started(f, "lead");
   f.emit(event(101, "plan-done", { data: { workflows: [], turn: false } }));
-  await f.drain();
+  await f.quiet(); // not drain: its marker Event starts a turn, which resets the counters
   assert.deepEqual(f.pi.delivered(), []);
   assert.deepEqual(f.pi.sent, []);
 });
@@ -413,7 +413,7 @@ const readsPass = async (f: Fixture, n: number, what: string) => {
   for (let i = 1; i <= n; i++) assert.ok(!(await readCall(f))?.block, `${what}: read ${i} passes`);
 };
 
-/** 12 reads, then a delivery of `e`: the counters are fresh when 30 more reads pass. */
+/** 12 reads, then a delivery of `e`: the streak is fresh, so 12 more reads pass and the 13th is refused. */
 async function resetsOn(t: { after(fn: () => unknown): void }, e: ReturnType<typeof event>) {
   const f = new Fixture();
   t.after(() => f.close());
@@ -421,8 +421,9 @@ async function resetsOn(t: { after(fn: () => unknown): void }, e: ReturnType<typ
   await readsPass(f, 12, "before");
   f.emit(e);
   await waitFor("the delivery", () => f.pi.delivered().length === 1);
-  await readsPass(f, 30, "after the delivery");
-  assert.ok((await readCall(f))?.block, "the 31st read is refused");
+  assert.equal(f.pi.delivered()[0]!.options.triggerTurn, true, "the delivery starts a turn");
+  await readsPass(f, 12, "after the delivery");
+  assert.ok((await readCall(f))?.block, "the 13th read is refused");
 }
 
 test("a steered delivery that starts a turn resets the loop guard counters", async (t) => {
@@ -461,7 +462,7 @@ test("a delivery that starts no turn does not reset the loop guard counters", as
   await waitFor("the first delivery", () => f.pi.delivered().length === 1);
   await readsPass(f, 12, "after the control delivery");
   f.emit(event(102, "job-merged", { data: { turn: false } }), event(103, "plan-done", { data: { workflows: [], turn: false } }));
-  await f.drain();
+  await f.quiet(); // not drain: its marker Event starts a turn, which resets the counters
   assert.equal(f.pi.delivered().length, 1, "no message, no turn");
   assert.ok((await readCall(f))?.block, "the streak kept its value");
 });
