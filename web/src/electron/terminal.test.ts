@@ -77,6 +77,8 @@ function harness(mode: UiMode = "tui") {
         ptyExit = cb;
         return () => log.push("off onPtyExit");
       },
+      sendWeb: () => {},
+      onWebMessage: () => () => {},
       onMode: (cb) => {
         log.push("onMode");
         modeCb = cb;
@@ -217,7 +219,7 @@ test("startTerminalHost applies the mode from the bridge and later changes", asy
   expect(initial).toEqual(["paused true", "show false"]);
   h.log.length = 0;
   h.fire.mode("tui");
-  expect(h.log).toEqual(["paused false", "show true", "focus"]);
+  expect(h.log).toEqual(["paused false", "show true", "fit", "focus"]);
   h.log.length = 0;
   h.fire.mode("webui");
   expect(h.log).toEqual(["paused true", "show false"]);
@@ -259,4 +261,17 @@ test("startTerminalHost prints the exit code when the pty exits", async () => {
   await started(h);
   h.fire.ptyExit(7);
   expect(h.writes).toEqual(["\r\n[cpd tui exited with code 7]\r\n"]);
+});
+
+test("startTerminalHost fits the engine when the mode becomes tui", async () => {
+  const h = harness("tui");
+  await started(h);
+  const startup = h.log.filter((l) => l === "fit" || l === "focus");
+  expect(startup).toEqual(["fit", "fit", "focus"]);
+  h.log.length = 0;
+  h.fire.mode("webui");
+  expect(h.log).toEqual(["paused true", "show false"]);
+  h.log.length = 0;
+  h.fire.mode("tui");
+  expect(h.log).toEqual(["paused false", "show true", "fit", "focus"]);
 });

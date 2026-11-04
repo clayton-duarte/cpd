@@ -31,5 +31,11 @@ export function createBridge(ipc: IpcRendererLike): CpdElectronBridge {
     onPtyData: (cb) => subscribe<string>(CHANNELS.ptyData, cb),
     onPtyExit: (cb) => subscribe<number>(CHANNELS.ptyExit, cb),
     onMode: (cb) => subscribe<UiMode>(CHANNELS.uiMode, cb),
+    sendWeb: () => {
+      throw new Error("not implemented");
+    },
+    onWebMessage: () => {
+      throw new Error("not implemented");
+    },
   };
 }
