@@ -54,6 +54,9 @@ mod embed_tests;
 mod fts;
 #[cfg(test)]
 mod fts_tests;
+mod hybrid;
+#[cfg(test)]
+mod hybrid_tests;
 pub mod inforce;
 pub(crate) mod legacy;
 mod list;

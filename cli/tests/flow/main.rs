@@ -35,6 +35,7 @@ mod context_reads_show;
 mod context_reads_store;
 mod context_reads_used;
 mod context_search;
+mod context_search_vectors;
 mod context_show_bounded;
 mod context_supersedes;
 mod context_topic;
