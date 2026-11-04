@@ -351,37 +351,8 @@ impl Store {
                 id => Ok(id),
             },
         )?;
-        conn.busy_timeout(Duration::from_millis(setup_ms))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-
-        let application_id: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
-        if application_id != 0 && application_id != APPLICATION_ID {
-            return Err(CpdError::new(
-                ErrorCode::StoreFailed,
-                format!(
-                    "{} is not a cpd 2 database: its application_id is {application_id}.",
-                    path.display()
-                ),
-            )
-            .with("application_id", application_id)
-            .with("expected", APPLICATION_ID));
-        }
-        let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
-        if !mode.eq_ignore_ascii_case("wal") {
-            let mode: String =
-                conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
-            if !mode.eq_ignore_ascii_case("wal") {
-                return Err(CpdError::new(
-                    ErrorCode::StoreFailed,
-                    format!(
-                        "Cannot switch {} to WAL: journal_mode stayed {mode}.",
-                        path.display()
-                    ),
-                )
-                .with("journal_mode", mode));
-            }
-        }
+        configure(&conn, path, setup_ms, APPLICATION_ID, "a cpd 2 database")?;
         Ok(Store {
             conn,
             path: path.to_owned(),
@@ -833,6 +804,58 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
         problems.join("; ")
     ))
     .with("problems", problems))
+}
+
+/// The pragma and WAL setup `Store::connect` and the derived caches share: the busy timeout `setup_ms`,
+/// `synchronous = NORMAL`, a refusal of a foreign `application_id` (0 is a new file) and the switch to WAL.
+pub(crate) fn configure(
+    conn: &Connection,
+    path: &Path,
+    setup_ms: u64,
+    expected_application_id: i32,
+    what: &str,
+) -> Result<(), CpdError> {
+    conn.busy_timeout(Duration::from_millis(setup_ms))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
+    let application_id: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
+    if application_id != 0 && application_id != expected_application_id {
+        return Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!(
+                "{} is not {what}: its application_id is {application_id}.",
+                path.display()
+            ),
+        )
+        .with("application_id", application_id)
+        .with("expected", expected_application_id));
+    }
+    let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        let mode: String =
+            conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            return Err(CpdError::new(
+                ErrorCode::StoreFailed,
+                format!(
+                    "Cannot switch {} to WAL: journal_mode stayed {mode}.",
+                    path.display()
+                ),
+            )
+            .with("journal_mode", mode));
+        }
+    }
+    Ok(())
+}
+
+/// Holds `locks/store.lock` (§1.4) until dropped: the one-time setup of a derived cache runs under it.
+pub(crate) struct CacheSetupLock {
+    _lock: SetupLock,
+}
+
+/// Takes `locks/store.lock` for a derived cache's first open, waiting `busy_ms` for a holder.
+pub(crate) fn cache_setup_lock(home: &CpdHome, busy_ms: u64) -> Result<CacheSetupLock, CpdError> {
+    setup_lock(&SystemClock, home, busy_ms).map(|_lock| CacheSetupLock { _lock })
 }
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not

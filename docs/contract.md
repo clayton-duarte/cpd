@@ -27,7 +27,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 - **CLI first.** Every capability is a command. Agents, the pi adapter, scripts and the TUI all use the same commands; the TUI (`cpd tui`) is the human view onto them, never a second way to change state.
 - **One binary, written in Rust.** The Cargo workspace at the root of the repo has three crates: `core/` (`cpd-core`, the library), `cli/` (`cpd`, the binary) and `tui/` (`cpd-tui`, the cockpit) (R6, switch-over; `implementing.md`). The binary is `cpd`, and this contract writes every command as `cpd …`. Until the switch-over the binary was installed as `cpd2` beside the TypeScript cpd (R12); the switch-over replaced cpd 1 and renamed the binary everywhere, including in rendered Specs and the pi adapter.
 - **System dependencies:** `git`, `tmux` **>= 3.6** (§6.1), `pi` and, for pull requests only, `gh`. No `bd`, no `wt` (worktrunk), no `herdr`, and no Node.js of cpd's own. pi brings its own Node runtime; cpd uses it only to read pi's model catalog (§9).
-- **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4).
+- **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4). The one other file is the derived cache `$CPD_HOME/vectors.db` (§4.6): not the source of truth, no history, never synced, rebuildable by embedding the records again; deleting it loses nothing.
 - **Context records in the database.** A Context's records (decisions, notes, questions and answers, Plans) live only in the database tables `contexts` and `context_records`; Contexts are machine-local (hs-d23, hs-a1; Plan manager B1, §4.6). ADR-0012's git store is superseded.
 - **tmux is the only host.** Leads run in the cockpit; Workers and the engine run in a hidden session of the same tmux server (§6).
 - **The repo's setup, Gate, test commands and protected paths are its repo policy file** under `$CPD_HOME/policy/<owner>/` (§8.3), read by cpd itself; cpd reads nothing from a repo's tree (R4, R5, §7).
@@ -56,6 +56,7 @@ Exit codes (kept from cpd 1 §2):
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
+| `1` (judge) | the Bifrost judge of write-time curation failed (§4.6) | `judge_unreachable` (retryable), `judge_refused` (`details.status`), `judge_bad_reply` |
 | `5` | timeout | `store_busy`, `lock_timeout` (`pr poll`'s `locks/pr-poll.lock`, §7.6; no git operation waits for a cpd lock since hs-d243, §7), `tool_timeout`, `ask_timeout`, `cancel_timeout` |
 
 **`tool_timeout`** (exit 5): a subprocess cpd started ran past its deadline (the deadlines are listed in §7 for `git`, §6.3 for `tmux`, §9 for `node`, §3.7 for the engine's `cpd pr poll` child, `commands.md` §14.1 for `doctor`). `details`: `tool` (`git`, `tmux`, `node`, `cpd`, …), `argv` (the full argument vector) and `deadline_seconds`. Every subprocess cpd starts has a deadline (except tmux's `display-popup`, §6.3), a constant in the code with its reason, not a config key; `gh` keeps its own timeouts (§7.6) and hooks theirs (§7.3). At the deadline cpd kills the process **group** (`SIGTERM`, then `SIGKILL` after 5 s to those still alive) and the command fails with `tool_timeout`; it replaces `git_failed`, `tmux_failed` and the like for that call.
@@ -111,6 +112,7 @@ $CPD_HOME/
       <repo>.toml                 a repo's policy; optional
   bin/git                         the `git` wrapper first on every Session's `PATH`: refuses `git stash` (§6.5, hs-d310); an executable `sh` script
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
+  vectors.db, vectors.db-wal, vectors.db-shm  the derived vector cache of write-time neighbour curation (§4.6); not the source of truth, safe to delete
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
@@ -639,6 +641,7 @@ Context and Plan carry `deleted_at` (hs-d527). A delete is permanent and cannot 
 
 - **What goes, in one transaction** (hs-d527): after the re-check, (1) `deleted_at` is set on the Plan (for a Context: on every Plan not yet deleted, then on the Context); (2) the rows go, in an order that keeps every foreign key whole: the board posts of the Sessions, the Inbox items, then the Events (an Inbox item points to an Event); then the Escalations, Attempts, Dependencies and Jobs, the Workflow needs, Workflows and Plan reviews, and the Sessions but the Lead. A Plan delete does this for its Plan. A Context delete does the Inbox items and Events for the whole Context (every Plan of it, those deleted earlier included, and the rows that have no Plan), the rest for each Plan, and then the `record_retirements` and `record_curations` rows of the Context and its `context_records` (each through the exception; `context_records_immutable` keeps refusing every update) and the Manager's Session; (3) one `plan-deleted` or `context-deleted` Event is appended **after** the row deletes, in the same transaction, carrying the counts. It is **never deleted by its own delete** (it is appended once the deletes are over); a later Context delete deletes the `plan-deleted` Events of its Plans with the other Events of the Context. A `pull_requests` row (§4.4) is no Plan's: the poll does not delete rows (hs-d565, §7.6 step 5). **Context records are kept by a Plan delete and deleted by a Context delete** (hs-d527), whose records go with the Context.
 
+- **The vector cache is left alone.** A Context delete does not touch `$CPD_HOME/vectors.db` (§4.6): its orphan rows are never read, because every read is filtered by the in-force ids the caller passes.
 - **Files, after the transaction:** (4) the Sessions' session files (the Lead's included), (5) the run files (`$CPD_HOME/run/<plan>/`, and `$CPD_HOME/run/context-digests/<context>/` for a Context; never the `history` rows), (6) every Attempt worktree and Workflow Lead worktree with its `target/`, then the local branches (`cpd/<plan>--<attempt>` and the stored `lead_branch` of each Workflow, `<plan>/<key>` or `cpd/<plan>/<key>` for legacy ones; §4.5; not on the remote), then the directories. A path that is already gone is skipped.
 
 - **The preview:** without `--yes` the command prints the JSON that `--yes` would produce (lists of ids and counts), and writes nothing.
@@ -1425,6 +1428,7 @@ The Context stage ends with `plan phase plan` and the Plan stage with `plan lock
 - Every connection sets `PRAGMA foreign_keys = ON`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = <store_busy_ms>`, and registers the SQL function `cpd_txn()` (§4.3) before it runs any statement. The function must not be flagged `SQLITE_DIRECTONLY`, because triggers call it.
 - `synchronous = NORMAL` with `journal_mode = WAL` (decision of 2026-10-19): SQLite documents this pair as never corrupting the database, but a power loss or OS crash can lose the last committed transactions (a process crash loses nothing). Why: `synchronous = FULL` made each commit wait for a WAL fsync, and under disk load that held the write lock for seconds (measured in `run/store-slow.log`: a 7902 ms hold was a 7861 ms commit, the work 0-5 ms).
 - SQLite is bundled into the binary (rusqlite's `bundled` feature), at least 3.45, so `STRICT` tables and the JSON functions are always present.
+- `$CPD_HOME/vectors.db` is a derived cache beside it, not part of this database and not the source of truth (§4.6 "The vector cache").
 - Rows are deleted only by `plan delete` and `context delete`, through the exception of §4.4 (hs-d527, §2.2 "Deleted"). The file never shrinks and nothing is pruned: the tombstones, `history` and `txns` only grow.
 
 ### 4.2 Transactions and concurrency
@@ -2754,6 +2758,47 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
   - A row whose key cannot be built (a Worker without its Attempt) makes the NOT NULL of `name` fail, so the migration is refused (`migration_failed`) and nothing is applied.
   - The statement changes only the column `name`: no other column, and no row is inserted or deleted.
   - **Tests** (`core/src/store/schema/agent_key_backfill_tests.rs`): `agent_key_backfill_is_a_breaking_migration_after_101`, `agent_key_backfill_names_every_manager_by_its_context_archived_too`, `agent_key_backfill_names_every_non_fork_lead_context_colon_plan`, `agent_key_backfill_names_every_worker_context_plan_job_for_every_attempt`, `agent_key_backfill_leaves_a_fork_name_alone`, `agent_key_backfill_changes_only_the_name_column`.
+
+#### Write-time neighbour curation (Experimental Feature `write_curation`)
+
+Plan `exp-write-curation` (pro-d366, pro-d370, pro-a1). When a Context record is written, the feature checks it against its nearest in-force records and proposes pending retirements only; the User approves them as ever (`user_only`, unchanged). It adds no migration, no relation, no Event kind and no Inbox kind (A7).
+
+- **Off means silent.** With `experimental.write_curation` false the whole feature makes no port call (no embedder, no classifier, no judge, no runner) and writes nothing, in `cpd.db` or in `vectors.db`.
+- **The kind gate.** `plan` and `brief` records are never curated. `question` and `answer` records get `topic` and `short` only: k = 0 neighbours, one judge call, no retirement (A9). `decision` and `note` records continue to the neighbour lookup.
+- **Forced neighbours.** Every in-force record id named in the new record's text, and the target of the record's own `supersedes`, are neighbours whatever their score.
+- **Neighbour lookup, k = 8.** FTS5 `bm25` over the 20 rarest terms of the new text, in an index built in memory per run (A1; no virtual table, no migration), top 25; embedding cosine, top 25, from `vectors.db` when the embedder answers; both lists fused by Reciprocal Rank Fusion with constant 60; the forced ids first; the first 8 are the neighbours. Every read is filtered by the in-force ids the caller passes. When the embedder is unreachable, or `vectors.db` is corrupt, only FTS5 runs and the run line says `fts-only`. Each run embeds the new record and up to 25 in-force records that have no vector yet, newest first (A11).
+- **The pair verdict.** For each (new record, neighbour) pair the classifier `kev-4b` (ClassifierPort) answers first: `independent` with confidence >= 0.80 is accepted at no cost (A8: it writes no `record_curations` row; the batch distiller fills `topic` and `short` later). Every other result, and an unreachable classifier, goes to the judge, Bifrost `vertex/gemini-3.8-flash` (no lite judge, A4). The verdict is one of `duplicate`, `supersedes`, `contradicts`, `independent`. **Agreement and quote** (A10, A14): when `kev-4b` answered a retire-class verdict, the judge must return the same verdict and a **verbatim quote**; with `kev-4b` unreachable the judge alone suffices, with its quote check. Any disagreement, or a quote that is a substring of neither the new record's text nor the neighbour's, makes the pair `independent`: counted, never applied.
+- **Direction rules** (as `Batch::retire`, §4.6 above): `duplicate` keeps the OLDER record and retires the later one (target seq < record seq); `superseded` retires the OLDER record in favour of the newer target (target seq > record seq). A confirmed retirement is written only as a `record_retirements` row with status `pending`, through `propose_rejecting`, with its `record_curations` row (the only curation rows this feature writes).
+- **`contradicts` retires nothing** (A3, A7). It is reported in the run line and in the curate command's JSON only; it writes no relation and no Inbox item.
+- **The already-checked marker.** A record whose pairs were all judged is entered in `context_checked` of `vectors.db` and is not checked again.
+- **Backoff.** After a failed port call (embedder, classifier or judge unreachable) the feature waits 1, 2, 4 ... 60 minutes (doubling, ceiling 60) before it calls that port again; a success resets it. The state is in engine memory (A5), read from `Ports.clock`, and is lost at a restart.
+- **Privacy** (pro-a1). The full text of a record goes to the hosted embedder and to the judge. The User accepted this on this machine.
+
+##### The vector cache `$CPD_HOME/vectors.db`
+
+A derived cache, **not the source of truth**: it holds no history, is never synced, and is rebuilt by embedding the records again. Deleting the file loses nothing. It is a separate file because a BLOB in a `history_tables` table breaks every insert (User, 2026-11-03). A Context delete (§2.2) leaves it alone: orphan rows are never read, because every read is filtered by the in-force ids the caller passes.
+
+```sql
+PRAGMA application_id = 1668703587;
+PRAGMA user_version = 1;
+CREATE TABLE context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
+CREATE TABLE context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;
+```
+
+- `vector` is `dims` little-endian `f32`.
+- A read of a missing file is empty and creates nothing. The first open takes `locks/store.lock`, sets the pragmas of `Store::connect` and WAL, and creates the tables.
+- A file with a foreign `application_id`, or a `user_version` above 1, is refused. A corrupt file is `store_failed` with the path; curation then runs FTS5-only and says so.
+- It has no migration (§4.5): its own `user_version` is its version.
+
+##### The Bifrost judge and its error codes
+
+The judge is `JudgePort`, beside `Ports` (docs/implementing.md); the real one runs a Node helper through the Runner, which resolves the key (never in argv, env, output or error). Its failures:
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `judge_unreachable` | 1 | connect, DNS, timeout, or a non-zero exit of the helper; retryable (it starts the backoff) |
+| `judge_refused` | 1 | the gateway answered a non-2xx; `details.status` is the status |
+| `judge_bad_reply` | 1 | the reply is not JSON, has an unknown verdict, or lacks a field |
 
 ## 5. Events
 

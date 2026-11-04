@@ -16,6 +16,22 @@ mod distill_runner_tests;
 mod arch_citations_tests;
 mod archive;
 mod contexts;
+pub mod curate;
+pub mod curate_backoff;
+#[cfg(test)]
+mod curate_backoff_tests;
+pub mod curate_judge;
+#[cfg(test)]
+mod curate_judge_tests;
+pub mod curate_neighbours;
+#[cfg(test)]
+mod curate_neighbours_tests;
+pub mod curate_vectors;
+#[cfg(test)]
+mod curate_vectors_tests;
+pub mod curate_verdict;
+#[cfg(test)]
+mod curate_verdict_tests;
 pub mod curated;
 pub mod curation;
 mod delete;
