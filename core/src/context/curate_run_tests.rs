@@ -12,6 +12,7 @@ use time::macros::datetime;
 use super::curate::{Judged, Verdict};
 use super::curate_run::{DIMS, FILL, Models, WINDOW_HOURS, curate_with, next_record};
 use super::curate_vectors::VectorStore;
+use super::curation::{Approval, Curation, Proposal, Reason as CurationReason, propose};
 use super::distill::State;
 use super::{By, Draft, PlanRef, Record};
 use crate::classifier::Chosen;
@@ -356,8 +357,11 @@ fn a_low_confidence_pair_goes_to_the_judge() {
 
 // ---- the verdicts and the writes --------------------------------------------------------------------------------
 
+const ROW: &str = "SELECT record || '|' || target || '|' || reason || '|' || status || '|' || coalesce(decided_by, '') FROM record_retirements";
+const MODELS: &str = "kev-4b+gemini-3.8-flash";
+
 #[test]
-fn agreement_and_a_verbatim_quote_write_a_pending_duplicate_retirement() {
+fn agreement_and_a_verbatim_quote_write_an_approved_duplicate_retirement() {
     let mut f = Fx::pair();
     let p = ports(
         chosen("duplicate", Some(0.9)),
@@ -370,8 +374,12 @@ fn agreement_and_a_verbatim_quote_write_a_pending_duplicate_retirement() {
     );
     assert_eq!(f.rows(), (1, 1));
     assert_eq!(
-        f.text("SELECT record || '|' || target || '|' || reason || '|' || status FROM record_retirements"),
-        "hs-d2|hs-d1|duplicate|pending"
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|approved|{MODELS}")
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM record_retirements WHERE decided_at = proposed_at"),
+        1
     );
     assert_eq!(f.text("SELECT record FROM record_curations"), "hs-d2");
     assert_eq!(f.events(), 1);
@@ -379,7 +387,7 @@ fn agreement_and_a_verbatim_quote_write_a_pending_duplicate_retirement() {
 }
 
 #[test]
-fn supersedes_writes_a_pending_retirement_of_the_older_neighbour() {
+fn supersedes_writes_an_approved_retirement_of_the_older_neighbour() {
     let mut f = Fx::pair();
     let p = ports(
         chosen("supersedes", Some(0.9)),
@@ -391,11 +399,271 @@ fn supersedes_writes_a_pending_retirement_of_the_older_neighbour() {
         json!([{"record": "hs-d1", "target": "hs-d2", "reason": "superseded"}])
     );
     assert_eq!(
-        f.text("SELECT record || '|' || target || '|' || reason || '|' || status FROM record_retirements"),
-        "hs-d1|hs-d2|superseded|pending"
+        f.text(ROW),
+        format!("hs-d1|hs-d2|superseded|approved|{MODELS}")
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM record_retirements WHERE decided_at = proposed_at"),
+        1
     );
     assert_eq!(f.text("SELECT record FROM record_curations"), "hs-d1");
     assert_eq!(f.events(), 1);
+}
+
+#[test]
+fn an_approved_write_appends_one_records_retired_event() {
+    let mut f = Fx::pair();
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    f.run(&p, None).unwrap();
+    assert_eq!(f.retired_events(), 1);
+}
+
+#[test]
+fn without_kev_an_agreed_retirement_stays_pending() {
+    let mut f = Fx::pair();
+    let down = ports(
+        Err(code_err(ErrorCode::ClassifierUnreachable)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    f.run(&down, None).unwrap();
+    assert_eq!(f.text(ROW), "hs-d2|hs-d1|duplicate|pending|");
+    assert_eq!(f.retired_events(), 0);
+    // kev is back: the next run's sweep decides the row it left pending
+    let up = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&up, None).unwrap();
+    assert_eq!(out["swept"], json!({"approved": 1, "rejected": 0}));
+    assert_eq!(
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|approved|{MODELS}")
+    );
+}
+
+// ---- the sweep of pending rows ------------------------------------------------------------------------------------
+
+/// Two records out of the window per pair, `hs-d{2n-1}` (older) and `hs-d{2n}`, and a pending duplicate row
+/// retiring the later one: nothing is due, so only the sweep has work.
+fn swept(pairs: i64) -> Fx {
+    let mut f = fixture(true);
+    for n in 1..=pairs {
+        f.add(&format!("hs-d{}", 2 * n - 1), 40 * HOURS, OLD_TEXT);
+        f.add(&format!("hs-d{}", 2 * n), 30 * HOURS, NEW_TEXT);
+        f.seed(&format!("hs-d{}", 2 * n), &format!("hs-d{}", 2 * n - 1));
+    }
+    f
+}
+
+impl Fx {
+    fn retired_events(&mut self) -> i64 {
+        self.count("SELECT count(*) FROM events WHERE kind = 'records-retired'")
+    }
+
+    /// A pending duplicate row of `record` (curated) retiring `target`.
+    fn seed(&mut self, record: &str, target: &str) {
+        let curation = Curation {
+            record: id(record),
+            topic: "postgres-store".into(),
+            short: "Use Postgres for the store".into(),
+        };
+        let proposal = Proposal {
+            record: id(record),
+            reason: CurationReason::Duplicate,
+            target: target.into(),
+            approval: Approval::Pending,
+        };
+        propose(&mut self.store, &context(), &[curation], &[proposal]).unwrap();
+    }
+
+    fn pending(&mut self) -> i64 {
+        self.count("SELECT count(*) FROM record_retirements WHERE status = 'pending'")
+    }
+}
+
+#[test]
+fn the_sweep_approves_a_pending_pair_both_models_confirm() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["swept"], json!({"approved": 1, "rejected": 0}));
+    assert_eq!(
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|approved|{MODELS}")
+    );
+    assert_eq!(f.retired_events(), 1);
+    let calls = p.judge.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].new.id, id("hs-d2"));
+    assert_eq!(calls[0].neighbour.as_ref().unwrap().id, id("hs-d1"));
+}
+
+#[test]
+fn the_sweep_rejects_a_pending_pair_the_models_disagree_on() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Supersedes, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["swept"], json!({"approved": 0, "rejected": 1}));
+    assert_eq!(
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|rejected|{MODELS}")
+    );
+}
+
+#[test]
+fn the_sweep_rejects_a_pending_pair_kev_accepts_as_independent() {
+    let mut f = swept(1);
+    let p = ports(chosen("independent", Some(0.9)), FakeJudge::new(vec![]));
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["swept"], json!({"approved": 0, "rejected": 1}));
+    assert_eq!(
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|rejected|{MODELS}")
+    );
+    assert!(p.judge.calls().is_empty());
+}
+
+#[test]
+fn the_sweep_rejects_a_pending_pair_whose_quote_is_in_neither_record() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, "a phrase in neither record")),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["swept"], json!({"approved": 0, "rejected": 1}));
+    assert_eq!(
+        f.text(ROW),
+        format!("hs-d2|hs-d1|duplicate|rejected|{MODELS}")
+    );
+}
+
+#[test]
+fn the_sweep_leaves_a_pending_pair_when_kev_is_unreachable_and_stops() {
+    let mut f = swept(2);
+    let p = ports(
+        Err(code_err(ErrorCode::ClassifierUnreachable)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(p.classifier.calls().len(), 1);
+    assert!(p.judge.calls().is_empty());
+    assert_eq!(f.pending(), 2);
+    assert!(out.get("swept").is_none());
+}
+
+#[test]
+fn the_sweep_leaves_a_pending_pair_on_a_judge_error() {
+    let mut f = swept(2);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::new(vec![Err(code_err(ErrorCode::JudgeUnreachable))]),
+    );
+    let _ = f.run(&p, None);
+    assert_eq!(p.judge.calls().len(), 1);
+    assert_eq!(p.classifier.calls().len(), 1);
+    assert_eq!(f.pending(), 2);
+}
+
+#[test]
+fn the_sweep_leaves_a_contradicting_pending_pair_pending() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("contradicts", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Contradicts, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(p.judge.calls().len(), 1);
+    assert_eq!(f.text(ROW), "hs-d2|hs-d1|duplicate|pending|");
+    assert!(out.get("swept").is_none());
+}
+
+#[test]
+fn the_sweep_runs_when_no_record_is_due() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["already"], json!(true));
+    assert_eq!(out["remaining"], json!(0));
+    assert_eq!(out["swept"], json!({"approved": 1, "rejected": 0}));
+}
+
+#[test]
+fn the_sweep_checks_at_most_three_pairs_per_run() {
+    let mut f = swept(4);
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(p.classifier.calls().len(), 3);
+    assert_eq!(out["swept"], json!({"approved": 3, "rejected": 0}));
+    assert_eq!(f.pending(), 1);
+    assert_eq!(f.retired_events(), 1);
+}
+
+#[test]
+fn the_sweep_ignores_documented_rows() {
+    let mut f = fixture(true);
+    f.add("hs-d1", 30 * HOURS, OLD_TEXT);
+    let curation = Curation {
+        record: id("hs-d1"),
+        topic: "postgres-store".into(),
+        short: "Use Postgres for the store".into(),
+    };
+    let proposal = Proposal {
+        record: id("hs-d1"),
+        reason: CurationReason::Documented,
+        target: "docs/store.md".into(),
+        approval: Approval::GitGrep,
+    };
+    propose(&mut f.store, &context(), &[curation], &[proposal]).unwrap();
+    f.sql(
+        "UPDATE record_retirements SET status = 'pending', decided_at = NULL, decided_by = NULL;",
+    );
+    // a duplicate row beside it: only that one is swept
+    f.add("hs-d2", 30 * HOURS, NEW_TEXT);
+    f.seed("hs-d2", "hs-d1");
+    let p = ports(
+        chosen("duplicate", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Duplicate, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(p.classifier.calls().len(), 1);
+    assert_eq!(p.judge.calls().len(), 1);
+    assert_eq!(out["swept"], json!({"approved": 1, "rejected": 0}));
+    assert_eq!(
+        f.text("SELECT status FROM record_retirements WHERE reason = 'documented'"),
+        "pending"
+    );
+}
+
+#[test]
+fn a_run_that_sweeps_nothing_has_no_swept_key() {
+    let mut f = swept(1);
+    let p = ports(
+        chosen("contradicts", Some(0.9)),
+        FakeJudge::answering(judged(Verdict::Contradicts, QUOTE)),
+    );
+    let out = f.run(&p, None).unwrap();
+    // the sweep did look at the pair, and decided nothing
+    assert_eq!(p.judge.calls().len(), 1);
+    assert_eq!(
+        out,
+        json!({"context": "ctx", "already": true, "remaining": 0})
+    );
 }
 
 #[test]
