@@ -195,7 +195,7 @@ describe("context list without open_questions", () => {
 
 // Assumption: `cpd session list` has no created_at, so "newest" is the later entry of the list.
 const treeOf = async (r: Replies) => (await createReadModel(fakeCpd(r).cpd).loadAll(null)).tree;
-const ids = (xs: { ref: { id: string } }[]) => xs.map((s) => s.ref.id);
+const ids = (xs: readonly { ref: { id: string } }[]) => xs.map((s) => s.ref.id);
 
 it("buildTree drops worker sessions", async () => {
   const tree = await treeOf({
