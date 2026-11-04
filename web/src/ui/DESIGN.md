@@ -547,44 +547,139 @@ div[data-part="header-bar"]                                  flex h-full items-c
 
 ### 3b. Status Bar (30px)
 
-File `web/src/ui/cockpit/StatusBar.tsx`.
+Files: `web/src/ui/cockpit/StatusBar.tsx` (the bar), `web/src/ui/cockpit/LegendDialog.tsx`, `web/src/ui/cockpit/LogsDialog.tsx`, `web/src/ui/cockpit/AgentTiersDialog.tsx` (the three popups). Records: **pro-d40** and the User's answers. The bar **mirrors the TUI status bar** (`core/src/host/tmux.rs:476-520`, the cockpit's tmux status line) and its popups, one element per row of the table below, left to right. The slim header stays (3a). The Phase 2 `State:` segment leaves the bar: it is not one of the TUI status-bar elements. The cockpit name and the engine state are not in the bar either.
 
-```ts
-export interface StatusBarProps {
-  readonly runner: Runner | null;                 // KEPT
-  readonly state: SessionState | null;            // KEPT; narrowed from string (App already passes ref.state)
-  readonly version: Stat<string> | null;          // KEPT
-  /** `$` cost toggle. Rendered only when `onToggleCost` is passed. */
-  readonly showCost?: boolean;
-  readonly onToggleCost?: () => void;
-  /** Reset layout. Rendered only when passed. */
-  readonly onResetLayout?: () => void;
-}
-export function StatusBar(props: StatusBarProps): ReactElement;
+The web draws the TUI's pills as coloured text on `bg-surface-sunken`: the TUI's caps and reversed blocks are tmux drawing, not data. Buttons are shadcn/ui `Button` (`ghost`), dialogs are shadcn/ui `Dialog` (2f), all on the Dango tokens (2b). The TUI's `━` joins are not drawn; the gap between elements separates them. Icons are lucide icons of the same meaning as the TUI glyphs (named in the table); the lucide names are checked at implementation.
+
+Status data is read by the server (`web/src/server/cockpit/`) and sent to the client; the client never reads a file or runs a command. Sources are in "Data sources" below.
+
+| # | Element (`data-part`) | Shown when | Exact text, or accessible name | Source | TUI colour (index → token) |
+|---|---|---|---|---|---|
+| 1 | Reset button (`reset-layout`) | always | accessible name `Reset layout`; TUI glyph U+F0A1D; lucide icon | none | 15 → `text-fg-strong` |
+| 2 | Legend button (`legend-button`) | always | `Legend`; TUI glyph U+F0A01 | none | 15 → `text-fg-strong` |
+| 3 | Logs button (`logs-button`) | always | `Logs`; TUI glyph U+F09ED | none | 15 → `text-fg-strong` |
+| 4 | Costs button (`costs-button`, `aria-pressed`) | always | `Costs`; TUI glyph U+EEC1 | the costs flag (below) | 15 → `text-fg-strong` |
+| 5 | Settings button (`settings-button`) | always | `Settings`; TUI glyph U+F013 | none | 15 → `text-fg-strong` |
+| 6 | Runner (`runner`) | the runner is known | `pi` or `durable` | `cpd config experimental` | 15 → `text-fg-strong` |
+| 7 | Preview (`preview`) | tmux option `@cpd_preview` is set | `preview: <value>` | tmux `@cpd_preview` | 3 (review, yellow) → `text-status-landing` |
+| 8 | fill | always | none | none | none |
+| 9 | Incident (`incident`) | `cpd incident status` reports the incident on | `Incident Mode: <elapsed>`, italic | `cpd incident status` | 9 (failed, bright) → `text-status-blocked-bright` |
+| 10 | Workers (`workers`) | tmux option `@cpd_workers` is set | `workers Q·W·N/M` | tmux `@cpd_workers` | 8 → `text-fg-dim` |
+| 11 | Version (`version`, `data-alert`) | the version is known | `cpd: <version>`; red when the host alert is set | `cpd --version`; `run/cpd-install.json` | 8 → `text-fg-dim`; alert 9 → `text-status-blocked-bright` |
+
+DOM (inside `footer[aria-label="Status bar"]`, which `Shell` writes and styles, 3c; the footer is 30px):
+
+```
+div[data-part="status-bar"]                                flex h-full w-full items-center gap-1 overflow-hidden px-2 text-[11.5px]
+├─ Button[type="button"][data-part="reset-layout"][aria-label="Reset layout"]    ghost, h-[22px] px-2, text-fg-strong, hover:bg-row-hover; icon svg size 14, aria-hidden
+├─ Button[type="button"][data-part="legend-button"][aria-label="Legend"]         same
+├─ Button[type="button"][data-part="logs-button"][aria-label="Logs"]             same
+├─ Button[type="button"][data-part="costs-button"][aria-label="Costs"][aria-pressed="true|false"]   same; aria-pressed="true" → bg-surface-pressed
+├─ Button[type="button"][data-part="settings-button"][aria-label="Settings"]     same
+├─ span[data-part="runner"]        "pi" | "durable"; only when the runner is known; font-mono text-meta text-fg-strong
+├─ span[data-part="preview"]       "preview: <value>"; only when set; font-mono text-meta text-status-landing
+├─ span.flex-1                     the fill
+├─ span[data-part="incident"]      "Incident Mode: <elapsed>"; only when on; font-mono text-meta italic text-status-blocked-bright
+├─ span[data-part="workers"]       "workers Q·W·N/M"; only when set; font-mono text-meta text-fg-dim
+└─ span[data-part="version"][data-alert="true|false"]   "cpd: <version>"; only when known; font-mono text-meta text-fg-dim, text-status-blocked-bright when data-alert="true"
 ```
 
-`Runner`, `SessionState`, `Stat` are the types of `web/src/protocol/domain.ts`.
+- **Runner.** The machine's runner, not the selected session's (Phase 2 read `session.ref.runner`). It is `durable` when `experimental.durable_workers` is on, else `pi`: the engine's rule that writes `@cpd_runner` (`core/src/config/file.rs:229-232`, `engine/src/watch/workers.rs:93-94`). The pill shows the value only, with no label.
+- **Preview.** `preview: <value>`, where `<value>` is the text of the tmux option `@cpd_preview`, `<worktree basename> <sha>`, set by `scripts/preview-tui.sh` (`docs/ui-preview.md`).
+- **Incident.** `<elapsed>` is the TUI's text (contract 6.1.1, `engine/src/watch/workers.rs:137-170`), from the incident's `started_at` to now, in whole minutes: under 60 minutes `<m>m`; under 24 hours `<h>h`, plus ` <m>m` when the minutes are not zero; else `<d>d`, plus ` <h>h` when the hours are not zero. A `started_at` in the future reads `0m`.
+- **Workers.** `workers Q·W·N/M`: Q = Jobs with status `queued`; W = Ready Jobs; N = tenant Jobs of pool `workers`; M = the concurrency setting (`engine/src/watch/workers.rs:27-40`, `:81-133`). The TUI puts a glyph (U+F0798) between the four numbers; the web's separator is `·`. The engine writes the option on each tick, so a stopped engine leaves the last value on screen.
+- **Version.** `cpd: <version>`, the `version` field of `cpd --version`. The text is the Phase 2 text, kept. The segment is absent while the version is unknown (the TUI draws the pill only when it is set).
+- **Host alert.** The version segment turns red (`data-alert="true"`) when `$CPD_HOME/run/cpd-install.json` has `status` `skipped`; the alert is its `reason` (`core/src/host/install_state.rs:135-141`). The bar shows the colour only.
 
-DOM (inside `footer[aria-label="Status bar"]`, which `Shell` writes and styles `flex items-center border-t border-border bg-surface-sunken`; the footer is exactly 30px):
+**Buttons, behaviour** (pro-d40):
 
-```
-div[data-part="status-bar"]                                  flex h-full w-full items-center gap-1 overflow-hidden px-2 text-[11.5px]
-├─ button[data-part="reset-layout"][type="button"] "Reset layout"   only when onResetLayout; h-[22px] px-2 rounded-[4px] text-fg-strong hover:bg-row-hover
-├─ button[data-part="cost-toggle"][type="button"][aria-pressed] "$"  only when onToggleCost; font-mono h-[22px] px-2 rounded-[4px] text-fg-strong; aria-pressed="true" → bg-surface-pressed
-├─ span.flex-1
-└─ span[data-part="status-right"]                            flex items-center gap-2 font-mono text-meta text-muted-foreground
-    ├─ span[data-part="runner"]   "Runner: pi" | "Runner: durable" | "Runner: none"   KEPT, exact text
-    ├─ span[aria-hidden="true"] "│"  text-line
-    ├─ span[data-part="state"][data-tone][data-glyph]   KEPT hook; exact text "State: <state>" | "State: none"
-    │     leading glyph span[aria-hidden] className={glyphClass[g]} when state !== null (g from dotDisplay({state, attention:null}) → sessionDisplay[...].glyph; data-tone from the same)
-    ├─ span[aria-hidden="true"] "│"  text-line
-    └─ span[data-part="version"]  "cpd: <value>" | "cpd: unknown"        KEPT, exact text
-```
+- **Reset layout** resets the resizable panel sizes to the TUI defaults and nothing else: tree 20%, centre 58%, inbox 22% of the columns; plan 40% and chat 60% of the centre (3c). No confirmation, no respawn, no reload, no change to the selection or to the costs flag. A collapsed panel is resized to its default, so it opens. The TUI reset only resizes panes (`tui/src/cockpit.rs`, `reset_layout`). The panel handles are local to `Shell` (3c); how the bar reaches them is the implementation's choice (a ref or a context inside `Shell`). The behaviour is fixed here.
+- **Legend** opens the Legend dialog (below).
+- **Logs** opens the Logs dialog (below).
+- **Costs** flips the cost display of the Context and Plan rows (3d). It opens no popup. The flag is React state of `App`, off at every load, and is never stored (not in `sessionStorage`, unlike the selection). `aria-pressed` shows it.
+- **Settings** opens the Agent Tiers dialog (below).
+- Keyboard: the buttons are native; Enter and Space activate them; standard focus ring. No shortcut keys are built (the TUI's `?` that opens the Legend is Not wired).
 
-- The text of `[data-part="runner"]`, `[data-part="state"]`, `[data-part="version"]` is **exactly** the Phase 2 text (`Runner: durable`, `State: idle`, `cpd: 0.21.102`, `cpd: unknown` when `version` is `null` or `{state:"unknown"}`); the glyph span has no text, so `textContent` is unchanged (`Frame.test` 2, 3, 6 stay green). `data-tone`/`data-glyph` are on the `state` span only when `state !== null`.
-- Colours: runner and version text `text-muted-foreground`; the `State:` value is not coloured (the glyph carries the tone); separators `text-line`; the bar sits on `bg-surface-sunken`, so `text-fg-dim` is allowed there and used for `State: none` and `Runner: none` (the empty values).
-- Keyboard: both buttons are native, Enter and Space activate, standard focus ring. No shortcut keys.
-- Not wired (omitted, never faked): Legend `?`, Logs, Tiers, the `pi | durable` segmented control (the runner is shown, not chosen), the Incident pill, the Workers `52 → 13 → 10/10` meter, version `HoverCard`, host `cpu / ram / disk`. `App` passes none of `showCost`, `onToggleCost`, `onResetLayout`: the cost toggle is meaningless without cost data in the tree or plan models, and layout reset needs the Shell's group handle (not exposed).
+**Legend dialog** (`LegendDialog`, `data-part="legend-dialog"`). Title `Legend: What The Cockpit's Colours And Icons Mean (Any Key Closes)`. Static: no props, no data, no live values. Its sections, in this order, carry the TUI's legend content (`tui/src/widgets/legend.rs`, colours from `pi/lib/pill-spec.json` and `tui/src/palette.rs`):
+
+1. Meanings → Colour (one source for every view)
+2. Jobs: Plan Pills And Context Counters
+3. Session Dots
+4. Workflows (Dispatch)
+5. Inbox
+6. Pulse
+7. PR Checks
+
+The body scrolls (`scroll-area.tsx`). Keys: `↑` `↓` and `j` `k` move one row; `PgUp` `PgDn` move a page; `End` and `G` go to the end. Any other key closes the dialog (`Esc` included). The mouse wheel scrolls.
+
+**Logs dialog** (`LogsDialog`, `data-part="logs-dialog"`). The event log: the latest 500 Events, oldest first. One line per Event: `HH:MM:SS` (24-hour, the browser's local time), one space, then the Event's `text`, or its `kind` when `text` is empty; the line is cut to the row width with `…`. Rows of kind `error` are red (`text-status-blocked`). An empty log shows `none yet` in `text-fg-dim`.
+
+- Follow: while the view is at the bottom, new Events scroll in. Scrolled up, the lines stay where they are; new Events are added to the list and shown once the view is at the bottom again. `End` or `G` go to the bottom and follow.
+- Keys: `↑` `↓` `j` `k`, `PgUp` `PgDn`, `End` `G` scroll as in the Legend; `Esc` closes (Dialog).
+- Data: the Context names no data source for the logs. Recorded here from the TUI reading, to be confirmed by the Lead: a snapshot from `cpd events follow --since 0 --until-idle` (one JSON line per Event, then the command exits; the server keeps the last 500), then live Events from the existing `cpd events follow --since <cursor>` (`web/src/server/cockpit/events.ts`). The snapshot's cost grows with the store (timing unverified).
+
+**Agent Tiers dialog** (`AgentTiersDialog`, `data-part="agent-tiers-dialog"`). Title `Agent Tiers`. Fourteen rows in two sections. Labels as the TUI prints them.
+
+| # | Section | Label | Control | Value | Read from |
+|---|---|---|---|---|---|
+| 0 | Models + Tiers | Preset | select, and a `Load` button | the preset name, or `(none)` | `cpd config` → `.config.presets` (names) |
+| 1 | Models + Tiers | Provider | select | the provider of the O model | `cpd models show` → `.providers[].provider` |
+| 2 | Models + Tiers | `O  opus` | select | the model id without its provider; `(unset)` in red | `cpd tiers` → `.tiers.O.model`; ids from `cpd models show` → `.providers[].ids` |
+| 3 | Models + Tiers | `S  sonnet` | select | as row 2 | `.tiers.S.model` |
+| 4 | Models + Tiers | `H  haiku` | select | as row 2 | `.tiers.H.model` |
+| 5 | Models + Tiers | `G  gemini` | select | as row 2 | `.tiers.G.model` |
+| 6 | Models + Tiers | auxiliar | select of Tiers | a Tier, e.g. `GX`; range `default only` | `cpd config` → `.config.context_distill_tier` |
+| 7 | Models + Tiers | worker | select of Tiers | a Tier; range `<floor>..<ceiling>` or `no rung` | `cpd config` → `.config.worker_tier` |
+| 8 | Models + Tiers | lead | select of Tiers | as row 7 | `cpd config` → `.config.lead_tier` |
+| 9 | Models + Tiers | manager | select of Tiers | as row 7 | `cpd config` → `.config.manager_tier` |
+| 10 | Experimental | durable_workers | on/off | `on` or `off` | `cpd config experimental` → `.experimental.durable_workers` |
+| 11 | Experimental | write_curation | on/off | `on` or `off` | `cpd config experimental` → `.experimental.write_curation` |
+| 12 | Experimental | failure_triage | on/off | `on` or `off` | `cpd config experimental` → `.experimental.failure_triage` |
+| 13 | Experimental | turn_question_guard | on/off | `on` or `off` | `cpd config experimental` → `.experimental.turn_question_guard` |
+
+A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model, as the TUI draws it.
+
+- **Save** runs the writes below in order, as the TUI does (`tui/src/settings/model.rs:681-733`, `tui/src/settings/mod.rs:115-181`). Each step runs only when its value changed.
+  1. `cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>` when a model or the Provider changed.
+  2. `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers.
+  3. `cpd config experimental <feature> on|off`, once per changed switch.
+  4. `cpd session retier --all`, only when step 1 or 2 changed something. It re-tiers every live Lead and Manager.
+- Save is blocked, and the reason is shown in red: a model is unset, a re-read failed, or a Tier is not a rung of the model it runs on. Save with nothing changed closes the dialog. A failed step stops the run and shows its error; the next Save runs only the steps that did not succeed.
+- **Cancel** closes the dialog and writes nothing.
+- **Load** copies the preset's Provider and four model refs into rows 1 to 5, then re-reads the rungs with `cpd tiers --model O=… --model S=… --model H=… --model G=…`. It writes nothing until Save.
+
+**Data sources** (server reads; no new cpd command):
+
+| Read | Command or source | Field | Used by |
+|---|---|---|---|
+| Runner, switches | `cpd config experimental` | `.experimental.{durable_workers,write_curation,failure_triage,turn_question_guard}` | Runner, Agent Tiers rows 10 to 13 |
+| Tiers, presets | `cpd config` | `.config.{context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
+| Models, rungs | `cpd tiers` | `.tiers.{O,S,H,G}.{model,efforts}` | Agent Tiers rows 2 to 5 and ranges |
+| Provider lists | `cpd models show` | `.providers[].{provider,ids}` | Agent Tiers rows 1 and 2 to 5 |
+| Incident | `cpd incident status` | `on`, `incident.started_at` | Incident |
+| Version | `cpd --version` | `version` | Version |
+| Workers | tmux option `@cpd_workers` (`show -gqv`) | text | Workers |
+| Preview | tmux option `@cpd_preview` (`show -gqv`) | text | Preview |
+| Host alert | `$CPD_HOME/run/cpd-install.json` | `status`, `reason` | Version colour |
+| Cost | session JSONL files, and three cpd calls (below) | `usage.cost.total` | Costs toggle (3d) |
+| Events | `cpd events follow` (above) | `at`, `kind`, `text` | Logs |
+
+The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `config.toml` (default `cpd`). Refresh cadence: not set by the Context (open, for the Lead).
+
+**Cost** (pro-d40: "cost by parsing session JSONL, usage.cost.total, summed, no dedup, cached by (mtime, size), 3 cpd calls per refresh"; the rules below are the TUI's, the contract for this value):
+
+- **Session file.** Its cost is the sum of `usage.cost.total` over every counted entry: a `type` `"message"` entry whose `message.role` is `assistant`, or an entry of type `usage`, `compaction` or `branch_summary` with a top-level `usage` object. No dedup: every counted entry adds. In a fork (line 1 is a `session` header with a string `parentSession`), an entry whose timestamp is before the header's timestamp counts for nothing. A malformed line (not JSON, no string `type` or RFC 3339 `timestamp`, or a counted entry without `usage.cost.total`) makes the whole file malformed: the last good value is kept, never a partial sum. The value is cached per file by `(mtime, size)` and parsed again only when either changes (`core/src/metrics/mod.rs:147-240`, `tui/src/read/cost.rs:13-62`).
+- **Attempt.** Its stored cost when it has one (the `data.cost_usd` of its `attempt-ended` Event), else the cost of its Worker Session's file. Never both (`tui/src/read/cost.rs:66-80`).
+- **Plan.** The sum of its Lead Sessions (archived included) and its Attempts. **Context.** The sum of its Plans (archived included) and its Manager Sessions (archived included). A total with no known part is absent; otherwise it is the sum of the known parts (`tui/src/read/tree.rs:311-416`, `tui/src/read/cost.rs:82-88`).
+- **The three cpd calls per refresh:** `cpd context list` (Plan ids); `cpd session list --archived` (`role`, `plan`, `context`, `attempt`, `file`); `cpd events list --kind attempt-ended --since <cursor> --limit 5000` (stored Attempt costs; repeated while a page is full). Today's read model calls `session list` without `--archived`; the cost needs it.
+- **Format** (`core/src/metrics/mod.rs:244-253`): `NaN` or below `0.0005` → `$0.000`; below `9.9995` → `$` and 3 decimals (`$0.120`); below `99.995` → 2 decimals; below `999.95` → 1 decimal; below `9995` → thousands, 2 decimals and `k` (`$1.23k`); below `99950` → thousands, 1 decimal and `k`; otherwise thousands, 0 decimals and `k`. Exact ties round to even, as Rust's formatting does (JavaScript's `toFixed` does not).
+
+**Not wired** (omitted, never faked): the runner choice (the `pi | durable` segmented control; the TUI runner pill flips `durable_workers`, and the Context does not decide that for the web), clicks on the runner, incident and version pills (the TUI's `incident` and `host` actions; not decided), the `?` key that opens the Legend, the version `HoverCard`, host `cpu / ram / disk` (not in the TUI bar), the TUI's short workers form and its drop of segments on a narrow client (the bar clips with `overflow-hidden`).
+
+**Built by pro-d40** (were Not wired in Phase 2): the Reset layout, Legend, Logs, Costs and Settings buttons (the Settings button is the Agent Tiers dialog, formerly "Tiers"); the Incident pill; the Workers pill (the Q·W·N/M meter); the Preview pill; the Runner pill as the machine's runner; the Version pill's host-alert colour.
+
+**Changed from Phase 2:** the `State:` segment is removed; `Runner: <x>` is `<x>`, and is absent when unknown (was `Runner: none`); `cpd: unknown` is absent when the version is unknown; the reset and `$` buttons are replaced by the five buttons; `App` passes the status data and the handlers (3e). The Phase 2 tests this changes are in 3f.
+
 
 ### 3c. Shell and the resizable split
 
