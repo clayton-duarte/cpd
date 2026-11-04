@@ -79,6 +79,7 @@ export interface InboxRow {
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;
+  readonly workflow?: string | null; // the Workflow key for PR kinds (optional until the read model fills it)
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
 }
@@ -97,6 +98,8 @@ export type CockpitAction =
   | { kind: "inbox.claim"; itemId: number }
   | { kind: "inbox.approve"; itemId: number }
   | { kind: "pr.post"; planId: string; workflow: string }
+  | { kind: "pr.merge"; planId: string; workflow: string }
+  | { kind: "engine.start" }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
@@ -121,6 +124,8 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "inbox.claim": ["itemId"],
     "inbox.approve": ["itemId"],
     "pr.post": ["planId", "workflow"],
+    "pr.merge": ["planId", "workflow"],
+    "engine.start": [],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
   };

@@ -4,11 +4,15 @@ import type { Cpd } from "./cli.ts";
 
 export function actionArgs(action: CockpitAction): readonly string[] {
   switch (action.kind) {
-    case "inbox.snooze": return ["inbox", "snooze", String(action.itemId), action.duration satisfies SnoozeDuration];
+    case "inbox.snooze":
+      if (action.duration === "tomorrow") throw new Error("not implemented");
+      return ["inbox", "snooze", String(action.itemId), action.duration satisfies SnoozeDuration];
     case "inbox.dismiss": return ["inbox", "dismiss", String(action.itemId)];
     case "inbox.claim": return ["inbox", "claim", String(action.itemId)];
     case "inbox.approve": return ["inbox", "approve", String(action.itemId)];
     case "pr.post": return ["pr", "post", "--workflow", action.workflow, "--plan", action.planId];
+    case "pr.merge": throw new Error("not implemented");
+    case "engine.start": throw new Error("not implemented");
     case "session.retier": return ["session", "retier", action.sessionId, "--tier", action.tier];
     case "plan.reject": return ["plan", "decide", action.review, "--reject", "--plan", action.planId];
   }
