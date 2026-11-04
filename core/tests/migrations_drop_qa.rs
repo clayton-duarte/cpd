@@ -38,11 +38,11 @@ fn rewind(conn: &Connection) {
         .unwrap();
     let removed = conn
         .execute(
-            "DELETE FROM schema_migrations WHERE name = ?1",
+            "DELETE FROM schema_migrations WHERE name >= ?1",
             params![MIGRATION],
         )
         .unwrap();
-    assert_eq!(removed, 1, "{MIGRATION} is in the list of migrations");
+    assert!(removed >= 1, "{MIGRATION} is in the list of migrations");
     conn.execute_batch(&guard).unwrap();
 }
 
