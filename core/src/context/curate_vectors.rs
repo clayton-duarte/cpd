@@ -14,11 +14,11 @@ use crate::store::{cache_setup_lock, configure};
 /// `PRAGMA application_id` of `vectors.db` (§4.6): "cpvc".
 const APPLICATION_ID: i32 = 1_668_703_587;
 /// `PRAGMA user_version` of `vectors.db`; a file with a higher one is refused.
-const VERSION: i32 = 1;
+const VERSION: i32 = 2;
 /// How long the first open waits for `locks/store.lock` and for SQLite.
 const BUSY_MS: u64 = 5000;
 
-const DDL: &str = "CREATE TABLE IF NOT EXISTS context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
+const DDL: &str = "CREATE TABLE IF NOT EXISTS context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;";
 
 /// The vector cache file.
@@ -134,6 +134,19 @@ impl VectorStore {
         // Always the idempotent DDL, so a file that stopped between its pragmas and its tables is completed.
         conn.execute_batch(DDL)
             .map_err(|e| failed(path, "create the tables of", e))?;
+        let has_hash: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('context_embeddings') WHERE name = 'content_hash'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| failed(path, "read", e))?;
+        if has_hash == 0 {
+            conn.execute_batch(
+                "ALTER TABLE context_embeddings ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            )
+            .map_err(|e| failed(path, "upgrade", e))?;
+        }
         conn.pragma_update(None, "application_id", APPLICATION_ID)
             .map_err(|e| failed(path, "set application_id of", e))?;
         conn.pragma_update(None, "user_version", VERSION)
@@ -149,6 +162,31 @@ impl VectorStore {
         vector: &[f32],
         at: &str,
     ) -> Result<(), CpdError> {
+        self.write(context, model, record, vector, at, "")
+    }
+
+    /// [`VectorStore::put`] with the content hash of the embedded text (see [`content_hash`]).
+    pub fn put_hashed(
+        &self,
+        context: &ContextId,
+        model: &str,
+        record: &RecordId,
+        vector: &[f32],
+        hash: &str,
+    ) -> Result<(), CpdError> {
+        let at = crate::clock::timestamp(time::OffsetDateTime::now_utc());
+        self.write(context, model, record, vector, &at, hash)
+    }
+
+    fn write(
+        &self,
+        context: &ContextId,
+        model: &str,
+        record: &RecordId,
+        vector: &[f32],
+        at: &str,
+        hash: &str,
+    ) -> Result<(), CpdError> {
         if vector.is_empty() || vector.iter().any(|f| !f.is_finite()) {
             return Err(CpdError::new(
                 ErrorCode::StoreFailed,
@@ -159,33 +197,50 @@ impl VectorStore {
         }
         let conn = self.writer()?;
         conn.execute(
-            "INSERT OR REPLACE INTO context_embeddings (context, model, record, dims, vector, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![context.as_str(), model, record.to_string(), vector.len() as i64, blob(vector), at],
+            "INSERT OR REPLACE INTO context_embeddings (context, model, record, dims, vector, at, content_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![context.as_str(), model, record.to_string(), vector.len() as i64, blob(vector), at, hash],
         )
         .map_err(|e| failed(&self.path, "write", e))?;
         Ok(())
     }
 
-    /// [`VectorStore::put`] with the content hash of the embedded text (see [`content_hash`]).
-    pub fn put_hashed(
-        &self,
-        _context: &ContextId,
-        _model: &str,
-        _record: &RecordId,
-        _vector: &[f32],
-        _hash: &str,
-    ) -> Result<(), CpdError> {
-        todo!("put_hashed")
-    }
-
     /// The stored content hash of each of `ids` that has a row ('' when unknown).
     pub fn hashes(
         &self,
-        _context: &ContextId,
-        _model: &str,
-        _ids: &[RecordId],
+        context: &ContextId,
+        model: &str,
+        ids: &[RecordId],
     ) -> Result<std::collections::HashMap<RecordId, String>, CpdError> {
-        todo!("hashes")
+        let path = &self.path;
+        let Some(conn) = self.reader()? else {
+            return Ok(Default::default());
+        };
+        let has_hash: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('context_embeddings') WHERE name = 'content_hash'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| failed(path, "read", e))?;
+        let sql = if has_hash == 0 {
+            "SELECT '' FROM context_embeddings WHERE context = ?1 AND model = ?2 AND record = ?3"
+        } else {
+            "SELECT content_hash FROM context_embeddings WHERE context = ?1 AND model = ?2 AND record = ?3"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| failed(path, "read", e))?;
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            match stmt.query_row(params![context.as_str(), model, id.to_string()], |r| {
+                r.get::<_, String>(0)
+            }) {
+                Ok(h) => {
+                    out.insert(id.clone(), h);
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(e) => return Err(failed(path, "read", e)),
+            }
+        }
+        Ok(out)
     }
 
     pub fn get(
@@ -266,6 +321,10 @@ impl VectorStore {
 }
 
 /// Lowercase hex SHA-256 of the exact text sent to the embedder.
-pub fn content_hash(_text: &str) -> String {
-    todo!("content_hash")
+pub fn content_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

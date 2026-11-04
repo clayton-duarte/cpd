@@ -254,7 +254,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 
 | Command | Callers | Cockpit | Internal |
 |---|---|---|---|
-| `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context owner` (§3.14) | Manager, Lead | no | no |
 | `cpd host approve` (§9.17) | | no | yes |
 | `cpd host repair` (§9.17) | Manager | no | no |
@@ -287,6 +286,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
 | `cpd context topics` (§3.3a) | Manager, Lead, Worker | no | no |
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
+| `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.

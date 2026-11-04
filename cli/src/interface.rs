@@ -33,6 +33,7 @@ pub const TABLE: &[Entry] = &[
     ("context pending", &[Lead, Manager], false),
     ("context distill", &[Lead], false),
     ("context curate", &[Lead], false),
+    ("context embed", &[Lead], false),
     ("context owner", &[Lead, Manager], false),
     ("context delete", &[], true),
     ("context reads", &[Lead, Manager, Worker], false),
