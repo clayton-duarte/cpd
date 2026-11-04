@@ -560,7 +560,7 @@ fn run_action(
     tmux.run(&on_client(popup, client)).map(drop)
 }
 
-/// The runner pill (pro-d199): flips `worker_runner` in config.toml, sets `@cpd_runner` at once and redraws the client.
+/// The runner pill (pro-d199): flips `durable_workers` in the `[experimental]` table of config.toml, sets `@cpd_runner` at once and redraws the client.
 fn toggle_runner(home: &CpdHome, tmux: &Tmux, client: &str) -> Result<(), CpdError> {
     let to = cpd_core::config::toggle(home)?;
     tmux.run(&[

@@ -410,6 +410,26 @@ export class Fixture {
     await waitFor("the follower", () => this.follows().length > 0);
   }
 
+  /** Resolves when pi was sent `n` user messages. */
+  async userMessagesSent(n: number): Promise<void> {
+    await waitFor(`${n} user message(s)`, () => this.pi.userMessages.length >= n);
+  }
+
+  /** Resolves when the classifier was called `n` times. */
+  async classifyCalled(n: number): Promise<void> {
+    await waitFor(`${n} classify call(s)`, () => this.pi.classifyCalls.length >= n);
+  }
+
+  /** Resolves when the adapter set the blocked state `label`. */
+  async stateSet(label: string): Promise<void> {
+    await waitFor(`the state ${label}`, () => stateCalls(this).includes(label));
+  }
+
+  /** Resolves when `n` notices whose message contains `part` were shown. */
+  async noticesContaining(part: string, n: number): Promise<void> {
+    await waitFor(`${n} notice(s) containing ${part}`, () => this.pi.noticeLevels.filter((x) => x.message.includes(part)).length >= n);
+  }
+
   /** `--since` of every follower start. */
   sinces(): number[] {
     return this.follows().map((c) => Number(c.since));
@@ -502,6 +522,30 @@ export const ev = (id: number, kind: string, over: Record<string, unknown> = {})
 
 export type FakeDialog = { kind: "select" | "editor"; title: string; options: string[] | undefined; signal: AbortSignal | undefined; settled: boolean; answer(value: string | undefined): void };
 
+/** The options of `sendUserMessage`: `deliverAs` is what the question guard sends its nudge with. */
+export type UserMessageOptions = { expandPromptTemplates?: boolean; deliverAs?: "steer" | "followUp" };
+
+/** What a fake `classify` was called with. */
+export type ClassifyCall = { model: { provider: string; id: string }; context: any; options: any };
+/** What a fake `classify` answers: pi-ai's `ClassifyResult` shape (`stopReason`, `answers`). */
+export type ClassifyBehavior = (call: ClassifyCall) => Promise<unknown>;
+
+/** A classifier that answered: `asking_user` is a bool with `probability`. */
+export const classified = (probability: number): ClassifyBehavior => () => Promise.resolve({ stopReason: "stop", answers: { asking_user: { type: "bool", probability } } });
+/** A classifier call that failed (pi-ai's `error`: the endpoint is unreachable). */
+export const classifyError: ClassifyBehavior = () => Promise.resolve({ stopReason: "error", errorMessage: "fetch failed", answers: {} });
+/** A classifier call that ended `aborted` at once, as the 1500 ms timeout of the call's signal does (the run's own signal is not aborted). */
+export const classifyTimedOut: ClassifyBehavior = () => Promise.resolve({ stopReason: "aborted", answers: {} });
+/** A classifier call that throws. */
+export const classifyThrows: ClassifyBehavior = () => Promise.reject(new Error("classifier blew up"));
+/** A classifier call that never settles until its `signal` aborts, then ends `aborted`. */
+export const classifyUntilAborted: ClassifyBehavior = ({ options }) =>
+  new Promise((resolve) => {
+    const done = () => resolve({ stopReason: "aborted", answers: {} });
+    if (options?.signal?.aborted) done();
+    else options?.signal?.addEventListener("abort", done, { once: true });
+  });
+
 export type Sent = { message: Message; options: SendOptions };
 
 export class FakePi implements PiApi {
@@ -527,6 +571,8 @@ export class FakePi implements PiApi {
   readonly notices: string[] = [];
   /** The notices shown with level `error`. */
   readonly errorNotices: string[] = [];
+  /** Every notice with the level it was shown with. */
+  readonly noticeLevels: { message: string; level: string | undefined }[] = [];
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
@@ -540,7 +586,7 @@ export class FakePi implements PiApi {
   readonly commandErrors: unknown[] = [];
   /** Commands started by `sendUserMessage` and not finished. */
   readonly commandsRunning = new Set<Promise<void>>();
-  readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
+  readonly userMessages: { content: string; options: UserMessageOptions }[] = [];
   mode: Ctx["mode"] = "tui";
   sessionId = ID;
 
@@ -637,10 +683,10 @@ export class FakePi implements PiApi {
   }
 
   /** Like pi: with `expandPromptTemplates` a registered extension command runs at once (not awaited by the sender). */
-  sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void {
+  sendUserMessage(content: string, options: UserMessageOptions): void {
     this.userMessages.push({ content, options });
     notify();
-    const handler = options.expandPromptTemplates && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
+    const handler = options.expandPromptTemplates === true && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
     if (!handler) return;
     const running: Promise<void> = handler("", this.commandCtx())
       .catch((e) => void this.commandErrors.push(e))
@@ -703,6 +749,12 @@ export class FakePi implements PiApi {
   modelAccepted = true;
   /** The models `ctx.modelRegistry.find(provider, id)` knows, as `provider/id`. */
   readonly knownModels = new Set<string>(["p/opus", "p/sonnet", "p/haiku"]);
+  /** The classifier models `ctx.modelRegistry.findOfType("classifier", provider, id)` knows, as `provider/id`. */
+  readonly classifierModels = new Set<string>(["llama.cpp/kev-4b"]);
+  /** Every `ctx.modelRegistry.classify` call, in order. */
+  readonly classifyCalls: ClassifyCall[] = [];
+  /** What `classify` does: by default it answers with probability 0.99. A test sets it, and may set it again between calls. */
+  classifyBehavior: ClassifyBehavior = classified(0.99);
 
   async setModel(model: { provider: string; id: string }): Promise<boolean> {
     this.modelsSet.push(model);
@@ -719,6 +771,7 @@ export class FakePi implements PiApi {
     const ui = {
       notify: (m: string, level?: string) => {
         this.notices.push(m);
+        this.noticeLevels.push({ message: m, level });
         notify();
         if (level === "error") this.errorNotices.push(m);
       },
@@ -730,7 +783,7 @@ export class FakePi implements PiApi {
       editor: (title: string) => this.dialog("editor", title, undefined, undefined),
     };
     // `modelRegistry` is what the adapter reads to find a model (commands.md §15.3 `session-retiered`): pi's `ModelRegistry.find`.
-    const ctx: Ctx & { modelRegistry: { find(provider: string, id: string): { provider: string; id: string } | undefined } } = {
+    const ctx: Ctx & { modelRegistry: { find(provider: string, id: string): { provider: string; id: string } | undefined; findOfType(kind: string, provider: string, id: string): { provider: string; id: string } | undefined; classify(model: { provider: string; id: string }, context: unknown, options?: unknown): Promise<unknown> } } = {
       mode: this.mode,
       cwd: join(tmpdir(), "pi-test-no-such-project"),
       isProjectTrusted: () => this.trusted,
@@ -738,7 +791,16 @@ export class FakePi implements PiApi {
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]>, getBranch: () => this.entries as ReturnType<Ctx["sessionManager"]["getBranch"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
-      modelRegistry: { find: (provider, id) => (this.knownModels.has(`${provider}/${id}`) ? { provider, id } : undefined) },
+      modelRegistry: {
+        find: (provider, id) => (this.knownModels.has(`${provider}/${id}`) ? { provider, id } : undefined),
+        findOfType: (kind, provider, id) => (kind === "classifier" && this.classifierModels.has(`${provider}/${id}`) ? { provider, id } : undefined),
+        classify: (model, context, options) => {
+          const call = { model, context, options };
+          this.classifyCalls.push(call);
+          notify();
+          return this.classifyBehavior(call);
+        },
+      },
     };
     return ctx;
   }

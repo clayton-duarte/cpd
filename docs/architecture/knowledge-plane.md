@@ -78,4 +78,4 @@ The plane is not the state: a Context record is knowledge that outlives the Jobs
 - [commands.md](../commands.md) — §3.5 (`context decide`, `note`, `ask`), §3.6 (`context answer`), §3.13 (`context distill`).
 - [CONTEXT.md](../CONTEXT.md) — Context record, Context store, Distilled Context, Event.
 - [architecture-verification.md](../research/architecture-verification.md) — §8 (the knowledge plane), §11 (the boundaries).
-- Model: `hs-d802` (`cpd context show --record hs-d802`).
+- Model: `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)).

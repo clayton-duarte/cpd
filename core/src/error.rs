@@ -115,6 +115,10 @@ error_codes! {
     ModelsRefreshFailed = "models_refresh_failed" => Failure,
     ModelsNoProvider = "models_no_provider" => Failure,
     ModelsHelperFailed = "models_helper_failed" => Failure,
+    // The Bifrost judge of write-time curation (contract §4.6).
+    JudgeUnreachable = "judge_unreachable" => Failure,
+    JudgeRefused = "judge_refused" => Failure,
+    JudgeBadReply = "judge_bad_reply" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
@@ -346,6 +350,12 @@ error_codes! {
     LeadBranchMoved = "lead_branch_moved" => Refused,
     HeadMoved = "head_moved" => Refused,
     WorkflowNotFound = "workflow_not_found" => NotFound,
+    ClassifierUnreachable = "classifier_unreachable" => Failure,
+    ClassifierRefused = "classifier_refused" => Failure,
+    ClassifierBadReply = "classifier_bad_reply" => Failure,
+    EmbeddingUnreachable = "embedding_unreachable" => Failure,
+    EmbeddingRefused = "embedding_refused" => Failure,
+    EmbeddingBadReply = "embedding_bad_reply" => Failure,
 }
 
 impl fmt::Display for ErrorCode {

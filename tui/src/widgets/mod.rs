@@ -29,6 +29,8 @@ pub(crate) mod inbox;
 #[cfg(test)]
 mod inbox_flat_tests;
 #[cfg(test)]
+mod inbox_loop_guard_tests;
+#[cfg(test)]
 mod inbox_rows_tests;
 #[cfg(test)]
 mod inbox_var_tests;

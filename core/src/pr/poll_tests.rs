@@ -592,3 +592,71 @@ fn a_failed_rebind_leaves_the_workflow_cancelled_and_reports_one_error() {
         rig.errors()
     );
 }
+
+/// [`ReopenGh`] listing `acme/pay#801` OPEN in the search (so the poll keeps a stored open `#801` open), but with no pull request
+/// for any head: `gh pr list --head` answers `[]`.
+struct NoHeadGh(ReopenGh);
+
+impl Handler for NoHeadGh {
+    fn handle(&self, call: &Call) -> Reply {
+        if call.args.starts_with(&["pr".to_owned(), "list".to_owned()]) {
+            return Reply::ok("[]");
+        }
+        self.0.handle(call)
+    }
+}
+
+fn pr_list_calls(rig: &Rig) -> usize {
+    (*rig.fakes.runner)
+        .clone()
+        .calls()
+        .iter()
+        .filter(|c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]))
+        .count()
+}
+
+fn legacy_status(rig: &Rig) -> (String, String) {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT w.status, p.phase FROM workflows w JOIN plans p ON p.id = w.plan WHERE w.key = 'api'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn poll_makes_no_gh_pr_list_call_and_no_error_for_a_legacy_cancelled_workflow() {
+    use crate::workflow::reopen_tests::{cancelled, rig};
+    let rig = rig("done");
+    cancelled(&rig, "pay", "api", None);
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(ReopenGh { state: "CLOSED" }));
+    for _ in 0..2 {
+        poll_once(&rig).unwrap();
+        assert_eq!(pr_list_calls(&rig), 0, "no `gh pr list` for a legacy row");
+        assert!(rig.errors().is_empty(), "{:?}", rig.errors());
+        assert_eq!(legacy_status(&rig), ("cancelled".into(), "done".into()));
+    }
+}
+
+#[test]
+fn poll_skips_a_legacy_cancelled_workflow_not_open_on_github_without_an_error() {
+    use crate::workflow::reopen_tests::{cancelled, rig, stored_pull};
+    let rig = rig("done");
+    cancelled(&rig, "pay", "api", None);
+    // The unowned open row is `acme/pay#801`: the scripted search lists it OPEN, so the poll keeps it open.
+    stored_pull(&rig, 801, "open");
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(NoHeadGh(ReopenGh { state: "OPEN" })));
+    for _ in 0..2 {
+        poll_once(&rig).unwrap();
+        assert!(rig.errors().is_empty(), "{:?}", rig.errors());
+        assert_eq!(legacy_status(&rig), ("cancelled".into(), "done".into()));
+    }
+}
