@@ -194,9 +194,15 @@ fn a_prose_target_already_superseded_is_not_refused() {
 fn a_prose_target_of_an_unsupersedable_kind_or_unknown_id_is_not_refused() {
     let fx = two();
     assert_unlinked_refused(&fx);
-    write(&fx, "ask", "Why?");
-    // hs-q1 is a question: a decision may not supersede it; hs-d9 does not exist.
-    decide(&fx, "New. Supersedes hs-q1 and hs-d9.", &[]).ok();
+    // hs-d1 is a decision: a note may not supersede it; hs-d9 does not exist.
+    fx.cpd(&[
+        "context",
+        "note",
+        "New. Supersedes hs-d1 and hs-d9.",
+        "--context",
+        CTX,
+    ])
+    .ok();
 }
 
 #[test]

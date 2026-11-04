@@ -237,7 +237,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 ### 1.5 Text arguments
 
-Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
+Free text (Job `--title`, `--reason`, Context record text, Escalation questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
 
 ## 2. Command index
 
@@ -296,7 +296,7 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 **Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's records for this machine and letter (§2.1). The write transaction makes it race-free; only this machine writes its letter sequence.
 
-**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Also, a `decide` or `note` whose trimmed text and `supersedes` list equal an in-force record of the same kind (any machine or session) returns that record with `"already": true`; a different kind, list or text, or a record out of force does not dedupe. Any other write appends a new record; records are never edited.
+**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes` and `by.session`. Also, a `decide` or `note` whose trimmed text and `supersedes` list equal an in-force record of the same kind (any machine or session) returns that record with `"already": true`; a different kind, list or text, or a record out of force does not dedupe. Any other write appends a new record; records are never edited.
 
 ### 3.1 `context new`
 
@@ -340,7 +340,7 @@ No flags, no preconditions, no effects (one read transaction).
 ```json
 {"ok": true, "contexts": [
   {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "archived_at": null,
-   "records": 57, "open_questions": 2,
+   "records": 57,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
@@ -367,16 +367,15 @@ cpd context show [<record>] [--context <id>] [--since <seq>] [--record <id>] [--
 Effects: no Context record changes. Read log (best-effort): with a Session in `CPD_SESSION`, else `PI_SESSION_ID`, that parses as a SessionId and is a row of `sessions` (otherwise nothing is logged and nothing is an error; this is **the Session rule**, which §3.4, §3.5, §4.1, §5.1 and §10.13 refer to), it appends `context_reads` rows (contract §4.4, §4.6 "Reads"): channel `show` for `--record <id>` and for `--topic <t>`, one row per record shown; channel `pushed` for `--since <seq> --pushed`, one row per record the output holds; a bare `--since` without `--pushed` logs nothing. A failed log never fails the command and never changes its output or exit status. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
 
 1. `# <title>` with the Jira key, as before.
-2. `## Open questions`: every open question, never capped.
-3. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
-4. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
-5. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
-6. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
-7. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> answered questions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a question under Answered questions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all four counts are zero.
+2. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
+3. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
+4. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
+5. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
+6. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all three counts are zero.
 
-Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the open questions, the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, answered questions with their answers, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "answered_questions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
+Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
 
-`--all` is the former output, byte for byte: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions, Open questions, Answered questions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
+`--all` is the full history: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -401,7 +400,7 @@ Idempotent: read-only.
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 and `context answer` (§3.6) are unchanged.
+**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 are unchanged.
 
 ```json
 {"ok": false, "error": {"code": "record_not_found", "message": "Context building-cpd has no record pro-d7. pro-d7 belongs to machine pro; this machine is hs, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.", "details": {"context": "building-cpd", "record": "pro-d7", "record_machine": "pro", "local_machine": "hs"}}}
@@ -484,17 +483,16 @@ Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `reco
 
 Idempotent: yes; a rerun with nothing new to index returns the same records.
 
-### 3.5 `context decide`, `context note`, `context ask`
+### 3.5 `context decide`, `context note`
 
 ```
 cpd context decide <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
 cpd context note <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
-cpd context ask <question> [--context <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
-| `<text>`, `<question>` | the record's `text` (§1.5) |
+| `<text>` | the record's `text` (§1.5) |
 | `--supersedes <record>` | `decide` and `note`: the id of an earlier record this one replaces (recency wins, contract §2.2). Repeatable: `--supersedes hs-d2 --supersedes hs-d5`, or the comma form `--supersedes hs-d2,hs-d5` (ids hold no comma), or both. A decision may replace a decision or a note of the Context; a note may replace a note only |
 | `--no-supersedes` | `decide` and `note`: a bool flag that confirms the text names no record this one replaces, so the prose check below is skipped. Conflicts with `--supersedes` (`usage`) |
 
@@ -517,7 +515,7 @@ cpd context ask <question> [--context <id>]
 - The retry is decided first: an identical latest record is returned as `already` even when its text would fail the check.
 
 
-Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux. Then, best-effort, the citation marking (the Session rule of §3.3): for the writing Session, `used` = 1 on its `context_reads` rows of each record it read whose id the new record's text cites (`RecordId::scan`, contract §2.1), except the new record's own id and its `--supersedes` targets. The User (no Session) marks nothing. A failed marking never fails the command or changes its output or exit status.
+Effects: the record write above (one transaction), with kind `decision` (letter `d`) or `note` (`n`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux. Then, best-effort, the citation marking (the Session rule of §3.3): for the writing Session, `used` = 1 on its `context_reads` rows of each record it read whose id the new record's text cites (`RecordId::scan`, contract §2.1), except the new record's own id and its `--supersedes` targets. The User (no Session) marks nothing. A failed marking never fails the command or changes its output or exit status.
 
 ```json
 {"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": ["hs-d2", "hs-d5"]}, "seq": 58}
@@ -2067,7 +2065,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ## 8. `ask` and `answer`
 
-Escalations from a Worker to its Lead (§2.2, §3.5). The Context's `context ask` / `context answer` (§3.5, §3.6) are records, not Escalations.
+Escalations from a Worker to its Lead (§2.2, §3.5).
 
 ### 8.1 `ask`
 

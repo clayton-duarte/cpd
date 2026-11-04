@@ -144,7 +144,7 @@ fn before() -> (tempfile::TempDir, CpdHome, Store) {
 /// its Attempt and Worker, records with links, curations, retirements, inbox items, a board post, Events), an
 /// archived `host` (13 records), a live `host-2` (7 records and a decision), an archived `cpd`, an archived
 /// `old`, a live `other`; and, with `codereview`, an archived `codereview` that has its own live Manager,
-/// an archived Plan and records `box-n1..n4`, `box-d1`, `box-q1`. `root` is the cwd of the sessions that are
+/// an archived Plan and records `box-n1..n4`, `box-d1`. `root` is the cwd of the sessions that are
 /// "in the CPD_HOME".
 fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
     let mut sql = format!(
@@ -227,29 +227,13 @@ fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
         None,
         None,
     );
-    sql += &record(
-        "eec-codereview",
-        "box-q1",
-        "question",
-        "e question 1",
-        None,
-        None,
-    );
-    sql += &record(
-        "eec-codereview",
-        "box-a1",
-        "answer",
-        "e answer 1",
-        None,
-        Some("box-q1"),
-    );
     sql += "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at) VALUES
           ('eec-codereview', 'box-n1', 'superseded', 'box-n3', 'pending', 't'),
           ('eec-codereview', 'box-n2', 'duplicate', 'box-d1', 'pending', 't'),
           ('eec-codereview', 'box-n3', 'documented', 'docs/box-n1.md', 'pending', 't');
         INSERT INTO record_curations (context, record, topic, short, curated_at) VALUES
-          ('eec-codereview', 'box-q1', 'topic', 'short', 't'),
-          ('eec-codereview', 'box-a1', 'topic', 'short', 't');
+          ('eec-codereview', 'box-d1', 'topic', 'short', 't'),
+          ('eec-codereview', 'box-n1', 'topic', 'short', 't');
         INSERT INTO inbox_items (kind, urgency, subject, context, record, label, opened_at) VALUES
           ('curate-retire', 'blue', 's1', 'eec-codereview', 'box-n1', 'l', 't');
         INSERT INTO inbox_items (kind, urgency, subject, context, plan, job, label, opened_at) VALUES
@@ -394,14 +378,6 @@ fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
             None,
             None,
         );
-        sql += &record(
-            "codereview",
-            "box-q1",
-            "question",
-            "cr question 1",
-            None,
-            None,
-        );
     }
     write(store, &sql).unwrap();
 }
@@ -503,7 +479,7 @@ fn eec_codereview_moves_to_codereview_in_every_table() {
             &mut store,
             "SELECT id FROM context_records WHERE context = 'codereview' ORDER BY seq"
         ),
-        ["box-n1", "box-n2", "box-n3", "box-d1", "box-q1", "box-a1"]
+        ["box-n1", "box-n2", "box-n3", "box-d1"]
     );
     assert_eq!(
         rows(
@@ -647,21 +623,21 @@ fn moving_into_an_existing_codereview_merges_instead_of_aborting() {
             &mut store,
             "SELECT count(*) FROM context_records WHERE context = 'codereview'"
         ),
-        12
+        9
     );
     assert_eq!(
         count(
             &mut store,
             "SELECT count(*) FROM context_records WHERE context = 'codereview' AND text LIKE 'e %'"
         ),
-        6
+        4
     );
     assert_eq!(
         count(
             &mut store,
             "SELECT count(*) FROM context_records WHERE context = 'codereview' AND text LIKE 'cr %'"
         ),
-        6
+        5
     );
     assert_eq!(
         strings(
@@ -830,33 +806,23 @@ fn text_of(store: &mut Store, context: &str, body: &str) -> String {
 fn a_renumbered_record_is_re_pointed_in_every_column_that_holds_a_record_id() {
     let (_dir, home) = old_store(true);
     let mut store = migrated(&home);
-    // codereview has n1..n4, d1, q1: eec's n1, n2, n3, d1, q1 collide and take n5, n6, n7, d2, q2; a1 stays
+    // codereview has n1..n4, d1: eec's n1, n2, n3, d1 collide and take n5, n6, n7, d2
     for (body, id) in [
         ("e note 1", "box-n5"),
         ("e note 2", "box-n6"),
         ("e note 3", "box-n7"),
         ("e decision 1", "box-d2"),
-        ("e question 1", "box-q2"),
-        ("e answer 1", "box-a1"),
         ("cr note 1", "box-n1"),
-        ("cr question 1", "box-q1"),
     ] {
         assert_eq!(text_of(&mut store, "codereview", body), id, "{body}");
     }
-    // context_records.supersedes and .question
+    // context_records.supersedes
     assert_eq!(
         text(
             &mut store,
             "SELECT supersedes FROM context_records WHERE context = 'codereview' AND text = 'e note 3'"
         ),
         "box-n5"
-    );
-    assert_eq!(
-        text(
-            &mut store,
-            "SELECT question FROM context_records WHERE context = 'codereview' AND text = 'e answer 1'"
-        ),
-        "box-q2"
     );
     // record_retirements.record and .target (a `documented` target is not a record id)
     assert_eq!(
@@ -876,7 +842,7 @@ fn a_renumbered_record_is_re_pointed_in_every_column_that_holds_a_record_id() {
             &mut store,
             "SELECT record FROM record_curations WHERE context = 'codereview' ORDER BY record"
         ),
-        ["box-a1", "box-q2"]
+        ["box-d2", "box-n5"]
     );
     // inbox_items.record
     assert_eq!(

@@ -100,7 +100,6 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let Some(b) = &bounded {
         out["omitted"] = json!({
             "superseded_decisions": b.omitted.superseded_decisions,
-            "answered_questions": b.omitted.answered_questions,
             "superseded_notes": b.omitted.superseded_notes,
             "older_notes": b.omitted.older_notes,
             "done_plans": b.omitted.done_plans,

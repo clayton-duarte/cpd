@@ -36,7 +36,7 @@ pub struct SearchArgs {
     /// At most this many records; 0 is every match
     #[arg(long, value_name = "n", default_value_t = 20)]
     limit: u32,
-    /// Only these kinds, comma-separated [default: decision,note,question,answer]
+    /// Only these kinds, comma-separated [default: decision,note]
     #[arg(long, value_name = "k,k", value_delimiter = ',')]
     kind: Vec<String>,
     /// Include the records out of force, labelled
@@ -230,15 +230,10 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
 fn kinds(names: &[String]) -> Result<HashSet<&'static str>, CpdError> {
     if names.is_empty() {
-        return Ok([
-            RecordKind::Decision,
-            RecordKind::Note,
-            RecordKind::Question,
-            RecordKind::Answer,
-        ]
-        .into_iter()
-        .map(RecordKind::as_str)
-        .collect());
+        return Ok([RecordKind::Decision, RecordKind::Note]
+            .into_iter()
+            .map(RecordKind::as_str)
+            .collect());
     }
     let mut kinds = HashSet::new();
     for name in names {
@@ -364,10 +359,7 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
 
 /// Whether a record kind is ever in force (`inforce.rs`).
 fn force_kind(kind: RecordKind) -> bool {
-    matches!(
-        kind,
-        RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
-    )
+    matches!(kind, RecordKind::Decision | RecordKind::Note)
 }
 
 /// The curated short form, else the record's first line at most 120 bytes.
