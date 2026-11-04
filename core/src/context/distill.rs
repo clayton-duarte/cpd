@@ -1284,7 +1284,7 @@ mod tests {
             "2026-10-03T10:00:00.000Z",
             "Use it.",
             Draft::Decision {
-                supersedes: Some(RecordId::parse("hs-d1").unwrap()),
+                supersedes: vec![RecordId::parse("hs-d1").unwrap()],
             },
         );
         assert_eq!(
