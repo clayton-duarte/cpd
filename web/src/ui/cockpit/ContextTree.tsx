@@ -93,8 +93,9 @@ export function ContextTree(props: {
   selectedPlanId: string | null;
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
+  onNewContext?: () => void;
 }): ReactElement {
-  const { tree, ...handlers } = props;
+  const { tree, onNewContext: _onNewContext, ...handlers } = props;
   if (tree === null) return <nav aria-label="Context tree">Loading contexts…</nav>;
   const live = tree.contexts.filter((c) => !c.archived);
   const archived = tree.contexts.filter((c) => c.archived);
