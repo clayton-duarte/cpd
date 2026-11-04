@@ -38,6 +38,9 @@ mod delete;
 pub mod distill;
 #[cfg(test)]
 mod distill_git_tests;
+mod distill_known;
+#[cfg(test)]
+mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
 pub mod engine;

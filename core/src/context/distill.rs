@@ -6,7 +6,7 @@
 //! holds `locks/distill-<context>.lock`, a `flock(2)` lock the kernel frees when
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::curation::{Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting};
+use super::distill_known::known_md;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
 use crate::config::{Config, Letter, Tier};
@@ -161,7 +162,7 @@ pub struct State {
     records: Vec<Indexed>,
     retired: HashSet<RecordId>,
     /// `record id -> (topic, short)` of every curated record.
-    curated: HashMap<RecordId, (String, String)>,
+    pub(super) curated: HashMap<RecordId, (String, String)>,
 }
 
 impl State {
@@ -208,7 +209,7 @@ impl State {
             .collect()
     }
 
-    fn in_force(&self) -> Vec<&Indexed> {
+    pub(super) fn in_force(&self) -> Vec<&Indexed> {
         self.highest().map_or_else(Vec::new, |h| {
             inforce::in_force_without(&self.records, h, &self.retired)
         })
@@ -464,7 +465,7 @@ impl Run<'_> {
         let hits = self.grep_hits(&batch_records)?;
         let dir = self.home.context_digest_dir(self.context);
         fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
-        self.write_inputs(&dir, &batch_records, &in_force, state, &hits)?;
+        self.write_inputs(&dir, &batch_records, state, &hits)?;
         let batch = Batch {
             records: &batch_records,
             in_force: in_force
@@ -561,20 +562,10 @@ impl Run<'_> {
         &self,
         dir: &Path,
         batch: &[&Indexed],
-        in_force: &[&Indexed],
         state: &State,
         hits: &HashMap<RecordId, Vec<String>>,
     ) -> Result<(), CpdError> {
-        let mut known: Vec<(&str, String)> = Vec::new();
-        for (_, record) in in_force {
-            if let Some((topic, short)) = state.curated.get(&record.id) {
-                known.push((topic, format!("[{}] {topic} | {short}\n", record.id)));
-            }
-        }
-        let topics: BTreeSet<&str> = known.iter().map(|(t, _)| *t).collect();
-        let mut known_md: String = topics.iter().map(|t| format!("{t}\n")).collect();
-        known_md.push('\n');
-        known_md.extend(known.iter().map(|(_, line)| line.as_str()));
+        let known_md = known_md(state, batch)?;
         let mut docs_md = String::new();
         for (_, record) in batch {
             docs_md.push_str(&format!("[{}]\n", record.id));

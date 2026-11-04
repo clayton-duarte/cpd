@@ -1809,3 +1809,53 @@ fn the_fake_pi_reads_its_inputs_answers_as_pi_json_and_appends_stderr_to_the_log
     pi.handle(&call);
     assert_eq!(fs::read_to_string(&log).unwrap(), "boom\nagain\n");
 }
+
+#[test]
+fn a_step_over_80_curated_sends_only_neighbours_in_known_md() {
+    let fx = fx().one_step();
+    // 100 curated records, each with a topic of its own and a rare token; then 2 uncurated, naming tokens 40 and 7.
+    fx.store()
+        .write("fixture", |tx| {
+            for n in 1..=100 {
+                tx.execute(
+                    "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', ?1, 'note', ?2, 'hs', ?3)",
+                    (format!("hs-n{n}"), ago(1000), format!("Record {n} about zq{n}x.")),
+                )?;
+                tx.execute(
+                    "INSERT INTO record_curations (context, record, topic, short, curated_at) VALUES ('ctx', ?1, ?2, ?3, 't')",
+                    (format!("hs-n{n}"), format!("tp{n:03}"), format!("short zq{n}x")),
+                )?;
+            }
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    fx.insert(
+        CONTEXT,
+        "hs-n201",
+        &ago(100),
+        "Batch one: zq40x.",
+        Draft::Note,
+    );
+    fx.insert(
+        CONTEXT,
+        "hs-n202",
+        &ago(99),
+        "Batch two: zq7x.",
+        Draft::Note,
+    );
+    fx.pi.curates_all();
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["distilled"], true, "{out}");
+    let known = seen(&fx, "known.md");
+    for n in 1..=100 {
+        let topic = format!("tp{n:03}");
+        assert!(known.lines().any(|l| l == topic), "topic {topic}: {known}");
+    }
+    let lines: Vec<&str> = known.lines().filter(|l| l.starts_with('[')).collect();
+    assert_eq!(
+        lines,
+        ["[hs-n7] tp007 | short zq7x", "[hs-n40] tp040 | short zq40x"],
+        "{known}"
+    );
+}
