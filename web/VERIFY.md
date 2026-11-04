@@ -175,7 +175,7 @@ Covered by Phase 2: C1 to C7. Measure in Chrome DevTools Performance on the larg
 
 ## 6. Phase 3/4 checklist (high-fidelity Dango v3)
 
-Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide and 800 px high; DevTools open for the steps that name it. Have a Plan in phase `dispatch` with at least two Workflows (one with a failed Job, one with a queued Job), a Lead session on the durable runner, an inbox with items of several urgencies, and (step 18 to 20) the ability to make a durable agent call `ask_user_question` and `cpd_plan_review`. Specification: [`src/ui/DESIGN.md`](./src/ui/DESIGN.md) (foundation and shell), `src/ui/DESIGN-panes.md`, `src/ui/DESIGN-chat.md`, `src/ui/DESIGN-compose.md`. Measure sizes with DevTools (Elements, computed style). Record results in 6.2.
+Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide and 800 px high; DevTools open for the steps that name it. Have a Plan in phase `dispatch` with at least two Workflows (one with a failed Job, one with a queued Job), a Lead session on the durable runner, an inbox with items of several urgencies, and (steps 19 and 20) the ability to make a durable agent call `ask_user_question` and `cpd_plan_review`. Specification: [`src/ui/DESIGN.md`](./src/ui/DESIGN.md) (foundation and shell), `src/ui/DESIGN-panes.md`, `src/ui/DESIGN-chat.md`, `src/ui/DESIGN-compose.md`. Measure sizes with DevTools (Elements, computed style). Record results in 6.2.
 
 ### 6.1 Steps
 
