@@ -1,10 +1,16 @@
 import type { AttentionCounts } from "./attention.ts";
+import { join } from "node:path";
 import type { UiMode } from "./channels.ts";
 
 export interface AssetPaths { icon: string; tray: string; trayAttention: string }
 
-export function resolveAssetPaths(_o: { packaged: boolean; resourcesPath: string; appPath: string }): AssetPaths {
-  throw new Error("not implemented");
+export function resolveAssetPaths(o: { packaged: boolean; resourcesPath: string; appPath: string }): AssetPaths {
+  const base = o.packaged ? o.resourcesPath : join(o.appPath, "build");
+  return {
+    icon: join(base, "icon.png"),
+    tray: join(base, "tray", "trayTemplate.png"),
+    trayAttention: join(base, "tray", "trayAttentionTemplate.png"),
+  };
 }
 
 export interface ImageLike { setTemplateImage(template: boolean): void }
@@ -26,10 +32,48 @@ export interface NativeShellDeps {
 }
 export interface NativeShell { setAttention(c: AttentionCounts): void; dispose(): void }
 
-export function setupNativeShell(_deps: NativeShellDeps): NativeShell {
-  throw new Error("not implemented");
+export function setupNativeShell(deps: NativeShellDeps): NativeShell {
+  const { app, actions } = deps;
+  deps.nativeTheme.themeSource = "dark";
+  app.setAboutPanelOptions({ applicationName: "cpd", applicationVersion: app.getVersion(), credits: "Continuous Parallel Delivery" });
+  if (deps.platform !== "darwin") return { setAttention() {}, dispose() {} };
+
+  app.dock?.setIcon(deps.assets.icon);
+  const normal = deps.nativeImage.createFromPath(deps.assets.tray);
+  normal.setTemplateImage(true);
+  const attention = deps.nativeImage.createFromPath(deps.assets.trayAttention);
+  attention.setTemplateImage(true);
+  const tray = deps.createTray(normal);
+  tray.setToolTip("cpd");
+  tray.setContextMenu(deps.buildMenu([
+    { label: "Open cockpit", click: () => actions.openCockpit() },
+    { label: "Switch to TUI", click: () => actions.setMode("tui") },
+    { label: "Switch to WebUI", click: () => actions.setMode("webui") },
+    { type: "separator" },
+    { label: "Quit cpd", click: () => actions.quit() },
+  ]));
+
+  let previousBlocking: number | null = null;
+  let destroyed = false;
+  return {
+    setAttention(c) {
+      const needsYou = c.blocking + c.decisions;
+      app.dock?.setBadge(needsYou > 0 ? String(needsYou) : "");
+      tray.setImage(needsYou > 0 ? attention : normal);
+      if (previousBlocking !== null && c.blocking > previousBlocking && !deps.isWindowFocused()) app.dock?.bounce("informational");
+      previousBlocking = c.blocking;
+    },
+    dispose() {
+      if (destroyed) return;
+      destroyed = true;
+      tray.destroy();
+    },
+  };
 }
 
-export function createExternalLinkHandler(_openExternal: (url: string) => unknown): (details: { url: string }) => { action: "deny" } {
-  throw new Error("not implemented");
+export function createExternalLinkHandler(openExternal: (url: string) => unknown): (details: { url: string }) => { action: "deny" } {
+  return (details) => {
+    openExternal(details.url);
+    return { action: "deny" };
+  };
 }
