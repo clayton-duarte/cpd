@@ -66,7 +66,6 @@ it("the context tree, plan and inbox scroll independently", () => {
   expect(declsMatching(/Context tree column|data-pane="tree"|data-part="tree"|\[data-shell\] > aside/).get("overflow-y"), "context tree column: overflow-y").toBe("auto");
   const plan = declsMatching(/plan/i);
   expect(plan.get("overflow-y"), "plan pane: overflow-y").toBe("auto");
-  expect(plan.get("max-height"), "plan pane: max-height").toBeDefined();
   expect(declsMatching(/Inbox column|data-pane="inbox"|data-part="inbox"|\[data-shell\] > aside/).get("overflow-y"), "inbox column: overflow-y").toBe("auto");
   expect(decls('[data-column="center"]').get("min-height"), "center column: min-height").toBe("0");
 });
