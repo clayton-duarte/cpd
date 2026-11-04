@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 104
+-- cpd-migration: breaking after 106
 -- workflow-base-retarget (pro-d379): after the lock a waiting, dispatch or open Workflow's `base` may change to any other
 -- value while its plan, key, repo and lead_branch stay; `workflows_locked` drops the conditions about another Workflow's lead branch.
 DROP TRIGGER workflows_locked;
