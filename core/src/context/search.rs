@@ -219,6 +219,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
             }
         })
         .collect();
+    let fts_start = ports.clock.now();
     let ranked = fts::rank(&docs, &query)?;
     let named = snap
         .records
@@ -240,23 +241,45 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     .into_iter()
     .map(|hit| hit.id)
     .collect();
-    let lexical = fts::floor(
-        filter(ranked, &snap, &kinds, args.all, named.as_deref()),
-        named.as_deref(),
-    );
-    let (kept, mode, semantic_error) = match semantic(
+    let pending_hidden = if args.all {
+        0
+    } else {
+        filter(ranked.clone(), &snap, &kinds, true, named.as_deref())
+            .iter()
+            .filter(|hit| {
+                snap.hidden.contains(&hit.id) && named.as_deref() != Some(hit.id.as_str())
+            })
+            .count() as u64
+    };
+    let unfloored = filter(ranked, &snap, &kinds, args.all, named.as_deref());
+    let candidates = unfloored.len() as u64;
+    let lexical = fts::floor(unfloored, named.as_deref());
+    let floor_dropped = candidates - lexical.len() as u64;
+    let fts_ms = ports
+        .clock
+        .now()
+        .saturating_duration_since(fts_start)
+        .as_millis() as u64;
+    let (kept, mode, semantic_error, embed_ms, embed_tokens) = match semantic(
         &SemanticInput {
             home: &home,
             config: &config,
             runner: &ports.runner,
             context: &context,
             query: &query,
+            clock: &ports.clock,
         },
         &visible,
     )? {
-        Semantic::None => (lexical, "fts", None),
-        Semantic::Failed(code) => (lexical, "fts-only", Some(code)),
-        Semantic::List(list) => (rrf(&lexical, &list, named.as_deref()), "hybrid", None),
+        Semantic::None => (lexical, "fts", None, None, None),
+        Semantic::Failed(code) => (lexical, "fts-only", Some(code), None, None),
+        Semantic::List(list, ms, tokens) => (
+            rrf(&lexical, &list, named.as_deref()),
+            "hybrid",
+            None,
+            Some(ms),
+            tokens,
+        ),
     };
     let hits = hits_of(kept, &snap);
 
@@ -282,19 +305,22 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         Channel::Search,
         &reads::search_reads(&page_hits),
     );
-    // Stub: the row's figures are not measured yet.
+    let session = reads::env_session(&mut store).map(|id| id.to_string());
+    let at = crate::clock::timestamp(ports.clock.utc());
+    // Best-effort: a vectors.db failure never fails the search.
     let _ = VectorStore::at(&home).log_search(&SearchLogRow {
+        at: &at,
         context: &context,
-        session: None,
+        session: session.as_deref(),
         query: &query,
         hybrid: mode == "hybrid",
-        candidates: 0,
-        floor_dropped: 0,
-        pending_hidden: 0,
-        hits: 0,
-        fts_ms: 0,
-        embed_ms: None,
-        embed_tokens: None,
+        candidates,
+        floor_dropped,
+        pending_hidden,
+        hits: page.len() as u64,
+        fts_ms,
+        embed_ms,
+        embed_tokens,
     });
     let mut out = json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
@@ -316,7 +342,8 @@ enum Semantic {
     /// Vectors exist but could not be used; the error code.
     Failed(String),
     /// The semantic list over the visible records.
-    List(Vec<Scored>),
+    /// With the embed time in ms and the embed tokens.
+    List(Vec<Scored>, u64, Option<u64>),
 }
 
 /// What the vector leg reads.
@@ -326,6 +353,7 @@ struct SemanticInput<'a> {
     runner: &'a std::sync::Arc<dyn crate::host::runner::Runner>,
     context: &'a ContextId,
     query: &'a str,
+    clock: &'a std::sync::Arc<dyn crate::clock::Clock>,
 }
 
 /// The vector leg: the visible records' vectors, then the embedded query against them.
@@ -345,17 +373,27 @@ fn semantic(input: &SemanticInput<'_>, visible: &[String]) -> Result<Semantic, C
     if vectors.is_empty() {
         return Ok(Semantic::None);
     }
+    let started = input.clock.now();
     let embedded = bifrost_embedder(input.config, input.runner)
         .and_then(|embedder| embedder.embed(input.query, DIMS));
-    let query = match embedded {
-        Ok(embedded) => embedded.vector,
+    let embed_ms = input
+        .clock
+        .now()
+        .saturating_duration_since(started)
+        .as_millis() as u64;
+    let (query, tokens) = match embedded {
+        Ok(embedded) => (embedded.vector, embedded.tokens),
         Err(e) => return Ok(Semantic::Failed(e.code().as_str().to_owned())),
     };
     let vectors: Vec<(String, Vec<f32>)> = vectors
         .into_iter()
         .map(|(id, v)| (id.to_string(), v))
         .collect();
-    Ok(Semantic::List(semantic_list(&query, &vectors)))
+    Ok(Semantic::List(
+        semantic_list(&query, &vectors),
+        embed_ms,
+        tokens,
+    ))
 }
 
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
