@@ -98,6 +98,23 @@ pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
         .optional()?)
 }
 
+/// How old the last post of a review thread must be before the pull request reads `review overdue` (24 h).
+pub const BUMP_INTERVAL_SECS: u64 = 86_400;
+
+/// A SQL condition: the Workflow row `wf` has a post whose `COALESCE(last_posted_at, posted_at)` is before the
+/// parameter `due_before`, its Workflow is open, its Plan unarchived and the pull request row `pr` open, non-draft and unreviewed.
+#[must_use]
+pub fn overdue_sql(pr: &str, wf: &str, due_before: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM pr_posts p JOIN workflows w ON w.plan = p.plan AND w.key = p.workflow
+                   JOIN plans l ON l.id = p.plan
+                  WHERE p.plan = {wf}.plan AND p.workflow = {wf}.key
+                    AND COALESCE(p.last_posted_at, p.posted_at) < {due_before}
+                    AND w.status = 'open' AND l.archived_at IS NULL
+                    AND {pr}.state = 'open' AND {pr}.draft = 0 AND {pr}.review_decision = 'none')"
+    )
+}
+
 /// A post due for a repeat bump: the thread (`ts`) of the first post in `channel`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bump {

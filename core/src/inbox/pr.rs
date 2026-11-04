@@ -1,7 +1,10 @@
 //! The authored pull request rule (contract §2.2 "The authored pull request rule", pro-d130, pro-d131): one `pr-ready`
 //! condition per open authored pull request, its urgency and label by the STATUS table.
 
+use std::time::Duration;
+
 use rusqlite::Connection;
+use time::OffsetDateTime;
 
 use super::model::{Condition, Item, Kind, Urgency};
 use super::rules::id;
@@ -9,6 +12,7 @@ use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::ids::{ContextId, PlanId, SessionId, WorkflowKey};
 use crate::pr::postable::unready;
+use crate::pr::posts::{self, BUMP_INTERVAL_SECS};
 use crate::pr::pulls::{self, PullRequest};
 
 /// The state of an authored pull request: the word of the row's label and the colour of its urgency.
@@ -93,15 +97,23 @@ pub const OVERDUE_TEXT: &str = "review overdue";
 /// The urgency and Row 1 tail of a pull request row's status; `OVERDUE_TEXT` replaces `waiting for peer review` when overdue.
 #[must_use]
 pub fn row(status: Status, overdue: bool) -> (Urgency, &'static str) {
-    let _ = (status, overdue);
-    todo!("pr-post-bump: the overdue label")
+    if overdue && status == Status::InReview {
+        (status.urgency(), OVERDUE_TEXT)
+    } else {
+        (status.urgency(), status.text())
+    }
 }
 
 /// A `pr-ready` item whose Row 1 tail is `OVERDUE_TEXT`.
 #[must_use]
 pub fn is_overdue(item: &Item) -> bool {
-    let _ = item;
-    todo!("pr-post-bump: the overdue label")
+    item.kind == Kind::PrReady
+        && item
+            .label
+            .split('\n')
+            .next()
+            .and_then(|first| first.split_once(' '))
+            .is_some_and(|(_, text)| text == OVERDUE_TEXT)
 }
 
 /// What the table reads of a pull request besides its row.
@@ -158,7 +170,12 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
 
 /// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
 /// that points to it). A policy that does not resolve counts as post disabled.
-pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+pub fn conditions(
+    conn: &Connection,
+    home: &CpdHome,
+    now: OffsetDateTime,
+) -> Result<Vec<Condition>, CpdError> {
+    let due_before = crate::clock::timestamp(now - Duration::from_secs(BUMP_INTERVAL_SECS));
     let columns: Vec<String> = pulls::COLUMNS
         .split(", ")
         .map(|c| format!("r.{c}"))
@@ -168,7 +185,8 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
                 COALESCE(s.state = 'working', 0)
                   OR EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.workflow = o.key
                                 AND j.kind IN ('update', 'work') AND j.status IN ('queued', 'running')),
-                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key)
+                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key),
+                {}
            FROM pull_requests r
            LEFT JOIN workflows o ON o.rowid = (SELECT n.rowid FROM workflows n JOIN plans np ON np.id = n.plan
                                           WHERE n.pull_request = r.id
@@ -179,16 +197,21 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
           ORDER BY r.id",
         columns.join(", "),
         pulls::ready_to_merge_sql("r"),
+        posts::overdue_sql("r", "o", "?1"),
     ))?;
     let width = pulls::COLUMNS.split(", ").count();
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query([&due_before])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let pull = PullRequest::from_row(row)?;
         let clean: bool = row.get(width)?;
         let get = |i: usize| row.get::<_, Option<String>>(width + i);
         let (plan, key, context, lead) = (get(1)?, get(2)?, get(3)?, get(4)?);
-        let (handled, posted): (bool, bool) = (row.get(width + 5)?, row.get(width + 6)?);
+        let (handled, posted, overdue): (bool, bool, bool) = (
+            row.get(width + 5)?,
+            row.get(width + 6)?,
+            row.get(width + 7)?,
+        );
         let plan = plan
             .as_deref()
             .map(|p| id("Plan id", p, PlanId::parse))
@@ -211,15 +234,16 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
                     .is_ok_and(|p| p.pr.post.enabled)
             })
         });
+        let (urgency, text) = self::row(status, overdue);
         let name = pull
             .repo
             .split_once('/')
             .map_or(pull.repo.as_str(), |(_, name)| name);
         out.push(Condition {
             kind: Kind::PrReady,
-            urgency: status.urgency(),
+            urgency,
             subject: format!("pr:{}#{}", pull.repo, pull.number),
-            label: format!("{name}#{} {}\n{}", pull.number, status.text(), pull.title),
+            label: format!("{name}#{} {}\n{}", pull.number, text, pull.title),
             url: Some(pull.url.clone()),
             context: context
                 .as_deref()
