@@ -13,6 +13,7 @@ mod attempt;
 mod attempt_abort;
 mod attempt_abort_teardown;
 mod config;
+mod config_experimental;
 mod context;
 mod context_curation;
 mod context_dedupe;
