@@ -16,7 +16,7 @@ it("a session-message sent by the web chat is a user message even when from is a
       at: "2026-11-03T20:28:42.459Z",
       kind: "session-message",
       text: "Message from cpd-context: hello from the web",
-      data: { from: "75b61f97-8377-4feb-97e6-2f1c1d1ed439", text: "hello from the web", wake: true },
+      data: { from: "75b61f97-8377-4feb-97e6-2f1c1d1ed439", text: "hello from the web", wake: true, unblocks: "User message from the web chat" },
     },
   });
   const { items } = normalizeText(text);
