@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ContextNode, ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
 import { ContextTree } from "./ContextTree.tsx";
@@ -49,6 +49,19 @@ const live: ContextNode = {
 const archivedCtx: ContextNode = { ...live, id: "c2", title: "Old Context", archived: true, sessions: [], plans: [] };
 const tree: ContextTreeModel = { cursor: 1, contexts: [live, archivedCtx] };
 
+beforeEach(() => {
+  const m = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    get length() { return m.size; },
+    clear: () => m.clear(),
+    getItem: (k: string) => m.get(k) ?? null,
+    key: (i: number) => Array.from(m.keys())[i] ?? null,
+    removeItem: (k: string) => void m.delete(k),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
+
 function props(over: Partial<Parameters<typeof ContextTree>[0]> = {}) {
   return { tree, selectedSessionId: null, selectedPlanId: null, onSelectSession: vi.fn(), onSelectPlan: vi.fn(), ...over };
 }
@@ -63,7 +76,7 @@ it("context tree renders sections glyphs and counters", () => {
   expect(add?.getAttribute("aria-label")).toBe("New context");
   act(() => add?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(onNewContext).toHaveBeenCalledTimes(1);
-  expect(c.textContent).not.toMatch(/\bActive\b|\bStanding\b/);
+  expect(c.textContent).not.toMatch(/\bActive\b/);
   const ctxRow = c.querySelector('[data-context="c1"] > button[data-select="context"]');
   expect(ctxRow?.querySelector('[data-part="context-id"]')?.textContent).toBe("c1");
   const ctxDot = ctxRow?.querySelector('[role="img"][data-dot]');
@@ -91,16 +104,20 @@ it("context tree renders sections glyphs and counters", () => {
   m.unmount();
 });
 
-// DESIGN.md 3d: the Archived group is a closed shadcn group, its label toggles it.
-it("context tree archive section collapse", () => {
+// pro-d44: the Archive section lives in the pinned bottom, closed by default, folded by its header.
+it("context tree archive section collapses", () => {
   const m = mount(<ContextTree {...props()} />);
   const group = m.container.querySelector("[data-archived]");
-  expect(group?.textContent).toContain("Archived (1)");
+  expect(group?.textContent).toContain("Archive");
+  expect(group?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
   expect(m.container.querySelector("details, summary")).toBeNull();
   expect(m.container.querySelector('[data-context="c2"]')).toBeNull();
-  const toggle = group?.querySelector("button") ?? null;
+  const toggle = group?.querySelector('[data-slot="sidebar-group-label"] button') ?? null;
+  expect(toggle?.getAttribute("aria-expanded")).toBe("false");
   act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(m.container.querySelector('[data-context="c2"]')).not.toBeNull();
+  act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  expect(m.container.querySelector('[data-context="c2"]')).toBeNull();
   m.unmount();
 });
 
@@ -109,7 +126,7 @@ it("context tree marks the selected plan", () => {
   const m = mount(<ContextTree {...props({ selectedPlanId: "p1", selectedSessionId: "s-mgr" })} />);
   const c = m.container;
   const item = c.querySelector('li[role="treeitem"][data-plan="p1"]');
-  expect(item?.querySelector('button[data-select="plan"]')?.getAttribute("aria-current")).toBe("true");
+  expect(item?.querySelector('button[data-select="plan"]')?.hasAttribute("aria-current")).toBe(false);
   expect(item?.querySelector('button[data-select="plan"] [role="img"][data-dot]')).not.toBeNull();
   expect(item?.closest('[data-slot="sidebar-menu-sub"]')).not.toBeNull();
   const other = c.querySelector('li[data-plan="p2"] button[data-select="plan"]');

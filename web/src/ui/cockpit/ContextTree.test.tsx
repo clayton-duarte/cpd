@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { expect, it, vi } from "vitest";
-import type { ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ContextNode, ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
 import { ContextTree } from "./ContextTree.tsx";
 
@@ -73,6 +73,25 @@ function click(el: Element | null): void {
     el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
 }
+
+function fakeStorage(initial: Record<string, string> = {}): Storage {
+  const m = new Map(Object.entries(initial));
+  return {
+    get length() { return m.size; },
+    clear: () => m.clear(),
+    getItem: (k: string) => m.get(k) ?? null,
+    key: (i: number) => Array.from(m.keys())[i] ?? null,
+    removeItem: (k: string) => void m.delete(k),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+  };
+}
+
+let store: Storage;
+beforeEach(() => {
+  store = fakeStorage();
+  vi.stubGlobal("localStorage", store);
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const q = (c: ParentNode, sel: string) => c.querySelector(sel);
 
@@ -231,7 +250,7 @@ it("a Context row shows the id and its title as tooltip", () => {
   m.unmount();
 });
 
-it("the Archived group is closed by default and counts its Contexts and Plans", () => {
+it("the Archived group is closed by default and folds by section archive", () => {
   const archivedPlan = { ...tree.contexts[0]!.plans[0]!, id: "p9", archived: true, sessions: [] };
   const archivedCtx = { ...tree.contexts[0]!, id: "c2", archived: true, sessions: [], plans: [archivedPlan] };
   const t: ContextTreeModel = { cursor: 1, contexts: [...tree.contexts, archivedCtx] };
@@ -240,7 +259,146 @@ it("the Archived group is closed by default and counts its Contexts and Plans", 
   expect(group).not.toBeNull();
   expect(group?.tagName).not.toBe("DETAILS");
   expect(m.container.querySelector("nav, details, summary")).toBeNull();
+  expect(group?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
   expect(group?.querySelector('[data-context="c2"]')).toBeNull();
-  expect(group?.textContent).toContain("Archived (2)");
+  expect(group?.textContent).toContain("Archive");
+  click(header(m.container, "Archive"));
+  expect(store.getItem("cpd-ui:collapse:section:archive")).toBe("1");
+  expect(m.container.querySelector('[data-archived] [data-context="c2"]')).not.toBeNull();
   m.unmount();
+});
+
+// pro-d44 three layers.
+const mgr = (id: string, dot: SessionNode["dot"]): SessionNode =>
+  ({ ...session(`m-${id}`, id, dot.state, null), contextId: id, dot });
+function ctx(id: string, createdAt: string, dot: SessionNode["dot"] = { state: "idle", attention: null }, over: Partial<ContextNode> = {}): ContextNode {
+  return { id, title: id, archived: false, records: 0, openQuestions: 0, sessions: [mgr(id, dot)], plans: [], createdAt, ...over } as ContextNode;
+}
+const layered: ContextTreeModel = {
+  cursor: 1,
+  contexts: [
+    ctx("codereview", "2026-01-01"),
+    ctx("old", "2026-02-01"),
+    ctx("host", "2026-01-02"),
+    ctx("new", "2026-03-01"),
+    ctx("hot", "2026-01-05", { state: "waiting", attention: "red" }),
+    ctx("cpd", "2026-01-03"),
+    ctx("gone", "2026-01-06", { state: "idle", attention: null }, { archived: true }),
+  ],
+};
+const ids = (root: ParentNode | null) => Array.from(root?.querySelectorAll("[data-context]") ?? []).map((e) => e.getAttribute("data-context"));
+const header = (c: ParentNode, name: string): HTMLElement | null =>
+  Array.from(c.querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"] button')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
+
+it("the tree has three layers: Contexts, a separator and a pinned bottom with Standing and Archive", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const c = m.container;
+  const bottom = q(c, '[data-part="tree-pinned-bottom"]');
+  expect(bottom, "pinned bottom").not.toBeNull();
+  for (const cls of ["mt-auto", "max-h-[50%]", "shrink-0"]) expect(bottom?.className).toContain(cls);
+  expect(bottom?.querySelector('[data-slot="scroll-area"]'), "bottom scroll area").not.toBeNull();
+  expect(bottom?.querySelector("[data-standing]"), "standing").not.toBeNull();
+  expect(bottom?.querySelector("[data-archived]"), "archive").not.toBeNull();
+  expect(bottom?.querySelectorAll('[data-slot="separator"]').length, "separator inside bottom").toBeGreaterThanOrEqual(1);
+  const top = q(c, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
+  expect(top, "Contexts inside a scroll area").not.toBeNull();
+  expect(bottom?.contains(top)).toBe(false);
+  expect(c.querySelectorAll('[data-slot="separator"]').length, "separators").toBeGreaterThanOrEqual(2);
+  m.unmount();
+});
+
+it("the Contexts section lists live Contexts by dot tier then newest first", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const top = q(m.container, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
+  expect(ids(top)).toEqual(["hot", "new", "old"]);
+  m.unmount();
+});
+
+it("the Standing section lists cpd host codereview in that order", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(ids(q(m.container, "[data-standing]"))).toEqual(["cpd", "host", "codereview"]);
+  m.unmount();
+});
+
+it("each section header shows a minus icon when open and a plus icon when closed", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const icon = (name: string) => header(m.container, name)?.querySelector("svg")?.getAttribute("class") ?? "";
+  for (const name of ["Contexts", "Standing"]) {
+    expect(icon(name), `${name} open`).toContain("lucide-minus");
+    click(header(m.container, name));
+    expect(icon(name), `${name} closed`).toContain("lucide-plus");
+  }
+  expect(icon("Archive"), "Archive closed by default").toContain("lucide-plus");
+  click(header(m.container, "Archive"));
+  expect(icon("Archive"), "Archive open").toContain("lucide-minus");
+  m.unmount();
+});
+
+it("the Archive section is closed by default and opens from its header", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const archive = () => q(m.container, "[data-archived]");
+  expect(archive()).not.toBeNull();
+  expect(archive()?.querySelector('[data-context="gone"]')).toBeNull();
+  expect(header(m.container, "Archive")?.getAttribute("aria-expanded")).toBe("false");
+  expect(archive()?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  click(header(m.container, "Archive"));
+  expect(archive()?.querySelector('[data-context="gone"]')).not.toBeNull();
+  click(header(m.container, "Archive"));
+  expect(archive()?.querySelector('[data-context="gone"]')).toBeNull();
+  m.unmount();
+});
+
+it("a Plan row is current only when its Lead session is selected", () => {
+  const m = mount(<ContextTree {...props({ selectedSessionId: "s-lead", selectedPlanId: null })} />);
+  expect(q(m.container, '[data-plan="p1"] button[data-select="plan"]')?.getAttribute("aria-current")).toBe("true");
+  m.unmount();
+  const other = mount(<ContextTree {...props({ selectedSessionId: "s-cfork", selectedPlanId: "p1" })} />);
+  expect(q(other.container, '[data-plan="p1"] button[data-select="plan"]')?.hasAttribute("aria-current")).toBe(false);
+  other.unmount();
+});
+
+it("selecting a Manager does not mark its Plans current", () => {
+  const m = mount(<ContextTree {...props({ selectedSessionId: "s-mgr", selectedPlanId: "p1" })} />);
+  expect(q(m.container, 'button[data-select="context"]')?.getAttribute("aria-current")).toBe("true");
+  expect(m.container.querySelectorAll('button[data-select="plan"][aria-current]')).toHaveLength(0);
+  m.unmount();
+});
+
+const withArchivedPlans = (): ContextTreeModel => {
+  const p = { ...tree.contexts[0]!.plans[0]!, id: "p9", archived: true, sessions: [] };
+  return { cursor: 1, contexts: [...tree.contexts, { ...tree.contexts[0]!, id: "c2", archived: true, sessions: [], plans: [p] }] };
+};
+
+it("section and context open state persists in localStorage under cpd-ui collapse keys", () => {
+  const m = mount(<ContextTree {...props({ tree: withArchivedPlans() })} />);
+  const key = (k: string) => store.getItem(`cpd-ui:collapse:${k}`);
+  click(header(m.container, "Contexts"));
+  expect(key("section:contexts")).toBe("0");
+  click(header(m.container, "Contexts"));
+  expect(key("section:contexts")).toBe("1");
+  click(header(m.container, "Standing"));
+  expect(key("section:standing")).toBe("0");
+  click(header(m.container, "Archive"));
+  expect(key("section:archive")).toBe("1");
+  click(q(m.container, '[data-context="c1"] [data-slot="sidebar-menu-action"]'));
+  expect(key("ctx:c1")).toBe("0");
+  click(q(m.container, '[data-archived] [data-context="c2"] [data-slot="sidebar-menu-action"]'));
+  expect(key("ctx:arch:c2")).toBe("0");
+  m.unmount();
+});
+
+it("a closed section stays closed after a remount", () => {
+  const first = mount(<ContextTree {...props({ tree: layered })} />);
+  click(header(first.container, "Standing"));
+  click(header(first.container, "Archive"));
+  first.unmount();
+  const again = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(q(again.container, '[data-standing] [data-context="cpd"]')).toBeNull();
+  expect(q(again.container, '[data-archived] [data-context="gone"]')).not.toBeNull();
+  again.unmount();
+  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0" });
+  vi.stubGlobal("localStorage", preset);
+  const closed = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(q(closed.container, '[data-context="hot"]')).toBeNull();
+  closed.unmount();
 });

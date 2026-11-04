@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./resizable.tsx";
 
@@ -24,5 +24,22 @@ it("resizable parts render their documented hooks", () => {
   expect(handle?.getAttribute("aria-label"), "handle label").toBe("Resize a and b");
   expect(handle?.getAttribute("tabindex"), "handle focusable").toBe("0");
   expect(handle?.querySelector("div"), "withHandle grip").not.toBeNull();
+  m.unmount();
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+it("the resizable group persists panel sizes under react-resizable-panels with its id", () => {
+  const getItem = vi.fn((k: string): string | null => (k === "react-resizable-panels:pg" ? JSON.stringify({ a: 30, b: 70 }) : null));
+  const setItem = vi.fn();
+  vi.stubGlobal("localStorage", { getItem, setItem, removeItem: vi.fn(), clear: vi.fn(), key: vi.fn(), length: 0 });
+  const m = mount(
+    <ResizablePanelGroup id="pg" orientation="horizontal">
+      <ResizablePanel id="a">A</ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel id="b">B</ResizablePanel>
+    </ResizablePanelGroup>,
+  );
+  expect(getItem).toHaveBeenCalledWith("react-resizable-panels:pg");
   m.unmount();
 });
