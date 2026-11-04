@@ -70,7 +70,7 @@ fn poll_with(fx: &Poll, updated_at: &str, threads: Vec<Value>) -> Value {
 fn reads(fx: &Poll) -> Vec<Vec<String>> {
     fx.gh_calls()
         .into_iter()
-        .filter(|c| c.iter().any(|a| a.contains("reviewThreads")))
+        .filter(|c| c.iter().any(|a| a.contains("comments(last:")))
         .collect()
 }
 

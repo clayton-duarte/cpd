@@ -1668,7 +1668,7 @@ impl Handler for Gh {
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
                 self.search.get()
             }
-            ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => {
+            ["api", "graphql", "-f", query, ..] if query.contains("comments(last:") => {
                 match &*self.comments.lock().unwrap() {
                     Some(text) => Reply::ok(&format!("{text}\n")),
                     None => Reply::ok(&format!("{}\n", empty_comments(query))),
@@ -2200,7 +2200,7 @@ pub(super) fn node(
     let rollup = rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
     format!(
         r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","mergedAt":{merged},"reviewDecision":{review},{reviewers}
+        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":{merged},"reviewDecision":{review},{reviewers}
         "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
     )

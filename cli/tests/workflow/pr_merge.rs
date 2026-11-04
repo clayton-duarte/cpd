@@ -451,7 +451,7 @@ fn gh_read_back(fx: &Fx, before: &str, after: &str, graphql: Reply) -> Arc<Gh> {
 /// The GraphQL search answer listing acme/api#7 with `state`, mergeable UNKNOWN, mergeStateStatus CLEAN.
 fn search_listing(state: &str) -> Reply {
     let node = format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/api","defaultBranchRef":{{"name":"main"}}}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","mergedAt":null,"baseRefName":"main","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/api","defaultBranchRef":{{"name":"main"}}}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":null,"baseRefName":"main","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     let search = format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
@@ -577,7 +577,7 @@ fn a_poll_that_finds_the_pull_request_merged_closes_its_pr_ready_item_in_the_sam
     let env = &fx.env;
     row_with_ready_item(env);
     let node = format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","mergedAt":"{MERGED_AT}","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":"{MERGED_AT}","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     let search = format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
