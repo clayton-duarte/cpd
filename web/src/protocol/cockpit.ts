@@ -148,3 +148,18 @@ export interface StatusModel {
 /** Dollar totals keyed by Plan id and Context id. */
 export type CostModel = Readonly<Record<string, number>>;
 export interface LogRow { readonly id: number; readonly at: string; readonly kind: string; readonly text: string; readonly tone: "error" | "lead-error" | "normal" }
+
+/** The Agent Tiers dialog read: the four role Tiers and the four experimental switches. */
+export const SETTINGS_SWITCHES = ["durable_workers", "write_curation", "failure_triage", "turn_question_guard"] as const;
+export type SettingsSwitch = (typeof SETTINGS_SWITCHES)[number];
+export const SETTINGS_ROLES = ["auxiliar", "worker", "lead", "manager"] as const;
+export type SettingsRole = (typeof SETTINGS_ROLES)[number];
+export interface SettingsModel {
+  readonly tiers: Readonly<Record<SettingsRole, string>>;
+  readonly experimental: Readonly<Record<SettingsSwitch, boolean>>;
+}
+/** Only the values the User changed. */
+export interface SettingsChanges {
+  readonly tiers?: Partial<Record<SettingsRole, string>>;
+  readonly experimental?: Partial<Record<SettingsSwitch, boolean>>;
+}

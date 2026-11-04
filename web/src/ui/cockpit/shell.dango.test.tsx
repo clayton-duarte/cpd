@@ -113,35 +113,32 @@ it("header breadcrumb falls back when no plan is selected", () => {
   noPlan.unmount();
 });
 
-// Title kept from the Job; DESIGN.md 3b: Legend and Logs are not wired, so the buttons are reset layout and cost.
+// Title kept from the Job; the bar is the TUI's: five icon buttons, then the session pills until the machine status arrives.
 it("status bar shows reset layout, legend, logs and the runner pill", () => {
-  const onResetLayout = vi.fn();
-  const onToggleCost = vi.fn();
+  const onReset = vi.fn();
+  const onCosts = vi.fn();
   const m = mount(
-    <StatusBar runner="durable" state="idle" version={{ state: "known", value: "0.21.102" }} showCost={true} onResetLayout={onResetLayout} onToggleCost={onToggleCost} />,
+    <StatusBar runner="durable" state="idle" version={{ state: "known", value: "0.21.102" }} costsOn={true} onReset={onReset} onLegend={vi.fn()} onLogs={vi.fn()} onCosts={onCosts} onSettings={vi.fn()} />,
   );
   const c = m.container;
   expect(c.querySelector('[data-part="status-bar"]')).not.toBeNull();
-  const reset = c.querySelector('button[data-part="reset-layout"]');
-  expect(reset?.textContent).toBe("Reset layout");
+  const reset = c.querySelector('button[aria-label="Reset layout"]');
   click(reset);
-  expect(onResetLayout).toHaveBeenCalledTimes(1);
-  const cost = c.querySelector('button[data-part="cost-toggle"]');
-  expect(cost?.textContent).toBe("$");
+  expect(onReset).toHaveBeenCalledTimes(1);
+  const cost = c.querySelector('button[aria-label="Costs"]');
   expect(cost?.getAttribute("aria-pressed")).toBe("true");
   click(cost);
-  expect(onToggleCost).toHaveBeenCalledTimes(1);
+  expect(onCosts).toHaveBeenCalledTimes(1);
+  expect(c.querySelector('button[aria-label="Legend"]')).not.toBeNull();
+  expect(c.querySelector('button[aria-label="Logs"]')).not.toBeNull();
   expect(c.querySelector('[data-part="status-right"] [data-part="runner"]')?.textContent).toBe("Runner: durable");
   const state = c.querySelector('[data-part="state"]');
   expect(state?.textContent).toBe("State: idle");
   expect(state?.getAttribute("data-tone")).toBe("neutral");
   expect(state?.getAttribute("data-glyph")).toBe("idle");
   expect(c.querySelector('[data-part="version"]')?.textContent).toBe("cpd: 0.21.102");
-  expect(c.textContent).not.toMatch(/Legend|Logs/);
   m.unmount();
   const bare = mount(<StatusBar runner={null} state={null} version={null} />);
-  expect(bare.container.querySelector('[data-part="reset-layout"]')).toBeNull();
-  expect(bare.container.querySelector('[data-part="cost-toggle"]')).toBeNull();
   expect(bare.container.querySelector('[data-part="runner"]')?.textContent).toBe("Runner: none");
   expect(bare.container.querySelector('[data-part="status-bar"]')).not.toBeNull();
   bare.unmount();

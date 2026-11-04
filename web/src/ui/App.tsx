@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { Scheduler, Transport } from "../protocol/runtime.ts";
 import { createConnection } from "../state/connection.ts";
@@ -11,7 +11,13 @@ import { Header } from "./cockpit/Header.tsx";
 import { Inbox } from "./cockpit/Inbox.tsx";
 import { PlanView } from "./cockpit/PlanView.tsx";
 import { Shell } from "./cockpit/Shell.tsx";
-import { StatusBar } from "./cockpit/StatusBar.tsx";
+import { barStatus, StatusBar } from "./cockpit/StatusBar.tsx";
+import { resetLayout } from "./cockpit/layout.ts";
+import type { LayoutPanels } from "./cockpit/layout.ts";
+import type { SettingsChanges } from "../protocol/cockpit.ts";
+import { LegendDialog } from "./dialogs/LegendDialog.tsx";
+import { LogsDialog } from "./dialogs/LogsDialog.tsx";
+import { SettingsDialog } from "./dialogs/SettingsDialog.tsx";
 import type { FileReaderBoundary } from "./composer/attachments.ts";
 
 const MemoTree = memo(ContextTree);
@@ -38,6 +44,34 @@ export function App(props: AppProps): ReactElement {
   const onSelectSession = useCallback((id: string) => connection.selectSession(id), [connection]);
   const onSelectPlan = useCallback((id: string) => connection.selectPlan(id), [connection]);
   const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => { connection.action(a); }, [connection]);
+  const panelsRef = useRef<LayoutPanels | null>(null);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [costsOn, setCostsOn] = useState(false); // off at start, never persisted
+  const costs = useMemo(() => {
+    const flat = cockpit.costs ?? {};
+    const contexts: Record<string, number> = {};
+    const plans: Record<string, number> = {};
+    for (const c of cockpit.tree?.contexts ?? []) {
+      if (flat[c.id] !== undefined) contexts[c.id] = flat[c.id]!;
+      for (const p of c.plans) if (flat[p.id] !== undefined) plans[p.id] = flat[p.id]!;
+    }
+    return { contexts, plans };
+  }, [cockpit.costs, cockpit.tree]);
+  const onReset = useCallback(() => { if (panelsRef.current !== null) resetLayout(panelsRef.current); }, []);
+  const onLegend = useCallback(() => setLegendOpen(true), []);
+  const onLogs = useCallback(() => { connection.readLogs(); setLogsOpen(true); }, [connection]);
+  const onSettings = useCallback(() => { connection.readSettings(); setSettingsOpen(true); }, [connection]);
+  const onCosts = useCallback(() => setCostsOn((on) => !on), []);
+  const onSaveSettings = useCallback((changes: SettingsChanges) => { setSaving(true); connection.saveSettings(changes); }, [connection]);
+  const saved = cockpit.saved;
+  useEffect(() => {
+    if (!saving || saved === null) return;
+    setSaving(false);
+    if (saved.ok) setSettingsOpen(false);
+  }, [saving, saved]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
   const selectedPlanId = cockpit.selectedPlanId;
   const restored = useRef(false);
@@ -58,13 +92,24 @@ export function App(props: AppProps): ReactElement {
     <>
     <BootstrapOverlay />
     <Shell
+      panelsRef={panelsRef}
       header={
         <Header
           location={cockpit.plan === null ? null : { context: cockpit.plan.contextId, plan: cockpit.plan.planId }}
           engine={cockpit.inbox === null ? null : cockpit.inbox.engineRunning}
         />
       }
-      status={<StatusBar runner={session?.ref?.runner ?? null} state={session?.ref?.state ?? null} version={null} />}
+      status={
+        <StatusBar
+          {...(cockpit.status === null ? { runner: session?.ref?.runner ?? null, state: session?.ref?.state ?? null, version: null } : { status: barStatus(cockpit.status, Date.now()) })}
+          costsOn={costsOn}
+          onReset={onReset}
+          onLegend={onLegend}
+          onLogs={onLogs}
+          onCosts={onCosts}
+          onSettings={onSettings}
+        />
+      }
       tree={
         !live ? null : <MemoTree
           tree={cockpit.tree}
@@ -72,6 +117,8 @@ export function App(props: AppProps): ReactElement {
           selectedPlanId={cockpit.selectedPlanId}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}
+          costsOn={costsOn}
+          costs={costs}
         />
       }
       plan={!live ? null : <MemoPlan plan={cockpit.plan} onAction={onAction} />}
@@ -89,6 +136,15 @@ export function App(props: AppProps): ReactElement {
           onSelectSession={onSelectSession}
         />
       }
+    />
+    <LegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />
+    <LogsDialog open={logsOpen} onClose={() => setLogsOpen(false)} events={cockpit.logs ?? []} />
+    <SettingsDialog
+      open={settingsOpen}
+      read={cockpit.settings}
+      error={saved !== null && !saved.ok && !saving ? saved.error.message : null}
+      onSave={onSaveSettings}
+      onCancel={() => setSettingsOpen(false)}
     />
     </>
   );

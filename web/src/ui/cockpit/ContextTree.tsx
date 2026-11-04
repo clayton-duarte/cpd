@@ -3,6 +3,7 @@ import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
+import { formatCost } from "../../server/cockpit/cost.ts";
 import { dotDisplay, sessionDisplay } from "../dango-status.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
@@ -32,6 +33,15 @@ interface Handlers {
   selectedPlanId: string | null;
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
+  costsOn?: boolean;
+  costs?: Costs;
+}
+type Costs = { readonly contexts: Readonly<Record<string, number>>; readonly plans: Readonly<Record<string, number>> };
+
+/** The row's cost, drawn only while costs are on and the cost is known. */
+function RowCost({ on, value }: { on: boolean | undefined; value: number | undefined }): ReactElement | null {
+  if (on !== true || value === undefined) return null;
+  return <span data-part="row-cost" className="shrink-0 font-mono text-meta text-fg-dim">{formatCost(value)}</span>;
 }
 
 function Counters({ counts }: { counts: PlanCounts }): ReactElement | null {
@@ -162,6 +172,7 @@ function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
       >
         <Dot dot={lead === undefined ? STOPPED : lead.dot} plan={plan} archived={plan.archived} />
         <span data-part="plan-id" title={plan.title} className="min-w-0 flex-1 truncate font-mono text-key">{plan.id}</span>
+        <RowCost on={props.costsOn} value={props.costs?.plans[plan.id]} />
         <Counters counts={plan.counts} />
       </SidebarMenuSubButton>
       {forks.length > 0 ? (
@@ -200,6 +211,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
         >
           <Dot dot={manager === undefined ? STOPPED : manager.dot} archived={props.allPlans || context.archived} />
           <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+          <RowCost on={props.costsOn} value={props.costs?.contexts[context.id]} />
         </SidebarMenuButton>
         {hasChildren ? (
           <>
@@ -278,9 +290,9 @@ export function ContextTree(props: {
   onNewContext?: () => void;
   /** Costs by Context id and Plan id; drawn only while `costsOn`. */
   costsOn?: boolean;
-  costs?: { readonly contexts: Readonly<Record<string, number>>; readonly plans: Readonly<Record<string, number>> };
+  costs?: Costs;
 }): ReactElement {
-  const { tree, onNewContext, costsOn: _costsOn, costs: _costs, ...handlers } = props;
+  const { tree, onNewContext, ...handlers } = props;
   const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
   const [standingOpen, setStandingOpen] = usePersistedBoolean("section:standing", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);

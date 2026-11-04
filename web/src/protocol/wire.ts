@@ -1,6 +1,6 @@
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
-import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type InboxModel, type PlanViewModel } from "./cockpit.ts";
+import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
 
 
 export type ClientMessage =
@@ -16,6 +16,9 @@ export type ClientMessage =
   | { type: "session.compact"; sessionId: string; instructions?: string }
   | { type: "session.configure"; sessionId: string; change: ConfigureChange }
   | { type: "session.listModels"; sessionId: string }
+  | { type: "logs.read" } // answered with logs.result
+  | { type: "settings.read" } // answered with settings.result
+  | { type: "settings.save"; changes: SettingsChanges } // answered with settings.saved
   | { type: "dialog.respond"; sessionId: string; dialogId: string; response: DialogResponse };
 
 
@@ -23,14 +26,20 @@ export type CockpitPane = "tree" | "plan" | "inbox";
 export type CockpitPaneData =
   | { pane: "tree"; data: ContextTreeModel }
   | { pane: "plan"; data: PlanViewModel | null } // null = no Plan selected
-  | { pane: "inbox"; data: InboxModel };
+  | { pane: "inbox"; data: InboxModel }
+  | { pane: "status"; data: StatusModel }
+  | { pane: "costs"; data: CostModel };
 
 export interface SessionMeta { ref: SessionRef; footer: FooterStats }
 
 export type ServerMessage =
   // cockpit
-  | { type: "cockpit.snapshot"; tree: ContextTreeModel; plan: PlanViewModel | null; inbox: InboxModel } // all three panes; sent on subscribe
+  | { type: "cockpit.snapshot"; tree: ContextTreeModel; plan: PlanViewModel | null; inbox: InboxModel; status?: StatusModel; costs?: CostModel } // all panes; sent on subscribe
   | ({ type: "cockpit.patch" } & CockpitPaneData) // replaces ONE pane (an invalidation refresh); "patch" = per-pane replacement
+  | { type: "logs.result"; rows: LogRow[] }
+  | { type: "settings.result"; settings: SettingsModel }
+  | { type: "settings.saved"; ok: true }
+  | { type: "settings.saved"; ok: false; error: WireError }
   | { type: "cockpit.error"; error: WireError } // a refresh failed; the previous snapshot stays valid
   | { type: "action.result"; actionId: string; ok: true; output: ActionOutput }
   | { type: "action.result"; actionId: string; ok: false; error: WireError }
@@ -124,6 +133,28 @@ function parseResponse(o: Obj): DialogResponse {
   throw bad("response method/outcome pair is not valid", "response");
 }
 
+const TIER = /^[GHSO]([0-4]|X)$/;
+function parseChanges(o: Obj): SettingsChanges {
+  const c = objOf(o, "changes");
+  const tiers: Record<string, string> = {};
+  const experimental: Record<string, boolean> = {};
+  if (c["tiers"] !== undefined) {
+    const t = objOf(c, "tiers");
+    for (const [k, v] of Object.entries(t)) {
+      if (!(SETTINGS_ROLES as readonly string[]).includes(k) || typeof v !== "string" || !TIER.test(v)) throw bad(`tiers.${k} is not a Tier`, "changes");
+      tiers[k] = v;
+    }
+  }
+  if (c["experimental"] !== undefined) {
+    const e = objOf(c, "experimental");
+    for (const [k, v] of Object.entries(e)) {
+      if (!(SETTINGS_SWITCHES as readonly string[]).includes(k) || typeof v !== "boolean") throw bad(`experimental.${k} is not a switch`, "changes");
+      experimental[k] = v;
+    }
+  }
+  return { ...(Object.keys(tiers).length > 0 ? { tiers } : {}), ...(Object.keys(experimental).length > 0 ? { experimental } : {}) };
+}
+
 export function parseClientMessage(raw: unknown): ClientMessage {
   if (!isObj(raw) || typeof raw["type"] !== "string") throw bad("message must be an object with a string type", "type");
   const o = raw;
@@ -136,6 +167,9 @@ export function parseClientMessage(raw: unknown): ClientMessage {
       return { type: "cockpit.selectPlan", planId };
     }
     case "cockpit.action": return { type: "cockpit.action", actionId: nonEmpty(o, "actionId"), action: parseCockpitAction(o["action"]) };
+    case "logs.read": return { type: "logs.read" };
+    case "settings.read": return { type: "settings.read" };
+    case "settings.save": return { type: "settings.save", changes: parseChanges(o) };
     case "session.attach": return { type: "session.attach", sessionId: sessionId() };
     case "session.detach": return { type: "session.detach" };
     case "session.loadEarlier": return { type: "session.loadEarlier", sessionId: sessionId(), before: nonEmpty(o, "before") };

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type {
   Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError,
 } from "../protocol/domain.ts";
-import type { ContextTreeModel, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
+import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
@@ -44,6 +44,14 @@ export interface AppState {
     readonly inbox: InboxModel | null;
     readonly selectedPlanId: string | null;
     readonly error: WireError | null;
+    readonly status: StatusModel | null;
+    readonly costs: CostModel | null;
+    /** The last `logs.result`; null until requested. */
+    readonly logs: readonly LogRow[] | null;
+    /** The last `settings.result`; null until requested. */
+    readonly settings: SettingsModel | null;
+    /** The last `settings.saved`; null until a save was answered. */
+    readonly saved: { readonly ok: true } | { readonly ok: false; readonly error: WireError } | null;
   };
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null;
@@ -62,7 +70,7 @@ export type StoreAction =
 export const initialState: AppState = {
   connection: "connecting",
   retryAttempt: 0,
-  cockpit: { tree: null, plan: null, inbox: null, selectedPlanId: null, error: null },
+  cockpit: { tree: null, plan: null, inbox: null, selectedPlanId: null, error: null, status: null, costs: null, logs: null, settings: null, saved: null },
   selectedSessionId: null,
   session: null,
   lastError: null,
@@ -147,7 +155,13 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
 function reduceServer(state: AppState, message: ServerMessage): AppState {
   switch (message.type) {
     case "cockpit.snapshot":
-      return { ...state, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: message.inbox, error: null } };
+      return { ...state, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: message.inbox, status: message.status ?? state.cockpit.status, costs: message.costs ?? state.cockpit.costs, error: null } };
+    case "logs.result":
+      return { ...state, cockpit: { ...state.cockpit, logs: message.rows } };
+    case "settings.result":
+      return { ...state, cockpit: { ...state.cockpit, settings: message.settings } };
+    case "settings.saved":
+      return { ...state, cockpit: { ...state.cockpit, saved: message.ok ? { ok: true } : { ok: false, error: message.error } } };
     case "cockpit.patch":
       return { ...state, cockpit: { ...state.cockpit, [message.pane]: message.data } };
     case "cockpit.error":
