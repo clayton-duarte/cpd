@@ -134,7 +134,7 @@ it("App shows the header and the status bar with the selected session runner", (
   act(() => transport.emitMessage(snapshot));
   expect(container.querySelector('header[aria-label="Cockpit header"] [data-emblem]')?.textContent).toBe("C-P-D");
   expect(container.querySelector('footer[aria-label="Status bar"] [data-part="runner"]')?.textContent).toBe("Runner: none");
-  act(() => { container.querySelector<HTMLButtonElement>('[data-session="s1"]')!.click(); });
+  act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
   act(() => {
     transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref, footer } });
   });

@@ -14,6 +14,8 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
+    "preview:on": "sh ../scripts/preview-web.sh on",
+    "preview:off": "sh ../scripts/preview-web.sh off",
     "dist:mac": "pnpm run build:electron && electron-builder --mac",
     "build:electron": "CPD_ELECTRON_TARGET=renderer vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=main vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=preload vite build -c vite.electron.config.ts",
     "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && electron ."

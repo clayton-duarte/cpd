@@ -320,3 +320,51 @@ it("queued and pending messages render inside the log after the rows", () => {
   expect(list?.querySelector('li[data-pending="sending"]')).not.toBeNull();
   h.m.unmount();
 });
+
+it("an unrelated re-render does not snap a pinned transcript back to the bottom", () => {
+  const h = harness({ items: users(0, 50) });
+  expect(h.log.getAttribute("data-at-bottom")).toBe("true");
+  const bottom = h.log.scrollTop;
+  h.log.scrollTop = bottom - 300; // the user scrolled up; the scroll event has not fired yet
+  h.update({ items: users(0, 50) }); // identical items, new array: a re-render
+  expect(h.log.scrollTop, "scrollTop untouched by the commit").toBe(bottom - 300);
+  expect(h.log.getAttribute("data-at-bottom")).toBe("true");
+  h.m.unmount();
+});
+
+it("a scroll event that moves up unpins even within the near-bottom distance", () => {
+  const h = harness({ items: users(0, 50) });
+  const top = h.log.scrollHeight - VIEWPORT - 20; // 20px above the bottom, inside NEAR_BOTTOM_PX
+  h.scrollTo(top);
+  expect(h.log.getAttribute("data-at-bottom")).toBe("false");
+  h.update({ items: users(0, 50) });
+  expect(h.log.scrollTop, "a following re-render does not move scrollTop").toBe(top);
+  h.m.unmount();
+});
+
+it("a new item still scrolls a pinned transcript to the bottom", () => {
+  const h = harness({ items: users(0, 50) });
+  h.update({ items: users(0, 52) });
+  expect(h.log.scrollTop).toBe(h.log.scrollHeight);
+  expect(h.log.getAttribute("data-at-bottom")).toBe("true");
+  h.m.unmount();
+});
+
+it("a new pending submission still scrolls an unpinned transcript to the bottom", () => {
+  const h = harness({ items: users(0, 50) });
+  h.scrollTo(1000);
+  const p: PendingSubmission = { clientSubmissionId: "p9", text: "hi", imageCount: 0, whenBusy: "followUp", state: "sending" };
+  h.update({ pending: [p] });
+  expect(h.log.scrollTop).toBe(h.log.scrollHeight);
+  expect(h.log.getAttribute("data-at-bottom")).toBe("true");
+  h.m.unmount();
+});
+
+it("the Jump to bottom button still scrolls to the bottom", () => {
+  const h = harness({ items: users(0, 50) });
+  h.scrollTo(1000);
+  act(() => (h.jump() as HTMLButtonElement).click());
+  expect(h.log.scrollTop).toBe(h.log.scrollHeight);
+  expect(h.log.getAttribute("data-at-bottom")).toBe("true");
+  h.m.unmount();
+});

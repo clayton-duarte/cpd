@@ -663,56 +663,78 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`).
 
+**Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (`nav` > `ul[role="tree"]`); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks, cursor or costs (Not wired).
+
+**Read model rules** (the read model keeps these; the component may rely on them):
+- At most one live Manager per Context: role `manager`, `archived_at` null. When several match, the one with `file !== null` wins, then the newest.
+- At most one Lead per Plan: `plan.lead_session`; else the newest live `plan_lead` session.
+- The live lists drop sessions with role `worker` and archived sessions.
+- A live non-lead Lead (a live session of role `lead` that is not its Plan's Lead) is listed once, as a fork under its Context (below).
+- The Archived group is `details[data-archived]`, closed by default, with summary `Archived (n)`, where n is the archived Contexts in the group plus the archived Plans they contain. **Assumption:** the addendum's "Contexts + Plans in it" is read as this sum; a per-Context archived-Plans group keeps `Archived (n)` with n = its archived Plans.
+
 DOM:
 
 ```
 nav[aria-label="Context tree"]                                  KEPT   flex min-h-full flex-col
-├─ div[data-part="tree-header"]                                 sticky top-0 z-10 flex h-9 items-center gap-2 bg-background px-[14px]
+├─ div[data-part="tree-header"]                                 KEPT   sticky top-0 z-10 flex h-9 items-center gap-2 bg-background px-[14px]
 │   ├─ span  "Contexts"                                         text-[11px] font-semibold uppercase tracking-[.08em] text-muted-foreground
 │   ├─ span.flex-1
 │   └─ button[data-action="new-context"][aria-label="New context"][type="button"]   only when onNewContext; size-6 grid place-items-center rounded-[5px] text-fg-strong; PlusIcon 14
 ├─ (tree === null)   p[data-part="loading"]  "Loading contexts…"                 px-[14px] text-fg-dim
-├─ (no live and no archived contexts)   p[data-part="empty"]  "No contexts"      px-[14px] text-fg-dim   (new copy)
+├─ (no live and no archived contexts)   p[data-part="empty"]  "No contexts"      px-[14px] text-fg-dim
 ├─ ul[role="tree"]                                              KEPT   flex flex-col gap-0.5 px-1.5 pb-2.5   (live contexts)
 │   └─ li[role="treeitem"][data-context="<id>"]                 KEPT   mb-1
-│       ├─ div[data-part="context-row"]       flex h-7 items-center gap-2 rounded-sm px-2
-│       │   ├─ span[aria-hidden]  "▾"         font-mono text-[10px] w-[10px] text-fg-dim
-│       │   ├─ span[data-part="aggregate"][data-tone][data-glyph]  aggregate glyph (see below)
-│       │   └─ span  {context.title}          font-mono text-key font-semibold text-fg-strong flex-1 truncate
-│       ├─ ul[role="group"]   plan items (live), then Archived plans (details)         KEPT
+│       ├─ button[type="button"][data-select="context"][aria-current="true"?][disabled]   NEW (replaces the Phase 2 context-row div)
+│       │     flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left; hover:bg-row-hover (not when disabled); aria-current → bg-sidebar-accent text-fg-strong
+│       │   ├─ span[aria-hidden="true"]  "▾"                    font-mono text-[10px] w-[10px] text-fg-dim   (static, decorative)
+│       │   ├─ DOT (the Manager)                                 see Dot below
+│       │   ├─ span[data-part="context-id"][title]  {context.id}   font-mono text-key font-semibold text-fg-strong flex-1 min-w-0 truncate
+│       │   │     title attribute = the context title, only when it differs from the id
+│       │   └─ span[data-part="counters"]                       Counters of its live Plans; font-mono text-meta text-right
+│       ├─ ul[role="group"]   live plan items, then Archived plans (details)     KEPT
 │       │   └─ li[role="treeitem"][data-plan="<id>"]            KEPT
-│       │       ├─ div[data-part="plan-row"]  flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2
-│       │       │   ├─ span[data-part="aggregate"][data-tone][data-glyph]
-│       │       │   ├─ button[type="button"][data-select="plan"][aria-current="true"?]   KEPT   {plan.title}
-│       │       │   │     font-mono text-key flex-1 min-w-0 truncate text-left; text-foreground; text-muted-foreground when aggregate is idle/asleep; aria-current → bg-sidebar-accent text-fg-strong; hover:bg-row-hover (not when current)
-│       │       │   └─ span[data-part="counts"]  see below
-│       │       └─ ul   session rows of the plan          KEPT (no role)
-│       └─ ul   session rows of the context (Manager, forks)   KEPT (no role)
-└─ details[data-archived]  (only when archived contexts exist)      KEPT
-    ├─ summary  "Archived (<n>)"                                    KEPT copy; flex h-7 items-center gap-2 px-2 text-muted-foreground   (mx-1.5)
+│       │       └─ button[type="button"][data-select="plan"][aria-current="true"?]   KEPT   flex h-[26px] w-full items-center gap-2 rounded-sm pl-8 pr-2 text-left; hover:bg-row-hover; aria-current → bg-sidebar-accent text-fg-strong
+│       │           ├─ DOT (the Lead)                           see Dot below
+│       │           ├─ span[data-part="plan-id"][title={plan.title}]  {plan.id}   font-mono text-key flex-1 min-w-0 truncate
+│       │           └─ span[data-part="counters"]               Counters of this Plan; font-mono text-meta text-right
+│       │     archived Plans inside a Context: li > details[data-archived] > summary "Archived (n)" (n = its archived Plans), KEPT
+│       └─ ul  fork rows (no role)                              after the Plans
+│           └─ li
+│               └─ span[data-part="session-row"]                flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2   (KEPT wrapper)
+│                   ├─ DOT (the fork's own dot)
+│                   └─ button[type="button"][data-session="<ref.id>"][aria-current="true"?]   text-left font-mono text-key truncate
+│                         label: `<plan id>·<first 4 characters of ref.id>` (a Plan fork) or `ref.key` (a Context fork)
+└─ details[data-archived]  (only when archived contexts exist)  KEPT   closed by default
+    ├─ summary  "Archived (<n>)"                                 KEPT copy; n as in the read model rules above
     └─ ul[role="tree"]  archived contexts, same item structure
 ```
 
-**Session row** (KEPT structure; the dot and the button are siblings inside one wrapper, `Phase 2 test: button.parentElement.querySelector("[data-dot]")`):
+**Dot** (`span[role="img"][data-dot="<state>"][data-attention="<urgency>|none"][data-tone][data-glyph][aria-label]`, className `glyphClass[g]`, KEPT hooks):
+- `data-dot` = `dot.state`; `data-attention` = `attention ?? "none"`; `aria-label` = `state` when `attention === null`, else `` `${state}, needs you (${attention})` `` (KEPT; the Phase 2 test pins `aria-label="waiting"`).
+- `data-tone` and `data-glyph` from `sessionDisplay[dotDisplay(dot)]`, as before.
+- Source: a Context row shows its Manager's `dot`; a Plan row shows its Lead's `dot`; a fork row shows its own `dot`. A missing Manager or Lead draws `{ state: "stopped", attention: null }` (**assumption:** the TUI draws a Stopped dot with no live Manager, `sc-tree-tui.md` section 4; I infer the same for a missing Lead).
+- Exactly one `[role="img"][data-dot]` per row: one on each Context row, Plan row and fork row, none elsewhere.
 
-```
-li
-└─ span[data-part="session-row"]    flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2   (context sessions and plan sessions alike)
-    ├─ span[role="img"][data-dot="<state>"][data-attention="<urgency>|none"][data-tone][data-glyph][aria-label]   KEPT; className={glyphClass[g]}
-    └─ button[type="button"][data-session="<ref.id>"][aria-current="true"?]    KEPT
-          text exactly `{key}` or `{key} — {title}` (U+2014 with spaces): <span class="font-mono">{key}</span><span class="text-muted-foreground"> — {title}</span>
-```
+**Counters** (`span[data-part="counters"]`, `font-mono text-meta`):
+- Numbers only, no words. Each non-zero bucket is `span[data-count="<key>"]`, the buckets in the order `planned, active, failed, done`, joined by a ` · ` text node in `text-line`. A zero bucket is omitted; with every bucket zero the span renders empty.
+- `planned` = draft + queued (`text-muted-foreground`); `active` = running (`text-status-active`); `failed` (`text-status-blocked`); `done` = merged (`text-status-done`). `cancelled` is not shown.
+- A Context row sums its live (non-archived) Plans; a Plan row shows its own counts. Example: queued 2, running 1, failed 1, merged 13 renders `2 · 1 · 1 · 13`.
+- **Resolution:** the TUI's `active` also counts `merging`; the protocol has no `merging` field (`sc-tree-tui.md` section 10, item 5), so `active` is running only. The old per-Plan `Session` sub-row and the old count words (`merged 13 · running 1`) are removed.
 
-- `data-dot` = `node.dot.state` (domain value); `data-attention` = `attention ?? "none"`; `aria-label` = `state` when `attention === null`, else `` `${state}, needs you (${attention})` `` (all KEPT, Phase 2 test pins `aria-label="waiting"`). **New:** `data-tone` and `data-glyph` from `sessionDisplay[dotDisplay(node.dot)]`; the glyph class is its `glyphClass`. The `role="img"` + `data-dot` hook belongs to **session dots only**: exactly one per session, no other element carries both (Phase 2 test pins the count, 2 for its fixture).
-- **Aggregate glyph** (`data-part="aggregate"`, context row and plan row): `planState(sessions.map((s) => dotDisplay(s.dot)))`, then `sessionDisplay[...]`; a `span` with `aria-hidden`, `data-tone`, `data-glyph`, no `role`, className `glyphClass[glyph]`, followed by an `sr-only` span with the display label (`Working`, `Needs attention`, ...). Plan row: sessions = `plan.sessions`; context row: sessions = `context.sessions` plus the `sessions` of every non-archived plan. No sessions → `planState([])` = `idle`.
-- **Counts** (`span[data-part="counts"]` on the plan row, `font-mono text-meta min-w-[52px] text-right`): **KEPT text**: the non-zero counts in the order `draft, queued, merged, running, failed, cancelled`, each as `<key> <n>`, joined by ` · ` (`merged 13 · running 1`; Phase 2 pins `toContain("merged 13 · running 1")`). **New:** each count is `<span data-count="<key>">`, the separator ` · ` a text node in `text-line`; tone: `running` `text-status-active`, `merged` `text-status-done`, `failed` `text-status-blocked`, `queued`, `draft`, `cancelled` `text-muted-foreground`; the whole span is `text-fg-dim` when every count is zero (renders empty). **Resolution:** the board draws bare unlabelled numbers `r · q · m · f` and lists no legend (its caveat 7); Phase 2's labelled text wins, so the words are kept.
-- **Selection:** `aria-current="true"` on the selected plan button or session button (KEPT); a selected plan row is `bg-sidebar-accent` (`rgba(122,162,206,.16)`) with `text-fg-strong`; a selected session row likewise.
-- **Order and grouping** are Phase 2: live contexts, then `details[data-archived]`; inside a context the plans come first (live then archived `details`), then the context's own sessions. **Resolution:** the board's `Active` / `Standing` sections and per-row `$` cost have no source field; they are not drawn.
-- **Archived plans** inside a context keep `li > details[data-archived] > summary "Archived (<n>)"` (KEPT).
-- Keyboard: every row is a native `button`: Tab order is document order, Enter and Space select. The `role="tree"` has no arrow-key navigation (Phase 2 has none; Not wired).
+**Order.** Live Contexts first, then `details[data-archived]`. Inside a live Context: the live Plans in model order, then the archived Plans (`details`), then the fork rows: the Context's own forks first, then the forks of each Plan in Plan order, archived Plans included.
+
+**Forks.** Only forks have their own rows. A fork is a live session that is (a) not the Manager and has no Plan, labelled `ref.key`; or (b) not the Lead of its Plan and has `jobKey === null`, labelled `<plan id>·<first 4 characters of ref.id>`; or (c) a live non-lead Lead (see the read model rules). Each session is listed once. Workers (`jobKey !== null`), archived sessions and the Manager are never rows.
+
+**Selection.** `aria-current="true"` marks the selected row (KEPT): the Plan button when `selectedPlanId === plan.id`; a Context button or a fork button when `selectedSessionId` is the Manager's id or the fork's `ref.id`. The selected Context and Plan button and the selected fork's `session-row` take `bg-sidebar-accent text-fg-strong`.
+
+**Clicks.**
+- Context button: `onSelectSession(manager.ref.id)`. Without a Manager the button is `disabled` and calls nothing.
+- Plan button: `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` where `lead` is the session of `plan.sessions` whose `ref.id === plan.leadSessionId`. **Assumption:** with no such Lead only `onSelectPlan(plan.id)` is called.
+- Fork button: `onSelectSession(ref.id)`.
+- Keyboard: every row is a native `button`: Tab order is document order, Enter and Space select. The `role="tree"` has no arrow-key navigation (Not wired).
 - Scrolling: the column `aside` scrolls (`overflow-y: auto`); the `tree-header` is sticky.
 
-Not wired: Active/Standing sections, per-context and per-plan cost, `▾ N more` overflow rows (all rows render), collapse and expand of a context (the `▾` caret is static and decorative), the `Archive` count row of the board (replaced by `Archived (n)` details), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+Not wired: Active/Standing sections, per-context and per-plan cost, `▾ N more` overflow rows (all rows render), collapse and expand of a context (the `▾` caret is static and decorative), the `Archive` count row of the board (replaced by `Archived (n)` details), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
 ### 3e. `App.tsx` wiring
 
@@ -740,7 +762,8 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 | `Frame.test.tsx` 2, 3, 6 | none (text and hooks KEPT); the `state` prop is typed `SessionState | null` so a test literal like `"idle"` still type-checks |
 | `Frame.test.tsx` 4, 5 | none (`labels(c)` of `[data-shell]` children; `[data-column="center"]` has 2 children: Group and controls) |
 | `Shell.test.tsx` | none (descendant selectors still match) |
-| `ContextTree.test.tsx` 1 to 4 | none (hooks, copy and counts text KEPT) |
+| `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager is no longer a `button[data-session]` row (its dot and selection move to the Context button); the counts are `data-count` spans without words (`merged 13 · running 1` is gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
+| `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of the fixture is `2 · 1 · 1 · 13` (planned 2, active 1, failed 1, done 13); the selected Manager is the Context button; the `Archived (1)` summary and `button[data-action="new-context"]` are KEPT |
 | `app.css.test.ts` 1, 2 | none |
 | `app.css.test.ts` 3 | the `declsMatching(/plan/i)` assertion drops `max-height` (2a) |
 | `AppMemo.test.tsx`, `App.test.tsx` | none |

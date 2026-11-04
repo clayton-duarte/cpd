@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { connect } from "node:net";
 import { promises as fsp, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
@@ -45,7 +46,7 @@ export function createServices(b: PluginBoundaries): Services {
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now })),
     durable: lazy(() =>
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
@@ -64,13 +65,41 @@ const disposable = (f: () => void) => {
   return { dispose: () => { if (!done) { done = true; f(); } } };
 };
 
-export function realBoundaries(env: NodeJS.ProcessEnv): PluginBoundaries {
+export const CPD_IDENTITY_VARS: readonly string[] = ["CPD_SESSION", "PI_SESSION_ID", "CPD_SESSION_ID", "CPD_ATTEMPT_ID"];
+
+/** The environment cpd children get: the server's own, minus any cpd/pi session identity. */
+export function cpdChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const k of CPD_IDENTITY_VARS) delete out[k];
+  return out;
+}
+
+export interface ChildBoundary {
+  execFile(
+    file: string,
+    args: string[],
+    options: { maxBuffer: number; env?: NodeJS.ProcessEnv },
+    callback: (error: (Error & { code?: unknown }) | null, stdout: string, stderr: string) => void,
+  ): unknown;
+  spawn(
+    file: string,
+    args: string[],
+    options: { stdio: ["ignore", "pipe", "pipe"]; env?: NodeJS.ProcessEnv },
+  ): {
+    stdout: { on(event: "data", h: (c: Buffer) => void): unknown };
+    stderr: { on(event: "data", h: (c: Buffer) => void): unknown };
+    on(event: "close", h: (code: number | null) => void): unknown;
+    kill(): unknown;
+  };
+}
+
+export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { execFile, spawn }): PluginBoundaries {
   const cpdBin = env["CPD_BIN"] ?? "cpd";
   return {
     cpdExec: {
       run: (args) =>
         new Promise((resolve) => {
-          execFile(cpdBin, [...args], { maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+          child.execFile(cpdBin, [...args], { maxBuffer: 64 * 1024 * 1024, env: cpdChildEnv(env) }, (error, stdout, stderr) => {
             const code = error === null ? 0 : typeof error.code === "number" ? error.code : 1;
             resolve({ stdout, stderr: error !== null && typeof error.code !== "number" ? error.message : stderr, exitCode: code });
           });
@@ -78,13 +107,13 @@ export function realBoundaries(env: NodeJS.ProcessEnv): PluginBoundaries {
     },
     follow: {
       start: (args) => {
-        const child = spawn(cpdBin, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+        const proc = child.spawn(cpdBin, [...args], { stdio: ["ignore", "pipe", "pipe"], env: cpdChildEnv(env) });
         let stderr = "";
         let pending = "";
         const lineHandlers = new Set<(line: string) => void>();
         const exitHandlers = new Set<(info: { code: number | null; stderr: string }) => void>();
-        child.stderr.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
-        child.stdout.on("data", (c: Buffer) => {
+        proc.stderr.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
+        proc.stdout.on("data", (c: Buffer) => {
           pending += c.toString("utf8");
           let nl = pending.indexOf("\n");
           while (nl >= 0) {
@@ -94,11 +123,11 @@ export function realBoundaries(env: NodeJS.ProcessEnv): PluginBoundaries {
             nl = pending.indexOf("\n");
           }
         });
-        child.on("close", (code) => { for (const h of exitHandlers) h({ code, stderr }); });
+        proc.on("close", (code) => { for (const h of exitHandlers) h({ code, stderr }); });
         return {
           onLine: (h) => { lineHandlers.add(h); return disposable(() => lineHandlers.delete(h)); },
           onExit: (h) => { exitHandlers.add(h); return disposable(() => exitHandlers.delete(h)); },
-          kill: () => { child.kill(); },
+          kill: () => { proc.kill(); },
         };
       },
     },
@@ -127,6 +156,10 @@ export function realBoundaries(env: NodeJS.ProcessEnv): PluginBoundaries {
         }),
     },
     fs: {
+      write: async (path, bytes) => {
+        await fsp.mkdir(dirname(path), { recursive: true });
+        await fsp.writeFile(path, bytes, { mode: 0o600 });
+      },
       stat: async (path) => {
         const s = await fsp.stat(path);
         return { size: s.size, identity: `${s.dev}:${s.ino}` };

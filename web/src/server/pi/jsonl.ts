@@ -246,7 +246,7 @@ export function createNormalizer(): PiNormalizer {
         const details = isObj(entry.details) ? entry.details : {};
         if (foldKind === "cpd") {
           const data = isObj(details.data) ? details.data : {};
-          if (details.kind === "session-message" && data.from === null && typeof data.text === "string" && data.text !== "") {
+          if (details.kind === "session-message" && (data.from === null || data.unblocks === "User message from the web chat") && typeof data.text === "string" && data.text !== "") {
             facts.lastRole = "user";
             const when = str(details.at);
             r.added.push({ kind: "user", id: `u:${id}`, ...(when === undefined ? stamp : { at: when }), text: data.text, attachments: [] });
@@ -289,7 +289,7 @@ export function createNormalizer(): PiNormalizer {
             method: "cpd_plan_review",
             title: planTitle ?? `Plan review ${String(review)}`,
             summary: planSummary,
-            interactive: false,
+            interactive: true,
           });
         } else if (status === "approved" || status === "rejected" || status === "superseded" || status === "lost") {
           if (pendingReviews.delete(dialogId)) r.dialogsResolved.push(dialogId);

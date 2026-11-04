@@ -55,6 +55,9 @@ class FakeFile implements FileBoundary {
   read(_p: string, start: number, end: number): Promise<Uint8Array> {
     return Promise.resolve(this.bytes.slice(start, end));
   }
+  write(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 class FakeWatch implements WatchBoundary {
   disposed = 0;
@@ -101,7 +104,7 @@ async function setup(opts: { text?: string; ref?: Partial<SessionRef>; branch?: 
     },
   };
   const out: SessionServerMessage[] = [];
-  const backend = createPiBackend({ cpd, fs, watch, git });
+  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home", attachmentsDir: "/att", now: () => 1000 });
   const attach = () => backend.attach({ ref: ref(opts.ref), file: opts.ref && "file" in opts.ref ? opts.ref.file : FILE, tierOptions: ["S1", "S2", "S3"] }, (m) => out.push(m));
   return { fs, cpd, watch, gitCalls, out, attach };
 }
@@ -165,21 +168,12 @@ describe("pi backend", () => {
     expect(sends()).toBe(before);
   });
 
-  it("text file attachments are inlined and images are rejected with a typed reason", async () => {
+  it("text file attachments are inlined and images are declared supported", async () => {
     const s = await attached();
     const inlined = 'look at this\n<file name="notes.txt">\nline one\n</file>';
     await s.handle.submit({ clientSubmissionId: "c1", text: inlined, images: [], whenBusy: "followUp" });
     expect(s.cpd.calls.at(-1)).toEqual(["session", "send", "s1", "--unblocks", "User message from the web chat", "--", inlined]);
-    const err = await rejects(
-      s.handle.submit({ clientSubmissionId: "c2", text: "pic", images: [{ mimeType: "image/png", dataBase64: "AAAA" }], whenBusy: "followUp" }),
-    );
-    expect(err.code).toBe("unsupported_capability");
-    const images = s.handle.capabilities.images;
-    expect(images.supported).toBe(false);
-    if (images.supported) throw new Error("images must be unsupported");
-    expect(err.message).toBe(images.reason);
-    expect(images.reason).not.toBe("");
-    expect(s.cpd.calls.filter((c) => c[1] === "send")).toHaveLength(1);
+    expect(s.handle.capabilities.images.supported).toBe(true);
   });
 
   it("retier maps to cpd session retier with the tier", async () => {
@@ -199,16 +193,15 @@ describe("pi backend", () => {
     expect(s.handle.capabilities.configure.tier).toMatchObject({ supported: true, options: ["S1", "S2", "S3"] });
   });
 
-  it("abort steer and interactive dialogs are declared unsupported with a reason", async () => {
+  it("abort and steer are declared unsupported with a reason", async () => {
     const s = await attached();
     const c = s.handle.capabilities;
-    for (const cap of [c.steer, c.abort, c.abortSubmission, c.compact, c.images, c.configure.model, c.configure.thinking]) {
+    for (const cap of [c.steer, c.abort, c.abortSubmission, c.compact, c.configure.model, c.configure.thinking]) {
       expect(cap.supported).toBe(false);
       if (!cap.supported) expect(cap.reason).toMatch(/\S/);
     }
     expect(c.followUp.supported).toBe(true);
-    expect(c.dialogs.mode).toBe("readonly");
-    if (c.dialogs.mode === "readonly") expect(c.dialogs.reason).toMatch(/\S/);
+    expect(c.dialogs.mode).toBe("interactive");
     expect(c.images.maxCount).toBeGreaterThan(0);
     const calls = [
       s.handle.abort(),

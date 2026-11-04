@@ -73,13 +73,15 @@ export function Composer(props: {
   };
   const onDrop = (e: DragEvent<HTMLFormElement>) => {
     e.preventDefault();
+    e.stopPropagation();
     setDrop("idle");
     void add(filesFromDrop(e.dataTransfer));
   };
 
   return (
-    <form aria-label="Composer" data-drop={drop} className="rounded-lg border bg-card" onSubmit={(e) => { e.preventDefault(); const t = enterTarget(); if (t !== null) submit(t); }}
+    <form aria-label="Composer" data-drop={drop} className="rounded-lg border bg-card data-[drop=over]:border-dashed data-[drop=over]:border-primary data-[drop=over]:bg-primary/5" onSubmit={(e) => { e.preventDefault(); const t = enterTarget(); if (t !== null) submit(t); }}
       onDragEnter={onDrag} onDragOver={onDrag} onDragLeave={() => setDrop("idle")} onDrop={onDrop}>
+      {drop === "over" && <span data-part="drop-cue" className="block px-3 pt-1.5 font-mono text-xs text-primary">Drop to attach</span>}
       {queued.length > 0 && (
         <ul aria-label="Queued" data-part="queued-bar" className="flex flex-wrap gap-1.5 border-b px-3 py-2">
           {queued.map((q) => (
@@ -94,10 +96,12 @@ export function Composer(props: {
         </ul>
       )}
       {attachments.length > 0 && (
-        <ul aria-label="Attachments">
+        <ul aria-label="Attachments" data-part="attachment-bar" className="flex flex-wrap gap-2 px-3 pt-2">
           {attachments.map((a) => (
-            <li key={a.name} data-attachment={a.name} data-kind={a.kind}>
-              {a.name}{" "}
+            <li key={a.name} data-attachment={a.name} data-kind={a.kind}
+              className="flex items-center gap-1.5 rounded-md border px-2 text-xs">
+              {a.kind === "image" && <img data-part="attachment-thumb" alt={a.name} src={`data:${a.mimeType};base64,${a.dataBase64}`} className="h-6 w-8 rounded-sm object-cover" />}
+              <span data-part="attachment-name">{a.name}</span>
               <button type="button" aria-label={`Remove ${a.name}`}
                 onClick={() => { current.current = current.current.filter((x) => x !== a); setAttachments(current.current); }}>×</button>
             </li>
@@ -105,8 +109,8 @@ export function Composer(props: {
         </ul>
       )}
       {rejected.length > 0 && (
-        <ul role="alert" aria-label="Rejected files">
-          {rejected.map((r, i) => <li key={`${r.name}:${i}`}>{r.name}: {r.message}</li>)}
+        <ul role="alert" aria-label="Rejected files" className="px-3 pt-1.5 text-xs text-status-blocked-bright">
+          {rejected.map((r, i) => <li data-part="rejected-file" key={`${r.name}:${i}`}>{r.name}: {r.message}</li>)}
         </ul>
       )}
       <textarea aria-label="Message" value={text} disabled={caps === null} rows={2} className="w-full resize-none bg-transparent px-3 py-2 outline-none"

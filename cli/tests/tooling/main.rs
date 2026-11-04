@@ -21,6 +21,7 @@ mod pill_parity;
 mod pill_sites;
 mod pnpm_fresh;
 mod preview_script;
+mod preview_web_script;
 mod real_process_scan;
 mod retired_terms;
 mod run_with;

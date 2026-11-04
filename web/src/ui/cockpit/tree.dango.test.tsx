@@ -7,7 +7,7 @@ import { ContextTree } from "./ContextTree.tsx";
 
 function session(id: string, key: string, state: SessionNode["ref"]["state"], planId: string | null): SessionNode {
   return {
-    ref: { id, key, runner: "pi", role: "manager", state, title: null },
+    ref: { id, key, runner: "pi", role: planId === null ? "manager" : "lead", state, title: null },
     contextId: "c1",
     planId,
     jobKey: null,
@@ -64,32 +64,26 @@ it("context tree renders sections, glyphs and job counters", () => {
   act(() => add?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(onNewContext).toHaveBeenCalledTimes(1);
   expect(c.textContent).not.toMatch(/\bActive\b|\bStanding\b/);
-  const ctxRow = c.querySelector('[data-context="c1"] [data-part="context-row"]');
-  expect(ctxRow?.textContent).toContain("Context One");
-  const ctxAgg = ctxRow?.querySelector('[data-part="aggregate"]');
-  expect(ctxAgg?.getAttribute("data-glyph")).toBe("active");
-  expect(ctxAgg?.getAttribute("data-tone")).toBe("active");
-  expect(ctxAgg?.getAttribute("aria-hidden")).toBe("true");
-  expect(ctxAgg?.className).toContain("glyph-active");
-  const planRow = c.querySelector('[data-plan="p1"] [data-part="plan-row"]');
-  expect(planRow?.querySelector('[data-part="aggregate"]')?.getAttribute("data-glyph")).toBe("active");
-  expect(planRow?.querySelector('[data-part="aggregate"]')?.getAttribute("data-tone")).toBe("active");
-  const idleRow = c.querySelector('[data-plan="p2"] [data-part="plan-row"] [data-part="aggregate"]');
-  expect(idleRow?.getAttribute("data-glyph")).toBe("idle");
-  expect(idleRow?.getAttribute("data-tone")).toBe("neutral");
-  const counts = planRow?.querySelector('[data-part="counts"]');
-  expect(counts?.textContent).toBe("queued 2 · merged 13 · running 1 · failed 1");
-  expect(counts?.querySelector('[data-count="running"]')?.textContent).toBe("running 1");
-  expect(counts?.querySelector('[data-count="merged"]')?.textContent).toBe("merged 13");
-  expect(counts?.querySelector('[data-count="failed"]')?.textContent).toBe("failed 1");
-  expect(counts?.querySelector('[data-count="queued"]')?.textContent).toBe("queued 2");
+  const ctxRow = c.querySelector('[data-context="c1"] > button[data-select="context"]');
+  expect(ctxRow?.querySelector('[data-part="context-id"]')?.textContent).toBe("c1");
+  const ctxDot = ctxRow?.querySelector('[role="img"][data-dot]');
+  expect(ctxDot?.getAttribute("data-dot")).toBe("waiting");
+  expect(ctxDot?.getAttribute("data-glyph")).toBe("idle");
+  expect(ctxRow?.querySelector('[data-part="aggregate"]')).toBeNull();
+  const planRow = c.querySelector('[data-plan="p1"] button[data-select="plan"]');
+  const planDot = planRow?.querySelector('[role="img"][data-dot]');
+  expect(planDot?.getAttribute("data-glyph")).toBe("active");
+  expect(planDot?.getAttribute("data-tone")).toBe("active");
+  expect(planDot?.className).toContain("glyph-active");
+  const stopped = c.querySelector('[data-plan="p2"] button[data-select="plan"] [role="img"][data-dot]');
+  expect(stopped?.getAttribute("data-dot")).toBe("stopped");
+  const counts = planRow?.querySelector('[data-part="counters"]');
+  expect(counts?.textContent).toBe("2 · 1 · 1 · 13");
+  expect(counts?.querySelector('[data-count="planned"]')?.textContent).toBe("2");
+  expect(counts?.querySelector('[data-count="active"]')?.textContent).toBe("1");
+  expect(counts?.querySelector('[data-count="failed"]')?.textContent).toBe("1");
+  expect(counts?.querySelector('[data-count="done"]')?.textContent).toBe("13");
   expect(counts?.querySelector('[data-count="draft"]')).toBeNull();
-  const dot = c.querySelector('[data-session="s-lead"]')?.parentElement?.querySelector("[data-dot]");
-  expect(dot?.getAttribute("data-glyph")).toBe("active");
-  expect(dot?.getAttribute("data-tone")).toBe("active");
-  expect(dot?.className).toContain("glyph-active");
-  expect(c.querySelector('[data-session="s-mgr"]')?.parentElement?.querySelector("[data-dot]")?.getAttribute("data-glyph")).toBe("idle");
-  expect(c.querySelector('[data-session="s-lead"] .font-mono')?.textContent).toBe("c1:p1");
   m.unmount();
 });
 
@@ -105,7 +99,7 @@ it("context tree archive section collapses", () => {
   expect(details?.open).toBe(true);
   act(() => summary?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(details?.open).toBe(false);
-  expect(m.container.querySelector("[data-part=\"aggregate\"][data-glyph]")).not.toBeNull();
+  expect(m.container.querySelector('[role="img"][data-dot]')).not.toBeNull();
   m.unmount();
 });
 
@@ -115,13 +109,12 @@ it("context tree marks the selected plan", () => {
   const c = m.container;
   const item = c.querySelector('li[role="treeitem"][data-plan="p1"]');
   expect(item?.querySelector('button[data-select="plan"]')?.getAttribute("aria-current")).toBe("true");
-  expect(item?.querySelector('[data-part="plan-row"] [data-part="aggregate"]')).not.toBeNull();
+  expect(item?.querySelector('button[data-select="plan"] [role="img"][data-dot]')).not.toBeNull();
   const other = c.querySelector('li[data-plan="p2"] button[data-select="plan"]');
   expect(other?.hasAttribute("aria-current")).toBe(false);
-  expect(c.querySelector('[data-session="s-mgr"]')?.getAttribute("aria-current")).toBe("true");
-  expect(c.querySelector('li[role="treeitem"][data-context="c1"]')).not.toBeNull();
-  expect(c.querySelector('[data-session="s-lead"]')).not.toBeNull();
-  expect(c.querySelectorAll('[role="img"][data-dot]')).toHaveLength(2);
+  expect(c.querySelector('[data-context="c1"] > button[data-select="context"]')?.getAttribute("aria-current")).toBe("true");
+  expect(c.querySelector('[data-session="s-lead"]')).toBeNull();
+  expect(c.querySelectorAll('[role="img"][data-dot]')).toHaveLength(3);
   expect(c.querySelector('[data-dot="working"]')?.getAttribute("data-tone")).toBe("active");
   m.unmount();
 });

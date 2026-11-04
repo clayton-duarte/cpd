@@ -31,15 +31,15 @@ const sessionSendArgs = (id: string, text: string): readonly string[] => ["sessi
 const sessionRetierArgs = (id: string, tier: string): readonly string[] => ["session", "retier", id, "--tier", tier];
 
 const REASON = {
-  images: "pi sessions take prompts only through `cpd session send`, which carries text and no images",
   steer: "`cpd session send` cannot steer a running pi turn; send a follow-up instead",
   abort: "cpd has no command to abort a pi session turn",
   abortSubmission: "pi sessions have no submission queue to cancel from",
   compact: "cpd has no command to compact a pi session",
   model: "cpd cannot change the model of a pi session; pick a Tier instead",
   thinking: "cpd cannot change the thinking level of a pi session",
-  dialogs: "a TUI dialog of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
+  dialogs: "a question of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
 } as const;
+const IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as const;
 const no = (reason: string): { supported: false; reason: string } => ({ supported: false, reason });
 const unsupported = (reason: string): WebError => new WebError("unsupported_capability", reason);
 
@@ -63,6 +63,9 @@ export function createPiBackend(deps: {
   fs: FileBoundary;
   watch: WatchBoundary;
   git: GitBoundary;
+  cpdHome: string;
+  attachmentsDir: string;
+  now(): number;
   windowSize?: number;
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
@@ -117,7 +120,7 @@ export function createPiBackend(deps: {
     };
 
     const capabilities: Capabilities = {
-      images: { ...no(REASON.images), maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64 },
+      images: { supported: true, maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64 },
       steer: no(REASON.steer),
       followUp: { supported: true },
       abort: no(REASON.abort),
@@ -128,7 +131,7 @@ export function createPiBackend(deps: {
         thinking: no(REASON.thinking),
         tier: { supported: true, options: session.tierOptions },
       },
-      dialogs: { mode: "readonly", reason: REASON.dialogs },
+      dialogs: { mode: "interactive" },
     };
 
     let disposed = false;
@@ -138,7 +141,11 @@ export function createPiBackend(deps: {
       if (!disposed) emit(m);
     };
     const status = (): void => out({ type: "session.status", sessionId, busy, queued: [] });
-    const dialog = (d: Dialog): void => out({ type: "session.dialog", sessionId, dialog: d });
+    const openReviews = new Set<string>();
+    const dialog = (d: Dialog): void => {
+      if (d.method === "cpd_plan_review") openReviews.add(d.id);
+      out({ type: "session.dialog", sessionId, dialog: d });
+    };
 
     const startWatch = (normalizer: PiNormalizer, offset: number, identity: string): void => {
       watcher = watchSession({
@@ -162,6 +169,7 @@ export function createPiBackend(deps: {
       if (r.added.length > 0) out({ type: "session.append", sessionId, items: r.added });
       if (r.updated.length > 0) out({ type: "session.update", sessionId, items: r.updated });
       for (const d of r.dialogsOpened) dialog(d);
+      for (const id of r.dialogsResolved) openReviews.delete(id);
       for (const id of r.dialogsResolved) out({ type: "session.dialogResolved", sessionId, dialogId: id, outcome: "answered" });
       if (r.factsChanged) out({ type: "session.footer", sessionId, footer: footer() });
       const now = isBusy(tail.normalizer.facts);
@@ -198,13 +206,18 @@ export function createPiBackend(deps: {
         out({ type: "session.window", sessionId, mode: "earlier", window: page.window });
       },
       async submit(input) {
-        if (input.images.length > 0) throw unsupported(REASON.images);
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         if (input.text.trim() === "") throw new WebError("invalid_submission", "the message is empty");
-        if (input.text.length > PI_SEND_TEXT_MAX) {
+        const stamp = deps.now();
+        const paths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
+        const text = paths.length === 0 ? input.text : `${input.text}\n\n${paths.map((p) => `[Attached image: ${p}]`).join("\n")}`;
+        if (text.length > PI_SEND_TEXT_MAX) {
           throw new WebError("invalid_submission", `the message is longer than ${PI_SEND_TEXT_MAX} characters`);
         }
-        await deps.cpd.json(sessionSendArgs(sessionId, input.text));
+        for (const [i, im] of input.images.entries()) {
+          await deps.fs.write(paths[i] as string, Uint8Array.from(Buffer.from(im.dataBase64, "base64")));
+        }
+        await deps.cpd.json(sessionSendArgs(sessionId, text));
         out({ type: "session.submitAck", sessionId, clientSubmissionId: input.clientSubmissionId, queued: false });
       },
       abort: () => Promise.reject(unsupported(REASON.abort)),
@@ -221,7 +234,20 @@ export function createPiBackend(deps: {
         out({ type: "session.footer", sessionId, footer: footer() });
       },
       listModels: () => Promise.reject(unsupported(REASON.model)),
-      respond: () => Promise.reject(unsupported(REASON.dialogs)),
+      async respond(dialogId, response) {
+        if (response.method === "ask_user_question") throw unsupported(REASON.dialogs);
+        if (response.outcome === "cancelled") return;
+        if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
+        const n = dialogId.slice("review:".length);
+        const plan = ref.key.split(":")[1] as string;
+        if (response.outcome === "approve") await deps.cpd.json(["plan", "decide", n, "--approve", "--plan", plan]);
+        else if (response.outcome === "reject") await deps.cpd.json(["plan", "decide", n, "--reject", "--plan", plan]);
+        else {
+          const path = `${deps.cpdHome}/run/${plan}/feedback-${n}.md`;
+          await deps.fs.write(path, new TextEncoder().encode(response.feedback));
+          await deps.cpd.json(["plan", "decide", n, "--reject", "--feedback-file", path, "--plan", plan]);
+        }
+      },
       dispose() {
         disposed = true;
         watcher?.dispose();

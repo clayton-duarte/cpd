@@ -10,6 +10,7 @@ export interface FileStat {
 export interface FileBoundary {
   stat(path: string): Promise<FileStat>;
   read(path: string, start: number, end: number): Promise<Uint8Array>;
+  write(path: string, bytes: Uint8Array): Promise<void>;
 }
 export const CHUNK_BYTES = 65_536;
 

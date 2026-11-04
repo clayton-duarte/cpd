@@ -68,7 +68,7 @@ export interface ChatHeaderProps {
   readonly role?: SessionRole;
   /** `view.ref.runner`. Absent: no runner in the subtitle. */
   readonly runner?: Runner;
-  /** `view.busy`. true: the live status shows. Absent or false: it does not. */
+  /** The computed `busy` of 2.4.3 (`ChatPane` passes it, not `view.busy` alone). true: the live status shows. Absent or false: it does not. */
   readonly busy?: boolean;
   /** Thinking toggle. Rendered only when `onToggleThinking` is passed; `thinking` then defaults to "folded". */
   readonly thinking?: ThinkingMode;
@@ -82,7 +82,7 @@ export function ChatHeader(props: ChatHeaderProps): JSX.Element;
 
 `<ChatHeader sessionKey="k" title={null} />` (the Phase 2 call) renders without a toggle and without a status.
 
-Source of each element: key `SessionView.ref.key` (fallback `SessionView.id`); title `SessionView.title`; role and runner `SessionView.ref` (`SessionRef.role`, `SessionRef.runner`); running status `SessionView.busy`. `ChatPane` passes `role={view.ref?.role}`, `runner={view.ref?.runner}`, `busy={view.busy}` and the four toggle props from `useChatToggles()`; with `exactOptionalPropertyTypes` an absent `ref` spreads nothing (`{...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}`).
+Source of each element: key `SessionView.ref.key` (fallback `SessionView.id`); title `SessionView.title`; role and runner `SessionView.ref` (`SessionRef.role`, `SessionRef.runner`); running status: the computed `busy` of 2.4.3. `ChatPane` passes `role={view.ref?.role}`, `runner={view.ref?.runner}`, `busy={busy}` (the computed value) and the four toggle props from `useChatToggles()`; with `exactOptionalPropertyTypes` an absent `ref` spreads nothing (`{...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}`).
 
 ### 1.2 Behaviour
 
@@ -145,6 +145,8 @@ export function Transcript(props: {
   sizes?: SizeObserver;                    // KEPT
   /** The assistant card stamp `<key> · <time>`. Absent: the card shows no stamp. `ChatPane` passes `view.ref?.key ?? view.id`. */
   sessionKey?: string;
+  /** The computed `busy` of 2.4.3. Absent or false: no working cue. Default false. */
+  busy?: boolean;
   /** Default "folded". */
   thinking?: ThinkingMode;
   /** Default "grouped". */
@@ -167,9 +169,10 @@ div[data-part="transcript"]                                  KEPT (app.css)
 │   │       └─ div[data-row-key]                              KEPT, MeasuredRow, no className, no style, the only measured element
 │   │           └─ div[data-part="row-body"]                  NEW, py-[3px]; the one wrapper of every row (RowBody)
 │   │               └─ <row>   article[data-kind="user"] | article[data-kind="assistant"] | details[data-kind="fold"] | details[data-kind="compaction"] | details[data-kind="tool-group"] | div[data-part="tool-rail"] > details[data-kind="tool"] | article[data-kind="orphan-result"]
-│   └─ ul[aria-label="Queued messages"]                       KEPT, inside the log, after virtual-space; NEW className "flex flex-col gap-0 px-4 pb-2.5 list-none m-0 p-0"
-│       ├─ li[data-queued]                                    2.6
-│       └─ li[data-pending]                                   2.7
+│   ├─ ul[aria-label="Queued messages"]                       KEPT, inside the log, after virtual-space; NEW className "flex flex-col gap-0 px-4 pb-2.5 list-none m-0 p-0"
+│   │   ├─ li[data-queued]                                    2.6
+│   │   └─ li[data-pending]                                   2.7
+│   └─ div[role="status"][data-part="working-cue"]            NEW, last child of the log, only while busy (2.4.3)
 └─ button[type="button"][data-action="jump-to-bottom"] "Jump to bottom"     KEPT; only when not pinned; sibling after the log.
       <Button variant="outline" size="sm"> className "rounded-full border-input bg-popover px-3 text-[12px] text-fg-strong"; position is app.css (absolute, bottom 0, centred), no position utility on it
 ```
@@ -245,6 +248,24 @@ details[data-kind="thinking"][open?=open]                   KEPT hook; closed in
 - Keyboard: `summary` is natively focusable; Enter and Space toggle. `⌃T` toggles all.
 - `Phase 2 change:` the summary text was `Thinking…` + the raw text inside the `details`; it is now `Thinking` plus the optional time, the raw text is in `[data-part="thinking-body"]`. `Transcript.test` 2 is updated (2.10).
 
+### 2.4.3 Working cue (`busy`, `Transcript`)
+
+**Computed busy.** `ChatPane` computes `busy = view.busy || view.ref?.state === "working" || view.pending.some((p) => p.state === "sending")` and passes this one value to `ChatHeader` (1.1), `Transcript` (2.1) and `Composer` (`DESIGN-compose.md` section 0). It replaces `view.busy` in those three places. `TierSelector` keeps `view.busy` (`DESIGN-compose.md` section 0).
+
+**Props.** `busy?: boolean` on `Transcript`, default `false`.
+
+**Rule.** When `busy` is true and the last item of `items` is not an assistant item with `streaming === true`, the log renders a working cue as its last child, after the Queued messages list (2.2). When the last item is a streaming assistant item, the 2.4 marker shows instead and no cue renders.
+
+```
+div[role="status"][data-part="working-cue"]     NEW; flex h-[26px] items-center gap-2.5 px-2 text-[12px] text-mizu-bright   (the look of the 2.4 marker)
+├─ span[aria-hidden="true"]  className={glyphClass.active}     (data-tone="active" data-glyph="active")
+└─ text node: `Using ${tool.name}…` when the last item is a tool item with status "running"; else "Thinking…"
+```
+
+- The text uses U+2026. The tool name is `ToolItem.name`, the raw name the protocol carries.
+- The cue is not a row: it has no `data-row-key`, is not in `groupRows`, is not virtualised and is not measured by `MeasuredRow`. It sits in normal flow after the rows, like the Queued list.
+- **Resolution:** the board's cue names a command and an elapsed time; the protocol carries neither, so the cue is `Using <tool name>…` or `Thinking…` (Not wired: elapsed time).
+
 ### 2.5 Compaction divider
 
 Component: `CompactionRow` (`web/src/ui/chat/Folds.tsx`), props **KEPT** `{ item: CompactionItem }`.
@@ -307,6 +328,24 @@ Test-facing facts: `sent` `textContent` is `` `${p.text}sent` `` (bubble text, t
 
 Both KEPT hooks and copy (`Load earlier`, `Jump to bottom`); classes in 2.2. **Resolution:** the board's `▲ 3,912 earlier messages` needs a count the window does not carry; the Phase 2 copy `Load earlier` stays.
 
+### 2.8.1 Pinning to the bottom
+
+The log is pinned to the bottom only while the user has not scrolled up. State: `pinned` (initially true) and `lastScrollTop` (a ref: the `scrollTop` of the previous scroll event).
+
+**Scroll event (`onScroll`).**
+1. If `lastScrollTop - scrollTop > 1` (the `scrollTop` is more than 1px lower than the previous event's, that is, the user scrolled up), `pinned = false` at once, even inside the near-bottom distance.
+2. Otherwise `pinned = isNearBottom(...)` (`virtual.ts`, 48px).
+3. `lastScrollTop = scrollTop`, on every event.
+
+**Bottom write (layout effect, after each commit).** `log.scrollTop = log.scrollHeight` is written only when `pinned` is true AND at least one of these holds since the previous commit:
+- the layout total height changed;
+- `tailEpoch` changed;
+- `pending` grew;
+- `busy` turned on (false to true);
+- `pinned` turned on (the transcript just became pinned, for example by the Jump to bottom button).
+
+An ordinary re-render, with none of these, never writes `scrollTop`. The bottom write's own scroll event moves `scrollTop` down, so step 1 does not unpin. **Evidence:** `sc-scroll.md`: the write on every commit while pinned undid a user's scroll-up; this rule replaces that write.
+
 ### 2.9 Virtualization contract (what every new wrapper keeps)
 
 1. `MeasuredRow` and `div[data-row-key={row.key}]` are unchanged: no `className`, no `style`, no `data-index`, the same ref and `ResizeObserver` wiring. The measured element is that div (its border box).
@@ -314,7 +353,7 @@ Both KEPT hooks and copy (`Load earlier`, `Jump to bottom`); classes in 2.2. **R
 3. Row keys come from `groupRows` unchanged (`item.id`, `group:<first tool id>`); `rows.ts` and `virtual.ts` are not edited.
 4. The new wrapper `div[data-part="row-body"]` is the **only** child of `div[data-row-key]` and is rendered for every row, so `[data-row-key]`'s `firstElementChild` is stable across re-renders (`Rows.test` 2). Vertical spacing is its padding (0.3), never a margin.
 5. A row changes height only by content (a `details` opening, a Show-more click, a Markdown stream); the observer reports it, as in Phase 2. Toggling Thinking or Tools changes heights and goes through the same `onHeight` compensation.
-6. The log, pin, `data-at-bottom`, `jump-to-bottom` and prepend-anchor logic are not touched.
+6. The `data-at-bottom`, `jump-to-bottom` and prepend-anchor logic are not touched; the pin and bottom-write rule is 2.8.1.
 
 ### 2.10 Phase 2 tests this section changes
 
