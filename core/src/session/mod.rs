@@ -16,6 +16,9 @@
 //! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
 mod archive;
+pub mod delta;
+#[cfg(test)]
+mod delta_tests;
 #[cfg(test)]
 mod durable_moves_tests;
 #[cfg(test)]

@@ -115,6 +115,10 @@ error_codes! {
     ModelsRefreshFailed = "models_refresh_failed" => Failure,
     ModelsNoProvider = "models_no_provider" => Failure,
     ModelsHelperFailed = "models_helper_failed" => Failure,
+    // The Bifrost judge of write-time curation (contract §4.6).
+    JudgeUnreachable = "judge_unreachable" => Failure,
+    JudgeRefused = "judge_refused" => Failure,
+    JudgeBadReply = "judge_bad_reply" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
@@ -186,6 +190,7 @@ error_codes! {
     ExploreWorkflowForbidden = "explore_workflow_forbidden" => Refused,
     ExploreNoDraft = "explore_no_draft" => Refused,
     ExploreNeedsMixed = "explore_needs_mixed" => Refused,
+    ExplorePending = "explore_pending" => Refused,
     ArtefactMissing = "artefact_missing" => Refused,
     SummaryMissing = "summary_missing" => Refused,
     SummaryTooLong = "summary_too_long" => Refused,
@@ -522,6 +527,7 @@ mod tests {
             (ErrorCode::ExploreWorkflowForbidden, 3),
             (ErrorCode::ExploreNoDraft, 3),
             (ErrorCode::ExploreNeedsMixed, 3),
+            (ErrorCode::ExplorePending, 3),
             (ErrorCode::ArtefactMissing, 3),
             (ErrorCode::SummaryMissing, 3),
             (ErrorCode::SummaryTooLong, 3),

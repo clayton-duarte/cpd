@@ -23,6 +23,12 @@ An entry is a bold term, a parenthesis with its kind and the Context record that
 The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
+**Neighbour curation** (mechanism, Experimental Feature `write_curation`):
+Checking a new Context record against its nearest in-force records at write time. It proposes pending retirements only; the User approves them. Contract §4.6.
+
+**Vector cache** (entity):
+`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
+
 **Permanent Context** (entity, pro-d338):
 One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.
 _Avoid_: default Context, system Context

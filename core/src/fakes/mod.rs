@@ -5,4 +5,5 @@ pub mod classifier;
 pub mod context_engine;
 pub mod embedding;
 pub mod git;
+pub mod judge;
 pub mod tmux;

@@ -1,0 +1,11 @@
+[data-shell] { display: grid; grid-template-columns: 20rem 1fr 22rem; height: 100vh; gap: 0.5rem; }
+[data-shell] > aside, [data-column] { overflow: auto; min-width: 0; }
+[data-column] { display: flex; flex-direction: column; }
+[data-column] > main { flex: 1; min-height: 0; overflow: auto; }
+[data-chat-dropzone] { display: flex; flex-direction: column; height: 100%; }
+[data-chat-dropzone] [role="log"] { flex: 1; overflow: auto; }
+[data-diff="add"] { background: #e6ffed; }
+[data-diff="remove"] { background: #ffeef0; }
+[data-side-by-side] { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+button:disabled, textarea:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+[data-shell] > header, [data-shell] > footer { grid-column: 1 / -1; }

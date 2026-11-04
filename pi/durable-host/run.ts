@@ -32,16 +32,16 @@ import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
 import { registerHostTools } from "./tools.ts";
-import type { EventStream } from "../durable-worker/harness.ts";
+import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
 import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
-export type { EventStream };
+export type { ViewCall, ViewStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
 /** The change a retier applies (contract §6.18): pi-durable's `AgentChange`, narrowed to the two fields the host sets. */
 export type AgentChange = { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null };
-export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<ViewStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
 
 /** The four conversation commands of contract 6.17 a `Conversation` must carry (built by `conversationOf`). */
 export type ConversationCommands = {
@@ -99,17 +99,18 @@ export type Deps = {
   log(line: string): void;
 };
 
-/** `conversation.closed` settles with a pi-durable `SessionEnd`: `{ reason: 'closed' } | { reason: 'failed', error }`. */
+/** A `WatchEnd` (`{ kind: 'stopped' | 'aborted' | 'ended' } | { kind: 'listener_error' | 'failed', error }`) or a `SessionEnd` (`{ reason }`). */
 function endText(end: unknown): string {
   if (typeof end !== "object" || end === null) return String(end);
-  const { reason, error } = end as { reason?: unknown; error?: unknown };
-  if (reason !== "failed") return String(reason ?? "closed");
+  const { kind, reason, error } = end as { kind?: unknown; reason?: unknown; error?: unknown };
+  if (kind !== undefined && kind !== "failed" && kind !== "listener_error") return String(kind);
+  if (kind === undefined && reason !== "failed") return String(reason ?? "closed");
   return `failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-/** The host's own version (the wire's `host_version`) and the pi-durable it is built on (package.json pins 1.3.0). */
+/** The host's own version (the wire's `host_version`) and the pi-durable it is built on (package.json pins 1.5.0). */
 const HOST_VERSION = "1";
-const PI_DURABLE = "1.3.0";
+export const PI_DURABLE = "1.5.0";
 /** Timers of the server: the global ones, unref-ed so a pending hello timeout never holds the process. */
 const timers = {
   after(ms: number, fn: () => void): () => void {
@@ -147,7 +148,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   let follower: { start(): void; stop(): void } | undefined;
   let server: Server | undefined;
   let listener: { close(): Promise<void> } | undefined;
-  let current: EventStream | undefined;
+  let current: ViewStream | undefined;
   let over = false;
   let byeReason: "shutdown" | "storage_failed" = "shutdown";
   let end!: (code: number, reason?: "shutdown" | "storage_failed") => void;
@@ -438,7 +439,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // The event stream: the ring of what clients are caught up on (contract §6.14).
     const first = current!;
     const epoch = deps.newEpoch();
-    const ring = new Ring(epoch, first.snapshot);
+    const ring = new Ring(epoch, first.value);
     let from = "";
     let nextClient = 0;
     const srv = createServer({
@@ -548,26 +549,36 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       clientId: () => (from = `c${++nextClient}`),
     });
     server = srv;
-    const attachStream = (s: EventStream): void => {
-      s.start(async (events) => {
-        if (s !== current) return;
-        srv.frame(ring.append([...events]));
-        if (!ring.shouldRebase(events.some((e) => (e as { type?: unknown }).type === "run_end"))) return;
-        // Retire this stream first (events it delivers after this point are in the next snapshot); its stop is not awaited, since it may wait for this very listener (unverified in pi-durable 1.3.0).
-        current = undefined;
-        s.stop().catch((e) => failed("stopping the stream", e));
-        const next = await conversation.watch();
-        current = next;
-        srv.frame(ring.rebase(next.snapshot));
-        attachStream(next);
+    const hasRun = (view: unknown): boolean => {
+      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
+      return live?.run !== undefined && live.run !== null;
+    };
+    let lastView: unknown = first.value;
+    const attachStream = (s: ViewStream): void => {
+      s.start(async (call: ViewCall) => {
+        if (call.kind === "failed") {
+          failed("the watch", call.error);
+          end(1, "storage_failed");
+          return;
+        }
+        srv.frame(ring.append([...call.ops]));
+        const runEnd = hasRun(lastView) && !hasRun(call.value);
+        lastView = call.value;
+        if (ring.shouldRebase(runEnd)) srv.frame(ring.rebase(call.value));
       });
-      s.closed.then((reason) => {
-        if (s !== current) return;
-        const why = (reason as { reason?: unknown } | null)?.reason;
-        if (why === "stopped") return;
-        failed("the event stream ended", endText(reason));
-        end(1, "storage_failed");
-      });
+      // pi-durable 1.5.0 (chord watch.d.ts): `stop()` idempotently stops future callbacks and settles `closed` with `{ kind: 'stopped' }`; any other kind is the watch ending on its own.
+      s.closed.then(
+        (e) => {
+          if (over || (e as { kind?: unknown } | undefined)?.kind === "stopped") return;
+          failed("the watch ended", endText(e));
+          end(1, "storage_failed");
+        },
+        (e) => {
+          if (over) return;
+          failed("the watch ended", e);
+          end(1, "storage_failed");
+        },
+      );
     };
     attachStream(first);
     listener = await deps.listen(sock, (conn) => {

@@ -1,6 +1,6 @@
 # Attention inbox
 
-The attention inbox is cpd's **single source of "needs you"**: one stored item per thing that needs the User, opened and closed by the engine from its cause. It is the second of the two queue-like concepts cpd keeps by design (`hs-d802`, `cpd context show --record hs-d802`; verified in [architecture-verification.md §9](../research/architecture-verification.md)).
+The attention inbox is cpd's **single source of "needs you"**: one stored item per thing that needs the User, opened and closed by the engine from its cause. It is the second of the two queue-like concepts cpd keeps by design (`hs-d802` (a record of machine `hs`); verified in [architecture-verification.md §9](../research/architecture-verification.md)).
 
 ## Purpose
 
@@ -31,4 +31,4 @@ The Inbox owns only what the User must act on. Escalations from Workers go to th
 - [contract.md](../contract.md) — §2.2 "Inbox item", §3.7 (engine, E8).
 - [CONTEXT.md](../CONTEXT.md) — Inbox, Inbox item.
 - [architecture-verification.md](../research/architecture-verification.md) — §9 (the two queue-like concepts).
-- Model: `hs-d802` (`cpd context show --record hs-d802`).
+- Model: `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)).

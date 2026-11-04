@@ -100,7 +100,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {
           if (over.firstMessage === true) return { id: 1, status: async () => "queued", wait: async () => "done" };
           throw new Error("the host submits nothing");
         },
-        watch: async () => ({ snapshot: {}, start: () => {}, stop: async () => ({ reason: "stopped" }), closed: new Promise<unknown>(() => {}) }),
+        watch: async () => ({ value: {}, start: () => {}, stop: async () => ({ kind: "stopped" }), closed: new Promise<unknown>(() => {}) }),
         abort: async () => {},
         abortSubmission: async () => "not_found",
         write: async () => ({}),
