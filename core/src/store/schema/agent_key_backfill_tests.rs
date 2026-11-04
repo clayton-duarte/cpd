@@ -208,7 +208,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     assert_eq!(
         NAMED.iter().rev().nth(6).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `workflow-base-retarget` and `bump-last-posted-at` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at` and `workflow-base-retarget` come after it"
     );
     assert_eq!(
         NAMED.iter().rev().nth(5).map(|n| n.name),
@@ -228,11 +228,11 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     );
     assert_eq!(
         NAMED.iter().rev().nth(1).map(|n| n.name),
-        Some("20261104T1600-workflow-base-retarget")
+        Some("20261104T1445-bump-last-posted-at")
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261104T1445-bump-last-posted-at")
+        Some("20261104T1600-workflow-base-retarget")
     );
 }
 
