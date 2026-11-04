@@ -1107,6 +1107,79 @@ fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_faile
     assert!(live.plan_events("pr-opened").is_empty());
 }
 
+/// The Attempt of an open Job ended `failed` / `crashed` (never left `merging`), its detail starting `prefix`, the Job retried at the same
+/// Tier, and the Plan still holds the one `open` Job (pro-d375, pro-d379).
+fn assert_open_attempt_crashed(live: &Live, attempt: &Value, prefix: &str) {
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("failed"), &json!("crashed")),
+        "{attempt}"
+    );
+    assert_ne!(attempt["status"], json!("merging"), "{attempt}");
+    let retry = live.event("open-repo-a1", "attempt-retry");
+    let feedback = retry["data"]["feedback"].as_str().unwrap();
+    assert!(
+        feedback.starts_with(prefix)
+            || feedback.contains(&format!("\n{prefix}"))
+            || feedback.contains(&format!(": {prefix}")),
+        "the detail starts {prefix}: {retry}"
+    );
+    assert_eq!(
+        live.job_status("open-repo"),
+        "queued",
+        "retried at the same Tier"
+    );
+    let opens: i64 = live.value("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'");
+    assert_eq!(opens, 1, "no open-repo-2");
+}
+
+/// A `gh pr list` that fails at the adoption check (step 6b, the first `gh` call, after the Gates) ends the Attempt `failed` / `crashed` with
+/// the detail `gh_failed:`, like step 8b: never left `merging` for R2 to merge (pro-d375).
+#[test]
+fn an_open_jobs_gh_failure_at_the_adoption_check_ends_the_attempt_crashed_with_gh_failed() {
+    let live = open_live();
+    live.runner().on(
+        "gh",
+        |_| true,
+        Reply::exit(1, "", "GraphQL: API rate limit already exceeded\n"),
+    );
+    let before = live.remote("cpd/pay/repo");
+
+    let (attempt, _) = live.run_job("open-repo", submit_only);
+
+    assert_open_attempt_crashed(&live, &attempt, "gh_failed:");
+    assert_eq!(live.remote("cpd/pay/repo"), before, "no push happened");
+    assert_eq!(
+        (live.pr_row().0.as_str(), live.phase().as_str()),
+        ("dispatch", "dispatch")
+    );
+    assert_eq!(live.pr_row().1, None, "no pull request recorded");
+    assert!(live.plan_events("pr-opened").is_empty());
+}
+
+/// A git failure in `base_check` (step 6: the fetch of the base) ends the Attempt `failed` / `crashed` with the detail `git_failed:` and does
+/// not crash the driver, leaving it `merging` (pro-d379).
+#[test]
+fn an_open_jobs_base_check_git_failure_ends_the_attempt_crashed() {
+    let live = open_live();
+    live.gh_creates();
+    let before = live.remote("cpd/pay/repo");
+
+    let (attempt, _) = live.run_job("open-repo", |live, id| {
+        let submitted = submit(live, id);
+        live.runner().on(
+            "git",
+            |c| c.args.iter().any(|a| a == "fetch"),
+            Reply::exit(128, "", "fatal: unable to access origin\n"),
+        );
+        submitted
+    });
+
+    assert_open_attempt_crashed(&live, &attempt, "git_failed:");
+    assert_eq!(live.remote("cpd/pay/repo"), before, "no push happened");
+    assert_eq!(live.pr_row().0, "dispatch");
+}
+
 /// The update Job on a conflict: the same path as the open Job without `gh`. Its first Attempt is accepted at the submit and fails at the
 /// merge `merge_conflict` (the base check, before the Gates); the next Attempt's Worker merges the base, and cpd runs both Gates on it and
 /// pushes the resolution in the merge; the pull request is already open, so nothing is created and no PR row changes.

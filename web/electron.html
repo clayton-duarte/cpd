@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>cpd</title>
+    <style>
+      html, body { margin: 0; overflow: hidden; background: #1c1a20; color: #d8d2cc; }
+      #terminal { width: 100vw; height: 100vh; }
+      #webui-placeholder { padding: 24px; font-family: monospace; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <div id="webui-placeholder" hidden>WebUI mode is not available in this build yet. Use View &gt; TUI to return.</div>
+    <script type="module" src="/src/electron/renderer.ts"></script>
+  </body>
+</html>

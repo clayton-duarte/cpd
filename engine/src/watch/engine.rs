@@ -87,8 +87,6 @@ pub(super) struct Engine {
     pub team: team::State,
     /// E17: the merge reaction's run in flight and when the last one ended.
     pub react: react::State,
-    /// E23: the bump's run in flight and when each failed one ended.
-    pub bump: bump::State,
     /// E19: the Jira helper's run in flight and when the last failed one ended.
     pub jira: jira::State,
     /// E18: the auto-merge request's run in flight and when the last one failed.
@@ -165,7 +163,6 @@ impl Engine {
             titles: titles::Runs::default(),
             team: team::State::default(),
             react: react::State::default(),
-            bump: bump::State::default(),
             jira: jira::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),

@@ -206,33 +206,37 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(6).map(|n| n.name),
+        NAMED.iter().rev().nth(7).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at` and `record-topics` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics` and `workflow-base-retarget` come after it"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(5).map(|n| n.name),
+        NAMED.iter().rev().nth(6).map(|n| n.name),
         Some("20261103T1100-workflow-reopen")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(4).map(|n| n.name),
+        NAMED.iter().rev().nth(5).map(|n| n.name),
         Some("20261103T1200-context-reads")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(3).map(|n| n.name),
+        NAMED.iter().rev().nth(4).map(|n| n.name),
         Some("20261103T2150-context-supersedes-list")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(2).map(|n| n.name),
+        NAMED.iter().rev().nth(3).map(|n| n.name),
         Some("20261103T2200-drop-question-answer")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(1).map(|n| n.name),
+        NAMED.iter().rev().nth(2).map(|n| n.name),
         Some("20261104T1445-bump-last-posted-at")
     );
     assert_eq!(
-        NAMED.iter().next_back().map(|n| n.name),
+        NAMED.iter().rev().nth(1).map(|n| n.name),
         Some("20261104T1555-record-topics")
+    );
+    assert_eq!(
+        NAMED.iter().next_back().map(|n| n.name),
+        Some("20261104T1600-workflow-base-retarget")
     );
 }
 

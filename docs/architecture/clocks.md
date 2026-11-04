@@ -64,7 +64,7 @@ sequenceDiagram
 
 ## The repeat bump clock: 86 400 s (E23)
 
-The repeat bump (pro-d382; [contract §4.4](../contract.md) "The repeat bump"; [contract §3.7](../contract.md) E23) bumps an unreviewed posted pull request again once 24 hours have passed since its last post. It is a fixed clock: `BUMP_INTERVAL_SECS` = 86 400 is a constant in the code, not a `[watch]` key, and no config changes it. A row is due when `COALESCE(last_posted_at, posted_at)` is at most 86 400 seconds before now, compared as text in the format `posted_at` has. `last_posted_at` is set to the bump's transaction time only after the Slack send succeeded. The engine checks due rows every tick (E23); a failed bump leaves the row due and is retried after `watch.error_repeat_seconds`, for that row alone ([contract §3.7](../contract.md) E23).
+The repeat bump (pro-d382; [contract §4.4](../contract.md) "The repeat bump"; [contract §3.7](../contract.md) E23) was to bump an unreviewed posted pull request again once 24 hours had passed since its last post. Nothing does so today: E23 sends nothing and writes nothing (pro-d386). The later change that raises an Inbox item with a RePost action (pro-d386) keeps this clock. It is a fixed clock: `BUMP_INTERVAL_SECS` = 86 400 is a constant in the code, not a `[watch]` key, and no config changes it. A row is due when `COALESCE(last_posted_at, posted_at)` is at most 86 400 seconds before now, compared as text in the format `posted_at` has. No step writes `last_posted_at` today ([contract §3.7](../contract.md) E23).
 
 ## How the two clocks interleave
 

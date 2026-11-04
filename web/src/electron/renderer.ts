@@ -1,0 +1,54 @@
+import { FitAddon, Ghostty, Terminal } from "@aurigax-ai/ghostty-web";
+import { DANGO_THEME, TERMINAL_FONT, startTerminalHost } from "./terminal.ts";
+import type { TerminalEngine } from "./terminal.ts";
+
+function element(id: string): HTMLElement {
+  const found = document.getElementById(id);
+  if (!found) throw new Error("missing #" + id);
+  return found;
+}
+
+async function boot(): Promise<void> {
+  const bridge = window.cpdElectron;
+  const container = element("terminal");
+  const placeholder = element("webui-placeholder");
+  const ghostty = await Ghostty.fromBytes(await bridge.readWasm());
+  const term = new Terminal({ ghostty, renderer: "webgl", theme: DANGO_THEME, ...TERMINAL_FONT });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  const engine: TerminalEngine = {
+    open: () => term.open(container),
+    fit: () => fit.fit(),
+    size: () => ({ cols: term.cols, rows: term.rows }),
+    write: (data) => term.write(data),
+    focus: () => term.focus(),
+    setPaused: (paused) => term.setPaused(paused),
+    onData: (cb) => void term.onData(cb),
+    onResize: (cb) => void term.onResize(cb),
+    setClipboardWriteHandler: (handler) => {
+      term.clipboardWriteHandler = handler;
+    },
+    dispose: () => term.dispose(),
+  };
+  await startTerminalHost({
+    engine,
+    bridge,
+    resize: {
+      observe: (cb) => {
+        const observer = new ResizeObserver(() => cb());
+        observer.observe(container);
+        return () => observer.disconnect();
+      },
+    },
+    clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
+    view: {
+      showTerminal: (visible) => {
+        container.hidden = !visible;
+        placeholder.hidden = visible;
+      },
+    },
+    onError: (error) => console.error(error),
+  });
+}
+
+boot().catch((error: unknown) => console.error(error));

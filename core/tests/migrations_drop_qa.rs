@@ -25,17 +25,15 @@ fn raw(home: &CpdHome) -> Connection {
     conn
 }
 
-/// The migrations that sort after `MIGRATION`, with the table each one changes and the statement that undoes
-/// its schema change (all are additive): the runner refuses `MIGRATION` while any of them is recorded as applied.
+/// The migrations that sort after `MIGRATION` (`rewind` removes every one of them from the list), with the table each
+/// one changes and the statement that undoes its schema change (all are additive).
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
-const LATER: &[(&str, &str, &str)] = &[
+const LATER: &[(&str, &str)] = &[
     (
-        "20261104T1445-bump-last-posted-at",
         "pr_posts",
         "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
     ),
     (
-        "20261104T1555-record-topics",
         "record_topics",
         "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
     ),
@@ -54,12 +52,12 @@ fn rewind(conn: &Connection) {
         .unwrap();
     let removed = conn
         .execute(
-            "DELETE FROM schema_migrations WHERE name = ?1",
+            "DELETE FROM schema_migrations WHERE name >= ?1",
             params![MIGRATION],
         )
         .unwrap();
-    assert_eq!(removed, 1, "{MIGRATION} is in the list of migrations");
-    for (name, table, undo) in LATER {
+    assert!(removed >= 1, "{MIGRATION} is in the list of migrations");
+    for (table, undo) in LATER {
         let triggers: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN (?1, 'history_tables')")
             .unwrap()
@@ -72,13 +70,6 @@ fn rewind(conn: &Connection) {
                 .unwrap();
         }
         conn.execute_batch(undo).unwrap();
-        let removed = conn
-            .execute(
-                "DELETE FROM schema_migrations WHERE name = ?1",
-                params![name],
-            )
-            .unwrap();
-        assert_eq!(removed, 1, "{name} is in the list of migrations");
     }
     conn.execute_batch(&guard).unwrap();
 }

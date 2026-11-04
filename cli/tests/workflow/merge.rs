@@ -1971,6 +1971,62 @@ fn r_before_step_8_ends_crashed_and_retries_at_the_same_tier() {
     assert!(worktree.exists());
 }
 
+/// An `open` Job's Attempt that died in `merging` before step 8, whose Workflow has no recorded pull request: R2's ancestry test is
+/// always true for a linear Attempt, but nothing was merged, so R ends it `failed` / `crashed` (retried at the same Tier), never `merged`
+/// (pro-d375).
+#[test]
+fn r_an_open_attempt_with_no_recorded_pull_request_ends_crashed_not_merged() {
+    let fx = fx();
+    let (attempt, _worktree) = fx.submitted_as(&fx.first_pr(), "open-repo", "open", None);
+    let old = fx.lead_sha();
+
+    let recovered = fx.recover();
+
+    assert_eq!(recovered.len(), 1);
+    assert!(
+        matches!(
+            recovered[0].end,
+            Some(End::Failed {
+                cause: Failure::Crashed,
+                ..
+            })
+        ),
+        "{recovered:?}"
+    );
+    assert_eq!(fx.lead_sha(), old);
+    let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
+    assert_eq!(
+        (
+            status.as_str(),
+            outcome.as_deref(),
+            cause.as_deref(),
+            merged
+        ),
+        ("ended", Some("failed"), Some("crashed"), None)
+    );
+    assert_eq!(fx.job_row("open-repo"), ("queued".into(), None, None));
+    let events = fx.events(&attempt);
+    assert_eq!(
+        (
+            events[1].0.as_str(),
+            &events[1].1["cause"],
+            &events[1].1["next_tier"]
+        ),
+        ("attempt-retry", &json!("crashed"), &json!("S2"))
+    );
+    let opens: i64 = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(opens, 1, "no second open Job");
+}
+
 /// G13: R removes the driver lock file of an Attempt it ended, and nothing recreates it.
 #[test]
 fn r_removes_the_driver_lock_of_the_attempt_it_ended() {
