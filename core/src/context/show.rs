@@ -4,6 +4,7 @@
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
+use super::reads::{self, Channel, Read};
 use super::{ContextRow, Record, ShowArgs, curated, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -59,11 +60,27 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
             v
         })
         .collect();
+    if args.pushed {
+        let reads: Vec<Read> = records
+            .iter()
+            .filter_map(|r| plain_read(r["id"].as_str()?))
+            .collect();
+        reads::log_reads(&mut store, &id, Channel::Pushed, &reads);
+    }
     Ok(Output::success(json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
     })))
+}
+
+/// A read of the record `id` with no rank and no score; `None` for an id that does not parse.
+fn plain_read(id: &str) -> Option<Read> {
+    Some(Read {
+        record: id.parse().ok()?,
+        rank: None,
+        score: None,
+    })
 }
 
 /// The approved retirements of `context`, as `render` labels them: `<reason> <target>` by record id.
@@ -108,6 +125,11 @@ fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Out
         .iter()
         .map(|(id, short)| json!({"id": id, "short": short}))
         .collect();
+    let reads: Vec<Read> = found
+        .iter()
+        .filter_map(|(id, _)| plain_read(&id.to_string()))
+        .collect();
+    reads::log_reads(store, context, Channel::Show, &reads);
     Ok(Output::success(json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "topic": topic,
@@ -143,6 +165,8 @@ fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<
     let markdown = render::single(&row.title, row.jira.as_deref(), &record);
     let mut v = record.to_json();
     v["seq"] = json!(seq);
+    let reads: Vec<Read> = plain_read(&id.to_string()).into_iter().collect();
+    reads::log_reads(store, context, Channel::Show, &reads);
     Ok(Output::success(json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": [v],

@@ -221,6 +221,9 @@ pub struct ShowArgs {
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
+    /// Log the shown records as pushed reads (the pi turn start)
+    #[arg(long, requires = "since")]
+    pushed: bool,
 }
 
 #[derive(Args, Debug)]

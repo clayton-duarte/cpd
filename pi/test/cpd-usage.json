@@ -395,6 +395,7 @@
       "--context": true,
       "--help": false,
       "--plan": true,
+      "--pushed": false,
       "--record": true,
       "--since": true,
       "--topic": true
