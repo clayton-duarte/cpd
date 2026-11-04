@@ -58,7 +58,7 @@ fn neighbour_ids(
         .collect();
     let mut keep = HashSet::new();
     for (_, record) in batch {
-        let supersedes: Vec<RecordId> = record.supersedes().cloned().into_iter().collect();
+        let supersedes: Vec<RecordId> = record.supersedes().to_vec();
         let forced = forced_ids(&record.text, &supersedes, &record.id, &candidates);
         let lexical = lexical_rank(&record.text, &candidates, TOP)?;
         keep.extend(

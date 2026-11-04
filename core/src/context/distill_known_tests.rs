@@ -165,7 +165,7 @@ fn known_md_forces_ids_cited_in_batch_text_and_supersedes() {
             },
             text: "Replaces the old one, zq60x.".into(),
             draft: Draft::Decision {
-                supersedes: Some(RecordId::parse(&id(4)).unwrap()),
+                supersedes: vec![RecordId::parse(&id(4)).unwrap()],
             },
         },
     );
