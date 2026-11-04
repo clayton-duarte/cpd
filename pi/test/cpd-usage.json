@@ -392,6 +392,7 @@
   },
   "context show": {
     "flags": {
+      "--all": false,
       "--context": true,
       "--help": false,
       "--plan": true,

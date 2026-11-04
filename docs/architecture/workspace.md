@@ -2,8 +2,7 @@
 
 This note documents the worktree lifecycle cpd uses to run work: the **Lead Branch** and
 **Lead worktree** of one Workflow, the worktree of an Attempt, and the two clean-up paths
-— the `janitor` and `prune`. It documents the model's item 7 (`hs-d802`,
-`cpd context show --record hs-d802`), verified in
+— the `janitor` and `prune`. It documents the model's item 7 (`hs-d802` (a record of machine `hs`)), verified in
 [architecture-verification.md §7](../research/architecture-verification.md), which also
 records where the model's "per-attempt worktrees" is only partly true. Related notes:
 [[sdk]] (the engine that starts and cleans worktrees), [[job-lifecycle]] (the states a Job
@@ -118,4 +117,4 @@ on worktrees and branches only and touch no remote branch ([commands §23](../co
 - [CONTEXT — Lead worktree](../CONTEXT.md), [CONTEXT — Attempt](../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 7
-- `hs-d802` (`cpd context show --record hs-d802`) — the model
+- `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model

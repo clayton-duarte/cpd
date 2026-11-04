@@ -32,6 +32,7 @@ mod context_reads_store;
 mod context_reads_used;
 mod context_reindex;
 mod context_search;
+mod context_show_bounded;
 mod context_topic;
 mod driver;
 mod driver_desc_gate;

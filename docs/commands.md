@@ -151,7 +151,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_tampered` | 1 | a write command, when the schema check fails (§4.3); read commands report it in `tamper` instead |
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2); `SQLITE_BUSY` and `SQLITE_LOCKED` both |
 | `internal` | 1 | a bug in cpd itself (for example a malformed Event built by a command), or a failed write to stdout other than EPIPE (no I/O error code exists). `store_failed` is for SQLite failures only |
-| `context_not_found`, `plan_not_found`, `workflow_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `context_not_found`, `plan_not_found`, `workflow_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6; `context show --record` of another machine's record adds `details.record_machine` and `details.local_machine`, §3.3) |
 | `no_merge_method` | 3 | `pr merge` (§9.10) or `pr post` (§9.8b) read the repo's settings and found squash, merge commit and rebase all off; `details` `{repo, number, squash, merge, rebase}` (pro-d254, pro-d261) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `required_check_not_passed` | 3 | `pr merge` (§9.10) re-read the pull request's head commit and a required check name is missing, pending or failed; `details` has `repo`, `number`, `missing`, `pending`, `failed` (lists of check names; hs-d743, hs-n571) |
@@ -345,19 +345,32 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
+cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
-| `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
+| `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
+| `--all` | a boolean: print the full history, the output bare `context show` had before the bounded view (Output, below; pro-d1, pro-d3): every section and every record, no `omitted`. Exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2) |
 | `--pushed` | with `--since <seq>` (`usage` without it): the call of pi's turn-start update (§15.7). It logs channel `pushed` for the records the output holds (Effects) |
 
 **Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
 
-Effects: no Context record changes. Read log (best-effort): with a Session in `CPD_SESSION`, else `PI_SESSION_ID`, that parses as a SessionId and is a row of `sessions` (otherwise nothing is logged and nothing is an error; this is **the Session rule**, which §3.4, §3.5, §4.1, §5.1 and §10.13 refer to), it appends `context_reads` rows (contract §4.4, §4.6 "Reads"): channel `show` for `--record <id>` and for `--topic <t>`, one row per record shown; channel `pushed` for `--since <seq> --pushed`, one row per record the output holds; a bare `--since` without `--pushed` logs nothing. A failed log never fails the command and never changes its output or exit status. Output: the Context, its records in index order and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: no Context record changes. Read log (best-effort): with a Session in `CPD_SESSION`, else `PI_SESSION_ID`, that parses as a SessionId and is a row of `sessions` (otherwise nothing is logged and nothing is an error; this is **the Session rule**, which §3.4, §3.5, §4.1, §5.1 and §10.13 refer to), it appends `context_reads` rows (contract §4.4, §4.6 "Reads"): channel `show` for `--record <id>` and for `--topic <t>`, one row per record shown; channel `pushed` for `--since <seq> --pushed`, one row per record the output holds; a bare `--since` without `--pushed` logs nothing. A failed log never fails the command and never changes its output or exit status. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
+
+1. `# <title>` with the Jira key, as before.
+2. `## Open questions`: every open question, never capped.
+3. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
+4. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
+5. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
+6. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
+7. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> answered questions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a question under Answered questions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all four counts are zero.
+
+Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the open questions, the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, answered questions with their answers, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "answered_questions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
+
+`--all` is the former output, byte for byte: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions, Open questions, Answered questions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -380,6 +393,12 @@ Idempotent: read-only.
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "topic": "engine",
  "records": [{"id": "hs-d7", "short": "one engine per machine"}],
  "markdown": "- [hs-d7] one engine per machine"}
+```
+
+**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 and `context answer` (§3.6) are unchanged.
+
+```json
+{"ok": false, "error": {"code": "record_not_found", "message": "Context building-cpd has no record pro-d7. pro-d7 belongs to machine pro; this machine is hs, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.", "details": {"context": "building-cpd", "record": "pro-d7", "record_machine": "pro", "local_machine": "hs"}}}
 ```
 
 ### 3.4 `context search`
@@ -5265,6 +5284,57 @@ A test, `pi/test/skill-writing-audit.test.ts`, pins each rule; the rules apply t
 - **R28, Manager Plans steps**: cpd-manager `### 2. Plans` keeps six numbered steps; the check of pending work (`cpd context pending --context <c>`) is stated in step 1 Intake, not as step 4.
 
 The rows of the verified tables that are left out (LW-32, LW-36, LW-37, LA-11, LA-14, MG-10, LA-17, LA-19, LA-20, MG-12, XS-10) are recorded in BACKLOG.md.
+
+### 15.26 The turn-end question guard (Plan `exp-turn-question-guard`, pro-d366)
+
+A Lead or a Manager that ends its turn by asking the User a question in plain prose, instead of calling `ask_user_question`, leaves its Session `idle` and not `blocked`, so the User gets no structured questionnaire (§15.13). The guard nudges such a Session once to call the tool. It lives in its own module, `pi/lib/question-guard.ts`, registered once from `pi/lib/adapter.ts` next to `registerLoopGuard`. pi has no unsubscribe, so every handler reads `host.run` and the Session's role at call time, as `pi/lib/loop-guard.ts` does. **A turn** here is one run of the adapter, from pi's `before_agent_start` to `agent_end` (as §15.15 L3), not pi's `turn_start` and `turn_end`. The guard is an Experimental Feature, gated by the config key `experimental.turn_question_guard` (Q5).
+
+**Q1 Scope and trigger.** The guard acts for a Session of role `lead` or `manager` only, never for a Worker. At `agent_end` it marks a candidate when all three hold: the LAST assistant message of `event.messages` has `stopReason === "stop"`; its text (`lastAssistantText` of `pi/lib/reminder.ts`, which ignores `stopReason`, so the guard checks it itself) contains `?`; and the run called none of the tools `ask_user_question`, `cpd_plan_review`, `cpd_secret_approve`, `cpd_host_approve`. Every `tool_call` event counts, a nested one too: a call that a `codemode` script makes carries `parentToolCallId` (§15.21) and counts as called. The run keeps its own set of the tool names it called on the Run state. The set is cleared at `before_agent_start` and at `agent_end` after it was read.
+
+**Q2 One nudge per User turn.** The Run counter `questionNudges` counts the nudges sent. No nudge is sent while it is 1 or more. It is reset to 0 by (a) an `input` event with source `interactive` (the User's typed prompt, `isTyped` of `pi/lib/reply.ts`) and (b) a `before_agent_start` whose `startsReply(event)` is true and whose `messageType` is not `user` (the User's from-null session-message, `pi/lib/reply.ts`). A `before_agent_start` with `messageType: "user"` does not reset it: pi starts the run of `sendUserMessage` with that type, the nudge's own run included, so a reset there would loop.
+
+**Q3 Deferred send.** `agent_end` only stores the candidate on the Run state: its text, and an identity of the run that produced it. The send happens in the `agent_settled` handler (next to the one in `pi/lib/agent-state.ts`). That handler starts the rest as a non-awaited async function (`void`), so it never holds the settle or the state report. pi 1.3.0 reports `ctx.isIdle()` as false inside `agent_end` and defers a prompt sent in `agent_settled` until after the settle, so the nudge is sent from there. A `before_agent_start` or `agent_start` of a newer run clears the candidate. After every `await` the function checks that `host.run` is still the same run and that the candidate is still the same; if either differs, it does nothing.
+
+**Q4 Order of checks.** The checks of Q1 to Q3 run first and cost nothing. Then, in this order, each failure ends the candidate silently (no message, no notice, no state change):
+
+1. the flag (Q5);
+2. for a Lead with a Plan (`r.info.plan`), `cpd plan show --plan <plan>` through `host.call` (the pattern of `pi/lib/turns.ts`): `counts.running + counts.queued` must be 0. A Manager has no Plan read and skips this step. A failed call or unreadable output ends the candidate;
+3. the classifier (Q6);
+4. the send (Q7).
+
+**Q5 The flag.** The guard reads `cpd config` as JSON through `host.call(["config"])` at the moment of the check, with no cache, so a change of the User's toggle applies at once. It is ON unless `config.experimental?.turn_question_guard === false`. An absent `experimental` table and an absent key both mean ON; the key is defined by Plan `experimental-config`, and until that Plan lands the guard is on. A failed `cpd config` call, or output that does not parse, makes the guard do nothing for this candidate and writes one line with `r.log`: no message, no notice, no state change.
+
+**Q6 The classifier.** The model is `ctx.modelRegistry.findOfType("classifier", "llama.cpp", "kev-4b")`. When it is `undefined` the guard does nothing (neither a notice nor a state change). Otherwise it calls `ctx.modelRegistry.classify(model, { state: { message }, questions: { asking_user } }, { signal, maxRetries: 0 })`, where:
+
+- `message` is the candidate's text, truncated to its LAST 2000 characters;
+- `asking_user` is a `bool` question with the instructions "Does this assistant message ask the human user a question or ask for a decision/confirmation before proceeding?", criteria `true`: "The assistant is asking the user a question, offering choices, or waiting for user confirmation/input.", and `false`: "The assistant is only reporting status, summarizing completed work, or rhetorical/quoted question marks.";
+- `signal` is `AbortSignal.any([r.abort.signal, AbortSignal.timeout(1500)])`, the hard bound of 1500 ms. pi's `timeoutMs` is per HTTP request and retried, so it does not bound the call.
+
+A result counts only when its `stopReason` is `"stop"` and `answers.asking_user` is `{type: "bool", probability}` with `probability >= 0.85` (the threshold is inclusive). Anything else sends nothing. A throw is caught and treated as UNREACHABLE (Q8). The outcome is classified for Q8.
+
+**Q7 The nudge.** A candidate that passes Q6 is sent as this text, a steer:
+
+```
+You ended your turn with a question in plain text. If you need a decision or input from the User, call `ask_user_question` now so the session enters `blocked` state; otherwise state your assumption in one line and proceed.
+```
+
+The call is `host.pi.sendUserMessage(<text>, { deliverAs: "steer" })`. It is not sent while `r.tripped` (§15.15) or `r.firstPending` is true: those hold every send that would start a turn. After a send, `questionNudges += 1`.
+
+**Q8 Unreachable classifier notice.** The classifier endpoint is `http://ollama.lab/v1`. The Q6 outcome is one of three:
+
+- **REACHED**: `stopReason` is `"stop"`, whatever the probability. The Run flag `classifierDown` is set to false.
+- **UNREACHABLE**: `stopReason` is `"error"`, the call throws, or it aborts because the 1500 ms timeout fired while `r.abort.signal` is not aborted.
+- **Neither**: an abort while `r.abort.signal` is aborted (session shutdown), or a missing model (Q6). Nothing is shown and no state changes.
+
+On UNREACHABLE the guard still sends nothing: a turn is never interrupted. When `classifierDown` is false, the guard sets it to true and shows the User one warning with `ctx.ui.notify`, the text passed through `boldPhi` of `pi/lib/phi.ts`, level `warning`:
+
+```
+φ: classifier_unreachable: http://ollama.lab/v1 is unreachable, so the turn-end question guard is skipped (connect Tailscale or turn it off: cpd config experimental turn_question_guard off).
+```
+
+While `classifierDown` is true no further notice is shown, whatever the number of turns; the next REACHED outcome clears the flag, so a later outage notifies again. The notice goes to the User's screen only: not to the agent, not through `host.deliver`, with no `cpd` call and no Session state change. `classifierDown` is kept on the Run state, per Session process, so a restart may notify once more.
+
+**Fail open.** Everywhere in the guard, a failure is handled without an error: the only visible output is the Q8 notice, nothing changes the Session's state, and nothing throws out of a handler.
 
 ## 16. The Worker contract
 

@@ -1,7 +1,0 @@
-# cpd session tail sample — derived from docs/contract.md §6.20, NOT captured (no durable Session was live when this fixture was written)
-user: run the checks
-assistant: ok, the checks pass
-and the linter is clean
-system: session started
-tool bash: npm test -- --run
-tool read: ENOENT: no such file or directory (error)

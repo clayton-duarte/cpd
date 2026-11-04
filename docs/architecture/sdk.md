@@ -1,8 +1,7 @@
 # The SDK
 
 `cpd SDK` names the whole of cpd as one programmable thing: the **core**, the
-**ledger** and the **engine** ([contract §1.1](../contract.md); `hs-d802`,
-`cpd context show --record hs-d802`). This note says what each part is and how
+**ledger** and the **engine** ([contract §1.1](../contract.md); `hs-d802` (a record of machine `hs`)). This note says what each part is and how
 they sit together. The vault's
 [architecture-verification.md](../research/architecture-verification.md) maps
 the claim to the contract sections that own it and records where the name does
