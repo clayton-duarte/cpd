@@ -40,6 +40,10 @@ pub const MIGRATIONS: &[ConfigMigration] = &[
         name: "drop-inbox-review-context",
         run: drop_inbox_review_context,
     },
+    ConfigMigration {
+        name: "worker-runner-to-experimental",
+        run: worker_runner_to_experimental,
+    },
 ];
 
 /// Folds the migrations in order over `text`, returning the final text and the names of
@@ -184,4 +188,31 @@ fn drop_inbox_review_context(text: &str) -> Option<String> {
         start += line.len();
     }
     None
+}
+
+/// `worker-runner-to-experimental` (A8): a top-level `worker_runner = "durable"` becomes
+/// `[experimental] durable_workers = true` (an existing `durable_workers` key stays); `"pi"` is dropped.
+/// Every other line, comment and the formatting survive.
+fn worker_runner_to_experimental(text: &str) -> Option<String> {
+    let table: Table = text.parse().ok()?;
+    let durable = match table.get("worker_runner")? {
+        Value::String(v) if v == "durable" => true,
+        Value::String(v) if v == "pi" => false,
+        _ => return None,
+    };
+    let (start, _, end, _) = top_level_line(text, "worker_runner")?;
+    let dropped = format!("{}{}", &text[..start], &text[end..]);
+    let has_key = table
+        .get("experimental")
+        .and_then(Value::as_table)
+        .is_some_and(|t| t.contains_key("durable_workers"));
+    if durable && !has_key {
+        Some(super::experimental::set_in_text(
+            &dropped,
+            "durable_workers",
+            true,
+        ))
+    } else {
+        Some(dropped)
+    }
 }
