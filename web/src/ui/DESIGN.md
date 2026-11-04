@@ -779,7 +779,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 | Test | Change |
 |---|---|
 | `Frame.test.tsx` 1 | none (`[data-emblem]` text `C-P-D`, now `sr-only`) |
-| `Frame.test.tsx` 2, 3, 6 | none (text and hooks KEPT); the `state` prop is typed `SessionState | null` so a test literal like `"idle"` still type-checks |
+| `Frame.test.tsx` 2, 3, 6 | none (text and hooks KEPT); the `state` prop is typed `SessionState \| null` so a test literal like `"idle"` still type-checks |
 | `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are `header`, the columns group (no `aria-label`) and `footer`; the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
 | `Shell.test.tsx` | none (descendant selectors still match) |
 | `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager row is the Context button (its dot and selection); a Context row has no `data-part="counters"`; a Plan row's counts are `data-count` spans in the keys `draft, queued, running, merging, failed, merged`, separated by one space (`planned`, `active`, `done` and ` · ` are gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
