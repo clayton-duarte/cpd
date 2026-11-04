@@ -187,7 +187,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
       at: r.at,
       by: r.by.session,
       text: r.text,
-      ...(Array.isArray(r.supersedes) && r.supersedes.every((s) => typeof s === "string") && r.supersedes.length > 0 ? { supersedes: r.supersedes as string[] } : {}),
+      ...(isStrings(r.supersedes) && r.supersedes.length > 0 ? { supersedes: r.supersedes } : {}),
       ...(typeof r.question === "string" ? { question: r.question } : {}),
       ...(isObject(r.plan) && typeof r.plan.id === "string" ? { plan: r.plan.id } : {}),
     };
@@ -349,3 +349,5 @@ export function closedPrLines(planShow: unknown): string[] {
     return [`Workflow ${p.key}: its pull request #${number} (${url}) is closed without a merge and cpd still lists the Workflow as open. Ask the User, or cpd workflow cancel --workflow ${p.key}.`];
   });
 }
+
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
