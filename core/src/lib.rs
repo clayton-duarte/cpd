@@ -73,11 +73,11 @@ mod classifier_tests;
 #[cfg(test)]
 mod clock_tests;
 #[cfg(test)]
-mod ids_scan_tests;
-#[cfg(test)]
 mod embedding_adapter_tests;
 #[cfg(test)]
 mod embedding_tests;
+#[cfg(test)]
+mod ids_scan_tests;
 #[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
