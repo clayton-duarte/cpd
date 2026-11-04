@@ -106,6 +106,17 @@ fn recover_one(
             },
         )
     };
+    // An `open` Attempt whose Workflow has no recorded pull request cannot have merged: R2 does not apply (R3).
+    let check = match check {
+        Ok(Some(_)) if attempt.kind == "open" => {
+            if super::workflow_row(store, attempt)?.pull_request.is_none() {
+                Ok(None)
+            } else {
+                check
+            }
+        }
+        other => other,
+    };
     match check {
         // R2: the merge happened.
         Ok(Some(tip)) => {
