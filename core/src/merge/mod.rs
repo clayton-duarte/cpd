@@ -17,12 +17,16 @@ mod linear_tests;
 #[path = "touches_tests.rs"]
 mod touches_tests;
 
+#[cfg(test)]
+mod triage_tests;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::attempt::ledger::{self, GateFacts, Stage};
+use crate::classifier::{Choice, Chosen, ClassifierPort, PiClassifier};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Pipeline, run::run};
@@ -53,6 +57,56 @@ pub struct Ctx<'a> {
     pub source: &'a str,
     /// A9's `metrics` of an Attempt, recorded in the transaction that ends it.
     pub metrics: &'a dyn Fn(&Attempt) -> Option<Value>,
+    /// Gate failure triage (§3.4): asked once when an Attempt ends `gate_failed` and the flag is on.
+    pub classifier: &'a dyn ClassifierPort,
+}
+
+/// The real [`ClassifierPort`] for the merge: `PiClassifier` over `ports.runner` with `<pi adapter>/lib/classify.ts` and
+/// pi's agent directory (as `models::helper` finds them). When either cannot be found the classifier answers
+/// `classifier_unreachable` on every call, which the triage treats as no verdict.
+pub fn real_classifier(
+    config: &Config,
+    home: &CpdHome,
+    ports: &crate::ports::Ports,
+) -> Box<dyn ClassifierPort> {
+    let found = config
+        .pi_adapter_dir()
+        .and_then(|dir| crate::config::locate_pi().map(|pi| (dir, pi.agent_dir)));
+    match found {
+        Ok((dir, agent_dir)) => Box::new(PiClassifier::new(
+            ports.runner.clone(),
+            dir.join("lib").join("classify.ts"),
+            agent_dir,
+            home,
+        )),
+        Err(e) => Box::new(NoClassifier(e.message().to_owned())),
+    }
+}
+
+/// A shared fake classifier that always errs `classifier_unreachable`: no verdict, for callers that build a [`Ctx`] and do
+/// not test the triage.
+#[cfg(any(test, feature = "fakes"))]
+pub fn no_verdict_classifier() -> &'static crate::fakes::classifier::FakeClassifier {
+    static NONE: std::sync::LazyLock<crate::fakes::classifier::FakeClassifier> =
+        std::sync::LazyLock::new(|| {
+            crate::fakes::classifier::FakeClassifier::new(vec![Err(CpdError::new(
+                ErrorCode::ClassifierUnreachable,
+                "no classifier",
+            ))])
+        });
+    &NONE
+}
+
+/// A classifier that cannot be built: every question is `classifier_unreachable`.
+struct NoClassifier(String);
+
+impl ClassifierPort for NoClassifier {
+    fn choose(&self, _q: &Choice) -> Result<Chosen, CpdError> {
+        Err(CpdError::new(
+            ErrorCode::ClassifierUnreachable,
+            self.0.clone(),
+        ))
+    }
 }
 
 /// The result of [`merge`].

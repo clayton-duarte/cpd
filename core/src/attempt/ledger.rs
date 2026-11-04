@@ -46,6 +46,8 @@ pub struct Attempt {
     pub kind: String,
     /// The Job's Workflow (R34 A7).
     pub workflow: Option<String>,
+    /// The Job's Spec `touches`.
+    pub touches: Vec<String>,
 }
 
 impl Attempt {
@@ -76,7 +78,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status, j.touches
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
                LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
               WHERE a.plan = ?1 AND a.id = ?2",
@@ -93,7 +95,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, Option<String>>(7)?,
                     (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?),
                     r.get::<_, Option<String>>(11)?,
-                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?),
+                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, String>(16)?),
                 ))
             },
         )
@@ -114,7 +116,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         (repo, lead_worktree, lead_branch),
         submitted_sha,
-        (kind, workflow, head_ref, workflow_status),
+        (kind, workflow, head_ref, workflow_status, touches),
     ) = row;
     // An explore Attempt has no Workflow: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
     let (repo, lead_worktree, lead_branch) =
@@ -152,6 +154,8 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         submitted_sha,
         kind,
         workflow,
+        touches: serde_json::from_str(&touches)
+            .map_err(|_| corrupt(format!("touches {touches:?} of Job {job}")))?,
     })
 }
 
