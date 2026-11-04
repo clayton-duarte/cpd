@@ -31,7 +31,7 @@ Vite prints `Local: http://localhost:5173/` (`web/vite.config.ts`: `port: 5173`,
 | Action | Expected | Look at |
 |---|---|---|
 | Load the page | 5-zone frame: header on top showing the φ mark (accessible name `C-P-D`); Context tree left; Plan pane above the chat in the centre; Inbox right; status bar at the bottom | whole page |
-| Read the Context tree | Contexts, then Plans with Session buttons and a state dot (aria label gives the state); archived ones are in a separate group. Before data: `Loading contexts…` | left |
+| Read the Context tree | One row per Context, its Manager chat (id, Manager dot, counters); under it one row per Plan (Lead dot, plan id, counters `planned`, `active`, `failed`, `done`); forks are extra rows; Workers are never rows. A Plan row opens the Plan and its Lead chat. Archived ones are in a separate group. Before data: `Loading contexts…` | left |
 | Click a Plan / Lead session | Plan pane shows the Plan title, `Workflow <key>` boxes and Explore jobs; chat attaches (`Select a session` placeholder disappears) | centre |
 | Read the Inbox | heading `Inbox (<n>)`, one row per item with its actions; `Nothing needs you` when empty; `Engine is not running` appears if the engine is stopped (check with `cpd watch --check`) | right |
 | Click an Inbox row's session button | that session is selected | right then centre |
@@ -72,7 +72,7 @@ Repeat for the **durable** and the **pi** session.
 | Drag a file over the composer | the form shows the drop state (`data-drop="over"`), drop adds a chip | composer |
 | Pick the binary / an oversize file | listed under `Rejected files` with a message; nothing sent | composer |
 | Durable: send text + the image, ask "what is in this image?" | the model describes the image: the payload reached the model (the user item also shows the image). Cross-check: `cpd session tail <id>` shows the turn | chat |
-| Pi: attach an image and send | EXPECTED: refused, reason "pi sessions take prompts only through `cpd session send`, which carries text and no images"; nothing is sent | composer |
+| Pi: attach an image and send | EXPECTED: sent. The text reaches the session with a blank line and one `[Attached image: <path>]` line per image; each path is under `<tmpdir>/cpd-webui-attachments/`; the agent's read tool opens it and the agent can describe the image (as on durable) | chat; `cpd session tail <id>` shows the line |
 | Text file | its content is sent with the prompt on both runners (the agent can quote it) | chat |
 
 ### 5. Tier / model / thinking selector
@@ -94,7 +94,8 @@ Repeat for the **durable** and the **pi** session.
 | Repeat; type in `Type something.` instead, `Submit` | the agent receives the custom text | chat |
 | Repeat; press `Esc` (or click `Cancel`) | the dialog cancels, the agent is told it was cancelled | chat |
 | Durable: a `cpd_plan_review` appears (`Plan review` card with the summary in Markdown) | click `Approve` → approved; second review: `Request changes`, type in `Feedback`, submit → feedback delivered; third: `Reject` | chat; `cpd plan show <id>` |
-| Pi: a pending ask or plan review in the transcript | rendered READ-ONLY (no answering), with the reason "a TUI dialog of a pi session cannot be answered from outside…"; answer it in the TUI | chat |
+| Pi: a pending ask in the transcript | rendered READ-ONLY (no answering), with the reason "a TUI dialog of a pi session cannot be answered from outside…"; answer it in the TUI | chat |
+| Pi: a pending `cpd_plan_review` | answerable: `Approve` runs `cpd plan decide <review> --approve --plan <plan>`; `Reject` runs `… --reject --plan <plan>`; `Change` with feedback writes `<CPD_HOME>/run/<plan>/feedback-<review>.md` and runs `… --reject --feedback-file <that path> --plan <plan>`; the card closes when pi records the review's new status | chat; `cpd plan show <id>` |
 
 ### 7. Streaming, folds, tools
 
@@ -110,12 +111,12 @@ Repeat for the **durable** and the **pi** session.
 ## 3. Known limitations (Phase 1, amended for Phase 2)
 
 - **Durable v1 and v2 (superseded by CONTRACT 10.8):** pi-durable 1.3.0 (protocol 1, `snapshot`/`events`) and 1.5.0 (protocol 2, `view`/`ops`) are both understood; v2 is tested only against mocked frames until `cpd:pi-1-5-upgrade` has merged. An unknown host version or frame shape fails loud with `unsupported_host_version` / `protocol_error`, never a silent fallback.
-- **pi sessions (A4):** read from the session JSONL and written through `cpd session send` / `cpd session retier`. No abort, steer, images, model or thinking change, or compaction (cpd has no command for them); interactive dialogs are read-only. The UI disables each control and shows the reason.
+- **pi sessions (A4):** read from the session JSONL and written through `cpd session send` / `cpd session retier`. No abort, steer, model or thinking change, or compaction (cpd has no command for them); a pending `ask_user_question` is read-only (cpd has no command that settles a held ask); plan reviews are answerable; images are accepted and sent as paths in the text (see the README section "Server behaviour and pi sessions"). The UI disables each control it cannot drive and shows the reason.
 - **Dev bench:** runs only under `vite serve`; transport is Vite `server.ws` custom events (`cpd:c2s`, `cpd:s2c`); no auth beyond Vite's localhost bind; `vite build` output is not runnable.
 - **Phase 2 (CONTRACT 10.9):** no keep-mounted rows for selection, no in-app search, fold open state is not persisted across unmount, no v2 `history` paging beyond the host's newest-50 window, reference-style Markdown link definitions across segments do not resolve, from-null `cpd` nudges show as User messages, durable `cpd-event`/`cpd-first-message`/`cpd-error`/`cpd-plan-review` entries stay dropped.
 - **Unverified without a running v2 host:** tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title.
 - **Not covered by Phase 2 (docs/research/webui-chat-base.md):** C8 instant session switch, C9 highlighting off the hot path, C10 virtualisation escape hatches (search, keep-mounted, fold state across unmount), C11 heavy rows bounded, C12 hooks exposed by the base.
-- **Phase 3/4 (high-fidelity UI):** dark theme only (no light theme); fonts are CSS stacks, none is bundled, so a machine without IBM Plex Sans, EB Garamond or Maple Mono falls back to the next family of the stack; no responsive layout below 980px and no Sheet drawers; panel sizes are not persisted; no command palette (⌘K), no Reset layout, Legend, Logs or Tiers dialogs, no Workers meter, host CPU/RAM/disk or incident pill (their data is not in the protocol); Snooze and Dismiss in the inbox are disabled hints (no backend action); session cost `$` and per-plan cost are not shown; the Context tree has no Active/Standing sections and no collapse; every element whose data the protocol does not carry is listed under "Not wired" in the DESIGN files and is absent from the UI, never faked.
+- **Phase 3/4 (high-fidelity UI):** dark theme only (no light theme); fonts are CSS stacks, none is bundled, so a machine without IBM Plex Sans, EB Garamond or Maple Mono falls back to the next family of the stack; no responsive layout below 980px and no Sheet drawers; panel sizes are not persisted; no command palette (⌘K), no Reset layout, Legend, Logs or Tiers dialogs, no Workers meter, host CPU/RAM/disk or incident pill (their data is not in the protocol); Snooze and Dismiss in the inbox are disabled hints (no backend action); session cost `$` and per-plan cost are not shown; the Context tree is one row per Context (its Manager chat), one row per Plan (its Lead chat), forks as extra rows, and never Workers; every element whose data the protocol does not carry is listed under "Not wired" in the DESIGN files and is absent from the UI, never faked.
 
 ## 4. Results (Phase 1)
 
@@ -124,9 +125,9 @@ Repeat for the **durable** and the **pi** session.
 | 1 | Cockpit frame and panes | [ ] | [ ] | |
 | 2 | Chat title and footer | [ ] | [ ] | |
 | 3 | Live attach, Load earlier, send, steer/follow up, abort | [ ] | [ ] (limits as expected) | |
-| 4 | Image and file import | [ ] | [ ] (images refused as expected) | |
+| 4 | Image and file import | [ ] | [ ] (images sent as paths, as expected) | |
 | 5 | Tier / model / thinking | [ ] | [ ] (model, thinking disabled as expected) | |
-| 6 | Interactive dialogs | [ ] | [ ] (read-only as expected) | |
+| 6 | Interactive dialogs | [ ] | [ ] (ask read-only, plan review answerable, as expected) | |
 | 7 | Streaming, Thinking…, tools, diffs, cpd and compaction folds | [ ] | [ ] | |
 
 ## 5. Phase 2 checklist (pro-d20)
@@ -137,7 +138,7 @@ Prerequisite additions: a pi-runner session; a durable v1 session (pi-durable 1.
 
 | # | Steps | Expected |
 |---|---|---|
-| 1 | pi-runner round trip. (a) Select the pi session, type a message in the chat, press Enter. (b) From another session run `cpd session send <pi-id> "ping" --unblocks "verify"` (or have another session message this one). | (a) Within a second your text appears as a User message in the transcript, exactly once: the pending row (`sending…`, then sent) disappears when the User message arrives, and no duplicate remains after 30 s. (b) The message from the other session shows as a collapsed fold whose summary reads `Message from <key>` (fold kind `cpd`); click opens it. |
+| 1 | pi-runner round trip. (a) Select the pi session, type a message in the chat, press Enter. (b) From another session run `cpd session send <pi-id> "ping" --unblocks "verify"` (or have another session message this one). | (a) Within a second your text appears as a User message in the transcript, exactly once: the pending row (`sending…`, then sent) disappears when the User message arrives, and no duplicate remains after 30 s. (b) The message from the other session shows as a collapsed fold whose summary reads `Message from <key>` (fold kind `cpd`); click opens it. A message the web chat sent (`unblocks` `User message from the web chat`) is a user bubble even when its sender is a session id. |
 | 2 | Sticky auto-scroll. Attach a session with a long transcript; send a message; let the reply stream. | On attach the view is at the bottom (`data-at-bottom="true"`); after send it scrolls to your message; during streaming the newest text stays in view without jitter. |
 | 3 | Scroll-up opt-out. Scroll up one screen while a reply streams; then click `Jump to bottom`; scroll up again and scroll back to the bottom by hand. | Scrolling up stops following and the view does not move as the last row grows; a `Jump to bottom` button appears (and `data-at-bottom="false"`); clicking it scrolls to the end, hides the button and follows again; returning within about 48 px of the bottom re-pins. |
 | 4 | Load earlier. Scroll to the top of a session with more than 40 items, read a message in the middle of the screen, click `Load earlier`. | The previous page is prepended and the message you were reading stays at the same screen position (moves at most 1 px); the button disappears at the start of the transcript. |
@@ -191,8 +192,8 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | 6 | Measure the header, the status bar, the Context tree column and the Inbox column. | Header 44px high with a 1px bottom border `#2e2a33`; status bar 30px high, background `#19171c`, 1px top border; tree column 272px wide with a right border; inbox column 340px wide with a left border. The page has no outer scrollbar. |
 | 7 | Read the header. | Left: a φ mark in a serif face (28px, `#f3ead9`); then, when a Plan is shown, the breadcrumb `<context> / <plan>` in monospace 12px; right: `engine` with a glyph and `running` (green dot) when `cpd watch --check` says the engine runs. Stop the engine: the glyph becomes a triangle and the text `not running`. No search box is shown (command palette not wired). |
 | 8 | Read the status bar. | Right side: `Runner: pi`/`durable`/`none`, `State: <state>` with a glyph, `cpd: <version>` or `cpd: unknown`, all matching Phase 1 step 1. No Legend, Logs, Tiers, Workers, CPU/RAM or incident element appears. |
-| 9 | Read the Context tree: header row `CONTEXTS`; contexts in monospace semibold; plans under them with a glyph, the title and labelled counts such as `merged 13 · running 1` (numbers coloured: running teal, merged green, failed red); sessions with a state dot. Hover a row. | Row heights: context 28px, plan and session 26px. Hover tints the row `#24212a`. The count words are present. A plan or context row's glyph is the most urgent state of its sessions (error beats landing beats waiting-on-you beats working). Archived items sit under `Archived (<n>)`. |
-| 10 | Click a plan, then a session. | The clicked row gets a blue tint (`rgba(122,162,206,.16)`) and brighter text; the Plan pane and chat follow as in Phase 1 step 1. |
+| 9 | Read the Context tree: header row `CONTEXTS`. One row per Context, its Manager chat (id, Manager dot, counters). Under it one row per Plan (Lead dot, plan id, counters `planned`, `active`, `failed`, `done`). Forks are extra rows under their Context. Hover a row. | Each Plan row shows its Lead's dot and the four counters; each fork row shows its own dot. No Worker appears as a row. Archived items sit under `Archived (<n>)`. |
+| 10 | Click a Plan row, then a fork row. | The Plan row gets a blue tint (`rgba(122,162,206,.16)`) and brighter text; the Plan pane and its Lead chat open as in Phase 1 step 1. The fork row opens its chat. |
 | 11 | Plan/chat split: drag the thin bar between the Plan pane and the chat (`Resize plan view and chat`) up and down. Focus it with Tab and press ArrowUp / ArrowDown. | The plan gets taller or shorter, never below 20% or above 80% of the column; each pane scrolls on its own; with the keyboard the bar moves (step size is the library's). Double-click on the bar restores the default 40/60 split. |
 | 12 | Click `Collapse plan view` (top right of the Plan pane), then `Expand plan view`, then `Zoom plan view`, then `Zoom plan view` again. | Collapse: the plan shrinks to its 44px title row, the button label becomes `Expand plan view`, `Zoom plan view` is disabled. Expand restores the previous size. Zoom: the chat shrinks to nothing and the plan fills the column (`Zoom plan view` has `aria-pressed="true"`, `Collapse plan view` is disabled); the second click restores the previous split. Tab never lands inside a hidden pane. |
 | **Plan view** (DESIGN-panes.md) | | |
@@ -209,7 +210,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | **Ask card** (DESIGN-compose.md) | | |
 | 19 | Durable: make the agent call `ask_user_question` with 2 or 3 questions, one multi-select, one option with a preview. Pick answers with the mouse, then with the keyboard (1 to 4, arrows, Tab), and Submit; repeat with `Type something.` and with Esc. | A pink-bordered card, tabs per question with answered/unanswered marks, options with numbered badges and the `recommended` badge where given, the preview pane beside the options when two-column, `Submit N/M answers ⏎` as the one filled button; the answers reach the agent exactly as in Phase 1 step 6; Esc or `Cancel` cancels. A pi session shows the read-only card with its reason. |
 | **Plan review card** (DESIGN-compose.md) | | |
-| 20 | Durable: a Lead in phase `plan` calls `cpd_plan_review`. Read the card; use `Approve`, then on a second review `Request changes` with feedback, then on a third `Reject`. | A card headed `Plan review · <plan>` with the summary rendered as Markdown; a decision bar with a `Feedback` textarea, `Reject` (red text), `Request changes`, and `Approve` as the one filled button; each outcome reaches the agent as in Phase 1 step 6 and `cpd plan show <id>` agrees. A pi session shows it read-only. |
+| 20 | Durable: a Lead in phase `plan` calls `cpd_plan_review`. Read the card; use `Approve`, then on a second review `Request changes` with feedback, then on a third `Reject`. | A card headed `Plan review · <plan>` with the summary rendered as Markdown; a decision bar with a `Feedback` textarea, `Reject` (red text), `Request changes`, and `Approve` as the one filled button; each outcome reaches the agent as in Phase 1 step 6 and `cpd plan show <id>` agrees. A pi session's review is answerable from the card (section 2, step 6). |
 
 ### 6.2 Phase 3/4 results
 
@@ -223,7 +224,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | 17 | Tool rows and thinking | [ ] | [ ] | |
 | 18 | Composer and footer | [ ] | [ ] | |
 | 19 | Ask card | [ ] | [ ] (read-only as expected) | |
-| 20 | Plan review card | [ ] | [ ] (read-only as expected) | |
+| 20 | Plan review card | [ ] | [ ] (answerable as expected) | |
 
 ## 7. Electron app checklist (pro-d21, pro-d23, pro-d24)
 
