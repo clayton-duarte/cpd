@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::curate::{Judged, Verdict};
+use super::curate::{JudgeUsage, Judged, Verdict};
 use super::curate_judge::{BifrostJudge, JudgePort, JudgeRequest, RecordView};
 use crate::clock::ManualClock;
 use crate::config::Config;
@@ -93,6 +93,7 @@ fn judged() -> Judged {
         reason: "newer choice".to_owned(),
         topic: "storage".to_owned(),
         short: "Store moves to Postgres".to_owned(),
+        usage: None,
     }
 }
 
@@ -244,4 +245,42 @@ fn fake_judge_replays_scripted_replies_in_order_and_records_requests() {
         sent["neighbour"]["text"],
         calls[0].neighbour.as_ref().unwrap().text
     );
+}
+
+#[test]
+fn judged_carries_usage_from_the_answer() {
+    let mut with = good();
+    with["usage"] = json!({"tokens_in": 120, "tokens_out": 30, "cost": 0.0004});
+    let fx = fixture(answer(&with));
+    let (new, old) = (id("m1-d2"), id("m1-n1"));
+    let got = fx.judge().judge(&pair_request(&new, &old)).unwrap();
+    assert_eq!(
+        got.usage,
+        Some(JudgeUsage {
+            tokens_in: 120,
+            tokens_out: 30,
+            cost: Some(0.0004)
+        })
+    );
+    let mut no_cost = good();
+    no_cost["usage"] = json!({"tokens_in": 7, "tokens_out": 2, "cost": null});
+    let got = fixture(answer(&no_cost))
+        .judge()
+        .judge(&pair_request(&new, &old))
+        .unwrap();
+    assert_eq!(
+        got.usage,
+        Some(JudgeUsage {
+            tokens_in: 7,
+            tokens_out: 2,
+            cost: None
+        })
+    );
+    let mut none = good();
+    none["usage"] = Value::Null;
+    let got = fixture(answer(&none))
+        .judge()
+        .judge(&pair_request(&new, &old))
+        .unwrap();
+    assert_eq!(got.usage, None);
 }

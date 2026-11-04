@@ -475,7 +475,9 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 
 **Mode** (contract §4.6 "The vector leg"): `mode` is `fts` when the Context has no vectors for the embedder's model (the embedder is never called); `hybrid` when it has them and the query was embedded: the lexical and the semantic lists are fused by Reciprocal Rank Fusion, k = 60, and each `score` is then an RRF score, about 0.01 to 0.03, which must not be compared with a bm25 score; `fts-only` when it has them but the query could not be embedded: the result is the lexical list alone and `semantic_error` is the embedder's code (`embedding_unreachable`, `embedding_refused` or `embedding_bad_reply`, contract §4.6). `semantic_error` is present only with `fts-only`. The embedder never fails the search.
 
-Effects: no Context record changes. Read log (best-effort, the Session rule of §3.3): with a Session, one `context_reads` row per returned hit, channel `search`, `rank` its 1-based position in the returned list and `score` the hit's score (contract §4.6 "Reads"). The index is built in memory for each search: nothing is written to disk. A `hybrid` search starts one embedder call and writes nothing; search never embeds records and never writes `vectors.db` (contract §4.6 "The vector leg").
+Effects: no Context record changes. Read log (best-effort, the Session rule of §3.3): with a Session, one `context_reads` row per returned hit, channel `search`, `rank` its 1-based position in the returned list and `score` the hit's score (contract §4.6 "Reads"). The index is built in memory for each search and no record is stored. A `hybrid` search starts one embedder call; search never embeds records and never writes a record vector (contract §4.6 "The vector leg").
+
+**Search log** (Plan `ctx-observability`, pro-d13). Every search, with or without a Session, appends one `search_log` row to `$CPD_HOME/vectors.db` (contract §4.6 "The search log"), best-effort like the read log: a failed write never fails or changes the search, its output or its exit status, and the file is created by the first search if it is absent. The row holds the query, the `mode` (`fts` or `hybrid`; a `fts-only` search is logged as `fts`), the counts `candidates`, `floor_dropped`, `pending_hidden` and `hits` (defined in contract §4.6 "The search log"), `fts_ms`, and, when the query was embedded, `embed_ms` and `embed_tokens`. The output of `search` does not change. `cpd context stats` (§3.20) reads the log.
 
 Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's topic as a string, or `null` when it has none (its curated topic, else its provisional topic, else `null`; C7 of Plan `ctx-topics-surface`); `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score (an RRF score in `hybrid` mode, below); `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a topic (curated, else provisional) and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
 
@@ -791,6 +793,7 @@ Effects:
   - **Once (C4):** one row per record, written `ON CONFLICT DO NOTHING`; a record that already has a curation or a row is never classified. The record stays uncurated (no `record_curations` row), so the distiller (§3.13) still curates it. The step writes no Event.
   - **Off:** with `experimental.write_curation` off, the whole pass, this step included, makes no call and writes nothing (the Flag off bullet above).
 - **`contradicts`** is listed in the JSON and retires nothing.
+- **Telemetry** (Plan `ctx-observability`, pro-d13): the run measures its wall time with the Ports clock (`ms`) and sums the tokens it used: the embedder's (`embed_tokens`), `kev-4b`'s (`kev_tokens_in`, `kev_tokens_out`) and the judge's (`judge_tokens_in`, `judge_tokens_out`), each 0 when nothing was called or the gateway reported none. `cost` is the sum of the costs the gateway reported for the judge calls (Bifrost `usage.cost`, USD), `null` when none was reported; there is no rate table. `kev-4b` is local: it has tokens and no cost. Each run that gets past the skips (`off`, `archived`, `young`) and the `already` answer appends one line to `curate-runs.jsonl` (contract §4.6 "The curate run log"), best-effort. A failed run (the Failures table) appends nothing.
 - **The checked marker**: a record whose run finished is entered in `context_checked` of `vectors.db`.
 - **tmux:** none. **git:** none.
 
@@ -811,10 +814,12 @@ An unreachable embedder or classifier is **not** a failure: the run finishes, ex
  "free": 6, "judged": 2,
  "retire": [{"record": "pro-d371", "target": "pro-d120", "reason": "duplicate"}],
  "contradicts": [{"neighbour": "pro-d200", "quote": "...", "reason": "..."}],
- "disagreed": 0, "quote_failed": 0, "rejected": 0, "remaining": 3}
+ "disagreed": 0, "quote_failed": 0, "rejected": 0, "remaining": 3,
+ "ms": 4210, "embed_tokens": 312, "kev_tokens_in": 5400, "kev_tokens_out": 96,
+ "judge_tokens_in": 1800, "judge_tokens_out": 240, "cost": 0.0042}
 ```
 
-`remaining` is the count of records still due.
+`remaining` is the count of records still due. The telemetry keys `ms` (integer milliseconds), `embed_tokens`, `kev_tokens_in`, `kev_tokens_out`, `judge_tokens_in`, `judge_tokens_out` (integers) and `cost` (a number in USD, or `null`) are present on every run that did work; the `skipped` and `already` answers do not carry them.
 
 Idempotent: yes. A second run picks the next record, or says `"already": true`.
 
@@ -1021,6 +1026,7 @@ Effects:
 - **Records**: the Context's in-force decisions and notes, newest first. A Plan or brief record is never embedded (contract §4.6 kind gate). A record whose row's `content_hash` equals the lowercase hex SHA-256 of its text is **skipped**; any other record is **embedded**, one embedder call each, at 768 dims.
 - **Each row is written at once** (`context`, `model`, `record`, `dims`, `vector`, `at`, `content_hash`), so an interrupted run resumes: the rows already written stay. A record that is not skipped is the only one sent to the embedder, so when every record is skipped the embedder is not called.
 - **Counts**: `embedded` is the records written in this run, `skipped` the records whose row was current, and `remaining` the records whose row is missing or stale after the run. With `--limit`, the records not yet reached are counted in `remaining`.
+- **Telemetry** (Plan `ctx-observability`, pro-d13): `ms` is the run's wall time measured with the Ports clock, `embed_tokens` the sum of the tokens the embedder reported (0 when none), and `cost` is always `null` (the embedder reports none). A run appends one line to `curate-runs.jsonl` with `kind` `"embed"` (contract §4.6 "The curate run log"), best-effort, also when it fails after embedding some records.
 - Writes `$CPD_HOME/vectors.db` (§1.4), under `locks/store.lock`. Not gated by `experimental.write_curation`.
 - **tmux:** none. **git:** none.
 
@@ -1034,10 +1040,107 @@ Failures. The command fails with the code, exit 1, and the rows already written 
 | `vectors.db` is corrupt or cannot be written | `store_failed` | 1 |
 
 ```json
-{"ok": true, "context": "building-cpd", "model": "vertex/gemini-embedding-2", "embedded": 60, "skipped": 4, "remaining": 0}
+{"ok": true, "context": "building-cpd", "model": "vertex/gemini-embedding-2", "embedded": 60, "skipped": 4, "remaining": 0,
+ "ms": 21800, "embed_tokens": 5120, "cost": null}
 ```
 
+`ms` is an integer (milliseconds), `embed_tokens` an integer and `cost` is `null`.
+
 Idempotent: yes. A rerun embeds nothing when every row is current; its `skipped` is the count of current rows.
+
+### 3.20 `context stats`
+
+```
+cpd context stats [--context <c>] [--all] [--since <iso>]
+```
+
+Reports what a Context holds, what writing and curating it costs, and how it is read (contract §4.6 "The curate run log" and "The search log"; Plan `ctx-observability`, pro-d13). Read-only: it writes nothing, creates no file and calls no port. The Context is `--context`, else the selected Plan's (§1.3). Callers: Lead; no cockpit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3), unless `--all` | `context_required` | 2 |
+| the selected Plan exists (when the Context comes from `--plan` or `CPD_PLAN`) | `plan_not_found` | 4 |
+| the Context exists | `context_not_found` | 4 |
+| `--since` is an ISO 8601 UTC time | `usage` (`details.since`) | 2 |
+| `--all` is not combined with `--context` | `usage` | 2 |
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+| `--all` | every live Context (not deleted; archived ones included), one entry each, sorted by id |
+| `--since <iso>` | count only what happened at or after this time: records written, distill and curate runs, embed runs, reads and searches. `sizes` is a snapshot of now and ignores it |
+
+Effects: none. `contexts` is always a list: one entry without `--all`. A missing `curate-runs.jsonl`, `runs.jsonl` or `vectors.db` counts as zero lines or rows and is no error; a line of either file that is not valid JSON is skipped and is no error.
+
+Sources, so that a figure can be checked: `sizes.records` and `sizes.curated` from `context_records`, `record_curations`, `record_topics` and `record_retirements`; `sizes.vectors` from `vectors.db` `context_embeddings` and `context_checked` of the Context; distill figures from `runs.jsonl` (`tokens_in`, `tokens_out`, `cost`, `seconds` × 1000 for `ms`; contract §4.6 "The run log"); curate and embed figures from `curate-runs.jsonl`; reads from `context_reads`; searches from `search_log`.
+
+**Output** (`ok` true, the data). `markdown` is concise: one `## <context>` heading per Context, then the four sections as short tables or lists.
+
+```json
+{"ok": true, "since": null,
+ "contexts": [{
+  "context": "building-cpd",
+  "sizes": {
+   "records": {
+    "by_kind": {"decision": {"count": 210, "bytes": 184200}, "note": {"count": 96, "bytes": 51100}, "plan": {"count": 30, "bytes": 22400}, "brief": {"count": 30, "bytes": 61800}},
+    "by_status": {"in_force": {"count": 240, "bytes": 230000}, "superseded": {"count": 80, "bytes": 60100}, "retired_approved": {"count": 10, "bytes": 7000}, "retired_pending": {"count": 6, "bytes": 4300}}},
+   "curated": {"count": 190, "short_bytes": 15800},
+   "provisional_topics": 12,
+   "vectors": {"count": 300, "checked": 280, "blob_bytes": 921600}},
+  "writing_and_curation": {
+   "records_written": 14,
+   "distill": {"runs": 3, "curations": 38, "retire": 4, "rejected": 1, "failed": 0},
+   "curate": {"runs": 20, "free": 120, "judged": 31, "retire": 5, "contradicts": 2, "disagreed": 1, "quote_failed": 0, "kev_unreachable": 0},
+   "retirements": {
+    "duplicate": {"approved": 3, "pending": 2, "rejected": 0},
+    "superseded": {"approved": 1, "pending": 0, "rejected": 0},
+    "documented": {"approved": 0, "pending": 1, "rejected": 0}}},
+  "cost": {
+   "distill": {"runs": 3, "tokens_in": 91000, "tokens_out": 5200, "cost": 0.31, "ms": 180000},
+   "curate": {"runs": 20, "kev_tokens_in": 108000, "kev_tokens_out": 1900, "judge_tokens_in": 36000, "judge_tokens_out": 4800, "cost": 0.084, "ms": 84000},
+   "embed": {"runs": 2, "embed_tokens": 9800, "ms": 41000},
+   "search": {"searches": 57, "embed_tokens": 640, "embed_ms": 22000, "fts_ms": 410},
+   "total": {"tokens_in": 235000, "tokens_out": 11900, "embed_tokens": 10440, "cost": 0.394, "ms": 305000}},
+  "retrieval": {
+   "reads": {"pushed": 0, "search": 140, "show": 88},
+   "reading_sessions": 17,
+   "cited": {"used": 31, "conversion": 0.136},
+   "unread_in_force": 71,
+   "searches": {"total": 57, "hybrid": 50, "fts": 7, "zero_hit": 6,
+    "recent_zero_hit_queries": ["engine socket path"],
+    "fts_ms": {"mean": 7.2, "max": 31}, "embed_ms": {"mean": 440.0, "max": 1210}}}}],
+ "markdown": "## building-cpd\n…"}
+```
+
+**`sizes`** (a snapshot):
+- `records.by_kind` has the four keys `decision`, `note`, `plan` and `brief`, each `{count, bytes}`; a record of another kind (`question`, `answer`) is in neither map. `bytes` is the sum of the UTF-8 byte length of the records' `text`.
+- `records.by_status` has the four keys `in_force`, `superseded`, `retired_approved` and `retired_pending`, each `{count, bytes}`, and counts the same records as `by_kind` does. The statuses are **exclusive**, with this precedence: `retired_approved` (a `record_retirements` row `approved`) over `superseded` (named in the `supersedes` of a later record) over `retired_pending` (a `record_retirements` row `pending`) over `in_force`. Invariant: the `count` of the four statuses sums to the `count` of the four kinds, and so do the `bytes`.
+- `curated` is `{count, short_bytes}`: the `record_curations` rows of the Context and the sum of the byte length of their `short`.
+- `provisional_topics` is the number of `record_topics` rows whose record has no `record_curations` row (a curated topic wins, §3.3a).
+- `vectors` is `{count, checked, blob_bytes}`: the Context's rows in `context_embeddings` (all models), its rows in `context_checked`, and the sum of `length(vector)`. An absent `vectors.db` gives zeros.
+
+**`writing_and_curation`** (in the `--since` window):
+- `records_written` is the records of the Context with `at` in the window, of every kind.
+- `distill` is taken from the lines of `runs.jsonl` with `started_at` in the window: `runs` is the number of lines, `failed` the lines whose `result` is `"failed"`, `rejected` the sum of the lengths of the `rejected` arrays the lines carry, `curations` and `retire` the counters a line carries (0 when it carries none).
+- `curate` is taken from the lines of `curate-runs.jsonl` of kind `curate` with `at` in the window: `runs` is the number of lines and each other key is the sum of that counter.
+- `retirements` counts the `record_retirements` rows of the Context whose `proposed_at` is in the window, by `reason` and by `status`.
+
+**`cost`** (in the window; cost in USD; a `cost` is a sum of the costs that were reported, 0 when none was, and never null):
+- `distill`: `runs`, the sums of `tokens_in`, `tokens_out` and `cost` of the lines (a null counts as 0), and `ms` the sum of `seconds` × 1000.
+- `curate`: `runs`, and the sums of `kev_tokens_in`, `kev_tokens_out`, `judge_tokens_in`, `judge_tokens_out`, `cost` and `ms` over the lines of kind `curate`.
+- `embed`: `runs` (lines of kind `embed`) and the sums of `embed_tokens` and `ms`.
+- `search`: `searches` is the `search_log` rows in the window; `embed_tokens`, `embed_ms` and `fts_ms` are the sums (a null counts as 0).
+- `total`: `tokens_in` = `distill.tokens_in` + `curate.kev_tokens_in` + `curate.judge_tokens_in`; `tokens_out` likewise; `embed_tokens` = the `embed_tokens` of `curate` lines, `embed` and `search`; `cost` = `distill.cost` + `curate.cost`; `ms` = `distill.ms` + `curate.ms` + `embed.ms` + `search.embed_ms` + `search.fts_ms`.
+
+**`retrieval`** (in the window):
+- `reads` counts the `context_reads` rows with `read_at` in the window by channel: `pushed`, `search`, `show` (the reserved `shadow` is not listed). `reading_sessions` is the number of distinct sessions among them.
+- `cited.used` is the rows with `used` 1; `cited.conversion` is `used` ÷ the total of the rows, 0 when there are none.
+- `unread_in_force` is the number of records that are `in_force` or `retired_pending` (the `by_status` rule above) and have no `context_reads` row at all (a snapshot: the window does not apply).
+- `searches`: `total` is the `search_log` rows in the window; `hybrid` and `fts` split it by `mode` (`total` = `hybrid` + `fts`); `zero_hit` is the rows with `hits` 0; `recent_zero_hit_queries` is the `query` strings of the newest of those rows, at most 10, newest first. `fts_ms` and `embed_ms` are `{mean, max}` over the rows that have the value (`embed_ms` is null on a `fts` row); both are `null` when there is no sample.
+
+Output: `since` is the `--since` value normalised to UTC, else `null`; `contexts` is the list of entries above; `markdown` is the report as GFM.
+
+Idempotent: yes; with nothing new logged, a rerun returns the same figures.
 
 ## 4. `plan`
 

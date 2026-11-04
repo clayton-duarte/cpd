@@ -3,13 +3,15 @@
 use clap::Args;
 use serde_json::json;
 
-use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
+use super::curate_run::{DIMS, EMBED_MODEL, append_run, bifrost_embedder};
 use super::curate_vectors::{VectorStore, content_hash};
 use super::distill::State;
 use super::{ContextRow, Select};
+use crate::clock::Clock;
 use crate::embedding::EmbeddingPort;
 use crate::env::Env;
 use crate::error::CpdError;
+use crate::home::CpdHome;
 use crate::ids::{ContextId, RecordId};
 use crate::output::Output;
 
@@ -28,6 +30,8 @@ pub(super) struct EmbedReport {
     pub embedded: usize,
     pub skipped: usize,
     pub remaining: usize,
+    pub embed_tokens: u64,
+    pub ms: u64,
 }
 
 /// Embeds the `records` (newest first, with their text) whose stored content hash differs, at most `limit`.
@@ -45,6 +49,8 @@ pub(super) fn embed_records(
         embedded: 0,
         skipped: 0,
         remaining: 0,
+        embed_tokens: 0,
+        ms: 0,
     };
     for (id, text) in records {
         let hash = content_hash(text);
@@ -55,9 +61,45 @@ pub(super) fn embed_records(
         } else {
             let e = embedder.embed(text, DIMS)?;
             store.put_hashed(context, &e.model, id, &e.vector, &hash)?;
+            report.embed_tokens += e.tokens.unwrap_or(0);
             report.embedded += 1;
         }
     }
+    Ok(report)
+}
+
+/// [`embed_records`] timed by `clock`, with its `curate-runs.jsonl` line appended (best effort).
+pub(super) fn embed_run(
+    home: &CpdHome,
+    clock: &dyn Clock,
+    store: &VectorStore,
+    embedder: &dyn EmbeddingPort,
+    context: &ContextId,
+    records: &[(RecordId, String)],
+    limit: usize,
+) -> Result<EmbedReport, CpdError> {
+    let started = clock.now();
+    let mut report = embed_records(store, embedder, context, records, limit)?;
+    report.ms = clock.now().saturating_duration_since(started).as_millis() as u64;
+    append_run(
+        home,
+        context,
+        json!({
+            "kind": "embed",
+            "at": crate::clock::timestamp(clock.utc()),
+            "context": context.as_str(),
+            "ms": report.ms,
+            "embed_tokens": report.embed_tokens,
+            "kev_tokens_in": 0,
+            "kev_tokens_out": 0,
+            "judge_tokens_in": 0,
+            "judge_tokens_out": 0,
+            "cost": null,
+            "embedded": report.embedded,
+            "skipped": report.skipped,
+            "remaining": report.remaining,
+        }),
+    );
     Ok(report)
 }
 
@@ -81,12 +123,23 @@ pub(super) fn embed(args: EmbedArgs) -> Result<Output, CpdError> {
         .collect();
     let embedder = bifrost_embedder(&config, &ports.runner)?;
     let vectors = VectorStore::at(&home);
-    let report = embed_records(&vectors, &embedder, &context, &records, args.limit)?;
+    let report = embed_run(
+        &home,
+        ports.clock.as_ref(),
+        &vectors,
+        &embedder,
+        &context,
+        &records,
+        args.limit,
+    )?;
     Ok(Output::success(json!({
         "context": context.as_str(),
         "model": EMBED_MODEL,
         "embedded": report.embedded,
         "skipped": report.skipped,
         "remaining": report.remaining,
+        "ms": report.ms,
+        "embed_tokens": report.embed_tokens,
+        "cost": serde_json::Value::Null,
     })))
 }

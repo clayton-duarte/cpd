@@ -30,8 +30,9 @@ export interface JudgeRequest {
 
 export type Verdict = "duplicate" | "supersedes" | "contradicts" | "independent";
 export type Failure = { code: "judge_unreachable" | "judge_refused" | "judge_bad_reply"; message: string; details: Record<string, unknown> };
+export type Usage = { tokens_in: number; tokens_out: number; cost: number | null };
 export type Answer =
-  | { ok: true; verdict: Verdict; quote: string; reason: string; topic: string; short: string }
+  | { ok: true; verdict: Verdict; quote: string; reason: string; topic: string; short: string; usage: Usage | null }
   | { ok: false; error: Failure };
 
 export interface JudgeDeps {
@@ -133,9 +134,15 @@ export async function judge(deps: JudgeDeps): Promise<Answer> {
   if (status < 200 || status > 299) return fail("judge_refused", `The gateway answered HTTP ${status}.`, { status });
 
   let content: unknown;
+  let usage: Usage | null = null;
   let reply: Record<string, unknown>;
   try {
-    content = (JSON.parse(text) as { choices?: { message?: { content?: unknown } }[] }).choices?.[0]?.message?.content;
+    const body = JSON.parse(text) as { choices?: { message?: { content?: unknown } }[]; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; cost?: unknown } | null };
+    content = body.choices?.[0]?.message?.content;
+    const u = body.usage;
+    if (u && typeof u.prompt_tokens === "number" && typeof u.completion_tokens === "number") {
+      usage = { tokens_in: u.prompt_tokens, tokens_out: u.completion_tokens, cost: typeof u.cost === "number" ? u.cost : null };
+    }
     if (!isText(content)) return fail("judge_bad_reply", "The gateway's answer holds no message text.");
     const parsed: unknown = JSON.parse(content);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return fail("judge_bad_reply", "The model's reply is not a JSON object.");
@@ -146,12 +153,12 @@ export async function judge(deps: JudgeDeps): Promise<Answer> {
 
   if (request.neighbour === null) {
     if (!isText(reply.topic) || !isText(reply.short)) return fail("judge_bad_reply", "The model's reply has no text `topic` and `short`.");
-    return { ok: true, verdict: "independent", quote: "", reason: "", topic: reply.topic, short: reply.short };
+    return { ok: true, verdict: "independent", quote: "", reason: "", topic: reply.topic, short: reply.short, usage };
   }
   const { verdict, quote, reason, topic, short } = reply;
   if (!isText(verdict) || !VERDICTS.includes(verdict)) return fail("judge_bad_reply", "The model's `verdict` is not one of the four.");
   if (!isText(quote) || !isText(reason) || !isText(topic) || !isText(short)) return fail("judge_bad_reply", "The model's reply lacks a text `quote`, `reason`, `topic` or `short`.");
-  return { ok: true, verdict: verdict as Verdict, quote, reason, topic, short };
+  return { ok: true, verdict: verdict as Verdict, quote, reason, topic, short, usage };
 }
 
 /** Prints ONE JSON line (the [`Answer`]) on `stdout`; returns the exit status (0 for every outcome it can describe). */
@@ -162,7 +169,8 @@ export async function main(deps: Omit<JudgeDeps, "request"> & { stdin: string; s
   } catch (e) {
     answer = fail("judge_bad_reply", `The judge request is not valid: ${messageOf(e)}`);
   }
-  deps.stdout.write(JSON.stringify(answer) + "\n");
+  // No usage means no `usage` key on the line (the Rust side reads a missing key as none).
+  deps.stdout.write(JSON.stringify(answer, (k, v) => (k === "usage" && v === null ? undefined : v)) + "\n");
   return 0;
 }
 

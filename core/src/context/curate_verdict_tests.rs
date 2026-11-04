@@ -24,6 +24,7 @@ fn judged(verdict: Verdict, quote: &str) -> Judged {
         reason: "because".into(),
         topic: "the topic".into(),
         short: "the short".into(),
+        usage: None,
     }
 }
 

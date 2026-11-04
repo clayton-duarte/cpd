@@ -409,6 +409,20 @@
     },
     "required": []
   },
+  "context stats": {
+    "flags": {
+      "--all": false,
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--since": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context topics": {
     "flags": {
       "--context": true,

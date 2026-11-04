@@ -20,7 +20,7 @@ use super::curation::{Curation, NotCurable, Proposal, not_curable, propose_rejec
 use super::distill::{Lock, State};
 use super::{ContextRow, Select};
 use crate::classifier::{Choice, ClassifierPort, Label, PiClassifier};
-use crate::clock;
+use crate::clock::{self, Clock};
 use crate::config::{Config, locate_pi};
 use crate::embedding::{BifrostEmbedding, EmbeddingPort};
 use crate::env::Env;
@@ -114,6 +114,32 @@ struct Tally {
     /// `(record, topic, model)`: a provisional topic (`record_topics`).
     provisional: Vec<(RecordId, String, String)>,
     contradicts: Vec<Value>,
+    embed_tokens: u64,
+    kev_tokens_in: u64,
+    kev_tokens_out: u64,
+    judge_tokens_in: u64,
+    judge_tokens_out: u64,
+    /// The sum of the judge costs the gateway reported; `None` when it reported none.
+    cost: Option<f64>,
+}
+
+impl Tally {
+    fn add_kev(&mut self, usage: Option<crate::classifier::Usage>) {
+        if let Some(u) = usage {
+            self.kev_tokens_in += u.input_tokens;
+            self.kev_tokens_out += u.output_tokens;
+        }
+    }
+
+    fn add_judge(&mut self, usage: &Option<super::curate::JudgeUsage>) {
+        if let Some(u) = usage {
+            self.judge_tokens_in += u.tokens_in;
+            self.judge_tokens_out += u.tokens_out;
+            if let Some(c) = u.cost {
+                self.cost = Some(self.cost.unwrap_or(0.0) + c);
+            }
+        }
+    }
 }
 
 struct Pair<'a> {
@@ -192,6 +218,7 @@ fn ask_kev(models: &Models, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()
             return Err(());
         }
     };
+    tally.add_kev(chosen.usage);
     let verdict = match chosen.label.as_str() {
         "duplicate" => Verdict::Duplicate,
         "supersedes" => Verdict::Supersedes,
@@ -259,6 +286,7 @@ fn provisional_topic(
     let Ok(chosen) = models.classifier.choose(&choice) else {
         return Ok(());
     };
+    tally.add_kev(chosen.usage);
     if chosen.confidence.unwrap_or(0.0) >= TOPIC_CONFIDENCE
         && topics.iter().any(|(topic, _)| *topic == chosen.label)
     {
@@ -281,6 +309,7 @@ fn judge_pair(
     };
     let judged = models.judge.judge(&request)?;
     tally.judged += 1;
+    tally.add_judge(&judged.usage);
     match confirm(side(pair.new), side(pair.other), kev, judged) {
         Outcome::Independent { why } => match why {
             Some(Why::Disagreed) => tally.disagreed += 1,
@@ -351,8 +380,10 @@ fn semantic(
     context: &ContextId,
     new: &Candidate,
     all: &[Candidate],
+    tokens: &mut u64,
 ) -> Result<Vec<RecordId>, CpdError> {
     let query = models.embedding.embed(&new.text, DIMS)?;
+    *tokens += query.tokens.unwrap_or(0);
     let model = query.model.as_str();
     vectors.put_hashed(
         context,
@@ -369,6 +400,7 @@ fn semantic(
         .take(FILL);
     for c in missing {
         let e = models.embedding.embed(&c.text, DIMS)?;
+        *tokens += e.tokens.unwrap_or(0);
         vectors.put_hashed(context, &e.model, &c.id, &e.vector, &content_hash(&c.text))?;
     }
     let ids: Vec<RecordId> = all.iter().map(|c| c.id.clone()).collect();
@@ -384,11 +416,12 @@ fn find_neighbours(
     new: &Candidate,
     supersedes: &[RecordId],
     all: &[Candidate],
+    tokens: &mut u64,
 ) -> Result<(Vec<Neighbour>, bool), CpdError> {
     let forced = forced_ids(&new.text, supersedes, &new.id, all);
     let others: Vec<Candidate> = all.iter().filter(|c| c.id != new.id).cloned().collect();
     let lexical = lexical_rank(&new.text, &others, TOP)?;
-    let semantic = semantic(models, vectors, context, new, all).ok();
+    let semantic = semantic(models, vectors, context, new, all, tokens).ok();
     let fts_only = semantic.is_none();
     Ok((neighbours(&new.id, forced, lexical, semantic), fts_only))
 }
@@ -451,6 +484,7 @@ fn report(
     tally: &Tally,
     remaining: usize,
     context: &ContextId,
+    ms: u64,
 ) -> Value {
     let retire: Vec<Value> = tally
         .retire
@@ -478,6 +512,13 @@ fn report(
         "quote_failed": tally.quote_failed,
         "rejected": tally.rejected,
         "remaining": remaining,
+        "ms": ms,
+        "embed_tokens": tally.embed_tokens,
+        "kev_tokens_in": tally.kev_tokens_in,
+        "kev_tokens_out": tally.kev_tokens_out,
+        "judge_tokens_in": tally.judge_tokens_in,
+        "judge_tokens_out": tally.judge_tokens_out,
+        "cost": tally.cost,
     })
 }
 
@@ -489,6 +530,7 @@ fn not_due(context: &ContextId, id: &RecordId) -> CpdError {
     .with("record", id.to_string())
 }
 
+#[allow(clippy::too_many_arguments)] // the injected ports and clock of one run
 pub fn curate_with(
     store: &mut Store,
     home: &CpdHome,
@@ -496,8 +538,10 @@ pub fn curate_with(
     context: &ContextId,
     models: &Models,
     now: OffsetDateTime,
+    clock: &dyn Clock,
     only: Option<&RecordId>,
 ) -> Result<Value, CpdError> {
+    let started = clock.now();
     if !config.experimental.write_curation {
         return Ok(json!({"context": context.as_str(), "skipped": "off"}));
     }
@@ -535,7 +579,15 @@ pub fn curate_with(
         .find(|(_, r)| r.id == picked)
         .map(|(_, r)| r.supersedes().to_vec())
         .unwrap_or_default();
-    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all)?;
+    let (found, fts) = find_neighbours(
+        models,
+        &vectors,
+        context,
+        new,
+        &supersedes,
+        &all,
+        &mut tally.embed_tokens,
+    )?;
     fts_only |= fts;
     let count = found.len().min(K);
     check_pairs(models, new, &found, &all, &topics, &mut tally)?;
@@ -548,7 +600,43 @@ pub fn curate_with(
     vectors.mark_checked(context, &picked, &at)?;
     checked.insert(picked);
     let remaining = due(&state, &checked, now).len();
-    Ok(report(new, count, fts_only, &tally, remaining, context))
+    let ms = clock.now().saturating_duration_since(started).as_millis() as u64;
+    append_run(
+        home,
+        context,
+        json!({
+            "kind": "curate",
+            "at": clock::timestamp(clock.utc()),
+            "context": context.as_str(),
+            "ms": ms,
+            "embed_tokens": tally.embed_tokens,
+            "kev_tokens_in": tally.kev_tokens_in,
+            "kev_tokens_out": tally.kev_tokens_out,
+            "judge_tokens_in": tally.judge_tokens_in,
+            "judge_tokens_out": tally.judge_tokens_out,
+            "cost": tally.cost,
+            "free": tally.free,
+            "judged": tally.judged,
+            "retire": tally.retire.len(),
+            "contradicts": tally.contradicts.len(),
+            "disagreed": tally.disagreed,
+            "quote_failed": tally.quote_failed,
+            "kev_unreachable": tally.kev_unreachable,
+        }),
+    );
+    Ok(report(new, count, fts_only, &tally, remaining, context, ms))
+}
+
+/// Appends one line to the Context's `curate-runs.jsonl`. Best effort, as distill's `log_run`: a failure is ignored.
+pub(super) fn append_run(home: &CpdHome, context: &ContextId, line: Value) {
+    use std::io::Write;
+    let dir = home.context_digest_dir(context);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("curate-runs.jsonl"))
+        .and_then(|mut file| writeln!(file, "{line}"));
 }
 
 #[derive(Args, Debug)]
@@ -624,6 +712,7 @@ pub(super) fn curate(args: CurateArgs) -> Result<Output, CpdError> {
         &context,
         &models,
         now,
+        ports.clock.as_ref(),
         args.record.as_ref(),
     )
     .map(Output::success)

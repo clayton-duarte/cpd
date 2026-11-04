@@ -1,11 +1,35 @@
 //! An in-process [`JudgePort`] for the tests of the curation pipeline: scripted answers, no process, no thread.
 
 use std::sync::Mutex;
+use std::time::Duration;
+
+use crate::clock::ManualClock;
 
 use crate::context::curate::Judged;
 use crate::context::curate_judge::{JudgePort, JudgeRequest, RecordView};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{RecordId, RecordKind};
+
+/// Virtual time a fake port spends per call: advances `clock` by `step` on each call.
+#[derive(Clone)]
+pub struct Tick {
+    pub clock: ManualClock,
+    pub step: Duration,
+}
+
+impl std::fmt::Debug for Tick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Tick({:?})", self.step)
+    }
+}
+
+impl Tick {
+    pub fn fire(tick: &Option<Tick>) {
+        if let Some(t) = tick {
+            t.clock.advance(t.step);
+        }
+    }
+}
 
 /// An owned copy of a [`RecordView`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +66,7 @@ pub struct FakeJudge {
     replies: Mutex<Vec<Result<Judged, CpdError>>>,
     always: Option<Judged>,
     calls: Mutex<Vec<OwnedRequest>>,
+    tick: Option<Tick>,
 }
 
 impl FakeJudge {
@@ -53,6 +78,7 @@ impl FakeJudge {
             replies: Mutex::new(replies),
             always: None,
             calls: Mutex::new(Vec::new()),
+            tick: None,
         }
     }
 
@@ -62,7 +88,17 @@ impl FakeJudge {
             replies: Mutex::new(Vec::new()),
             always: Some(judged),
             calls: Mutex::new(Vec::new()),
+            tick: None,
         }
+    }
+
+    /// Each call advances the fake clock by `step`.
+    pub fn advancing(mut self, clock: &ManualClock, step: Duration) -> FakeJudge {
+        self.tick = Some(Tick {
+            clock: clock.clone(),
+            step,
+        });
+        self
     }
 
     /// Every request received, in order, as an owned copy.
@@ -73,6 +109,7 @@ impl FakeJudge {
 
 impl JudgePort for FakeJudge {
     fn judge(&self, request: &JudgeRequest) -> Result<Judged, CpdError> {
+        Tick::fire(&self.tick);
         if let Ok(mut calls) = self.calls.lock() {
             calls.push(OwnedRequest {
                 new: OwnedRecord::of(&request.new),

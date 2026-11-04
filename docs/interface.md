@@ -25,6 +25,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context curation` | List the pending retirements (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
 | `cpd context reads` | List the Context records Sessions have read or cited (§3.18) | Lead, Manager, Worker | |
+| `cpd context stats` | Report a Context's sizes, writing and curation cost, and reads (§3.20) | Lead, Manager | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |
