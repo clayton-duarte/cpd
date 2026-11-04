@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { QueuedSubmission, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
 import type { PendingSubmission } from "../../state/store.ts";
+import type { SizeObserver } from "./virtual.ts";
 import { CompactionRow, FoldRow } from "./Folds.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
 
@@ -57,6 +58,8 @@ export function Transcript(props: {
   queued: readonly QueuedSubmission[];
   pending: readonly PendingSubmission[];
   onLoadEarlier(): void;
+  tailEpoch: number;
+  sizes?: SizeObserver;
 }): JSX.Element {
   const nodes: JSX.Element[] = [];
   let run: ToolItem[] = [];
