@@ -1,4 +1,4 @@
-//! Red tests for the `@cpd_runner` feed (pro-d199; contract §6.1): the workers step reads `worker_runner` from
+//! Red tests for the `@cpd_runner` feed (pro-d199; contract §6.1): the workers step reads `durable_workers` from
 //! config.toml afresh and sets `@cpd_runner` (`pi` or `durable`) in the same tmux call as the workers texts, remembers it
 //! and sets it again only when it differs; a config that does not parse is an `error` and sets nothing.
 //!
@@ -7,10 +7,11 @@
 use super::super::testkit::Fx;
 use cpd_core::host::runner::FakeRunner;
 
-/// A config.toml with `worker_runner = "<runner>"`, the rest as the kit writes it.
+/// A config.toml with `durable_workers` for `<runner>`, the rest as the kit writes it.
 fn write_runner(fx: &Fx, runner: &str) {
     let text = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\nworker_runner = \"{runner}\"\n\n[tmux]\nsocket = \"testkit\"\n"
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n\n[experimental]\ndurable_workers = {}\n\n[tmux]\nsocket = \"testkit\"\n",
+        runner == "durable"
     );
     std::fs::write(fx.engine.home.config(), text).unwrap();
 }
@@ -71,7 +72,11 @@ fn a_config_that_does_not_parse_reports_an_error_and_sets_no_option() {
     let mut fx = Fx::new("");
     let runner = fx.on_fake_tmux();
     fx.tmux_server();
-    std::fs::write(fx.engine.home.config(), "version = 1\nworker_runner = [\n").unwrap();
+    std::fs::write(
+        fx.engine.home.config(),
+        "version = 1\n[experimental]\ndurable_workers = [\n",
+    )
+    .unwrap();
     let sent = sets(&mut fx, &runner);
     assert!(
         sent.is_empty(),

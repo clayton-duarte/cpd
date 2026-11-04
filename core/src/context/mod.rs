@@ -16,6 +16,22 @@ mod distill_runner_tests;
 mod arch_citations_tests;
 mod archive;
 mod contexts;
+pub mod curate;
+pub mod curate_backoff;
+#[cfg(test)]
+mod curate_backoff_tests;
+pub mod curate_judge;
+#[cfg(test)]
+mod curate_judge_tests;
+pub mod curate_neighbours;
+#[cfg(test)]
+mod curate_neighbours_tests;
+pub mod curate_vectors;
+#[cfg(test)]
+mod curate_vectors_tests;
+pub mod curate_verdict;
+#[cfg(test)]
+mod curate_verdict_tests;
 pub mod curated;
 pub mod curation;
 mod delete;
@@ -207,6 +223,9 @@ pub struct ListArgs {}
 pub struct ShowArgs {
     #[command(flatten)]
     select: Select,
+    /// Every record, the superseded, answered and done ones too (bare `show` lists only what is active)
+    #[arg(long, conflicts_with_all = ["since", "record", "topic"])]
+    all: bool,
     /// Only the records whose index position is greater
     #[arg(long, value_name = "seq")]
     since: Option<u64>,

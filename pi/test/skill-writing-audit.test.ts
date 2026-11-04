@@ -411,3 +411,19 @@ test("Manager Plans keeps six steps with the pending check in Intake", () => {
   const late = steps.slice(1).filter((l) => l.includes("cpd context pending --context <c>"));
   assert.deepEqual(late, [], `pending check outside Intake: ${late.map((l) => l.slice(0, 60)).join(" | ")}`);
 });
+
+test("cpd-lead sends codebase reads to scout Jobs", () => {
+  const bad: string[] = [];
+  const phrases = ["by reading it yourself", "verified in source", "not cheaper to read", "cheap to answer by reading", "read instead"];
+  for (const f of files("cpd-lead"))
+    f.text.split("\n").forEach((l, i) => {
+      for (const p of phrases) if (l.includes(p)) bad.push(`${f.name}:${i + 1}: contains "${p}"`);
+    });
+  const grounding = section(lead, "### Grounding");
+  for (const t of ["scout", "research", "job-merged", "explore_pending"]) if (!grounding.includes(t)) bad.push(`### Grounding lacks ${t}`);
+  for (const w of ["end", "turn"]) if (!new RegExp(`\\b${w}\\b`).test(grounding)) bad.push(`### Grounding lacks the word ${w}`);
+  const grilling = section(lead, "### Grilling");
+  if (!/cpd plan phase plan[^\n]*(only )?after[^\n]*explore[^\n]*merged|only after[^\n]*explore[^\n]*merged[^\n]*cpd plan phase plan|explore[^\n]*merged[^\n]*cpd plan phase plan/i.test(grilling))
+    bad.push("### Grilling does not say `cpd plan phase plan` runs only after the explore Jobs merged");
+  assert.deepEqual(bad, [], bad.join("\n"));
+});

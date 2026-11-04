@@ -119,7 +119,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `workflow_required` | 2 | the command needs a Workflow, `--workflow` is omitted and the Plan does not have exactly one Workflow that is not `cancelled` (R34) |
 | `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
-| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive` or `session unarchive` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: archive is the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
+| `explore_pending` | 3 | `plan phase plan` (§4.4) while a scout or research Job of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}`, `jobs` the sorted keys of those Jobs; nothing is written (pro-d374) |
+| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive`, `session unarchive` or `session resume` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11, §10.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: these commands are the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
@@ -230,6 +231,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 | `run/<plan>/summary-<review>.md` | `plan review` (§4.6, hs-d502): a copy of the summary that a later render cannot change | the pi adapter, which shows it in the Lead's chat (§15.5) |
 | `run/<plan>/feedback-<review>.md` | the pi adapter: the User's note from the chat dialog's Change, overwritten on a retry | `plan decide --feedback-file` |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
+| `vectors.db` (`$CPD_HOME`, with its `-wal` and `-shm`) | `context curate` (Experimental Feature `write_curation`; contract §4.6): the derived vector cache, safe to delete | `context curate` |
 | `run/titles/<session>.log` | engine E10: the output of the `session retitle` runs it starts (hs-d257, contract §1.4); `locks/title-<session>.lock` is the run's own lock (§10.14) | the User |
 
 ### 1.5 Text arguments
@@ -344,7 +346,7 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
+cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
 ```
 
 | Flag | Meaning |
@@ -352,10 +354,23 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
+| `--all` | a boolean: print the full history, the output bare `context show` had before the bounded view (Output, below; pro-d1, pro-d3): every section and every record, no `omitted`. Exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2) |
 
 **Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
 
-Effects: none. Output: the Context, its records in index order and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: none. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
+
+1. `# <title>` with the Jira key, as before.
+2. `## Open questions`: every open question, never capped.
+3. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
+4. `## Topics`: one line `topic (n), topic (n), ...`, the curated topics of the records in force with the number `n` of those records, in alphabetical order of topic (A5). The section is absent when no curated record is in force.
+5. `## Notes`: the notes in force (not superseded, not retired), capped to the newest 40 by `seq` (A1) and shown in `seq` order. When more exist, a footer line follows: `... <k> older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all`, `<k>` being the number left out.
+6. `## Plans`: only the **active** Plans (A2). A Plan is done when this machine's `plans.done_at` is set for it; a done Plan is not listed (it is counted in History). A Plan of another machine, or one with no row in this machine's database, stays listed. Each listed Plan has its repos and its brief nested short, as the Plans and Briefs paragraphs below describe.
+7. `## History (omitted; cpd context show --all renders it)`: one line per non-zero count, in this order: `- <n> superseded decisions`, `- <n> answered questions`, `- <n> superseded notes`, `- <n> done plans`. A record is counted exactly where `--all` lists it: a superseded or retired decision under Superseded decisions, a question under Answered questions, a superseded or retired note under Notes, a done Plan under Plans. The section is absent when all four counts are zero.
+
+Each item shows its id and date, as in `--all`. Bare JSON (A3): `records` holds only the records the markdown shows, in `seq` order (the open questions, the decisions in force, the notes in force within the cap, the listed Plans and their briefs); done Plans and their briefs, superseded or retired decisions, answered questions with their answers, superseded or retired notes and the notes beyond the cap are absent. It also carries `omitted`, an object whose keys are always all present: `{"superseded_decisions": n, "answered_questions": n, "superseded_notes": n, "older_notes": n, "done_plans": n}`, the number of records left out of each kind, `older_notes` being the notes in force beyond the cap.
+
+`--all` is the former output, byte for byte: `markdown` renders every record under the sections Plans, Decisions, Superseded decisions, Open questions, Answered questions and Notes (each superseded or retired record labelled and naming its successor, as before), `records` holds every record in `seq` order, and there is no `omitted`. `--all` is exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2). `--since`, `--record` and `--topic` are unchanged: with `--since`, `markdown` renders only the records after the cursor, in the same order of sections as `--all`. The Briefs and Plans paragraphs below describe the Plans listed; in the bare view a done Plan and its brief are not listed.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -921,8 +936,9 @@ The only phase moved by hand (cpd 1 §11 `workflow phase`, kept). Any other targ
 | Precondition | Code | Exit |
 |---|---|---|
 | the phase is `grounding` (already `plan`: `already`) | `illegal_transition` | 3 |
+| no explore Job (`scout`, `research`) of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}` | `explore_pending` | 3 |
 
-Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux.
+Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux. In phase `grounding`, the explore check (pro-d374, assumption A2) runs in the same transaction, before the change: `details.jobs` is the sorted list of the keys of the Plan's Jobs of kind `scout` or `research` that are `queued`, `running` or `failed`; a `merged` or `cancelled` explore Job does not block, and a refusal writes nothing.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "plan"}
@@ -3251,10 +3267,11 @@ Output:
 cpd session resume <id>
 ```
 
-Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3.
+Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3. Only the User and the engine resume: an agent is refused (pro-d374).
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller has `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty (an agent); `details` `{command: "session resume", session, attempt}`, `session` and `attempt` the values of those variables or `null`; the check and message are §1.3's `agent_forbidden`, refused before the Ledger is opened | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager` | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
@@ -3277,7 +3294,7 @@ Effects:
 cpd session tail <id>
 ```
 
-The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14), folds the frames onto the `SnapshotEvent` and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
+The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14, protocol 2), folds the frames onto the pi-durable `ConversationView` (its base `view` frame and its `ops` frames) and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
 
 | Argument | Meaning |
 |---|---|
@@ -3292,9 +3309,9 @@ The read path of a live durable Lead's or Manager's transcript (contract §6.20;
 | the socket path `$CPD_HOME/run/host/<id>.sock` is at most `SOCKET_PATH_MAX` (107) bytes (contract §6.14 step 1, applied symmetrically) | `usage` (`socket_path_too_long`) | 2 |
 
 Effects:
-- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`client: "cpd session tail"`), attaches without a cursor, and prints the whole transcript from the base `snapshot` frame — one line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
-- **Follow:** every live `events` frame prints the messages it completes, as they complete.
-- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in snapshot mode: the fold replaces its state, one line on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the stream never repeats lines it printed.
+- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`protocol: 2`, `min_protocol: 2`, `client: "cpd session tail"`), attaches without a cursor, and prints the transcript of the base `view` frame: the window the host's watch starts with, the newest 50 entries (up to 100), so a long transcript shows its recent part; earlier entries are read with `cpd session history` (§10.12). One line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
+- **Follow:** every live `ops` frame prints the entries it appends, as they complete. The message still streaming is not printed until its entry is appended. When the window moved past entries the tail had not printed (a gap), one line on stderr names the gap and the tail goes on.
+- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in view mode: the fold replaces its replica, prints the entries it has not printed and writes one line on stderr (`view <epoch> seq <seq>: view replaced`), so the stream never repeats a line it printed.
 - **End:** exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (none of the host's reasons can reach a tail that never detaches; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
 - **Rows / Events / tmux:** none.
 
@@ -3307,7 +3324,7 @@ tool bash: all checks pass
 assistant: All green. Ready for review.
 ```
 
-Idempotent: reading only; the same transcript renders the same lines (the first snapshot's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
+Idempotent: reading only; the same transcript renders the same lines (the base view's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
 
 ## 10a. `board` (hs-d514)
 
@@ -5151,6 +5168,25 @@ A refusal's text starts `φ: ` and names the rule: `φ: <rule>: <what was refuse
 `git log`, `show`, `diff` and the other read-only commands stay allowed for both kinds. A `research` Worker may reach outside the machine (web, curl, attached MCP servers, registries, upstream docs): the profile has no `network` rule for it. The first `write` row is the one `edit` and `write` calls meet: they are refused outside the explore directory and the OS temp dir.
 
 The explore Worker also may run the read-only `cpd context search` and `cpd context show` (§3.3, §3.4), as its Spec's Deliverable section says (R10); nothing enforces that.
+
+The rules of this table are the Workers' profile only. A Lead's explore-artefact rule (`artefact`) is not one of them: it is §15.22a.
+
+### 15.22a A Lead's explore-artefact guard (pro-d374)
+
+An explore Job's artefact is for the Worker that wrote it. A Lead gets the Job's summary, never the file (contract §2.2 "Job kinds", §5.2 `job-merged`); when the summary is not enough it adds a follow-up scout Job. The adapter enforces this in pi's `tool_call` (`pi/lib/adapter.ts`), while `host.run` is set, as §15.16 does for checkouts (assumption A3, Plan `lead-grounding-guard`).
+
+**What is refused.** For a Session whose role is `lead` only; a Worker and a Manager are untouched, and so are the Lead's `edit` and `write` calls (§15.16):
+
+- a `read` call whose `path` is under `$CPD_HOME/run/<any plan>/explore/`, the path resolved as pi resolves tool paths (§15.16);
+- a `bash` call whose simple command (the tokenizer of §15.11, after its prefixes) has a file reader as its command word, `cat`, `head`, `tail`, `sed`, `grep`, `rg`, `awk`, `less`, `more`, `jq`, `wc`, `cut`, `sort`, `nl` or `bat` (a path ending in `/<word>` counts), and a word of it that names a path under that directory. The path may be written `$CPD_HOME/…`, `${CPD_HOME}/…`, `~/.cpd/…`, `$HOME/.cpd/…` or as the absolute home path.
+
+**What passes.** A Lead that cites the path in a heredoc, in a Spec file or in a `cpd` command is not refused: only a file reader's operand is judged.
+
+**The refusal** is `{block: true, reason}`. The rule is `artefact`, so the reason has the form `φ: explore <rule>: <what>` of §15.22, with this text, exactly:
+
+```
+φ: explore artefact: $CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job
+```
 
 ### 15.23 A Session is told its skill changed (Plan `skill-fresh`)
 

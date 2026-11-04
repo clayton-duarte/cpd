@@ -90,6 +90,15 @@ fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
 /// built-in GX and H3 are no rungs of it.
 const ROLES: &str = "context_distill_tier = \"G0\"\nworker_tier = \"H2\"\nlead_tier = \"S4\"";
 
+/// [`write_config`] with `extra`, then the `[experimental]` table with `durable_workers = <durable>` after the keys.
+fn write_config_durable(fx: &Fx, extra: &str, durable: bool) {
+    write_config(fx, extra);
+    let path = fx.env.cpd_home().join("config.toml");
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str(&format!("\n[experimental]\ndurable_workers = {durable}\n"));
+    fs::write(&path, text).unwrap();
+}
+
 /// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
 fn healthy() -> Fx {
     let fx = Fx::with_ports();
@@ -978,9 +987,11 @@ fn version_calls(fx: &Fx) -> usize {
 #[test]
 fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
     // No runner file, and a Node too old for the runner: `pi` does not care.
-    for extra in ["", "worker_runner = \"pi\""] {
+    for explicit in [false, true] {
         let fx = healthy();
-        write_config(&fx, &format!("{ROLES}\n{extra}"));
+        if explicit {
+            write_config_durable(&fx, ROLES, false);
+        }
         script(
             &fx,
             "node",
@@ -996,7 +1007,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
         assert_eq!(
             version_calls(&fx),
             1,
-            "only `pi_node` asked for the version: {extra:?}"
+            "only `pi_node` asked for the version: explicit: {explicit}"
         );
     }
 }
@@ -1004,7 +1015,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
 #[test]
 fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
     let fx = healthy();
-    write_config(&fx, &format!("{ROLES}\nworker_runner = \"durable\""));
+    write_config_durable(&fx, ROLES, true);
     add_runner_file(&fx);
     script(
         &fx,
@@ -1027,7 +1038,7 @@ fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
 #[test]
 fn worker_runner_durable_fails_when_the_runner_file_is_missing() {
     let fx = healthy();
-    write_config(&fx, "worker_runner = \"durable\"");
+    write_config_durable(&fx, "", true);
     assert!(!runner_file(&fx).exists());
     let run = doctor(&fx);
     assert_doctor_failed(&run);
@@ -1045,7 +1056,7 @@ fn worker_runner_durable_fails_when_the_runner_file_is_missing() {
 fn worker_runner_durable_fails_when_node_is_older_than_22_19_0() {
     for old in ["v22.18.9", "v20.11.1"] {
         let fx = healthy();
-        write_config(&fx, "worker_runner = \"durable\"");
+        write_config_durable(&fx, "", true);
         add_runner_file(&fx);
         script(
             &fx,

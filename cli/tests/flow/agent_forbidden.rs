@@ -149,3 +149,30 @@ fn unset_or_empty_variables_are_not_an_agent() {
         }
     }
 }
+
+#[test]
+fn session_resume_is_refused_for_an_agent() {
+    use crate::common::session::{events, setup_with_fork};
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    fx.env.sql(
+        "UPDATE sessions SET state = 'blocked', state_label = 'φ: loop guard' WHERE id = 'lead1'",
+    );
+    let cases: [(Vars, Value, Value); 2] = [
+        (&[("CPD_SESSION", "lead1")], json!("lead1"), Value::Null),
+        (&[("CPD_ATTEMPT", "api-a1")], Value::Null, json!("api-a1")),
+    ];
+    for (vars, session, attempt) in cases {
+        let run = fx.cpd_with(fx.env.root(), &["session", "resume", "lead1"], vars);
+        let error = refused(&run, "agent_forbidden", 3);
+        assert_eq!(
+            error["details"],
+            json!({"command": "session resume", "session": session, "attempt": attempt}),
+            "{error}"
+        );
+        assert!(events(&fx, "session-resumed").is_empty());
+    }
+    // Control: with neither variable set the same resume succeeds.
+    fx.cpd(&["session", "resume", "lead1"]).ok();
+    assert_eq!(events(&fx, "session-resumed").len(), 1);
+}

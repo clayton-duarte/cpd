@@ -99,7 +99,9 @@ fn events(env: &impl Cpd, kind: &str) -> Vec<Value> {
 
 /// The ids of the Context's records, in index order.
 fn record_ids(env: &impl Cpd) -> Vec<String> {
-    let shown = env.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = env
+        .cpd(&["context", "show", "--context", CTX, "--all"])
+        .ok();
     shown["records"]
         .as_array()
         .unwrap()
@@ -521,7 +523,7 @@ fn a_record_names_its_session_and_plan() {
         out["record"]["by"],
         json!({"session": "pi-session", "plan": "cpd2"})
     );
-    let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     assert_eq!(
         shown["records"][1]["by"],
         json!({"session": "pi-session", "plan": "cpd2"})
@@ -633,7 +635,7 @@ fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() 
     assert_eq!(events(&fx, "context-record").len(), 2);
 
     // JSON: both records stay, the successor names what it replaced.
-    let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     let records = shown["records"].as_array().unwrap();
     assert_eq!(records.len(), 2, "{shown}");
     assert!(records[0].get("supersedes").is_none());
@@ -687,7 +689,7 @@ fn a_decision_supersedes_a_note_which_is_then_labelled_superseded() {
         .ok();
     assert_eq!(d1["record"]["id"], "hs-d1", "{d1}");
     assert_eq!(d1["record"]["supersedes"], "hs-n1");
-    let shown = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let shown = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     assert_eq!(shown["records"][1]["supersedes"], "hs-n1");
     let md = shown["markdown"].as_str().unwrap();
     let old = item_line(md, "hs-n1");
@@ -1075,7 +1077,7 @@ fn show_renders_the_records() {
     fx.cpd(&["context", "note", "A note.", "--context", CTX])
         .ok();
 
-    let out = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let out = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     assert_eq!(
         out["context"],
         json!({"id": CTX, "title": "Building cpd", "jira": null})
@@ -1152,7 +1154,7 @@ fn show_lists_the_repos_of_each_plans_prs_from_the_database() {
         })
         .unwrap();
 
-    let out = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let out = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     let records = out["records"].as_array().unwrap();
     assert_eq!(records[0]["plan"], json!({"id": "old", "machine": "hs"}));
     let repos: Vec<&Value> = records.iter().map(|r| &r["repos"]).collect();
@@ -1206,7 +1208,7 @@ fn show_lists_a_brief_short_under_its_plan_and_record_prints_it_whole() {
     fx.cpd(&["context", "note", "A note.", "--context", CTX])
         .ok();
 
-    let out = fx.cpd(&["context", "show", "--context", CTX]).ok();
+    let out = fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok();
     let records = out["records"].as_array().unwrap();
     let brief = records.iter().find(|r| r["id"] == "hs-b1").unwrap();
     assert_eq!(brief["kind"], "brief");

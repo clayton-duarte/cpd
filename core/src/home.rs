@@ -118,6 +118,11 @@ impl CpdHome {
         self.root.join("cpd.db")
     }
 
+    /// `vectors.db`: the derived vector cache of write-time curation (contract §4.6); `-wal` and `-shm` live beside it.
+    pub fn vectors_db(&self) -> PathBuf {
+        self.root.join("vectors.db")
+    }
+
     /// `contexts/`: the git stores of earlier versions, one folder per Context.
     /// Only migration 0007 reads it (contract §4.5); nothing creates it.
     pub fn old_contexts_dir(&self) -> PathBuf {
