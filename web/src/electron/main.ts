@@ -4,17 +4,20 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, shell as electronShell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
-import { CHANNELS } from "./channels.ts";
+import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL } from "./channels.ts";
 import { registerWebuiIpc } from "./cockpit-ipc.ts";
 import { resolveLoginPath } from "./env.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController, modeFilePath } from "./mode.ts";
 import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
 import type { MenuTemplate } from "./menu.ts";
+import { nodeExec, nodeFs, nodeSpawnFollow, nodeTimers } from "./update/node.ts";
+import { startAutoUpdate } from "./update/start.ts";
+import type { BootstrapStatus, UpdateState } from "./update/types.ts";
 import { startPty } from "./pty.ts";
 import type { PtyBackend } from "./pty.ts";
 
@@ -131,45 +134,98 @@ async function main(): Promise<void> {
     void openExternal(url);
   });
 
-  const services = createServices(realBoundaries(env));
-  const started = services.cockpit.start().catch((error: unknown) => {
-    console.error(error);
-    throw error;
-  });
-  const webuiIpc = registerWebuiIpc({
-    ipc: ipcMain,
-    newConnection: services.newConnection,
-    started,
-    onError: (error) => console.error(error),
-  });
-  const attention = started.then(() => watchAttention(services.cockpit, nativeShell.setAttention));
-  attention.catch(() => undefined);
+  const disposers: (() => void)[] = [];
+  const startServices = (): void => {
+    const services = createServices(realBoundaries(env));
+    const started = services.cockpit.start().catch((error: unknown) => {
+      console.error(error);
+      throw error;
+    });
+    const webuiIpc = registerWebuiIpc({
+      ipc: ipcMain,
+      newConnection: services.newConnection,
+      started,
+      onError: (error) => console.error(error),
+    });
+    const attention = started.then(() => watchAttention(services.cockpit, nativeShell.setAttention));
+    attention.catch(() => undefined);
 
-  const sinks = {
-    data: (chunk: string) => send(CHANNELS.ptyData, chunk),
-    exit: (exitCode: number) => send(CHANNELS.ptyExit, exitCode),
+    const sinks = {
+      data: (chunk: string) => send(CHANNELS.ptyData, chunk),
+      exit: (exitCode: number) => send(CHANNELS.ptyExit, exitCode),
+    };
+    const wasmPath = createRequire(import.meta.url).resolve("@aurigax-ai/ghostty-web/ghostty-vt.wasm");
+    const ipc = registerIpc({
+      ipc: ipcMain,
+      startPty: (size, ptySinks) =>
+        startPty({ backend, size, cwd: os.homedir(), env, sinks: ptySinks }),
+      sinks,
+      readWasm: async () => new Uint8Array(await fs.readFile(wasmPath)),
+      getMode: controller.getMode,
+      timers: nodeTimers,
+    });
+    disposers.push(() => {
+      ipc.dispose();
+      void webuiIpc.dispose();
+      void attention.then((watch) => watch.dispose()).catch(() => undefined);
+      void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
+    });
   };
-  const wasmPath = createRequire(import.meta.url).resolve("@aurigax-ai/ghostty-web/ghostty-vt.wasm");
-  const ipc = registerIpc({
-    ipc: ipcMain,
-    startPty: (size, ptySinks) =>
-      startPty({ backend, size, cwd: os.homedir(), env, sinks: ptySinks }),
-    sinks,
-    readWasm: async () => new Uint8Array(await fs.readFile(wasmPath)),
-    getMode: controller.getMode,
-  });
+
+  let stopUpdate: () => void = () => {};
   app.on("before-quit", () => {
-    ipc.dispose();
-    void webuiIpc.dispose();
-    void attention.then((watch) => watch.dispose()).catch(() => undefined);
+    stopUpdate();
+    for (const dispose of disposers) dispose();
     nativeShell.dispose();
-    void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
   });
   app.on("window-all-closed", () => app.quit());
+
+  let latestBootstrap: BootstrapStatus | undefined;
+  let latestState: UpdateState | undefined;
+  win.webContents.on("did-finish-load", () => {
+    if (latestBootstrap) send(UPDATE_BOOTSTRAP_CHANNEL, latestBootstrap);
+    if (latestState) send(UPDATE_STATE_CHANNEL, latestState);
+  });
+  const updateLog = path.join(cpdHome, "run", "electron-update.log");
+  const log = (line: string): void => {
+    console.log(line);
+    fs.mkdir(path.dirname(updateLog), { recursive: true })
+      .then(() => fs.appendFile(updateLog, `${new Date().toISOString()} ${line}\n`))
+      .catch((error: unknown) => console.error(error));
+  };
 
   const devUrl = process.env["CPD_ELECTRON_DEV_URL"];
   if (devUrl) await win.loadURL(devUrl);
   else await win.loadFile(path.join(here, "renderer", "electron.html"));
+
+  const update = await startAutoUpdate({
+    env: process.env,
+    bundleDir: here,
+    home: os.homedir(),
+    platform: process.platform,
+    exec: nodeExec,
+    fs: nodeFs,
+    timers: nodeTimers,
+    spawnFollow: nodeSpawnFollow,
+    isFocused: () => win.isFocused(),
+    systemIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+    reloadRenderer: () => win.webContents.reloadIgnoringCache(),
+    onState: (state) => {
+      latestState = state;
+      send(UPDATE_STATE_CHANNEL, state);
+      nativeShell.setUpdateState(state, () => {
+        app.relaunch();
+        app.exit(0);
+      });
+    },
+    onBootstrap: (status) => {
+      latestBootstrap = status;
+      send(UPDATE_BOOTSTRAP_CHANNEL, status);
+    },
+    log,
+  });
+  stopUpdate = update.stop;
+  if (update.bootstrap.state === "ready") startServices();
 }
 
 main().catch((error: unknown) => {

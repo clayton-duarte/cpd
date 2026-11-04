@@ -1,3 +1,5 @@
+import type { BootstrapStatus, UpdateState } from "./update/types.ts";
+
 export const CHANNELS = {
   ptyStart: "pty:start",
   ptyWrite: "pty:write",
@@ -10,6 +12,9 @@ export const CHANNELS = {
   webC2s: "cpd:c2s",
   webS2c: "cpd:s2c",
 } as const;
+
+export const UPDATE_BOOTSTRAP_CHANNEL = "update:bootstrap";
+export const UPDATE_STATE_CHANNEL = "update:state";
 
 export type UiMode = "tui" | "webui";
 
@@ -29,4 +34,9 @@ export interface CpdElectronBridge {
   onMode(cb: (mode: UiMode) => void): () => void;
   sendWeb(raw: unknown): void;
   onWebMessage(cb: (raw: unknown) => void): () => void;
+}
+
+export interface UpdateBridge {
+  onUpdateBootstrap(cb: (s: BootstrapStatus) => void): () => void;
+  onUpdateState(cb: (s: UpdateState) => void): () => void;
 }

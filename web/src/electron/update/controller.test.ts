@@ -1,0 +1,155 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { SyncResult } from './checkout';
+import { createUpdater, type UpdaterDeps } from './controller';
+import type { UpdateState } from './types';
+
+const OK = { ok: true } as const;
+const SHA = 'abc123';
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+function setup(over: Partial<UpdaterDeps> = {}) {
+  const events: string[] = [];
+  const states: UpdateState[] = [];
+  const logs: string[] = [];
+  const deps: UpdaterDeps = {
+    sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'updated', from: 'old', to: SHA, lockfileChanged: false })),
+    headSha: vi.fn(async () => SHA),
+    builtSha: vi.fn(() => 'old'),
+    cliSha: vi.fn(() => SHA),
+    build: vi.fn(async () => { events.push('build'); return OK; }),
+    swap: vi.fn(() => { events.push('swap'); return { mainChanged: false }; }),
+    whenApplicable: vi.fn(async () => { events.push('gate'); }),
+    reloadRenderer: vi.fn(() => { events.push('reload'); }),
+    installCli: vi.fn(async () => OK),
+    onState: vi.fn((s: UpdateState) => { states.push(s); events.push(`state:${s.phase}`); }),
+    log: vi.fn((l: string) => { logs.push(l); }),
+    ...over,
+  };
+  return { deps, events, states, logs, updater: createUpdater(deps) };
+}
+
+const phases = (states: UpdateState[]) => states.map((s) => s.phase);
+
+describe('createUpdater', () => {
+  it('check does nothing when sync is skipped', async () => {
+    const { deps, states, logs, updater } = setup({ sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'skipped', reason: 'dirty' })) });
+    await updater.check();
+    expect(phases(states)).toEqual(['syncing', 'idle']);
+    expect(logs.join('\n')).toContain('dirty');
+    expect(deps.build).not.toHaveBeenCalled();
+    expect(deps.installCli).not.toHaveBeenCalled();
+  });
+
+  it('check builds swaps and reloads when the checkout advanced', async () => {
+    const { deps, events, states, updater } = setup();
+    await updater.check();
+    expect(deps.build).toHaveBeenCalledWith({ lockfileChanged: false, sha: SHA });
+    expect(phases(states)).toEqual(['syncing', 'building', 'waiting', 'idle']);
+    expect(events.filter((e) => ['build', 'gate', 'swap', 'reload'].includes(e))).toEqual(['build', 'gate', 'swap', 'reload']);
+  });
+
+  it('check rebuilds when the stamp differs from HEAD', async () => {
+    const { deps, updater } = setup({ sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'current', sha: SHA })), builtSha: vi.fn(() => 'stale') });
+    await updater.check();
+    expect(deps.build).toHaveBeenCalledTimes(1);
+  });
+
+  it('check does not build when the stamp equals HEAD', async () => {
+    const { deps, states, updater } = setup({ sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'current', sha: SHA })), builtSha: vi.fn(() => SHA) });
+    await updater.check();
+    expect(deps.build).not.toHaveBeenCalled();
+    expect(deps.swap).not.toHaveBeenCalled();
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+    expect(states[states.length - 1]).toEqual({ phase: 'idle' });
+  });
+
+  it('check passes lockfileChanged from the sync result', async () => {
+    const updated = setup({ sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'updated', from: 'o', to: SHA, lockfileChanged: true })) });
+    await updated.updater.check();
+    expect(updated.deps.build).toHaveBeenCalledWith({ lockfileChanged: true, sha: SHA });
+    const current = setup({ sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'current', sha: SHA })), builtSha: vi.fn(() => 'stale') });
+    await current.updater.check();
+    expect(current.deps.build).toHaveBeenCalledWith({ lockfileChanged: true, sha: SHA });
+  });
+
+  it('check waits for the apply gate before swapping', async () => {
+    const gate = deferred<void>();
+    const { deps, states, updater } = setup({ whenApplicable: vi.fn(() => gate.promise) });
+    const run = updater.check();
+    await vi.waitFor(() => expect(deps.whenApplicable).toHaveBeenCalled());
+    expect(phases(states)).toContain('waiting');
+    expect(deps.swap).not.toHaveBeenCalled();
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+    gate.resolve();
+    await run;
+    expect(deps.swap).toHaveBeenCalledTimes(1);
+    expect(deps.reloadRenderer).toHaveBeenCalledTimes(1);
+  });
+
+  it('check does not reload when main.js changed and reports restart-needed', async () => {
+    const { deps, states, updater } = setup({ swap: vi.fn(() => ({ mainChanged: true })) });
+    await updater.check();
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+    expect(states[states.length - 1]).toEqual({ phase: 'restart-needed' });
+    expect(phases(states)).not.toContain('idle');
+  });
+
+  it('check keeps restart-needed sticky and never reloads afterwards', async () => {
+    const mainChanged = [true, false];
+    const { deps, states, updater } = setup({ swap: vi.fn(() => ({ mainChanged: mainChanged.shift() ?? false })) });
+    await updater.check();
+    await updater.check();
+    expect(deps.swap).toHaveBeenCalledTimes(2);
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+    expect(states[states.length - 1]).toEqual({ phase: 'restart-needed' });
+  });
+
+  it('check reports error and keeps the old bundle when the build fails', async () => {
+    const { deps, states, updater } = setup({ build: vi.fn(async () => ({ ok: false as const, log: 'compiling\nboom: it broke\n' })) });
+    await updater.check();
+    expect(states[states.length - 1]).toEqual({ phase: 'error', message: 'boom: it broke' });
+    expect(deps.swap).not.toHaveBeenCalled();
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+  });
+
+  it('check installs the CLI when its stamp differs from HEAD', async () => {
+    const { deps, updater } = setup({ cliSha: vi.fn(() => 'older') });
+    await updater.check();
+    expect(deps.installCli).toHaveBeenCalledWith(SHA);
+  });
+
+  it('check skips the CLI install when its stamp equals HEAD', async () => {
+    const { deps, updater } = setup({ cliSha: vi.fn(() => SHA) });
+    await updater.check();
+    expect(deps.installCli).not.toHaveBeenCalled();
+  });
+
+  it('check logs a CLI install failure without failing the bundle flow', async () => {
+    const { deps, states, logs, updater } = setup({ cliSha: vi.fn(() => null), installCli: vi.fn(async () => ({ ok: false as const, log: 'cargo exploded' })) });
+    await updater.check();
+    expect(logs.join('\n')).toContain('cargo exploded');
+    expect(phases(states)).not.toContain('error');
+    expect(deps.reloadRenderer).toHaveBeenCalledTimes(1);
+    expect(states[states.length - 1]).toEqual({ phase: 'idle' });
+  });
+
+  it('check coalesces overlapping calls into one trailing run', async () => {
+    const first = deferred<SyncResult>();
+    const results = [first.promise];
+    const sync = vi.fn(() => results.shift() ?? Promise.resolve<SyncResult>({ kind: 'current', sha: SHA }));
+    const { updater } = setup({ sync, builtSha: vi.fn(() => SHA) });
+    const a = updater.check();
+    const b = updater.check();
+    const c = updater.check();
+    expect(sync).toHaveBeenCalledTimes(1);
+    first.resolve({ kind: 'current', sha: SHA });
+    await Promise.all([a, b, c]);
+    await updater.check();
+    expect(sync).toHaveBeenCalledTimes(3);
+  });
+});
