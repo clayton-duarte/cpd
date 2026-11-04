@@ -119,7 +119,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `workflow_required` | 2 | the command needs a Workflow, `--workflow` is omitted and the Plan does not have exactly one Workflow that is not `cancelled` (R34) |
 | `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
-| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive` or `session unarchive` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: archive is the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
+| `explore_pending` | 3 | `plan phase plan` (§4.4) while a scout or research Job of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}`, `jobs` the sorted keys of those Jobs; nothing is written (pro-d374) |
+| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive`, `session unarchive` or `session resume` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11, §10.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: these commands are the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
@@ -935,8 +936,9 @@ The only phase moved by hand (cpd 1 §11 `workflow phase`, kept). Any other targ
 | Precondition | Code | Exit |
 |---|---|---|
 | the phase is `grounding` (already `plan`: `already`) | `illegal_transition` | 3 |
+| no explore Job (`scout`, `research`) of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}` | `explore_pending` | 3 |
 
-Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux.
+Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux. In phase `grounding`, the explore check (pro-d374, assumption A2) runs in the same transaction, before the change: `details.jobs` is the sorted list of the keys of the Plan's Jobs of kind `scout` or `research` that are `queued`, `running` or `failed`; a `merged` or `cancelled` explore Job does not block, and a refusal writes nothing.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "plan"}
@@ -3252,10 +3254,11 @@ Output:
 cpd session resume <id>
 ```
 
-Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3.
+Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3. Only the User and the engine resume: an agent is refused (pro-d374).
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller has `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty (an agent); `details` `{command: "session resume", session, attempt}`, `session` and `attempt` the values of those variables or `null`; the check and message are §1.3's `agent_forbidden`, refused before the Ledger is opened | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager` | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
@@ -5152,6 +5155,25 @@ A refusal's text starts `φ: ` and names the rule: `φ: <rule>: <what was refuse
 `git log`, `show`, `diff` and the other read-only commands stay allowed for both kinds. A `research` Worker may reach outside the machine (web, curl, attached MCP servers, registries, upstream docs): the profile has no `network` rule for it. The first `write` row is the one `edit` and `write` calls meet: they are refused outside the explore directory and the OS temp dir.
 
 The explore Worker also may run the read-only `cpd context search` and `cpd context show` (§3.3, §3.4), as its Spec's Deliverable section says (R10); nothing enforces that.
+
+The rules of this table are the Workers' profile only. A Lead's explore-artefact rule (`artefact`) is not one of them: it is §15.22a.
+
+### 15.22a A Lead's explore-artefact guard (pro-d374)
+
+An explore Job's artefact is for the Worker that wrote it. A Lead gets the Job's summary, never the file (contract §2.2 "Job kinds", §5.2 `job-merged`); when the summary is not enough it adds a follow-up scout Job. The adapter enforces this in pi's `tool_call` (`pi/lib/adapter.ts`), while `host.run` is set, as §15.16 does for checkouts (assumption A3, Plan `lead-grounding-guard`).
+
+**What is refused.** For a Session whose role is `lead` only; a Worker and a Manager are untouched, and so are the Lead's `edit` and `write` calls (§15.16):
+
+- a `read` call whose `path` is under `$CPD_HOME/run/<any plan>/explore/`, the path resolved as pi resolves tool paths (§15.16);
+- a `bash` call whose simple command (the tokenizer of §15.11, after its prefixes) has a file reader as its command word, `cat`, `head`, `tail`, `sed`, `grep`, `rg`, `awk`, `less`, `more`, `jq`, `wc`, `cut`, `sort`, `nl` or `bat` (a path ending in `/<word>` counts), and a word of it that names a path under that directory. The path may be written `$CPD_HOME/…`, `${CPD_HOME}/…`, `~/.cpd/…`, `$HOME/.cpd/…` or as the absolute home path.
+
+**What passes.** A Lead that cites the path in a heredoc, in a Spec file or in a `cpd` command is not refused: only a file reader's operand is judged.
+
+**The refusal** is `{block: true, reason}`. The rule is `artefact`, so the reason has the form `φ: explore <rule>: <what>` of §15.22, with this text, exactly:
+
+```
+φ: explore artefact: $CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job
+```
 
 ### 15.23 A Session is told its skill changed (Plan `skill-fresh`)
 
