@@ -311,6 +311,21 @@
     },
     "required": []
   },
+  "context reads": {
+    "flags": {
+      "--channel": true,
+      "--context": true,
+      "--help": false,
+      "--min-sessions": true,
+      "--plan": true,
+      "--since": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context rename": {
     "flags": {
       "--help": false,
@@ -357,6 +372,7 @@
       "--context": true,
       "--help": false,
       "--plan": true,
+      "--pushed": false,
       "--record": true,
       "--since": true,
       "--topic": true

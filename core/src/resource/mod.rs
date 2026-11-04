@@ -344,6 +344,25 @@ fn parse(text: &str) -> Holder {
     serde_json::from_str(text).unwrap_or(Holder::Unknown)
 }
 
+/// The holder the record in the held lock file at `path` names.
+fn record_of(path: &std::path::Path) -> Holder {
+    parse(&fs::read_to_string(path).unwrap_or_default())
+}
+
+/// True for a command holder whose pid (within 1..=i32::MAX) no longer exists: its slot lock is held only by a leaked fd.
+fn dead_command(holder: &Holder) -> bool {
+    let Holder::Command { pid, .. } = holder else {
+        return false;
+    };
+    i32::try_from(*pid)
+        .ok()
+        .filter(|p| *p > 0)
+        .is_some_and(|p| {
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(p), None)
+                == Err(nix::errno::Errno::ESRCH)
+        })
+}
+
 /// Takes the lowest free slot of every pool of `pools` (in name order, all or none) by a non-blocking exclusive try-lock,
 /// then writes `holder` into each lock file.
 pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, CpdError> {
@@ -356,17 +375,29 @@ pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, Cpd
         let mut taken = None;
         for slot in 1..=pool.slots() {
             let path = lock_path(home, pool, slot);
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)
-                .map_err(|e| lock_failed(&path, e))?;
-            if lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
-                taken = Some((slot, file));
-                break;
+            let open = || {
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&path)
+                    .map_err(|e| lock_failed(&path, e))
+            };
+            let mut file = open()?;
+            if !lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
+                // Held: a command whose pid is dead only has its lock kept by a leaked fd; take a fresh inode.
+                if !dead_command(&record_of(&path)) {
+                    continue;
+                }
+                let _ = fs::remove_file(&path);
+                file = open()?;
+                if !lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
+                    continue;
+                }
             }
+            taken = Some((slot, file));
+            break;
         }
         let Some((slot, file)) = taken else {
             return Ok(Take::Busy {
@@ -438,7 +469,8 @@ pub fn wanted(
     }))
 }
 
-/// The holders of the slots of `pool`, in slot order: `None` for a free slot (whatever its file still holds), else its record.
+/// The holders of the slots of `pool`, in slot order: `None` for a free slot (whatever its file still holds)
+/// or one held only by a command whose pid is dead (its file is unlinked), else its record.
 pub fn holders(home: &CpdHome, pool: &Pool) -> Result<Vec<Option<Holder>>, CpdError> {
     (1..=pool.slots())
         .map(|slot| holder_of_slot(home, pool, slot))
@@ -456,5 +488,10 @@ fn holder_of_slot(home: &CpdHome, pool: &Pool, slot: u8) -> Result<Option<Holder
     if lock::shared(&file).map_err(|e| lock_failed(&path, e))? {
         return Ok(None);
     }
-    Ok(Some(parse(&fs::read_to_string(&path).unwrap_or_default())))
+    let holder = record_of(&path);
+    if dead_command(&holder) {
+        let _ = fs::remove_file(&path);
+        return Ok(None);
+    }
+    Ok(Some(holder))
 }

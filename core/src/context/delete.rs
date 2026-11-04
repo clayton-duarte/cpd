@@ -172,6 +172,7 @@ pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
                 for plan in &live_plans {
                     delete_rows(tx, plan)?;
                 }
+                tx.execute("DELETE FROM context_reads WHERE context = ?1", [id.as_str()])?;
                 tx.execute("DELETE FROM context_records WHERE context = ?1", [id.as_str()])?;
                 tx.execute("DELETE FROM sessions WHERE context = ?1 AND role = 'manager'", [id.as_str()])?;
                 let text = format!(

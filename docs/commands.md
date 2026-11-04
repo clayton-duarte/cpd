@@ -286,6 +286,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
 | `cpd context topics` (§3.3a) | Manager, Lead, Worker | no | no |
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
+| `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -359,10 +360,11 @@ cpd context show [<record>] [--context <id>] [--since <seq>] [--record <id>] [--
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
 | `--all` | a boolean: print the full history, the output bare `context show` had before the bounded view (Output, below; pro-d1, pro-d3): every section and every record, no `omitted`. Exclusive with `--since`, `--record` and `--topic` (`usage`, exit 2) |
+| `--pushed` | with `--since <seq>` (`usage` without it): the call of pi's turn-start update (§15.7). It logs channel `pushed` for the records the output holds (Effects) |
 
 **Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
 
-Effects: none. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
+Effects: no Context record changes. Read log (best-effort): with a Session in `CPD_SESSION`, else `PI_SESSION_ID`, that parses as a SessionId and is a row of `sessions` (otherwise nothing is logged and nothing is an error; this is **the Session rule**, which §3.4, §3.5, §4.1, §5.1 and §10.13 refer to), it appends `context_reads` rows (contract §4.4, §4.6 "Reads"): channel `show` for `--record <id>` and for `--topic <t>`, one row per record shown; channel `pushed` for `--since <seq> --pushed`, one row per record the output holds; a bare `--since` without `--pushed` logs nothing. A failed log never fails the command and never changes its output or exit status. Output: the Context, its `records` and `markdown`, the rendering of §2.2 "Context record". Bare `context show` (no `--since`, `--record`, `--topic` or `--all`; `--context` and `--plan` only choose the Context) is the **bounded view**, decided by the User (Context records pro-d1 and pro-d3; assumptions A1 to A5 accepted with them). Its `markdown` renders these sections, in this order:
 
 1. `# <title>` with the Jira key, as before.
 2. `## Decisions`: every decision in force (not superseded, not retired), never capped. A superseded or retired decision is not shown here; it is counted in History.
@@ -398,7 +400,7 @@ Idempotent: read-only.
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 and `context answer` (§3.6) are unchanged.
+**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 are unchanged.
 
 ```json
 {"ok": false, "error": {"code": "record_not_found", "message": "Context building-cpd has no record pro-d7. pro-d7 belongs to machine pro; this machine is hs, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.", "details": {"context": "building-cpd", "record": "pro-d7", "record_machine": "pro", "local_machine": "hs"}}}
@@ -469,7 +471,7 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 
 `records` holds the hits in rank order, with `topic` the record's curated topic as a string, or `null` when it has none; `short` the curated short form, else the record's first line at most 120 bytes; `in_force` is false only with `--all`. `markdown` is one `- [<id>] <short>` line per hit, or `- [<id>] [<topic>] <short>` when the hit has a curated topic, with ` (superseded by <id>)` after a superseded record and ` [retired (<reason> <target>)]` after one with an approved retirement, as `context show` labels them. Both are empty on no hits.
 
-Effects: none. Nothing is written, stored or indexed on disk, and no other process is started.
+Effects: no Context record changes. Read log (best-effort, the Session rule of §3.3): with a Session, one `context_reads` row per returned hit, channel `search`, `rank` its 1-based position in the returned list and `score` the hit's score (contract §4.6 "Reads"). The index is built in memory for each search: nothing is written to disk and no other process is started.
 
 Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a curated topic and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
 
@@ -512,7 +514,8 @@ cpd context note <text> [--supersedes <record>]... [--no-supersedes] [--context 
 - `--no-supersedes` skips the check, whatever the text says.
 - The retry is decided first: an identical latest record is returned as `already` even when its text would fail the check.
 
-Effects: the record write above (one transaction), with kind `decision` (letter `d`) or `note` (`n`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux.
+
+Effects: the record write above (one transaction), with kind `decision` (letter `d`) or `note` (`n`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux. Then, best-effort, the citation marking (the Session rule of §3.3): for the writing Session, `used` = 1 on its `context_reads` rows of each record it read whose id the new record's text cites (`RecordId::scan`, contract §2.1), except the new record's own id and its `--supersedes` targets. The User (no Session) marks nothing. A failed marking never fails the command or changes its output or exit status.
 
 ```json
 {"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": ["hs-d2", "hs-d5"]}, "seq": 58}
@@ -522,7 +525,26 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-`context ask` and `context answer` are removed (pro-d8): both are refused as usage errors (exit 2), as any unknown command is.
+### 3.6 `context answer`
+
+```
+cpd context answer <question> <text> [--context <id>]
+```
+
+`<question>` is the record id of the question.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<question>` is a record of this Context of kind `question` | `record_not_found` | 3 |
+| no answer in this Context's records names it yet | `question_answered` | 3 |
+
+Effects: the record write with kind `answer` (letter `a`) and `question` = `<question>`; **Event** `context-record`. Then the citation marking of §3.5 (best-effort, the same rule; there is no `--supersedes`).
+
+```json
+{"ok": true, "record": {"id": "hs-a2", "kind": "answer", "at": "…", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "Yes, per machine.", "question": "hs-q3"}, "seq": 59}
+```
+
+Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
 
 ### 3.7 `context sync`
 
@@ -872,6 +894,45 @@ Effects: **one transaction**, all or nothing (a refusal writes nothing). **Rows:
 
 Idempotent: no. A rerun finds the rows decided and is refused `curation_not_pending`.
 
+### 3.18 `context reads`
+
+```
+cpd context reads [--context <id>] [--since <iso>] [--channel <c,c>] [--min-sessions <n>]
+```
+
+Lists the Context records that Sessions have read or cited (the `context_reads` telemetry, contract §4.4, §4.6 "Reads"): per record, how many reads there are, how many distinct Sessions made them, and how many of those Sessions later cited it (`used`). The Context is `--context`, else the selected Plan's (§1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+| `--since` is an ISO-8601 instant: a date and time with a zone (`Z` or `±hh:mm`) | `usage` | 2 |
+| `--channel` is a comma list of the channels `pushed`, `search` and `show` only (`shadow` included) | `usage` | 2 |
+| `--min-sessions` is an integer of at least 1 | `usage` | 2 |
+
+| Flag | Meaning |
+|---|---|
+| `--since <iso>` | only rows with `read_at` at or after this instant (`>=`), compared as instants. The output's `since` is that instant in UTC, written as `read_at` is written (`YYYY-MM-DDTHH:MM:SS.mmmZ`); omitted, `since` is null and there is no lower bound |
+| `--channel <c,c>` | the channels whose rows are counted; default all three. Output `channels` lists the chosen ones in the order `pushed`, `search`, `show` |
+| `--min-sessions <n>` | only records with `sessions` at least n (default 1) |
+
+**Callers** (as `context show`, §3.3): the Lead, the Manager and the **Worker**. Read-only.
+
+Effects: none. No Context record changes, and no read is logged for this command.
+
+**Counting.** Of the Context's `context_reads` rows, a row counts when its `channel` is chosen and its `read_at` is at or after `--since`. For each record with counted rows: `reads` is their count; `sessions` the distinct `session` values among them; `used` the distinct `session` values among them whose row has `used` = 1. A record is listed only when `sessions` is at least `--min-sessions`. `kind` is the record's kind (§2.2) from `context_records`; every kind is listed. Order: `reads` descending, then `sessions` descending, then `id` ascending.
+
+Output: `context` (`{id, title, jira}`), `since`, `channels`, `min_sessions`, `records` (each `{id, kind, reads, sessions, used}`) and `markdown`: one line per record, `<id> <kind> reads=<n> sessions=<n> used=<n>`, the lines joined by newlines (an empty string when there are none). An empty result is `records: []`.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "since": null,
+ "channels": ["pushed", "search", "show"], "min_sessions": 2,
+ "records": [{"id": "hs-d7", "kind": "decision", "reads": 9, "sessions": 4, "used": 2}],
+ "markdown": "hs-d7 decision reads=9 sessions=4 used=2"}
+```
+
+Idempotent: read-only.
+
 ## 4. `plan`
 
 A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) and `plan` group.
@@ -908,7 +969,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name` = `<context>:<plan>`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
-2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
+2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`. Then the citation marking of §3.5 (best-effort, the Session rule of §3.3), over the texts of the `plan` record and the `brief` record.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then, when at least one curated topic is in force, the `Topics:` line between the brief (or the header) and the pointer line: `Topics: engine (3), store (1)`, the `markdown` of `context topics` (§3.3a) with the prefix `Topics: `, a snapshot taken when the message is written, with no cap (none is written when no curated topic is in force). Then the pointer line:
    ```
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
@@ -1549,6 +1610,8 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--workflo
 | `--kind scout` or `research` in phase `done` (with or without `--draft`): a message of its own, since an explore Job is added in `grounding`, `plan`, `dispatch` or `deploy` | `illegal_phase` | 3 |
 | an explore Job's `needs` are all explore Jobs and no other Job needs an explore Job; `details.jobs` lists the Jobs on the other side. `needs_other_workflow` does not apply to an explore Job, which has no Workflow | `explore_needs_mixed` | 3 |
 | an explore Job's Spec has exactly the four fields of the explore Spec (below): `touches`, `tests`, `test_files` or `resources` is refused, with the JSON path in `details` | `spec_invalid` | 2 |
+
+Effects: the Job's write as above. Then the citation marking of §3.5 (best-effort, the Session rule of §3.3, the Session read from the environment): in the Plan's Context, the text of `goal`, `context`, each `acceptance` item and `out_of_scope` is scanned (`RecordId::scan`, contract §2.1) and each record id it cites that the Session read gets `used` = 1. A failed marking never fails the command or changes its output or exit status.
 
 ### Explore Jobs (`scout`, `research`)
 
@@ -3108,6 +3171,7 @@ Effects:
 - **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
   - **Its `text`** (what `cpd events list` shows) is `Message from <who>: <preview>`, `<preview>` the start of the message's text and `<who>` the sender: `<name> (<uuid>)` when the sender's row has a name (`sessions.name`, the agent key for a Manager, a Lead that is not a fork and a Worker), `<uuid>` alone when the row has no name, and `the User` when `from` is null. With `--unblocks <reason>` it is `Message from <who> (unblocks: <reason>): <preview>`. The text does not name the target: the Event is addressed to it (`session` = the target).
 - **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux, and none for a `durable` target.
+- **Citation marking** (best-effort, after the transaction; §3.5, the Session rule of §3.3): the text is scanned (`RecordId::scan`, contract §2.1), and each record id it cites that the sender Session read in the sender's Context (`sessions.context`; a sender with none logs nothing) gets `used` = 1. The User (`from` null) logs nothing. A failed marking never fails the command or changes its output or exit status.
 
 ```json
 {"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened", "started": true, "pane": "%47"}
@@ -6900,7 +6964,7 @@ Resources with slots, declared at host, owner or repo level (contract §8.3 "The
 cpd resource list
 ```
 
-Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per visible resource sorted by name (`[]` when none is declared): `name`; `scope` (`host`, `owner` or `repo`, the declaring level, contract §8.3); `slots`; `free`, the free slots of the pool (contract §1.4: `slots` minus the Job tenants minus the held command slots, never below 0); and `holders`, an array of the holders only, free slots have no entry: first one `{slot, holder}` per held command slot in slot order, `holder` the `command` record of contract §1.4 (each slot read with the shared try-lock probe), then one `{slot: null, holder}` per Job tenant by `jobs.seq`, `holder` the derived shape `{by:"attempt", plan, job, attempt, at}` of the Job's latest Attempt, a Job holder having no slot number. The list includes the built-in `workers` (contract §8.3): `scope` `host`, `slots` = `concurrency` and `holders` one `{slot: null, holder}` per tenant Job (a `failed` Job included and more than `slots` while an urgent Job holds the slot beyond).
+Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per visible resource sorted by name (`[]` when none is declared): `name`; `scope` (`host`, `owner` or `repo`, the declaring level, contract §8.3); `slots`; `free`, the free slots of the pool (contract §1.4: `slots` minus the Job tenants minus the held command slots, never below 0); and `holders`, an array of the holders only, free slots have no entry: first one `{slot, holder}` per held command slot in slot order, `holder` the `command` record of contract §1.4 (each slot read with the shared try-lock probe; a stale slot, a `command` record whose pid is dead under contract §1.4, is free, has no entry, and its file is removed by the probe), then one `{slot: null, holder}` per Job tenant by `jobs.seq`, `holder` the derived shape `{by:"attempt", plan, job, attempt, at}` of the Job's latest Attempt, a Job holder having no slot number. The list includes the built-in `workers` (contract §8.3): `scope` `host`, `slots` = `concurrency` and `holders` one `{slot: null, holder}` per tenant Job (a `failed` Job included and more than `slots` while an urgent Job holds the slot beyond).
 
 ```json
 {"ok": true, "repo": "clayton-duarte/card-dashboard", "resources": [
@@ -6930,7 +6994,7 @@ Takes a slot of the resource, then runs the command holding it. It decides the p
 | the directory is in a git worktree whose `origin` can be keyed | `repo_unkeyed` | 1 |
 | the repo's policy resolves | `owner_unconfirmed`, `policy_invalid`, … | 1 |
 | `<name>` is declared; `details` `{resource, repo, declared, file}` | `resource_undeclared` | 3 |
-| the pool has a free slot (contract §1.4: `slots` minus the Job tenants minus the held command slots), taking under the guard the lowest free slot file by a non-blocking exclusive try-lock, tried again every second for `--wait` minutes; `details` `{resource, repo, holders, waited_minutes}` (`holders` the holders of the pool, as in `resource list`; `waited_minutes` the minutes given, 0 when absent). The command never starts | `resource_busy` | 3 |
+| the pool has a free slot (contract §1.4: `slots` minus the Job tenants minus the held command slots), taking under the guard the lowest free slot file by a non-blocking exclusive try-lock (a stale slot file, contract §1.4, is removed and taken afresh in its place), tried again every second for `--wait` minutes; `details` `{resource, repo, holders, waited_minutes}` (`holders` the holders of the pool, as in `resource list`; `waited_minutes` the minutes given, 0 when absent). The command never starts | `resource_busy` | 3 |
 | the command can be executed (after the lock is held; the process and the lock are gone together) | `spawn_failed` | 1 |
 
 Effects: after it holds a slot it writes the command holder record (contract §1.4: `pid` its own process id, `command` the argv joined by single spaces, `session` from `CPD_SESSION` and `attempt` from `CPD_ATTEMPT`, null when unset), then **replaces itself with the command** (`exec`):

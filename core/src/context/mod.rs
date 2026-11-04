@@ -61,6 +61,11 @@ mod prose_supersedes_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
+mod reads;
+#[cfg(test)]
+mod reads_best_effort_tests;
+#[cfg(test)]
+mod reads_tests;
 mod record;
 mod rename;
 pub(crate) mod render;
@@ -126,6 +131,8 @@ pub enum Command {
     /// Decide the pending retirements (§3.16)
     #[command(hide = true)]
     Retire(curation::RetireArgs),
+    /// List the Context records Sessions have read or cited (§3.18)
+    Reads(reads::ReadsArgs),
 }
 
 /// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -247,6 +254,9 @@ pub struct ShowArgs {
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
+    /// Log the shown records as pushed reads (the pi turn start)
+    #[arg(long, requires = "since")]
+    pushed: bool,
     /// A record id, as --record
     #[arg(value_name = "record", conflicts_with_all = ["record", "since", "topic"])]
     record_positional: Option<RecordId>,
@@ -368,6 +378,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),
         Command::Retire(args) => curation::retire(args),
+        Command::Reads(args) => reads::reads(args),
     }
 }
 
