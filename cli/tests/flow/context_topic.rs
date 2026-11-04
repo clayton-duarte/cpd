@@ -260,3 +260,42 @@ fn topics_of_an_unknown_context_is_refused() {
         4,
     );
 }
+
+/// A provisional topic (`record_topics`, decision pro-d11) counts a record once; a curation's topic wins.
+#[test]
+fn topics_counts_a_provisional_topic_once() {
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+    seed(&fx.env, "m1-n2", "note", 50, "b");
+    seed(&fx.env, "m1-n3", "note", 40, "c");
+    curate(
+        &fx.env,
+        &[("m1-n1", "engine", "one"), ("m1-n3", "store", "three")],
+    );
+    fx.env.sql(&format!(
+        "INSERT INTO record_topics (context, record, topic, model, at) VALUES
+           ('{CTX}', 'm1-n2', 'engine', 'kev-4b', '2026-11-03T00:00:00.000Z'),
+           ('{CTX}', 'm1-n3', 'engine', 'kev-4b', '2026-11-03T00:00:00.000Z');"
+    ));
+    let out = topics(&fx);
+    assert_eq!(
+        out["topics"],
+        serde_json::json!([{"topic": "engine", "count": 2}, {"topic": "store", "count": 1}]),
+        "{out}"
+    );
+    assert_eq!(markdown(&out), "engine (2), store (1)", "{out}");
+}
+
+/// `show --topic` stays curated-only: a provisional topic lists nothing and is not a topic of the Context.
+#[test]
+fn show_topic_lists_only_curated_records() {
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+    seed(&fx.env, "m1-n2", "note", 50, "b");
+    curate(&fx.env, &[("m1-n1", "engine", "one")]);
+    fx.env.sql(&format!(
+        "INSERT INTO record_topics (context, record, topic, model, at) VALUES
+           ('{CTX}', 'm1-n2', 'engine', 'kev-4b', '2026-11-03T00:00:00.000Z');"
+    ));
+    assert_eq!(markdown(&topic(&fx, "engine")), "- [m1-n1] one");
+}

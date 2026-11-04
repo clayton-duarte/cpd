@@ -344,3 +344,21 @@ fn show_all_is_exclusive_with_since_record_and_topic() {
         assert_eq!(run.error()["code"], "usage", "{extra:?}: {run:?}");
     }
 }
+
+/// commands.md §3.3 item 3: show's `## Topics` section stays curated-only; a provisional topic changes nothing in it.
+#[test]
+fn show_topics_section_counts_curated_records_only() {
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "one");
+    seed(&fx.env, "m1-n2", "note", 50, "two");
+    seed(&fx.env, "m1-n3", "note", 40, "three");
+    curate(&fx.env, &[("m1-n1", "engine", "one")]);
+    fx.env.sql(&format!(
+        "INSERT INTO record_topics (context, record, topic, model, at) VALUES
+           ('{CTX}', 'm1-n2', 'engine', 'kev-4b', '2026-11-03T00:00:00.000Z'),
+           ('{CTX}', 'm1-n3', 'store', 'kev-4b', '2026-11-03T00:00:00.000Z');"
+    ));
+    let md = markdown(&show(&fx, &[]));
+    assert!(md.contains("## Topics\nengine (1)\n"), "{md}");
+    assert!(!md.contains("store"), "{md}");
+}

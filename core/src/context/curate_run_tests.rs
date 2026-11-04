@@ -621,3 +621,163 @@ fn record_curates_the_named_record_whatever_its_age_and_marker() {
     assert_eq!(marked["record"], json!("hs-d2"));
     assert!(f.checked().contains(&id("hs-d1")));
 }
+
+// ---- the provisional topic (commands.md §3.13a; decision pro-d11) -----------------------------------------------
+
+const KEV_PAIR: &str = "independent";
+
+/// Two old records curated `engine` and `store` (out of the window) and the new, uncurated `hs-d1`: a run picks `hs-d1`.
+fn topics_fixture() -> Fx {
+    let mut f = fixture(true);
+    f.add("hs-n1", 30 * HOURS, "The engine ranks hits.");
+    f.add("hs-n2", 31 * HOURS, "The store keeps rows.");
+    f.sql(
+        "INSERT INTO record_curations (context, record, topic, short, curated_at) VALUES
+           ('ctx', 'hs-n1', 'engine', 'engine ranks', '2026-11-01T00:00:00.000Z'),
+           ('ctx', 'hs-n2', 'store', 'store keeps', '2026-11-01T00:00:00.000Z');",
+    );
+    f.add("hs-d1", HOURS, NEW_TEXT);
+    f
+}
+
+/// Kev accepts every pair as independent; the topic question (it offers `engine`) gets `topic`.
+fn topic_ports(topic: Result<Chosen, CpdError>) -> Ports {
+    Ports {
+        classifier: FakeClassifier::routed(vec![("engine", topic)], chosen(KEV_PAIR, Some(0.9))),
+        embedding: FakeEmbedding::new(vec![embedded()]),
+        judge: FakeJudge::new(vec![]),
+    }
+}
+
+fn topic_calls(p: &Ports) -> usize {
+    p.classifier
+        .calls()
+        .iter()
+        .filter(|c| c.labels.iter().any(|(name, _)| name == "engine"))
+        .count()
+}
+
+fn provisional_rows(f: &mut Fx) -> i64 {
+    f.count("SELECT count(*) FROM record_topics")
+}
+
+#[test]
+fn an_accepted_independent_record_gets_a_provisional_topic() {
+    let mut f = topics_fixture();
+    let p = topic_ports(chosen("engine", Some(0.9)));
+    f.run(&p, None).unwrap();
+    assert_eq!(topic_calls(&p), 1);
+    let labels: Vec<String> = p
+        .classifier
+        .calls()
+        .into_iter()
+        .find(|c| c.labels.iter().any(|(n, _)| n == "engine"))
+        .unwrap()
+        .labels
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(labels, ["engine", "store"]);
+    assert_eq!(
+        f.text("SELECT topic || '|' || model FROM record_topics WHERE context = 'ctx' AND record = 'hs-d1'"),
+        "engine|kev-4b"
+    );
+    assert_eq!(provisional_rows(&mut f), 1);
+    assert_eq!(
+        f.count("SELECT count(*) FROM record_curations WHERE record = 'hs-d1'"),
+        0
+    );
+    assert_eq!(f.events(), 0);
+}
+
+#[test]
+fn a_low_confidence_label_writes_no_provisional_topic() {
+    let mut f = topics_fixture();
+    let p = topic_ports(chosen("engine", Some(0.5)));
+    f.run(&p, None).unwrap();
+    assert_eq!(provisional_rows(&mut f), 0);
+    // the ask itself was made: only the confidence kept the row out
+    assert_eq!(topic_calls(&p), 1);
+}
+
+#[test]
+fn a_label_outside_the_topics_writes_no_provisional_topic() {
+    let mut f = topics_fixture();
+    let p = topic_ports(chosen("cache", Some(0.95)));
+    f.run(&p, None).unwrap();
+    assert_eq!(provisional_rows(&mut f), 0);
+    assert_eq!(topic_calls(&p), 1);
+}
+
+#[test]
+fn a_classifier_error_writes_nothing_and_the_run_succeeds() {
+    let mut f = topics_fixture();
+    let p = topic_ports(Err(code_err(ErrorCode::ClassifierUnreachable)));
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out["record"], json!("hs-d1"));
+    assert_eq!(provisional_rows(&mut f), 0);
+    assert_eq!(topic_calls(&p), 1);
+    assert!(f.checked().contains(&id("hs-d1")));
+}
+
+#[test]
+fn no_curated_topics_means_no_classifier_call() {
+    let mut f = fixture(true);
+    f.add("hs-d1", HOURS, NEW_TEXT);
+    let p = topic_ports(chosen("engine", Some(0.9)));
+    f.run(&p, None).unwrap();
+    assert!(p.classifier.calls().is_empty());
+    assert_eq!(provisional_rows(&mut f), 0);
+}
+
+#[test]
+fn an_off_run_does_not_classify() {
+    let mut f = topics_fixture();
+    f.config = Config::parse(
+        "version = 1\nmachine = \"hs\"\n[experimental]\nwrite_curation = false\n",
+        Path::new("config.toml"),
+    )
+    .unwrap()
+    .0;
+    let p = topic_ports(chosen("engine", Some(0.9)));
+    let out = f.run(&p, None).unwrap();
+    assert_eq!(out, json!({"context": "ctx", "skipped": "off"}));
+    assert!(p.classifier.calls().is_empty());
+    assert_eq!(provisional_rows(&mut f), 0);
+}
+
+#[test]
+fn a_curated_record_is_never_classified() {
+    let mut f = topics_fixture();
+    f.sql(
+        "INSERT INTO record_curations (context, record, topic, short, curated_at)
+           VALUES ('ctx', 'hs-d1', 'store', 'already curated', '2026-11-03T11:00:00.000Z');",
+    );
+    let p = topic_ports(chosen("engine", Some(0.9)));
+    f.run(&p, None).unwrap();
+    assert_eq!(topic_calls(&p), 0);
+    assert_eq!(provisional_rows(&mut f), 0);
+    assert_eq!(
+        f.text("SELECT topic FROM record_curations WHERE record = 'hs-d1'"),
+        "store"
+    );
+}
+
+#[test]
+fn a_record_with_a_provisional_topic_is_not_classified_again() {
+    let mut f = topics_fixture();
+    f.sql(
+        "INSERT INTO record_topics (context, record, topic, model, at)
+           VALUES ('ctx', 'hs-d1', 'store', 'kev-4b', '2026-11-03T11:00:00.000Z');",
+    );
+    let p = topic_ports(chosen("engine", Some(0.9)));
+    f.run(&p, None).unwrap();
+    assert_eq!(topic_calls(&p), 0);
+    assert_eq!(provisional_rows(&mut f), 1);
+    assert_eq!(
+        f.text(
+            "SELECT topic || '|' || model || '|' || at FROM record_topics WHERE record = 'hs-d1'"
+        ),
+        "store|kev-4b|2026-11-03T11:00:00.000Z"
+    );
+}
