@@ -67,6 +67,29 @@ fn command(pid: u32) -> Holder {
     }
 }
 
+/// A command holder told apart by `n`, whose pid is this live test process.
+fn numbered(n: u32) -> Holder {
+    match command(std::process::id()) {
+        Holder::Command {
+            pid,
+            session,
+            attempt,
+            at,
+            ..
+        } => Holder::Command {
+            pid,
+            command: format!("npm run dev {n}"),
+            session,
+            attempt,
+            at,
+        },
+        other => other,
+    }
+}
+
+/// i32::MAX: above every OS pid_max, so `kill(pid, 0)` is ESRCH without starting a process.
+const DEAD_PID: u32 = 2_147_483_647;
+
 fn attempt() -> Holder {
     Holder::Attempt {
         plan: "pl".to_owned(),
@@ -94,7 +117,7 @@ fn held_file(world: &World, name: &str, content: &str) -> File {
 #[test]
 fn resource_lock_take_writes_the_holder_record_and_a_second_take_is_busy() {
     let w = world();
-    let holder = command(4242);
+    let holder = command(std::process::id());
 
     let held = w.held(&["e2e-port"], &holder);
 
@@ -114,7 +137,7 @@ fn resource_lock_take_writes_the_holder_record_and_a_second_take_is_busy() {
 #[test]
 fn resource_lock_a_free_lock_with_a_stale_record_reads_as_free() {
     let w = world();
-    drop(w.held(&["e2e-port"], &command(4242)));
+    drop(w.held(&["e2e-port"], &command(std::process::id())));
 
     assert!(
         !fs::read_to_string(w.path("e2e-port")).unwrap().is_empty(),
@@ -150,11 +173,11 @@ fn resource_lock_a_held_lock_with_an_empty_record_is_holder_unknown() {
 #[test]
 fn resource_lock_taking_several_is_all_or_none() {
     let w = world();
-    let _b = w.held(&["b"], &command(1));
+    let _b = w.held(&["b"], &numbered(1));
 
     match w.take(&["c", "b", "a"], &attempt()) {
         Take::Busy { resource, holders } => {
-            assert_eq!((resource.as_str(), holders), ("b", vec![Some(command(1))]))
+            assert_eq!((resource.as_str(), holders), ("b", vec![Some(numbered(1))]))
         }
         Take::Held(_) => panic!("b is held: none may be taken"),
     }
@@ -207,7 +230,7 @@ fn took(w: &World, pools: &[Pool], holder: &Holder) -> Held {
 /// Takes every slot of `pool` for a tenant, then finds `other` (the same pool seen from another repo) full.
 fn fills_and_blocks(w: &World, pool: &Pool, other: &Pool) -> Vec<Held> {
     let held: Vec<Held> = (1..=pool.slots())
-        .map(|n| took(w, std::slice::from_ref(pool), &command(u32::from(n))))
+        .map(|n| took(w, std::slice::from_ref(pool), &numbered(u32::from(n))))
         .collect();
     assert!(
         matches!(
@@ -251,7 +274,7 @@ fn resource_owner_pool_is_shared_by_the_repos_of_one_owner() {
             .join("resource.owner.acme.staging.2.lock")
     );
     let held = fills_and_blocks(&w, &web, &api);
-    drop(took(&w, &[elsewhere], &command(9)));
+    drop(took(&w, &[elsewhere], &numbered(9)));
     drop(held);
 }
 
@@ -270,7 +293,7 @@ fn resource_repo_pool_is_one_pool_per_repo() {
             .join("resource.repo.acme.web.staging.2.lock")
     );
     let held = fills_and_blocks(&w, &web, &web);
-    drop(took(&w, &[api], &command(9)));
+    drop(took(&w, &[api], &numbered(9)));
     drop(held);
 }
 
@@ -352,9 +375,9 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     let w = world();
     let pool = slotted(&w, "e2e-port", 3);
 
-    let first = took(&w, std::slice::from_ref(&pool), &command(1));
-    let second = took(&w, std::slice::from_ref(&pool), &command(2));
-    let third = took(&w, std::slice::from_ref(&pool), &command(3));
+    let first = took(&w, std::slice::from_ref(&pool), &numbered(1));
+    let second = took(&w, std::slice::from_ref(&pool), &numbered(2));
+    let third = took(&w, std::slice::from_ref(&pool), &numbered(3));
     assert_eq!(
         (
             first.slot("e2e-port"),
@@ -365,19 +388,19 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     );
     assert_eq!(
         record_of(&w, &pool, 2),
-        command(2),
+        numbered(2),
         "each slot has its own holder record"
     );
     assert_eq!(
         holders(&w.home, &pool).unwrap(),
-        vec![Some(command(1)), Some(command(2)), Some(command(3))]
+        vec![Some(numbered(1)), Some(numbered(2)), Some(numbered(3))]
     );
-    match take(&w.home, std::slice::from_ref(&pool), &command(4)).unwrap() {
+    match take(&w.home, std::slice::from_ref(&pool), &numbered(4)).unwrap() {
         Take::Busy { resource, holders } => {
             assert_eq!(resource, "e2e-port");
             assert_eq!(
                 holders,
-                vec![Some(command(1)), Some(command(2)), Some(command(3))],
+                vec![Some(numbered(1)), Some(numbered(2)), Some(numbered(3))],
                 "every slot, in slot order"
             );
         }
@@ -388,7 +411,7 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     drop(second);
     assert_eq!(
         holders(&w.home, &pool).unwrap(),
-        vec![Some(command(1)), None, Some(command(3))]
+        vec![Some(numbered(1)), None, Some(numbered(3))]
     );
     let again = took(&w, std::slice::from_ref(&pool), &attempt());
     assert_eq!(again.slot("e2e-port"), Some(2));
@@ -396,9 +419,9 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     // A pool whose slots were lowered keeps the held slots held and offers none above the count.
     let lowered = slotted(&w, "e2e-port", 2);
     drop(first);
-    let five = took(&w, std::slice::from_ref(&lowered), &command(5));
+    let five = took(&w, std::slice::from_ref(&lowered), &numbered(5));
     assert_eq!(five.slot("e2e-port"), Some(1));
-    match take(&w.home, std::slice::from_ref(&lowered), &command(6)).unwrap() {
+    match take(&w.home, std::slice::from_ref(&lowered), &numbered(6)).unwrap() {
         Take::Busy { holders, .. } => assert_eq!(holders.len(), 2),
         Take::Held(_) => panic!("slot 3 is above the count and is never offered"),
     }
@@ -409,24 +432,24 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
 fn resource_take_is_all_or_none_across_resources_with_slots() {
     let w = world();
     let (a, b) = (slotted(&w, "a", 2), slotted(&w, "b", 1));
-    let _a1 = took(&w, std::slice::from_ref(&a), &command(1));
-    let _b1 = took(&w, std::slice::from_ref(&b), &command(2));
+    let _a1 = took(&w, std::slice::from_ref(&a), &numbered(1));
+    let _b1 = took(&w, std::slice::from_ref(&b), &numbered(2));
 
     // `a` has a free slot (the second), `b` has none: nothing is kept, not even `a`'s slot 2.
     match take(&w.home, &[b.clone(), a.clone()], &attempt()).unwrap() {
         Take::Busy { resource, holders } => {
-            assert_eq!((resource.as_str(), holders), ("b", vec![Some(command(2))]))
+            assert_eq!((resource.as_str(), holders), ("b", vec![Some(numbered(2))]))
         }
         Take::Held(_) => panic!("b is full: none may be taken"),
     }
-    assert_eq!(holders(&w.home, &a).unwrap(), vec![Some(command(1)), None]);
+    assert_eq!(holders(&w.home, &a).unwrap(), vec![Some(numbered(1)), None]);
 
     drop(_b1);
     let both = took(&w, &[b, a.clone()], &attempt());
     assert_eq!((both.slot("a"), both.slot("b")), (Some(2), Some(1)));
     assert_eq!(
         holders(&w.home, &a).unwrap(),
-        vec![Some(command(1)), Some(attempt())]
+        vec![Some(numbered(1)), Some(attempt())]
     );
 }
 
@@ -434,11 +457,11 @@ fn resource_take_is_all_or_none_across_resources_with_slots() {
 fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     let w = world();
     let pool = slotted(&w, "e2e-port", 2);
-    let first = took(&w, std::slice::from_ref(&pool), &command(1));
-    let second = took(&w, std::slice::from_ref(&pool), &command(2));
+    let first = took(&w, std::slice::from_ref(&pool), &numbered(1));
+    let second = took(&w, std::slice::from_ref(&pool), &numbered(2));
     assert_eq!(
         holders(&w.home, &pool).unwrap(),
-        vec![Some(command(1)), Some(command(2))]
+        vec![Some(numbered(1)), Some(numbered(2))]
     );
 
     // The holder of slot 1 dies: the kernel closes its descriptor; no code releases a slot by name.
@@ -452,7 +475,7 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     );
     assert_eq!(
         holders(&w.home, &pool).unwrap(),
-        vec![None, Some(command(2))]
+        vec![None, Some(numbered(2))]
     );
     assert_eq!(
         took(&w, std::slice::from_ref(&pool), &attempt()).slot("e2e-port"),
@@ -622,4 +645,97 @@ fn resource_run_takes_a_slot_only_when_job_tenants_plus_commands_are_below_slots
         0,
         "two tenants of a pool of one: never below 0"
     );
+}
+
+fn command_record(pid: u32) -> String {
+    serde_json::to_string(&command(pid)).unwrap()
+}
+
+#[test]
+fn resource_reap_holders_report_a_held_slot_free_when_its_command_pid_is_dead() {
+    let w = world();
+    let _orphan = held_file(&w, "e2e-port", &command_record(DEAD_PID));
+
+    assert_eq!(holders(&w.home, &w.pool("e2e-port")).unwrap(), vec![None]);
+    assert!(
+        !w.path("e2e-port").exists(),
+        "the stale slot file is unlinked"
+    );
+}
+
+#[test]
+fn resource_reap_take_unlinks_a_stale_command_slot_and_takes_the_fresh_inode() {
+    use std::os::unix::fs::MetadataExt;
+    let w = world();
+    let orphan = held_file(&w, "e2e-port", &command_record(DEAD_PID));
+    let old = orphan.metadata().unwrap();
+    let fresh = command(std::process::id());
+
+    let held = match w.take(&["e2e-port"], &fresh) {
+        Take::Held(held) => held,
+        Take::Busy { resource, holders } => {
+            panic!("a stale slot must be reaped, but {resource} is held by {holders:?}")
+        }
+    };
+
+    assert_eq!(held.slot("e2e-port"), Some(1));
+    assert_eq!(record_of(&w, &w.pool("e2e-port"), 1), fresh);
+    let now = fs::metadata(w.path("e2e-port")).unwrap();
+    assert_ne!((now.dev(), now.ino()), (old.dev(), old.ino()));
+    let second = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(w.path("e2e-port"))
+        .unwrap();
+    assert!(!lock::try_lock(&second).unwrap(), "the new holder holds it");
+    drop(held);
+    drop(orphan);
+}
+
+#[test]
+fn resource_reap_take_reaps_only_the_stale_slot_of_a_two_slot_pool() {
+    let w = world();
+    let pool = slotted(&w, "e2e-port", 2);
+    fs::create_dir_all(w.home.locks_dir()).unwrap();
+    let open = |slot: u8, content: String| {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path(&w.home, &pool, slot))
+            .unwrap();
+        assert!(lock::try_lock(&file).unwrap());
+        fs::write(lock_path(&w.home, &pool, slot), content).unwrap();
+        file
+    };
+    let _live = open(1, command_record(std::process::id()));
+    let _orphan = open(2, command_record(DEAD_PID));
+
+    let held = took(&w, std::slice::from_ref(&pool), &attempt());
+
+    assert_eq!(held.slot("e2e-port"), Some(2));
+    assert_eq!(record_of(&w, &pool, 1), command(std::process::id()));
+}
+
+#[test]
+fn resource_reap_keeps_a_held_slot_whose_command_pid_is_alive_or_not_a_command() {
+    let w = world();
+    let records = [
+        ("alive", command_record(std::process::id())),
+        ("attempt", serde_json::to_string(&attempt()).unwrap()),
+        ("empty", String::new()),
+        ("zero", command_record(0)),
+        ("huge", command_record(u32::MAX)),
+    ];
+    let files: Vec<File> = records
+        .iter()
+        .map(|(name, content)| held_file(&w, name, content))
+        .collect();
+
+    for (name, _) in &records {
+        assert!(w.read(name).is_some(), "{name} stays held");
+        assert!(w.path(name).exists(), "{name} keeps its file");
+    }
+    drop(files);
 }
