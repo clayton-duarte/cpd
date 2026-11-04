@@ -25,6 +25,7 @@ pub(super) fn write(
     select: &Select,
     text: &Text,
     draft: Draft,
+    no_supersedes: bool,
 ) -> Result<Output, CpdError> {
     let Env {
         config, mut store, ..
@@ -34,7 +35,14 @@ pub(super) fn write(
         session: session_from_env()?,
         plan: select.plan.plan.clone(),
     };
-    let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;
+    let written = Contexts::new(&config, &mut store).write_confirmed(
+        &context,
+        command,
+        by,
+        text,
+        draft,
+        no_supersedes,
+    )?;
     let mut out = json!({"record": written.record.to_json(), "seq": written.seq});
     if written.already {
         out["already"] = json!(true);

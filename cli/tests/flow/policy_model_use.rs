@@ -435,7 +435,7 @@ fn distiller(owner: Option<&str>) -> (Fx, std::sync::Arc<DistillPi>) {
             plan: None,
         },
         text: "Use sqlite.".into(),
-        draft: Draft::Decision { supersedes: None },
+        draft: Draft::Decision { supersedes: vec![] },
     };
     store(&fx.env)
         .write("fixture", |tx| {

@@ -202,6 +202,7 @@ fn merge_ctx<'a>(
     config: &'a Config,
     catalog: &'a Catalog,
     metrics: &'a dyn Fn(&Attempt) -> Option<Value>,
+    classifier: &'a dyn crate::classifier::ClassifierPort,
 ) -> Ctx<'a> {
     Ctx {
         home,
@@ -209,6 +210,7 @@ fn merge_ctx<'a>(
         catalog,
         source: "test",
         metrics,
+        classifier,
     }
 }
 
@@ -225,7 +227,13 @@ fn a_linear_merge_uses_the_base_sha_for_the_tamper_check() {
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
-    let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
+    let ctx = merge_ctx(
+        &rig.home,
+        &config,
+        &catalog,
+        &metrics,
+        merge::no_verdict_classifier(),
+    );
     let out = Ports::scope(&rig.fakes.ports, || {
         merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)
     })
@@ -266,7 +274,13 @@ fn a_linear_merge_records_the_submitted_commit() {
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
-    let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
+    let ctx = merge_ctx(
+        &rig.home,
+        &config,
+        &catalog,
+        &metrics,
+        merge::no_verdict_classifier(),
+    );
     let out = Ports::scope(&rig.fakes.ports, || {
         merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)
     })
@@ -336,7 +350,13 @@ fn r_recovers_a_linear_merging_attempt() {
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
-    let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
+    let ctx = merge_ctx(
+        &rig.home,
+        &config,
+        &catalog,
+        &metrics,
+        merge::no_verdict_classifier(),
+    );
     let ports = Ports {
         clock: rig.fakes.ports.clock.clone(),
         runner: rig.fakes.ports.runner.clone(),

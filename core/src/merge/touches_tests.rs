@@ -230,6 +230,7 @@ impl Rig {
             catalog: &catalog,
             source: "test",
             metrics: &metrics,
+            classifier: crate::merge::no_verdict_classifier(),
         };
         Ports::scope(&self.fakes.ports, || {
             merge::merge(&mut self.store, &ctx, &self.plan, &self.id)

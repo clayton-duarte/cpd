@@ -126,6 +126,7 @@ impl Fx {
             catalog: &catalog,
             source: "pr open test",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         let mut store = Store::open(&self.home, 5000).unwrap();
         merge::merge(
