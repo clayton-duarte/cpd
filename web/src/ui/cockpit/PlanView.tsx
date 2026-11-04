@@ -14,7 +14,9 @@ function Job(props: { job: JobView }): ReactElement {
   );
 }
 
-export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void }): ReactElement {
+export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void;
+  onRetryJob?: (jobKey: string, workflowKey: string) => void;
+}): ReactElement {
   const { plan, onAction } = props;
   if (plan === null) return <p data-empty>No plan selected</p>;
   const explore = plan.jobs.filter((j) => j.workflow === null);
