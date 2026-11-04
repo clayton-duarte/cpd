@@ -30,6 +30,7 @@ mod context_permanent;
 mod context_prose_supersedes;
 mod context_reindex;
 mod context_search;
+mod context_show_bounded;
 mod context_supersedes;
 mod context_topic;
 mod driver;

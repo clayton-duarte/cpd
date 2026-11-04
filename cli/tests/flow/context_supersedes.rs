@@ -42,7 +42,7 @@ fn write(fx: &Fx, kind: &str, text: &str) {
 }
 
 fn show(fx: &Fx) -> Value {
-    fx.cpd(&["context", "show", "--context", CTX]).ok()
+    fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok()
 }
 
 fn record_ids(fx: &Fx) -> Vec<String> {

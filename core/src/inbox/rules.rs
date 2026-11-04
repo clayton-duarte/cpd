@@ -114,7 +114,7 @@ pub fn conditions_with(
 
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
 /// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
-/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
+/// as "unknown": the open items stay as they are, and no condition is opened.
 fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
@@ -650,7 +650,7 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 ///
 /// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
-/// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
+/// as they are, and no `engine-error` is opened (hs-d314: the failure goes to an `error` Event). A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
 fn review_requested(
     store: &mut Store,
@@ -663,8 +663,8 @@ fn review_requested(
     };
     let cache = match team::read_cache(home) {
         Ok(Some(cache)) => cache,
-        Ok(None) => return kept_review_items(store, None),
-        Err(e) => return kept_review_items(store, Some(&e)),
+        Ok(None) => return kept_review_items(store),
+        Err(_) => return kept_review_items(store),
     };
     let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
     let posts: Vec<&Post> = cache
@@ -678,7 +678,7 @@ fn review_requested(
     let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
     let lookup = match (team.github)(&refs) {
         Ok(lookup) => lookup,
-        Err(e) => return kept_review_items(store, Some(&e)),
+        Err(_) => return kept_review_items(store),
     };
     let read = |p: &Post| -> Option<&GhPr> {
         lookup
@@ -687,11 +687,7 @@ fn review_requested(
             .and_then(Option::as_ref)
     };
     if posts.iter().all(|p| read(p).is_none()) {
-        let none = CpdError::new(
-            ErrorCode::GhFailed,
-            "GitHub could not read any pull request posted in the team channel.",
-        );
-        return kept_review_items(store, Some(&none));
+        return kept_review_items(store);
     }
     let settled = settled_review_subjects(store)?;
     Ok(posts
@@ -745,35 +741,14 @@ fn settled_review_subjects(
     })
 }
 
-/// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.
-fn kept_review_items(
-    store: &mut Store,
-    why: Option<&CpdError>,
-) -> Result<Vec<Condition>, CpdError> {
-    let mut out: Vec<Condition> = store
+/// The open `review-requested` items as conditions (nothing changes), so a transient failure does not close them.
+fn kept_review_items(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
+    Ok(store
         .read(open_items)?
         .iter()
         .filter(|i| i.kind == Kind::ReviewRequested)
         .map(Condition::from)
-        .collect();
-    if let Some(e) = why {
-        let code = e.code().as_str();
-        out.push(Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:E8/team-review/{code}"),
-            label: format!("team review: {code}"),
-            url: None,
-            context: None,
-            plan: None,
-            job: None,
-            session: None,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
+        .collect())
 }
 
 /// `models-changed`: each provider file whose `changes.at` is within [`models::WINDOW`] and whose announced part is not empty.
@@ -2299,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_cache_keeps_the_items_and_says_so() {
+    fn an_unreadable_cache_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2323,17 +2298,9 @@ mod tests {
                 .count(),
             1
         );
-        let error = all
-            .iter()
-            .find(|c| c.kind == Kind::EngineError)
-            .expect("an engine-error condition");
-        assert_eq!(
-            (error.urgency, error.subject.as_str(), error.label.as_str()),
-            (
-                Urgency::Red,
-                "error:E8/team-review/store_failed",
-                "team review: store_failed"
-            )
+        assert!(
+            all.iter().all(|c| c.kind != Kind::EngineError),
+            "no engine-error for an unreadable cache"
         );
         std::fs::write(
             f.home.run_dir().join("team-review.json"),
@@ -2349,14 +2316,18 @@ mod tests {
             Some(team(&mut |_| panic!("unreadable"))),
         )
         .unwrap();
-        assert!(
-            all.iter().any(|c| c.kind == Kind::EngineError),
-            "another version is unreadable too"
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1,
+            "another version is unreadable too: kept"
         );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
-    fn a_github_that_fails_keeps_the_items_and_says_so() {
+    fn a_github_that_fails_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2382,12 +2353,7 @@ mod tests {
             1,
             "kept"
         );
-        assert_eq!(
-            all.iter()
-                .find(|c| c.kind == Kind::EngineError)
-                .map(|c| c.subject.as_str()),
-            Some("error:E8/team-review/gh_failed")
-        );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
@@ -2437,7 +2403,7 @@ mod tests {
             1,
             "every Workflow unreadable: the queue stays"
         );
-        assert!(all.iter().any(|c| c.kind == Kind::EngineError));
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     // ---- all together ----
