@@ -16,6 +16,13 @@ const OK: &str = r#"{"ok":true,"channel":"C0FIRST001","ts":"1793040197.490209","
 
 /// Plan `pay`'s open Workflow `repo` with the Slack helper (`node`) answering `node`, and its first post stored.
 fn world(node: Reply) -> Pay {
+    let pay = bare(node);
+    pay.seed_post();
+    pay
+}
+
+/// [`world`] before its first post is stored.
+fn bare(node: Reply) -> Pay {
     let pay = fx("open");
     let env = &pay.fx.env;
     let adapter = env.root().join("adapter");
@@ -28,7 +35,6 @@ fn world(node: Reply) -> Pay {
     ));
     pay.fx.install_pi();
     pay.fx.fake_node(node);
-    pay.seed_post();
     pay
 }
 
@@ -129,13 +135,7 @@ fn repost_twice_moves_last_posted_at_each_time() {
 
 #[test]
 fn repost_refuses_a_workflow_without_a_post() {
-    let pay = world(Reply::ok(&format!("{OK}\n")));
-    pay.store()
-        .write("fixture", |tx| {
-            tx.execute_batch("DELETE FROM pr_posts;")
-                .map_err(Into::into)
-        })
-        .unwrap();
+    let pay = bare(Reply::ok(&format!("{OK}\n")));
 
     let error = refused(&pay.repost_cmd(), "post_not_found", 3);
 
@@ -146,8 +146,7 @@ fn repost_refuses_a_workflow_without_a_post() {
 
 #[test]
 fn a_failed_send_leaves_last_posted_at_unchanged_and_reports_the_helper_code() {
-    let pay = world(Reply::ok(&format!("{OK}\n")));
-    pay.fx.fake_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
+    let pay = world(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
     let error = refused(&pay.repost_cmd(), "slack_auth", 3);
 
