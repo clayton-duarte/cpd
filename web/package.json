@@ -2,6 +2,7 @@
   "name": "cpd-web-client",
   "version": "0.0.0",
   "private": true,
+  "productName": "CPD",
   "type": "module",
   "description": "The cpd web client (browser UI with cockpit parity) against the typed API mock (hs-d780)",
   "main": "dist-electron/main.js",
@@ -18,7 +19,7 @@
     "preview:off": "sh ../scripts/preview-web.sh off",
     "dist:mac": "pnpm run build:electron && electron-builder --mac",
     "build:electron": "CPD_ELECTRON_TARGET=renderer vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=main vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=preload vite build -c vite.electron.config.ts",
-    "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && electron ."
+    "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && if [ \"$(node -p process.platform)\" = darwin ]; then for k in CFBundleName CFBundleDisplayName; do plutil -replace $k -string CPD node_modules/electron/dist/Electron.app/Contents/Info.plist; done; fi && electron ."
   },
   "dependencies": {
     "@aurigax-ai/ghostty-web": "0.3.9",
