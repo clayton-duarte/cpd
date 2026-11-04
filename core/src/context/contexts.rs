@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind, SessionId};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
@@ -243,7 +243,7 @@ impl<'a> Contexts<'a> {
                 already: true,
             });
         }
-        self.store.write(command, |tx| {
+        let written = self.store.write(command, |tx| {
             // The number is taken again inside the write transaction: only one writer at a time.
             let number = match next(tx)? {
                 Next::Retry(seq, record) => {
@@ -274,7 +274,30 @@ impl<'a> Contexts<'a> {
                 seq,
                 already: false,
             })
-        })
+        })?;
+        // Best-effort telemetry: a failed mark never fails the write.
+        if let (false, Some(session)) = (written.already, &by.session) {
+            let mut exclude = vec![written.record.id.clone()];
+            exclude.extend(draft.supersedes().cloned());
+            let _ =
+                super::reads::mark_used_for(self.store, context, session, text.as_str(), &exclude);
+        }
+        Ok(written)
+    }
+
+    /// The Session of the environment (`CPD_SESSION`, else `PI_SESSION_ID`), when it is a known Session.
+    pub(crate) fn env_session(store: &mut Store) -> Option<SessionId> {
+        super::reads::env_session(store)
+    }
+
+    /// Best-effort: mark the records `text` cites that `session` read in `context` as used.
+    pub(crate) fn mark_cited(
+        store: &mut Store,
+        context: &ContextId,
+        session: &SessionId,
+        text: &str,
+    ) {
+        let _ = super::reads::mark_used_for(store, context, session, text, &[]);
     }
 }
 
