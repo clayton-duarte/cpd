@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./resizable.tsx";
 
 // jsdom has no ResizeObserver, which react-resizable-panels (external) needs: an inert double.
-vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+});
 
 it("resizable parts render their documented hooks", () => {
   const m = mount(
