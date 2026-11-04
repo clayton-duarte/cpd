@@ -183,10 +183,10 @@ fn flow_plan_new_to_archive_with_a_mocked_host() {
         fx.events("session-message")
     );
     host_conn.serve(vec![
-        line(r#"{"type":"welcome","protocol":1,"host_version":"2.7.0","pi_durable":"1.3.0","session":"flow","role":"lead","epoch":"e1","client_id":"c1","cwd":"/","limits":{"client_line":1048576}}"#),
-        line(r#"{"type":"attached","req":"r1","mode":"snapshot","epoch":"e1","from_seq":1,"head_seq":2,"client_id":"c1"}"#),
-        line(r#"{"type":"snapshot","epoch":"e1","seq":1,"snapshot":{"type":"snapshot","entries":[{"id":1,"conversationId":1,"kind":"pi.user","model":[{"role":"user","content":"run the checks","timestamp":1}]}],"tools":[],"nestedTools":[],"compactions":[],"inbox":[],"agent":{},"usage":{"models":{},"tools":{}}}}"#),
-        line(r#"{"type":"events","epoch":"e1","seq":2,"events":[{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"All green. Ready for review."}],"api":"faux","provider":"faux","model":"faux-1","usage":{},"stopReason":"stop","timestamp":2}},{"type":"message_end","entry":{"id":2,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"All green. Ready for review."}],"api":"faux","provider":"faux","model":"faux-1","usage":{},"stopReason":"stop","timestamp":2}]}}]}"#),
+        line(r#"{"type":"welcome","protocol":2,"host_version":"2.7.0","pi_durable":"1.5.0","session":"flow","role":"lead","epoch":"e1","client_id":"c1","cwd":"/","limits":{"client_line":1048576}}"#),
+        line(r#"{"type":"attached","req":"r1","mode":"view","epoch":"e1","from_seq":1,"head_seq":2,"client_id":"c1"}"#),
+        line(r#"{"type":"view","epoch":"e1","seq":1,"view":{"conversation":{},"entries":[{"id":1,"conversationId":1,"kind":"pi.user","model":[{"role":"user","content":[{"type":"text","text":"run the checks"}],"timestamp":1}]}],"docs":{}}}"#),
+        line(r#"{"type":"ops","epoch":"e1","seq":2,"ops":[["p",["entries"],1,0,[{"id":2,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"All green. Ready for review."}],"timestamp":2}]}]]]}"#),
         line(r#"{"type":"bye","reason":"detached","reconnect":false}"#),
     ]);
     let home = fx.engine.home.clone();

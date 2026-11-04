@@ -6,6 +6,7 @@
 
 mod cache;
 pub mod catalog;
+pub mod experimental;
 mod file;
 mod migrate;
 pub mod preset;
@@ -13,6 +14,9 @@ mod repo;
 mod runner;
 mod tier;
 pub mod tier_write;
+
+#[cfg(test)]
+mod experimental_tests;
 
 #[cfg(test)]
 mod migrate_tests;
@@ -48,11 +52,12 @@ use crate::policy::PolicyKey;
 use crate::policy::model::Models;
 
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
+pub use experimental::{Experimental, Feature};
 pub use file::{
     Config, Events, Inbox, Preset, Source, Sources, TickSeconds, Timeouts, Tmux, Watch,
 };
 pub use repo::RepoTests;
-pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
+pub use runner::{WorkerRunner, toggle};
 pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel};
 
 /// `cpd config` takes no arguments, or the subcommand `tiers set` (§14.2a).

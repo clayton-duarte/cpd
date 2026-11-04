@@ -47,9 +47,9 @@ class FakeSocket implements SocketLike {
 
 const WELCOME = {
   type: "welcome",
-  protocol: 1,
+  protocol: 2,
   host_version: "1.0.0",
-  pi_durable: "1.3.0",
+  pi_durable: "1.5.0",
   session: "s1",
   role: "worker",
   epoch: "e1",
@@ -88,11 +88,11 @@ async function codeOf(p: Promise<unknown>): Promise<unknown> {
 }
 
 describe("durable client", () => {
-  it("hello handshake sends protocol and client name", async () => {
+  it("hello handshake sends protocol 2 and client name", async () => {
     const { socket, client, paths } = await open();
     expect(paths).toEqual(["/run/host/s1.sock"]);
-    expect(socket.lines[0]).toBe('{"type":"hello","protocol":1,"min_protocol":1,"client":"cpd-web"}\n');
-    expect(client.welcome.pi_durable).toBe("1.3.0");
+    expect(socket.lines[0]).toBe('{"type":"hello","protocol":2,"min_protocol":2,"client":"cpd-web"}\n');
+    expect(client.welcome.pi_durable).toBe("1.5.0");
   });
 
   it("splits NDJSON frames across chunk boundaries", async () => {
@@ -119,11 +119,31 @@ describe("durable client", () => {
     expect(typeof sent.req).toBe("string");
     socket.emitFrame({ type: "attached", req: sent.req, mode: "resume", epoch: "e1", from_seq: 5, head_seq: 9, client_id: "c1" });
     expect(await p).toMatchObject({ mode: "resume", from_seq: 5, head_seq: 9 });
+  });
+
+  it("attach without a cursor answers view mode", async () => {
+    const { socket, client } = await open();
     const fresh = client.attach();
     await tick();
+    expect(socket.last()).toMatchObject({ type: "attach", conversation: "root" });
     expect(socket.last()).not.toHaveProperty("cursor");
-    socket.emitFrame({ type: "attached", req: socket.last().req, mode: "snapshot", epoch: "e1", from_seq: 0, head_seq: 9, client_id: "c1" });
-    expect(await fresh).toMatchObject({ mode: "snapshot" });
+    socket.emitFrame({ type: "attached", req: socket.last().req, mode: "view", epoch: "e1", from_seq: 0, head_seq: 9, client_id: "c1" });
+    expect(await fresh).toMatchObject({ mode: "view" });
+  });
+
+  it("history sends before and limit and returns the page", async () => {
+    const { socket, client } = await open();
+    const p = client.history("n1", 25);
+    await tick();
+    expect(socket.last()).toMatchObject({ type: "history", before: "n1", limit: 25 });
+    socket.reply({ entries: [{ id: 4 }], next: "n2" });
+    expect(await p).toEqual({ entries: [{ id: 4 }], next: "n2" });
+    const first = client.history();
+    await tick();
+    expect(socket.last()).not.toHaveProperty("before");
+    expect(socket.last()).not.toHaveProperty("limit");
+    socket.reply({ entries: [] });
+    expect(await first).toEqual({ entries: [] });
   });
 
   it("submit carries images and when_busy", async () => {

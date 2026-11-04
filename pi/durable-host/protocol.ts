@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSIONS = [1] as const;
+export const PROTOCOL_VERSIONS = [2] as const;
 export const LIMITS = {
   clientLine: 1048576,
   hostLine: 67108864,
@@ -81,9 +81,9 @@ export type UiRequestBase = {
 
 export type ToClient =
   | { type: "welcome"; protocol: number; host_version: string; pi_durable: string; session: string; role: "lead" | "manager"; epoch: string; client_id: string; cwd: string; limits: { client_line: number } }
-  | { type: "attached"; req: string; mode: "snapshot" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
-  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
-  | { type: "events"; epoch: string; seq: number; events: unknown[] }
+  | { type: "attached"; req: string; mode: "view" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
+  | { type: "view"; epoch: string; seq: number; view: unknown }
+  | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
   | { type: "result"; req: string; data: object }
   | { type: "error"; req?: string; code: ErrorCode; message: string; details?: object }
   | { type: "host_state"; state: HostState["state"]; name?: string; clients: number; held_ui: number; agent?: unknown }

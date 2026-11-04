@@ -1,4 +1,4 @@
-//! The `worker_runner` flag and the Attempt's `runner` and `worker_pid` (contract §3.4 "The Worker runner and its seam", §4.4, §8.2;
+//! The `durable_workers` flag and the Attempt's `runner` and `worker_pid` (contract §3.4 "The Worker runner and its seam", §4.4, §8.2;
 //! commands.md §6.3, §14.2), through the command tree in this process: `cpd config`, `job dispatch`, `attempt show` and `job show`.
 
 use crate::common;
@@ -20,41 +20,59 @@ fn config_with(fx: &Fx, text: &str) -> Run {
 }
 
 #[test]
-fn config_defaults_the_worker_runner_to_pi() {
+fn config_defaults_durable_workers_to_off() {
     let fx = Fx::new();
     let out = config_with(&fx, MINIMAL).ok();
-    assert_eq!(out["config"]["worker_runner"], "pi", "{out}");
-    assert_eq!(out["sources"]["worker_runner"], "default", "{out}");
+    assert_eq!(
+        out["config"]["experimental"]["durable_workers"], false,
+        "{out}"
+    );
+    assert_eq!(
+        out["sources"]["experimental.durable_workers"], "default",
+        "{out}"
+    );
 }
 
 #[test]
-fn config_accepts_the_durable_worker_runner() {
+fn config_accepts_durable_workers() {
     let fx = Fx::new();
-    for runner in ["pi", "durable"] {
-        let out = config_with(&fx, &format!("{MINIMAL}worker_runner = \"{runner}\"\n")).ok();
-        assert_eq!(out["config"]["worker_runner"], runner, "{out}");
-        assert_eq!(out["sources"]["worker_runner"], "file", "{out}");
+    for on in [false, true] {
+        let out = config_with(
+            &fx,
+            &format!("{MINIMAL}[experimental]\ndurable_workers = {on}\n"),
+        )
+        .ok();
+        assert_eq!(
+            out["config"]["experimental"]["durable_workers"], on,
+            "{out}"
+        );
+        assert_eq!(
+            out["sources"]["experimental.durable_workers"], "file",
+            "{out}"
+        );
     }
 }
 
 #[test]
-fn config_refuses_a_worker_runner_that_is_neither_pi_nor_durable() {
+fn config_refuses_durable_workers_that_is_not_a_boolean_and_the_old_top_level_key() {
     let fx = Fx::new();
-    // An unknown word, a different case, an empty string, and values that are not strings.
-    for bad in ["\"tmux\"", "\"Durable\"", "\"\"", "1", "true", "[\"pi\"]"] {
-        let run = config_with(&fx, &format!("{MINIMAL}worker_runner = {bad}\n"));
+    for bad in ["\"durable\"", "\"\"", "1", "[true]"] {
+        let run = config_with(
+            &fx,
+            &format!("{MINIMAL}[experimental]\ndurable_workers = {bad}\n"),
+        );
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
-        assert_eq!(err["details"]["key"], "worker_runner", "{bad}: {err}");
-        assert!(
-            !err["message"]
-                .as_str()
-                .unwrap()
-                .contains("is not a known key"),
+        assert_eq!(
+            err["details"]["key"], "experimental.durable_workers",
             "{bad}: {err}"
         );
     }
+    let run = config_with(&fx, &format!("{MINIMAL}worker_runner = \"pi\"\n"));
+    let err = run.error();
+    assert_eq!(err["code"], "config_invalid", "{err}");
+    assert_eq!(err["details"]["key"], "worker_runner", "{err}");
 }
 
 fn runner_of(live: &Live, id: &str) -> Value {
@@ -65,8 +83,8 @@ fn runner_of(live: &Live, id: &str) -> Value {
 fn a_dispatched_attempt_records_the_runner_the_config_names() {
     for (extra, runner) in [
         ("", "pi"),
-        ("worker_runner = \"pi\"", "pi"),
-        ("worker_runner = \"durable\"", "durable"),
+        ("[experimental]\ndurable_workers = false", "pi"),
+        ("[experimental]\ndurable_workers = true", "durable"),
     ] {
         let live = live(extra);
         let out = live.dispatch(JOB).ok();
@@ -84,7 +102,7 @@ fn a_dispatched_attempt_records_the_runner_the_config_names() {
 
 #[test]
 fn an_attempt_keeps_its_runner_when_the_config_changes_after_it_started() {
-    let live = live("worker_runner = \"pi\"");
+    let live = live("[experimental]\ndurable_workers = false");
     let id = live.dispatch(JOB).ok()["attempt"]
         .as_str()
         .unwrap()
@@ -92,10 +110,10 @@ fn an_attempt_keeps_its_runner_when_the_config_changes_after_it_started() {
     assert_eq!(runner_of(&live, &id), "pi");
 
     // The flag moves after the Attempt exists: the Attempt does not.
-    seed_home(&live.fx.env, "worker_runner = \"durable\"");
+    seed_home(&live.fx.env, "[experimental]\ndurable_workers = true");
     assert_eq!(
-        live.fx.cpd(&["config"]).ok()["config"]["worker_runner"],
-        "durable"
+        live.fx.cpd(&["config"]).ok()["config"]["experimental"]["durable_workers"],
+        true
     );
     assert_eq!(
         runner_of(&live, &id),
@@ -114,7 +132,7 @@ fn an_attempt_keeps_its_runner_when_the_config_changes_after_it_started() {
 
 #[test]
 fn attempt_show_and_job_show_carry_runner_and_worker_pid() {
-    let live = live("worker_runner = \"durable\"");
+    let live = live("[experimental]\ndurable_workers = true");
     let id = live.dispatch(JOB).ok()["attempt"]
         .as_str()
         .unwrap()
