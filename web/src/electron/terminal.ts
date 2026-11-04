@@ -51,7 +51,19 @@ export interface TerminalHostDeps {
   resize: ResizeSource;
   clipboard: { writeText(text: string): Promise<void> };
   view: { showTerminal(visible: boolean): void };
+  pointer: { buttons(): number };
   onError(error: unknown): void;
+}
+
+export function fixSgrMouseHover(_data: string, _buttonsPressed: number): string {
+  throw new Error("not implemented");
+}
+
+export function fitToContainer(
+  _addon: { proposeDimensions(): { cols: number; rows: number } | undefined },
+  _term: { cols: number; rows: number; resize(cols: number, rows: number): void },
+): void {
+  throw new Error("not implemented");
 }
 
 export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): void }> {

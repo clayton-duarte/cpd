@@ -40,6 +40,7 @@ async function boot(): Promise<void> {
         return () => observer.disconnect();
       },
     },
+    pointer: { buttons: () => 0 },
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     view: {
       showTerminal: (visible) => {
