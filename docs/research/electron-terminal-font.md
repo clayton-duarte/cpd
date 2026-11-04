@@ -34,3 +34,7 @@ Match needs a side-by-side screenshot to confirm each; none has been done.
 
 - Ligatures: lib draws text by batches with `letterSpacing` (`lib/renderer.ts:736,783,908-910`), and in WebGL per-glyph atlas entries; ligature use is not set anywhere (guess: Maple Mono's `calt` ligatures may be off in the atlas path, but Ghostty enables `calt` by default; unverified either way).
 - Fallback order: canvas font-family lists the same first two families as Ghostty (`Maple Mono`, `Symbols Nerd Font Mono`), so Nerd glyphs come from the same font. Differences: the list adds `MesloLGS Nerd Font Mono`, `MesloLGS NF`, `monospace` after; Ghostty falls back through CoreText's own cascade. Per-glyph fallback inside canvas follows Chromium's rules, not Ghostty's; only glyphs missing from both fonts differ.
+
+## Patch: ghostty-web 0.3.9 (pro-d33)
+
+<!-- skeleton: sections to be filled: Why, Changes, Regenerate, Remove -->
