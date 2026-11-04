@@ -5,16 +5,13 @@ import type { ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionNode }
 import { cn } from "../../lib/utils.ts";
 import { dotDisplay, glyphClass, planState, sessionDisplay } from "../dango-status.ts";
 
-const COUNT_ORDER: readonly (keyof PlanCounts)[] = ["draft", "queued", "merged", "running", "failed", "cancelled"];
-const COUNT_TONE: Record<keyof PlanCounts, string> = {
-  draft: "text-muted-foreground",
-  queued: "text-muted-foreground",
-  merged: "text-status-done",
-  running: "text-status-active",
-  failed: "text-status-blocked",
-  cancelled: "text-muted-foreground",
-};
 const SELECTED = "bg-sidebar-accent text-fg-strong";
+const COUNTERS = [
+  ["planned", "text-muted-foreground"],
+  ["active", "text-status-active"],
+  ["failed", "text-status-blocked"],
+  ["done", "text-status-done"],
+] as const;
 
 interface Handlers {
   selectedSessionId: string | null;
@@ -23,124 +20,121 @@ interface Handlers {
   onSelectPlan(planId: string): void;
 }
 
-function Counts({ counts }: { counts: PlanCounts }): ReactElement {
-  const shown = COUNT_ORDER.filter((k) => counts[k] > 0);
+function Counters({ plans }: { plans: readonly PlanNode[] }): ReactElement {
+  const sum = (f: (c: PlanCounts) => number) => plans.reduce((n, p) => n + f(p.counts), 0);
+  const value = {
+    planned: sum((c) => c.draft + c.queued),
+    active: sum((c) => c.running),
+    failed: sum((c) => c.failed),
+    done: sum((c) => c.merged),
+  };
   return (
-    <span data-part="counts" className={cn("min-w-[52px] text-right font-mono text-meta", shown.length === 0 && "text-fg-dim")}>
-      {shown.map((k, i) => (
+    <span data-part="counters" className="font-mono text-meta">
+      {COUNTERS.map(([k, tone], i) => (
         <Fragment key={k}>
           {i > 0 ? <span className="text-line"> · </span> : null}
-          <span data-count={k} className={COUNT_TONE[k]}>{`${k} ${counts[k]}`}</span>
+          <span data-count={k} className={tone}>{String(value[k])}</span>
         </Fragment>
       ))}
     </span>
   );
 }
 
-function Aggregate({ sessions }: { sessions: readonly SessionNode[] }): ReactElement {
-  const key = planState(sessions.map((s) => dotDisplay(s.dot)));
-  const d = sessionDisplay[key];
+const STOPPED: SessionNode["dot"] = { state: "stopped", attention: null };
+
+function Dot({ dot }: { dot: SessionNode["dot"] }): ReactElement {
+  const { state, attention } = dot;
+  const label = attention === null ? state : `${state}, needs you (${attention})`;
+  const d = sessionDisplay[dotDisplay(dot)];
   return (
-    <>
-      <span data-part="aggregate" data-tone={d.tone} data-glyph={d.glyph} aria-hidden="true" className={glyphClass[d.glyph]} />
-      <span className="sr-only">{d.label}</span>
-    </>
+    <span role="img" data-dot={state} data-attention={attention ?? "none"} data-tone={d.tone} data-glyph={d.glyph} aria-label={label} className={glyphClass[d.glyph]} />
   );
 }
 
-function SessionRow(props: { node: SessionNode } & Handlers): ReactElement {
+function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactElement {
   const { node } = props;
-  const { state, attention } = node.dot;
-  const label = attention === null ? state : `${state}, needs you (${attention})`;
-  const d = sessionDisplay[dotDisplay(node.dot)];
   const current = props.selectedSessionId === node.ref.id;
   return (
     <li>
       <span data-part="session-row" className={cn("flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2", current && SELECTED)}>
-        <span
-          role="img"
-          data-dot={state}
-          data-attention={attention ?? "none"}
-          data-tone={d.tone}
-          data-glyph={d.glyph}
-          aria-label={label}
-          className={glyphClass[d.glyph]}
-        />
+        <Dot dot={node.dot} />
         <button
           type="button"
           data-session={node.ref.id}
           aria-current={current ? "true" : undefined}
           onClick={() => props.onSelectSession(node.ref.id)}
-          className="min-w-0 flex-1 truncate text-left"
+          className="min-w-0 flex-1 truncate text-left font-mono"
         >
-          <span className="font-mono">{node.ref.key}</span>
-          {node.ref.title === null ? null : <span className="text-muted-foreground">{` — ${node.ref.title}`}</span>}
+          {props.label}
         </button>
       </span>
     </li>
   );
 }
 
+const isFork = (s: SessionNode): boolean => s.ref.role === "lead" && !s.archived;
+
 function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
   const { plan } = props;
-  const agg = planState(plan.sessions.map((s) => dotDisplay(s.dot)));
-  const current = props.selectedPlanId === plan.id;
-  const quiet = agg === "idle" || agg === "asleep";
+  const lead = plan.sessions.find((s) => s.ref.id === plan.leadSessionId);
+  const forks = plan.sessions.filter((s) => isFork(s) && s.ref.id !== plan.leadSessionId);
+  const current = props.selectedPlanId === plan.id || (lead !== undefined && props.selectedSessionId === lead.ref.id);
   return (
     <li role="treeitem" data-plan={plan.id}>
-      <div data-part="plan-row" className="flex h-[26px] items-center gap-2 rounded-sm pl-8 pr-2">
-        <Aggregate sessions={plan.sessions} />
+      <div data-part="plan-row" className={cn("flex h-[26px] items-center rounded-sm pl-6 pr-2", current && SELECTED)}>
         <button
           type="button"
           data-select="plan"
           aria-current={current ? "true" : undefined}
-          onClick={() => props.onSelectPlan(plan.id)}
-          className={cn(
-            "min-w-0 flex-1 truncate rounded-sm text-left font-mono text-key",
-            quiet ? "text-muted-foreground" : "text-foreground",
-            current ? SELECTED : "hover:bg-row-hover",
-          )}
+          onClick={() => {
+            props.onSelectPlan(plan.id);
+            if (lead !== undefined) props.onSelectSession(lead.ref.id);
+          }}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          {plan.title}
+          <Dot dot={lead === undefined ? STOPPED : lead.dot} />
+          <span data-part="plan-id" title={plan.title} className="min-w-0 flex-1 truncate font-mono text-key">{plan.id}</span>
+          <Counters plans={[plan]} />
         </button>
-        <Counts counts={plan.counts} />
       </div>
-      <ul>
-        {plan.sessions.map((s) => (
-          <SessionRow key={s.ref.id} node={s} {...props} />
-        ))}
-      </ul>
+      {forks.length > 0 ? (
+        <ul>
+          {forks.map((s) => (
+            <ForkRow key={s.ref.id} node={s} label={`${plan.id}·${s.ref.id.slice(0, 4)}`} {...props} />
+          ))}
+        </ul>
+      ) : null}
     </li>
   );
 }
 
-function ContextItem(props: { context: ContextNode } & Handlers): ReactElement {
+function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handlers): ReactElement {
   const { context } = props;
-  const live = context.plans.filter((p) => !p.archived);
-  const archived = context.plans.filter((p) => p.archived);
-  const planItems = (plans: readonly PlanNode[]) => plans.map((p) => <PlanItem key={p.id} plan={p} {...props} />);
-  const aggSessions = [...context.sessions, ...live.flatMap((p) => p.sessions)];
+  const plans = props.allPlans ? context.plans : context.plans.filter((p) => !p.archived);
+  const manager = context.sessions.find((s) => s.ref.role === "manager" && !s.archived);
+  const forks = context.sessions.filter(isFork);
+  const current = manager !== undefined && props.selectedSessionId === manager.ref.id;
   return (
     <li role="treeitem" data-context={context.id} className="mb-1">
-      <div data-part="context-row" className="flex h-7 items-center gap-2 rounded-sm px-2">
-        <span aria-hidden="true" className="w-[10px] font-mono text-[10px] text-fg-dim">▾</span>
-        <Aggregate sessions={aggSessions} />
-        <span className="flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.title}</span>
-      </div>
+      <button
+        type="button"
+        data-select="context"
+        aria-current={current ? "true" : undefined}
+        onClick={() => {
+          if (manager !== undefined) props.onSelectSession(manager.ref.id);
+        }}
+        className={cn("flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left", current ? SELECTED : "hover:bg-row-hover")}
+      >
+        {props.allPlans ? null : <Dot dot={manager === undefined ? STOPPED : manager.dot} />}
+        <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+        <Counters plans={plans} />
+      </button>
       <ul role="group">
-        {planItems(live)}
-        {archived.length > 0 ? (
-          <li>
-            <details data-archived>
-              <summary className="flex h-7 items-center gap-2 px-2 text-muted-foreground">Archived ({archived.length})</summary>
-              <ul role="group">{planItems(archived)}</ul>
-            </details>
-          </li>
-        ) : null}
-      </ul>
-      <ul>
-        {context.sessions.map((s) => (
-          <SessionRow key={s.ref.id} node={s} {...props} />
+        {plans.map((p) => (
+          <PlanItem key={p.id} plan={p} {...props} />
+        ))}
+        {forks.map((s) => (
+          <ForkRow key={s.ref.id} node={s} label={s.ref.key} {...props} />
         ))}
       </ul>
     </li>
@@ -158,7 +152,8 @@ export function ContextTree(props: {
   const { tree, onNewContext, ...handlers } = props;
   const live = tree === null ? [] : tree.contexts.filter((c) => !c.archived);
   const archived = tree === null ? [] : tree.contexts.filter((c) => c.archived);
-  const items = (cs: readonly ContextNode[]) => cs.map((c) => <ContextItem key={c.id} context={c} {...handlers} />);
+  const archivedPlans = live.flatMap((c) => c.plans.filter((p) => p.archived).map((p) => ({ c, p })));
+  const archivedCount = archived.length + archived.reduce((n, c) => n + c.plans.filter((p) => p.archived).length, 0) + archivedPlans.length;
   return (
     <nav aria-label="Context tree" className="flex min-h-full flex-col">
       <div data-part="tree-header" className="sticky top-0 z-10 flex h-9 items-center gap-2 bg-background px-[14px]">
@@ -181,11 +176,16 @@ export function ContextTree(props: {
       ) : live.length === 0 && archived.length === 0 ? (
         <p data-part="empty" className="px-[14px] text-fg-dim">No contexts</p>
       ) : null}
-      {tree === null ? null : <ul role="tree" className="flex flex-col gap-0.5 px-1.5 pb-2.5">{items(live)}</ul>}
-      {archived.length > 0 ? (
+      {tree === null ? null : <ul role="tree" className="flex flex-col gap-0.5 px-1.5 pb-2.5">{live.map((c) => <ContextItem key={c.id} context={c} allPlans={false} {...handlers} />)}</ul>}
+      {archivedCount > 0 ? (
         <details data-archived>
-          <summary className="mx-1.5 flex h-7 items-center gap-2 px-2 text-muted-foreground">Archived ({archived.length})</summary>
-          <ul role="tree">{items(archived)}</ul>
+          <summary className="mx-1.5 flex h-7 items-center gap-2 px-2 text-muted-foreground">{`Archived (${archivedCount})`}</summary>
+          <ul role="tree">
+            {archived.map((c) => <ContextItem key={c.id} context={c} allPlans {...handlers} />)}
+            {archivedPlans.map(({ c, p }) => (
+              <PlanItem key={`${c.id}/${p.id}`} plan={p} {...handlers} />
+            ))}
+          </ul>
         </details>
       ) : null}
     </nav>

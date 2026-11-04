@@ -192,20 +192,46 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
   const plans = [...input.plans].sort((a, b) => Number(a.archived_at !== null) - Number(b.archived_at !== null) || (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   for (const p of plans) {
     ctx(p.context).plans.set(p.id, {
-      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: p.lead_session },
+      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null },
       sessions: [],
     });
   }
-  for (const s of input.sessions) {
-    const node = sessionNode(s, input.inbox);
+  const live = input.sessions.filter((s) => s.role !== "worker" && s.archived_at === null);
+  const newest = (xs: RawSession[]): RawSession | undefined => xs[xs.length - 1]; // no created_at: the later entry is the newer
+  const managers = new Map<string, RawSession>();
+  for (const s of live) {
+    if (s.role !== "manager" || s.plan !== null) continue;
+    const cur = managers.get(s.context);
+    if (cur === undefined || s.file !== null || cur.file === null) managers.set(s.context, s);
+  }
+  const planKey = (s: RawSession) => `${s.context}\u0000${s.plan}`;
+  const leads = new Map<string, RawSession>();
+  for (const p of plans) {
+    const mine = live.filter((s) => s.context === p.context && s.plan === p.id && s.plan_lead);
+    const named = p.lead_session === null ? undefined : mine.find((s) => s.id === p.lead_session);
+    const lead = named ?? newest(mine);
+    if (lead !== undefined) leads.set(planKey(lead), lead);
+  }
+  for (const s of live) {
+    if (s.plan === null || !s.plan_lead || leads.has(planKey(s))) continue;
+    leads.set(planKey(s), newest(live.filter((o) => o.context === s.context && o.plan === s.plan && o.plan_lead))!);
+  }
+  for (const s of live) {
     const c = ctx(s.context);
-    if (s.plan === null) { c.sessions.push(node); continue; }
+    if (s.plan === null) {
+      if (managers.get(s.context) === s) c.sessions.unshift(sessionNode(s, input.inbox));
+      else if (s.role === "lead") c.sessions.push(sessionNode(s, input.inbox));
+      continue;
+    }
     let p = c.plans.get(s.plan);
     if (p === undefined) {
       p = { node: { id: s.plan, contextId: s.context, title: s.plan, phase: "unknown", archived: false, counts: ZERO, leadSessionId: null }, sessions: [] };
       c.plans.set(s.plan, p);
     }
-    if (s.plan_lead) p.sessions.unshift(node); else p.sessions.push(node);
+    if (leads.get(planKey(s)) === s) {
+      p.sessions.unshift(sessionNode(s, input.inbox));
+      p.node = { ...p.node, leadSessionId: s.id };
+    } else if (!s.plan_lead && s.role === "lead") p.sessions.push(sessionNode(s, input.inbox));
   }
   return {
     contexts: [...ctxs.values()].map((c) => ({ ...c.node, sessions: c.sessions, plans: [...c.plans.values()].map((p) => ({ ...p.node, sessions: p.sessions })) })),
