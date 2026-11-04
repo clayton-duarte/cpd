@@ -289,10 +289,10 @@ li[data-kind][data-urgency][data-id]
     │   ├─ (otherwise) strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate
     │   └─ span[data-part="age"]  {age}   font-mono text-meta text-muted-foreground shrink-0
     └─ span[data-part="subtitle"]   only when the label has a non-empty second line   text-muted-foreground text-[12px] truncate
-          text: the second line `{rest[0]}`, aligned under the label (indented past the glyph column)
+          text: the label after its first line break (`rest`), aligned under the label (indented past the glyph column)
 ```
 
-- `first` = `row.label.split("\n")[0] ?? ""`; the second line is `row.label.split("\n")[1]`, shown only when non-empty. Labels with more lines show the second line only (TUI).
+- `first` = `row.label.split("\n")[0] ?? ""`; `rest` = the label after its first line break, shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
 - **Link kinds.** `row.url !== null` and `row.kind` is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy` (TUI `is_link`, `inbox.rs:492-494`): the label is the link. Clicking the label opens `row.url` (native anchor; TUI `mod.rs:591-601`). The link cue is the only extra mark. Other rows have no link.
 - **Age** `{age}` from `row.ageSeconds` (DESIGN 2c Phase 2 rule, unchanged): `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`. The TUI shows `42s`, `5m`, `2d` (`inbox.rs:673-676`); its hour form is **unverified** (`read/age.rs` was not read), so the web keeps `h`.
 - Row 1 is cut with an ellipsis before the age (`truncate`); row 2 is cut with an ellipsis as well. Nothing else is cut.
