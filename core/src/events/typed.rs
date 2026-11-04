@@ -939,7 +939,10 @@ mod tests {
                 NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s))),
                 NewEvent::job_merged_explore(T, s, s, s, s, s),
             ],
-            Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
+            Kind::JobFailed => vec![
+                NewEvent::job_failed(T, s, s, s, n),
+                NewEvent::job_failed_triaged(T, s, s, s, n, Some(json!({}))),
+            ],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
@@ -952,7 +955,10 @@ mod tests {
                 NewEvent::attempt_check_end(T, s, false),
                 NewEvent::attempt_check_end(T, s, true),
             ],
-            Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
+            Kind::AttemptRetry => vec![
+                NewEvent::attempt_retry(T, s, s, s, s),
+                NewEvent::attempt_retry_triaged(T, s, s, s, s, Some(json!({}))),
+            ],
             Kind::AttemptAborted => vec![NewEvent::attempt_aborted(T, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AttemptEnded => vec![

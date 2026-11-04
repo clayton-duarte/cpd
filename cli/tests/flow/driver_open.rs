@@ -105,7 +105,11 @@ pub(super) fn live(config_extra: &str) -> Live {
         ],
     );
     fx.git(&repo, &["push", "-q", "origin", "main", "cpd/pay/repo"]);
-    seed_home(&fx.env, config_extra);
+    // These tests pin the pre-triage Gate retry (pro-d280): no classifier call.
+    seed_home(
+        &fx.env,
+        &format!("{config_extra}\n[experimental]\nfailure_triage = false\n"),
+    );
     // The work session as the engine leaves it: its `watch` window, and remain-on-exit (§6.1).
     for args in [
         &[
