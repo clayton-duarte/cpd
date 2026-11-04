@@ -84,6 +84,8 @@ mod search;
 mod show;
 pub mod stats;
 #[cfg(test)]
+mod stats_retrieval_tests;
+#[cfg(test)]
 mod stats_tests;
 #[cfg(test)]
 mod supersedes_tests;
