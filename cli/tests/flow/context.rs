@@ -1822,6 +1822,60 @@ fn archive_and_unarchive_of_an_unknown_context_are_refused() {
     );
 }
 
+// ---- context show: positional record, RecordId error ------------------------
+
+#[test]
+fn context_show_positional_record_equals_record_flag() {
+    let fx = hs();
+    new_context(&fx);
+    fx.cpd(&["context", "decide", "Use SQLite.", "--context", CTX])
+        .ok();
+    let flag = fx
+        .cpd(&["context", "show", "--record", "hs-d1", "--context", CTX])
+        .ok();
+    let positional = fx.cpd(&["context", "show", "hs-d1", "--context", CTX]).ok();
+    assert_eq!(positional["records"], flag["records"]);
+    assert_eq!(positional["markdown"], flag["markdown"]);
+}
+
+#[test]
+fn context_show_positional_record_not_in_context_is_record_not_found() {
+    let fx = hs();
+    new_context(&fx);
+    refused(
+        fx.cpd(&["context", "show", "hs-d9", "--context", CTX]),
+        3,
+        "record_not_found",
+    );
+}
+
+#[test]
+fn context_show_positional_record_refused_with_record_since_or_topic() {
+    let fx = hs();
+    new_context(&fx);
+    fx.cpd(&["context", "decide", "Use SQLite.", "--context", CTX])
+        .ok();
+    fx.cpd(&["context", "show", "hs-d1", "--context", CTX]).ok();
+    for extra in [["--record", "hs-d1"], ["--since", "0"], ["--topic", "x"]] {
+        let mut args = vec!["context", "show", "hs-d1", "--context", CTX];
+        args.extend(extra);
+        refused(fx.cpd(&args), 2, "usage");
+    }
+}
+
+#[test]
+fn context_show_bad_record_id_error_names_every_letter() {
+    let fx = hs();
+    new_context(&fx);
+    let error = refused(
+        fx.cpd(&["context", "show", "--record", "nonsense", "--context", CTX]),
+        2,
+        "invalid_record_id",
+    );
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("letter one of d n q a p b"), "{message}");
+}
+
 #[test]
 fn show_record_of_another_machine_names_both_machines() {
     let fx = hs();

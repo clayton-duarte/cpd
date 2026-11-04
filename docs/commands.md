@@ -119,7 +119,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `workflow_required` | 2 | the command needs a Workflow, `--workflow` is omitted and the Plan does not have exactly one Workflow that is not `cancelled` (R34) |
 | `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
-| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive` or `session unarchive` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: archive is the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
+| `explore_pending` | 3 | `plan phase plan` (§4.4) while a scout or research Job of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}`, `jobs` the sorted keys of those Jobs; nothing is written (pro-d374) |
+| `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive`, `session unarchive` or `session resume` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11, §10.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: these commands are the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
@@ -345,11 +346,12 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
+cpd context show [<record>] [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
 ```
 
 | Flag | Meaning |
 |---|---|
+| `<record>` | positional, an alias of `--record <record>`: the same output and the same `record_not_found` (exit 3). Exclusive with `--record`, `--since` and `--topic` (`usage`, exit 2) |
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
@@ -411,6 +413,7 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 | Precondition | Code | Exit |
 |---|---|---|
 | a Context was selected (§1.3) | `context_required` | 2 |
+| the selected Plan exists (when the Context comes from `--plan` or `CPD_PLAN`) | `plan_not_found` | 4 |
 | the Context exists | `context_not_found` | 4 |
 | the query is empty after trimming | `usage` (`details.query`) | 2 |
 | the query is malformed FTS5, such as an unbalanced parenthesis or `NEAR(` among the kept operators: SQLite refuses it | `usage` (`details.query`, `details.message`, SQLite's message) | 2 |
@@ -441,7 +444,15 @@ Searches the Context's records by their id, topic, short form and text, ranked b
 
 Effects: none. Nothing is written, stored or indexed on disk, and no other process is started.
 
-Idempotent: read-only.
+Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, short, kind, at, seq, score, in_force}`: `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `markdown` is one line per record, `- [<id>] <short>` with the labels above, joined by newlines.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "query": "engine",
+ "records": [{"id": "hs-d7", "short": "one engine per machine", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "seq": 42, "score": 1.5, "in_force": true}],
+ "markdown": "- [hs-d7] one engine per machine"}
+```
+
+Idempotent: yes; a rerun with nothing new to index returns the same records.
 
 ### 3.5 `context decide`, `context note`, `context ask`
 
@@ -594,7 +605,7 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4) and has two parts, a blank line between them: the header `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the on-demand pointer (hs-d655) `Context on demand: cpd context search <query> --context <c> · cpd context show --context <c> --since <seq> · cpd context show --context <c> --record <id>`. No digest and no records are written: the Manager reads the Context on demand. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
@@ -955,8 +966,9 @@ The only phase moved by hand (cpd 1 §11 `workflow phase`, kept). Any other targ
 | Precondition | Code | Exit |
 |---|---|---|
 | the phase is `grounding` (already `plan`: `already`) | `illegal_transition` | 3 |
+| no explore Job (`scout`, `research`) of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}` | `explore_pending` | 3 |
 
-Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux.
+Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux. In phase `grounding`, the explore check (pro-d374, assumption A2) runs in the same transaction, before the change: `details.jobs` is the sorted list of the keys of the Plan's Jobs of kind `scout` or `research` that are `queued`, `running` or `failed`; a `merged` or `cancelled` explore Job does not block, and a refusal writes nothing.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "plan"}
@@ -1869,16 +1881,29 @@ Effects, for an explore Attempt that passes:
 cpd attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
-A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order, from the Worker's session file. `--lines` (default 40) keeps the last n. A partial last line of a file being written is skipped.
+A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order. The source is the Worker Session's `runner`:
+- `pi`: the Worker's session file (`sessions.file`). A partial last line of a file being written is skipped.
+- `durable`: the Attempt's store `run/<plan>/durable/<attempt>.sqlite`, the `entries` table. Only the rows whose `record` `kind` is `pi.assistant` are read, in `id` order: each `model[0].content` text block gives an `assistant: …` line and each `toolCall` block a `tool: <name>` line, as for `pi`. The `file` field is the `.sqlite` path. There is no partial-line rule.
+
+`--lines` (default 40) keeps the last n.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session is registered and its `file` is known and exists | `session_not_found` | 4 |
-| every complete line is a JSON session entry | `session_malformed` | 1 |
+| the Session is registered and its `file` is known and exists (`pi`); the store `run/<plan>/durable/<attempt>.sqlite` exists (`durable`) | `session_not_found` | 4 |
+| every complete line is a JSON session entry (`pi`); every `pi.assistant` row's `record` is an assistant entry, its `model[0]` an assistant message with a `content` array (`durable`) | `session_malformed` | 1 |
+
+Example for `pi`:
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "session": "c1a2…", "file": "/home/clayton/.pi/agent/sessions/…/…_c1a2….jsonl", "total": 412,
  "lines": ["tool: bash", "assistant: The schema compiles; committing."]}
+```
+
+Example for `durable`:
+
+```json
+{"ok": true, "attempt": "api-schema-a1", "session": "d4e5…", "file": "/home/clayton/.cpd/run/api-schema/durable/api-schema-a1.sqlite", "total": 57,
+ "lines": ["assistant: The schema compiles; committing.", "tool: bash"]}
 ```
 
 Read-only.
@@ -3272,10 +3297,11 @@ Output:
 cpd session resume <id>
 ```
 
-Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3.
+Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3. Only the User and the engine resume: an agent is refused (pro-d374).
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the caller has `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty (an agent); `details` `{command: "session resume", session, attempt}`, `session` and `attempt` the values of those variables or `null`; the check and message are §1.3's `agent_forbidden`, refused before the Ledger is opened | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager` | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
@@ -3298,7 +3324,7 @@ Effects:
 cpd session tail <id>
 ```
 
-The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14), folds the frames onto the `SnapshotEvent` and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
+The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14, protocol 2), folds the frames onto the pi-durable `ConversationView` (its base `view` frame and its `ops` frames) and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
 
 | Argument | Meaning |
 |---|---|
@@ -3313,9 +3339,9 @@ The read path of a live durable Lead's or Manager's transcript (contract §6.20;
 | the socket path `$CPD_HOME/run/host/<id>.sock` is at most `SOCKET_PATH_MAX` (107) bytes (contract §6.14 step 1, applied symmetrically) | `usage` (`socket_path_too_long`) | 2 |
 
 Effects:
-- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`client: "cpd session tail"`), attaches without a cursor, and prints the whole transcript from the base `snapshot` frame — one line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
-- **Follow:** every live `events` frame prints the messages it completes, as they complete.
-- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in snapshot mode: the fold replaces its state, one line on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the stream never repeats lines it printed.
+- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`protocol: 2`, `min_protocol: 2`, `client: "cpd session tail"`), attaches without a cursor, and prints the transcript of the base `view` frame: the window the host's watch starts with, the newest 50 entries (up to 100), so a long transcript shows its recent part; earlier entries are read with `cpd session history` (§10.12). One line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
+- **Follow:** every live `ops` frame prints the entries it appends, as they complete. The message still streaming is not printed until its entry is appended. When the window moved past entries the tail had not printed (a gap), one line on stderr names the gap and the tail goes on.
+- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in view mode: the fold replaces its replica, prints the entries it has not printed and writes one line on stderr (`view <epoch> seq <seq>: view replaced`), so the stream never repeats a line it printed.
 - **End:** exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (none of the host's reasons can reach a tail that never detaches; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
 - **Rows / Events / tmux:** none.
 
@@ -3328,7 +3354,7 @@ tool bash: all checks pass
 assistant: All green. Ready for review.
 ```
 
-Idempotent: reading only; the same transcript renders the same lines (the first snapshot's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
+Idempotent: reading only; the same transcript renders the same lines (the base view's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
 
 ## 10a. `board` (hs-d514)
 
@@ -3492,7 +3518,7 @@ The engine, one per machine (§3.7, §6.6, D5).
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
-**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode; it opens no Inbox item and wakes the Plan's Lead only (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5171,6 +5197,25 @@ A refusal's text starts `φ: ` and names the rule: `φ: <rule>: <what was refuse
 `git log`, `show`, `diff` and the other read-only commands stay allowed for both kinds. A `research` Worker may reach outside the machine (web, curl, attached MCP servers, registries, upstream docs): the profile has no `network` rule for it. The first `write` row is the one `edit` and `write` calls meet: they are refused outside the explore directory and the OS temp dir.
 
 The explore Worker also may run the read-only `cpd context search` and `cpd context show` (§3.3, §3.4), as its Spec's Deliverable section says (R10); nothing enforces that.
+
+The rules of this table are the Workers' profile only. A Lead's explore-artefact rule (`artefact`) is not one of them: it is §15.22a.
+
+### 15.22a A Lead's explore-artefact guard (pro-d374)
+
+An explore Job's artefact is for the Worker that wrote it. A Lead gets the Job's summary, never the file (contract §2.2 "Job kinds", §5.2 `job-merged`); when the summary is not enough it adds a follow-up scout Job. The adapter enforces this in pi's `tool_call` (`pi/lib/adapter.ts`), while `host.run` is set, as §15.16 does for checkouts (assumption A3, Plan `lead-grounding-guard`).
+
+**What is refused.** For a Session whose role is `lead` only; a Worker and a Manager are untouched, and so are the Lead's `edit` and `write` calls (§15.16):
+
+- a `read` call whose `path` is under `$CPD_HOME/run/<any plan>/explore/`, the path resolved as pi resolves tool paths (§15.16);
+- a `bash` call whose simple command (the tokenizer of §15.11, after its prefixes) has a file reader as its command word, `cat`, `head`, `tail`, `sed`, `grep`, `rg`, `awk`, `less`, `more`, `jq`, `wc`, `cut`, `sort`, `nl` or `bat` (a path ending in `/<word>` counts), and a word of it that names a path under that directory. The path may be written `$CPD_HOME/…`, `${CPD_HOME}/…`, `~/.cpd/…`, `$HOME/.cpd/…` or as the absolute home path.
+
+**What passes.** A Lead that cites the path in a heredoc, in a Spec file or in a `cpd` command is not refused: only a file reader's operand is judged.
+
+**The refusal** is `{block: true, reason}`. The rule is `artefact`, so the reason has the form `φ: explore <rule>: <what>` of §15.22, with this text, exactly:
+
+```
+φ: explore artefact: $CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job
+```
 
 ### 15.23 A Session is told its skill changed (Plan `skill-fresh`)
 
