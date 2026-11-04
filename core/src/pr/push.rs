@@ -73,7 +73,12 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
         super::rebase::refuse_running_conn(tx, &id, &key, "do the push")?;
 
         match git::push_commit(&lead, &remote_branch, &sha)? {
-            Push::Pushed { new } => Ok((new, sha.clone())),
+            Push::Pushed { new } => {
+                if new {
+                    super::pulls::reset_after_push(tx, &id, &key)?;
+                }
+                Ok((new, sha.clone()))
+            }
             Push::Contained { remote } => Ok((false, remote)),
             Push::Rejected { stderr } => {
                 let next = if adopted { "It gained commits cpd lacks: catch up" } else { "Rebase" };
