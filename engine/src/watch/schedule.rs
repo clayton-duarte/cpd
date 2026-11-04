@@ -373,11 +373,11 @@ pub(super) fn run(engine: &mut Engine) {
         .collect();
     // pro-d199: the runner is re-read before Attempts start; a config that does not parse starts none (no stale value).
     let runner = match cpd_core::config::Config::load(&engine.home) {
-        Ok(fresh) => fresh.worker_runner,
+        Ok(fresh) => fresh.experimental.durable_workers,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
     let mut config = engine.config.clone();
-    config.worker_runner = runner;
+    config.experimental.durable_workers = runner;
     let (home, concurrency) = (engine.home.clone(), engine.config.concurrency);
     let mut remaining = ready;
     // The walk names the Jobs to start and the Jobs it skips. A start that fails (a tier outside the Worker range, a tampered Job,

@@ -14,11 +14,11 @@ import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dis
 
 const plain = (lines: string[]) => lines.map(stripTerminalSequences);
 let sequence = 0;
-function context(id: string, fields: Partial<RenderContext> = {}): RenderContext {
+function context(id: string, fields: Partial<Omit<RenderContext, "keyText" | "keyHint">> = {}): RenderContext {
 	return {
 		args: { command: "echo hello" }, argsComplete: true, cwd: "/project", executionStarted: false,
 		expanded: false, invalidate() {}, isError: false, isPartial: false, lastComponent: undefined,
-		showImages: false, state: {}, toolCallId: id, ...fields,
+		showImages: false, state: {}, toolCallId: id, keyText: (k) => String(k), keyHint: (_k, d) => d, ...fields,
 	};
 }
 
