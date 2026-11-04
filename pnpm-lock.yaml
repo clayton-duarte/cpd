@@ -162,6 +162,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@aurigax-ai/ghostty-web@0.3.9': 1a19d71cb822364540eea92176390d9445aa4cebe7e3118b295ff01bd4d3ee45
+
 importers:
 
   .:
@@ -208,7 +211,7 @@ importers:
     dependencies:
       '@aurigax-ai/ghostty-web':
         specifier: 0.3.9
-        version: 0.3.9
+        version: 0.3.9(patch_hash=1a19d71cb822364540eea92176390d9445aa4cebe7e3118b295ff01bd4d3ee45)
       '@earendil-works/chord':
         specifier: 1.5.0
         version: 1.5.0
@@ -3874,7 +3877,7 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@aurigax-ai/ghostty-web@0.3.9': {}
+  '@aurigax-ai/ghostty-web@0.3.9(patch_hash=1a19d71cb822364540eea92176390d9445aa4cebe7e3118b295ff01bd4d3ee45)': {}
 
   '@aws-sdk/client-bedrock-runtime@3.1127.0':
     dependencies:
