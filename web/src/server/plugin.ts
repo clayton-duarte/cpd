@@ -67,8 +67,10 @@ const disposable = (f: () => void) => {
 export const CPD_IDENTITY_VARS: readonly string[] = ["CPD_SESSION", "PI_SESSION_ID", "CPD_SESSION_ID", "CPD_ATTEMPT_ID"];
 
 /** The environment cpd children get: the server's own, minus any cpd/pi session identity. */
-export function cpdChildEnv(_env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  throw new Error("not implemented");
+export function cpdChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const k of CPD_IDENTITY_VARS) delete out[k];
+  return out;
 }
 
 export interface ChildBoundary {
@@ -96,7 +98,7 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
     cpdExec: {
       run: (args) =>
         new Promise((resolve) => {
-          child.execFile(cpdBin, [...args], { maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+          child.execFile(cpdBin, [...args], { maxBuffer: 64 * 1024 * 1024, env: cpdChildEnv(env) }, (error, stdout, stderr) => {
             const code = error === null ? 0 : typeof error.code === "number" ? error.code : 1;
             resolve({ stdout, stderr: error !== null && typeof error.code !== "number" ? error.message : stderr, exitCode: code });
           });
@@ -104,7 +106,7 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
     },
     follow: {
       start: (args) => {
-        const proc = child.spawn(cpdBin, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+        const proc = child.spawn(cpdBin, [...args], { stdio: ["ignore", "pipe", "pipe"], env: cpdChildEnv(env) });
         let stderr = "";
         let pending = "";
         const lineHandlers = new Set<(line: string) => void>();
