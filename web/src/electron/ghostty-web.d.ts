@@ -13,6 +13,7 @@ export interface ITerminalOptions {
   theme?: ITheme;
   fontFamily?: string;
   fontSize?: number;
+  fontWeight?: "normal" | "bold" | number;
 }
 export interface ITerminalAddon {
   activate(terminal: Terminal): void;
@@ -22,6 +23,14 @@ export class Terminal {
   constructor(options?: ITerminalOptions);
   readonly cols: number;
   readonly rows: number;
+  readonly options: { fontSize: number };
+  renderer?: { getMetrics(): { width: number; height: number } };
+  wasmTerm?: { isAlternateScreen(): boolean };
+  hasMouseTracking(): boolean;
+  attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void;
+  attachCustomWheelEventHandler(handler?: (event: WheelEvent) => boolean): void;
+  paste(text: string): void;
+  input(data: string, wasUserInput?: boolean): void;
   clipboardWriteHandler: ((text: string) => boolean) | null;
   open(parent: HTMLElement): void;
   write(data: string | Uint8Array): void;

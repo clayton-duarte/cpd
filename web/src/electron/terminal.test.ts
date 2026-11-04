@@ -1,6 +1,16 @@
 import type { CpdElectronBridge, PtySize, UiMode } from "./channels.ts";
 import {
   DANGO_THEME,
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  createWheelAccumulator,
+  isCmdV,
+  nextFontSize,
+  shiftEnterSequence,
+  zoomAction,
+  type KeyEventLike,
+  type WheelEventLike,
   TERMINAL_FONT,
   fitToContainer,
   fixSgrMouseHover,
@@ -21,6 +31,12 @@ function harness(mode: UiMode = "tui") {
   let resolveStart: () => void = () => {};
   let rejectWrite: { error: unknown } | undefined;
   let engineSize: PtySize = { cols: 80, rows: 24 };
+  let keyHandler: (e: KeyEventLike) => boolean = () => undefined as unknown as boolean; // unregistered
+  let wheelHandler: (e: WheelEventLike) => boolean = () => undefined as unknown as boolean; // unregistered
+  let fontSizePx = 13;
+  let ownsWheel = false;
+  let clipboardRead: Promise<string> = Promise.resolve("");
+  const pasted: string[] = [];
   const writes: string[] = [];
   const sentWrites: string[] = [];
   const resizes: PtySize[] = [];
@@ -51,6 +67,24 @@ function harness(mode: UiMode = "tui") {
       setClipboardWriteHandler: (h) => {
         log.push("clipboardHandler");
         clipboardHandler = h;
+      },
+      fontSize: () => fontSizePx,
+      setFontSize: (px) => {
+        log.push(`setFontSize ${px}`);
+        fontSizePx = px;
+      },
+      cellHeight: () => 16,
+      setKeyHandler: (h) => {
+        keyHandler = h;
+      },
+      setWheelHandler: (h) => {
+        wheelHandler = h;
+      },
+      appOwnsWheel: () => ownsWheel,
+      wheelStep: (dir, x, y) => (dir === "up" ? `<U${x},${y}>` : `<D${x},${y}>`),
+      input: (d) => engineData(d),
+      paste: (t) => {
+        pasted.push(t);
       },
       dispose: () => log.push("engine.dispose"),
     },
@@ -100,6 +134,7 @@ function harness(mode: UiMode = "tui") {
       },
     },
     clipboard: {
+      readText: () => clipboardRead,
       writeText: (t) => {
         clipboardTexts.push(t);
         return rejectWrite === undefined ? Promise.resolve() : Promise.reject(rejectWrite.error);
@@ -120,6 +155,15 @@ function harness(mode: UiMode = "tui") {
     sentWrites,
     resizes,
     clipboardTexts,
+    pasted,
+    key: (e: KeyEventLike) => keyHandler(e),
+    wheel: (e: WheelEventLike) => wheelHandler(e),
+    setOwnsWheel: (v: boolean) => {
+      ownsWheel = v;
+    },
+    setClipboardRead: (p: Promise<string>) => {
+      clipboardRead = p;
+    },
     flush,
     setButtons: (b: number) => {
       pointerButtons = b;
@@ -342,5 +386,158 @@ test("TERMINAL_FONT falls back to the Nerd Font stack", () => {
   expect(TERMINAL_FONT).toEqual({
     fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace',
     fontSize: 13,
+    fontWeight: 300,
   });
+});
+
+const key = (over: Partial<KeyEventLike> = {}): KeyEventLike => ({
+  key: "",
+  code: "",
+  shiftKey: false,
+  ctrlKey: false,
+  altKey: false,
+  metaKey: false,
+  isComposing: false,
+  ...over,
+});
+
+test("shiftEnterSequence returns the CSI-u sequence for plain Shift Enter", () => {
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true }))).toBe("\x1b[13;2u");
+});
+
+test("shiftEnterSequence ignores other modifiers and composition", () => {
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true }))).toBe("\x1b[13;2u");
+  expect(shiftEnterSequence(key({ key: "Enter" }))).toBeNull();
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true, ctrlKey: true }))).toBeNull();
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true, altKey: true }))).toBeNull();
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true, metaKey: true }))).toBeNull();
+  expect(shiftEnterSequence(key({ key: "Enter", shiftKey: true, isComposing: true }))).toBeNull();
+  expect(shiftEnterSequence(key({ key: "a", shiftKey: true }))).toBeNull();
+});
+
+test("zoomAction maps Cmd equals Cmd plus Cmd minus and Cmd zero", () => {
+  const z = (k: string, shiftKey = false) => zoomAction(key({ key: k, metaKey: true, shiftKey }));
+  expect(z("=")).toBe("in");
+  expect(z("+", true)).toBe("in");
+  expect(z("-")).toBe("out");
+  expect(z("_", true)).toBe("out");
+  expect(z("0")).toBe("reset");
+  expect(z("a")).toBeNull();
+});
+
+test("zoomAction ignores events without Cmd", () => {
+  expect(zoomAction(key({ key: "=", metaKey: true }))).toBe("in");
+  expect(zoomAction(key({ key: "=" }))).toBeNull();
+  expect(zoomAction(key({ key: "=", ctrlKey: true }))).toBeNull();
+  expect(zoomAction(key({ key: "=", metaKey: true, ctrlKey: true }))).toBeNull();
+  expect(zoomAction(key({ key: "-", metaKey: true, altKey: true }))).toBeNull();
+});
+
+test("nextFontSize steps by one and clamps to the range", () => {
+  expect(nextFontSize(13, "in")).toBe(14);
+  expect(nextFontSize(13, "out")).toBe(12);
+  expect(nextFontSize(FONT_SIZE_MAX, "in")).toBe(FONT_SIZE_MAX);
+  expect(nextFontSize(FONT_SIZE_MIN, "out")).toBe(FONT_SIZE_MIN);
+});
+
+test("nextFontSize reset returns the default size", () => {
+  expect(FONT_SIZE_DEFAULT).toBe(13);
+  expect(nextFontSize(20, "reset")).toBe(13);
+  expect(nextFontSize(9, "reset")).toBe(13);
+});
+
+test("wheel accumulator emits no step below the threshold", () => {
+  const w = createWheelAccumulator();
+  expect(w.push(10, 0, 16)).toBe(0);
+  expect(w.push(10, 0, 16)).toBe(0);
+  expect(w.push(10, 0, 16)).toBe(1);
+});
+
+test("wheel accumulator emits one step per threshold and keeps the remainder", () => {
+  const w = createWheelAccumulator();
+  expect(w.push(30, 0, 16)).toBe(1);
+  expect(w.push(20, 0, 16)).toBe(1);
+  expect(w.push(-0, 0, 16)).toBe(0);
+  const big = createWheelAccumulator();
+  expect(big.push(-100, 0, 16)).toBe(-4);
+  expect(big.push(-20, 0, 16)).toBe(-1);
+  const tall = createWheelAccumulator();
+  expect(tall.push(30, 0, 40)).toBe(0);
+  expect(tall.push(30, 0, 40)).toBe(1);
+});
+
+test("wheel accumulator zeroes the remainder on direction reversal", () => {
+  const w = createWheelAccumulator();
+  expect(w.push(20, 0, 16)).toBe(0);
+  expect(w.push(-20, 0, 16)).toBe(0);
+  expect(w.push(-10, 0, 16)).toBe(-1);
+});
+
+test("wheel accumulator converts line deltas to pixels", () => {
+  const w = createWheelAccumulator();
+  expect(w.push(3, 1, 16)).toBe(2);
+  const pages = createWheelAccumulator();
+  expect(pages.push(1, 2, 16)).toBe(6);
+});
+
+test("isCmdV matches only Cmd V", () => {
+  const v = (over: object) => isCmdV({ code: "KeyV", metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, ...over });
+  expect(v({})).toBe(true);
+  expect(v({ metaKey: false })).toBe(false);
+  expect(v({ ctrlKey: true })).toBe(false);
+  expect(v({ altKey: true })).toBe(false);
+  expect(v({ shiftKey: true })).toBe(false);
+  expect(v({ code: "KeyC" })).toBe(false);
+});
+
+test("host writes CSI-u to the pty on Shift Enter and consumes the key", async () => {
+  const h = harness();
+  await started(h);
+  expect(h.key(key({ key: "Enter", shiftKey: true }))).toBe(true);
+  expect(h.sentWrites).toEqual(["\x1b[13;2u"]);
+  expect(h.key(key({ key: "Enter" }))).toBe(false);
+  expect(h.sentWrites).toEqual(["\x1b[13;2u"]);
+});
+
+test("host zooms the font and refits the terminal on zoom keys", async () => {
+  const h = harness();
+  await started(h);
+  h.log.length = 0;
+  expect(h.key(key({ key: "=", metaKey: true }))).toBe(true);
+  expect(h.log).toEqual(["setFontSize 14", "fit"]);
+  expect(h.key(key({ key: "0", metaKey: true }))).toBe(true);
+  expect(h.log.slice(2)).toEqual(["setFontSize 13", "fit"]);
+});
+
+test("host pastes the clipboard text on Cmd V", async () => {
+  const h = harness();
+  await started(h);
+  h.setClipboardRead(Promise.resolve("hello"));
+  expect(h.key(key({ code: "KeyV", key: "v", metaKey: true }))).toBe(true);
+  await h.flush();
+  expect(h.pasted).toEqual(["hello"]);
+  h.setClipboardRead(Promise.resolve(""));
+  expect(h.key(key({ code: "KeyV", key: "v", metaKey: true }))).toBe(true);
+  await h.flush();
+  expect(h.pasted).toEqual(["hello"]);
+});
+
+test("host consumes wheel events and writes one step per threshold when the app owns the wheel", async () => {
+  const h = harness();
+  await started(h);
+  h.setOwnsWheel(true);
+  expect(h.wheel({ deltaY: 10, deltaMode: 0, clientX: 5, clientY: 6 })).toBe(true);
+  expect(h.sentWrites).toEqual([]);
+  expect(h.wheel({ deltaY: 40, deltaMode: 0, clientX: 5, clientY: 6 })).toBe(true);
+  expect(h.sentWrites).toEqual(["<D5,6>".repeat(2)]);
+  expect(h.wheel({ deltaY: -100, deltaMode: 0, clientX: 1, clientY: 2 })).toBe(true);
+  expect(h.sentWrites).toEqual(["<D5,6>".repeat(2), "<U1,2>".repeat(4)]);
+});
+
+test("host leaves wheel events to the engine when the app does not own the wheel", async () => {
+  const h = harness();
+  await started(h);
+  h.setOwnsWheel(false);
+  expect(h.wheel({ deltaY: 100, deltaMode: 0, clientX: 5, clientY: 6 })).toBe(false);
+  expect(h.sentWrites).toEqual([]);
 });

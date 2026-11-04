@@ -44,6 +44,22 @@ async function boot(): Promise<void> {
     setClipboardWriteHandler: (handler) => {
       term.clipboardWriteHandler = handler;
     },
+    fontSize: () => term.options.fontSize,
+    setFontSize: (px) => { term.options.fontSize = px; },
+    cellHeight: () => term.renderer?.getMetrics().height ?? 20,
+    setKeyHandler: (handler) => term.attachCustomKeyEventHandler(handler),
+    setWheelHandler: (handler) => term.attachCustomWheelEventHandler(handler),
+    appOwnsWheel: () => term.hasMouseTracking() || (term.wasmTerm?.isAlternateScreen() ?? false),
+    wheelStep: (direction, clientX, clientY) => {
+      if (!term.hasMouseTracking()) return direction === "up" ? "\x1b[A" : "\x1b[B";
+      const metrics = term.renderer?.getMetrics();
+      const rect = container.getBoundingClientRect();
+      const col = Math.max(1, Math.floor((clientX - rect.left) / (metrics?.width || 1)) + 1);
+      const row = Math.max(1, Math.floor((clientY - rect.top) / (metrics?.height || 1)) + 1);
+      return "\x1b[<" + (direction === "up" ? 64 : 65) + ";" + col + ";" + row + "M";
+    },
+    input: (data) => term.input(data, true),
+    paste: (text) => term.paste(text),
     dispose: () => term.dispose(),
   };
   await document.fonts?.ready;
@@ -58,7 +74,7 @@ async function boot(): Promise<void> {
       },
     },
     pointer: { buttons: () => buttons },
-    clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
+    clipboard: { writeText: (text) => navigator.clipboard.writeText(text), readText: () => navigator.clipboard.readText() },
     view: { showTerminal: createViewToggle(boolHidden(container), boolHidden(webuiRoot)) },
     onError: (error) => console.error(error),
   });
