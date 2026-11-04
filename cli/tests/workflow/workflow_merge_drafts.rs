@@ -12,7 +12,7 @@ const MERGED_AT: &str = "2026-10-21T15:01:30Z";
 /// The GraphQL search answer listing acme/api#7 merged.
 fn search_merged() -> Reply {
     let node = format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/api","defaultBranchRef":{{"name":"main"}}}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","mergedAt":"{MERGED_AT}","baseRefName":"main","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/api","defaultBranchRef":{{"name":"main"}}}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":"{MERGED_AT}","baseRefName":"main","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     Reply::ok(&format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#

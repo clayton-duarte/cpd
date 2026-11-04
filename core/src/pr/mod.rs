@@ -29,6 +29,10 @@ mod incident_tests;
 mod open_reopen_tests;
 #[cfg(test)]
 mod poll_tests;
+#[cfg(test)]
+mod poll_threads_tests;
+#[cfg(test)]
+mod push_reset_tests;
 
 pub mod auto_merge;
 pub mod closed;

@@ -1,6 +1,6 @@
 //! The table `pull_requests` (contract §2.2 Pull request, §4.4; D5): what the
 //! pull request poller last read of one of the User's pull requests. This module is the
-//! only writer of the table. A row is written only when a value changes; the
+//! writer of the table (`pr merge` and the push paths also update a row). A row is written only when a value changes; the
 //! rows append no Event of their own: `attention` says which transitions the
 //! owning Plan's Lead is told of (D7).
 
@@ -136,6 +136,7 @@ impl PullRequest {
         let same_but_created_at = PolledPr {
             created_at: self.created_at.clone(),
             updated_at: self.polled()?.updated_at,
+            open_threads: listed.pr.open_threads.clone(),
             ..listed.pr.clone()
         };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
@@ -187,6 +188,7 @@ impl PullRequest {
             merged_at: self.merged_at.clone(),
             base_ref: self.base_ref.clone(),
             default_branch: self.default_branch.clone(),
+            open_threads: vec![],
         })
     }
 }
@@ -348,6 +350,21 @@ pub(super) fn upsert(
         after: load(tx, before.id)?,
         before: Some(before),
     }))
+}
+
+/// Resets the pull request row linked to the Workflow (`plan`, `key`) after cpd pushed new commits to it:
+/// `checks` pending, `mergeable` and `merge_state` unknown (pro-d384). A Workflow with no linked row changes nothing.
+pub(crate) fn reset_after_push(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &WorkflowKey,
+) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE pull_requests SET checks = 'pending', mergeable = 'unknown', merge_state = 'unknown'
+         WHERE id = (SELECT pull_request FROM workflows WHERE plan = ?1 AND key = ?2 AND pull_request IS NOT NULL)",
+        rusqlite::params![plan.as_str(), key.as_str()],
+    )?;
+    Ok(())
 }
 
 /// The row of `polled`'s pull request: inserted when absent (the User's own: `authored`
@@ -895,6 +912,7 @@ mod tests {
             merged_at: None,
             base_ref: None,
             default_branch: None,
+            open_threads: vec![],
         }
     }
 

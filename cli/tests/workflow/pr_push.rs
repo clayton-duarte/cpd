@@ -799,3 +799,50 @@ fn push_of_a_pr_merged_during_its_gate_pushes_nothing() {
     );
     assert_eq!(fx.remote_sha(), before, "nothing pushed");
 }
+
+/// The linked row `(checks, mergeable, merge_state)`.
+fn pr_row(fx: &Fx) -> (String, String, String) {
+    fx.store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT checks, mergeable, merge_state FROM pull_requests WHERE number = 812",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn pr_push_resets_stored_checks_mergeable_and_merge_state() {
+    let fx = fx("open");
+    fx.sh(|_| Reply::ok(""));
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET checks = 'failed', mergeable = 'conflicting', merge_state = 'dirty'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let tip = fx.commit("more.txt");
+
+    let out = fx.push().ok();
+
+    assert_eq!(out["pushed"], json!(true));
+    assert_eq!(fx.remote_sha(), tip);
+    assert_eq!(
+        pr_row(&fx),
+        ("pending".into(), "unknown".into(), "unknown".into())
+    );
+}
+
+#[test]
+fn pr_push_without_linked_row_still_pushes() {
+    let bare = fx("dispatch");
+    bare.sh(|_| Reply::ok(""));
+    let tip = bare.commit("bare.txt");
+    bare.push().ok();
+    assert_eq!(bare.remote_sha(), tip);
+}

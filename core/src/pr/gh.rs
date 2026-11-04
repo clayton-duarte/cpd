@@ -809,7 +809,8 @@ pub fn inline_comments(
 macro_rules! pr_fields {
     () => {
         "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
-         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+         reviewThreads(first: 100) { nodes { id isResolved } }"
     };
 }
 
@@ -849,6 +850,8 @@ pub struct PolledPr {
     pub base_ref: Option<String>,
     /// The repo's default branch (`defaultBranchRef.name`); `None` when GitHub has none.
     pub default_branch: Option<String>,
+    /// The ids of the first 100 review threads that are not resolved: resolving one does not move `updatedAt` (pro-d231), so `due_reads` compares them with the stored open threads.
+    pub open_threads: Vec<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -985,6 +988,8 @@ struct RawPr {
     #[serde(rename = "mergeStateStatus")]
     merge_state: String,
     commits: RawCommits,
+    #[serde(rename = "reviewThreads")]
+    review_threads: RawThreads,
     /// Selected by the direct read only (`read_absent`); `None` when the reply has no such key, `Some(Null)` for a null.
     #[serde(rename = "viewerDidAuthor", default)]
     viewer_did_author: Option<bool>,
@@ -994,6 +999,18 @@ struct RawPr {
         deserialize_with = "present"
     )]
     viewer_review_request: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawThreads {
+    nodes: Vec<RawThread>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawThread {
+    id: String,
+    #[serde(rename = "isResolved")]
+    resolved: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1135,6 +1152,13 @@ impl Reply<'_> {
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             merged_at: raw.merged_at,
+            open_threads: raw
+                .review_threads
+                .nodes
+                .into_iter()
+                .filter(|t| !t.resolved)
+                .map(|t| t.id)
+                .collect(),
         })
     }
 }
@@ -1987,6 +2011,7 @@ mod tests {
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
             "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED","latestOpinionatedReviews":{{"nodes":[{{"state":"APPROVED","author":{{"__typename":"User","login":"alice"}}}}]}},
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
+            "reviewThreads":{{"nodes":[{{"id":"T1","isResolved":false}},{{"id":"T2","isResolved":true}}]}},
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
     }
@@ -2173,10 +2198,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -2240,6 +2265,7 @@ mod tests {
             (ReviewDecision::Approved, "T7", None)
         );
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
+        assert_eq!(a.open_threads, vec!["T1".to_owned()]);
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
         assert_eq!(
