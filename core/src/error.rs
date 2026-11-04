@@ -177,7 +177,6 @@ error_codes! {
     SupersedesInvalid = "supersedes_invalid" => Refused,
     SupersedesUnlinked = "supersedes_unlinked" => Refused,
     ContextExists = "context_exists" => Refused,
-    QuestionAnswered = "question_answered" => Refused,
     NotAGitRepo = "not_a_git_repo" => Refused,
     PlanExists = "plan_exists" => Refused,
     BranchExists = "branch_exists" => Refused,

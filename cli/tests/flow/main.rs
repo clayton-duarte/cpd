@@ -28,6 +28,7 @@ mod context_pending;
 mod context_pending_waiting;
 mod context_permanent;
 mod context_prose_supersedes;
+mod context_qa_gone;
 mod context_search;
 mod context_show_bounded;
 mod context_supersedes;

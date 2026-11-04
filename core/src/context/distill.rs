@@ -904,8 +904,8 @@ fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
     .with("path", path.display().to_string())
 }
 
-/// `records.md` (contract §4.6 step 3): one block per record, `[<id>] <kind> (<date>)`, `answers <question id>`
-/// for an answer, then the full text. A superseding decision's `supersedes` is not shown: what it names is not in force.
+/// `records.md` (contract §4.6 step 3): one block per record, `[<id>] <kind> (<date>)`
+/// then the full text. A superseding decision's `supersedes` is not shown: what it names is not in force.
 pub(super) fn records_md(in_force: &[&Indexed]) -> String {
     let mut out = String::new();
     for (_, record) in in_force {
@@ -915,9 +915,6 @@ pub(super) fn records_md(in_force: &[&Indexed]) -> String {
             record.id,
             record.kind().as_str()
         ));
-        if let Some(question) = record.question() {
-            out.push_str(&format!("answers {question}\n"));
-        }
         out.push_str(record.text.trim_end());
         out.push_str("\n\n");
     }
@@ -1256,19 +1253,11 @@ mod tests {
 
     #[test]
     fn records_md_gives_one_block_per_record_with_its_full_text() {
-        let q = record(
-            "hs-q1",
+        let n = record(
+            "hs-n1",
             "2026-10-01T10:00:00.000Z",
-            "Which port?",
-            Draft::Question,
-        );
-        let a = record(
-            "hs-a1",
-            "2026-10-02T10:00:00.000Z",
             "Port 80.\nSecond line.\n",
-            Draft::Answer {
-                question: RecordId::parse("hs-q1").unwrap(),
-            },
+            Draft::Note,
         );
         let d = record(
             "hs-d2",
@@ -1279,9 +1268,8 @@ mod tests {
             },
         );
         assert_eq!(
-            records_md(&[&q, &a, &d]),
-            "[hs-q1] question (2026-10-01 UTC)\nWhich port?\n\n\
-             [hs-a1] answer (2026-10-02 UTC)\nanswers hs-q1\nPort 80.\nSecond line.\n\n\
+            records_md(&[&n, &d]),
+            "[hs-n1] note (2026-10-01 UTC)\nPort 80.\nSecond line.\n\n\
              [hs-d2] decision (2026-10-03 UTC)\nUse it.\n\n"
         );
     }

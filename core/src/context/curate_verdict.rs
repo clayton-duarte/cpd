@@ -10,14 +10,12 @@ pub const GATE: f32 = 0.80;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gate {
     Skip,
-    LabelOnly,
     Neighbours,
 }
 
 pub fn gate(kind: RecordKind) -> Gate {
     match kind {
         RecordKind::Decision | RecordKind::Note => Gate::Neighbours,
-        RecordKind::Question | RecordKind::Answer => Gate::LabelOnly,
         _ => Gate::Skip,
     }
 }
