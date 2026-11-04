@@ -74,8 +74,8 @@ describe("readmodel", () => {
     const c1 = tree.contexts[0]!;
     expect(c1.sessions.map((s) => s.ref.id)).toEqual(["s-mgr"]);
     expect(c1.plans.map((p) => p.id)).toEqual(["p1"]);
-    expect(c1.plans[0]!.sessions.map((s) => s.ref.id)).toEqual(["s-lead", "s-w1"]);
-    expect(c1.plans[0]!.sessions[1]!.jobKey).toBe("j1");
+    expect(c1.plans[0]!.sessions.map((s) => s.ref.id)).toEqual(["s-lead"]);
+    expect(c1.plans[0]!.leadSessionId).toBe("s-lead");
     expect(tree.contexts[1]!.plans).toEqual([]);
     expect(tree.cursor).toBe(8);
   });
@@ -191,4 +191,97 @@ describe("context list without open_questions", () => {
     const { tree } = await createReadModel(cpd).loadAll(null);
     expect(tree.contexts.map((c) => [c.id, c.openQuestions])).toEqual([["c1", 0], ["c2", 0]]);
   });
+});
+
+// Assumption: `cpd session list` has no created_at, so "newest" is the later entry of the list.
+const treeOf = async (r: Replies) => (await createReadModel(fakeCpd(r).cpd).loadAll(null)).tree;
+const ids = (xs: { ref: { id: string } }[]) => xs.map((s) => s.ref.id);
+
+it("buildTree drops worker sessions", async () => {
+  const tree = await treeOf({
+    context: [context("c1")],
+    plan: [plan("p1", "c1")],
+    session: [
+      session("s-ctx-w", { role: "worker" }),
+      session("s-w", { role: "worker", plan: "p1", key: "c1:p1:j1" }),
+      session("s-lead", { role: "lead", plan: "p1", plan_lead: true }),
+    ],
+  });
+  const c1 = tree.contexts[0]!;
+  expect(ids(c1.sessions)).toEqual([]);
+  expect(ids(c1.plans[0]!.sessions)).toEqual(["s-lead"]);
+});
+
+it("buildTree drops archived sessions from the live lists", async () => {
+  const tree = await treeOf({
+    context: [context("c1")],
+    plan: [plan("p1", "c1")],
+    session: [
+      session("m-old", { archived_at: "2026-01-01T00:00:00Z" }),
+      session("l-old", { role: "lead", plan: "p1", plan_lead: true, archived_at: "2026-01-01T00:00:00Z" }),
+      session("f-old", { role: "lead", plan: "p1", archived_at: "2026-01-01T00:00:00Z" }),
+    ],
+  });
+  const c1 = tree.contexts[0]!;
+  expect(ids(c1.sessions)).toEqual([]);
+  expect(ids(c1.plans[0]!.sessions)).toEqual([]);
+  expect(c1.plans[0]!.leadSessionId).toBeNull();
+});
+
+it("buildTree keeps one live Manager per Context, preferring one with a file then the newest", async () => {
+  const filed = await treeOf({
+    context: [context("c1"), context("c2")],
+    plan: [],
+    session: [
+      session("m1", { file: "/f/1" }),
+      session("m2", { file: null }),
+      session("m3", { file: "/f/3" }),
+      session("m4", { file: null }),
+      session("n1", { context: "c2" }),
+      session("n2", { context: "c2" }),
+    ],
+  });
+  expect(ids(filed.contexts[0]!.sessions)).toEqual(["m3"]);
+  expect(ids(filed.contexts[1]!.sessions)).toEqual(["n2"]);
+});
+
+it("buildTree keeps one Lead per Plan, the plan lead_session first", async () => {
+  const tree = await treeOf({
+    context: [context("c1")],
+    plan: [plan("p1", "c1", { lead_session: "l-named" }), plan("p2", "c1")],
+    session: [
+      session("l-named", { role: "lead", plan: "p1", plan_lead: true }),
+      session("l-newer", { role: "lead", plan: "p1", plan_lead: true }),
+      session("l-a", { role: "lead", plan: "p2", plan_lead: true }),
+      session("l-b", { role: "lead", plan: "p2", plan_lead: true }),
+      session("l-none", { role: "lead", plan: "p3", plan_lead: false }),
+    ],
+  });
+  const plans = Object.fromEntries(tree.contexts[0]!.plans.map((p) => [p.id, p]));
+  expect(plans["p1"]!.leadSessionId).toBe("l-named");
+  expect(plans["p1"]!.sessions[0]!.ref.id).toBe("l-named");
+  expect(plans["p2"]!.leadSessionId).toBe("l-b");
+  expect(plans["p2"]!.sessions[0]!.ref.id).toBe("l-b");
+  expect(plans["p3"]!.leadSessionId).toBeNull();
+});
+
+it("buildTree lists a non-lead Lead as a fork once under its Context", async () => {
+  const tree = await treeOf({
+    context: [context("c1")],
+    plan: [plan("p1", "c1", { lead_session: "l1" })],
+    session: [
+      session("l1", { role: "lead", plan: "p1", plan_lead: true }),
+      session("pf", { role: "lead", plan: "p1", plan_lead: false }),
+      session("cf", { role: "lead", plan: null, plan_lead: false }),
+      session("m1"),
+    ],
+  });
+  const c1 = tree.contexts[0]!;
+  const all = [...ids(c1.sessions), ...c1.plans.flatMap((p) => ids(p.sessions))];
+  expect(all.filter((id) => id === "pf")).toHaveLength(1);
+  expect(all.filter((id) => id === "cf")).toHaveLength(1);
+  expect(new Set(all).size).toBe(all.length);
+  expect(ids(c1.sessions)[0]).toBe("m1");
+  expect(ids(c1.plans[0]!.sessions)[0]).toBe("l1");
+  expect(all.sort()).toEqual(["cf", "l1", "m1", "pf"]);
 });
