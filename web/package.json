@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.0"
+    "@aurigax-ai/ghostty-web": "0.3.9",
+    "@earendil-works/chord": "1.5.0",
+    "node-pty": "1.1.0"
   },
   "devDependencies": {
     "@shadcn/react": "0.3.1",
@@ -27,6 +29,7 @@
     "ai": "7.0.159",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "electron": "45.2.2",
     "jsdom": "30.1.3",
     "lucide-react": "1.65.0",
     "nanoid": "6.0.2",
