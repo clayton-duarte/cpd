@@ -39,7 +39,12 @@ export function App(props: AppProps): ReactElement {
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
   return (
     <Shell
-      header={<Header />}
+      header={
+        <Header
+          location={cockpit.plan === null ? null : { context: cockpit.plan.contextId, plan: cockpit.plan.planId }}
+          engine={cockpit.inbox === null ? null : cockpit.inbox.engineRunning}
+        />
+      }
       status={<StatusBar runner={session?.ref?.runner ?? null} state={session?.ref?.state ?? null} version={null} />}
       tree={
         !live ? null : <MemoTree
@@ -53,7 +58,7 @@ export function App(props: AppProps): ReactElement {
       plan={!live ? null : <MemoPlan plan={cockpit.plan} onAction={onAction} />}
       chat={
         session === null ? (
-          <p data-empty>Select a session</p>
+          <p data-empty className="grid h-full place-items-center text-muted-foreground">Select a session</p>
         ) : (
           <ChatPane view={session} connection={connection} reader={reader} />
         )

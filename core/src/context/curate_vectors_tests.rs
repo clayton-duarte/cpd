@@ -232,7 +232,7 @@ fn vectors_too_new_user_version_is_refused() {
         let conn = Connection::open(home.vectors_db()).unwrap();
         conn.pragma_update(None, "application_id", 1_668_703_587_i32)
             .unwrap();
-        conn.pragma_update(None, "user_version", 2_i32).unwrap();
+        conn.pragma_update(None, "user_version", 3_i32).unwrap();
         conn.execute_batch("CREATE TABLE t (x)").unwrap();
     }
     let store = VectorStore::at(&home);
@@ -269,5 +269,5 @@ fn vectors_second_open_of_a_new_file_keeps_wal_and_loses_no_row() {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!((app, version), (1_668_703_587, 1));
+    assert_eq!((app, version), (1_668_703_587, 2));
 }

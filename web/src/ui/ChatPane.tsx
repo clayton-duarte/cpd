@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
 import type { Connection } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
@@ -13,12 +13,42 @@ import { TierSelector } from "./composer/TierSelector.tsx";
 import { AskCard } from "./dialogs/AskCard.tsx";
 import { PlanReviewCard } from "./dialogs/PlanReviewCard.tsx";
 
+function useChatToggles(): {
+  thinking: "folded" | "expanded";
+  tools: "grouped" | "expanded";
+  toggleThinking: () => void;
+  toggleTools: () => void;
+} {
+  const [thinking, setThinking] = useState<"folded" | "expanded">("folded");
+  const [tools, setTools] = useState<"grouped" | "expanded">("grouped");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.isComposing) return;
+      const k = e.key.toLowerCase();
+      if (k === "t") setThinking((v) => (v === "folded" ? "expanded" : "folded"));
+      else if (k === "o") setTools((v) => (v === "grouped" ? "expanded" : "grouped"));
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  return {
+    thinking,
+    tools,
+    toggleThinking: () => setThinking((v) => (v === "folded" ? "expanded" : "folded")),
+    toggleTools: () => setTools((v) => (v === "grouped" ? "expanded" : "grouped")),
+  };
+}
+
 const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
 export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary }): ReactElement {
   const { view, connection, reader } = props;
   const composer = useRef<ComposerHandle>(null);
   const { dialog } = view;
+  const toggles = useChatToggles();
+  const sessionKey = view.ref?.key ?? view.id;
   return (
     <div
       data-chat-dropzone
@@ -29,7 +59,16 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         void composer.current?.addFiles(filesFromDrop(e.dataTransfer));
       }}
     >
-      <ChatHeader sessionKey={view.ref?.key ?? view.id} title={view.title} />
+      <ChatHeader
+        sessionKey={sessionKey}
+        title={view.title}
+        {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
+        busy={view.busy}
+        thinking={toggles.thinking}
+        onToggleThinking={toggles.toggleThinking}
+        tools={toggles.tools}
+        onToggleTools={toggles.toggleTools}
+      />
       <Transcript
         items={view.transcript.items}
         hasEarlier={view.transcript.hasEarlier}
@@ -37,6 +76,9 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         pending={view.pending}
         onLoadEarlier={() => connection.loadEarlier()}
         tailEpoch={view.transcript.tailEpoch}
+        sessionKey={sessionKey}
+        thinking={toggles.thinking}
+        tools={toggles.tools}
       />
       {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />

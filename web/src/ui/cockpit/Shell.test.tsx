@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { Shell } from "./Shell.tsx";
+
+// jsdom has no ResizeObserver, which react-resizable-panels (external) needs: an inert double.
+vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+
 
 it("lays out tree, plan view, chat slot and inbox", () => {
   const m = mount(

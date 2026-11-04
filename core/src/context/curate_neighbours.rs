@@ -99,30 +99,34 @@ pub fn lexical_rank(
     Ok(out)
 }
 
-/// Cosine rank of `vectors` against `query`; vectors of another dimension are skipped.
-pub fn semantic_rank(query: &[f32], vectors: &[(RecordId, Vec<f32>)], top: usize) -> Vec<RecordId> {
+/// Cosine similarity of two vectors of one dimension; `None` for another dimension or a zero vector.
+pub(super) fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
     let norm = |v: &[f32]| {
         v.iter()
             .map(|x| f64::from(*x) * f64::from(*x))
             .sum::<f64>()
             .sqrt()
     };
-    let qn = norm(query);
+    if a.len() != b.len() {
+        return None;
+    }
+    let (an, bn) = (norm(a), norm(b));
+    if an == 0.0 || bn == 0.0 {
+        return None;
+    }
+    let dot: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| f64::from(*x) * f64::from(*y))
+        .sum();
+    Some(dot / (an * bn))
+}
+
+/// Cosine rank of `vectors` against `query`; vectors of another dimension are skipped.
+pub fn semantic_rank(query: &[f32], vectors: &[(RecordId, Vec<f32>)], top: usize) -> Vec<RecordId> {
     let mut scored: Vec<(f64, &RecordId)> = vectors
         .iter()
-        .filter(|(_, v)| v.len() == query.len())
-        .filter_map(|(id, v)| {
-            let vn = norm(v);
-            if qn == 0.0 || vn == 0.0 {
-                return None;
-            }
-            let dot: f64 = query
-                .iter()
-                .zip(v)
-                .map(|(a, b)| f64::from(*a) * f64::from(*b))
-                .sum();
-            Some((dot / (qn * vn), id))
-        })
+        .filter_map(|(id, v)| Some((cosine(query, v)?, id)))
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
     scored

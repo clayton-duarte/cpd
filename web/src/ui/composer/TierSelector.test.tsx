@@ -21,8 +21,10 @@ const models: ModelChoice[] = [
   { model: "a/m2", name: "Model Two", thinkingLevels: ["off"], contextWindow: 1000 },
 ];
 
+const openPill = (c: HTMLElement) => click(c.querySelector('button[data-part="tier-pill"]')!);
 const sel = (c: HTMLElement, label: string) => c.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
 const opts = (s: HTMLSelectElement) => Array.from(s.options).map((o) => o.value);
+function click(el: Element) { act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); }); }
 function choose(s: HTMLSelectElement, value: string) {
   act(() => {
     const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
@@ -33,6 +35,7 @@ function choose(s: HTMLSelectElement, value: string) {
 
 it("lists tiers and models from the session capabilities", () => {
   const m = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
+  openPill(m.container);
   expect(opts(sel(m.container, "Tier"))).toEqual(["S1", "S2", "S3"]);
   expect(sel(m.container, "Tier").value).toBe("S2");
   expect(opts(sel(m.container, "Model"))).toEqual(["a/m1", "a/m2"]);
@@ -44,6 +47,7 @@ it("choosing a tier, model or thinking level calls onConfigure", () => {
   const calls: ConfigureChange[] = [];
   const onRequestModels = vi.fn();
   const m = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={(c) => calls.push(c)} onRequestModels={onRequestModels} />);
+  openPill(m.container);
   choose(sel(m.container, "Tier"), "S3");
   choose(sel(m.container, "Model"), "a/m2");
   choose(sel(m.container, "Thinking level"), "high");
@@ -58,6 +62,7 @@ it("choosing a tier, model or thinking level calls onConfigure", () => {
 it("unsupported controls are disabled with a reason", () => {
   const c = caps({ model: { supported: false, reason: "follows tier" }, thinking: { supported: false, reason: "follows tier" } });
   const m = mount(<TierSelector capabilities={c} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
+  openPill(m.container);
   const model = sel(m.container, "Model");
   expect(model.disabled).toBe(true);
   expect(model.title).toBe("follows tier");

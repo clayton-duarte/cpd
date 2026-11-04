@@ -12,7 +12,7 @@ use super::curate_judge::{BifrostJudge, JudgePort, JudgeRequest, RecordView};
 use super::curate_neighbours::{
     K, Neighbour, TOP, forced_ids, lexical_rank, neighbours, semantic_rank,
 };
-use super::curate_vectors::VectorStore;
+use super::curate_vectors::{VectorStore, content_hash};
 use super::curate_verdict::{
     Gate, Outcome, Reason, Screen, Screened, Side, Why, confirm, gate, screen,
 };
@@ -33,6 +33,8 @@ use crate::store::Store;
 /// Records older than this are never picked without `--record`.
 pub const WINDOW_HOURS: i64 = 24;
 pub const DIMS: usize = 768;
+/// The model the real embedder (`pi/lib/embed.ts`) answers with; the lookup before the first embed uses it.
+pub(super) const EMBED_MODEL: &str = "vertex/gemini-embedding-2";
 /// Missing vectors embedded per run, newest first.
 pub const FILL: usize = 25;
 
@@ -349,11 +351,16 @@ fn semantic(
     context: &ContextId,
     new: &Candidate,
     all: &[Candidate],
-    at: &str,
 ) -> Result<Vec<RecordId>, CpdError> {
     let query = models.embedding.embed(&new.text, DIMS)?;
     let model = query.model.as_str();
-    vectors.put(context, model, &new.id, &query.vector, at)?;
+    vectors.put_hashed(
+        context,
+        model,
+        &new.id,
+        &query.vector,
+        &content_hash(&new.text),
+    )?;
     let have = vectors.embedded(context, model)?;
     let missing = all
         .iter()
@@ -362,7 +369,7 @@ fn semantic(
         .take(FILL);
     for c in missing {
         let e = models.embedding.embed(&c.text, DIMS)?;
-        vectors.put(context, &e.model, &c.id, &e.vector, at)?;
+        vectors.put_hashed(context, &e.model, &c.id, &e.vector, &content_hash(&c.text))?;
     }
     let ids: Vec<RecordId> = all.iter().map(|c| c.id.clone()).collect();
     let found = vectors.get(context, model, &ids)?;
@@ -377,12 +384,11 @@ fn find_neighbours(
     new: &Candidate,
     supersedes: &[RecordId],
     all: &[Candidate],
-    at: &str,
 ) -> Result<(Vec<Neighbour>, bool), CpdError> {
     let forced = forced_ids(&new.text, supersedes, &new.id, all);
     let others: Vec<Candidate> = all.iter().filter(|c| c.id != new.id).cloned().collect();
     let lexical = lexical_rank(&new.text, &others, TOP)?;
-    let semantic = semantic(models, vectors, context, new, all, at).ok();
+    let semantic = semantic(models, vectors, context, new, all).ok();
     let fts_only = semantic.is_none();
     Ok((neighbours(&new.id, forced, lexical, semantic), fts_only))
 }
@@ -529,7 +535,7 @@ pub fn curate_with(
         .find(|(_, r)| r.id == picked)
         .map(|(_, r)| r.supersedes().to_vec())
         .unwrap_or_default();
-    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all, &at)?;
+    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all)?;
     fts_only |= fts;
     let count = found.len().min(K);
     check_pairs(models, new, &found, &all, &topics, &mut tally)?;
@@ -552,6 +558,20 @@ pub struct CurateArgs {
     /// Curate this record, whatever its age
     #[arg(long, value_name = "id")]
     record: Option<RecordId>,
+}
+
+/// The real embedder: `pi/lib/embed.ts` run by `runner` in pi's agent directory. Shared by curate, embed and search.
+pub(super) fn bifrost_embedder(
+    config: &Config,
+    runner: &std::sync::Arc<dyn crate::host::runner::Runner>,
+) -> Result<BifrostEmbedding, CpdError> {
+    let agent_dir = locate_pi()?.agent_dir;
+    let lib = config.pi_adapter_dir()?.join("lib");
+    Ok(BifrostEmbedding::new(
+        runner.clone(),
+        lib.join("embed.ts"),
+        agent_dir,
+    ))
 }
 
 /// `context curate` (§3.13a).
@@ -586,10 +606,10 @@ pub(super) fn curate(args: CurateArgs) -> Result<Output, CpdError> {
     let classifier = PiClassifier::new(
         ports.runner.clone(),
         lib.join("classify.ts"),
-        agent_dir.clone(),
+        agent_dir,
         &home,
     );
-    let embedding = BifrostEmbedding::new(ports.runner.clone(), lib.join("embed.ts"), agent_dir);
+    let embedding = bifrost_embedder(&config, &ports.runner)?;
     let judge = BifrostJudge::new(&home, &config, ports.runner.clone());
     let models = Models {
         classifier: &classifier,

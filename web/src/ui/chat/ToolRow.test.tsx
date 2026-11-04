@@ -94,10 +94,13 @@ it("consecutive tool items are grouped under one summary row", () => {
   const g = m.container.querySelectorAll('details[data-kind="tool-group"]');
   expect(g.length).toBe(1);
   const group = g[0] as HTMLDetailsElement;
-  expect(group.open).toBe(true);
-  expect(group.querySelector(":scope > summary")?.textContent).toBe("3 tool calls");
+  expect(group.open).toBe(false);
+  expect(group.querySelector('[data-part="group-count"]')?.textContent).toBe("3 tool calls");
   expect(group.querySelectorAll('details[data-kind="tool"]').length).toBe(3);
   m.unmount();
+  const open = mount(<Transcript {...props} tools="expanded" items={[t1, t2, t3]} />);
+  expect((open.container.querySelector('details[data-kind="tool-group"]') as HTMLDetailsElement).open).toBe(true);
+  open.unmount();
   const single = mount(<Transcript {...props} items={[t1]} />);
   expect(single.container.querySelector('[data-kind="tool-group"]')).toBeNull();
   expect(single.container.querySelectorAll('details[data-kind="tool"]').length).toBe(1);
