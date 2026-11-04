@@ -36,6 +36,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         queued={view.queued}
         pending={view.pending}
         onLoadEarlier={() => connection.loadEarlier()}
+        tailEpoch={0}
       />
       {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
