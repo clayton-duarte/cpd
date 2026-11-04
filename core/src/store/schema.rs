@@ -1073,6 +1073,8 @@ mod drafts_parked_tests;
 #[cfg(test)]
 mod explore_kinds_tests;
 #[cfg(test)]
+mod finish_legacy_review_plans_tests;
+#[cfg(test)]
 mod jira_transitions_tests;
 #[cfg(test)]
 mod job_addenda_tests;
