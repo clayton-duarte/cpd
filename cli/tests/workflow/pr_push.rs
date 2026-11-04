@@ -836,9 +836,11 @@ fn pr_push_resets_stored_checks_mergeable_and_merge_state() {
         pr_row(&fx),
         ("pending".into(), "unknown".into(), "unknown".into())
     );
+}
 
-    // A Workflow with no linked row still pushes.
-    let bare = super::pr_push::fx("dispatch");
+#[test]
+fn pr_push_without_linked_row_still_pushes() {
+    let bare = fx("dispatch");
     bare.sh(|_| Reply::ok(""));
     let tip = bare.commit("bare.txt");
     bare.push().ok();
