@@ -1,8 +1,14 @@
 # pnpm 12 refuses dependency build scripts that are not listed; the `prepare` of @google/genai
-# and the `postinstall` of protobufjs are not needed.
+# and the `postinstall` of protobufjs are not needed. `electron` (binary download) and `node-pty`
+# (Node-API prebuilds ship in the package) need no build, so a frozen install needs no compiler.
 allowBuilds:
   '@google/genai': false
+  electron: false
+  node-pty: false
   protobufjs: false
+
+minimumReleaseAgeExclude:
+  - electron@45.2.2
 
 packages:
   - 'web/'
