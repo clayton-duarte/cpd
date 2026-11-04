@@ -8,7 +8,7 @@ Sources: the design handoff (`HANDOFF.md`, `COMPONENTS.md`, `app/globals.css`, `
 
 **File boundary (pro-n15).** The Plan touches only `web/src/ui/**`, `web/src/lib/**`, `web/vite.config.ts` and `web/VERIFY.md`, plus the one field of 3d (`PlanCounts.merging`, pro-d43). No dependency is added; only what `web/package.json` on main already has is used: `@shadcn/react` 0.3.1, `@tailwindcss/vite` 4.3.3, `tailwindcss` 4.3.3, `radix-ui`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge`, `tw-animate-css`, `react-resizable-panels` 4.15.3.
 
-**No backend change (A6).** No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`, except the one field `PlanCounts.merging?: number` in `web/src/protocol/cockpit.ts`, parsed by the read model (`web/src/server/cockpit/readmodel.ts`), pro-d43 (3d). A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
+**No backend change (A6).** No change to `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**`, except the one field `PlanCounts.merging?: number` in `web/src/protocol/cockpit.ts`, parsed by the read model (`web/src/server/cockpit/readmodel.ts`), pro-d43 (3d); and, pro-d40, the status snapshot the server sends to the Status Bar (its sources are in 3b, "Data sources") and the optional cost of a Context or Plan row (3d). Their wire shape is set by the implementation Job's tests, not here. A design element whose data is absent there renders only when an optional prop is passed, is omitted otherwise, and is never faked. Each is listed under "Not wired".
 
 ---
 
@@ -459,6 +459,7 @@ Written by hand (A2) from `https://ui.shadcn.com/r/styles/radix-rhea/<name>.json
 | `trace.tsx` | `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger`, `TraceCollapsibleContent` | `TraceLine` `status`: `running` \| `error` \| `pending`. | registry `trace` (uses `./collapsible.tsx`, `ChevronRightIcon`) |
 | `resizable.tsx` | `ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle`, `usePanelRef` | thin wrappers over `react-resizable-panels` 4.15.3 (`Group`, `Panel`, `Separator`, `usePanelRef`), no new dependency. `ResizablePanelGroup` is `flex h-full w-full` and turns vertical with `aria-[orientation=vertical]`; `ResizablePanel` is `min-h-0 min-w-0`; `ResizableHandle` `withHandle` draws a grip (`h-6 w-1`, `rounded-lg`) on a 1px `bg-border` bar with a 8px hit area. Every resizable split in the Shell uses these parts (3c). `data-slot` `resizable-panel-group`, `resizable-panel`, `resizable-handle`. | shadcn/ui `resizable`, hand-written as above |
 | `context-menu.tsx` | `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `ContextMenuItem`, `ContextMenuSeparator` | shadcn/ui `context-menu`, hand-written as above, over the `ContextMenu` primitive of `radix-ui` (already in `web/package.json`; the export is **unverified** until the part compiles). Used by the Inbox row (DESIGN-panes 2d). `data-slot` `context-menu-*`. | shadcn/ui `context-menu`, hand-written as above |
+| `dialog.tsx` | `Dialog`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter` | wrap the `radix-ui` `Dialog` primitive (already in `web/package.json`), hand-written as above; `data-slot` `dialog`, `dialog-content`. The three popups of the Status Bar (3b) use it. Not yet in `components/` (pro-d40). | shadcn/ui `dialog`, hand-written as above |
 | `sidebar.tsx` | `Sidebar`, `SidebarContent`, `SidebarGroup`, `SidebarGroupAction`, `SidebarGroupContent`, `SidebarGroupLabel`, `SidebarMenu`, `SidebarMenuAction`, `SidebarMenuBadge`, `SidebarMenuButton`, `SidebarMenuItem`, `SidebarMenuSub`, `SidebarMenuSubButton`, `SidebarMenuSubItem` | styled wrappers only, no state and no context: no `SidebarProvider`, no `useSidebar`, no cookie or storage. `Sidebar` `collapsible`: `offcanvas`, `icon`, `none` (the Context Tree uses `none`). Uses `radix-ui` `Slot` (`asChild`) and `class-variance-authority`, both already in `web/package.json`. `data-slot` and `data-sidebar` on each part. The Context Tree (3d) is the only consumer. | shadcn/ui `sidebar`, hand-written as above |
 | `message-scroller.tsx` | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton`, `useMessageScroller`, `useMessageScrollerScrollable`, `useMessageScrollerVisibility` | built on `@shadcn/react/message-scroller` (namespace `Provider`, `Root`, `Viewport`, `Content`, `Item`, `Button`). Props that matter: provider `autoScroll`, `defaultScrollPosition: "start" \| "end" \| "last-anchor"`, `scrollEdgeThreshold`; viewport `preserveScrollOnPrepend`; item `messageId`, `scrollAnchor`; button `direction: "start" \| "end"`. The file is provided for `DESIGN-chat.md`; the Phase 2 `Transcript` windowing and sticky auto-scroll (`data-row-key`, `data-at-bottom`) are **not** replaced by it. | registry `message-scroller` (uses `./button.tsx`, `ArrowDownIcon`) |
 | `questionnaire.tsx` | `Questionnaire`, `QuestionnaireActions`, `QuestionnaireChoice`, `QuestionnaireChoiceDescription`, `QuestionnaireChoices`, `QuestionnaireDescription`, `QuestionnaireError`, `QuestionnaireInput`, `QuestionnaireItem`, `QuestionnaireNext`, `QuestionnairePrevious`, `QuestionnaireProgress`, `QuestionnaireSkip`, `QuestionnaireSubmit`, `QuestionnaireTitle` | built on `@shadcn/react/questionnaire`; `shortcuts: "letters" \| "numbers"`; item `multiple`. | registry `questionnaire` (uses `./button.tsx`, `CheckIcon`) |
@@ -680,7 +681,6 @@ The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `confi
 
 **Changed from Phase 2:** the `State:` segment is removed; `Runner: <x>` is `<x>`, and is absent when unknown (was `Runner: none`); `cpd: unknown` is absent when the version is unknown; the reset and `$` buttons are replaced by the five buttons; `App` passes the status data and the handlers (3e). The Phase 2 tests this changes are in 3f.
 
-
 ### 3c. Shell and the resizable split
 
 File `web/src/ui/cockpit/Shell.tsx`. The resizable parts are `web/src/ui/components/resizable.tsx` (2f).
@@ -777,7 +777,7 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
-**Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks, cursor or costs (Not built).
+**Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks or cursor (Not built). Costs are drawn only while the Status Bar's costs toggle is on (3b, Cost below).
 
 **Read model rules** (the read model keeps these; the component may rely on them):
 - At most one live Manager per Context: role `manager`, `archived_at` null. When several match, the one with `file !== null` wins, then the newest.
@@ -835,6 +835,11 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Example: queued 2, running 1, failed 1, merged 13 renders `2 1 1 13`.
 - **Resolution (pro-d43):** the TUI's `active` counted `merging`. The web gives `merging` its own bucket, so the Phase 2 mapping (`planned` = draft + queued, `active` = running, `done` = merged) and the keys `planned`, `active` and `done` no longer apply.
 
+**Cost** (pro-d40; the value rules are in 3b, "Cost"). Shown only while the Status Bar's costs toggle is on, as `span[data-part="row-cost"]`, `ml-1 shrink-0 font-mono text-meta text-fg-dim`, with the value of `format_cost` (`$0.120`, `$1.23k`):
+- Context row: after `span[data-part="context-id"]`, separated by one space.
+- Plan row: after `span[data-part="plan-id"]`, separated by one space.
+- Absent when the value is unknown (never `$0.00`). Fork rows never show a cost, and the Manager (no row of its own, 3d above) and Workers have none. Archived rows show their cost, as in the TUI. When a row is narrow the label is cut before the cost.
+
 **Order.** Live Contexts first, then `details[data-archived]`. Inside a live Context: the live Plans in model order, then the archived Plans (`details`), then the fork rows: the Context's own forks first, then the forks of each Plan in Plan order, archived Plans included.
 
 **Forks.** Only forks have their own rows. A fork is a live session that is (a) not the Manager and has no Plan, labelled `ref.key`; or (b) not the Lead of its Plan and has `jobKey === null`, labelled `<plan id>·<first 4 characters of ref.id>`; or (c) a live non-lead Lead (see the read model rules). Each session is listed once. Workers (`jobKey !== null`), archived sessions and the Manager are never rows.
@@ -849,7 +854,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
 - Scrolling: the column `aside` scrolls (`overflow-y: auto`); the `tree-header` is sticky.
 
-Not built: Active/Standing sections, per-context and per-plan cost, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+Not built: Active/Standing sections, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), row context menus, session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
 ### 3e. `App.tsx` wiring
 
@@ -860,21 +865,21 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
   header={<Header
     location={cockpit.plan === null ? null : { context: cockpit.plan.contextId, plan: cockpit.plan.planId }}
     engine={cockpit.inbox === null ? null : cockpit.inbox.engineRunning} />}
-  status={<StatusBar runner={session?.ref?.runner ?? null} state={session?.ref?.state ?? null} version={null} />}
+  status={<StatusBar status={cockpit.status} costsOn={costsOn} onToggleCosts={toggleCosts} />}
   tree={…KEPT…} plan={…KEPT…} chat={…KEPT…} inbox={…KEPT…} />
 ```
 
 - Chat slot when no session is selected: `<p data-empty>Select a session</p>` (KEPT copy and hook), restyled `grid h-full place-items-center text-muted-foreground`.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
-- `version={null}` stays (the cpd version is not in the store): the Status Bar shows `cpd: unknown`.
-- Not built in `App`: `onOpenSearch`, `onNewContext`, `showCost`/`onToggleCost`, `onResetLayout`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is absent for a Manager-only selection.
+- `cockpit.status` is the status snapshot the server sends (3b, Data sources). The Status Bar's buttons, dialogs and the reset of 3c are wired inside the bar and `Shell`; `App` passes the snapshot and the costs flag only. `costsOn` is `App` state (`useState(false)`), never stored (3b).
+- Not built in `App`: `onOpenSearch`, `onNewContext`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is absent for a Manager-only selection.
 
 ### 3f. Phase 2 tests this section changes (owner `ui-impl-shell`)
 
 | Test | Change |
 |---|---|
 | `Frame.test.tsx` 1 | none (`[data-emblem]` text `C-P-D`, now `sr-only`) |
-| `Frame.test.tsx` 2, 3, 6 | none (text and hooks KEPT); the `state` prop is typed `SessionState \| null` so a test literal like `"idle"` still type-checks |
+| `Frame.test.tsx` 2, 3, 6 | **changed** by 3b (pro-d40): the tests that read `[data-part="runner"]`, `[data-part="state"]` and `[data-part="version"]` change. The `State:` segment is removed, so its assertions go; `Runner: <x>` becomes `<x>` and is absent when unknown; `cpd: unknown` becomes absent. The `state` prop of `StatusBar` is removed. |
 | `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are `header`, the columns group (no `aria-label`) and `footer`; the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
 | `Shell.test.tsx` | none (descendant selectors still match) |
 | `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager row is the Context button (its dot and selection); a Context row has no `data-part="counters"`; a Plan row's counts are `data-count` spans in the keys `draft, queued, running, merging, failed, merged`, separated by one space (`planned`, `active`, `done` and ` · ` are gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
