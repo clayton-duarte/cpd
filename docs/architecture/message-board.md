@@ -1,6 +1,6 @@
 # Message board
 
-The message board is cpd's **agent-to-agent exchange**: a Session posts a short message to a target Session, the target reads it at its next turn, and the exchange leaves the Context registry clean because it writes no Context record and appends no Event. It is one of the two queue-like concepts cpd keeps by design (`hs-d802`, `cpd context show --record hs-d802`; verified in [architecture-verification.md §9](../research/architecture-verification.md)).
+The message board is cpd's **agent-to-agent exchange**: a Session posts a short message to a target Session, the target reads it at its next turn, and the exchange leaves the Context registry clean because it writes no Context record and appends no Event. It is one of the two queue-like concepts cpd keeps by design (`hs-d802` (a record of machine `hs`); verified in [architecture-verification.md §9](../research/architecture-verification.md)).
 
 ## Purpose
 
@@ -34,4 +34,4 @@ The board is distinct from the two other queue-like things cpd keeps: the truthf
 - [commands.md](../commands.md) — §10a (`board`), §15.7 (the adapter's turn start).
 - [CONTEXT.md](../CONTEXT.md) — Board post.
 - [architecture-verification.md](../research/architecture-verification.md) — §9 (the two queue-like concepts).
-- Model: `hs-d802`, `hs-d514` (`cpd context show --record hs-d802`).
+- Model: `hs-d802`, `hs-d514` (records of machine `hs`; see [INDEX](INDEX.md)).

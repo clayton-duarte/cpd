@@ -29,6 +29,7 @@ mod context_permanent;
 mod context_qa_gone;
 mod context_reindex;
 mod context_search;
+mod context_show_bounded;
 mod context_topic;
 mod driver;
 mod driver_desc_gate;

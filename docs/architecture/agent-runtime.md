@@ -1,14 +1,14 @@
 # The agent runtime
 
-The **pi adapter is the agent runtime** (hs-d802, `cpd context show --record hs-d802`, item 3). It is cpd's own code — the TypeScript package `pi/`, loaded in every pi session cpd starts — that binds pi sessions to the SDK: first messages, dialog serialization, titles and state reporting ([commands §15](../commands.md), [commands §15.1](../commands.md)). The adapter is **the only pi-specific code**: it turns Events into messages, reports agent states and runs the Plan review in the Lead's chat, and it calls only `cpd` commands — it never reads the database and never types into a pane ([commands §15](../commands.md)).
+The **pi adapter is the agent runtime** (`hs-d802` (a record of machine `hs`), item 3). It is cpd's own code — the TypeScript package `pi/`, loaded in every pi session cpd starts — that binds pi sessions to the SDK: first messages, dialog serialization, titles and state reporting ([commands §15](../commands.md), [commands §15.1](../commands.md)). The adapter is **the only pi-specific code**: it turns Events into messages, reports agent states and runs the Plan review in the Lead's chat, and it calls only `cpd` commands — it never reads the database and never types into a pane ([commands §15](../commands.md)).
 
-This note documents the model in hs-d802 (`cpd context show --record hs-d802`) against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
+This note documents the model in hs-d802 against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
 
 ## cpd is pi-dependent by design
 
 pi is a **system dependency** of cpd, named beside `git`, `tmux >= 3.6` and `gh` ([contract §1.1](../contract.md)). The adapter is the only pi-specific code ([commands §15](../commands.md)); cpd starts pi for every Lead, Manager and Worker, for the title writer and for the distiller ([contract §6.6](../contract.md)).
 
-This is the design stance, not an accident (hs-d802, `cpd context show --record hs-d802`, item 3): cpd does not abstract over agent runtimes. The contract writes the exact `pi` argv and environment per role ([contract §6.6](../contract.md)), and the runtime the adapter extends **is** pi — [architecture §1.4](../architecture.md) calls the adapter and the durable host "the agent side of the wire," code loaded into pi processes.
+This is the design stance, not an accident (hs-d802, item 3): cpd does not abstract over agent runtimes. The contract writes the exact `pi` argv and environment per role ([contract §6.6](../contract.md)), and the runtime the adapter extends **is** pi — [architecture §1.4](../architecture.md) calls the adapter and the durable host "the agent side of the wire," code loaded into pi processes.
 
 > **Model vs docs.** hs-d802 says cpd is "not agent-agnostic." The runtime is pi by design, but the *control plane* is deliberately agent-neutral: [ADR-0005](../adr/0005-cpd-cli-control-plane.md) keeps the path open to Claude Code and Hermes without rewriting the core, because every capability is a CLI command the adapter drives ([commands §15](../commands.md)). The accurate statement is: the **runtime** is pi-dependent by design; the **control plane** (the CLI) is not ([architecture-verification.md](../research/architecture-verification.md), item 3).
 
@@ -31,9 +31,9 @@ pi-durable is the headless runner built on `@earendil-works/pi-durable`: the **d
 
 **tmux is the only host today.** The engine runs in a hidden session, the cockpit's panes are tmux panes, and Leads run in the cockpit ([contract §1.1](../contract.md), [contract §6.1](../contract.md)); [CONTEXT — Cockpit](../CONTEXT.md) says "tmux hosts the panes, ratatui draws the views." pi sessions themselves run in a tmux window ([contract §6.6](../contract.md)).
 
-hs-d802 (item 2) marks tmux **for removal once the pi → pi-durable migration completes** (hs-d802, `cpd context show --record hs-d802`; see also the model's item 2). The durable runner and host already run with **no tmux pane** ([contract §6.12](../contract.md), [contract §6.13](../contract.md)).
+hs-d802 (item 2) marks tmux **for removal once the pi → pi-durable migration completes** (hs-d802; see also the model's item 2). The durable runner and host already run with **no tmux pane** ([contract §6.12](../contract.md), [contract §6.13](../contract.md)).
 
-> **Model vs docs.** The removal is a *future* Plan step, not a state in today's contract: [contract §1.1](../contract.md) still says "tmux is the only host," and dropping it ("P3") is out of scope, its own decision after durable Leads have run a while (`hs-d752`, `cpd context show --record hs-d752`; [architecture-verification.md](../research/architecture-verification.md), item 3; [durable-leads.md](../research/durable-leads.md)). Treat tmux as a removal-marked dependency, not a removed one.
+> **Model vs docs.** The removal is a *future* Plan step, not a state in today's contract: [contract §1.1](../contract.md) still says "tmux is the only host," and dropping it ("P3") is out of scope, its own decision after durable Leads have run a while (`hs-d752`; [architecture-verification.md](../research/architecture-verification.md), item 3; [durable-leads.md](../research/durable-leads.md)). Treat tmux as a removal-marked dependency, not a removed one.
 
 ## Related notes
 
@@ -50,5 +50,5 @@ The runtime sits on the SDK ([[sdk]]); it starts the three agent roles and the a
 - [commands §15](../commands.md) — the pi adapter's protocol ([§15.1](../commands.md), [§15.4](../commands.md), [§15.5](../commands.md))
 - [CONTEXT — Worker runner](../CONTEXT.md), [CONTEXT — Session](../CONTEXT.md), [CONTEXT — Cockpit](../CONTEXT.md)
 - [ADR-0005](../adr/0005-cpd-cli-control-plane.md) — the CLI control plane keeps the path open to other agents
-- hs-d802 (`cpd context show --record hs-d802`), hs-d752 (`cpd context show --record hs-d752`)
+- hs-d802, hs-d752 (records of machine `hs`; see [INDEX](INDEX.md)).
 - [architecture-verification.md](../research/architecture-verification.md) — item 3 and its disagreements

@@ -1,6 +1,6 @@
 # Knowledge plane
 
-The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **holographic search index** built over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (`cpd context show --record hs-d802`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
+The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **holographic search index** built over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (a record of machine `hs`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
 
 ```mermaid
 flowchart LR
@@ -78,4 +78,4 @@ The plane is not the state: a Context record is knowledge that outlives the Jobs
 - [commands.md](../commands.md) — §3.5 (`context decide`, `note`), §3.13 (`context distill`).
 - [CONTEXT.md](../CONTEXT.md) — Context record, Context store, Distilled Context, Event.
 - [architecture-verification.md](../research/architecture-verification.md) — §8 (the knowledge plane), §11 (the boundaries).
-- Model: `hs-d802` (`cpd context show --record hs-d802`).
+- Model: `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)).

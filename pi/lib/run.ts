@@ -75,6 +75,14 @@ export class Run {
   totalCalls = 0;
   /** §15.15 L8: the calls refused in this turn; at 3 the breaker trips; reset at `before_agent_start` and `agent_end`. */
   turnRefusals = 0;
+  /** commands.md §15.26: the names of every tool called in this run, nested calls too; cleared at `before_agent_start` and `agent_end`. */
+  questionTools = new Set<string>();
+  /** commands.md §15.26: the last message of the run that ended on a question, until the settle handles it or a newer run starts. */
+  questionCandidate: { text: string } | undefined = undefined;
+  /** commands.md §15.26: the nudges sent since the User's last turn; at 1 no more is sent. */
+  questionNudges = 0;
+  /** commands.md §15.26: the User was told the classifier is unreachable and no run has reached it since. */
+  classifierDown = false;
   /** commands.md §15.23: the skill files changed since the baseline; told at the next turn, then cleared. */
   skillsNotice: SkillsNotice | undefined = undefined;
   unsubscribe: (() => void)[] = [];

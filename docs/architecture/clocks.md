@@ -1,8 +1,8 @@
 # The two clocks
 
-cpd runs two clocks, not one (hs-d802, `cpd context show --record hs-d802`, item 5): the **engine loop clock** (`watch.tick_seconds`) and the **GitHub poll clock** (engine step E5, `watch.pr_poll_seconds`). They are decoupled on purpose: the engine sleeps until the earlier of its next tick and E5's due time, so the poll is never held to a tick boundary ([contract §3.7](../contract.md)). Both keys live in the `[watch]` domain of `$CPD_HOME/config.toml` ([contract §8.2](../contract.md)); the loop they belong to is the one `cpd watch` per machine ([CONTEXT — Engine](../CONTEXT.md), [commands §12](../commands.md)).
+cpd runs two clocks, not one (`hs-d802` (a record of machine `hs`), item 5): the **engine loop clock** (`watch.tick_seconds`) and the **GitHub poll clock** (engine step E5, `watch.pr_poll_seconds`). They are decoupled on purpose: the engine sleeps until the earlier of its next tick and E5's due time, so the poll is never held to a tick boundary ([contract §3.7](../contract.md)). Both keys live in the `[watch]` domain of `$CPD_HOME/config.toml` ([contract §8.2](../contract.md)); the loop they belong to is the one `cpd watch` per machine ([CONTEXT — Engine](../CONTEXT.md), [commands §12](../commands.md)).
 
-This note documents the model in hs-d802 (`cpd context show --record hs-d802`) against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
+This note documents the model in hs-d802 against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
 
 ## The engine loop clock: `tick_seconds`
 
@@ -69,7 +69,7 @@ The clocks are independent by construction. The engine sleeps until the **earlie
 - **E7 runs after E5 in the same tick** ([commands §12](../commands.md), [contract §3.7](../contract.md)): a pull request starts in the tick after E5's poll result is applied, within `EARLY_GAP` (500 ms) of the poll's commit ([contract §3.7](../contract.md) E7).
 - **A commit wakes a tick**: when another process (the poll child, a CLI command) commits to the store, the engine starts its next tick within 500 ms, so E8's Inbox and E7's Workflow starts react to a poll's writes promptly ([contract §3.7](../contract.md)).
 
-The engine's time-only rules (a Job stuck, a snooze's end, liveness) still wait for `tick_seconds` ([contract §3.7](../contract.md)). This is the deliberate interleave: an internal loop pacing cpd's own work, and a separate poll pacing cpd's view of GitHub ([contract §3.7](../contract.md), hs-d802, `cpd context show --record hs-d802`).
+The engine's time-only rules (a Job stuck, a snooze's end, liveness) still wait for `tick_seconds` ([contract §3.7](../contract.md)). This is the deliberate interleave: an internal loop pacing cpd's own work, and a separate poll pacing cpd's view of GitHub ([contract §3.7](../contract.md), hs-d802).
 
 ```mermaid
 sequenceDiagram
@@ -102,5 +102,5 @@ The engine loop and the poll are served by the same core and the same store: [[s
 - [commands §12](../commands.md) — `watch`
 - [commands §9.2](../commands.md) — `pr poll`
 - [CONTEXT — Engine](../CONTEXT.md), [CONTEXT — PR poll](../CONTEXT.md)
-- hs-d802 (`cpd context show --record hs-d802`)
+- hs-d802 (records of machine `hs`; see [INDEX](INDEX.md)).
 - [architecture-verification.md](../research/architecture-verification.md) — items 2 and the disagreements on the two clocks
