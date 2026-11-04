@@ -191,7 +191,22 @@ export const DANGO_THEME: {
   black: string; red: string; green: string; yellow: string; blue: string; magenta: string; cyan: string; white: string;
   brightBlack: string; brightRed: string; brightGreen: string; brightYellow: string; brightBlue: string; brightMagenta: string; brightCyan: string; brightWhite: string;
 };
-export const TERMINAL_FONT: { fontFamily: string; fontSize: number };
+export const TERMINAL_FONT: { fontFamily: string; fontSize: number; fontWeight: number };
+
+// Pinned pure helpers (pro-d30, pro-d32). Exact names and signatures; tests call them directly.
+export const FONT_SIZE_MIN = 9;
+export const FONT_SIZE_MAX = 28;
+export const FONT_SIZE_DEFAULT = 13;
+export function shiftEnterSequence(event: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }): string | null;
+export function zoomAction(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "in" | "out" | "reset" | null;
+export function nextFontSize(current: number, action: "in" | "out" | "reset"): number;
+export function createWheelAccumulator(): { push(deltaY: number, deltaMode: number, cellHeight: number): number };
+export function isCmdV(event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean;
+
+// Event shapes handed to the handlers below. A KeyboardEvent or WheelEvent satisfies them structurally.
+export interface KeyEventLike { key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }
+export interface WheelEventLike { deltaY: number; deltaMode: number; clientX: number; clientY: number }
+
 export interface TerminalEngine {
   open(): void;                       // mounts into its container
   fit(): void;                        // recomputes cols and rows from the container size
@@ -202,12 +217,22 @@ export interface TerminalEngine {
   onData(cb: (data: string) => void): void;       // keyboard input from the user
   onResize(cb: (size: PtySize) => void): void;    // fires when cols or rows change
   setClipboardWriteHandler(handler: (text: string) => boolean): void;   // OSC 52 writes
+  fontSize(): number;                                                   // term.options.fontSize
+  setFontSize(px: number): void;                                        // term.options.fontSize = px; does not resize the pty, the caller calls fit()
+  cellHeight(): number;                                                 // renderer cell height in px
+  setKeyHandler(handler: (event: KeyEventLike) => boolean): void;       // term.attachCustomKeyEventHandler
+  setWheelHandler(handler: (event: WheelEventLike) => boolean): void;   // term.attachCustomWheelEventHandler
+  appOwnsWheel(): boolean;                                              // true when mouse tracking is on or the alternate screen is active
+  wheelStep(direction: "up" | "down", clientX: number, clientY: number): string;
+    // alternate screen: "\x1b[A" / "\x1b[B"; mouse tracking: SGR "\x1b[<64;col;rowM" / "\x1b[<65;col;rowM" for the cell under (clientX, clientY)
+  input(data: string): void;                                            // term.input(data, true): fires onData, so the bytes reach bridge.writePty
+  paste(text: string): void;                                            // term.paste(text): bracketed when the app asked
   dispose(): void;
 }
 export interface ResizeSource { observe(cb: () => void): () => void }   // returns the unobserve function
 export interface TerminalHostDeps {
   engine: TerminalEngine; bridge: CpdElectronBridge; resize: ResizeSource;
-  clipboard: { writeText(text: string): Promise<void> };
+  clipboard: { writeText(text: string): Promise<void>; readText(): Promise<string> };
   view: { showTerminal(visible: boolean): void };
   onError(error: unknown): void;
 }
