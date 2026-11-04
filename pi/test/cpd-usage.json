@@ -148,6 +148,16 @@
     },
     "required": []
   },
+  "config experimental": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 0
+    },
+    "required": []
+  },
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
@@ -162,33 +172,9 @@
     },
     "required": []
   },
-  "context answer": {
-    "flags": {
-      "--context": true,
-      "--help": false,
-      "--plan": true
-    },
-    "positionals": {
-      "max": 2,
-      "min": 2
-    },
-    "required": []
-  },
   "context archive": {
     "flags": {
       "--help": false
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
-    },
-    "required": []
-  },
-  "context ask": {
-    "flags": {
-      "--context": true,
-      "--help": false,
-      "--plan": true
     },
     "positionals": {
       "max": 1,
@@ -226,6 +212,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -301,6 +288,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -328,18 +316,6 @@
       "--context": true,
       "--help": false,
       "--markdown": false,
-      "--plan": true
-    },
-    "positionals": {
-      "max": 0,
-      "min": 0
-    },
-    "required": []
-  },
-  "context reindex": {
-    "flags": {
-      "--context": true,
-      "--help": false,
       "--plan": true
     },
     "positionals": {
@@ -397,6 +373,18 @@
       "--record": true,
       "--since": true,
       "--topic": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "context topics": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
     },
     "positionals": {
       "max": 0,

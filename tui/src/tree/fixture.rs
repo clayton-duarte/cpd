@@ -109,7 +109,6 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         title: titled(id),
         jira: None,
         records: 0,
-        open_questions: 0,
         archived_at: None,
         plans,
         archived_managers: Vec::new(),

@@ -41,9 +41,14 @@ mod delete;
 pub mod distill;
 #[cfg(test)]
 mod distill_git_tests;
+mod distill_known;
+#[cfg(test)]
+mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
-pub mod engine;
+mod fts;
+#[cfg(test)]
+mod fts_tests;
 pub mod inforce;
 pub(crate) mod legacy;
 mod list;
@@ -53,15 +58,20 @@ mod pending;
 pub mod permanent;
 #[cfg(test)]
 mod permanent_tests;
+pub mod prose_supersedes;
+#[cfg(test)]
+mod prose_supersedes_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
 mod record;
-mod reindex;
 mod rename;
 pub(crate) mod render;
 mod search;
 mod show;
+#[cfg(test)]
+mod supersedes_tests;
+mod topics;
 mod write;
 
 use std::fmt;
@@ -89,18 +99,14 @@ pub enum Command {
     List(ListArgs),
     /// Show a Context and its records (§3.3)
     Show(ShowArgs),
-    /// Search the Context's records, ranked by the holographic engine (§3.3)
+    /// List the curated topics in force with their record counts (§3.3a)
+    Topics(TopicsArgs),
+    /// Search the Context's records, ranked by in-process full-text search (§3.4)
     Search(search::SearchArgs),
-    /// Rebuild the Context's holographic engine index (§3.3)
-    Reindex(reindex::ReindexArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
     /// Record a note (§3.4)
     Note(NoteArgs),
-    /// Record a question (§3.4)
-    Ask(AskArgs),
-    /// Record the answer to a question (§3.5)
-    Answer(AnswerArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
     /// Archive the Context with its Plans and their Sessions (§3.8)
@@ -225,6 +231,12 @@ pub struct NewArgs {
 pub struct ListArgs {}
 
 #[derive(Args, Debug)]
+pub struct TopicsArgs {
+    #[command(flatten)]
+    select: Select,
+}
+
+#[derive(Args, Debug)]
 pub struct ShowArgs {
     #[command(flatten)]
     select: Select,
@@ -240,6 +252,9 @@ pub struct ShowArgs {
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
+    /// A record id, as --record
+    #[arg(value_name = "record", conflicts_with_all = ["record", "since", "topic"])]
+    record_positional: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
@@ -247,8 +262,11 @@ pub struct DecideArgs {
     /// The decision
     text: Text,
     /// The decision or note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -258,26 +276,11 @@ pub struct NoteArgs {
     /// The note
     text: Text,
     /// The note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AskArgs {
-    /// The question
-    question: Text,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AnswerArgs {
-    /// The record id of the question
-    question: RecordId,
-    /// The answer
-    text: Text,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -312,37 +315,54 @@ pub struct DeleteArgs {
     yes: bool,
 }
 
+/// `--no-supersedes` with `--supersedes` is `args_invalid`.
+fn no_supersedes_alone(supersedes: &[RecordId], no_supersedes: bool) -> Result<(), CpdError> {
+    if no_supersedes && !supersedes.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            "--no-supersedes conflicts with --supersedes.",
+        ));
+    }
+    Ok(())
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
         Command::List(_) => list::list(),
         Command::Show(args) => show::show(args),
+        Command::Topics(args) => topics::topics(args),
         Command::Search(args) => search::search(args),
-        Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = Draft::Decision {
                 supersedes: args.supersedes,
             };
-            write::write("context decide", &args.select, &args.text, draft)
+            write::write(
+                "context decide",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
         Command::Note(args) => {
-            let draft = match args.supersedes {
-                Some(supersedes) => Draft::NoteSupersedes { supersedes },
-                None => Draft::Note,
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
+            let draft = if args.supersedes.is_empty() {
+                Draft::Note
+            } else {
+                Draft::NoteSupersedes {
+                    supersedes: args.supersedes,
+                }
             };
-            write::write("context note", &args.select, &args.text, draft)
+            write::write(
+                "context note",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
-        Command::Ask(args) => {
-            write::write("context ask", &args.select, &args.question, Draft::Question)
-        }
-        Command::Answer(args) => write::write(
-            "context answer",
-            &args.select,
-            &args.text,
-            Draft::Answer {
-                question: args.question,
-            },
-        ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),

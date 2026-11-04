@@ -2,7 +2,7 @@
 
 The complete contract of the clean-slate `web/` package, Plan `webui-phase1-work` (Phase 1, "make it work", of cpd-webui). Workers write tests from this file alone. Where two statements conflict, the later section of this file does not win silently: ask the Lead (`cpd ask`).
 
-Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore artefacts of this Plan (`$CPD_HOME/run/webui-phase1-work/explore/`), cited as `scout-<x> §n`. Repo paths are relative to the repo root. `node_modules/@earendil-works/pi-durable/dist/...` and `.../pi-ai/dist/types.d.ts` are the installed typings (pi-durable 1.3.0, read this run). Every unconfirmed fact is tagged `(unverified, O<n>)` and listed once in section 9 "Open items". A value this file does not cite is a decision of this contract, called a **Phase 1 choice**.
+Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore artefacts of this Plan (`$CPD_HOME/run/webui-phase1-work/explore/`), cited as `scout-<x> §n`. Repo paths are relative to the repo root. `node_modules/@earendil-works/pi-durable/dist/...` and `.../pi-ai/dist/types.d.ts` are the installed typings (pi-durable 1.5.0, read by reading, not run). Every unconfirmed fact is tagged `(unverified, O<n>)` and listed once in section 9 "Open items". A value this file does not cite is a decision of this contract, called a **Phase 1 choice**.
 
 ## 1. Scope
 
@@ -21,26 +21,28 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | pro-d14 | Phase 1 is "make it work": correctness first; no visual design. (Recorded by the Plan; no further rule is derived from it here.) |
 | pro-d15 | Proof is manual in a browser, recorded in `web/VERIFY.md` (a later Job writes it; not this file). |
 | pro-d16 | Minimal functional visuals only: unstyled semantic HTML plus one small plain CSS file; the Figma design comes in Phase 3. |
-| pro-d17 | `web/package.json` is byte-identical, `pnpm-lock.yaml` is not edited: no dependency is added or removed. The transport is Vite `server.ws` custom events, dev bench only. |
+| pro-d17 | `web/package.json` gains exactly one dependency, `"@earendil-works/chord": "1.5.0"` (exact, no range), and `pnpm-lock.yaml` changes only for that line (pro-d377, User, 2026-11-03 EST: the freeze of this row is lifted for that one line and its lockfile change). Every other line of `web/package.json` and `pnpm-lock.yaml` is frozen: no other dependency is added or removed. The transport is Vite `server.ws` custom events, dev bench only. |
 | pro-d18 | (User, 2026-11-03 EST, chose in this Plan: add header and status bar slots, minimal.) The cockpit is a 5-zone frame: full-width Top Header, left full-height Context tree, centre-top Plan view, centre-bottom Chat (Chat Title on its top border, composer and chat footer at its bottom), right full-height Attention Inbox, full-width Bottom Status Bar. Phase 1 adds ONLY a Top Header with the plain text `C-P-D` (no emblem art) and a Bottom Status Bar showing the selected session's runner and state and `cpd` version (or an explicit `unknown`); the Chat Title is the `ChatHeader` already built, placed at the top of the chat zone. Pill styling, emblem art, host stats, workers summary and balloons are not Phase 1 (pro-d16: Figma in Phase 3, visuals in Phase 4). No new data source and no `wire.ts` field. |
+| pro-d365 | cpd consumes pi-durable as state (the `ConversationView` of host protocol 2, `view` and `ops` frames); no event-synthesis shim is built on top of it. |
+| pro-d377 | (User, 2026-11-03 EST.) The web durable backend speaks host protocol 2 (view and ops, pi-durable 1.5.0) with full parity with today: live text, tool rows, busy, queue, folds, footer, paging by the host `history` command, dialogs. `web/package.json` declares `@earendil-works/chord` 1.5.0 exactly; this lifts the freeze of pro-d17 and A7 for that one line and its lockfile change, and every other freeze stays. |
 
 ### 1.3 Accepted assumptions
 
 | Id | Assumption |
 |---|---|
 | A1 | Browser to server transport is Vite `server.ws` custom events `cpd:c2s` (client to server) and `cpd:s2c` (server to client), through `import.meta.hot.send/on` in the browser. Dev bench only; no auth beyond Vite's localhost bind. |
-| A2 | Only existing dependencies: react 19, react-dom, react-markdown, remark-gfm, vite, @vitejs/plugin-react, vitest, jsdom, typescript. No Tailwind, shadcn, radix, router. Unstyled semantic HTML plus one small plain CSS file (`web/src/ui/app.css`). UI tests use `react-dom/client` + `act` from `react` under `// @vitest-environment jsdom`, no testing-library. |
-| A3 | The durable backend implements pi-durable **1.3.0** host frames (`snapshot`/`events`) only. The 1.5.0 `ConversationView` shape cannot be checked (no `cpd:pi-1-5-upgrade` branch or Plan exists; scout-durable §6). The code keeps ONE dialect seam (`web/src/server/durable/frames.ts`) so a 1.5.0 adapter is added later by Plan `durable-host-webui`. An unknown host version or frame shape fails loud with a typed `unsupported_host_version` / `protocol_error`, never a silent fallback. |
+| A2 | Only existing dependencies (plus the one lifted line of pro-d17 and A7, `@earendil-works/chord` 1.5.0, used by the durable dialect for `applyImmutable`): react 19, react-dom, react-markdown, remark-gfm, vite, @vitejs/plugin-react, vitest, jsdom, typescript. No Tailwind, shadcn, radix, router. Unstyled semantic HTML plus one small plain CSS file (`web/src/ui/app.css`). UI tests use `react-dom/client` + `act` from `react` under `// @vitest-environment jsdom`, no testing-library. |
+| A3 | The durable backend speaks pi-durable **1.5.0** host protocol 2 only: a `view` base frame and `ops` frames (Chord ops applied with `applyImmutable`) of the `ConversationView` state (section 6.4), with full parity in live text, tool rows, busy, queue, folds, footer, paging by the host `history` command and dialogs. The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the thinking and tool-argument append paths are unverified (O20). The code keeps ONE dialect seam (`web/src/server/durable/frames.ts`). An unknown host version or frame shape fails loud with a typed `unsupported_host_version` / `protocol_error`, never a silent fallback. |
 | A4 | pi-runner sessions: transcript read from the session JSONL (`file` of `cpd session list`), live by file watch, prompts through `cpd session send`, Tier through `cpd session retier`. There is NO `cpd session abort` and no way to answer a TUI dialog from outside (scout-cockpit §3, scout-pi §6), so for pi sessions abort, steer, images and interactive dialogs are declared unsupported in typed `capabilities` with a human reason; dialogs are shown read-only, reconstructed from the transcript; the UI disables those controls and shows the reason. |
 | A5 | Window size is **40** transcript items for the tail and for each `loadEarlier` page (`WINDOW_SIZE`). |
 | A6 | Every timer or clock is an injected `Scheduler`. No test uses real time, a real socket, a real file watcher, a real `cpd`/`git` process or the real network: all externals are injected boundaries, faked in the test. No test leaks a file, process, socket, handle or timer. |
-| A7 | Only paths under `web/` are touched. `pi/durable-host/**`, `pi/durable-worker/**`, the root `package.json`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` are never touched. |
+| A7 | Only paths under `web/` are touched, plus `pnpm-lock.yaml` for the one `@earendil-works/chord` 1.5.0 line of `web/package.json` (pro-d377, the lifted line of pro-d17). `pi/durable-host/**`, `pi/durable-worker/**`, the root `package.json`, `pnpm-workspace.yaml` and every other line of `pnpm-lock.yaml` are never touched. |
 
 ### 1.4 Limitations (stated plainly)
 
-- **A3, durable is 1.3.0 only.** A host whose `welcome.pi_durable` is not exactly `"1.3.0"`, or a `snapshot`/`events` frame that does not match the 1.3.0 shapes of section 6.4, is refused with `unsupported_host_version` (version) or `protocol_error` (shape). The session shows that error; nothing is guessed. Supporting pi-durable 1.5.0 is the later Plan `durable-host-webui`.
+- **A3, durable is 1.5.0 protocol 2 only.** A host whose `welcome.pi_durable` is not exactly `"1.5.0"`, or whose `welcome.protocol` is not 2, is refused with `unsupported_host_version` (version). A `view` or `ops` frame that does not match the shapes of section 6.4, or an op the applier refuses, is `protocol_error` (shape). The session shows that error; nothing is guessed.
 - **A4, pi sessions cannot be driven fully.** For a pi session: no abort (no `cpd session abort` exists), no steer, no image attachments, no answering of dialogs, no model/thinking selection (the Tier decides, see 6.5), no compaction. Each is `{supported:false, reason}` in `capabilities`. Dialogs are read-only reconstructions. A queued-submission list does not exist (`queued` is always `[]`).
-- Footer: pi sessions report cost and context % as `unknown` with a reason (a full-file scan is forbidden by 6.5; the window size of the model is not known). Durable cost covers the active transcript only. No value is faked.
+- Footer: pi sessions report cost and context % as `unknown` with a reason (a full-file scan is forbidden by 6.5; the window size of the model is not known). Durable cost is the cumulative cost of the Session's models (`docs['pi.usage']`, 6.4), so it keeps the cost of turns that a compaction removed from the transcript. No value is faked.
 - Phase 1 does not render `cpd` session messages (`customType` `cpd`, `cpd-error`) or other custom message types: they are dropped. Only the four fold kinds of 3.2 render.
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
 - No visual design (pro-d16).
@@ -205,7 +207,7 @@ export type TranscriptItem = UserItem | AssistantItem | ToolItem | FoldItem | Co
 ```ts
 export type Cursor = string; // opaque to the browser; echoed back in `session.loadEarlier`
 // pi:   `pi:<byteOffset>`  the file offset of the first byte of the earliest loaded line
-// durable: `dur:<index>`   the index into the server-side normalised transcript of the earliest loaded item
+// durable: `dur:<id>`      the item id of the first item of the window in the server-side transcript (6.4 backend); `dur:` alone names the end of the cache (used when it holds no item)
 
 export interface Window {
   readonly items: readonly TranscriptItem[]; // oldest first
@@ -226,7 +228,7 @@ export interface FooterStats {
   readonly tier: Stat<string>;
   readonly thinking: Stat<string>; // thinking level, e.g. "high"; "off" is a value
   readonly contextPercent: Stat<number>; // 0..100
-  readonly cost: Stat<number>; // USD, sum of assistant usage.cost.total
+  readonly cost: Stat<number>; // USD: durable, the sum of docs['pi.usage'] models' cost.total (6.4, cumulative); pi, unknown (6.5)
   readonly branch: Stat<string>; // git branch of the session cwd
 }
 ```
@@ -364,7 +366,7 @@ export interface WireImage { readonly mimeType: ImageMime; readonly dataBase64: 
 
 export type ErrorCode =
   | "protocol_error" // a frame/line/JSON did not match its schema (host frame, wire message from the server)
-  | "unsupported_host_version" // durable host welcome.pi_durable !== "1.3.0" (A3) or protocol not negotiable
+  | "unsupported_host_version" // durable host welcome.pi_durable !== "1.5.0" or welcome.protocol !== 2 (A3); or the hello is answered with error protocol_mismatch
   | "host_unreachable" // the durable socket cannot be opened (missing, refused, path too long)
   | "host_disconnected" // the socket closed or `bye` arrived while attached
   | "host_error" // the host answered `error`; details {hostCode, ...} carries the host ErrorCode (scout-durable §3)
@@ -960,9 +962,18 @@ Behaviours: inbox snooze, dismiss, approve and claim map to the `inbox` commands
 
 ### 6.4 durable-srv `web/src/server/durable/`
 
-Protocol facts: scout-durable §1-§8. Transcript dialect (A3): pi-durable **1.3.0**, shapes read from `node_modules/@earendil-works/pi-durable/dist/harness/events.d.ts`, `.../harness/view.d.ts`, `.../types.d.ts` (EntryRecord `:290-305`) and `.../pi-ai/dist/types.d.ts` (message shapes).
+Protocol facts: pi-durable **1.5.0** host protocol 2. Host side: `docs/contract.md` §6.14 (the `ToHost`/`ToClient` tables, rules 1 to 11, `ring.ts` rules 1 to 5) and §6.17 (`history`), `pi/durable-host/protocol.ts` and `pi/durable-host/ring.ts`, all read by reading, not run. Pi-durable and chord shapes: `node_modules/@earendil-works/pi-durable/dist/harness/view.d.ts` (`ConversationView`, `ConversationWindow`), `dist/harness/live.d.ts` (`LiveState`, `ToolSlot`, `CompactionStatus`), `dist/harness/transcript.d.ts` and `transcript.js` (the reference client transcript: the `before` rule, the gap rule, descending pages), `dist/types.d.ts` (`EntryRecord`), `@earendil-works/pi-ai/dist/types.d.ts` (message shapes), `@earendil-works/chord/dist/delta/index.d.ts` (the ops). The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the window past five entries, its bounds and `before` after an overflow are **unverified** (O23). Every other claim of this section is verified by reading, not run, or is **unverified** and tagged with its O-item (section 9).
 
-#### `client.ts`: NDJSON protocol-v1 client
+**Transcript dialect (A3).** The durable backend consumes the host's `view` base frame and its `ops` frames. The host window holds the newest 50 to 100 entries (`ConversationView.entries`); older entries come from the `history` command. The backend keeps a transcript cache of every entry it has seen, so the window moving never drops an item (6.4 backend, "Cache and window").
+
+**Host frames (`protocol.ts`, `ring.ts`).**
+- `hello {protocol: 2, min_protocol: 2, client: "cpd-web"}` is answered by `welcome {protocol: 2, pi_durable: "1.5.0", host_version, session, role, epoch, client_id, cwd, limits}`. A host that cannot negotiate 2 answers `error protocol_mismatch` with `details {host: [2], client: [min_protocol, protocol]}`, then closes (§6.14 rule 1).
+- `attach {req, conversation: "root", cursor?}` is answered by `attached {req, mode: "view" | "resume", epoch, from_seq, head_seq, client_id}`, then the ring frames of the attach (the base `view` frame, then every `ops` frame in `seq` order, `ring.ts` rule 2 for `mode`), then one `host_state`. `mode` is `"view"` when there is no cursor, the cursor's epoch differs, or the cursor is outside the ring; `"resume"` only when the cursor is inside the ring.
+- `view {epoch, seq, view}`: the base, a `ConversationView` as JSON: `{conversation, entries, before?, docs}`. `entries` is the window in entry-id order (pi-durable `view.d.ts`, verified by reading); `before` is the id of the entry just before the window, absent when the window starts the transcript (`view.d.ts`, verified by reading); `docs` holds `pi.agent`, `pi.live`, `pi.inbox`, `pi.provider`, `pi.usage` (live-check run, verified). A later `view` frame replaces the whole value (ring rule 5, a rebase).
+- `ops {epoch, seq, ops}`: the ops of one watch call, plain JSON, applied in order to the last value. Ops are tuples with array paths (chord 1.5.0 `delta/index.d.ts`, verified by reading): `['r', value]` replaces the whole value; `['s', path, value]` sets a key or an in-range index; `['d', path]` deletes a key or splices out one array item; `['a', path, string]` appends to a string; `['t', path, n]` drops n leading characters; `['p', path, start, deleteCount, items]` splices an array; `['m', path, perm]` reorders an array. Live-check verified: the entry append `['p', ['entries'], n, 0, [entry]]`, `['s', ['docs','pi.live','run'], …]` and `['d', ['docs','pi.live','run']]`, `['s', ['docs','pi.live','generation'], {attempt: 1}]`, `['s', ['docs','pi.live','generation','message'], message]`, `['a', ['docs','pi.live','generation','message','content', i, 'text'], chunk]` (chunks, not cumulative) and `['d', ['docs','pi.live','generation']]`.
+- `history {req, before?, limit?}` is answered by `result {req, data: {entries, next?}}` (§6.17): `entries` are `EntryRecord`s unchanged, newest first (the host's `order: "descending"`, §6.17; verified by reading, and pi-durable's `transcript.js` reverses descending pages the same way); `next` is an opaque cursor, present when more entries older than the page exist. The first request has no `before` and returns the newest page (§6.17; **unverified** on the wire, O22).
+
+#### `client.ts`: NDJSON protocol-2 client
 
 ```ts
 export interface SocketLike {
@@ -972,13 +983,13 @@ export interface SocketLike {
   onClose(handler: (error: Error | null) => void): Disposable;
 }
 export interface SocketFactory { connect(path: string): Promise<SocketLike> } // rejects when the socket cannot be opened
-export const PROTOCOL = 1; export const CLIENT_NAME = "cpd-web";
+export const PROTOCOL = 2; export const CLIENT_NAME = "cpd-web";
 
 export type HostFrame =
   | { type: "welcome"; protocol: number; host_version: string; pi_durable: string; session: string; role: string; epoch: string; client_id: string; cwd: string; limits: { client_line: number } }
-  | { type: "attached"; req: string; mode: "snapshot" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
-  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
-  | { type: "events"; epoch: string; seq: number; events: unknown[] }
+  | { type: "attached"; req: string; mode: "view" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
+  | { type: "view"; epoch: string; seq: number; view: unknown } // the base, or a rebase: a ConversationView as JSON
+  | { type: "ops"; epoch: string; seq: number; ops: unknown[] } // the ops of one watch call, plain JSON
   | { type: "result"; req: string; data: Record<string, unknown> }
   | { type: "error"; req?: string; code: string; message: string; details?: unknown }
   | { type: "host_state"; state: "idle" | "working" | "waiting" | "blocked"; name?: string; clients: number; held_ui: number; agent?: { model?: { provider: string; model_id: string }; thinking_level?: string | null } }
@@ -988,86 +999,153 @@ export type HostFrame =
   | { type: "status"; key: string; text: string | null }
   | { type: "pong"; req?: string }
   | { type: "bye"; reason: "shutdown" | "restart" | "storage_failed" | "slow_client" | "detached"; reconnect: boolean };
-export function parseHostFrame(line: string): HostFrame; // JSON.parse + discriminator check; failure -> WebError("protocol_error", ..., {line: first 200 chars})
+export const FRAME_TYPES: ReadonlySet<string> = new Set(["welcome", "attached", "view", "ops", "result", "error", "host_state", "ui_request", "ui_resolved", "notice", "status", "pong", "bye"]); // the HostFrame types; `snapshot` and `events` are not among them
+export function parseHostFrame(line: string): HostFrame; // JSON.parse + discriminator check against FRAME_TYPES; failure -> WebError("protocol_error", ..., {line: first 200 chars})
 
-export interface HostCursor { epoch: string; seq: number } // host cursor (distinct from the domain `Cursor`)
+export interface HostCursor { epoch: string; seq: number } // host cursor (distinct from the domain `Cursor`); seq counts view and ops frames (ring.ts rule 1)
 export interface HostClient {
   readonly welcome: Extract<HostFrame, { type: "welcome" }>;
-  attach(cursor?: HostCursor): Promise<Extract<HostFrame, { type: "attached" }>>; // sends attach {req, conversation:"root", cursor?}
+  attach(cursor?: HostCursor): Promise<Extract<HostFrame, { type: "attached" }>>; // sends attach {req, conversation: "root", cursor?}; the view and ops frames that follow arrive through onFrame
   submit(input: { text: string; whenBusy: "followUp" | "steer"; requestId?: string; images?: { mimeType: ImageMime; dataBase64: string }[] }): Promise<{ submissionId: number; status: string }>;
   compact(instructions?: string): Promise<{ taskId: number }>;
-  configure(change: { model: string } | { thinkingLevel: string | null }): Promise<Record<string, unknown>>;
+  configure(change: { model: string } | { thinkingLevel: string | null }): Promise<Record<string, unknown>>; // wire: model | thinking_level
   listModels(): Promise<{ provider: string; model_id: string; name: string; thinking_levels: string[]; context_window: number }[]>;
+  history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>; // sends history {req, before?, limit?}; `before` is the `next` of an earlier page, opaque; `limit` is passed as given (the host defaults to HISTORY_LIMIT 50 and caps at HISTORY_MAX 500)
   abort(): Promise<void>; // abort {background:false}
   abortSubmission(submissionId: number): Promise<{ outcome: unknown }>;
   respond(id: string, answer: { value: string } | { confirmed: boolean } | { answer: object } | { cancelled: true }): Promise<void>;
   detach(): Promise<void>;
-  onFrame(handler: (frame: HostFrame) => void): Disposable; // live frames: snapshot, events, host_state, ui_request, ui_resolved, notice, status, bye
+  onFrame(handler: (frame: HostFrame) => void): Disposable; // live frames: view, ops, host_state, ui_request, ui_resolved, notice, status, bye
   onClose(handler: (error: Error | null) => void): Disposable;
   close(): void; // idempotent
 }
 export function connectHost(socketPath: string, deps: { factory: SocketFactory; scheduler: Scheduler }): Promise<HostClient>;
 ```
 
-Wire shapes cited: client frames `protocol.ts:39-53` (scout-durable §2): `hello {protocol, min_protocol, client, name?}`, `attach {req, cursor?:{epoch,seq}, conversation?}`, `submit {req, text, when_busy?, request_id?, images?:[{mime_type, data}]}`, `compact {req, instructions?}`, `configure {req, model? | thinking_level?}` (exactly one), `list_models {req}`, `abort {req, background}`, `abort_submission {req, submission_id}`, `ui_response {req, id, value|confirmed|answer|cancelled}`, `detach {req}`; `req` is a client-chosen string, replies `result`/`error` carry it. Result shapes: scout-durable §3 (`submit` -> `{submission_id, status}`, `compact` -> `{task_id}`, `configure` -> `{agent}`, `list_models` -> `{models}`, `abort_submission` -> `{outcome}`).
+Wire shapes cited: client frames `protocol.ts` `ToHost` (verified by reading): `hello {protocol, min_protocol, client, name?}`, `attach {req, cursor?, conversation?}`, `submit {req, text, when_busy?, request_id?, images?: [{mime_type, data}]}`, `compact {req, instructions?}`, `configure {req, model? | thinking_level?}` (exactly one), `list_models {req}`, `history {req, before?, limit?}`, `abort {req, background}`, `abort_submission {req, submission_id}`, `ui_response {req, id, value|confirmed|answer|cancelled}`, `detach {req}`; `req` is a client-chosen string and replies `result`/`error` carry it. Result `data` shapes (`protocol.ts`, §6.17, verified by reading): `submit` `{submission_id, status}`, `compact` `{task_id}`, `configure` `{agent}`, `list_models` `{models}`, `history` `{entries, next?}`, `abort_submission` `{outcome}`.
 
 Behaviours:
 
-- `connectHost` opens the socket through `factory.connect` (rejection -> `host_unreachable`), writes `{"type":"hello","protocol":1,"min_protocol":1,"client":"cpd-web"}\n`, and waits for `welcome`; no `welcome` within 5000 ms of the Scheduler (`LIMITS.helloMs`, protocol.ts:6) or an `error` frame -> `host_unreachable` / `host_error`; `welcome.pi_durable !== "1.3.0"` or `protocol !== 1` -> `unsupported_host_version` (details `{piDurable, protocol}`; A3). The hello handshake sends protocol and client name exactly as above.
-- Frames are split on `\n`; a frame may be split across any number of chunks, and several frames may arrive in one chunk; a trailing partial line is buffered. An empty line is ignored. A line failing `parseHostFrame` -> the client emits close with a `protocol_error` and ends the socket.
-- Every command gets a fresh `req` (`r<n>`); the returned promise settles on the `result`/`error` with that `req`: `error` -> `WebError("host_error", message, {hostCode: code, details})`. Frames with no matching pending request are delivered to `onFrame`.
-- `attach(cursor)` sends the cursor so the host may resume (`mode: "resume"` when `cursor.epoch` matches and `base.seq <= cursor.seq <= head`, scout-durable §4); the `attached` frame is returned and the snapshot/events frames that follow arrive through `onFrame`.
+- `connectHost` opens the socket through `factory.connect` (rejection → `host_unreachable`), writes `{"type":"hello","protocol":2,"min_protocol":2,"client":"cpd-web"}\n`, and waits for `welcome`. No `welcome` within 5000 ms of the Scheduler (`LIMITS.helloMs`, `protocol.ts`) → `host_unreachable`. An `error` frame before `welcome`: code `protocol_mismatch` → `unsupported_host_version` with `details {host, client}` from the frame's `details` (the host's rule 1 answer, verified by reading); any other code → `host_error` with `details {hostCode}`. A `welcome` is checked by `assertSupportedHost` (6.4 frames), so `pi_durable !== "1.5.0"` or `protocol !== 2` → `unsupported_host_version` with `details {piDurable, protocol}`. (Phase 1 choice: the handshake mapping of `protocol_mismatch`.)
+- Frames are split on `\n`; a frame may be split across any number of chunks, and several frames may arrive in one chunk; a trailing partial line is buffered. An empty line is ignored. A line failing `parseHostFrame` → the client emits close with a `protocol_error` and ends the socket. `snapshot` and `events` are not frame types: a line of either type is a `protocol_error`.
+- Every command gets a fresh `req` (`r<n>`); the returned promise settles on the `result`/`error` with that `req`: `error` → `WebError("host_error", message, {hostCode: code, details})`. Frames with no matching pending request are delivered to `onFrame`.
+- `attach(cursor)` sends the cursor when given. The `attached` frame is returned; the `view` and `ops` frames that follow arrive through `onFrame`. The backend sends no cursor (6.4 backend).
 - `submit` carries `when_busy` and `images` as `{mime_type, data}` (images omitted when none) and `request_id` when given.
+- `history(before, limit)` sends `history {req, before?, limit?}` (fields omitted when undefined) and settles on the `result` with `data` `{entries, next?}`.
 - `abort` sends `{"type":"abort","req":..,"background":false}`; `abortSubmission` sends `abort_submission {submission_id}`.
 - Socket close (or `bye`) while the client is open: every pending request rejects `host_disconnected`, `onClose` fires once with `host_disconnected`. `close()` ends the socket and rejects pending requests with `host_disconnected`; after it nothing is emitted.
 
-#### `frames.ts`: the single dialect seam (pi-durable 1.3.0)
+#### `frames.ts`: the single dialect seam (pi-durable 1.5.0, protocol 2)
+
+Every `view` and `ops` frame reaches the dialect, and nothing else touches the replica or the cache.
 
 ```ts
-export interface DurableTranscript { readonly items: TranscriptItem[]; readonly facts: DurableFacts }
-export interface DurableFacts { model?: string /* provider/modelId */; thinking?: string | null; costUsd: number; lastContextTokens?: number; queued: { id: number; mode: string }[]; cwd?: string }
-export interface DialectState { /* opaque, owned by frames.ts: live item bookkeeping */ }
-
-export const SUPPORTED_PI_DURABLE = "1.3.0";
-export function assertSupportedHost(welcome: { pi_durable: string; protocol: number }): void; // else WebError("unsupported_host_version")
-export function createDialect(): Dialect;
-export interface Dialect {
-  applySnapshot(frame: { snapshot: unknown }): { transcript: DurableTranscript };
-  applyEvents(frame: { events: unknown[] }): DialectOutput; // throws protocol_error on an unknown shape
-  readonly transcript: DurableTranscript; // the current normalised transcript (the server-side cache)
+export interface DurableTranscript { readonly items: TranscriptItem[]; readonly facts: DurableFacts; readonly before?: number /* view.before of the replica: the id just before its window; absent when the window starts the transcript */ }
+export interface DurableFacts {
+  model?: string; // provider/modelId, from docs["pi.agent"].model
+  thinking?: string | null; // docs["pi.agent"].thinkingLevel
+  busy: boolean; // docs["pi.live"].run !== undefined
+  costUsd: number; // see "Facts"
+  lastContextTokens?: number; // see "Facts"
+  queued: { id: number; mode: string }[]; // docs["pi.inbox"].items without mode "write"
+  cwd?: string; // welcome.cwd, set by the backend
 }
-export interface DialectOutput { append: TranscriptItem[]; update: TranscriptItem[]; deltas: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string }[]; busy?: boolean; queued?: { id: number; mode: string }[]; agent?: { model?: string; thinking?: string | null }; replaced?: boolean /* a `snapshot` event inside events: the transcript was rebuilt, send a new tail window */ }
+export interface Gap { readonly after: number; readonly upTo: number } // entry ids in (after, upTo] are not held
+export const SUPPORTED_PI_DURABLE = "1.5.0";
+export function assertSupportedHost(welcome: { pi_durable: string; protocol: number }): void; // else WebError("unsupported_host_version", msg, {piDurable, protocol}) unless pi_durable === SUPPORTED_PI_DURABLE and protocol === 2
+export interface Dialect {
+  applyView(frame: { view: unknown }): { transcript: DurableTranscript }; // the base (first call) or a replacement
+  applyOps(frame: { ops: unknown[] }): DialectOutput;
+  applyHistory(frame: { entries: unknown[]; next?: string }): void; // one history page
+  readonly gap: Gap | undefined;
+  readonly transcript: DurableTranscript; // the cache and the live tail (below)
+}
+export interface DialectOutput {
+  append: TranscriptItem[];
+  update: TranscriptItem[];
+  deltas: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string }[];
+  busy?: boolean;
+  queued?: { id: number; mode: string }[];
+  agent?: { model?: string; thinking?: string | null };
+  replaced?: boolean; // the transcript was rebuilt: the backend sends a new tail window and ignores append, update and deltas
+}
+export function createDialect(): Dialect;
 export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }>, transcript: readonly TranscriptItem[]): Dialog | { kind: "editor"; id: string } | { kind: "unsupported"; id: string; method: string; purpose: string }; // 3.8 table
 ```
 
-The 1.3.0 shapes (read, `events.d.ts`): the `snapshot` frame's `snapshot` is a `SnapshotEvent {type:"snapshot", entries: EntryRecord[], tools, nestedTools, compactions, inbox: {id, mode}[], agent, usage, run?, generation?}`; each `events` frame's `events` is an array of `AgentEvent` (`type` one of `snapshot, run_start, run_end, turn_start, turn_end, message_start, message_update, message_end, tool_execution_start, tool_execution_update, tool_execution_end, inbox_update, submission, auto_retry_start, auto_retry_end, deferred_poll, entry_appended, agent_changed, usage_changed, task_failed, compaction_start, compaction_end`); `message_update.changes` are `MessageChange` (`text_start|thinking_start|toolcall_start` with `contentIndex` and `block`; `text_delta|thinking_delta` with `contentIndex` and `delta`; `toolcall_delta`; `block`; `message`). `EntryRecord = {id, conversationId, kind, model?: Message[], data?, head?, edits?, byTaskId?}`. The host forwards the snapshot and event batches unchanged (`pi/durable-host/run.ts:441,552-554`, scout-durable §5). These shapes come from the installed typings; a live host emitting them was not exercised in this Plan (unverified, O13).
+**The cache.** Each entry is normalised once, when it is first seen (by its `id`, in a `view`, an `ops` batch or a history page), and kept for the attachment. A window moving past an entry never removes it. Entries never change once committed (pi-durable `transcript.js`, verified by reading), so a cached entry is never normalised again. `transcript.items` is the items of the cached entries in id order, followed by the live tail (below).
 
-**Entry normalisation** (`applySnapshot` over `entries`, and the `entry` of `message_end` / `tool_execution_end` / `entry_appended`), by `EntryRecord.kind`:
+**Replacement and gap.** `applyView` (every call) and an ops batch whose first op is `['r', …]` replace the replica. Let `n` be the newest cached entry id before the new value's entries are merged (undefined for an empty cache). If the new value's `before` is defined, `n` is defined and `before > n`, then `gap = {after: n, upTo: before}`: the entries with ids in (`n`, `before`] were never seen (the rule of pi-durable's `ConversationTranscript`, `transcript.js` `#cover`, verified by reading). `applyHistory` clears the gap when the page's oldest entry id is at most `after`, or when the page has no `next`. The backend fills an open gap before it shows anything (6.4 backend).
+
+**`applyView`.** Replaces the replica with the view, merges its entries (the cache rule), and recomputes the live tail (below). It emits no output: `transcript.facts` carries the same busy, queued, model and thinking values that a batch's `DialectOutput` carries. Throws `protocol_error` when the value is not an object with an `entries` array and a `docs` object.
+
+**`applyOps`.** In this order:
+1. No view applied yet: `protocol_error` ("ops before view").
+2. `next = applyImmutable(replica, ops)` (`@earendil-works/chord/delta`, copy on write). A thrown op is `protocol_error` carrying the applier's message; the replica is unchanged.
+3. `next` must be an object with an `entries` array and a `docs` object, else `protocol_error`.
+4. `replaced` is true when `ops[0]` is `['r', …]`; the gap rule applies to `next` as above.
+5. Entries of `next` not yet cached are merged in id order (a pi.assistant entry is matched to the live item here, rule L4). Entries are merged before step 6, so a live item is consumed in the batch that appends its entry.
+6. The live tail is recomputed from `next.docs['pi.live']` (rules L1 to L5).
+7. The output is produced (table below); the replica becomes `next`.
+
+**Output (`DialectOutput`).** When `replaced` is true, `append`, `update` and `deltas` are empty: the cache and the live tail are updated, and the backend sends the tail window. Otherwise:
+
+| Field | Source and rule |
+|---|---|
+| `append` | Items of entries newly cached in this batch, in id order, except those that take the place of a live item (`update`). Then the live assistant item when it is created (L2). Then tool items created by a toolCall block (L2) or a new tool slot (L5), in block or slot order. An item whose id is already in the transcript never goes to `append`. |
+| `update` | The entry item that takes the place of a live item (L4, keeps the live id). A live item whose message changes by any op other than `'a'` on its content (its blocks are replaced whole), or that is finalised (L3). A tool item whose slot status changed (L5), whose arguments were refreshed while it has no result (L2), or that received its result by pairing (T below). Cached items changed by pairing. |
+| `deltas` | One per `['a', path, chunk]` op whose path is `['docs','pi.live','generation','message','content', i, 'text']` or `[…, i, 'thinking']`, with `blockIndex` = the number of text and thinking blocks at content indices below `i` (the index among the assistant item's `blocks`, which exclude toolCall blocks), `blockType` by the last path segment, `text` = the chunk. Emitted only when no other op of the batch changes the message (otherwise the whole item is in `update`). Argument-path appends produce no delta (L2, O21). |
+| `busy` | `docs['pi.live'].run !== undefined`; set when it changed. |
+| `queued` | `docs['pi.inbox'].items` with `mode` `steer` or `followUp`, as `{id, mode}`; an item with `mode` `write` is not a queued submission and is filtered out. Set when `docs['pi.inbox']` changed. |
+| `agent` | `docs['pi.agent']`: `model` = `provider + "/" + modelId` when `model` is present; `thinking` = `thinkingLevel` when present. Set when `docs['pi.agent']` changed. |
+| `replaced` | true for an ops batch whose first op is `['r', …]`. A `view` frame after the first is the same case: `applyView` emits nothing and the backend treats it as `replaced: true`. |
+
+**Live tail (`docs['pi.live']`; `live.d.ts` `LiveState`, verified by reading).** The live tail is the list of items that are not yet entries. It is recomputed from each new value; a live item is identified by its id `live:<n>`, `n` counting from 1 per attachment.
+
+- **L1 busy.** `busy` is `docs['pi.live'].run !== undefined` (live-check run: present while a run is open, absent after its end, verified).
+- **L2 message.** `M = docs['pi.live'].generation?.message` (AssistantMessage JSON). When `M` holds a `text` or `thinking` block and no live item exists, a live assistant item is created: id `live:<n>`, `streaming: true`, `blocks` = the `text` and `thinking` blocks of `M.content` in order (`text` block: its `text`; `thinking` block: its `thinking`), appended at the end of the tail. A message with no text or thinking block yields no live assistant item (as a `pi.assistant` entry does). Each `toolCall` block of `M.content` yields a running ToolItem `tool:<block.id>` (`name`, `args` = `block.arguments` when it is an object, else `{}`), created in `append`; its `args` is refreshed in `update` only while the item has no result. Argument appends (`arguments` or `partialJson` paths) are not read: the complete arguments arrive with the entry (**unverified**, O21).
+- **L3 finalise.** When `M` is absent and a live item exists, the item is finalised: `streaming: false`, `update`, and it leaves the live state (it stays in the tail as a plain item). This happens after L4 in the same batch.
+- **L4 entry replaces live.** A `pi.assistant` entry merged in this batch (step 5) takes the place of the live assistant item when one exists: its assistant item keeps the live id (`live:<n>`, not `a:<id>`), `streaming: false`, and goes to `update`; the entry's tool items take the ids `tool:<callId>` of the live tool items they match (`update` when present, else `append`). The live state is then cleared. Without a live item, the entry is normalised as an ordinary `pi.assistant` entry (`a:<id>`, `append`).
+- **L5 tool slots.** `docs['pi.live'].tools` (absent: `[]`) is read per slot by `callId`; a slot `status` outside `pending|running|done` is `protocol_error`.
+  - A slot with no tool item yet creates one: `tool:<callId>`, `name` = the slot's `name`, `args` `{}` unless a toolCall block gave arguments, status `running`, `append`.
+  - `pending` and `running` slots keep the item `running`. Their `output`, `droppedBytes`, `droppedLines` and `details` are not shown: a running tool has an empty body (6.8, ToolRow).
+  - A `done` slot with an `entry` completes the item with that `pi.tool-result` entry (rule T), when that entry is cached.
+  - A `done` slot without an `entry` makes the item `failed` with `result {text: "", isError: true}`, `update`.
+  - `unoffered` is not special-cased. A slot is `update`d when its status changed since the last value.
+- Other live documents (`nestedTools`, `compactions`, `compactionFailure`, `runFailure`, `retry`, `deferred`) are not mapped to items: no item kind exists for them.
+
+**Tool results (T).** A `pi.tool-result` entry pairs with the item of the same `callId` (`model[0].toolCallId`) wherever it is: in the cache or in the live tail. The item takes `result {text, isError, durationMs?}` and `status` `done` (isError false) or `failed` (isError true), and `diff` for `name === "edit"` (below). Pairing works in either order: a call normalised after its result takes the result at normalisation. A result whose call is in no cached item or live item is an `OrphanResultItem` (`orphan:<callId>`); when its call is normalised later, the orphan is removed from the cache and the call takes the result (the browser's adoption, 4.4, does the same for the window).
+
+**Facts (`DurableFacts`).**
+- `costUsd` = the sum of `cost.total` over `docs['pi.usage'].models` (every value of the record; a value without a numeric `cost.total` is `protocol_error`). A compaction does not reset it: the cost of turns a compaction removed from the transcript stays in the sum, because `pi.usage` is cumulative per model (live-check run, verified for the model record's growth over two runs; compaction not run, **unverified** O24). This is the change from the replaced protocol-1 footer, which summed the active `pi.assistant` entries and reset at a compaction.
+- `lastContextTokens` = `usage.totalTokens` of `docs['pi.live'].generation.message` while a message is streaming and that value is a number; else `usage.totalTokens` of the `pi.assistant` entry with the highest id in the cache; absent when neither exists.
+- `model`, `thinking` from `docs['pi.agent']` (as `DialectOutput.agent`); `busy` from L1; `queued` from `docs['pi.inbox']`; `cwd` from `welcome.cwd` (set by the backend).
+
+**Entry normalisation (applied to `entries` of every `view`, `ops` batch and history page).** By `EntryRecord.kind`:
 
 | kind | Result |
 |---|---|
-| `pi.user` | `UserItem` (`u:<id>`) from `model[0]` (`UserMessage`: `content` string, or `TextContent`/`ImageContent` blocks; text blocks joined with `"\n"`, image blocks -> `TranscriptAttachment {kind:"image", mimeType, dataBase64}`) |
-| `pi.assistant` | `AssistantItem` (`a:<id>`, `streaming:false`) from `model[0]` (`AssistantMessage`): `text` -> text block, `thinking` -> thinking block (kept separate, in order), `toolCall` -> a `ToolItem` (`tool:<callId>`, `args = arguments`, `status:"running"`) appended right after the assistant item; `usage.cost.total` is added to `facts.costUsd`; `usage.totalTokens` of the LAST assistant entry is `facts.lastContextTokens`; `model` -> `AssistantItem.model` |
-| `pi.tool-result` | pairs with the `ToolItem` whose `callId === model[0].toolCallId`: sets `result {text, isError, durationMs}` and `status` (`done` / `failed`), and `diff` from `details.patch ?? details.diff` for `name === "edit"`. Result with no call in the transcript -> `OrphanResultItem` (`orphan:<callId>`) |
+| `pi.user` | `UserItem` (`u:<id>`) from `model[0]` (`UserMessage`: `content` string, or `TextContent`/`ImageContent` blocks; text blocks joined with `"\n"`, image blocks → `TranscriptAttachment {kind:"image", mimeType, dataBase64}`) |
+| `pi.assistant` | `AssistantItem` (`a:<id>`, `streaming:false`, or the live id under L4) from `model[0]` (`AssistantMessage`): `text` → text block, `thinking` → thinking block (kept separate, in order), `toolCall` → a `ToolItem` (`tool:<callId>`, `args = arguments`, `status:"running"`, unless the item already has a result) appended right after the assistant item; `model` → `AssistantItem.model`. `usage` is read by the facts rules, not here. |
+| `pi.tool-result` | pairs by `callId` (rule T): `result {text, isError, durationMs}`, `status`, and `diff` from `details.patch ?? details.diff` for `name === "edit"` (strings only; O3) |
 | `pi.compaction` | `CompactionItem` (`c:<id>`), `summary` = text of `model[0]` |
 | `pi.system`, `pi.reset` | dropped |
-| `cpd-context`, `cpd-plan-summary`, `cpd-plan-decision`, `cpd-skills` (host-written, `model: [{role:"user", content}]`, `data` = details; `pi/durable-host/plan-review.ts:102-113`, `turn.ts:88`) | `FoldItem` (`f:<id>`), `body` = text of `content`, title/defaultOpen by the rules of 3.3 (`data` plays `details`) |
+| `cpd-context`, `cpd-plan-summary`, `cpd-plan-decision`, `cpd-skills` (host-written, `model: [{role:"user", content}]`, `data` = details; `pi/durable-host/plan-review.ts:102-113`, `turn.ts:88`, read) | `FoldItem` (`f:<id>`), `body` = text of `content`, title and `defaultOpen` by the rules of 3.3 (`data` plays `details`) |
 | `cpd-chat`, `cpd-event`, `cpd-first-message`, `cpd-error`, `cpd-plan-review`, any other kind | dropped |
 
-An entry whose `kind` is a `pi.*` kind but whose `model` is missing, empty or not a message of the expected role -> `protocol_error`. An `EntryRecord` without `id`/`kind` -> `protocol_error`. Whether `cpd-context` entries carry `data.summary` in the durable path is unverified (O14); the title then falls back to the first body line.
+An entry whose `kind` is a `pi.*` kind but whose `model` is missing, empty or not a message of the expected role → `protocol_error`. An `EntryRecord` without `id` or `kind` → `protocol_error`. Whether `cpd-context` entries carry `data.summary` in the durable path is unverified (O14); the title then falls back to the first body line.
 
-**Streaming** (`message_update.changes` for the in-flight assistant message, tracked per message between `message_start` and `message_end`):
+**Errors (`protocol_error`, every case).** Each raised as `WebError("protocol_error", message)`:
+- an `ops` frame before any `view` (`ops before view`);
+- an op the applier refuses (`applyImmutable` throws), with the applier's message;
+- a value (base, replacement or ops result) that is not an object with an `entries` array and a `docs` object;
+- an unknown entry shape (the `pi.*` and missing-field cases above, including a history entry);
+- a tool slot `status` outside `pending|running|done`;
+- a `docs['pi.usage']` model value without a numeric `cost.total`.
 
-- `message_start` creates no item. The live `AssistantItem` `live:<n>` (`streaming:true`) is created in `append` by the first `text_start`/`thinking_start` of that message (a tool-only message therefore never creates an assistant item, as for `pi.assistant` entries).
-- `text_start`/`thinking_start` at `contentIndex` creates a block of that type (and the live item when it does not exist yet) and maps `contentIndex -> blocks.length`; `text_delta`/`thinking_delta` at `contentIndex` emits one `delta {itemId, blockIndex: mapped index, blockType, text: delta}` and also appends to the cached item. `toolcall_start` creates a running `ToolItem` (`tool:<block.id>`, args `{}`) in `append`; `toolcall_delta` is ignored (arguments are complete in `message_end`).
-- `block` replaces the content at `contentIndex` (text/thinking block text replaced, via `update` of the whole live item); `message` replaces the whole live message (via `update`).
-- `message_end {entry}`: when a live item exists it is replaced by the normalised entry, KEEPING the live id (`live:<n>`), `streaming:false`, in `update`; when none exists the entry is normalised as a `pi.assistant` entry into `append`; tool items of the entry are `update`d/appended by `tool:<callId>`. The cache keeps the live id so deltas and later updates address one item.
-- `tool_execution_start {toolCallId, args}` updates (or appends) the tool item with `args`; `tool_execution_end {entry}` pairs the result as above; `tool_execution_end` without `entry` marks the tool item `failed` with `result {text:"", isError:true}`.
-- `agent_changed {agent}` -> `DialectOutput.agent` (`agent.model` is `{provider, modelId}` here in pi-durable types; mapped to `provider/modelId`); `run_start` -> `busy:true`; `run_end` -> `busy:false`; `inbox_update {items}` and `snapshot.inbox` -> `queued` (`{id, mode}` of pi-durable `QueuedItem`); `usage_changed` is ignored (cost comes from entries).
-- A `snapshot` event inside `events` (a rebuild) -> `applySnapshot` semantics and `replaced:true`.
-- An event whose `type` is not in the list above, a `message_update` change whose `type` is not in the list above, or a non-object event -> `WebError("protocol_error", "unknown event <type>")`. Known events that Phase 1 does not use (`turn_start`, `turn_end`, `submission`, `auto_retry_*`, `deferred_poll`, `task_failed`, `compaction_start/end`, `tool_execution_update`) are accepted and produce no output.
+A `protocol_error` from any of these ends the attachment (`backend.ts`, Failure).
 
-Behaviours to test: user and assistant messages normalise to items; thinking blocks stay separate from text, in order; tool calls pair with results; a result without its call is an orphan; streaming text deltas append to the assistant item; cpd custom entries map to folds (default open only for `cpd-plan-summary`); compaction maps to a compaction item; an unknown frame shape raises `protocol_error`; `assertSupportedHost({pi_durable:"1.5.0",...})` raises `unsupported_host_version`.
+**Behaviours to test.** A `view` base normalises its entries and live tail with no output; an `ops` batch appends an entry (`p`) and its items; `run` presence drives `busy`; a text `a` op yields one delta at the text block's index, with thinking blocks counted; a message with only a toolCall yields a running tool item and no assistant item; a pi.assistant entry takes the live id and goes to `update`, and a later entry with no live item is appended as `a:<id>`; a done slot with an entry completes its tool item by pairing; a done slot without an entry becomes failed; a result without its call is an orphan and its call adopts it; `['r', …]` and a second `view` are `replaced`; a `before` above the newest cached id opens a gap that `applyHistory` clears; the cost is the sum over `pi.usage` models; an ops batch before any view, an op the applier refuses, an unknown entry shape and a bad slot status each raise `protocol_error`; `assertSupportedHost({pi_durable:"1.3.0", protocol:2})` and `({pi_durable:"1.5.0", protocol:1})` raise `unsupported_host_version`.
 
 #### `backend.ts`: `SessionBackend` for durable sessions
 
@@ -1076,18 +1154,39 @@ Behaviours to test: user and assistant messages normalise to items; thinking blo
 export function createDurableBackend(deps: { connect: (socketPath: string) => Promise<HostClient>; cpd: Cpd; git: GitBoundary; scheduler: Scheduler; windowSize?: number }): SessionBackend;
 ```
 
-Behaviours:
+**Frame order.** Every host frame of an attachment (`view`, `ops`, `host_state`, `ui_request`, `ui_resolved`) and every `loadEarlier` call is processed one at a time, in arrival order, by one serial queue. A job that needs a `history` call (a gap fill, a loadEarlier page) waits for that call; the jobs arriving meanwhile queue behind it. Nothing is emitted out of order.
 
-- `attach`: connects (`deps.connect(session.socketPath)`; a missing `socketPath` -> `host_unreachable`), calls `client.attach()`, builds the transcript with a `Dialect` from the first `snapshot` frame (resume is not used in Phase 1: every attach is a snapshot because the browser holds no host cursor), then emits in order `session.attached` (capabilities of section 8, `title` = `ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}` = the last `windowSize` (default `WINDOW_SIZE`) items of the cached transcript with `hasEarlier = items.length > windowSize` and `cursor = "dur:<index of the first returned item>"` (null when none earlier), `session.footer`, `session.status`, and one `session.dialog` per replayed held `ui_request` (the host replays them with `replayed:true` after the frames, scout-durable §4).
-- Server-side windowing (A5): the host sends the full snapshot; the backend caches the normalised transcript and serves windows from it. `loadEarlier("dur:<i>")` returns the `windowSize` items ending before index `i` as `session.window {mode:"earlier"}` with a new cursor (null at the start); an unparsable cursor -> `invalid_message`. Items past index `i` are never repeated.
-- Live: each `events` frame goes through `dialect.applyEvents` and is emitted as `session.append` / `session.update` / `session.delta` (deltas in order), plus `session.status {busy, queued}` when they changed. A `replaced` output emits a fresh `session.window tail`. `host_state` frames update `busy` (busy = `state !== "idle"`; the host sets only `idle|working|blocked`, scout-durable §3) and the agent.
-- `submit`: empty `text.trim()` with no images -> `invalid_submission`; `client.submit({text, whenBusy, requestId: clientSubmissionId, images})`; then `session.submitAck {clientSubmissionId, queued: busy, submissionId}`. When the session is busy the submission is added to `queued` (`{clientSubmissionId, submissionId, text, whenBusy}`) and is removed when the dialect reports the inbox without that submission id (queued submissions are tracked until their submission completes); `session.status` is emitted on each change. A host `error` becomes `session.error {clientSubmissionId, error: host_error}` (and the promise rejects with it).
-- `abort` -> `client.abort()`. `abortSubmission(clientSubmissionId)` looks up the `submissionId` of that queued submission (unknown -> `invalid_message`) and sends `abort_submission`; the queued entry is removed.
-- `compact(instructions)` -> `client.compact`. `listModels` -> `client.listModels()` mapped to `ModelChoice[]` (`model = provider + "/" + model_id`) -> `session.models`.
-- `configure`: `{kind:"model"}` -> `client.configure({model})`; `{kind:"thinking"}` -> `client.configure({thinkingLevel})`; `{kind:"tier"}` -> `cpd session retier <id> --tier <tier>` via `deps.cpd` (`sessionRetierArgs`); host refusal `refused "a run is pending"` (scout-durable §7.4) surfaces as `host_error` with `details.hostCode: "refused"`. After a model/thinking change the footer is recomputed and `session.footer` emitted.
-- Footer: `model` from host `agent.model` (`provider/model_id`), `thinking` from `agent.thinking_level`, `tier` from `ref.tier`, `cost` = `facts.costUsd` (sum of `usage.cost.total` of the active entries; compaction drops earlier cost, a documented limitation), `contextPercent` = `round(lastContextTokens / contextWindow * 100)` where `contextWindow` is `context_window` of the current model in `list_models` (fetched once at attach; an approximation, not pi-core's footer formula, O8), `branch` = `git.branch(cwd)` with `cwd` from `welcome.cwd`. A missing input gives `{state:"unknown", reason}`.
-- Dialogs: a `ui_request` becomes `session.dialog {dialog: {...Dialog, id, interactive:true}}` via `dialogFromRequest`; a `ui_resolved` frame becomes `session.dialogResolved`; `respond(dialogId, response)` maps per the table of 3.8 (`ask_user_question answered` -> `ui_response {id, answer: result}`; `cancelled` -> `{cancelled:true}`; plan review as in 3.8; an editor `ui_request` that follows a `Change` is answered by the backend; `reject` runs `cpd plan decide` via `deps.cpd`). A response for an unknown dialog id -> `invalid_message`. Cancel (host keeps the request held, scout-durable §7.5) emits `session.dialogResolved {outcome:"cancelled"}` when the host's `ui_resolved` arrives.
-- Socket close (`onClose`/`bye`) -> `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` detaches (`client.detach()` best effort), closes the client and drops every listener.
+**First-frame gate.** The attach sends no cursor. `attached.mode` must be `"view"`; `"resume"` is `protocol_error` (no cursor was sent). The first frame after `attached` must be a `view`: an `ops` frame or any other data frame before it is `protocol_error`. The first `view` is applied as soon as it arrives; the frames after it wait until the attach messages below are out, then replay in order.
+
+**Cache and window.** The transcript is `dialect.transcript.items` (6.4 frames, the cache and the live tail). The backend adds two pieces of state per attachment:
+- `older`: `undefined` until a history page is needed, a page cursor (opaque `next`) while more history exists, `null` once the host has no older entries. At the base `view`, `older` is `null` when `transcript.before` is absent (the window starts the transcript) and `undefined` otherwise.
+- the gap of `dialect.gap`, which the backend fills (below).
+
+A window is a slice of `transcript.items`:
+- **Cursor.** `session.window` cursors are `dur:<id>`, where `<id>` is the item id of the first item of the window (3.4). `dur:` with an empty id names the end of the cache (no item; used when the cache holds no item). A cursor is `dur:<id>` only: an id that is not an item of the transcript (cache or live tail) is `invalid_message`.
+- **Tail** (`mode "tail"`): the last `windowSize` (default `WINDOW_SIZE`) items of the transcript. `hasEarlier` = the tail does not start at index 0, or `older !== null`. `cursor` = `dur:<id of the first item>` when `hasEarlier` (the empty id when the tail holds no item), else `null`.
+- **Earlier** (`loadEarlier("dur:<id>")`): let `p` be the number of items before the cursor: the index of the cursor's item, or `items.length` for the empty id. While `p < windowSize` and `older !== null`, fetch the next history page (`client.history(older ?? undefined)`, which for `older === undefined` is the newest page), `dialect.applyHistory(page)`, and set `older` to the page's `next` or `null` when there is none; recompute `p` (the item keeps its id, so the index moves with the prepends). The page is `items.slice(max(0, p - windowSize), p)`. Emit `session.window {mode:"earlier"}` with `hasEarlier` and `cursor` computed as in the tail. Items past the cursor are never repeated.
+- An entry already cached is skipped by `applyHistory`, so a page that holds only known entries is not an error: the loop goes on until `p >= windowSize` or `older === null`. The page is sliced after the loop, so an empty cache is filled from history alone.
+
+**Gap fill.** After a replacement (a `view` after the first, or an ops batch with `replaced: true`) whose `dialect.gap` is defined, the backend fills the gap before it emits anything for that frame: it calls `client.history(undefined)` (the newest page), `dialect.applyHistory(page)`, and repeats with the page's `next` while `dialect.gap` is still defined. Then it emits the replacement. No `session.append`, `session.update` or `session.delta` is sent before the fill is complete.
+
+**Attach emission.** `session.attached` (capabilities of section 8, `title = ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}`, `session.footer`, `session.status`, then one `session.dialog` per replayed held `ui_request` (the host replays them with `replayed: true` after the frames, §6.14 and `protocol.ts`).
+
+**Live.** Each `ops` frame goes through `dialect.applyOps` (6.4 frames). If `output.replaced`, the gap rule runs and the backend emits `session.window {mode:"tail"}`; otherwise it emits `session.append` (`append`), `session.update` (`update`) and `session.delta` for each delta in order. Then `session.footer` and `session.status` as below. A `view` after the first runs the gap rule and emits `session.window {mode:"tail"}`, then the footer and status.
+
+**Status, host state and agent.** `busy` and `queued` come from `transcript.facts` (`busy`, `queued`), as in every frame. `session.status {busy, queued}` is emitted when either changed. `host_state` frames update the agent only (`agent.model` as `provider/model_id`, `agent.thinking_level`); busy is not read from `host_state.state` (the run presence of `docs['pi.live']` carries it; **unverified** while a dialog is held, O25).
+
+**Submit.** `text.trim() === ""` with no images → `invalid_submission`. Otherwise `client.submit({text, whenBusy, requestId: clientSubmissionId, images})`, then `session.submitAck {clientSubmissionId, queued: busy, submissionId}`. When busy, the submission is added to `queued` (`{clientSubmissionId, submissionId, text, whenBusy}`) and removed when `transcript.facts.queued` no longer holds its `submissionId`; `session.status` is emitted on each change. A host `error` becomes `session.error {clientSubmissionId, error: host_error}` and the promise rejects with it.
+
+**Other methods.** `abort` → `client.abort()`. `abortSubmission(clientSubmissionId)` looks up the `submissionId` of that queued submission (unknown → `invalid_message`), sends `abort_submission`, and removes the entry. `compact(instructions)` → `client.compact`. `listModels` → `client.listModels()` mapped to `ModelChoice[]` (`model = provider + "/" + model_id`) → `session.models`. `configure`: `{kind:"model"}` → `client.configure({model})`; `{kind:"thinking"}` → `client.configure({thinkingLevel})`; `{kind:"tier"}` → `cpd session retier <id> --tier <tier>` via `deps.cpd` (`sessionRetierArgs`). A host refusal `refused` (a run is pending, §6.17) surfaces as `host_error` with `details.hostCode: "refused"`. After a model or thinking change the footer is recomputed and `session.footer` is emitted. `respond` maps per the table of 3.8 (dialog handling: `ui_request` and `ui_resolved` frames, `dialogFromRequest` over the cached transcript).
+
+**Footer.** `model` = `host_state.agent` model (`provider/model_id`) when given, else `transcript.facts.model`; `thinking` likewise from the agent's `thinking_level`, else `transcript.facts.thinking`; `tier` = `ref.tier`; `cost` = `transcript.facts.costUsd` (the cumulative `pi.usage` cost, so compacted turns stay in it); `contextPercent` = `round(lastContextTokens / contextWindow * 100)` where `contextWindow` is `context_window` of the current model in `list_models` (fetched once at attach; an approximation, not pi-core's formula, O8); `branch` = `git.branch(cwd)` with `cwd` from `welcome.cwd`. A missing input gives `{state:"unknown", reason}`.
+
+**Dialogs.** A `ui_request` becomes `session.dialog` via `dialogFromRequest`, a `ui_resolved` becomes `session.dialogResolved`, `respond` answers per 3.8. The plan-review title and summary are read from the cached transcript.
+
+**Failure.** A `protocol_error` from `applyView`, `applyOps` or `applyHistory` is sent as `session.error {sessionId, error}`, and the attachment ends: the handle rejects every method with that error until disposed, and the client is closed (`client.detach()` best effort). A replica that missed a batch cannot be trusted, so the attachment does not continue (Phase 1 choice, fail loud). Socket close (`onClose`/`bye`) → `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` detaches (`client.detach()` best effort), closes the client and drops every listener.
+
+**Behaviours to test.** `attached.mode` `resume` and an `ops` frame before the first `view` each raise `protocol_error`; the attach emits in the order above; a tail window holds the last `windowSize` items with `dur:<id>`; `loadEarlier` answers from the cache first and then from `history` pages (already-held entries skipped), with the cursor of the page; a gap is filled by `history` before the replacement window is emitted, and no append precedes it; a `replaced` ops batch emits a tail window and no append; a rejected `ops` batch ends the attachment with `session.error`; `submit` queues while busy and drops the queued entry when the inbox no longer holds it; `host_state` changes the agent but not busy; the cost and context facts follow 6.4 frames; `configure` tier runs `cpd session retier`.
 
 ### 6.5 pi-srv `web/src/server/pi/`
 
@@ -1432,7 +1531,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | Code | Raised by | When | `details` |
 |---|---|---|---|
 | `protocol_error` | `parseServerMessage`, `parseHostFrame`, `frames.ts`, `transcript.applyDelta` | a frame, line, event or server message does not match its schema; unsupported dialog method; out-of-range delta | `{field?, line?}` |
-| `unsupported_host_version` | `client.ts connectHost`, `frames.assertSupportedHost` | `welcome.pi_durable !== "1.3.0"` or `protocol !== 1` (A3) | `{piDurable, protocol}` |
+| `unsupported_host_version` | `client.ts connectHost`, `frames.assertSupportedHost` | `welcome.pi_durable !== "1.5.0"` or `welcome.protocol !== 2` (A3); an `error protocol_mismatch` answering the hello | `{piDurable, protocol}`, or `{host, client}` for the mismatch |
 | `host_unreachable` | `client.ts`, `registry.ts`, `durable backend` | socket cannot be opened, no `welcome` in 5000 ms, no socket path, path > 107 bytes | `{path?, reason?}` |
 | `host_disconnected` | `client.ts`, `durable backend` | socket closed or `bye` while attached; pending requests rejected | `{bye?: reason}` |
 | `host_error` | `client.ts` | the host answered `error` (e.g. `refused` for configure while busy, `bad_args`, `busy`, `unsupported`) | `{hostCode, details?}` |
@@ -1453,7 +1552,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 `Capabilities` values per runner (fixed by the backends; `reason` strings are human text, tests match the `supported` flag and that `reason` is a non-empty string):
 
-| Capability | durable (host socket, 1.3.0) | pi (session JSONL) |
+| Capability | durable (host socket, pi-durable 1.5.0 protocol 2) | pi (session JSONL) |
 |---|---|---|
 | `images` | supported; `maxCount 4`, `maxTotalBase64 786432`, png/jpeg/gif/webp (`protocol.ts:19-21`) | **unsupported**: `pi sessions are fed through "cpd session send", which takes text only` (A4) |
 | `steer` | supported (`when_busy: "steer"`, `protocol.ts:42`) | **unsupported**: `cpd session send has no steer mode` (A4; O6) |
@@ -1466,11 +1565,11 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `configure.tier` | supported via `cpd session retier <id> --tier <T>` (applies at idle); `options` = `tierOptions` | supported via the same command |
 | `dialogs` | `{mode:"interactive"}` (`ui_request` / `ui_response`) | `{mode:"readonly", reason:"a pi session's dialogs are answered in its terminal; this view reconstructs them from the transcript (A4)"}` |
 | `queued` submissions | tracked from `submit` results and `inbox` (6.4) | always `[]` |
-| footer cost | sum of active entries' `usage.cost.total` | `unknown` (no full-file scan) |
+| footer cost | sum of `docs['pi.usage']` models' `cost.total` (cumulative, 6.4) | `unknown` (no full-file scan) |
 | footer context % | `lastContextTokens / context_window` (approximation) | `unknown` |
-| footer model/thinking | `host_state.agent` | `cpd session show` + `model_change` / `thinking_level_change` lines |
+| footer model/thinking | `docs['pi.agent']` and `host_state.agent` | `cpd session show` + `model_change` / `thinking_level_change` lines |
 | footer branch | `git.branch(welcome.cwd)` | `git.branch(ref.cwd)` |
-| transcript source | host `snapshot`/`events` frames, server-side window | JSONL tail by byte range, live by file watch |
+| transcript source | host `view` and `ops` frames, server-side cache and window (6.4) | JSONL tail by byte range, live by file watch |
 | plan review Reject | `cpd plan decide --reject` via `CpdExec` (O9) | not available (read-only) |
 
 ## 9. Open items
@@ -1491,12 +1590,18 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O10 | Whether the web User may call `cpd pr post` (caller listed as Lead) | 5.4 | `docs/commands.md:275` |
 | O11 | Runtime timing of Vite's `vite:ws:connect` / `vite:ws:disconnect` events and whether the page reloads on reconnect (types declared in `vite/types/customEvent.d.ts:16-17`) | 6.1 | vite 8.3.5 typings only |
 | O12 | `cpd session list` excludes archived sessions by default (inferred from the `--archived` flag) | 5.1 | `cpd session list --help` (scout-cockpit §1.1) |
-| O13 | A live durable host emitting the 1.3.0 frame shapes read from the typings was not exercised | 6.4 | `node_modules/@earendil-works/pi-durable/dist/harness/events.d.ts` |
+| O13 | The 1.5.0 `view` and `ops` shapes were verified by a real Harness run for text and entries only (`live-check.md`), not through the host socket. The thinking and tool-argument append paths are unverified (O20) | 6.4 | `$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`; `node_modules/@earendil-works/pi-durable/dist/harness/view.d.ts` |
 | O14 | Whether durable `cpd-context` entries carry `data.summary` (the fold title then falls back to the first body line) | 6.4 | scout-durable §5 |
 | O15 | `urgency` values beyond `red` and `magenta` and inbox kinds beyond those captured come from docs, not a live capture | 5.1, 5.3 | scout-cockpit §1.3, `docs/commands.md:3910` |
 | O16 | Event kind names not written in `docs/commands.md` (the core `Kind` strings were not read) | 6.3 `panesFor` | scout-cockpit §2 |
 | O17 | Whether Vite calls the plugin `closeBundle` hook on dev-server close (the plugin also listens on `httpServer` `close`) | 6.6 `plugin.ts` | vite 8.3.5 not read |
 | O18 | Live output of `cpd events follow` (not run) and its `cursor_ahead` refusal on restart | 6.3 `events.ts` | scout-cockpit §2 |
 | O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown` | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
+| O20 | The `['a']` append paths of thinking blocks (`docs['pi.live'].generation.message.content[i].thinking`) are assumed from the pi-ai thinking block shape; the live run captured text only | 6.4 frames (deltas) | `live-check.md`; `@earendil-works/pi-ai/dist/types.d.ts` |
+| O21 | The `['a']` append paths of tool-call arguments in the live message (`content[i].arguments` or `content[i].partialJson`) and how a live ToolItem's `args` are completed before its entry arrives; the live run had no tool call | 6.4 frames (L2) | `live-check.md` |
+| O22 | The host `history` command on the wire: the newest page first without `before`, entries in descending id order, `next` opaque and absent on the last page | 6.4 intro, backend (cache and window, gap fill) | `docs/contract.md` §6.17 (read); `pi-durable/dist/harness/transcript.js` (read); not run |
+| O23 | The window past five entries: its 50 and 100 bounds, the splice of its oldest entries and the `before` it sets, and a `view` frame after the first (a rebase) from a live host | 6.4 frames and backend | `pi-durable/dist/harness/view.d.ts` (read); `live-check.md` (five entries) |
+| O24 | `pi.usage` keeps the cost of turns that a compaction removed (cumulative per model): the live run showed the growth of a model's record over two runs; a compaction was not run | 6.4 facts | `live-check.md` |
+| O25 | Whether `busy` (`docs['pi.live'].run`) matches `host_state.state` while a dialog is held and the run waits on a `ui_request` | 6.4 backend (status) | not run |
 
-Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O18 inline or is this section.
+Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O25 inline or is this section.

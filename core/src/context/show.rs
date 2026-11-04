@@ -20,7 +20,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let Some(topic) = &args.topic {
         return show_topic(&mut store, &id, topic);
     }
-    if let Some(record) = &args.record {
+    if let Some(record) = args.record.as_ref().or(args.record_positional.as_ref()) {
         return show_record(&mut store, &id, record, &config.machine);
     }
     let since = args
@@ -92,7 +92,6 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let Some(b) = &bounded {
         out["omitted"] = json!({
             "superseded_decisions": b.omitted.superseded_decisions,
-            "answered_questions": b.omitted.answered_questions,
             "superseded_notes": b.omitted.superseded_notes,
             "older_notes": b.omitted.older_notes,
             "done_plans": b.omitted.done_plans,

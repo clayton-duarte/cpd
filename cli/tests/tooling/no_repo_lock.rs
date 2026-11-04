@@ -136,6 +136,7 @@ fn merged(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Merge {
         catalog: &catalog,
         source: "attempt run",
         metrics: &|_| None,
+        classifier: cpd_core::merge::no_verdict_classifier(),
     };
     merge::merge(&mut Store::open(home, 5000).unwrap(), &ctx, plan, attempt).unwrap()
 }

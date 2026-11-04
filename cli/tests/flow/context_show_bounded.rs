@@ -8,7 +8,7 @@ use common::TestEnv;
 use common::fx::Fx;
 use serde_json::Value;
 
-/// Inserts a record of `kind` written `minutes` minutes ago; `extra` names the `supersedes` or `question` column.
+/// Inserts a record of `kind` written `minutes` minutes ago; `extra` names the `supersedes` column.
 fn seed_with(
     env: &TestEnv,
     id: &str,
@@ -75,7 +75,7 @@ fn ids(out: &Value) -> Vec<String> {
         .collect()
 }
 
-/// One of each kind in force, plus a superseded decision, an answered question, a superseded note and a done Plan.
+/// One of each kind in force, plus a superseded decision, a superseded note and a done Plan.
 fn history(fx: &Fx) {
     let env = &fx.env;
     seed(env, "m1-d1", "decision", 100, "Old decision");
@@ -87,16 +87,6 @@ fn history(fx: &Fx) {
         "Current decision",
         Some(("supersedes", "m1-d1")),
     );
-    seed(env, "m1-q1", "question", 98, "Answered question text");
-    seed_with(
-        env,
-        "m1-a1",
-        "answer",
-        97,
-        "The given answer",
-        Some(("question", "m1-q1")),
-    );
-    seed(env, "m1-q2", "question", 96, "Open question text");
     seed(env, "m1-n1", "note", 95, "Superseded note text");
     seed_with(
         env,
@@ -111,20 +101,17 @@ fn history(fx: &Fx) {
 }
 
 #[test]
-fn bare_show_orders_open_questions_decisions_and_notes_before_plans() {
+fn bare_show_orders_decisions_and_notes_before_plans() {
     let fx = fast();
     history(&fx);
     let md = markdown(&show(&fx, &[]));
-    let order: Vec<usize> = ["## Open questions", "## Decisions", "## Notes", "## Plans"]
+    let order: Vec<usize> = ["## Decisions", "## Notes", "## Plans"]
         .iter()
         .map(|h| pos(&md, h))
         .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{md}");
     assert!(md.starts_with("# Payments\n"), "{md}");
-    assert!(
-        md.contains("Open question text") && md.contains("Current decision"),
-        "{md}"
-    );
+    assert!(md.contains("Current decision"), "{md}");
 }
 
 #[test]
@@ -135,8 +122,6 @@ fn bare_show_collapses_history_to_count_lines() {
     let md = markdown(&out);
     for gone in [
         "Old decision",
-        "Answered question text",
-        "The given answer",
         "Superseded note text",
         "finished",
         "Brief of finished",
@@ -144,7 +129,7 @@ fn bare_show_collapses_history_to_count_lines() {
         assert!(!md.contains(gone), "{gone} in {md}");
     }
     let shown = ids(&out);
-    for gone in ["m1-d1", "m1-q1", "m1-a1", "m1-n1", "m1-p1", "m1-b1"] {
+    for gone in ["m1-d1", "m1-n1", "m1-p1", "m1-b1"] {
         assert!(!shown.contains(&gone.to_owned()), "{gone} in {shown:?}");
     }
     let history = &md[pos(&md, "## History")..];
@@ -158,7 +143,6 @@ fn bare_show_collapses_history_to_count_lines() {
     );
     for line in [
         "- 1 superseded decisions",
-        "- 1 answered questions",
         "- 1 superseded notes",
         "- 1 done plans",
     ] {
@@ -185,13 +169,6 @@ fn bare_show_caps_notes_to_the_newest_forty_with_a_footer() {
             at,
             &format!("Decision number {n}x"),
         );
-        seed(
-            &fx.env,
-            &format!("m1-q{n}"),
-            "question",
-            at,
-            &format!("Question number {n}x"),
-        );
     }
     let md = markdown(&show(&fx, &[]));
     for n in 1..=5 {
@@ -210,10 +187,6 @@ fn bare_show_caps_notes_to_the_newest_forty_with_a_footer() {
         assert!(
             md.contains(&format!("Decision number {n}x")),
             "decision {n} in {md}"
-        );
-        assert!(
-            md.contains(&format!("Question number {n}x")),
-            "question {n} in {md}"
         );
     }
     let footer = md
@@ -245,14 +218,6 @@ fn bare_show_stays_under_fifty_kb_on_a_large_context() {
              VALUES ('{CTX}', 'm1-d{n}', 'decision', '2026-10-14T21:12:00.000Z', 'm1', 'D{n} {long}', {sup});"
         ));
     }
-    for n in 1..=200 {
-        sql.push_str(&format!(
-            "INSERT INTO context_records (context, id, kind, at, machine, text)
-               VALUES ('{CTX}', 'm1-q{n}', 'question', '2026-10-14T21:12:00.000Z', 'm1', 'Q{n} {long}');
-             INSERT INTO context_records (context, id, kind, at, machine, text, question)
-               VALUES ('{CTX}', 'm1-a{n}', 'answer', '2026-10-14T21:12:00.000Z', 'm1', 'A{n} {long}', 'm1-q{n}');"
-        ));
-    }
     fx.env.sql(&sql);
     for n in 1..=100 {
         seed_plan(&fx.env, n, &format!("done{n}"), true);
@@ -281,15 +246,15 @@ fn bare_show_json_counts_what_it_omits() {
     let out = show(&fx, &[]);
     assert_eq!(
         out["omitted"],
-        serde_json::json!({"superseded_decisions": 1, "answered_questions": 1, "superseded_notes": 1, "older_notes": 3, "done_plans": 1}),
+        serde_json::json!({"superseded_decisions": 1, "superseded_notes": 1, "older_notes": 3, "done_plans": 1}),
         "{out}"
     );
     let shown = ids(&out);
-    for kept in ["m1-d2", "m1-q2", "m1-p2", "m1-b2", "m1-n44"] {
+    for kept in ["m1-d2", "m1-p2", "m1-b2", "m1-n44"] {
         assert!(shown.contains(&kept.to_owned()), "{kept} in {shown:?}");
     }
     for gone in [
-        "m1-d1", "m1-q1", "m1-a1", "m1-n1", "m1-p1", "m1-b1", "m1-n2", "m1-n3", "m1-n4",
+        "m1-d1", "m1-n1", "m1-p1", "m1-b1", "m1-n2", "m1-n3", "m1-n4",
     ] {
         assert!(!shown.contains(&gone.to_owned()), "{gone} in {shown:?}");
     }
@@ -340,21 +305,13 @@ fn show_all_renders_the_full_history_in_the_old_order() {
         "## Plans",
         "## Decisions",
         "## Superseded decisions",
-        "## Open questions",
-        "## Answered questions",
         "## Notes",
     ]
     .iter()
     .map(|h| pos(&md, h))
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{md}");
-    for present in [
-        "finished",
-        "Old decision",
-        "Answered question text",
-        "The given answer",
-        "Superseded note text",
-    ] {
+    for present in ["finished", "Old decision", "Superseded note text"] {
         assert!(md.contains(present), "{present} in {md}");
     }
     assert!(!md.contains("## History"), "{md}");
@@ -362,8 +319,7 @@ fn show_all_renders_the_full_history_in_the_old_order() {
     assert_eq!(
         ids(&out),
         [
-            "m1-d1", "m1-d2", "m1-q1", "m1-a1", "m1-q2", "m1-n1", "m1-n2", "m1-p1", "m1-b1",
-            "m1-p2", "m1-b2"
+            "m1-d1", "m1-d2", "m1-n1", "m1-n2", "m1-p1", "m1-b1", "m1-p2", "m1-b2"
         ],
         "{out}"
     );

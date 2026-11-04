@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { UserItem } from "../../protocol/domain.ts";
 import { CHUNK_BYTES, cursorOf, offsetOf, readEarlier, readTail } from "./window.ts";
 import type { FileBoundary } from "./window.ts";
@@ -30,16 +30,30 @@ const userLine = (i: number, pad = ""): string =>
 
 function build(count: number, pad = ""): { text: string; starts: number[] } {
   const starts: number[] = [];
-  let text = "";
+  let offset = 0;
+  const chunks: string[] = [];
   for (let i = 0; i < count; i++) {
-    starts.push(enc.encode(text).length);
-    text += `${userLine(i, pad)}\n`;
+    starts.push(offset);
+    const line = `${userLine(i, pad)}\n`;
+    chunks.push(line);
+    offset += enc.encode(line).length;
   }
-  return { text, starts };
+  return { text: chunks.join(""), starts };
 }
 const ids = (w: { items: readonly { id: string }[] }): string[] => w.items.map((i) => i.id);
 
 describe("pi window reads", () => {
+  it("build encodes each line once, so its cost is linear", () => {
+    const spy = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      const { text } = build(3000, "x".repeat(60));
+      const encoded = spy.mock.calls.reduce((n, [arg]) => n + (typeof arg === "string" ? arg.length : 0), 0);
+      expect(encoded).toBeLessThanOrEqual(2 * text.length);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("tail window returns the last N items without reading the whole file", async () => {
     const { text, starts } = build(3000, "x".repeat(60));
     const fs = new FakeFile(text);

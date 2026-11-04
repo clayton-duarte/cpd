@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::curate::{Candidate, Judged, Verdict};
+use super::curate::{Candidate, Verdict};
 use super::curate_judge::{BifrostJudge, JudgePort, JudgeRequest, RecordView};
 use super::curate_neighbours::{
     K, Neighbour, TOP, forced_ids, lexical_rank, neighbours, semantic_rank,
@@ -88,7 +88,7 @@ fn due(state: &State, checked: &HashSet<RecordId>, now: OffsetDateTime) -> Vec<R
         .collect()
 }
 
-/// The oldest in-force record of kind decision, note, question or answer (gate != Skip), not in `checked`, written
+/// The oldest in-force record of kind decision or note (gate != Skip), not in `checked`, written
 /// within [`WINDOW_HOURS`] before `now` (RFC 3339 `at`); `None` when there is none.
 pub fn next_record(
     state: &State,
@@ -321,36 +321,14 @@ fn find_neighbours(
     Ok((neighbours(&new.id, forced, lexical, semantic), fts_only))
 }
 
-/// One judge call for a question or an answer: its topic and short form.
-fn label_only(
-    models: &Models,
-    new: &Candidate,
-    topics: &HashMap<RecordId, String>,
-    tally: &mut Tally,
-) -> Result<(), CpdError> {
-    let request = JudgeRequest {
-        new: view(new, topics.get(&new.id).map(String::as_str)),
-        neighbour: None,
-    };
-    let Judged { topic, short, .. } = models.judge.judge(&request)?;
-    tally.judged += 1;
-    if label_ok(&topic, &short) {
-        tally.labels.push((new.id.clone(), topic, short));
-    } else {
-        tally.rejected += 1;
-    }
-    Ok(())
-}
-
-/// The one write of a run (A8): only a confirmed retirement or a question or answer label writes anything.
+/// The one write of a run (A8): only a confirmed retirement or a label writes anything.
 fn write(
     store: &mut Store,
     context: &ContextId,
     state: &State,
     tally: &Tally,
-    only_label: bool,
 ) -> Result<(), CpdError> {
-    if tally.retire.is_empty() && !only_label {
+    if tally.retire.is_empty() && tally.labels.is_empty() {
         return Ok(());
     }
     let curations: Vec<Curation> = tally
@@ -384,7 +362,6 @@ fn write(
 
 fn report(
     new: &Candidate,
-    gate: Gate,
     count: usize,
     fts_only: bool,
     tally: &Tally,
@@ -406,7 +383,6 @@ fn report(
         "context": context.as_str(),
         "record": new.id.to_string(),
         "kind": new.kind.as_str(),
-        "gate": if gate == Gate::LabelOnly { "label_only" } else { "neighbours" },
         "neighbours": count,
         "fts_only": fts_only,
         "kev_unreachable": tally.kev_unreachable,
@@ -424,7 +400,7 @@ fn report(
 fn not_due(context: &ContextId, id: &RecordId) -> CpdError {
     CpdError::new(
         ErrorCode::RecordNotFound,
-        format!("{id} is not a decision, note, question or answer in force of Context {context}."),
+        format!("{id} is not a decision or note in force of Context {context}."),
     )
     .with("record", id.to_string())
 }
@@ -469,28 +445,22 @@ pub fn curate_with(
     let topics = topics(store, context)?;
     let at = clock::timestamp(now);
     let mut tally = Tally::default();
-    let mut count = 0;
-    if kind_gate == Gate::LabelOnly {
-        label_only(models, new, &topics, &mut tally)?;
-    } else {
-        let supersedes: Vec<RecordId> = state
-            .in_force_records()
-            .into_iter()
-            .find(|(_, r)| r.id == picked)
-            .and_then(|(_, r)| r.supersedes().cloned())
-            .into_iter()
-            .collect();
-        let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all, &at)?;
-        fts_only |= fts;
-        count = found.len().min(K);
-        check_pairs(models, new, &found, &all, &topics, &mut tally)?;
-    }
-    write(store, context, &state, &tally, kind_gate == Gate::LabelOnly)?;
+    let supersedes: Vec<RecordId> = state
+        .in_force_records()
+        .into_iter()
+        .find(|(_, r)| r.id == picked)
+        .map(|(_, r)| r.supersedes().to_vec())
+        .unwrap_or_default();
+    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all, &at)?;
+    fts_only |= fts;
+    let count = found.len().min(K);
+    check_pairs(models, new, &found, &all, &topics, &mut tally)?;
+    write(store, context, &state, &tally)?;
     vectors.mark_checked(context, &picked, &at)?;
     checked.insert(picked);
     let remaining = due(&state, &checked, now).len();
     Ok(report(
-        new, kind_gate, count, fts_only, &tally, remaining, context,
+        new, count, fts_only, &tally, remaining, context,
     ))
 }
 

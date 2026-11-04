@@ -91,12 +91,8 @@ impl Fx {
     /// Writes a record of the kind of its id's letter, `minutes` before `NOW`; records get their seq in call order.
     fn add(&mut self, rid: &str, minutes: i64, text: &str) {
         let draft = match self::id(rid).kind() {
-            RecordKind::Decision => Draft::Decision { supersedes: None },
+            RecordKind::Decision => Draft::Decision { supersedes: vec![] },
             RecordKind::Note => Draft::Note,
-            RecordKind::Question => Draft::Question,
-            RecordKind::Answer => Draft::Answer {
-                question: self::id("hs-q1"),
-            },
             kind => panic!("fixture.add does not make a {kind:?}"),
         };
         self.insert(draft_record(rid, minutes, text, draft));
@@ -252,16 +248,11 @@ fn plan_ref() -> PlanRef {
 // ---- the pick -----------------------------------------------------------------------------------------------
 
 #[test]
-fn next_record_takes_the_oldest_unchecked_decision_note_question_or_answer() {
+fn next_record_takes_the_oldest_unchecked_decision_or_note() {
     let mut f = fixture(true);
     f.add("hs-n1", 5 * HOURS, "A note.");
     f.add("hs-d1", 4 * HOURS, "A decision.");
-    f.add("hs-q1", 3 * HOURS, "A question?");
-    f.add("hs-a1", 2 * HOURS, "An answer.");
-    assert_eq!(
-        picks(&mut f, HashSet::new()),
-        [id("hs-n1"), id("hs-d1"), id("hs-q1"), id("hs-a1")]
-    );
+    assert_eq!(picks(&mut f, HashSet::new()), [id("hs-n1"), id("hs-d1")]);
 }
 
 #[test]
@@ -329,40 +320,6 @@ fn flag_off_makes_no_port_call_and_creates_no_vectors_db() {
     assert!(!f.home.vectors_db().exists());
     assert_eq!(f.rows(), (0, 0));
     assert_eq!(f.events(), 0);
-}
-
-#[test]
-fn a_question_gets_topic_and_short_from_one_judge_call_and_no_neighbour_lookup() {
-    let mut f = fixture(true);
-    f.add(
-        "hs-d1",
-        30 * HOURS,
-        "Which port does the daemon listen on? Port 80.",
-    );
-    f.add("hs-q1", HOURS, "Which port does the daemon listen on?");
-    let label = Judged {
-        verdict: Verdict::Independent,
-        quote: String::new(),
-        reason: String::new(),
-        topic: "daemon-port".into(),
-        short: "Which port the daemon listens on".into(),
-    };
-    let p = ports(chosen("duplicate", Some(0.9)), FakeJudge::answering(label));
-    let out = f.run(&p, None).unwrap();
-    assert_eq!(out["record"], json!("hs-q1"));
-    assert_eq!(out["gate"], json!("label_only"));
-    let calls = p.judge.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].new.id, id("hs-q1"));
-    assert_eq!(calls[0].neighbour, None);
-    assert!(p.classifier.calls().is_empty());
-    assert!(p.embedding.calls().is_empty());
-    assert_eq!(f.rows(), (1, 0));
-    assert_eq!(
-        f.text("SELECT topic || '|' || short FROM record_curations WHERE record = 'hs-q1'"),
-        "daemon-port|Which port the daemon listens on"
-    );
-    assert!(f.checked().contains(&id("hs-q1")));
 }
 
 // ---- the screen -----------------------------------------------------------------------------------------------

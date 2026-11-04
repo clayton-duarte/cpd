@@ -1,12 +1,9 @@
-//! `cpd context search`: the Context's records ranked by the holographic engine
-//! (contract §4.6; docs/research/context-holographic.md, `## Search contract` and
-//! `## Index and staleness`).
+//! `cpd context search`: the Context's records ranked by full-text search (contract §4.6).
 //!
-//! cpd.db is the source of truth: the engine is a derived per-Context index. A
-//! search first syncs that index (from scratch on first use, else the records added
-//! or curated since the watermark), then asks the engine, maps every hit back to its
-//! live row, and filters by kind and by force. The engine's order is kept, exact
-//! ties break by `seq` descending, and no hit is re-ranked.
+//! cpd.db is the source of truth. Each search reads a snapshot, builds an in-memory
+//! FTS5 table over every record (`fts.rs`), maps the hits back to live rows, and
+//! filters by kind, by force and by pending retirement. A relative score floor drops
+//! the weak tail; exact ties break by `seq` descending.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,9 +11,8 @@ use clap::Args;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::engine::{Bridge, ContextEngine};
+use super::fts::{self, Doc, Scored};
 use super::inforce;
-use super::query;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select};
 use crate::args::Text;
@@ -39,7 +35,7 @@ pub struct SearchArgs {
     /// At most this many records; 0 is every match
     #[arg(long, value_name = "n", default_value_t = 20)]
     limit: u32,
-    /// Only these kinds, comma-separated [default: decision,note,question,answer]
+    /// Only these kinds, comma-separated [default: decision,note]
     #[arg(long, value_name = "k,k", value_delimiter = ',')]
     kind: Vec<String>,
     /// Include the records out of force, labelled
@@ -48,20 +44,19 @@ pub struct SearchArgs {
 }
 
 /// The Context records, curations and live force a search reads once.
-pub(super) struct Snapshot {
+struct Snapshot {
     pub row: ContextRow,
     pub records: Vec<Indexed>,
     pub in_force: HashSet<String>,
     pub retired: HashMap<String, String>,
     pub successor: HashMap<String, String>,
     pub curations: HashMap<String, Curation>,
-    pub max_seq: i64,
-    pub max_curated: Option<String>,
+    pub hidden: HashSet<String>,
 }
 
 /// Reads the Context's row, records (index order), approved retirements, the live
 /// in-force set and the curations, in one read transaction.
-pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapshot, CpdError> {
+fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapshot, CpdError> {
     store.read(|conn| {
         let row = ContextRow::require(conn, context)?;
         let mut stmt = conn.prepare(&format!(
@@ -73,11 +68,6 @@ pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapsho
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let as_of = records.last().map(|(seq, _)| *seq).unwrap_or(0);
         let curated = curations(conn, context)?;
-        let max_curated = curated
-            .values()
-            .filter_map(|(_, _, at)| at.as_deref())
-            .max()
-            .map(str::to_owned);
         let retired_ids = inforce::retired(conn, context)?;
         let in_force = inforce::in_force_without(&records, as_of, &retired_ids)
             .into_iter()
@@ -90,14 +80,23 @@ pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapsho
             retired: retired_labels(conn, context)?,
             successor: successors(conn, context)?,
             curations: curated,
-            max_seq: as_of,
-            max_curated,
+            hidden: pending_hidden(conn, context)?,
         })
     })
 }
 
+/// The records with a pending duplicate or superseded retirement proposal.
+fn pending_hidden(conn: &Connection, context: &ContextId) -> Result<HashSet<String>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT record FROM record_retirements WHERE context = ?1 AND status = 'pending' \
+         AND reason IN ('duplicate', 'superseded')",
+    )?;
+    let rows = stmt.query_map([context.as_str()], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// The approved retirements of `context`, labelled `<reason> <target>` by record id.
-pub(super) fn retired_labels(
+fn retired_labels(
     conn: &Connection,
     context: &ContextId,
 ) -> Result<HashMap<String, String>, CpdError> {
@@ -117,16 +116,23 @@ fn successors(conn: &Connection, context: &ContextId) -> Result<HashMap<String, 
     let mut stmt = conn.prepare(
         "SELECT id, supersedes FROM context_records WHERE context = ?1 AND supersedes IS NOT NULL",
     )?;
-    let rows = stmt.query_map([context.as_str()], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?;
+    let rows = stmt
+        .query_map([context.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows
-        .map(|row| row.map(|(id, old)| (old, id)))
-        .collect::<rusqlite::Result<_>>()?)
+        .into_iter()
+        .flat_map(|(id, olds)| {
+            olds.split(',')
+                .map(|old| (old.to_owned(), id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect())
 }
 
 /// The curation (topic, short and clock) of every curated record of `context`.
-pub(super) fn curations(
+fn curations(
     conn: &Connection,
     context: &ContextId,
 ) -> Result<HashMap<String, Curation>, CpdError> {
@@ -146,17 +152,7 @@ pub(super) fn curations(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// A projected fact: the record id, its index position, its text and its curation (topic, short).
-pub(super) fn fact(seq: i64, record: &Record, curations: &HashMap<String, Curation>) -> Value {
-    let id = record.id.to_string();
-    let (topic, short): (&str, &str) = curations
-        .get(&id)
-        .map(|(topic, short, _)| (topic.as_str(), short.as_str()))
-        .unwrap_or(("", ""));
-    json!({"record": id, "seq": seq, "topic": topic, "short": short, "text": record.text})
-}
-
-/// `cpd context search` (docs/research/context-holographic.md, `## Search contract`).
+/// `cpd context search`.
 pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     let query = args.query.as_str().trim().to_owned();
     if query.is_empty() {
@@ -165,70 +161,40 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
                 .with("query", args.query.as_str()),
         );
     }
-    let sent = query::sanitise(&query);
     let kinds = kinds(&args.kind)?;
-    let Env {
-        home,
-        config,
-        mut store,
-        ..
-    } = Env::open()?;
+    let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let snap = snapshot(&mut store, &context)?;
-    let bridge = Bridge::new(
-        config.context_engine_enabled,
-        config.context_engine_bridge_path()?,
-        config.context_engine_python_path()?,
-        config.context_engine_timeout(),
-    )?;
-    let db = config
-        .context_engine_dir(&home)
-        .join(format!("{}.db", context.as_str()));
 
-    let stats = bridge.run(&db, &[json!({"cmd": "stats"})])?.remove(0);
-    check_ok(&stats, &query)?;
-    let total = stats["facts"].as_u64().unwrap_or(0);
-    let indexed_seq = stats["indexed_seq"].as_i64().unwrap_or(0);
-    let indexed_curated = stats["curated_at"].as_str().map(str::to_owned);
-
-    let mut requests: Vec<Value> = Vec::new();
-    if indexed_seq == 0 {
-        requests.push(json!({"cmd": "reset"}));
-        requests.push(index(&snap, &snap.records));
-    } else {
-        let changed: Vec<Indexed> = snap
-            .records
-            .iter()
-            .filter(|(seq, record)| {
-                *seq > indexed_seq
-                    || curation_is_newer(&snap, &record.id.to_string(), indexed_curated.as_deref())
-            })
-            .cloned()
-            .collect();
-        if !changed.is_empty() {
-            requests.push(index(&snap, &changed));
-        }
-    }
-
-    let n = over_fetch(total, args.limit);
-    requests.push(search_request(&sent, n));
-    let responses = bridge.run(&db, &requests)?;
-    for response in &responses {
-        check_ok(response, &query)?;
-    }
-    let mut hits = hits_of(&responses[responses.len() - 1], &snap, &kinds, args.all);
-
-    // One retry with a larger N when the filtered page is short and the engine truncated.
-    if args.limit > 0
-        && (hits.len() as u64) < u64::from(args.limit)
-        && response_len(&responses[responses.len() - 1]) == n
-        && n < total
-    {
-        let m = n.saturating_mul(5).min(total);
-        let again = bridge.run(&db, &[search_request(&sent, m)])?;
-        check_ok(&again[0], &query)?;
-        hits = hits_of(&again[0], &snap, &kinds, args.all);
-    }
+    let docs: Vec<Doc> = snap
+        .records
+        .iter()
+        .map(|(_, record)| {
+            let id = record.id.to_string();
+            let (topic, short) = snap
+                .curations
+                .get(&id)
+                .map(|(topic, short, _)| (topic.clone(), short.clone()))
+                .unwrap_or_default();
+            Doc {
+                id,
+                topic,
+                short,
+                text: record.text.clone(),
+            }
+        })
+        .collect();
+    let ranked = fts::rank(&docs, &query)?;
+    let named = snap
+        .records
+        .iter()
+        .map(|(_, record)| record.id.to_string())
+        .find(|id| id.eq_ignore_ascii_case(&query));
+    let kept = fts::floor(
+        filter(ranked, &snap, &kinds, args.all, named.as_deref()),
+        named.as_deref(),
+    );
+    let hits = hits_of(kept, &snap);
 
     let take = if args.limit == 0 {
         usize::MAX
@@ -253,15 +219,10 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
 fn kinds(names: &[String]) -> Result<HashSet<&'static str>, CpdError> {
     if names.is_empty() {
-        return Ok([
-            RecordKind::Decision,
-            RecordKind::Note,
-            RecordKind::Question,
-            RecordKind::Answer,
-        ]
-        .into_iter()
-        .map(RecordKind::as_str)
-        .collect());
+        return Ok([RecordKind::Decision, RecordKind::Note]
+            .into_iter()
+            .map(RecordKind::as_str)
+            .collect());
     }
     let mut kinds = HashSet::new();
     for name in names {
@@ -277,75 +238,6 @@ fn kinds(names: &[String]) -> Result<HashSet<&'static str>, CpdError> {
     Ok(kinds)
 }
 
-/// Whether `id` was curated after the watermark `indexed_curated`.
-fn curation_is_newer(snap: &Snapshot, id: &str, indexed_curated: Option<&str>) -> bool {
-    snap.curations
-        .get(id)
-        .and_then(|(_, _, at)| at.as_deref())
-        .is_some_and(|at| indexed_curated.is_none_or(|before| at > before))
-}
-
-/// `{"cmd":"index","facts":[…],"indexed_seq":…,"curated_at":…}` for `records`,
-/// carrying the Context's watermark so the bridge advances it even when only an
-/// older record's curation changed.
-pub(super) fn index(snap: &Snapshot, records: &[Indexed]) -> Value {
-    let facts: Vec<Value> = records
-        .iter()
-        .map(|(seq, record)| fact(*seq, record, &snap.curations))
-        .collect();
-    json!({
-        "cmd": "index",
-        "facts": facts,
-        "indexed_seq": snap.max_seq,
-        "curated_at": snap.max_curated,
-    })
-}
-
-/// `{"cmd":"search","query":…,"limit":…}`.
-fn search_request(query: &str, limit: u64) -> Value {
-    json!({"cmd": "search", "query": query, "limit": limit})
-}
-
-/// The over-fetch `N = min(total_facts, max(limit·5, 80))`; `--limit 0` is all facts.
-fn over_fetch(total: u64, limit: u32) -> u64 {
-    if limit == 0 {
-        return total;
-    }
-    u64::from(limit).saturating_mul(5).max(80).min(total)
-}
-
-/// The number of hits in a `search` response.
-fn response_len(response: &Value) -> u64 {
-    response["hits"]
-        .as_array()
-        .map_or(0, |hits| hits.len() as u64)
-}
-
-/// A response that is not `ok` is a refusal: `bad_query` is `usage`, anything else `engine_failed`.
-pub(super) fn check_ok(response: &Value, query: &str) -> Result<(), CpdError> {
-    if response["ok"] == true {
-        return Ok(());
-    }
-    let error = response["error"].as_str().unwrap_or("engine_error");
-    let message = response["message"]
-        .as_str()
-        .unwrap_or("the engine failed")
-        .to_owned();
-    if error == "bad_query" {
-        return Err(CpdError::new(
-            ErrorCode::Usage,
-            format!("The search query is malformed: {message}"),
-        )
-        .with("query", query)
-        .with("message", message));
-    }
-    Err(CpdError::new(
-        ErrorCode::EngineFailed,
-        format!("The holographic engine failed: {message}"),
-    )
-    .with("message", message))
-}
-
 /// One mapped, filtered hit, in the engine's order (before the tie-break sort).
 struct Hit {
     id: String,
@@ -355,6 +247,7 @@ struct Hit {
     seq: i64,
     score: f64,
     in_force: bool,
+    topic: Option<String>,
 }
 
 impl Hit {
@@ -367,12 +260,16 @@ impl Hit {
             "seq": self.seq,
             "score": self.score,
             "in_force": self.in_force,
+            "topic": self.topic,
         })
     }
 
     /// The `- [<id>] <short>` line, with the out-of-force labels of `context show`.
     fn line(&self, snap: &Snapshot) -> String {
-        let mut line = format!("- [{}] {}", self.id, self.short);
+        let mut line = match &self.topic {
+            Some(topic) => format!("- [{}] [{topic}] {}", self.id, self.short),
+            None => format!("- [{}] {}", self.id, self.short),
+        };
         if let Some(successor) = snap.successor.get(&self.id) {
             line.push_str(&format!(" (superseded by {successor})"));
         }
@@ -383,42 +280,60 @@ impl Hit {
     }
 }
 
-/// Maps the response's hits back to live rows, filters by kind and (unless `all`)
-/// force, and breaks exact ties by `seq` descending, keeping the engine's order.
-fn hits_of(
-    response: &Value,
+/// Keeps the ranked hits that map to a live row of a selected kind, in force (unless `all`)
+/// and not hidden by a pending duplicate or superseded proposal (unless `all`, or named by id).
+fn filter(
+    ranked: Vec<Scored>,
     snap: &Snapshot,
     kinds: &HashSet<&'static str>,
     all: bool,
-) -> Vec<Hit> {
-    let mut hits: Vec<Hit> = response["hits"]
-        .as_array()
+    named: Option<&str>,
+) -> Vec<Scored> {
+    ranked
         .into_iter()
-        .flatten()
+        .filter(|hit| {
+            let Some((_, record)) = snap
+                .records
+                .iter()
+                .find(|(_, record)| record.id.to_string() == hit.id)
+            else {
+                return false;
+            };
+            // `--all` governs supersession and retirement, which only the force
+            // kinds have; a `plan`/`brief` is never in force and is shown
+            // whenever its kind is selected.
+            if !all && !snap.in_force.contains(&hit.id) && force_kind(record.kind()) {
+                return false;
+            }
+            if !all && snap.hidden.contains(&hit.id) && named != Some(hit.id.as_str()) {
+                return false;
+            }
+            kinds.contains(record.kind().as_str())
+        })
+        .collect()
+}
+
+/// Maps the kept hits to rows and breaks exact ties by `seq` descending.
+fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = kept
+        .into_iter()
         .filter_map(|hit| {
-            let id = hit["record"].as_str()?;
             let (seq, record) = snap
                 .records
                 .iter()
-                .find(|(_, record)| record.id.to_string() == id)?;
-            let in_force = snap.in_force.contains(id);
-            // `--all` governs supersession and retirement, which only the four
-            // force kinds have; a `plan`/`brief` is never in force and is shown
-            // whenever its kind is selected.
-            if !all && !in_force && force_kind(record.kind()) {
-                return None;
-            }
-            if !kinds.contains(record.kind().as_str()) {
-                return None;
-            }
+                .find(|(_, record)| record.id.to_string() == hit.id)?;
             Some(Hit {
-                id: id.to_owned(),
-                short: short(&record.id.to_string(), record, &snap.curations),
+                short: short(&hit.id, record, &snap.curations),
                 kind: record.kind().as_str(),
                 at: record.at.clone(),
                 seq: *seq,
-                score: hit["score"].as_f64().unwrap_or(0.0),
-                in_force,
+                score: hit.score,
+                in_force: snap.in_force.contains(&hit.id),
+                topic: snap
+                    .curations
+                    .get(&hit.id)
+                    .map(|(topic, _, _)| topic.clone()),
+                id: hit.id,
             })
         })
         .collect();
@@ -433,10 +348,7 @@ fn hits_of(
 
 /// Whether a record kind is ever in force (`inforce.rs`).
 fn force_kind(kind: RecordKind) -> bool {
-    matches!(
-        kind,
-        RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
-    )
+    matches!(kind, RecordKind::Decision | RecordKind::Note)
 }
 
 /// The curated short form, else the record's first line at most 120 bytes.

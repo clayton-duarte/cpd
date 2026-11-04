@@ -34,7 +34,7 @@ One of exactly three Contexts that every machine keeps: `cpd`, `host` (local mai
 _Avoid_: default Context, system Context
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede others: `--supersedes` may repeat, and prose that says a record is superseded without linking it is refused, contract §4.6), a note, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
 
 **Context store**:
@@ -42,7 +42,7 @@ A Context's records, held only in the machine's database (tables `contexts` and 
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
-The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (search over all records), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
+The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (in-process full-text search over all records, no engine to install), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
@@ -180,7 +180,7 @@ The third stage: Documenting, Red testing, Implementing, Verifying and Deploying
 Reading the Context's records and the User's material (`context show`, `context note`).
 
 **Grilling** (step, pro-d146):
-The interview with the User, with `ask_user_question`, until unknowns are minimised (`context ask`, `context decide`).
+The interview with the User, with `ask_user_question`, until unknowns are minimised (`context decide`).
 
 **Clarifying** (step, pro-d146):
 Restating the Requirements, writing the records, and listing the assumptions the User accepts (`context decide`, `context note`).

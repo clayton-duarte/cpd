@@ -202,7 +202,7 @@ impl Kind {
             JobFailed => spec(
                 [Y, Y, Y, M, N],
                 &["cause", "detail", "tier", "attempts"],
-                &[],
+                &["triage"],
             ),
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
@@ -214,7 +214,7 @@ impl Kind {
             AttemptRetry => spec(
                 [Y, Y, Y, Y, N],
                 &["outcome", "cause", "next_tier"],
-                &["feedback"],
+                &["feedback", "triage"],
             ),
             AttemptAborted => spec([Y, Y, Y, Y, N], &["tier", "by"], &[]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),

@@ -27,11 +27,8 @@ fn context_show_and_search_list_worker_among_their_callers() {
     // The neighbouring Context rows keep their callers.
     for path in [
         "context list",
-        "context reindex",
         "context decide",
         "context note",
-        "context ask",
-        "context answer",
         "context pending",
         "context owner",
     ] {

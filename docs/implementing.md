@@ -56,6 +56,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 - `core/src/context/inforce.rs`: the records in force as of a `seq`, pure over the records read in one transaction (hs-d549, hs-d551);
 - `core/src/context/digest.rs`: the digest renderer (build the text from short forms, size limit, hs-d549, hs-d551), and the one function that renders "the Context" for a first message (FX7), which `plan new` and `context manager` call; the distiller's curation checks (FX1-FX3, hs-d549, hs-d551);
 - `core/src/context/distill.rs`: `context distill` (hs-d549, hs-d551): the lock, batch.md/known.md/docs.md input, the pi run and its timeout, the distiller's output validation and check (FX1-FX3, hs-d549, hs-d551), the `propose` function and retirement (FX2), the `error` Event;
+- `core/src/context/distill_known.rs`: `known_md`, the content of known.md (contract §4.6 step 3): every curated record in force up to `KNOWN_FULL_MAX` = 80, above it the topics in use and the top-`KNOWN_K` = 8 neighbours of each batch record plus the forced records (`curate_neighbours.rs`);
 - `core/src/context/distill_prompt.md`: the distiller's prompt rules (FX9: ids from headers, batch.md record order, duplicate target is older, topic lowercase/digits/dash only, answer short form names question, doc flag rule, four examples, hs-d549, hs-d551), embedded with `include_str!`;
 - `core/src/context/curate_run.rs`: `cpd context curate` (commands.md §3.13a): the command, `next_record`, `curate_with` and `Models`;
 - `engine/src/watch/curate.rs`: the curation tick (contract §3.7 E9), called by E9;
@@ -131,7 +132,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `workflow` | `pr*`, `merge*`, `git*`, `repo_hooks`, `workflow`, `workflow_adopt*`, `workflow_crud`, `workflow_describe`, `workflow_jira*`, `workflow_lead_branch`, `workflow_live_spec`, `workflow_local_needs`, `workflow_merge_drafts`, `workflow_needs_required`, `workflow_start`, `workflow_template_jobs` |
-  | `flow` | `plan*`, `agent_key_names`, `agent_key_worker`, `agent_forbidden`, `grounding_guard`, `archive_blockers`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_wire`, `preset` |
+  | `flow` | `plan*`, `agent_key_names`, `agent_key_worker`, `agent_forbidden`, `grounding_guard`, `archive_blockers`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `config_experimental`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_wire`, `preset` |
   | `session` | `session*`, `agent_key_guards`, `agent_key_addressing`, `agent_key_row`, `agent_key_text`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |

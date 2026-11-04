@@ -101,24 +101,26 @@ impl Tty for Tty0 {
 }
 
 /// One thing the User does, or the test looks at.
-enum Act {
+pub(super) enum Act {
     Key(KeyCode),
     Type(&'static str),
     /// A left click on the first cell of `target` in the first row that holds `anchor`.
     Click(&'static str, &'static str),
     Wheel(MouseEventKind),
+    /// A left click on the first cell of the last word of the first row that holds `anchor` (its value).
+    ClickEnd(&'static str),
     /// The test takes the screen as it is, and how many commands have run.
     Snap,
 }
 
 /// What a [`Act::Snap`] took.
-struct Snap {
+pub(super) struct Snap {
     buffer: Buffer,
-    calls: usize,
+    pub(super) calls: usize,
 }
 
 impl Snap {
-    fn rows(&self) -> Vec<String> {
+    pub(super) fn rows(&self) -> Vec<String> {
         buffer_rows(&self.buffer)
     }
 }
@@ -153,6 +155,21 @@ impl Script {
             Act::Key(code) => key(code),
             Act::Type(_) | Act::Snap => unreachable!("handled by the caller"),
             Act::Wheel(kind) => mouse(kind, 10, 5),
+            Act::ClickEnd(anchor) => {
+                let rows = buffer_rows(&self.screen.buffer());
+                let y = rows
+                    .iter()
+                    .position(|r| r.contains(anchor))
+                    .unwrap_or_else(|| panic!("no row shows {anchor:?}:\n{}", rows.join("\n")));
+                let line = rows[y].trim_end();
+                let word = line.rsplit(' ').next().unwrap_or(line);
+                let x = line.chars().count() - word.chars().count();
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    x as u16 + 1,
+                    y as u16,
+                )
+            }
             Act::Click(anchor, target) => {
                 let rows = buffer_rows(&self.screen.buffer());
                 let y = rows
@@ -225,8 +242,9 @@ const BIFROST: [&str; 4] = [
     "bifrost/vertex/gemini-3.8-flash",
 ];
 
-fn config() -> Value {
+pub(super) fn config(experimental: &Value) -> Value {
     json!({"config": {
+        "experimental": experimental,
         "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3",
         "presets": {"bifrost": {"O": BIFROST[0], "S": BIFROST[1], "H": BIFROST[2], "G": BIFROST[3]}},
     }})
@@ -256,17 +274,25 @@ fn refusal(code: ErrorCode, message: &str) -> CpdError {
 
 /// The fake commands: every argv recorded; `fail` answers an argv (by its first words) with an error, the first
 /// `times` times it runs.
-struct Commands {
+pub(super) struct Commands {
     calls: Rc<RefCell<Vec<Vec<String>>>>,
+    experimental: Value,
     fail: RefCell<Vec<(Vec<&'static str>, usize, CpdError)>>,
 }
 
 impl Commands {
-    fn new() -> Commands {
+    pub(super) fn new() -> Commands {
         Commands {
             calls: Rc::default(),
+            experimental: defaults(),
             fail: RefCell::default(),
         }
+    }
+
+    /// The `experimental` object `cpd config` prints.
+    pub(super) fn with_experimental(mut self, experimental: Value) -> Commands {
+        self.experimental = experimental;
+        self
     }
 
     fn failing(self, prefix: &[&'static str], times: usize, error: CpdError) -> Commands {
@@ -291,7 +317,12 @@ impl Commands {
         }
         let first: Vec<&str> = words.iter().map(String::as_str).collect();
         Ok(match first.as_slice() {
-            ["config"] => Output::success(config()),
+            ["config"] => Output::success(config(&self.experimental)),
+            ["config", "experimental", feature, state]
+                if FEATURES.contains(feature) && ["on", "off"].contains(state) =>
+            {
+                Output::success(json!({"experimental": self.experimental}))
+            }
             ["tiers", ..] => Output::success(tiers()),
             ["models", "show"] => Output::success(models()),
             ["preset", "set", ..] => Output::success(json!({"preset": "set"})),
@@ -302,13 +333,25 @@ impl Commands {
     }
 }
 
-fn call(words: &[&str]) -> Vec<String> {
+pub(super) const FEATURES: [&str; 4] = [
+    "durable_workers",
+    "write_curation",
+    "failure_triage",
+    "turn_question_guard",
+];
+
+/// The documented defaults (contract §8.2).
+pub(super) fn defaults() -> Value {
+    json!({"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true})
+}
+
+pub(super) fn call(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
 }
 
 const READS: [&[&str]; 3] = [&["config"], &["tiers"], &["models", "show"]];
 
-fn reads() -> Vec<Vec<String>> {
+pub(super) fn reads() -> Vec<Vec<String>> {
     READS.iter().map(|c| call(c)).collect()
 }
 
@@ -327,10 +370,10 @@ fn candidates(o: &str) -> Vec<String> {
 }
 
 /// What a run gave: its result, the argv list, the snaps, and the last screen.
-struct Run {
-    result: Result<Output, CpdError>,
-    calls: Vec<Vec<String>>,
-    snaps: Vec<Snap>,
+pub(super) struct Run {
+    pub(super) result: Result<Output, CpdError>,
+    pub(super) calls: Vec<Vec<String>>,
+    pub(super) snaps: Vec<Snap>,
     screen: Shared,
 }
 
@@ -363,7 +406,7 @@ fn drive(commands: &Commands, size: (u16, u16), acts: Vec<Act>) -> Run {
 }
 
 /// The popup's inside, 64 x 24.
-fn popup(commands: &Commands, acts: Vec<Act>) -> Run {
+pub(super) fn popup(commands: &Commands, acts: Vec<Act>) -> Run {
     drive(commands, (64, 24), acts)
 }
 
@@ -377,13 +420,13 @@ fn title_row() -> String {
     buffer_rows(&buf)[1].clone()
 }
 
-fn screen(rows: &[&str]) -> Vec<String> {
+pub(super) fn screen(rows: &[&str]) -> Vec<String> {
     let mut all: Vec<String> = rows.iter().map(|r| (*r).to_owned()).collect();
     all[1] = title_row();
     all
 }
 
-fn first_screen() -> Vec<String> {
+pub(super) fn first_screen() -> Vec<String> {
     screen(&[
         "",
         "",
@@ -402,11 +445,11 @@ fn first_screen() -> Vec<String> {
         "     lead      S4 ▾  S4..O2",
         "     manager   O3 ▾  O3..O4",
         "",
-        "                        [ Save ]  [ Cancel ]",
-        "",
-        "",
-        "",
-        "",
+        " Experimental",
+        "     durable_workers      off",
+        "     write_curation       on",
+        "     failure_triage       on",
+        "     turn_question_guard  on",
         "",
         "",
     ])
@@ -470,8 +513,8 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
         ])
     );
     // Esc closed the list only: the view is still open and the first screen is back, the focus on the lead row.
-    assert_eq!(run.snaps[1].rows()[14], "   ▸ lead      S4 ▾  S4..O2");
-    assert!(run.snaps[1].rows()[12].starts_with("     auxiliar"));
+    assert_eq!(run.snaps[1].rows()[13], "   ▸ lead      S4 ▾  S4..O2");
+    assert!(run.snaps[1].rows()[11].starts_with("     auxiliar"));
 }
 
 #[test]
@@ -548,6 +591,7 @@ fn the_footer_shows_a_refusal_in_red() {
             "( ) vertex/claude-sonnet-5-5",
             "( ) vertex/claude-sonnet-5-5",
         ),
+        Act::Wheel(MouseEventKind::ScrollDown),
         Act::Click("[ Save ]", "[ Save ]"),
         Act::Snap,
         Act::Key(KeyCode::Esc),
@@ -555,7 +599,7 @@ fn the_footer_shows_a_refusal_in_red() {
     let run = popup(&commands, acts);
     let snap = &run.snaps[0];
     let rows = snap.rows();
-    assert_eq!(rows[6], "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
+    assert_eq!(rows[5], "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
     assert_eq!(
         rows[23],
         "preset_model_unoffered: bifrost does not offer O's model"
@@ -660,6 +704,13 @@ fn change_manager_and_o_then(finish: Act) -> Vec<Act> {
     ]
 }
 
+/// [`change_manager_and_o_then`], the body scrolled to the buttons first.
+fn change_manager_and_o_then_scrolled(finish: Act) -> Vec<Act> {
+    let mut acts = change_manager_and_o_then(Act::Wheel(MouseEventKind::ScrollDown));
+    acts.push(finish);
+    acts
+}
+
 fn candidate_call() -> Vec<String> {
     candidates(BIFROST[1])
 }
@@ -696,7 +747,7 @@ fn a_click_on_save_runs_the_steps_through_the_commands_in_order_and_closes() {
     // no key after the click: the view closes by itself
     let run = popup(
         &commands,
-        change_manager_and_o_then(Act::Click("[ Save ]", "[ Save ]")),
+        change_manager_and_o_then_scrolled(Act::Click("[ Save ]", "[ Save ]")),
     );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     let mut want = reads();
@@ -711,8 +762,12 @@ fn a_refused_step_keeps_the_view_open_and_a_second_save_retries_only_that_step()
         1,
         refusal(ErrorCode::TierInvalid, "worker is not below lead"),
     );
-    let mut acts = change_manager_and_o_then(Act::Click("[ Save ]", "[ Save ]"));
-    acts.extend([Act::Snap, Act::Click("[ Save ]", "[ Save ]")]);
+    let mut acts = change_manager_and_o_then_scrolled(Act::Click("[ Save ]", "[ Save ]"));
+    acts.extend([
+        Act::Snap,
+        Act::Wheel(MouseEventKind::ScrollDown),
+        Act::Click("[ Save ]", "[ Save ]"),
+    ]);
     let run = popup(&commands, acts);
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(
@@ -740,6 +795,7 @@ fn a_click_on_cancel_closes_without_running_a_write_command() {
     let acts = vec![
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
+        Act::Wheel(MouseEventKind::ScrollDown),
         Act::Click("[ Cancel ]", "[ Cancel ]"),
     ];
     let run = popup(&commands, acts);

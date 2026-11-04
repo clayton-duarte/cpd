@@ -248,6 +248,7 @@ impl Fx {
             catalog: &self.catalog,
             source,
             metrics: &metrics,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         }
     }
 
@@ -2108,6 +2109,7 @@ fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip(
                 catalog: &fx.catalog,
                 source: "attempt run",
                 metrics: &metrics,
+                classifier: cpd_core::merge::no_verdict_classifier(),
             };
             merge::merge(
                 &mut Store::open(&fx.home, 5000).unwrap(),
