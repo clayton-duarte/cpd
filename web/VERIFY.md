@@ -285,3 +285,41 @@ Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH
 | 18, 19 | WebUI in the window: links, About, dark theme | [ ] | |
 | 20 to 22 | Packaging | [ ] | |
 | 23 to 26 | Terminal fixes: hover, resize, pointer, Nerd Fonts | [ ] | |
+
+## 8. Auto-update and CLI bootstrap
+
+Specification: [`ELECTRON.md`](./ELECTRON.md), section "Auto-update and CLI bootstrap". Run these on the app launched from the cpd checkout (macOS), with the checkout on branch `main`, clean, and `origin` reachable. `cpd` is on `PATH` and an engine is running. Steps (a), (b) and (d) need a merged PR: merge only the change the step names, into `main`.
+
+### 8.1 Steps
+
+1. **(a) Renderer reload on merge.** In WebUI (View > WebUI), select a plan and a session, and note the `cpd tui` process id (`pgrep -fl 'cpd tui'`). Focus another app. Merge a PR that touches `web/src/ui/`. Wait about 1 minute.
+   Expected: the renderer reloads only after the window is unfocused: the WebUI shows the same plan and session again, restored from `sessionStorage` key `cpd.selection`. The TUI terminal is repainted with the current cockpit, and `pgrep -fl 'cpd tui'` shows the same process id (still attached). No window takes focus during the reload. Unverified: the build time is not measured by the contract, so "about 1 minute" is the expectation, not a measured result.
+2. **(a) No reload while focused.** Focus the cockpit window and leave it active. Merge another PR that touches `web/src/ui/`. Wait 2 minutes with the window focused and the keyboard and pointer in use.
+   Expected: no reload while the window stays focused and the system is active. The reload happens after you unfocus the window, or after 300 s with no system input.
+3. **(a) Same-size resize (unverified).** Right after step 1, check that the TUI is painted. Drag the window edge by one column and back.
+   Expected: the TUI repaints at each size. Unverified: whether a same-size resize repaints tmux. The app works around it with a one-column nudge (`resize(cols - 1)`, then `resize(cols)` after 50 ms). If the terminal stays blank after step 1, record it in the results.
+4. **(b) main.ts change shows the restart item.** Merge a PR that changes `web/src/electron/main.ts` and nothing under `web/src/ui/`. Wait for the build.
+   Expected: the native menu shows `Restart to Apply Update`, enabled. The renderer does not reload: the WebUI keeps its selection and draft, and the `cpd tui` process id is unchanged. Then click `Restart to Apply Update`.
+   Expected after the click: the app applies the update. The click is the only way a changed `main.js` or `preload.cjs` is loaded.
+5. **(c) CLI bootstrap on a missing command.** Quit the app. Run `mv ~/.local/bin/cpd ~/.local/bin/cpd.aside`, then relaunch the app.
+   Expected: the window shows the overlay titled `Installing the cpd command tool`, with the detail `Runs once in the background; the cockpit starts when it finishes.`. When it finishes, the overlay goes and the cockpit starts. `ls -l ~/.local/bin/cpd` shows the file. Then run `rm ~/.local/bin/cpd.aside`.
+   If the overlay shows `cpd command tool install failed` instead, the log is `~/.cpd/run/cli-bootstrap.log`. Record it in the results.
+6. **(d) CLI install waits for a running Attempt.** Start a Job so that an Attempt is running: `cpd attempt list --active` lists it. Note the checkout's HEAD (`git rev-parse HEAD`). Merge a PR into `main`.
+   Expected: the updater log has a line saying an Attempt is running and that the CLI install waits. The exact wording is not fixed by the contract (unverified). `cat <checkout>/target/.cli-installed-sha` still shows the old sha while the Attempt runs.
+7. **(d) CLI install after the Attempt ends.** Wait for the Attempt to finish. Wait up to about 1 minute.
+   Expected: the install runs. `cat <checkout>/target/.cli-installed-sha` prints the HEAD from step 6, matching `git rev-parse HEAD`.
+8. **(e) Dirty checkout skips.** In the checkout, run `touch web/verify-dirty.txt`. Relaunch the app (the launch catch-up check runs).
+   Expected: the updater log has one line with the reason `dirty`. There is no build, no renderer reload and no CLI install. The menu shows `Up to Date`. Then run `rm web/verify-dirty.txt`.
+
+### 8.2 Results
+
+| # | Area | Result | Notes |
+|---|---|---|---|
+| 1 | (a) Renderer reload on merge | [ ] | |
+| 2 | (a) No reload while focused | [ ] | |
+| 3 | (a) Same-size resize repaint (unverified) | [ ] | |
+| 4 | (b) main.ts change shows the restart item | [ ] | |
+| 5 | (c) CLI bootstrap overlay | [ ] | |
+| 6 | (d) CLI install waits for a running Attempt | [ ] | |
+| 7 | (d) CLI install after the Attempt ends | [ ] | |
+| 8 | (e) Dirty checkout skips | [ ] | |
