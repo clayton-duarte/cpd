@@ -260,7 +260,7 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
     const pullObj = pull === null || pull === undefined ? null : obj(pull, c, "pull_request");
     const opt = (o: Obj | null, f: string): StrOrNull => (o !== null && typeof o[f] === "string" ? (o[f] as string) : null);
     return {
-      key: str(w, "key", c), title: str(w, "title", c), repo: str(w, "repo", c), base: str(w, "base", c), status: str(w, "status", c),
+      key: str(w, "key", c), title: str(w, "title", c), repo: strN(w, "repo", c) ?? "", base: strN(w, "base", c) ?? "", status: str(w, "status", c),
       needs: strList(w, "needs"), jobKeys: strList(w, "jobs"),
       pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable") },
     };
@@ -269,10 +269,10 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
     const key = str(j, "key", c);
     const attempts: AttemptView[] = (j["attempts"] === undefined ? [] : arr(j, "attempts", c)).map((a) => {
       const o = obj(a, c, "attempts[]");
-      return { id: str(o, "id", c), number: num(o, "number", c), tier: str(o, "tier", c), status: str(o, "status", c), outcome: strN(o, "outcome", c), cause: strN(o, "cause", c), workerSession: strN(o, "worker_session", c) };
+      return { id: str(o, "id", c), number: num(o, "number", c), tier: strN(o, "tier", c) ?? "", status: str(o, "status", c), outcome: strN(o, "outcome", c), cause: strN(o, "cause", c), workerSession: strN(o, "worker_session", c) };
     });
     return {
-      key, title: str(j, "title", c), kind: str(j, "kind", c), status: str(j, "status", c), tier: str(j, "tier", c), needs: strList(j, "needs"),
+      key, title: str(j, "title", c), kind: str(j, "kind", c), status: str(j, "status", c), tier: strN(j, "tier", c) ?? "", needs: strList(j, "needs"),
       workflow: workflows.find((w) => w.jobKeys.includes(key))?.key ?? null, attempts,
     };
   });
@@ -316,7 +316,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
       wantTree ? cpd.json(["plan", "list"]) : undefined,
       wantSessions ? cpd.json(["session", "list"]) : undefined,
       wantInbox ? cpd.json(["inbox", "list"]) : undefined,
-      wantPlan ? cpd.json(["plan", "show", "--plan", planId]) : undefined,
+      wantPlan ? cpd.json(["plan", "show", "--plan", planId]).catch(() => null) : undefined,
     ]);
     const out: { tree?: ContextTreeModel; plan?: PlanViewModel | null; inbox?: InboxModel } = {};
     const inbox = inboxR === undefined ? undefined : parseInboxList(inboxR);
@@ -327,7 +327,8 @@ export function createReadModel(cpd: Cpd): ReadModel {
       });
     }
     if (panes.has("inbox") && inbox !== undefined) out.inbox = buildInbox(inbox, sessR === undefined ? [] : parseSessionList(sessR));
-    if (panes.has("plan")) out.plan = showR === undefined ? null : buildPlanView(parsePlanShow(showR));
+    if (panes.has("plan")) if (showR === undefined) out.plan = null;
+    else if (showR !== null) out.plan = buildPlanView(parsePlanShow(showR));
     return out;
   }
   return {

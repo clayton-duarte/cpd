@@ -23,8 +23,8 @@ export function parseEventLine(line: string): CpdEvent {
   return { id: o["id"], kind: o["kind"], plan: s("plan"), context: s("context"), session: s("session"), job: s("job"), attempt: s("attempt"), at: s("at") ?? "", text: s("text") ?? "", data: (typeof o["data"] === "object" && o["data"] !== null && !Array.isArray(o["data"]) ? o["data"] : {}) as Record<string, unknown> };
 }
 
-const TREE_KINDS = new Set("context-created context-grounded context-record context-renamed context-archived plan-created plan-phase plan-done plan-renamed plan-archived plan-review job-added job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status all-merged workflow-added workflow-edited workflow-cancelled workflow-started pr-opened pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep plan-deleted context-deleted inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed".split(" "));
-const INBOX_KINDS = new Set("inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed session-state plan-created session-registered session-moved".split(" "));
+const TREE_KINDS = new Set("context-created context-grounded context-record context-renamed context-archived context-curated context-owner context-deleted plan-created plan-phase plan-done plan-renamed plan-archived plan-review plan-outlined plan-deleted job-added job-addendum job-blocked job-cancel-requested job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status attempt-ended attempt-aborted attempt-nudge all-merged workflow-added workflow-base-changed workflow-described workflow-edited workflow-cancelled workflow-started pr-added pr-base-changed pr-cancelled pr-described pr-edited pr-feedback pr-opened pr-started pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep session-message session-resumed session-retiered inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed watch-started watch-stopped incident-started incident-ended incident-plans error".split(" "));
+const INBOX_KINDS = new Set("inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed session-state session-message session-resumed plan-created plan-review job-failed job-blocked pr-opened pr-merged pr-feedback watch-started watch-stopped incident-started incident-ended session-registered session-moved".split(" "));
 
 export function panesFor(event: CpdEvent, selectedPlan: { id: string; contextId: string } | null): ReadonlySet<CockpitPane> {
   const panes = new Set<CockpitPane>();
@@ -93,9 +93,21 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     if (u.plan !== undefined) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
     if (u.inbox !== undefined) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
   };
+  let running = false;
+  let queued: Set<CockpitPane> | null = null;
   const refresh = async (panes: ReadonlySet<CockpitPane>): Promise<void> => {
-    try { apply(await readModel.loadPanes(panes, planId)); } catch (e) { emitError(e); }
+    if (running) { queued = new Set([...(queued ?? []), ...panes]); return; }
+    running = true;
+    try {
+      let next: ReadonlySet<CockpitPane> | null = panes;
+      while (next !== null && !stopped) {
+        try { apply(await readModel.loadPanes(next, planId)); } catch (e) { emitError(e); }
+        next = queued;
+        queued = null;
+      }
+    } finally { running = false; }
   };
+  const livePanes = (): Set<CockpitPane> => new Set<CockpitPane>(planId !== null ? ["tree", "inbox", "plan"] : ["tree", "inbox"]);
   const refreshExtras = async (): Promise<void> => {
     if (extras === undefined) return;
     try {
@@ -122,7 +134,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     safety = scheduler.after(SAFETY_REFRESH_MS, () => {
       safety = null;
       if (stopped) return;
-      if (planId !== null) void refresh(new Set<CockpitPane>(["plan"]));
+      void refresh(livePanes());
       void refreshExtras();
       scheduleSafety();
     });
@@ -207,7 +219,9 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       listeners.add(listener);
       return { dispose: () => { listeners.delete(listener); } };
     },
-    runAction: (action) => runAction(cpd, action),
+    async runAction(action) {
+      try { return await runAction(cpd, action); } finally { if (!stopped) void refresh(livePanes()); }
+    },
     readLogs: () => need().logs(),
     readSettings: () => need().settings(),
     saveSettings: (changes) => need().saveSettings(changes),
