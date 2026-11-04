@@ -1,6 +1,6 @@
 # Knowledge plane
 
-The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **in-process full-text search** over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (`cpd context show --record hs-d802`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
+The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **in-process full-text search** over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (a record of machine `hs`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
 
 ```mermaid
 flowchart LR
