@@ -486,24 +486,24 @@ fn a_plan_review_item_whose_lead_cannot_open_copies_nothing_and_shows_a_text_dia
 }
 
 #[test]
-fn a_click_on_a_loop_guard_item_resumes_its_session_in_the_background() {
+fn a_click_on_a_loop_guard_item_opens_its_session_in_the_chat_slot() {
     let fx = rig(vec![linked(
         Kind::LoopGuard,
         Urgency::Red,
-        "session:l-ship",
-        "l-ship loop guard",
-        Some("l-ship"),
+        "session:f-blocked",
+        "f-blocked loop guard",
+        Some("f-blocked"),
         None,
     )]);
     let _engine = engine(&fx);
-    cockpit(&fx);
+    let chat = cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, vec![click_on(&screen, "l-ship loop guard")]);
-    assert_eq!(cpd_calls(&fx), [words(&["session", "resume", "l-ship"])]);
+    run(&fx, vec![click_on(&screen, "f-blocked loop guard")]);
+    assert_eq!(cpd_calls(&fx), [words(&["session", "open", "f-blocked"])]);
     assert_eq!(
         focused(&fx),
-        Vec::<String>::new(),
-        "it is resumed in the background: the focus stays"
+        [chat],
+        "the focus goes to the chat slot after the open"
     );
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }

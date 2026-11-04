@@ -12,6 +12,8 @@
 #[cfg(test)]
 mod distill_runner_tests;
 
+#[cfg(test)]
+mod arch_citations_tests;
 mod archive;
 mod contexts;
 pub mod curated;
