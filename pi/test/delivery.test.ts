@@ -420,7 +420,8 @@ async function resetsOn(t: { after(fn: () => unknown): void }, e: ReturnType<typ
   await guarded(f);
   await readsPass(f, 12, "before");
   f.emit(e);
-  await waitFor("the delivery", () => f.pi.delivered().length === 1);
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 1);
   assert.equal(f.pi.delivered()[0]!.options.triggerTurn, true, "the delivery starts a turn");
   await readsPass(f, 12, "after the delivery");
   assert.ok((await readCall(f))?.block, "the 13th read is refused");
@@ -441,13 +442,15 @@ test("a delivery gated to nextTurn does not reset the loop guard counters", asyn
   // control: a delivery that starts a turn resets
   await readsPass(f, 12, "before");
   f.emit(event(101, "escalation"));
-  await waitFor("the first delivery", () => f.pi.delivered().length === 1);
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 1);
   await readsPass(f, 12, "after the control delivery");
   // three refusals trip the breaker, so the next delivery is gated
   for (let i = 0; i < 3; i++) assert.ok((await readCall(f))?.block);
-  await waitFor("the blocked state", () => stateCalls(f).includes("blocked:φ: loop guard"));
-  f.emit(event(102, "escalation"));
-  await waitFor("the gated delivery", () => f.pi.delivered().length === 2);
+  await f.quiet();
+  f.emit(event(103, "escalation"));
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 2);
   assert.deepEqual(f.pi.delivered()[1]!.options, { triggerTurn: false, deliverAs: "nextTurn" });
   assert.ok((await readCall(f))?.block, "the streak kept its value");
 });
@@ -459,7 +462,8 @@ test("a delivery that starts no turn does not reset the loop guard counters", as
   // control: a delivery that starts a turn resets
   await readsPass(f, 12, "before");
   f.emit(event(101, "escalation"));
-  await waitFor("the first delivery", () => f.pi.delivered().length === 1);
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 1);
   await readsPass(f, 12, "after the control delivery");
   f.emit(event(102, "job-merged", { data: { turn: false } }), event(103, "plan-done", { data: { workflows: [], turn: false } }));
   await f.quiet(); // not drain: its marker Event starts a turn, which resets the counters
