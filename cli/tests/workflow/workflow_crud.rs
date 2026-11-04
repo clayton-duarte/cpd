@@ -1557,7 +1557,7 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
         .sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let writes = fx.writes();
     let error = fx.refused(
-        &fx.pr(&["edit", "api", "--base", "main"]),
+        &fx.pr(&["edit", "api", "--base", "main", "--no-needs"]),
         "workflow_locked",
         3,
         writes,
@@ -1641,6 +1641,10 @@ fn edit_after_the_lock_retargets_a_dispatch_workflow_base_to_a_branch() {
     fx.add("a", &fx.pay, &["--no-needs"]).ok();
     fx.add("c", &fx.pay, &["--no-needs"]).ok();
     fx.add("b2", &fx.pay, &["--needs", "a,c"]).ok();
+    fx.git(
+        &fx.pay,
+        &["update-ref", "refs/remotes/origin/release", "main"],
+    );
     fx.env
         .sql("UPDATE workflows SET base = 'gone' WHERE key IN ('a', 'c')");
     fx.env
@@ -1685,17 +1689,14 @@ fn edit_after_the_lock_retargets_a_dispatch_workflow_base_to_a_branch() {
         fx.refused(&fx.pr(&args), "workflow_locked", 3, fx.writes());
     }
 
-    // A merged or cancelled Workflow stays refused.
-    for status in ["merged", "cancelled"] {
-        fx.env.sql(&format!(
-            "UPDATE workflows SET status = '{status}' WHERE key = 'c'"
-        ));
-        let args = ["edit", "c", "--base", "dev"];
-        let writes = fx.writes();
-        let got = fx.pr(&args);
-        assert_eq!(got.exit, 3, "{status}: {got:?}");
-        assert_eq!(fx.writes(), writes, "{status} wrote something");
-    }
+    // A cancelled Workflow stays refused (`dispatch>merged` is no transition, so only `cancelled` is staged).
+    fx.env.sql(
+        "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'c'",
+    );
+    let writes = fx.writes();
+    let got = fx.pr(&["edit", "c", "--base", "dev"]);
+    assert_eq!(got.exit, 3, "{got:?}");
+    assert_eq!(fx.writes(), writes, "cancelled wrote something");
 }
 
 #[test]
@@ -1780,7 +1781,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
 
     // After the lock the other flags are refused, the title is not.
     fx.refused(
-        &fx.pr(&["edit", "api", "--base", "main"]),
+        &fx.pr(&["edit", "api", "--base", "main", "--no-needs"]),
         "workflow_locked",
         3,
         fx.writes(),

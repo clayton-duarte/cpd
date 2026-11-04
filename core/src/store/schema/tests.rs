@@ -2232,7 +2232,6 @@ fn prs_locked_refuses_a_change_of_identity_repo_or_base_after_the_lock() {
     let mut store = migrated(&dir);
     for sql in [
         "UPDATE workflows SET repo = '/src/other' WHERE plan = 'di'",
-        "UPDATE workflows SET base = 'develop' WHERE plan = 'di'",
         "UPDATE workflows SET base = 'develop' WHERE plan = 'dn'",
         "UPDATE workflows SET key = 'other' WHERE plan = 'dn'",
         "UPDATE workflows SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
@@ -4463,8 +4462,8 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    // After it, only an `open` Workflow and a Workflow whose `base` is the Lead Branch of a Workflow of its repo; `pl` is locked.
-    for key in ["a", "c", "d", "x", "m"] {
+    // After it, a `waiting`, `dispatch` or `open` Workflow's `base` follows (`workflow-base-retarget` dropped the lead-branch condition); `pl` is locked.
+    for key in ["x", "m"] {
         let err = refused(
             &mut store,
             &format!("UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"),
@@ -4506,7 +4505,7 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     write(
         &mut store,
         "UPDATE workflows SET base = 'main' WHERE plan = 'pl' AND key IN ('b', 'e');
-         UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = 'op'",
+         UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key IN ('a', 'c', 'd', 'op')",
     )
     .unwrap();
     assert_eq!(
@@ -4520,12 +4519,7 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
             serde_json::json!(["op", "develop"])
         ]
     );
-    // `b` is no longer stacked, so its base is Locked again; the legacy rename of a merged Workflow is unchanged.
-    let err = refused(
-        &mut store,
-        "UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = 'b'",
-    );
-    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
+    // `b` is no longer stacked, but a waiting Workflow's base still follows (`workflow-base-retarget`).
     // Before the lock any Workflow may change, as before.
     write(
         &mut store,
