@@ -12,6 +12,7 @@ export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate {
   const { mode, platform, onSelect } = options;
   const template: MenuTemplate = [];
   if (platform === "darwin") template.push({ role: "appMenu" });
+  template.push({ role: "editMenu" });
   template.push({
     label: "View",
     submenu: [
