@@ -1,5 +1,8 @@
 import type { CpdEvent, EventOf, Kind } from "./event.ts";
 import type { Message, SendOptions } from "./pi.ts";
+import type { Host } from "./host.ts";
+import { resetTurn } from "./loop-guard.ts";
+import type { Run } from "./run.ts";
 import { zoneTime } from "./time.ts";
 
 /**
@@ -22,6 +25,13 @@ export const leadRule = (ev: CpdEvent) =>
 
 /** §15.7a: while a by-user Session's first message is pending, and §15.15 L4: while the loop guard is tripped, a send that would start a turn is queued for the next run instead. */
 export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions): SendOptions => ((r?.firstPending || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
+
+/** §15.15 L8: the one send path; a send that starts a turn resets the loop guard counters first. */
+export function send(host: Host, r: Run, message: Parameters<Host["pi"]["sendMessage"]>[0], options: SendOptions): void {
+  const final = gated(r, options);
+  if (final.triggerTurn) resetTurn(r);
+  host.pi.sendMessage(message, final);
+}
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });
 export const STEER = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "steer" });
