@@ -50,3 +50,7 @@ export type ServerMessage =
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId null: not tied to a session (invalid_message, session_not_found of an attach)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
+
+export function parseClientMessage(_raw: unknown): ClientMessage {
+  throw new Error("not implemented");
+}

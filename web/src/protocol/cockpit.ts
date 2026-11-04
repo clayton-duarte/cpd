@@ -100,3 +100,7 @@ export type CockpitAction =
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
+
+export function parseCockpitAction(_raw: unknown): CockpitAction {
+  throw new Error("not implemented");
+}
