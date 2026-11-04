@@ -10,6 +10,9 @@ use crate::store::Store;
 
 const CTX: &str = "c1";
 
+/// `(at, context, query, mode, hits, fts_ms, embed_ms)`.
+type Row<'a> = (&'a str, &'a str, &'a str, &'a str, i64, i64, Option<i64>);
+
 struct Fx {
     _dir: tempfile::TempDir,
     home: CpdHome,
@@ -63,7 +66,7 @@ impl Fx {
     }
 
     /// A `vectors.db` with a v3 `search_log`; `rows` are `(at, context, query, mode, hits, fts_ms, embed_ms)`.
-    fn search_log(&self, rows: &[(&str, &str, &str, &str, i64, i64, Option<i64>)]) {
+    fn search_log(&self, rows: &[Row]) {
         let conn = rusqlite::Connection::open(self.home.vectors_db()).unwrap();
         conn.execute_batch(
             "CREATE TABLE context_embeddings (context TEXT NOT NULL, model TEXT NOT NULL, record TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
@@ -166,7 +169,7 @@ fn stats_retrieval_recent_zero_hit_queries_are_the_newest_ten() {
     let ats: Vec<String> = (1..=12)
         .map(|i| format!("2026-03-{i:02}T12:00:00.000Z"))
         .collect();
-    let mut rows: Vec<(&str, &str, &str, &str, i64, i64, Option<i64>)> = names
+    let mut rows: Vec<Row> = names
         .iter()
         .zip(&ats)
         .map(|(n, a)| (a.as_str(), "c1", n.as_str(), "fts", 0, 1, None))
