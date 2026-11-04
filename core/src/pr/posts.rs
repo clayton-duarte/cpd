@@ -122,10 +122,20 @@ pub fn next_bump(
            AND q.state = 'open' AND q.draft = 0 AND q.review_decision = 'none'
          ORDER BY COALESCE(p.last_posted_at, p.posted_at), p.plan, p.workflow",
     )?;
-    let rows = stmt.query_map([due_before], |r| Ok(Bump { plan: r.get(0)?, workflow: r.get(1)?, channel: r.get(2)?, ts: r.get(3)? }))?;
+    let rows = stmt.query_map([due_before], |r| {
+        Ok(Bump {
+            plan: r.get(0)?,
+            workflow: r.get(1)?,
+            channel: r.get(2)?,
+            ts: r.get(3)?,
+        })
+    })?;
     for row in rows {
         let bump = row?;
-        if !skip.iter().any(|(p, w)| *p == bump.plan && *w == bump.workflow) {
+        if !skip
+            .iter()
+            .any(|(p, w)| *p == bump.plan && *w == bump.workflow)
+        {
             return Ok(Some(bump));
         }
     }

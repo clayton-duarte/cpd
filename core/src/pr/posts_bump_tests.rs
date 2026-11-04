@@ -59,8 +59,8 @@ fn add(store: &mut Store, key: &str, r: &Row) {
                 rusqlite::params![r.draft, r.state, r.review],
             )?;
             tx.execute(
-                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request)
-                 VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay/' || ?1, '/r/lead', cpd_txn(), 't', 't', 7, 'u', 't', (SELECT max(id) FROM pull_requests))",
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+                 VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay/' || ?1, '/r/lead', cpd_txn(), 't', 't', 7, 'u', 't', (SELECT max(id) FROM pull_requests), IIF(?2 = 'merged', 't', NULL))",
                 rusqlite::params![key, r.status],
             )?;
             let post = PostRecord {
