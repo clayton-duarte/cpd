@@ -30,6 +30,7 @@ mod archive_leads_tests;
 mod archive_tests;
 mod asks;
 mod auto_merge;
+mod bump;
 mod closed;
 #[cfg(test)]
 mod closed_tests;

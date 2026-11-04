@@ -319,7 +319,14 @@ impl Engine {
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
     if !matches!(
         step,
-        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18 | Step::E19
+        Step::E9
+            | Step::E10
+            | Step::E11
+            | Step::E16
+            | Step::E17
+            | Step::E18
+            | Step::E19
+            | Step::E23
     ) {
         return false;
     }
