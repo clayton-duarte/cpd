@@ -354,7 +354,7 @@ pub(super) fn upsert(
 
 /// Resets the pull request row linked to the Workflow (`plan`, `key`) after cpd pushed new commits to it:
 /// `checks` pending, `mergeable` and `merge_state` unknown (pro-d384). A Workflow with no linked row changes nothing.
-pub(super) fn reset_after_push(
+pub(crate) fn reset_after_push(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     key: &WorkflowKey,

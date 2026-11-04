@@ -187,6 +187,11 @@ pub fn merge(
         if let Some(pulled) = &pulled {
             crate::pr::record_pull(tx, plan, &workflow, pulled)?;
         }
+        // An `update` Job that merged pushed new commits to the open pull request: its stored checks, mergeable and
+        // merge_state are stale (pro-d384). `Merged` is reached only after the push succeeded.
+        if target.kind == "update" && matches!(end, End::Merged { .. }) {
+            crate::pr::pulls::reset_after_push(tx, plan, &workflow)?;
+        }
         if let Some(e) = &stale {
             ledger::append_error(
                 tx,
