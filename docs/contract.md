@@ -2729,12 +2729,12 @@ Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the databa
 - **Candidate selection** (pro-d10 item 2), two rules, with the kind filter (`--kind`) and the force filter applied to the candidates:
   - (a) **Before ranking**, without `--all`, a record out of force (a superseded record, or one with an approved retirement, §4.6 "Records in force") is hidden, as before, and so is a record with a `pending` `record_retirements` row whose reason is `duplicate` or `superseded`: its target stays. A `pending` `documented` row hides nothing. A record whose id is the typed query is exempt from the pending rule. `--all` includes both kinds of hidden record, labelled as `context show` labels them.
   - (b) **After ranking**, a relative score floor: a hit whose score is below `0.35` times the top hit's score is dropped (a top score of 0 or less drops nothing). The id-named record is exempt. Zero hits is a valid answer. `--limit` applies after the floor (`0` is every hit that remains).
-- **The vector leg** (pro-d10 item 2, pro-d12; Plan `vecrrf`). The mode of a search is decided before the embedder is called, from `vectors.db` (the vector cache above; read only, and never created by a search):
+- **The vector leg** (pro-d10 item 2, pro-d12; Plan `vecrrf`). The mode of a search is decided before the embedder is called, from `vectors.db` (the vector cache above; the decision reads the vectors only, and a search never creates `vectors.db` for them; its search log, below, is written after the result is built):
   - **`fts`**: the Context has no vectors for the embedder's model. The embedder is **never called**, and the result is the lexical list alone, as above.
   - **`hybrid`**: the Context has vectors for the model. The query is embedded **once**. The **semantic list** is the cosine similarity of the query with each vector of that Context and model with the same dimension, over the records that survive rule (a) and the kind filter; a record is a semantic hit only when its cosine is at least **0.60** (`SEM_FLOOR`, a first value, not measured), the list is sorted by cosine with ties by id, and it keeps the top **25** (`SEM_TOP`). The **lexical list** is the ranking after rule (b)'s floor (0.35 times the top score; the id-named record exempt). The two lists are fused by **Reciprocal Rank Fusion, k = 60**: score(id) is the sum, over the lists that hold the id, of 1 / (60 + rank), rank from 1, the constant `RRF_C` = 60 of `curate_neighbours.rs`. The fused list is sorted by score with ties by id, and **the record named by the typed id stays first** when it is in either list. A Context whose semantic list is empty gets the lexical order with RRF scores. `--limit` applies after fusion.
   - **`fts-only`**: the Context has vectors, but the query could not be embedded. The result is the lexical list alone, with `semantic_error` set to the embedder's error code (one of the codes of "The Bifrost embedder and its error codes" below).
 - **The result** carries `mode` (`fts`, `hybrid` or `fts-only`). `semantic_error` is present only with `fts-only`. **Hybrid scores are RRF scores**, about 0.01 to 0.03 (sums of 1 / (60 + rank)): a consumer must not compare them with the `bm25` scores of `fts` or `fts-only`.
-- **The embedder never fails the search.** Its error degrades the search to `fts-only`. **Search never embeds records and never writes `vectors.db`**; only `context curate` and `context embed` write it.
+- **The embedder never fails the search.** Its error degrades the search to `fts-only`. **Search never embeds records and never writes a vector**; only `context curate` and `context embed` write `context_embeddings`. A search writes one `search_log` row to `vectors.db` (§4.6 "The search log").
 - **Cost.** A `hybrid` search pays one embedder call, about 0.4 s plus a node start (an estimate, not measured here), bounded by the helper's 10 s timeout; the Rust side's deadline is 30 s.
 
 **Backfill** (Plan `vecrrf`; `cpd context embed`, commands §3.19). `cpd context embed` fills the vector cache of one Context, so that `hybrid` search has vectors to fuse. It embeds the Context's in-force decisions and notes, newest first, at most `--limit` records per run (default 100; `0` is all). A record whose row's `content_hash` equals the SHA-256 of its text is skipped; any other record is embedded at 768 dims and its row is written with the hash at once, so an interrupted run resumes. Plan and brief records are never embedded (the kind gate above). It is not gated by `experimental.write_curation`. The first embedder error stops the run and is returned; the rows already written stay.
@@ -2943,16 +2943,72 @@ A derived cache, **not the source of truth**: it holds no history, is never sync
 
 ```sql
 PRAGMA application_id = 1668703587;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 CREATE TABLE context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
 CREATE TABLE context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;
+CREATE TABLE search_log (
+  id             INTEGER PRIMARY KEY,
+  at             TEXT NOT NULL,
+  context        TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40),
+  session        TEXT,
+  query          TEXT NOT NULL,
+  mode           TEXT NOT NULL CHECK (mode IN ('fts','hybrid')),
+  candidates     INTEGER NOT NULL CHECK (candidates >= 0),
+  floor_dropped  INTEGER NOT NULL CHECK (floor_dropped >= 0),
+  pending_hidden INTEGER NOT NULL CHECK (pending_hidden >= 0),
+  hits           INTEGER NOT NULL CHECK (hits >= 0),
+  fts_ms         INTEGER NOT NULL CHECK (fts_ms >= 0),
+  embed_ms       INTEGER CHECK (embed_ms IS NULL OR embed_ms >= 0),
+  embed_tokens   INTEGER CHECK (embed_tokens IS NULL OR embed_tokens >= 0)
+) STRICT;
+CREATE INDEX search_log_context_at ON search_log(context, at);
 ```
 
 - `vector` is `dims` little-endian `f32`. `content_hash` is the lowercase hex SHA-256 of the exact text the embedder was sent for that row; `cpd context curate` writes it. An empty hash means unknown.
 - A read of a missing file is empty and creates nothing. The first open takes `locks/store.lock`, sets the pragmas of `Store::connect` and WAL, and creates the tables.
-- **Upgrade in place.** The writer, under `locks/store.lock`, upgrades a version 1 file with `ALTER TABLE context_embeddings ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''` and then sets `user_version = 2`; its rows keep their vectors, with hash ''. A new file is made at version 2. The reader opens read-only and accepts versions 1 and 2 without upgrading (a version 1 row reads as hash '').
-- A file with a foreign `application_id`, or a `user_version` above 2, is refused. A corrupt file is `store_failed` with the path; curation then runs FTS5-only and says so.
+- **Upgrade in place.** The writer, under `locks/store.lock`, upgrades a version 1 file with `ALTER TABLE context_embeddings ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''`, creates `search_log` and its index (`CREATE ... IF NOT EXISTS`) in a version 1 or version 2 file, and then sets `user_version = 3`; its rows keep their vectors, with hash '' for a version 1 row. A new file is made at version 3. The reader opens read-only and accepts versions 1, 2 and 3 without upgrading (a version 1 row reads as hash ''; a file below version 3 has no `search_log`, which reads as no rows). A search, the first writer of the file that is not a curate or embed run, takes the writer path for its log row, so the first search of a store without `vectors.db` creates it at version 3 (the log write is best-effort, below).
+- A file with a foreign `application_id`, or a `user_version` above 3, is refused. A corrupt file is `store_failed` with the path; curation then runs FTS5-only and says so.
 - It has no migration (§4.5): its own `user_version` is its version.
+
+##### The curate run log
+
+`$CPD_HOME/run/context-digests/<context>/curate-runs.jsonl` (`home.context_digest_dir(context)`, the directory of `runs.jsonl`, "The run log" above) holds one JSON object per line, one line for each `cpd context curate` run that did work (not `skipped`, not `already`, not failed) and one for each `cpd context embed` run (Plan `ctx-observability`, pro-d13). It is append-only, never pruned, and a write failure to it fails nothing and is written to the log. `at` is `ports.clock.utc()` (RFC 3339 UTC) when the run ended and `ms` is measured with the same Ports clock.
+
+| Key | Kinds | Meaning |
+|---|---|---|
+| `kind` | both | `"curate"` or `"embed"` |
+| `at` | both | the run's end, ISO 8601 UTC |
+| `context` | both | the Context id |
+| `ms` | both | integer wall time of the run in milliseconds |
+| `embed_tokens` | both | integer, tokens the embedder reported (0 when none) |
+| `kev_tokens_in`, `kev_tokens_out` | both | integers, `kev-4b`'s tokens (0 for `embed`; `kev-4b` is local, so it has no cost) |
+| `judge_tokens_in`, `judge_tokens_out` | both | integers, the judge's tokens (0 for `embed`) |
+| `cost` | both | a number in USD, the sum of the costs the judge calls reported (Bifrost `usage.cost`); `null` when none was reported, and always `null` for `embed`. There is no rate table |
+| `free`, `judged`, `retire`, `contradicts`, `disagreed`, `quote_failed`, `kev_unreachable` | `curate` | the run's counters as the report of `context curate` has them (commands.md §3.13a); `retire` and `contradicts` are counts here, not lists, and `kev_unreachable` is 0 or 1 |
+| `embedded`, `skipped`, `remaining` | `embed` | the counts of `context embed` (commands.md §3.19) |
+
+```json
+{"kind":"curate","at":"2026-11-04T18:02:11.480Z","context":"building-cpd","ms":4210,"embed_tokens":312,"kev_tokens_in":5400,"kev_tokens_out":96,"judge_tokens_in":1800,"judge_tokens_out":240,"cost":0.0042,"free":6,"judged":2,"retire":1,"contradicts":1,"disagreed":0,"quote_failed":0,"kev_unreachable":0}
+{"kind":"embed","at":"2026-11-04T18:09:40.120Z","context":"building-cpd","ms":21800,"embed_tokens":5120,"kev_tokens_in":0,"kev_tokens_out":0,"judge_tokens_in":0,"judge_tokens_out":0,"cost":null,"embedded":60,"skipped":4,"remaining":0}
+```
+
+**Judge usage.** The judge helper (`pi/lib/judge.ts`) returns, with `ok: true`, `usage: {tokens_in, tokens_out, cost} | null`: the tokens and the cost (`usage.cost` of the gateway's reply, a number or `null`) the gateway reported, or `usage: null` when it sent no usage. The Rust `Wire` and `Judged` carry the same. A pair whose judge answered with `usage: null` adds 0 tokens and no cost.
+
+##### The search log
+
+Every `cpd context search` appends one `search_log` row to `vectors.db` (above), after the result is built, with or without a Session (`context_reads` is unchanged: it still needs one). It is telemetry and best-effort, as "Reads" says: a failed write never fails or changes the search, its output or its exit status. `at` is `ports.clock.utc()`, `session` the Session id or null, `query` the query as trimmed, `mode` `fts` or `hybrid` (a `fts-only` search is logged `fts`: no semantic list took part). The log is never pruned (no pruning exists yet).
+
+The four counts are of the lexical leg of this one search; the invariants are checkable from one row:
+- `candidates`: the records of the Context that FTS5 matched and that pass the kind filter and rule (a) of "The search rail" (in force, and not hidden by a pending retirement; `--all` lifts both), counted **before** rule (b)'s floor. The id-named record counts when it is matched or forced first.
+- `floor_dropped`: the candidates that rule (b)'s floor dropped (score below `0.35` times the top score; the id-named record is exempt). The lexical list that remains has `candidates` − `floor_dropped` records.
+- `pending_hidden`: the records FTS5 matched and that pass the kind filter and are in force (or `--all`) but are hidden **only** by the pending `duplicate` or `superseded` retirement of rule (a), and are not the id-named record. It is 0 with `--all`. They are in neither `candidates` nor `floor_dropped`.
+- `hits`: the records the search returned, after the fusion and after `--limit`: the length of the `records` list of the output.
+- Invariants: `floor_dropped` ≤ `candidates`; in mode `fts`, `hits` = `candidates` − `floor_dropped` when `--limit` is 0, else `hits` = min(`--limit`, `candidates` − `floor_dropped`); in mode `hybrid`, `hits` ≥ min(`--limit`, `candidates` − `floor_dropped`) when `--limit` is not 0, since the semantic list adds records; a `hits` of 0 is a zero-hit search.
+- `fts_ms`: the time of the FTS5 ranking, measured with the Ports clock, in whole milliseconds. `embed_ms` and `embed_tokens`: the time of the query's embedder call and the tokens it reported; both null in mode `fts` and when the embedder failed or reported no tokens (`embed_tokens` only).
+
+##### `cpd context stats`
+
+`cpd context stats` (commands.md §3.20) is read-only: it reads `cpd.db` (records, curations, topics, retirements, reads), `runs.jsonl`, `curate-runs.jsonl` and `search_log`, and writes nothing and creates no file. A missing log file or `vectors.db` is zero, not an error. Its figures are defined by the keys of those three sources above; a `--since` window filters each by its own time key (`started_at`, `at`, `proposed_at`, `read_at`, `records.at`).
 
 ##### The Bifrost judge and its error codes
 
