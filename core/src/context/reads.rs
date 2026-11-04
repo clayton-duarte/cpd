@@ -32,6 +32,7 @@ use crate::clock;
 use crate::error::ErrorCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum Channel {
     Pushed,
     Search,
