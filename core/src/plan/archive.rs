@@ -346,7 +346,7 @@ pub(crate) fn refuse_agent_caller(command: &str) -> Result<(), CpdError> {
     };
     Err(CpdError::new(
         ErrorCode::AgentForbidden,
-        format!("cpd {command} is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule."),
+        format!("cpd {command} is for the User and the engine, not an agent."),
     )
     .with("command", command)
     .with("session", text(session))

@@ -10,7 +10,7 @@ decided model disagrees with the docs, is in
 ## The CLI is first-class
 
 The CLI is the first-class interface, and it is first-class because it is the
-agents' interface. `hs-d753` (`cpd context show --record hs-d753`) states it
+agents' interface. `hs-d753` (a record of machine `hs`) states it
 exactly: *"cpd is CLI-first: the CLI is the first-class interface, meant for
 agents; the TUI (the cockpit, cpd chat) is just one client of the core, as a web
 UI would be another. Moving Leads and Managers to pi-durable strengthens the core
@@ -43,8 +43,7 @@ prints no JSON value on success ([contract §1.2](../contract.md)).
 "One tmux server per machine"). tmux is the cockpit's medium and the pi Sessions'
 medium ([architecture §1.6](../architecture.md)).
 
-**It is a removal-marked dependency.** `hs-d802` (`cpd context show --record
-hs-d802`) marks tmux for removal once the pi → pi-durable migration completes.
+**It is a removal-marked dependency.** `hs-d802` marks tmux for removal once the pi → pi-durable migration completes.
 The removal is a future Plan step, not a change to today's docs: the contract
 still says "tmux is the only host", and the verification note records that the
 removal mark rests on the future P3 decision `hs-d752`, not on a mark in the
@@ -58,23 +57,21 @@ The web UI is a second human interface, decided but **not built**. The decided
 stack is `cpd web` (a new `cpd-web` crate in the one binary), a synchronous
 tiny_http-class server, a Vite + React + shadcn/ui front end, live views over a
 WebSocket, and a unix socket behind `tailscale serve` (Context records
-`hs-d768`–`hs-d779`, `cpd context show --record <id>`). It is being built by the
+`hs-d768`–`hs-d779`). It is being built by the
 Plan `web-client`, and it lives nowhere yet ([architecture §1.7](../architecture.md);
 [architecture §6](../architecture.md); [verification note, item 5](../research/architecture-verification.md)).
 
 The web is framed by `hs-d753` too: like the cockpit, it is **one client of the
 core**, never a second interface of the engine, and the CLI-first rule applies to
-it ([architecture §6](../architecture.md); `hs-d753`,
-`cpd context show --record hs-d753`).
+it ([architecture §6](../architecture.md); `hs-d753`).
 
 ## Which interface is first-class, and why
 
-The CLI is first-class ([contract §1.1](../contract.md); `hs-d753`,
-`cpd context show --record hs-d753`). The reason is the direction of dependency:
+The CLI is first-class ([contract §1.1](../contract.md); `hs-d753`). The reason is the direction of dependency:
 the core is the programmable whole, the engine is headless, and both human
 interfaces (cockpit and web) attach to the same commands. No capability may exist
 only in a TUI, so a capability that the cockpit needs must be a command first
-(`hs-d753`, `cpd context show --record hs-d753`). The cockpit is therefore a
+(`hs-d753`). The cockpit is therefore a
 client of `cli`, not the other way round ([architecture §1.5](../architecture.md));
 the web follows the same rule ([architecture §6](../architecture.md)).
 

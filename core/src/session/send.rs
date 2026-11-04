@@ -207,6 +207,22 @@ fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
     Ok(wake)
 }
 
+/// Best-effort: the sender used the records its message cites.
+fn mark_cited(store: &mut crate::store::Store, from: &crate::ids::SessionId, text: &str) {
+    let context = store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT context FROM sessions WHERE id = ?1",
+            [from.as_str()],
+            |r| r.get::<_, String>(0),
+        )?)
+    });
+    if let Ok(context) = context
+        && let Ok(context) = crate::ids::ContextId::parse(&context)
+    {
+        crate::context::Contexts::mark_cited(store, &context, from, text);
+    }
+}
+
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
@@ -240,6 +256,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
         )?;
         Ok((event, target))
     })?;
+    if let Some(from) = &from {
+        mark_cited(&mut env.store, from, text.as_str());
+    }
     let pane = if needs_pane {
         start_parked(&mut env, &target, "session send")?
     } else {

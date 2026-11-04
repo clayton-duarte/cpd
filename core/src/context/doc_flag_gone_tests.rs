@@ -19,7 +19,7 @@ fn decision(seq: i64, text_id: &str) -> Indexed {
                 plan: None,
             },
             text: "Use it.".into(),
-            draft: Draft::Decision { supersedes: None },
+            draft: Draft::Decision { supersedes: vec![] },
         },
     )
 }

@@ -351,3 +351,70 @@ fn reopen_matches_a_legacy_cancelled_workflow_by_lead_branch_only_when_unique() 
     assert_eq!(refused.code(), ErrorCode::IllegalTransition);
     assert_eq!(snapshot(&rig_two), before, "nothing was rebound");
 }
+
+/// `(key, pull_request)` of every row `reopenable` returns, in its order.
+fn listed(rig: &Rig) -> Vec<(String, Option<i64>)> {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(super::reopen::reopenable)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.key.as_str().to_owned(), c.pull_request))
+        .collect()
+}
+
+#[test]
+fn reopenable_lists_a_legacy_row_only_when_an_unowned_open_pull_request_exists() {
+    // (a) no pull_requests row: nothing.
+    let rig_a = rig("deploy");
+    cancelled(&rig_a, "pay", "api", None);
+    assert_eq!(listed(&rig_a), vec![], "no pull_requests row: nothing");
+
+    // (b) an unowned open authored pull request: the legacy row.
+    let rig_b = rig("deploy");
+    cancelled(&rig_b, "pay", "api", None);
+    stored_pull(&rig_b, 801, "open");
+    assert_eq!(
+        listed(&rig_b),
+        vec![("api".to_owned(), None)],
+        "an unowned open authored pull request: the legacy row"
+    );
+
+    // (c) the open pull request is linked to an `open` Workflow through `workflows.pull_request`: it is owned.
+    let rig_c = rig("deploy");
+    cancelled(&rig_c, "pay", "api", None);
+    stored_pull(&rig_c, 801, "open");
+    rig_c.sql(
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                pr_number, pr_url, pr_opened_at, pull_request)
+           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', '/wt/web', cpd_txn(), 't', 't',
+                   801, 'https://github.com/acme/pay/pull/801', 't',
+                   (SELECT id FROM pull_requests WHERE number = 801));",
+    );
+    assert_eq!(
+        listed(&rig_c),
+        vec![],
+        "an owned open pull request: nothing"
+    );
+
+    // (d) an open pull request that is not authored by us: nothing.
+    let rig_d = rig("deploy");
+    cancelled(&rig_d, "pay", "api", None);
+    stored_pull(&rig_d, 801, "open");
+    rig_d.sql("UPDATE pull_requests SET authored = 0 WHERE number = 801;");
+    assert_eq!(listed(&rig_d), vec![], "a not authored open row: nothing");
+
+    // (e) a kept pull_request stored open is listed whatever else exists.
+    let rig_e = rig("deploy");
+    cancelled(&rig_e, "pay", "api", None);
+    cancelled(&rig_e, "pay", "web", Some(802));
+    rig_e.sql("UPDATE pull_requests SET state = 'open' WHERE number = 802;");
+    let kept: i64 = rows(&rig_e, "SELECT id FROM pull_requests WHERE number = 802")[0]
+        .parse()
+        .unwrap();
+    assert!(
+        listed(&rig_e).contains(&("web".to_owned(), Some(kept))),
+        "the kept row is listed: {:?}",
+        listed(&rig_e)
+    );
+}

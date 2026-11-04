@@ -14,7 +14,6 @@ use common::refused;
 use cpd_core::lock;
 use serde_json::{Value, json};
 
-pub(super) const COMMAND_RECORD: &str = r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
 const ATTEMPT_RECORD: &str = r#"{"by":"attempt","plan":"pl","job":"api","attempt":"api-a1","at":"2026-10-26T21:41:00.000Z"}"#;
 
 /// A repo `acme/cpd` whose policy file is `policy`, in an `Fx` on fake ports.
@@ -170,7 +169,7 @@ fn resource_run_holds_the_lock_and_writes_its_record_when_it_execs_the_command()
 #[test]
 fn resource_run_takes_a_free_slot_while_another_slot_is_held() {
     let (fx, repo) = world("[resources.e2e-port]\nslots = 2\n");
-    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _first = hold(&fx, "e2e-port", &common::command_record());
     let seen = watch_exec_slot(&fx, "e2e-port", 2);
 
     let _ = fx.cpd_with(
@@ -196,7 +195,7 @@ fn resource_run_takes_a_free_slot_while_another_slot_is_held() {
     );
     assert_eq!(
         fs::read_to_string(slot_path(&fx, "e2e-port", 1)).unwrap(),
-        COMMAND_RECORD,
+        common::command_record(),
         "slot 1 is left as it was"
     );
 }
@@ -204,7 +203,7 @@ fn resource_run_takes_a_free_slot_while_another_slot_is_held() {
 #[test]
 fn resource_run_is_busy_with_every_holder_when_all_slots_are_held() {
     let (fx, repo) = world("[resources.e2e-port]\nslots = 2\n");
-    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _first = hold(&fx, "e2e-port", &common::command_record());
     let _second = hold_slot(&fx, &slot_path(&fx, "e2e-port", 2), ATTEMPT_RECORD);
 
     let run = fx.cpd_in(&repo, &run_args("e2e-port", &["--", "npm", "test"]));
@@ -216,7 +215,7 @@ fn resource_run_is_busy_with_every_holder_when_all_slots_are_held() {
     assert_eq!(
         details["holders"],
         json!([
-            {"slot": 1, "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()},
+            {"slot": 1, "holder": serde_json::from_str::<Value>(&common::command_record()).unwrap()},
             {"slot": 2, "holder": serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()},
         ]),
         "the holder of every held slot with its slot number, in slot order"
@@ -229,7 +228,7 @@ fn resource_run_is_busy_with_every_holder_when_all_slots_are_held() {
 #[test]
 fn resource_run_wait_takes_the_lock_when_the_holder_ends_within_the_minutes() {
     let (mut fx, repo) = world("[resources.e2e-port]\n");
-    let mut holder = Some(hold(&fx, "e2e-port", COMMAND_RECORD));
+    let mut holder = Some(hold(&fx, "e2e-port", &common::command_record()));
     // Another process ends at the run's first wait.
     fx.on_nap(move |_| drop(holder.take()));
     let seen = watch_exec(&fx, "e2e-port");
@@ -256,7 +255,7 @@ fn resource_run_wait_takes_the_lock_when_the_holder_ends_within_the_minutes() {
 #[test]
 fn resource_run_wait_that_runs_out_is_busy_with_waited_minutes() {
     let (fx, repo) = world("[resources.e2e-port]\n");
-    let _holder = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _holder = hold(&fx, "e2e-port", &common::command_record());
 
     let run = fx.cpd_in(
         &repo,
@@ -381,19 +380,19 @@ fn resource_list_shows_each_slot_with_its_holder_and_the_scope() {
         "[resources.staging]\n",
     )
     .unwrap();
-    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _first = hold(&fx, "e2e-port", &common::command_record());
     let _third = hold_slot(&fx, &slot_path(&fx, "e2e-port", 3), ATTEMPT_RECORD);
     // A record left in the file of a free lock is no holder.
-    drop(hold(&fx, "db", COMMAND_RECORD));
+    drop(hold(&fx, "db", &common::command_record()));
     let host_slot = fx
         .env
         .cpd_home()
         .join("locks/resource.host.shared-port.2.lock");
-    let _host = hold_slot(&fx, &host_slot, COMMAND_RECORD);
+    let _host = hold_slot(&fx, &host_slot, &common::command_record());
 
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
-    let command: Value = serde_json::from_str(COMMAND_RECORD).unwrap();
+    let command: Value = serde_json::from_str(&common::command_record()).unwrap();
     let attempt: Value = serde_json::from_str(ATTEMPT_RECORD).unwrap();
     assert_eq!(out["repo"], "acme/cpd");
     assert_eq!(

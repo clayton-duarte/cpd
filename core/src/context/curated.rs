@@ -70,13 +70,32 @@ pub fn by_topic(
         .collect())
 }
 
+/// The curated topics in force with their record counts, sorted by topic.
+pub fn topic_counts(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<Vec<(String, usize)>, CpdError> {
+    let loaded = load(conn, context)?;
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for (_, topic, _) in curated(&loaded) {
+        *counts.entry(topic.to_owned()).or_default() += 1;
+    }
+    Ok(counts.into_iter().collect())
+}
+
 /// The topics in use (a curated record in force has them), sorted.
 pub fn topics(conn: &Connection, context: &ContextId) -> Result<Vec<String>, CpdError> {
-    let loaded = load(conn, context)?;
-    Ok(curated(&loaded)
+    Ok(topic_counts(conn, context)?
         .into_iter()
-        .map(|(_, topic, _)| topic.to_owned())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
+        .map(|(topic, _)| topic)
         .collect())
+}
+
+/// `engine (3), store (1)`: the one rendering of topic counts.
+pub fn topics_line(counts: &[(String, usize)]) -> String {
+    counts
+        .iter()
+        .map(|(topic, count)| format!("{topic} ({count})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

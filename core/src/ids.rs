@@ -353,29 +353,24 @@ id_traits!(ReviewId);
 pub enum RecordKind {
     Decision,
     Note,
-    Question,
-    Answer,
+    // The `record_kinds` table still holds `question` and `answer`: its rows cannot be deleted and nothing reads them.
     Plan,
     Brief,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 6] = [
+    pub const ALL: [RecordKind; 4] = [
         RecordKind::Decision,
         RecordKind::Note,
-        RecordKind::Question,
-        RecordKind::Answer,
         RecordKind::Plan,
         RecordKind::Brief,
     ];
 
-    /// The letter in record ids: `d`, `n`, `q`, `a`, `p`, `b`.
+    /// The letter in record ids: `d`, `n`, `p`, `b`.
     pub fn letter(self) -> char {
         match self {
             RecordKind::Decision => 'd',
             RecordKind::Note => 'n',
-            RecordKind::Question => 'q',
-            RecordKind::Answer => 'a',
             RecordKind::Plan => 'p',
             RecordKind::Brief => 'b',
         }
@@ -387,13 +382,11 @@ impl RecordKind {
             .find(|kind| kind.letter() == letter)
     }
 
-    /// The `kind` field of the record: `decision`, `note`, `question`, `answer`, `plan`, `brief`.
+    /// The `kind` field of the record: `decision`, `note`, `plan`, `brief`.
     pub fn as_str(self) -> &'static str {
         match self {
             RecordKind::Decision => "decision",
             RecordKind::Note => "note",
-            RecordKind::Question => "question",
-            RecordKind::Answer => "answer",
             RecordKind::Plan => "plan",
             RecordKind::Brief => "brief",
         }
@@ -418,13 +411,55 @@ impl RecordId {
         }
     }
 
+    /// Every distinct valid record id token in `text`, in order of first appearance. A token is `<machine>-<letter><n>`
+    /// as [`RecordId::parse`] accepts it; the character before it is not an ASCII letter, digit, `-` or `_`, the
+    /// character after it is not an ASCII letter, digit or `_`.
+    pub fn scan(text: &str) -> Vec<RecordId> {
+        let b = text.as_bytes();
+        let mut found: Vec<RecordId> = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            let before_ok = i == 0
+                || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'-' || b[i - 1] == b'_');
+            if before_ok && b[i].is_ascii_lowercase() {
+                let mut j = i;
+                while j < b.len()
+                    && j - i < 8
+                    && (b[j].is_ascii_lowercase() || b[j].is_ascii_digit())
+                {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b'-' {
+                    let mut k = j + 1;
+                    if k < b.len() && b[k].is_ascii_lowercase() {
+                        k += 1;
+                        while k < b.len() && b[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                        let after_ok =
+                            k == b.len() || !(b[k].is_ascii_alphanumeric() || b[k] == b'_');
+                        if after_ok && let Ok(id) = RecordId::parse(&text[i..k]) {
+                            if !found.contains(&id) {
+                                found.push(id);
+                            }
+                            i = k;
+                            continue;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        found
+    }
+
     pub fn parse(s: &str) -> Result<RecordId, CpdError> {
         let err = || {
             invalid(
                 ErrorCode::InvalidRecordId,
                 "Context record id",
                 s,
-                "<machine>-<letter><n>, letter one of d n q a p, n from 1",
+                "<machine>-<letter><n>, letter one of d n p b, n from 1",
             )
         };
         // A machine name has no '-', so the separator is the first one.
@@ -789,10 +824,7 @@ mod tests {
     #[test]
     fn record_kind_names() {
         let names: Vec<_> = RecordKind::ALL.iter().map(|k| k.as_str()).collect();
-        assert_eq!(
-            names,
-            ["decision", "note", "question", "answer", "plan", "brief"]
-        );
+        assert_eq!(names, ["decision", "note", "plan", "brief"]);
     }
 
     #[test]

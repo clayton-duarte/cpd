@@ -12,7 +12,7 @@ async function readRecords(host: Host, r: Run, cursor: number) {
   const { call } = host;
   const events = parseRecordEvents(await call(["events", "list", "--context", r.info.context, "--kind", "context-record", "--since", String(cursor)]));
   const first = Math.min(...events.map((e) => e.seq));
-  const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
+  const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1), "--pushed"]));
   return { events, records };
 }
 

@@ -12,14 +12,38 @@
 #[cfg(test)]
 mod distill_runner_tests;
 
+#[cfg(test)]
+mod arch_citations_tests;
 mod archive;
 mod contexts;
+pub mod curate;
+pub mod curate_backoff;
+#[cfg(test)]
+mod curate_backoff_tests;
+pub mod curate_judge;
+#[cfg(test)]
+mod curate_judge_tests;
+pub mod curate_neighbours;
+#[cfg(test)]
+mod curate_neighbours_tests;
+pub mod curate_run;
+#[cfg(test)]
+mod curate_run_tests;
+pub mod curate_vectors;
+#[cfg(test)]
+mod curate_vectors_tests;
+pub mod curate_verdict;
+#[cfg(test)]
+mod curate_verdict_tests;
 pub mod curated;
 pub mod curation;
 mod delete;
 pub mod distill;
 #[cfg(test)]
 mod distill_git_tests;
+mod distill_known;
+#[cfg(test)]
+mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
 mod fts;
@@ -34,14 +58,25 @@ mod pending;
 pub mod permanent;
 #[cfg(test)]
 mod permanent_tests;
+pub mod prose_supersedes;
+#[cfg(test)]
+mod prose_supersedes_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
+mod reads;
+#[cfg(test)]
+mod reads_best_effort_tests;
+#[cfg(test)]
+mod reads_tests;
 mod record;
 mod rename;
 pub(crate) mod render;
 mod search;
 mod show;
+#[cfg(test)]
+mod supersedes_tests;
+mod topics;
 mod write;
 
 use std::fmt;
@@ -69,16 +104,14 @@ pub enum Command {
     List(ListArgs),
     /// Show a Context and its records (§3.3)
     Show(ShowArgs),
+    /// List the curated topics in force with their record counts (§3.3a)
+    Topics(TopicsArgs),
     /// Search the Context's records, ranked by in-process full-text search (§3.4)
     Search(search::SearchArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
     /// Record a note (§3.4)
     Note(NoteArgs),
-    /// Record a question (§3.4)
-    Ask(AskArgs),
-    /// Record the answer to a question (§3.5)
-    Answer(AnswerArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
     /// Archive the Context with its Plans and their Sessions (§3.8)
@@ -91,6 +124,8 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
+    /// Curate the next record with its neighbours (§3.13a)
+    Curate(curate_run::CurateArgs),
     /// Set or change the owner of a Context (§3.13)
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
@@ -101,6 +136,8 @@ pub enum Command {
     /// Decide the pending retirements (§3.16)
     #[command(hide = true)]
     Retire(curation::RetireArgs),
+    /// List the Context records Sessions have read or cited (§3.18)
+    Reads(reads::ReadsArgs),
 }
 
 /// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -201,9 +238,18 @@ pub struct NewArgs {
 pub struct ListArgs {}
 
 #[derive(Args, Debug)]
+pub struct TopicsArgs {
+    #[command(flatten)]
+    select: Select,
+}
+
+#[derive(Args, Debug)]
 pub struct ShowArgs {
     #[command(flatten)]
     select: Select,
+    /// Every record, the superseded, answered and done ones too (bare `show` lists only what is active)
+    #[arg(long, conflicts_with_all = ["since", "record", "topic"])]
+    all: bool,
     /// Only the records whose index position is greater
     #[arg(long, value_name = "seq")]
     since: Option<u64>,
@@ -213,6 +259,12 @@ pub struct ShowArgs {
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
+    /// Log the shown records as pushed reads (the pi turn start)
+    #[arg(long, requires = "since")]
+    pushed: bool,
+    /// A record id, as --record
+    #[arg(value_name = "record", conflicts_with_all = ["record", "since", "topic"])]
+    record_positional: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
@@ -220,8 +272,11 @@ pub struct DecideArgs {
     /// The decision
     text: Text,
     /// The decision or note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -231,26 +286,11 @@ pub struct NoteArgs {
     /// The note
     text: Text,
     /// The note this one replaces
-    #[arg(long, value_name = "record")]
-    supersedes: Option<RecordId>,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AskArgs {
-    /// The question
-    question: Text,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AnswerArgs {
-    /// The record id of the question
-    question: RecordId,
-    /// The answer
-    text: Text,
+    #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
+    supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -285,46 +325,66 @@ pub struct DeleteArgs {
     yes: bool,
 }
 
+/// `--no-supersedes` with `--supersedes` is `args_invalid`.
+fn no_supersedes_alone(supersedes: &[RecordId], no_supersedes: bool) -> Result<(), CpdError> {
+    if no_supersedes && !supersedes.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            "--no-supersedes conflicts with --supersedes.",
+        ));
+    }
+    Ok(())
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
         Command::List(_) => list::list(),
         Command::Show(args) => show::show(args),
+        Command::Topics(args) => topics::topics(args),
         Command::Search(args) => search::search(args),
         Command::Decide(args) => {
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = Draft::Decision {
                 supersedes: args.supersedes,
             };
-            write::write("context decide", &args.select, &args.text, draft)
+            write::write(
+                "context decide",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
         Command::Note(args) => {
-            let draft = match args.supersedes {
-                Some(supersedes) => Draft::NoteSupersedes { supersedes },
-                None => Draft::Note,
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
+            let draft = if args.supersedes.is_empty() {
+                Draft::Note
+            } else {
+                Draft::NoteSupersedes {
+                    supersedes: args.supersedes,
+                }
             };
-            write::write("context note", &args.select, &args.text, draft)
+            write::write(
+                "context note",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
-        Command::Ask(args) => {
-            write::write("context ask", &args.select, &args.question, Draft::Question)
-        }
-        Command::Answer(args) => write::write(
-            "context answer",
-            &args.select,
-            &args.text,
-            Draft::Answer {
-                question: args.question,
-            },
-        ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
+        Command::Curate(args) => curate_run::curate(args),
         Command::Owner(args) => owner::owner(args),
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),
         Command::Retire(args) => curation::retire(args),
+        Command::Reads(args) => reads::reads(args),
     }
 }
 

@@ -225,14 +225,14 @@ enum Seen {
 }
 
 /// A4's durable stall rule (contract §3.4 A4 "Liveness and restart, `durable`", hs-d798; §8.2
-/// `timeouts.stall_minutes`): a `durable` Worker's transcript that has not grown for the limit is one stall
+/// `timeouts.stall_minutes`): a `durable` Worker's transcript (the `.sqlite` file and its `-wal`) that has not grown for the limit is one stall
 /// episode. The driver appends one `worker_stalled` `error` Event per episode and kills nothing: the engine
 /// informs, the Lead decides. The quiet is measured on `ports.clock`, from the tick that last saw the transcript
 /// grow, never by mixing a file's mtime with the clock.
 struct DurableStall {
     /// `timeouts.stall_minutes`, as a duration; zero disables the rule (§8.2: at least 1, so 0 is a build with no file).
     limit: Duration,
-    /// The transcript's identity (its modification time and its length) when it was last seen to grow, with the
+    /// The transcript's identity (the latest modification time and the summed length of the `.sqlite` file and its `-wal` sibling) when it was last seen to grow, with the
     /// `ports.clock` instant then: the quiet counts from there.
     grown: Option<(SystemTime, u64, Instant)>,
     /// The identity of the last reported episode: a tick that sees the same identity appends nothing, and a
@@ -268,10 +268,20 @@ impl DurableStall {
         let Ok(meta) = std::fs::metadata(path) else {
             return false;
         };
-        let Ok(modified) = meta.modified() else {
+        let Ok(db_modified) = meta.modified() else {
             return false;
         };
-        let identity = (modified, meta.len());
+        // The `-wal` sibling holds the writes until a checkpoint: a missing one is 0 bytes and no time.
+        let mut wal_name = path.as_os_str().to_owned();
+        wal_name.push("-wal");
+        let (modified, len) = match std::fs::metadata(&wal_name) {
+            Ok(wal) => (
+                wal.modified().map_or(db_modified, |m| m.max(db_modified)),
+                meta.len() + wal.len(),
+            ),
+            Err(_) => (db_modified, meta.len()),
+        };
+        let identity = (modified, len);
         match self.grown {
             Some((seen_m, seen_len, since)) if (seen_m, seen_len) == identity => {
                 let from = self.suppressed_at.map_or(since, |at| at.max(since));
@@ -283,7 +293,7 @@ impl DurableStall {
             }
             // The transcript grew (or is seen for the first time): re-arm the watch from this tick.
             _ => {
-                self.grown = Some((modified, meta.len(), now));
+                self.grown = Some((modified, len, now));
                 false
             }
         }
@@ -1392,12 +1402,15 @@ impl Driver {
         let metrics = |a: &merge::Attempt| -> Option<Value> {
             runner::metrics(runner, dirs, a.worker_session.as_ref(), &report, wall)
         };
+        let classifier =
+            merge::real_classifier(&self.config, &self.home, &crate::ports::Ports::current());
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
             catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
             source: SOURCE,
             metrics: &metrics,
+            classifier: &*classifier,
         };
         let done = merge::merge(&mut self.store, &ctx, &self.plan, &self.id)?;
         let target = self.load()?;

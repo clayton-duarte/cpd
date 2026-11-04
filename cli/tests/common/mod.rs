@@ -1759,3 +1759,12 @@ pub fn real_tmux() -> std::path::PathBuf {
         .find(|p| p.is_file())
         .expect("tmux on PATH")
 }
+
+/// The record of a command slot held by this test process: its pid is live while the `cpd` under test probes it,
+/// so the dead-pid reap leaves the slot held.
+pub fn command_record() -> String {
+    format!(
+        r#"{{"by":"command","pid":{},"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}}"#,
+        std::process::id()
+    )
+}

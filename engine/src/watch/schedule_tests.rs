@@ -340,7 +340,7 @@ fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     );
 }
 
-/// A config.toml whose `worker_runner` is `line` (a whole TOML line, or none), written over the engine's home after it started.
+/// A config.toml whose `[experimental]` table is `line` (a whole TOML line, or none), written over the engine's home after it started.
 fn write_config(fx: &Fx, line: &str) {
     let text = format!(
         "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{line}\n\n[tmux]\nsocket = \"testkit\"\n"
@@ -361,12 +361,12 @@ fn runners(fx: &mut Fx) -> Vec<(String, String)> {
         .unwrap()
 }
 
-/// pro-d199: E3 re-reads `worker_runner` before it starts Attempts: the engine started on `pi`, the file now says `durable`.
+/// pro-d199: E3 re-reads `durable_workers` before it starts Attempts: the engine started on `pi`, the file now says `durable`.
 #[test]
 fn e3_starts_an_attempt_with_the_runner_the_config_names_now() {
     let mut fx = new_plan();
     fx.add_job("api", &[], "");
-    write_config(&fx, "worker_runner = \"durable\"");
+    write_config(&fx, "[experimental]\ndurable_workers = true");
     tick_on_fake_ports(&mut fx);
     assert_eq!(
         runners(&mut fx),
@@ -380,7 +380,7 @@ fn e3_leaves_a_running_attempts_runner_and_process_alone_when_the_config_changes
     let mut fx = new_plan();
     fx.add_running("busy", "running", &ago(1));
     fx.add_job("api", &[], "");
-    write_config(&fx, "worker_runner = \"durable\"");
+    write_config(&fx, "[experimental]\ndurable_workers = true");
     tick_on_fake_ports(&mut fx);
     assert_eq!(
         runners(&mut fx),
@@ -405,7 +405,7 @@ fn e3_leaves_a_running_attempts_runner_and_process_alone_when_the_config_changes
 fn e3_with_a_config_that_does_not_parse_starts_no_attempt_and_reports_it() {
     let mut fx = new_plan();
     fx.add_job("api", &[], "");
-    write_config(&fx, "worker_runner = [");
+    write_config(&fx, "[experimental]\ndurable_workers = [");
     tick_on_fake_ports(&mut fx);
     assert_eq!(attempts(&mut fx), 0, "no Attempt starts on a stale config");
     assert_eq!(fx.job_status("api"), "queued");

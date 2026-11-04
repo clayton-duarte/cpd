@@ -231,15 +231,16 @@ test("encode ends the line with one newline and never holds a raw newline", () =
 
 test("negotiate picks the highest common protocol", () => {
   const h = (protocol: number, min_protocol: number) => ({ type: "hello" as const, protocol, min_protocol, client: "c" });
-  assert.equal(negotiate(h(1, 1)), 1);
-  assert.equal(negotiate(h(3, 1)), 1);
-  assert.equal(negotiate(h(1, 0)), 1);
+  assert.equal(negotiate(h(2, 2)), 2);
+  assert.equal(negotiate(h(3, 1)), 2);
+  assert.equal(negotiate(h(2, 0)), 2);
 });
 
 test("negotiate returns undefined when no version is common", () => {
   const h = (protocol: number, min_protocol: number) => ({ type: "hello" as const, protocol, min_protocol, client: "c" });
-  assert.equal(negotiate(h(2, 2)), undefined);
+  assert.equal(negotiate(h(1, 1)), undefined);
   assert.equal(negotiate(h(0, 0)), undefined);
+  assert.equal(negotiate(h(4, 3)), undefined);
 });
 
 test("LIMITS holds the numbers of contract 6.14", () => {

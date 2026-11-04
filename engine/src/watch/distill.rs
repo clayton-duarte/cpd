@@ -60,11 +60,11 @@ pub(super) fn run(engine: &mut Engine) {
     };
     let now = engine.ports.clock.utc();
     let mut failed = false;
-    for context in contexts {
+    for context in &contexts {
         if stopping() {
             return;
         }
-        if let Err(e) = start_if_due(engine, &context, now) {
+        if let Err(e) = start_if_due(engine, context, now) {
             failed = true;
             engine.fail(Step::E9, About::Machine, &e);
         }
@@ -72,6 +72,7 @@ pub(super) fn run(engine: &mut Engine) {
     if !failed {
         engine.clear(Step::E9, &About::Machine);
     }
+    super::curate::run(engine, &contexts, now);
 }
 
 /// The batch sizes of a state's runs, largest first (FX4): a run that ends without changing its state failed, and

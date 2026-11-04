@@ -115,6 +115,10 @@ error_codes! {
     ModelsRefreshFailed = "models_refresh_failed" => Failure,
     ModelsNoProvider = "models_no_provider" => Failure,
     ModelsHelperFailed = "models_helper_failed" => Failure,
+    // The Bifrost judge of write-time curation (contract §4.6).
+    JudgeUnreachable = "judge_unreachable" => Failure,
+    JudgeRefused = "judge_refused" => Failure,
+    JudgeBadReply = "judge_bad_reply" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
@@ -171,8 +175,8 @@ error_codes! {
     LockedJobTampered = "locked_job_tampered" => Refused,
     RecordNotFound = "record_not_found" => Refused,
     SupersedesInvalid = "supersedes_invalid" => Refused,
+    SupersedesUnlinked = "supersedes_unlinked" => Refused,
     ContextExists = "context_exists" => Refused,
-    QuestionAnswered = "question_answered" => Refused,
     NotAGitRepo = "not_a_git_repo" => Refused,
     PlanExists = "plan_exists" => Refused,
     BranchExists = "branch_exists" => Refused,
@@ -184,6 +188,7 @@ error_codes! {
     ExploreWorkflowForbidden = "explore_workflow_forbidden" => Refused,
     ExploreNoDraft = "explore_no_draft" => Refused,
     ExploreNeedsMixed = "explore_needs_mixed" => Refused,
+    ExplorePending = "explore_pending" => Refused,
     ArtefactMissing = "artefact_missing" => Refused,
     SummaryMissing = "summary_missing" => Refused,
     SummaryTooLong = "summary_too_long" => Refused,
@@ -346,6 +351,12 @@ error_codes! {
     LeadBranchMoved = "lead_branch_moved" => Refused,
     HeadMoved = "head_moved" => Refused,
     WorkflowNotFound = "workflow_not_found" => NotFound,
+    ClassifierUnreachable = "classifier_unreachable" => Failure,
+    ClassifierRefused = "classifier_refused" => Failure,
+    ClassifierBadReply = "classifier_bad_reply" => Failure,
+    EmbeddingUnreachable = "embedding_unreachable" => Failure,
+    EmbeddingRefused = "embedding_refused" => Failure,
+    EmbeddingBadReply = "embedding_bad_reply" => Failure,
 }
 
 impl fmt::Display for ErrorCode {
@@ -512,6 +523,7 @@ mod tests {
             (ErrorCode::ExploreWorkflowForbidden, 3),
             (ErrorCode::ExploreNoDraft, 3),
             (ErrorCode::ExploreNeedsMixed, 3),
+            (ErrorCode::ExplorePending, 3),
             (ErrorCode::ArtefactMissing, 3),
             (ErrorCode::SummaryMissing, 3),
             (ErrorCode::SummaryTooLong, 3),
@@ -524,6 +536,7 @@ mod tests {
             (ErrorCode::LockedJobTampered, 3),
             (ErrorCode::RecordNotFound, 3),
             (ErrorCode::SupersedesInvalid, 3),
+            (ErrorCode::SupersedesUnlinked, 3),
             (ErrorCode::PlanNotFound, 4),
             (ErrorCode::TopicNotFound, 4),
             (ErrorCode::ItemNotFound, 4),

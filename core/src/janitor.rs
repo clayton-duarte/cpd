@@ -110,7 +110,120 @@ struct Entry {
     renamed: bool,
 }
 
+/// What the idle-target and durable prunes did to one path.
+struct Pruned {
+    plan: PlanId,
+    workflow: Option<WorkflowKey>,
+    path: PathBuf,
+    reason: Option<String>,
+}
+
+/// `(plan, workflow, lead worktree)` of every `open`, `merged` or `cancelled` Workflow with no queued or running Job and no
+/// starting, running or merging Attempt. A cancelled Workflow's row has no `lead_worktree`: its path is derived.
+fn idle_lead_worktrees(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<(PlanId, WorkflowKey, PathBuf)>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT w.plan, w.key, w.repo, w.lead_branch, w.lead_worktree FROM workflows w
+          WHERE w.status IN ('open', 'merged', 'cancelled')
+            AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status IN ('queued', 'running'))
+            AND NOT EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+                             WHERE j.plan = w.plan AND j.workflow = w.key AND a.status IN ('starting', 'running', 'merging'))
+          ORDER BY w.plan, w.key",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut found = Vec::new();
+    for (plan, workflow, repo, branch, worktree) in rows {
+        let plan = PlanId::parse(&plan)?;
+        let workflow = WorkflowKey::parse(&workflow)?;
+        let path = match worktree {
+            Some(path) => PathBuf::from(path),
+            None => {
+                match git::workflow_lead_worktree_path(Path::new(&repo), &plan, &workflow, &branch)
+                {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                }
+            }
+        };
+        found.push((plan, workflow, path));
+    }
+    Ok(found)
+}
+
+/// Every Plan archived or deleted that has no Attempt not `ended`.
+fn finished_plans(conn: &rusqlite::Connection) -> Result<Vec<PlanId>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id FROM plans p WHERE (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL)
+            AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.plan = p.id AND a.status <> 'ended') ORDER BY p.id",
+    )?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter().map(|id| PlanId::parse(id)).collect()
+}
+
+/// Removes `path` when it exists; a missing path reports nothing.
+fn prune_dir(plan: PlanId, workflow: Option<WorkflowKey>, path: PathBuf) -> Option<Pruned> {
+    if !path.exists() {
+        return None;
+    }
+    let reason = std::fs::remove_dir_all(&path).err().map(|e| e.to_string());
+    Some(Pruned {
+        plan,
+        workflow,
+        path,
+        reason,
+    })
+}
+
+/// (T) the `target/` of every idle Lead worktree, (D) the `durable/` of every finished Plan.
+fn prune(env: &mut Env) -> Result<Vec<Pruned>, CpdError> {
+    let leads = env.store.read(idle_lead_worktrees)?;
+    let plans = env.store.read(finished_plans)?;
+    let targets = leads
+        .into_iter()
+        .filter_map(|(plan, workflow, lead)| prune_dir(plan, Some(workflow), lead.join("target")));
+    let durables = plans.into_iter().filter_map(|plan| {
+        let dir = env.home.durable_dir(&plan);
+        prune_dir(plan, None, dir)
+    });
+    let pruned: Vec<Pruned> = targets.chain(durables).collect();
+    for p in &pruned {
+        let status = p
+            .reason
+            .as_deref()
+            .map_or("pruned".to_owned(), |r| format!("failed {r}"));
+        log(env, &format!("prune {} {status}", p.path.display()));
+    }
+    Ok(pruned)
+}
+
+fn pruned_json(pruned: &[Pruned]) -> Vec<Value> {
+    pruned
+        .iter()
+        .map(|p| {
+            let mut v = json!({"plan": p.plan, "workflow": p.workflow, "path": p.path.display().to_string(), "outcome": if p.reason.is_some() { "failed" } else { "pruned" }});
+            if let Some(reason) = &p.reason {
+                v["reason"] = json!(reason);
+            }
+            v
+        })
+        .collect()
+}
+
 fn run(env: &mut Env) -> Result<Output, CpdError> {
+    let pruned = prune(env)?;
     let pending = env.store.read(merged_prs_to_clean)?;
     let tmux = Tmux::new(env.config.tmux.socket.as_str());
     let work = env.config.tmux.work_session.clone();
@@ -150,7 +263,9 @@ fn run(env: &mut Env) -> Result<Output, CpdError> {
             v
         })
         .collect();
-    Ok(Output::success(json!({"outcomes": outcomes})))
+    Ok(Output::success(
+        json!({"outcomes": outcomes, "pruned": pruned_json(&pruned)}),
+    ))
 }
 
 /// The `cleanup_failed` Event of a `kept` or `failed` entry (DESIGN 5).

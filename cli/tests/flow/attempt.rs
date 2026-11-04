@@ -437,6 +437,7 @@ impl Git {
             catalog: &catalog,
             source: "attempt test",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         in_fakes(&self.fx, || {
             merge::merge(
@@ -1810,6 +1811,105 @@ fn read_needs_a_registered_session_with_an_existing_file() {
     refused(&fx.cpd(&["read", "api-a1", "--lines", "x"]), "usage", 2);
 }
 
+// ---------- attempt read: durable ----------
+
+impl Rows {
+    /// Makes `api-a1` a `durable` Attempt with a Session without a file; returns its store path.
+    fn durable(&self) -> PathBuf {
+        self.session(None);
+        self.fx
+            .env
+            .sql("UPDATE attempts SET runner = 'durable' WHERE id = 'api-a1'");
+        self.home
+            .durable_store(&plan(), &AttemptId::parse("api-a1").unwrap())
+    }
+}
+
+/// Writes the store at `path` with `records` as `entries` rows.
+fn durable_store(path: &Path, records: &[String]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE entries(id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, head INTEGER,
+           commit_seq INTEGER NOT NULL, record TEXT NOT NULL CHECK (json_valid(record)));",
+    )
+    .unwrap();
+    for (i, r) in records.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO entries (id, conversation_id, head, commit_seq, record) VALUES (?1, 1, NULL, ?1, ?2)",
+            params![i as i64 + 1, r],
+        )
+        .unwrap();
+    }
+}
+
+fn durable_record(kind: &str, role: &str, content: &str) -> String {
+    format!(
+        r#"{{"kind":"{kind}","id":1,"conversationId":1,"model":[{{"role":"{role}","content":{content}}}]}}"#
+    )
+}
+
+fn durable_records() -> Vec<String> {
+    vec![
+        durable_record("pi.system", "system", r#""s""#),
+        durable_record("pi.user", "user", r#"[{"type":"text","text":"hi"}]"#),
+        durable_record(
+            "pi.assistant",
+            "assistant",
+            r#"[{"type":"text","text":"a\nb"},{"type":"toolCall","id":"t","name":"bash","arguments":{}}]"#,
+        ),
+        durable_record(
+            "pi.tool-result",
+            "toolResult",
+            r#"[{"type":"text","text":"ok"}]"#,
+        ),
+        durable_record(
+            "pi.assistant",
+            "assistant",
+            r#"[{"type":"text","text":"done"},{"type":"toolCall","id":"u","name":"read","arguments":{}}]"#,
+        ),
+    ]
+}
+
+#[test]
+fn read_a_durable_attempt_reads_the_store_not_the_session_file() {
+    let fx = rows();
+    let store = fx.durable();
+    durable_store(&store, &durable_records());
+    let out = fx.cpd(&["read", "api-a1"]).ok();
+    assert_eq!(
+        out,
+        json!({"ok": true, "attempt": "api-a1", "session": "w1", "file": store.to_str().unwrap(), "total": 5,
+               "lines": ["assistant: a", "assistant: b", "tool: bash", "assistant: done", "tool: read"]})
+    );
+    let out = fx.cpd(&["read", "api-a1", "--lines", "2"]).ok();
+    assert_eq!(out["lines"], json!(["assistant: done", "tool: read"]));
+    assert_eq!(out["total"], 5);
+}
+
+#[test]
+fn read_a_durable_attempt_without_a_store_is_session_not_found() {
+    let fx = rows();
+    fx.durable();
+    // A readable pi session file is no store: it must not be read for a durable Attempt.
+    let file = fx.session_file(SESSION);
+    fx.fx.env.sql(&format!(
+        "UPDATE sessions SET file = '{}' WHERE id = 'w1'",
+        file.display()
+    ));
+    refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
+}
+
+#[test]
+fn read_a_durable_attempt_with_a_malformed_record_is_session_malformed() {
+    let fx = rows();
+    let store = fx.durable();
+    let mut records = durable_records();
+    records.push(r#"{"kind":"pi.assistant","id":9,"conversationId":1}"#.to_owned());
+    durable_store(&store, &records);
+    refused(&fx.cpd(&["read", "api-a1"]), "session_malformed", 1);
+}
+
 // ---------- attempt show ----------
 
 #[test]
@@ -2171,6 +2271,7 @@ impl Git {
             catalog: &catalog,
             source: "attempt test",
             metrics: &|_| Some(metrics.clone()),
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         in_fakes(&self.fx, || {
             merge::merge(

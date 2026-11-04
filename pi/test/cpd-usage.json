@@ -148,6 +148,16 @@
     },
     "required": []
   },
+  "config experimental": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 0
+    },
+    "required": []
+  },
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
@@ -162,18 +172,6 @@
     },
     "required": []
   },
-  "context answer": {
-    "flags": {
-      "--context": true,
-      "--help": false,
-      "--plan": true
-    },
-    "positionals": {
-      "max": 2,
-      "min": 2
-    },
-    "required": []
-  },
   "context archive": {
     "flags": {
       "--help": false
@@ -184,15 +182,16 @@
     },
     "required": []
   },
-  "context ask": {
+  "context curate": {
     "flags": {
       "--context": true,
       "--help": false,
-      "--plan": true
+      "--plan": true,
+      "--record": true
     },
     "positionals": {
-      "max": 1,
-      "min": 1
+      "max": 0,
+      "min": 0
     },
     "required": []
   },
@@ -213,6 +212,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -288,6 +288,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--no-supersedes": false,
       "--plan": true,
       "--supersedes": true
     },
@@ -316,6 +317,21 @@
       "--help": false,
       "--markdown": false,
       "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context reads": {
+    "flags": {
+      "--channel": true,
+      "--context": true,
+      "--help": false,
+      "--min-sessions": true,
+      "--plan": true,
+      "--since": true
     },
     "positionals": {
       "max": 0,
@@ -365,12 +381,26 @@
   },
   "context show": {
     "flags": {
+      "--all": false,
       "--context": true,
       "--help": false,
       "--plan": true,
+      "--pushed": false,
       "--record": true,
       "--since": true,
       "--topic": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "context topics": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
     },
     "positionals": {
       "max": 0,

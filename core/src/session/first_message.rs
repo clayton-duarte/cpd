@@ -36,11 +36,13 @@ pub(super) fn first_message(args: FirstMessageArgs) -> Result<Output, CpdError> 
                         |r| r.get(0),
                     )
                     .optional()?;
-                (plan::lead_message(&plan, brief.as_deref()), home.lead_message(plan_id))
+                let topics = crate::context::curated::topic_counts(conn, &plan.context)?;
+                (plan::lead_message(&plan, brief.as_deref(), &topics), home.lead_message(plan_id))
             }
             (None, Role::Manager) => {
                 let context = ContextRow::require(conn, &session.context)?;
-                (manager::manager_message(&session.context, &context.title), home.manager_message(&session.context))
+                let topics = crate::context::curated::topic_counts(conn, &session.context)?;
+                (manager::manager_message(&session.context, &context.title, &topics), home.manager_message(&session.context))
             }
             _ => return Err(not_a_lead(&session.id, session.role)),
         };

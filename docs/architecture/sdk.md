@@ -1,8 +1,7 @@
 # The SDK
 
 `cpd SDK` names the whole of cpd as one programmable thing: the **core**, the
-**ledger** and the **engine** ([contract §1.1](../contract.md); `hs-d802`,
-`cpd context show --record hs-d802`). This note says what each part is and how
+**ledger** and the **engine** ([contract §1.1](../contract.md); `hs-d802` (a record of machine `hs`)). This note says what each part is and how
 they sit together. The vault's
 [architecture-verification.md](../research/architecture-verification.md) maps
 the claim to the contract sections that own it and records where the name does
@@ -63,9 +62,10 @@ The ledger is written under a **single-writer discipline**:
 
 The engine is the tick loop: the one `cpd watch` per machine
 ([contract §3.7](../contract.md); [CONTEXT — Engine](../CONTEXT.md)). Every
-`tick_seconds` it runs its ordered steps, E1–E21 — scheduling Jobs under one
+`tick_seconds` it runs its ordered steps, E1–E23 — scheduling Jobs under one
 concurrency limit, watching liveness and timeouts, polling pull requests,
-reconciling the Inbox, curating Context records and the rest
+reconciling the Inbox, curating Context records, repeating the Slack bump of
+unreviewed posted pull requests (E23) and the rest
 ([contract §3.7](../contract.md)). One per machine is the rule (D5): the engine
 is not a daemon per Plan or a scheduler per Workflow
 ([CONTEXT — Engine](../CONTEXT.md)).

@@ -153,6 +153,7 @@ impl Fx {
             catalog: &self.catalog,
             source: "watch",
             metrics: &metrics,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         self.kit
             .scoped(|| merge::recover_attempt(&mut self.store(), &ctx, &plan(), attempt))

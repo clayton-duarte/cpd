@@ -1,5 +1,5 @@
 //! The start half of the Worker runner seam for `durable` (contract §3.4 "The Worker runner and its seam": Start, Liveness and
-//! restart, Stop; §6.12), through the driver in this process: with `worker_runner = "durable"` the driver starts the runner as a
+//! restart, Stop; §6.12), through the driver in this process: with `durable_workers = true` the driver starts the runner as a
 //! detached child of its own (no tmux window), watches it by pid, starts it again in place, ends the Attempt `setup_failed` or
 //! `crashed` where the contract says, stops it with SIGTERM then SIGKILL, and a reloaded driver follows the Attempt's stored
 //! runner, never today's flag.
@@ -53,19 +53,20 @@ pub(super) fn runner_file(adapter: &Path) -> PathBuf {
     adapter.join("durable-worker").join("main.ts")
 }
 
-/// The config of `live` from now on: `worker_runner = <runner>` and `pi_adapter = <adapter>`, then `tables` (`[timeouts]` and the
+/// The config of `live` from now on: `durable_workers` for `<runner>` and `pi_adapter = <adapter>`, then `tables` (`[timeouts]` and the
 /// like). An Attempt takes its runner from this file when it is dispatched.
 pub(super) fn use_runner(live: &Live, runner: &str, adapter: &Path, tables: &str) {
     seed_home(
         &live.fx.env,
         &format!(
-            "worker_runner = \"{runner}\"\npi_adapter = \"{}\"\n{tables}",
-            adapter.display()
+            "pi_adapter = \"{}\"\n[experimental]\ndurable_workers = {}\n{tables}",
+            adapter.display(),
+            runner == "durable"
         ),
     );
 }
 
-/// Plan `pay` with Job `api` queued, `worker_runner = "durable"` and an adapter directory that holds the runner file. `tables` is
+/// Plan `pay` with Job `api` queued, `durable_workers = true` and an adapter directory that holds the runner file. `tables` is
 /// more TOML after the keys (`[timeouts]`...). The models cache is made fresh and the engine's `pr poll` (E5) is answered, so a test
 /// that runs one tick of the engine ([`Fx::engine_tick`], the stall tests) makes no unscripted call.
 pub(super) fn durable_live(tables: &str) -> Live {
