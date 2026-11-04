@@ -21,6 +21,10 @@ vi.mock("./cockpit/Inbox.tsx", () => ({ Inbox: () => { renders.inbox++; return <
 
 import { App } from "./App.tsx";
 
+// jsdom has no ResizeObserver, which react-resizable-panels (external) needs: an inert double.
+vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+
+
 class FakeTransport implements Transport {
   private messageHandlers: ((raw: unknown) => void)[] = [];
   private statusHandlers: ((s: "open" | "closed") => void)[] = [];

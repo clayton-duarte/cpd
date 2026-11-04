@@ -48,6 +48,20 @@ impl Edits {
     fn restack_shape(&self) -> bool {
         self.repo.is_none() && self.base.is_some() && self.needs.is_some()
     }
+
+    /// Whether the flags are a retarget: `--base <branch>` (not a Workflow) alone (pro-d379).
+    fn retarget_shape(&self) -> bool {
+        self.repo.is_none()
+            && self.needs.is_none()
+            && matches!(self.base, Some(BaseWanted::Branch(_)))
+    }
+}
+
+/// The flag shapes `editable_workflow` lets through after the lock.
+#[derive(Clone, Copy)]
+struct Shape {
+    restack: bool,
+    retarget: bool,
 }
 
 // One variant holds a WorkflowRow, the other two; boxing would change the code that builds and matches them.
@@ -88,10 +102,22 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
     let wants_title = args.title.is_some() || args.jira.is_some();
     let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
+    // Whether `--base` names a Workflow is known only after `classify_base`; `decide` checks it.
+    let retarget_shape = args.repo.is_none() && args.base.is_some() && needs.is_none();
     let stored = env
         .store
         .read(|conn| {
-            editable_workflow(conn, &plan, &key, wants_title, wants_others, restack_shape)
+            editable_workflow(
+                conn,
+                &plan,
+                &key,
+                wants_title,
+                wants_others,
+                Shape {
+                    restack: restack_shape,
+                    retarget: retarget_shape,
+                },
+            )
         })?
         .0;
     if stored.head_ref.is_some()
@@ -199,15 +225,16 @@ fn retitle_open_pull_request(
 /// The Workflow `key` and its stored title, which must be editable. With `title`, the Workflow is not
 /// `merged` or `cancelled` (`workflow_ended`: its title is history). With `others` (a flag other than
 /// `--title`), the Plan is in `grounding` or `plan` and the Workflow `waiting` (`illegal_transition`); `--title` alone
-/// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` Workflow passes;
-/// anything else is `workflow_locked`, and `decide` checks the rest of the restack.
+/// meets neither rule. After the lock only a restack (`shape.restack`: the flags have its shape) of a `waiting` Workflow, or
+/// a retarget (`shape.retarget`: `--base` alone) of a `waiting` or `dispatch` one, passes (pro-d379);
+/// anything else is `workflow_locked`, and `decide` checks the rest.
 fn editable_workflow(
     conn: &Connection,
     plan: &PlanId,
     key: &WorkflowKey,
     title: bool,
     others: bool,
-    restack: bool,
+    shape: Shape,
 ) -> Result<(WorkflowRow, Option<String>), CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
@@ -225,12 +252,12 @@ fn editable_workflow(
     }
     if others {
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan)
-            && !(restack && workflow.status == "waiting")
-        {
+        let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
+        let retarget = shape.retarget && matches!(workflow.status.as_str(), "waiting" | "dispatch");
+        if locked && !(shape.restack && workflow.status == "waiting") && !retarget {
             return Err(workflow_locked(plan, phase, COMMAND));
         }
-        if workflow.status != "waiting" {
+        if workflow.status != "waiting" && !(locked && retarget) {
             return Err(CpdError::new(
                 ErrorCode::IllegalTransition,
                 format!(
@@ -264,7 +291,10 @@ fn decide(
         key,
         edits.title.is_some() || edits.jira.is_some(),
         edits.others(),
-        edits.restack_shape(),
+        Shape {
+            restack: edits.restack_shape(),
+            retarget: edits.retarget_shape(),
+        },
     )?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
@@ -293,7 +323,7 @@ fn decide(
         )?;
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan) {
+        if !matches!(phase, Phase::Grounding | Phase::Plan) && !edits.retarget_shape() {
             check_restack(
                 conn,
                 plan,
@@ -405,7 +435,7 @@ fn update(
     }
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
-            "UPDATE workflows SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
+            "UPDATE workflows SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status IN ('waiting', 'dispatch')",
             rusqlite::params![after.repo.as_str(), after.base.as_str(), plan.as_str(), after.key.as_str(), name.map(RepoName::as_str)],
         )?;
     }

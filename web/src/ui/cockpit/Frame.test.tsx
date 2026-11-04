@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import type { ReactNode } from "react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { Disposable, Transport } from "../../protocol/runtime.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import { mount } from "../../testing/render.tsx";
@@ -9,6 +9,10 @@ import { App } from "../App.tsx";
 import { Header } from "./Header.tsx";
 import { Shell } from "./Shell.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+
+// jsdom has no ResizeObserver, which react-resizable-panels (external) needs: an inert double.
+vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+
 
 class FakeTransport implements Transport {
   sent: unknown[] = [];

@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 107
+-- cpd-migration: breaking after 108
 -- Finish legacy codereview Plans stuck in grounding: grounding > done, legal for codereview (plans_phase trigger).
 UPDATE plans SET phase = 'done',
   locked_at = coalesce(locked_at, (SELECT at FROM txns WHERE id = cpd_txn())),

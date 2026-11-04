@@ -486,7 +486,7 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
                         detail: e.message().to_owned(),
                     }));
                 }
-                Err(e) => return Err(e),
+                Err(e) => return crash_end(e, None),
             }
         }
         if policy.gate.merge == Gate::Local
@@ -501,16 +501,25 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         {
             return Ok(Stepped::ends(end));
         }
-        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.4 step 8b; the merge finds it, submit does not check it, §7.7): it has no
+        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.4 step 6b; the merge finds it, submit does not check it, §7.7): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
-        if target.kind == "open" && pull_request_is_merged(store, target)? {
-            let pulled = open_pull_request(store, config, target)?;
-            return Ok(Stepped {
-                end: End::Merged { sha: old },
-                stale: None,
-                push: None,
-                pulled: Some(pulled),
-            });
+        if target.kind == "open" {
+            match pull_request_is_merged(store, target) {
+                Ok(false) => {}
+                Ok(true) => {
+                    let pulled = match open_pull_request(store, config, target) {
+                        Ok(pulled) => pulled,
+                        Err(e) => return crash_end(e, None),
+                    };
+                    return Ok(Stepped {
+                        end: End::Merged { sha: old },
+                        stale: None,
+                        push: None,
+                        pulled: Some(pulled),
+                    });
+                }
+                Err(e) => return crash_end(e, None),
+            }
         }
         // 7. Cancel check again: the last safe point.
         if store
@@ -615,32 +624,7 @@ fn finish_merge(
                     pulled: Some(pulled),
                 });
             }
-            Err(e)
-                if matches!(
-                    e.code(),
-                    ErrorCode::GhFailed | ErrorCode::ToolTimeout | ErrorCode::PrClosed
-                ) =>
-            {
-                let detail = format!(
-                    "{}: {}",
-                    if e.code() == ErrorCode::PrClosed {
-                        "pr_closed"
-                    } else {
-                        "gh_failed"
-                    },
-                    e.message()
-                );
-                return Ok(Stepped {
-                    end: End::Failed {
-                        cause: Failure::Crashed,
-                        detail,
-                    },
-                    stale,
-                    push: None,
-                    pulled: None,
-                });
-            }
-            Err(e) => return Err(e),
+            Err(e) => return crash_end(e, stale),
         }
     }
     Ok(Stepped {
@@ -915,6 +899,26 @@ fn is_refusal(code: ErrorCode) -> bool {
             | ErrorCode::JiraRequired
             | ErrorCode::BaseNotFound
     )
+}
+
+/// A git or `gh` failure ends the Attempt `crashed` (the ladder retries it); any other error propagates.
+fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> {
+    let label = match e.code() {
+        ErrorCode::GhFailed | ErrorCode::ToolTimeout => "gh_failed",
+        ErrorCode::PrClosed => "pr_closed",
+        ErrorCode::GitFailed | ErrorCode::BaseNotFound => e.code().as_str(),
+        _ => return Err(e),
+    };
+    let detail = format!("{label}: {}", e.message());
+    Ok(Stepped {
+        end: End::Failed {
+            cause: Failure::Crashed,
+            detail,
+        },
+        stale,
+        push: None,
+        pulled: None,
+    })
 }
 
 /// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).

@@ -1,4 +1,4 @@
-//! The data migration `20261104T1600-finish-legacy-review-plans` (pro-d383): a `codereview` Plan stuck in `grounding`
+//! The data migration `20261104T1601-finish-legacy-review-plans` (pro-d383): a `codereview` Plan stuck in `grounding`
 //! with nothing live or open becomes `done`, so the Lead can be archived. Stores here are built to the migration before it.
 
 use super::*;
@@ -6,7 +6,7 @@ use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::store::Store;
 
-const MIGRATION: &str = "20261104T1600-finish-legacy-review-plans";
+const MIGRATION: &str = "20261104T1601-finish-legacy-review-plans";
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
