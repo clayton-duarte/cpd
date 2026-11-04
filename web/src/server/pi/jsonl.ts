@@ -62,7 +62,7 @@ export interface PiNormalizer {
   readonly facts: JsonlFacts;
 }
 
-const FOLD_KINDS: readonly string[] = ["cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills"];
+const FOLD_KINDS: readonly string[] = ["cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills", "cpd"];
 
 /** Text of a content value: a string as is, else its text blocks joined with "\n". */
 function textOf(content: unknown): string {
@@ -88,8 +88,12 @@ function foldTitle(kind: FoldKind, body: string, details: Obj): string {
       return `Plan review ${String(details.review)} ${details.approved === true ? "approved" : "rejected"}`;
     case "cpd-skills":
       return firstLine(body);
-    case "cpd":
-      return firstLine(body);
+    case "cpd": {
+      const data = isObj(details.data) ? details.data : {};
+      if (details.kind === "session-message" && typeof data.from === "string") return `Message from ${data.from}`;
+      const t = str(details.text);
+      return firstLine(t !== undefined && t !== "" ? t : body);
+    }
   }
 }
 
@@ -240,6 +244,15 @@ export function createNormalizer(): PiNormalizer {
         const foldKind = entry.customType as FoldKind;
         const body = textOf(entry.content);
         const details = isObj(entry.details) ? entry.details : {};
+        if (foldKind === "cpd") {
+          const data = isObj(details.data) ? details.data : {};
+          if (details.kind === "session-message" && data.from === null && typeof data.text === "string" && data.text !== "") {
+            facts.lastRole = "user";
+            const when = str(details.at);
+            r.added.push({ kind: "user", id: `u:${id}`, ...(when === undefined ? stamp : { at: when }), text: data.text, attachments: [] });
+            break;
+          }
+        }
         const fold: FoldItem = {
           kind: "fold",
           id: `f:${id}`,
