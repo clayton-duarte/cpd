@@ -11,12 +11,16 @@ use clap::Args;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
+use super::curate_vectors::VectorStore;
 use super::fts::{self, Doc, Scored};
+use super::hybrid::{rrf, semantic_list};
 use super::inforce;
 use super::reads::{self, Channel};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select};
 use crate::args::Text;
+use crate::embedding::EmbeddingPort;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, RecordId, RecordKind};
@@ -52,6 +56,8 @@ struct Snapshot {
     pub retired: HashMap<String, String>,
     pub successor: HashMap<String, String>,
     pub curations: HashMap<String, Curation>,
+    /// `record_topics`: record to its provisional topic (shown until a curation exists).
+    pub provisional: HashMap<String, String>,
     pub hidden: HashSet<String>,
 }
 
@@ -81,6 +87,7 @@ fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapshot, CpdError
             retired: retired_labels(conn, context)?,
             successor: successors(conn, context)?,
             curations: curated,
+            provisional: provisional(conn, context)?,
             hidden: pending_hidden(conn, context)?,
         })
     })
@@ -132,6 +139,26 @@ fn successors(conn: &Connection, context: &ContextId) -> Result<HashMap<String, 
         .collect())
 }
 
+/// The provisional topic of every record of `context` that has one.
+fn provisional(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<HashMap<String, String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT record, topic FROM record_topics WHERE context = ?1")?;
+    let rows = stmt.query_map([context.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The topic of a record: its curation's, else its provisional one.
+fn topic_of(snap: &Snapshot, id: &str) -> Option<String> {
+    match snap.curations.get(id) {
+        Some((topic, _, _)) => Some(topic.clone()),
+        None => snap.provisional.get(id).cloned(),
+    }
+}
+
 /// The curation (topic, short and clock) of every curated record of `context`.
 fn curations(
     conn: &Connection,
@@ -163,7 +190,13 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         );
     }
     let kinds = kinds(&args.kind)?;
-    let Env { mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ports,
+        ..
+    } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let snap = snapshot(&mut store, &context)?;
 
@@ -172,10 +205,11 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         .iter()
         .map(|(_, record)| {
             let id = record.id.to_string();
-            let (topic, short) = snap
+            let topic = topic_of(&snap, &id).unwrap_or_default();
+            let short = snap
                 .curations
                 .get(&id)
-                .map(|(topic, short, _)| (topic.clone(), short.clone()))
+                .map(|(_, short, _)| short.clone())
                 .unwrap_or_default();
             Doc {
                 id,
@@ -191,10 +225,39 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         .iter()
         .map(|(_, record)| record.id.to_string())
         .find(|id| id.eq_ignore_ascii_case(&query));
-    let kept = fts::floor(
+    let visible: Vec<String> = filter(
+        docs.iter()
+            .map(|doc| Scored {
+                id: doc.id.clone(),
+                score: 0.0,
+            })
+            .collect(),
+        &snap,
+        &kinds,
+        args.all,
+        named.as_deref(),
+    )
+    .into_iter()
+    .map(|hit| hit.id)
+    .collect();
+    let lexical = fts::floor(
         filter(ranked, &snap, &kinds, args.all, named.as_deref()),
         named.as_deref(),
     );
+    let (kept, mode, semantic_error) = match semantic(
+        &SemanticInput {
+            home: &home,
+            config: &config,
+            runner: &ports.runner,
+            context: &context,
+            query: &query,
+        },
+        &visible,
+    )? {
+        Semantic::None => (lexical, "fts", None),
+        Semantic::Failed(code) => (lexical, "fts-only", Some(code)),
+        Semantic::List(list) => (rrf(&lexical, &list, named.as_deref()), "hybrid", None),
+    };
     let hits = hits_of(kept, &snap);
 
     let take = if args.limit == 0 {
@@ -219,12 +282,66 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         Channel::Search,
         &reads::search_reads(&page_hits),
     );
-    Ok(Output::success(json!({
+    let mut out = json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
         "query": query,
+        "mode": mode,
         "records": records,
         "markdown": markdown,
-    })))
+    });
+    if let Some(code) = semantic_error {
+        out["semantic_error"] = json!(code);
+    }
+    Ok(Output::success(out))
+}
+
+/// What the vector leg of a search found.
+enum Semantic {
+    /// No vectors for this Context and model: the embedder is never called.
+    None,
+    /// Vectors exist but could not be used; the error code.
+    Failed(String),
+    /// The semantic list over the visible records.
+    List(Vec<Scored>),
+}
+
+/// What the vector leg reads.
+struct SemanticInput<'a> {
+    home: &'a crate::home::CpdHome,
+    config: &'a crate::config::Config,
+    runner: &'a std::sync::Arc<dyn crate::host::runner::Runner>,
+    context: &'a ContextId,
+    query: &'a str,
+}
+
+/// The vector leg: the visible records' vectors, then the embedded query against them.
+/// A foreign or newer vectors.db is an error; any other store or embedder failure degrades to FTS-only.
+fn semantic(input: &SemanticInput<'_>, visible: &[String]) -> Result<Semantic, CpdError> {
+    let ids: Vec<RecordId> = visible.iter().filter_map(|id| id.parse().ok()).collect();
+    let vectors = match VectorStore::at(input.home).get(input.context, EMBED_MODEL, &ids) {
+        Ok(vectors) => vectors,
+        Err(e)
+            if e.details().contains_key("user_version")
+                || e.details().contains_key("application_id") =>
+        {
+            return Err(e);
+        }
+        Err(e) => return Ok(Semantic::Failed(e.code().as_str().to_owned())),
+    };
+    if vectors.is_empty() {
+        return Ok(Semantic::None);
+    }
+    let embedded = bifrost_embedder(input.config, input.runner)
+        .and_then(|embedder| embedder.embed(input.query, DIMS));
+    let query = match embedded {
+        Ok(embedded) => embedded.vector,
+        Err(e) => return Ok(Semantic::Failed(e.code().as_str().to_owned())),
+    };
+    let vectors: Vec<(String, Vec<f32>)> = vectors
+        .into_iter()
+        .map(|(id, v)| (id.to_string(), v))
+        .collect();
+    Ok(Semantic::List(semantic_list(&query, &vectors)))
 }
 
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
@@ -340,10 +457,7 @@ fn hits_of(kept: Vec<Scored>, snap: &Snapshot) -> Vec<Hit> {
                 seq: *seq,
                 score: hit.score,
                 in_force: snap.in_force.contains(&hit.id),
-                topic: snap
-                    .curations
-                    .get(&hit.id)
-                    .map(|(topic, _, _)| topic.clone()),
+                topic: topic_of(snap, &hit.id),
                 id: hit.id,
             })
         })

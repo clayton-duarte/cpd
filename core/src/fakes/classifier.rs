@@ -20,6 +20,8 @@ pub struct ChoiceCall {
 pub struct FakeClassifier {
     replies: Mutex<Vec<Result<Chosen, CpdError>>>,
     calls: Mutex<Vec<ChoiceCall>>,
+    /// `(label name, reply)`: a request that offers the label gets the reply, whatever its order.
+    routes: Vec<(String, Result<Chosen, CpdError>)>,
 }
 
 impl FakeClassifier {
@@ -28,6 +30,22 @@ impl FakeClassifier {
         FakeClassifier {
             replies: Mutex::new(replies),
             calls: Mutex::new(Vec::new()),
+            routes: Vec::new(),
+        }
+    }
+
+    /// A fake that answers by the labels a request offers: the first route whose label name is offered replies.
+    /// A request no route matches is answered from `fallback`.
+    pub fn routed(
+        routes: Vec<(&str, Result<Chosen, CpdError>)>,
+        fallback: Result<Chosen, CpdError>,
+    ) -> FakeClassifier {
+        FakeClassifier {
+            routes: routes
+                .into_iter()
+                .map(|(label, reply)| (label.to_string(), reply))
+                .collect(),
+            ..FakeClassifier::new(vec![fallback])
         }
     }
 
@@ -57,6 +75,13 @@ impl ClassifierPort for FakeClassifier {
                     .map(|l| (l.name.to_string(), l.definition.to_string()))
                     .collect(),
             });
+        }
+        if let Some((_, reply)) = self
+            .routes
+            .iter()
+            .find(|(label, _)| q.labels.iter().any(|l| l.name == label))
+        {
+            return reply.clone();
         }
         let mut replies = self.replies.lock().expect("script lock");
         if replies.len() > 1 {

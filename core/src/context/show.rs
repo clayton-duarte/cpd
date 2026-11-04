@@ -43,7 +43,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         } else {
             (
                 done_plans(conn, &config.machine, &records)?,
-                curated::topic_counts(conn, &id)?,
+                curated::curated_topic_counts(conn, &id)?,
             )
         };
         Ok((row, records, repos, retired, done, topics))

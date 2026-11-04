@@ -12,7 +12,7 @@ use super::curate_judge::{BifrostJudge, JudgePort, JudgeRequest, RecordView};
 use super::curate_neighbours::{
     K, Neighbour, TOP, forced_ids, lexical_rank, neighbours, semantic_rank,
 };
-use super::curate_vectors::VectorStore;
+use super::curate_vectors::{VectorStore, content_hash};
 use super::curate_verdict::{
     Gate, Outcome, Reason, Screen, Screened, Side, Why, confirm, gate, screen,
 };
@@ -33,6 +33,8 @@ use crate::store::Store;
 /// Records older than this are never picked without `--record`.
 pub const WINDOW_HOURS: i64 = 24;
 pub const DIMS: usize = 768;
+/// The model the real embedder (`pi/lib/embed.ts`) answers with; the lookup before the first embed uses it.
+pub(super) const EMBED_MODEL: &str = "vertex/gemini-embedding-2";
 /// Missing vectors embedded per run, newest first.
 pub const FILL: usize = 25;
 
@@ -109,6 +111,8 @@ struct Tally {
     kev_unreachable: bool,
     retire: Vec<(RecordId, RecordId, Reason)>,
     labels: Vec<(RecordId, String, String)>,
+    /// `(record, topic, model)`: a provisional topic (`record_topics`).
+    provisional: Vec<(RecordId, String, String)>,
     contradicts: Vec<Value>,
 }
 
@@ -201,6 +205,70 @@ fn ask_kev(models: &Models, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()
     })
 }
 
+/// The question `kev-4b` answers for a record's provisional topic (decision pro-d11).
+const TOPIC_QUESTION: &str = "Which topic does the Context record belong to?";
+/// A provisional topic is written only at this confidence or above.
+const TOPIC_CONFIDENCE: f32 = 0.80;
+
+/// The provisional topic of `new` (an accepted-independent record with no curation and no row yet), chosen among the
+/// Context's curated topics in force. Fail-open: an error or a weak or unknown label records nothing.
+fn provisional_topic(
+    models: &Models,
+    store: &mut Store,
+    context: &ContextId,
+    new: &Candidate,
+    state: &State,
+    tally: &mut Tally,
+) -> Result<(), CpdError> {
+    if state.is_curated(&new.id) {
+        return Ok(());
+    }
+    let (topics, has_row) = store.read(|conn| {
+        let has_row: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM record_topics WHERE context = ?1 AND record = ?2)",
+            [context.as_str(), new.id.to_string().as_str()],
+            |r| r.get(0),
+        )?;
+        Ok((
+            super::curated::curated_topic_counts(conn, context)?,
+            has_row,
+        ))
+    })?;
+    if has_row || topics.is_empty() {
+        return Ok(());
+    }
+    let definitions: Vec<String> = topics
+        .iter()
+        .map(|(topic, _)| format!("The record is about {topic}."))
+        .collect();
+    let labels: Vec<Label> = topics
+        .iter()
+        .zip(&definitions)
+        .map(|((topic, _), definition)| Label {
+            name: topic,
+            definition,
+        })
+        .collect();
+    let state_json =
+        json!({"record": {"id": new.id.to_string(), "kind": new.kind.as_str(), "text": new.text}});
+    let choice = Choice {
+        state: &state_json,
+        question: TOPIC_QUESTION,
+        labels: &labels,
+    };
+    let Ok(chosen) = models.classifier.choose(&choice) else {
+        return Ok(());
+    };
+    if chosen.confidence.unwrap_or(0.0) >= TOPIC_CONFIDENCE
+        && topics.iter().any(|(topic, _)| *topic == chosen.label)
+    {
+        tally
+            .provisional
+            .push((new.id.clone(), chosen.label, chosen.model));
+    }
+    Ok(())
+}
+
 fn judge_pair(
     models: &Models,
     pair: &Pair,
@@ -283,11 +351,16 @@ fn semantic(
     context: &ContextId,
     new: &Candidate,
     all: &[Candidate],
-    at: &str,
 ) -> Result<Vec<RecordId>, CpdError> {
     let query = models.embedding.embed(&new.text, DIMS)?;
     let model = query.model.as_str();
-    vectors.put(context, model, &new.id, &query.vector, at)?;
+    vectors.put_hashed(
+        context,
+        model,
+        &new.id,
+        &query.vector,
+        &content_hash(&new.text),
+    )?;
     let have = vectors.embedded(context, model)?;
     let missing = all
         .iter()
@@ -296,7 +369,7 @@ fn semantic(
         .take(FILL);
     for c in missing {
         let e = models.embedding.embed(&c.text, DIMS)?;
-        vectors.put(context, &e.model, &c.id, &e.vector, at)?;
+        vectors.put_hashed(context, &e.model, &c.id, &e.vector, &content_hash(&c.text))?;
     }
     let ids: Vec<RecordId> = all.iter().map(|c| c.id.clone()).collect();
     let found = vectors.get(context, model, &ids)?;
@@ -311,12 +384,11 @@ fn find_neighbours(
     new: &Candidate,
     supersedes: &[RecordId],
     all: &[Candidate],
-    at: &str,
 ) -> Result<(Vec<Neighbour>, bool), CpdError> {
     let forced = forced_ids(&new.text, supersedes, &new.id, all);
     let others: Vec<Candidate> = all.iter().filter(|c| c.id != new.id).cloned().collect();
     let lexical = lexical_rank(&new.text, &others, TOP)?;
-    let semantic = semantic(models, vectors, context, new, all, at).ok();
+    let semantic = semantic(models, vectors, context, new, all).ok();
     let fts_only = semantic.is_none();
     Ok((neighbours(&new.id, forced, lexical, semantic), fts_only))
 }
@@ -327,8 +399,9 @@ fn write(
     context: &ContextId,
     state: &State,
     tally: &Tally,
+    at: &str,
 ) -> Result<(), CpdError> {
-    if tally.retire.is_empty() && tally.labels.is_empty() {
+    if tally.retire.is_empty() && tally.labels.is_empty() && tally.provisional.is_empty() {
         return Ok(());
     }
     let curations: Vec<Curation> = tally
@@ -353,10 +426,21 @@ fn write(
             target: target.to_string(),
         })
         .collect();
-    if curations.is_empty() && proposals.is_empty() {
-        return Ok(());
+    if !curations.is_empty() || !proposals.is_empty() {
+        propose_rejecting(store, context, &curations, &proposals, tally.rejected)?;
     }
-    propose_rejecting(store, context, &curations, &proposals, tally.rejected)?;
+    if !tally.provisional.is_empty() {
+        store.write("context curate", |tx| {
+            for (record, topic, model) in &tally.provisional {
+                tx.execute(
+                    "INSERT INTO record_topics (context, record, topic, model, at) VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT DO NOTHING",
+                    [context.as_str(), &record.to_string(), topic, model, at],
+                )?;
+            }
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
@@ -451,11 +535,16 @@ pub fn curate_with(
         .find(|(_, r)| r.id == picked)
         .map(|(_, r)| r.supersedes().to_vec())
         .unwrap_or_default();
-    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all, &at)?;
+    let (found, fts) = find_neighbours(models, &vectors, context, new, &supersedes, &all)?;
     fts_only |= fts;
     let count = found.len().min(K);
     check_pairs(models, new, &found, &all, &topics, &mut tally)?;
-    write(store, context, &state, &tally)?;
+    let retired_or_labelled = tally.retire.iter().any(|(r, _, _)| *r == picked)
+        || tally.labels.iter().any(|(r, _, _)| *r == picked);
+    if tally.free > 0 && !retired_or_labelled {
+        provisional_topic(models, store, context, new, &state, &mut tally)?;
+    }
+    write(store, context, &state, &tally, &at)?;
     vectors.mark_checked(context, &picked, &at)?;
     checked.insert(picked);
     let remaining = due(&state, &checked, now).len();
@@ -469,6 +558,20 @@ pub struct CurateArgs {
     /// Curate this record, whatever its age
     #[arg(long, value_name = "id")]
     record: Option<RecordId>,
+}
+
+/// The real embedder: `pi/lib/embed.ts` run by `runner` in pi's agent directory. Shared by curate, embed and search.
+pub(super) fn bifrost_embedder(
+    config: &Config,
+    runner: &std::sync::Arc<dyn crate::host::runner::Runner>,
+) -> Result<BifrostEmbedding, CpdError> {
+    let agent_dir = locate_pi()?.agent_dir;
+    let lib = config.pi_adapter_dir()?.join("lib");
+    Ok(BifrostEmbedding::new(
+        runner.clone(),
+        lib.join("embed.ts"),
+        agent_dir,
+    ))
 }
 
 /// `context curate` (§3.13a).
@@ -503,10 +606,10 @@ pub(super) fn curate(args: CurateArgs) -> Result<Output, CpdError> {
     let classifier = PiClassifier::new(
         ports.runner.clone(),
         lib.join("classify.ts"),
-        agent_dir.clone(),
+        agent_dir,
         &home,
     );
-    let embedding = BifrostEmbedding::new(ports.runner.clone(), lib.join("embed.ts"), agent_dir);
+    let embedding = bifrost_embedder(&config, &ports.runner)?;
     let judge = BifrostJudge::new(&home, &config, ports.runner.clone());
     let models = Models {
         classifier: &classifier,
