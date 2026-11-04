@@ -202,4 +202,31 @@ describe("connection", () => {
     expect(store.getState().session?.pending).toEqual([]);
     expect(scheduler.pending()).toBe(0);
   });
+
+  it("an action result with a new Plan or Session id selects it", () => {
+    const { transport, store, connection } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    transport.sent.length = 0;
+    // plan new: the reply carries the Plan and its Lead session
+    transport.emitMessage({ type: "action.result", actionId: "a1", ok: true, output: { plan: { id: "my-plan" }, lead: { session: "s-lead9" } } });
+    expect(store.getState().cockpit.selectedPlanId).toBe("my-plan");
+    expect(store.getState().selectedSessionId).toBe("s-lead9");
+    expect(transport.sent).toEqual([
+      { type: "cockpit.selectPlan", planId: "my-plan" },
+      { type: "session.attach", sessionId: "s-lead9" },
+    ]);
+    transport.sent.length = 0;
+    // session fork: the reply carries the new session; the previous one is detached
+    transport.emitMessage({ type: "action.result", actionId: "a2", ok: true, output: { session: { id: "s-fork" } } });
+    expect(store.getState().selectedSessionId).toBe("s-fork");
+    expect(store.getState().cockpit.selectedPlanId).toBe("my-plan");
+    expect(transport.sent).toEqual([{ type: "session.detach" }, { type: "session.attach", sessionId: "s-fork" }]);
+    transport.sent.length = 0;
+    // a result without ids, and a failed result, change nothing
+    transport.emitMessage({ type: "action.result", actionId: "a3", ok: true, output: { done: true } });
+    transport.emitMessage({ type: "action.result", actionId: "a4", ok: false, error: { code: "cpd_failed", message: "no" } });
+    expect(store.getState().selectedSessionId).toBe("s-fork");
+    expect(transport.sent).toEqual([]);
+  });
 });

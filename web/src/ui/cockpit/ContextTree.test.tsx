@@ -557,3 +557,198 @@ it("a stopped or archived row shows a dim circle and never spins", () => {
   has(attentive, "text-fg-dim", "fill-current");
   lacks(attentive, "animate-spin", "text-status-blocked-bright");
 });
+
+// ---- context menus (pro-d46) ----
+// Radix opens a ContextMenu on a `contextmenu` event; the content is portalled to document.body and items select on click.
+const E = "\u2026";
+const menuOf = () => document.body.querySelector<HTMLElement>('[data-slot="context-menu-content"]');
+const labels = () => Array.from(menuOf()?.querySelectorAll('[role="menuitem"]') ?? []).map((i) => i.textContent);
+const item = (label: string) => Array.from(menuOf()?.querySelectorAll('[role="menuitem"]') ?? []).find((i) => i.textContent === label) ?? null;
+function rightClick(el: Element | null): void {
+  if (el === null) throw new Error("element not found");
+  act(() => {
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
+  });
+}
+const withMenu = () => ({ ...props(), onAction: vi.fn() });
+const ctxRow = (id: string) => `[data-context="${id}"] > button[data-select="context"]`;
+const planRow = (id: string) => `[data-plan="${id}"] > button[data-select="plan"]`;
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+});
+
+/** The tree with the Plan's Lead stopped: the Plan, and so the Context, is quiet. */
+const quietTree = (): ContextTreeModel => {
+  const c = tree.contexts[0]!;
+  const p = c.plans[0]!;
+  const lead = session("s-lead", "c1:p1", "stopped", null, { planId: "p1", role: "lead" });
+  return { cursor: 1, contexts: [{ ...c, plans: [{ ...p, sessions: [lead, ...p.sessions.slice(1)] }] }] };
+};
+const standingTree = (): ContextTreeModel => ({
+  cursor: 1,
+  contexts: [...tree.contexts, { id: "cpd", title: "cpd", archived: false, records: 0, openQuestions: 0, sessions: [session("s-cpd", "cpd", "idle", null)], plans: [] }],
+});
+
+it("right click on a Context row opens a menu with New Plan, Rename, Copy id, Archive and Delete", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={quietTree()} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("context");
+  expect(labels()).toEqual([`New Plan${E}`, `Rename${E}`, "Copy id", "Archive", "Delete"]);
+  click(item("Archive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.archive", contextId: "c1" });
+  m.unmount();
+});
+
+it("the Delete item is offered only when the Context or Plan is quiet", () => {
+  const busy = mount(<ContextTree {...withMenu()} />);
+  rightClick(q(busy.container, ctxRow("c1")));
+  expect(labels(), "busy Context").toEqual([`New Plan${E}`, `Rename${E}`, "Copy id", "Archive"]);
+  busy.unmount();
+  const busyPlan = mount(<ContextTree {...withMenu()} />);
+  rightClick(q(busyPlan.container, planRow("p1")));
+  expect(labels(), "busy Plan").toEqual([`New session${E}`, `Rename${E}`, "Copy id", "Archive"]);
+  busyPlan.unmount();
+  const quiet = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(quiet.container, planRow("p1")));
+  expect(labels().at(-1), "quiet Plan").toBe("Delete");
+  quiet.unmount();
+  const quietCtx = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(quietCtx.container, ctxRow("c1")));
+  expect(labels().at(-1), "quiet Context").toBe("Delete");
+  quietCtx.unmount();
+});
+
+it("a Standing Context menu offers only New Plan and Copy id", () => {
+  const m = mount(<ContextTree {...withMenu()} tree={standingTree()} />);
+  rightClick(q(m.container, `[data-standing] ${ctxRow("cpd")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("permanent");
+  expect(labels()).toEqual([`New Plan${E}`, "Copy id"]);
+  m.unmount();
+});
+
+it("right click on a Plan row opens a menu with New session, Rename, Copy id, Archive and Delete", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={quietTree()} />);
+  rightClick(q(m.container, planRow("p1")));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("plan");
+  expect(labels()).toEqual([`New session${E}`, `Rename${E}`, "Copy id", "Archive", "Delete"]);
+  click(item("Archive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.archive", planId: "p1" });
+  m.unmount();
+});
+
+it("right click on a Fork row offers Open, Rename, Fork, Copy id, Close and Archive", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, 'button[data-session="s-cfork"]'));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("fork");
+  expect(labels()).toEqual(["Open", `Rename${E}`, `Fork${E}`, "Copy id", "Close", "Archive"]);
+  click(item("Close"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "session.close", sessionId: "s-cfork" });
+  m.unmount();
+  const open = withMenu();
+  const again = mount(<ContextTree {...open} />);
+  rightClick(q(again.container, 'button[data-session="s-cfork"]'));
+  click(item("Open"));
+  expect(open.onSelectSession).toHaveBeenCalledExactlyOnceWith("s-cfork");
+  expect(open.onAction).not.toHaveBeenCalled();
+  again.unmount();
+});
+
+it("right click on an archived row offers Rename, Copy id and Unarchive, plus Delete on a Context or Plan", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:archive": "1" }));
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={withArchivedPlans()} />);
+  rightClick(q(m.container, `[data-archived] ${ctxRow("c2")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "Context kind").toBe("archived");
+  expect(labels(), "archived Context").toEqual([`Rename${E}`, "Copy id", "Unarchive", "Delete"]);
+  click(item("Unarchive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.unarchive", contextId: "c2" });
+  m.unmount();
+  const plans = withMenu();
+  const again = mount(<ContextTree {...plans} tree={withArchivedPlans()} />);
+  rightClick(q(again.container, `[data-archived] ${planRow("p9")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "Plan kind").toBe("archived");
+  expect(labels(), "archived Plan").toEqual([`Rename${E}`, "Copy id", "Unarchive", "Delete"]);
+  click(item("Unarchive"));
+  expect(plans.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.unarchive", planId: "p9" });
+  again.unmount();
+});
+
+it("Copy id writes the row id to the clipboard", () => {
+  const writeText = vi.fn(async () => undefined);
+  vi.stubGlobal("navigator", { userAgent: navigator.userAgent, clipboard: { writeText } });
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, planRow("p1")));
+  click(item("Copy id"));
+  expect(writeText).toHaveBeenCalledExactlyOnceWith("p1");
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item("Copy id"));
+  expect(writeText).toHaveBeenLastCalledWith("c1");
+  expect(p.onAction).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]');
+const field = () => dialog()?.querySelector<HTMLInputElement>("input") ?? null;
+function type(el: HTMLInputElement | null, value: string): void {
+  if (el === null) throw new Error("input not found");
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+const button = (label: string) => Array.from(dialog()?.querySelectorAll("button") ?? []).find((b) => b.textContent === label) ?? null;
+
+it("Rename and New Plan open a dialog with an input and submit the typed slug through onAction", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`Rename${E}`));
+  expect(dialog(), "rename dialog").not.toBeNull();
+  expect(field()?.value, "starts from the current title").toBe("Context One");
+  type(field(), "Better name");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.rename", contextId: "c1", title: "Better name" });
+  expect(dialog(), "dialog closes after submit").toBeNull();
+
+  p.onAction.mockClear();
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`New Plan${E}`));
+  expect(field()?.value, "New Plan starts empty").toBe("");
+  type(field(), "Fix the login page");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.new", planId: "fix-the-login-page", contextId: "c1", title: "Fix the login page" });
+
+  p.onAction.mockClear();
+  rightClick(q(m.container, planRow("p1")));
+  click(item(`New session${E}`));
+  type(field(), "side quest");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "session.fork", sourceId: "s-lead", name: "side quest" });
+  m.unmount();
+});
+
+it("the prompt dialog refuses an empty or invalid slug", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`New Plan${E}`));
+  click(button("OK"));
+  expect(p.onAction, "empty title").not.toHaveBeenCalled();
+  expect(dialog(), "stays open on empty").not.toBeNull();
+  expect(dialog()?.textContent, "empty error").toContain("Title is required.");
+  expect(field()?.getAttribute("aria-invalid"), "invalid flag").toBe("true");
+  type(field(), "!!");
+  click(button("OK"));
+  expect(p.onAction, "title without a usable id").not.toHaveBeenCalled();
+  expect(dialog(), "stays open on invalid slug").not.toBeNull();
+  expect(field()?.getAttribute("aria-invalid"), "invalid flag for slug").toBe("true");
+  click(button("Cancel"));
+  expect(dialog(), "cancel closes").toBeNull();
+  expect(p.onAction).not.toHaveBeenCalled();
+  m.unmount();
+});

@@ -14,6 +14,21 @@ export function actionArgs(action: CockpitAction): readonly string[] {
     case "engine.start": return ["watch", "--ensure"];
     case "session.retier": return ["session", "retier", action.sessionId, "--tier", action.tier];
     case "plan.reject": return ["plan", "decide", action.review, "--reject", "--plan", action.planId];
+    case "plan.new":
+    case "context.rename":
+    case "plan.rename":
+    case "session.rename":
+    case "session.fork":
+    case "session.close":
+    case "context.archive":
+    case "plan.archive":
+    case "session.archive":
+    case "context.unarchive":
+    case "plan.unarchive":
+    case "session.unarchive":
+    case "context.delete":
+    case "plan.delete":
+      throw new Error("not implemented");
   }
 }
 // `cpd pr merge <owner>/<repo>#<n>`: the pull request is the Workflow's stored pull_request, listed by `pr poll --plan`.

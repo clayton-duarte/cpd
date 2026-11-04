@@ -104,7 +104,21 @@ export type CockpitAction =
   | { kind: "pr.merge"; planId: string; workflow: string }
   | { kind: "engine.start" }
   | { kind: "session.retier"; sessionId: string; tier: string }
-  | { kind: "plan.reject"; planId: string; review: string };
+  | { kind: "plan.reject"; planId: string; review: string }
+  | { kind: "plan.new"; planId: string; contextId: string; title: string }
+  | { kind: "context.rename"; contextId: string; title: string }
+  | { kind: "plan.rename"; planId: string; title: string }
+  | { kind: "session.rename"; sessionId: string; name: string }
+  | { kind: "session.fork"; sourceId: string; name: string }
+  | { kind: "session.close"; sessionId: string }
+  | { kind: "context.archive"; contextId: string }
+  | { kind: "plan.archive"; planId: string }
+  | { kind: "session.archive"; sessionId: string }
+  | { kind: "context.unarchive"; contextId: string }
+  | { kind: "plan.unarchive"; planId: string }
+  | { kind: "session.unarchive"; sessionId: string }
+  | { kind: "context.delete"; contextId: string }
+  | { kind: "plan.delete"; planId: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
 
 const DURATIONS: readonly string[] = ["15m", "1h", "tomorrow"];
