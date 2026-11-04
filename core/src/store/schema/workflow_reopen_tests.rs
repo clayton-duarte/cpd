@@ -94,7 +94,9 @@ const SEED: &str = "INSERT OR IGNORE INTO contexts (id, title, created_at, creat
        VALUES ('pay', 'merged-wf', '/r/api', 'main', 'merged', 'cpd/pay/merged-wf', '/w/merged', 8, 'https://github.com/acme/api/pull/8', 't',
                (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(), 't', 't', 't');
      INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-       VALUES ('pay', 'cancel-wf', '/r/api', 'main', 'cancelled', 'cpd/pay/cancel-wf', cpd_txn(), 't');";
+       VALUES ('pay', 'cancel-wf', '/r/api', 'main', 'cancelled', 'cpd/pay/cancel-wf', cpd_txn(), 't');
+     -- An open Inbox item of the codereview Lead keeps `finish-legacy-review-plans` (a later migration) from finishing `rev`.
+     INSERT INTO inbox_items (kind, urgency, subject, session, label, opened_at) VALUES ('dialog', 'white', 'open dialog', 'l2', 'Open', 't');";
 
 fn before() -> (tempfile::TempDir, CpdHome) {
     let (dir, home) = crate::store::tests::tmp_home();

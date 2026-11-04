@@ -233,7 +233,7 @@ fn other_plans_are_left_alone() {
         store
             .read(|c: &Connection| {
                 Ok(c.query_row(
-                    "SELECT json_group_array(json_object('id', id, 'phase', phase, 'locked_at', locked_at, 'done_at', done_at, 'deleted_at', deleted_at, 'archived_at', archived_at)) FROM (SELECT * FROM plans WHERE id <> 'r-legacy' ORDER BY id)",
+                    "SELECT json_group_array(json_object('id', id, 'phase', phase, 'locked_at', locked_at, 'done_at', done_at, 'deleted_at', deleted_at, 'archived_at', archived_at)) FROM (SELECT id, phase, locked_at, done_at, deleted_at, archived_at FROM plans WHERE id <> 'r-legacy' ORDER BY id)",
                     [],
                     |r| r.get(0),
                 )?)

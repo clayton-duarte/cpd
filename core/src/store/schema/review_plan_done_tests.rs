@@ -74,7 +74,9 @@ const SEED: &str = "INSERT OR IGNORE INTO contexts (id, title, created_at, creat
      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
        VALUES ('r-pay-812', 'codereview', 'Review', 'grounding', 'l1', 't');
      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
-       VALUES ('c-pay', 'cpd', 'Pay', 'grounding', 'l2', 't');";
+       VALUES ('c-pay', 'cpd', 'Pay', 'grounding', 'l2', 't');
+     -- An open Inbox item of the codereview Lead keeps `finish-legacy-review-plans` (a later migration) from finishing `r-pay-812`.
+     INSERT INTO inbox_items (kind, urgency, subject, session, label, opened_at) VALUES ('dialog', 'white', 'open dialog', 'l1', 'Open', 't');";
 
 fn before() -> (tempfile::TempDir, CpdHome) {
     let (dir, home) = crate::store::tests::tmp_home();
