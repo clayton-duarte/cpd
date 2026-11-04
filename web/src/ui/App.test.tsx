@@ -77,7 +77,7 @@ function start() {
 }
 
 function attach(transport: FakeTransport, container: HTMLElement) {
-  const button = container.querySelector<HTMLButtonElement>('[data-session="s1"]');
+  const button = container.querySelector<HTMLButtonElement>('button[data-select="plan"]');
   expect(button).not.toBeNull();
   act(() => { button!.click(); });
   act(() => {
@@ -105,7 +105,7 @@ describe("App", () => {
   it("app subscribes to the cockpit and renders the three panes", () => {
     const { transport, container } = start();
     expect(transport.sent).toContainEqual({ type: "cockpit.subscribe" });
-    expect(container.querySelector('nav[aria-label="Context tree"]')?.textContent).toContain("Plan One");
+    expect(container.querySelector('nav[aria-label="Context tree"]')?.textContent).toContain("plan");
     expect(container.querySelector('section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
     expect(container.querySelector('aside[aria-label="Inbox"]')?.textContent).toContain("Nothing needs you");
   });

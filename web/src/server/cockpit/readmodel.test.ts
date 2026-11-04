@@ -85,10 +85,10 @@ describe("readmodel", () => {
       context: [context("c1")],
       plan: [],
       session: [
-        session("busy", { state: "working" }),
-        session("waiting", { state: "waiting" }),
-        session("quiet", { state: "idle" }),
-        session("snoozed", { state: "idle" }),
+        session("busy", { role: "lead", state: "working" }),
+        session("waiting", { role: "lead", state: "waiting" }),
+        session("quiet", { role: "lead", state: "idle" }),
+        session("snoozed", { role: "lead", state: "idle" }),
       ],
       inbox: [
         item(1, { session: "busy", urgency: "red" }),
