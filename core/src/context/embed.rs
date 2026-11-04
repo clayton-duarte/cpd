@@ -7,9 +7,11 @@ use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
 use super::curate_vectors::{VectorStore, content_hash};
 use super::distill::State;
 use super::{ContextRow, Select};
+use crate::clock::Clock;
 use crate::embedding::EmbeddingPort;
 use crate::env::Env;
 use crate::error::CpdError;
+use crate::home::CpdHome;
 use crate::ids::{ContextId, RecordId};
 use crate::output::Output;
 
@@ -28,6 +30,8 @@ pub(super) struct EmbedReport {
     pub embedded: usize,
     pub skipped: usize,
     pub remaining: usize,
+    pub embed_tokens: u64,
+    pub ms: u64,
 }
 
 /// Embeds the `records` (newest first, with their text) whose stored content hash differs, at most `limit`.
@@ -45,6 +49,8 @@ pub(super) fn embed_records(
         embedded: 0,
         skipped: 0,
         remaining: 0,
+        embed_tokens: 0,
+        ms: 0,
     };
     for (id, text) in records {
         let hash = content_hash(text);
@@ -59,6 +65,20 @@ pub(super) fn embed_records(
         }
     }
     Ok(report)
+}
+
+/// [`embed_records`] timed by `clock`, with its `curate-runs.jsonl` line appended (best effort).
+pub(super) fn embed_run(
+    home: &CpdHome,
+    clock: &dyn Clock,
+    store: &VectorStore,
+    embedder: &dyn EmbeddingPort,
+    context: &ContextId,
+    records: &[(RecordId, String)],
+    limit: usize,
+) -> Result<EmbedReport, CpdError> {
+    let _ = (home, clock); // stub: no ms, no tokens, no log yet
+    embed_records(store, embedder, context, records, limit)
 }
 
 /// `context embed`.
@@ -81,12 +101,23 @@ pub(super) fn embed(args: EmbedArgs) -> Result<Output, CpdError> {
         .collect();
     let embedder = bifrost_embedder(&config, &ports.runner)?;
     let vectors = VectorStore::at(&home);
-    let report = embed_records(&vectors, &embedder, &context, &records, args.limit)?;
+    let report = embed_run(
+        &home,
+        ports.clock.as_ref(),
+        &vectors,
+        &embedder,
+        &context,
+        &records,
+        args.limit,
+    )?;
     Ok(Output::success(json!({
         "context": context.as_str(),
         "model": EMBED_MODEL,
         "embedded": report.embedded,
         "skipped": report.skipped,
         "remaining": report.remaining,
+        "ms": report.ms,
+        "embed_tokens": report.embed_tokens,
+        "cost": serde_json::Value::Null,
     })))
 }

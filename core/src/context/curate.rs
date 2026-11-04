@@ -28,12 +28,23 @@ pub struct Candidate {
     pub text: String,
 }
 
+/// The gateway's usage figures of one judge call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JudgeUsage {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    /// US dollars, when the gateway reported it.
+    pub cost: Option<f64>,
+}
+
 /// What the judge answered.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Judged {
     pub verdict: Verdict,
     pub quote: String,
     pub reason: String,
     pub topic: String,
     pub short: String,
+    /// `None` when the gateway sent no usage.
+    pub usage: Option<JudgeUsage>,
 }

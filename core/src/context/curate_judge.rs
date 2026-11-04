@@ -92,6 +92,9 @@ struct Wire {
     reason: String,
     topic: String,
     short: String,
+    #[serde(default)]
+    #[allow(dead_code)] // stub: not read yet
+    usage: Option<Value>,
 }
 
 /// The helper's one line, parsed once into the typed answer or the error it carries.
@@ -109,6 +112,7 @@ fn parse(line: &str) -> Result<Judged, CpdError> {
                 reason: w.reason,
                 topic: w.topic,
                 short: w.short,
+                usage: None, // stub: the usage in `w.usage` is not read yet
             })
         }
         Value::Bool(false) => {

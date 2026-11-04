@@ -20,7 +20,7 @@ use super::curation::{Curation, NotCurable, Proposal, not_curable, propose_rejec
 use super::distill::{Lock, State};
 use super::{ContextRow, Select};
 use crate::classifier::{Choice, ClassifierPort, Label, PiClassifier};
-use crate::clock;
+use crate::clock::{self, Clock};
 use crate::config::{Config, locate_pi};
 use crate::embedding::{BifrostEmbedding, EmbeddingPort};
 use crate::env::Env;
@@ -478,6 +478,14 @@ fn report(
         "quote_failed": tally.quote_failed,
         "rejected": tally.rejected,
         "remaining": remaining,
+        // stub: usage, cost and time are not captured yet
+        "ms": 0,
+        "embed_tokens": 0,
+        "kev_tokens_in": 0,
+        "kev_tokens_out": 0,
+        "judge_tokens_in": 0,
+        "judge_tokens_out": 0,
+        "cost": Value::Null,
     })
 }
 
@@ -489,6 +497,7 @@ fn not_due(context: &ContextId, id: &RecordId) -> CpdError {
     .with("record", id.to_string())
 }
 
+#[allow(clippy::too_many_arguments)] // the injected ports and clock of one run
 pub fn curate_with(
     store: &mut Store,
     home: &CpdHome,
@@ -496,8 +505,10 @@ pub fn curate_with(
     context: &ContextId,
     models: &Models,
     now: OffsetDateTime,
+    clock: &dyn Clock,
     only: Option<&RecordId>,
 ) -> Result<Value, CpdError> {
+    let _ = clock; // stub: the Ports clock measures `ms` and stamps the curate-runs.jsonl line
     if !config.experimental.write_curation {
         return Ok(json!({"context": context.as_str(), "skipped": "off"}));
     }
@@ -624,6 +635,7 @@ pub(super) fn curate(args: CurateArgs) -> Result<Output, CpdError> {
         &context,
         &models,
         now,
+        ports.clock.as_ref(),
         args.record.as_ref(),
     )
     .map(Output::success)

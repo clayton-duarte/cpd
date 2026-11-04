@@ -123,3 +123,26 @@ test("judge maps an unknown verdict to judge_bad_reply", async () => {
   const f = fake(async () => reply({ ...verdict, verdict: "maybe" }));
   assert.equal(failure(await judge({ rt: runtime, fetch: f.fetch, request })).code, "judge_bad_reply");
 });
+
+const withUsage = (usage: unknown) =>
+  new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }], ...(usage === undefined ? {} : { usage }) }), { status: 200 });
+
+test("judge reports gateway usage tokens and cost", async () => {
+  const f = fake(async () => withUsage({ prompt_tokens: 120, completion_tokens: 30, cost: 0.0004 }));
+  const answer = await judge({ rt: runtime, fetch: f.fetch, request });
+  assert.deepEqual(answer, { ok: true, ...verdict, usage: { tokens_in: 120, tokens_out: 30, cost: 0.0004 } });
+  const noCost = fake(async () => withUsage({ prompt_tokens: 7, completion_tokens: 2 }));
+  const partial = await judge({ rt: runtime, fetch: noCost.fetch, request });
+  assert.deepEqual((partial as Extract<Answer, { ok: true }>).usage, { tokens_in: 7, tokens_out: 2, cost: null });
+  const labelled = fake(async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ topic: "storage", short: "Which store?" }) } }], usage: { prompt_tokens: 5, completion_tokens: 1, cost: 0.1 } }), { status: 200 }),
+  );
+  const l = await judge({ rt: runtime, fetch: labelled.fetch, request: label });
+  assert.deepEqual((l as Extract<Answer, { ok: true }>).usage, { tokens_in: 5, tokens_out: 1, cost: 0.1 });
+});
+
+test("judge reports null usage when the gateway sends none", async () => {
+  const f = fake(async () => withUsage(undefined));
+  const answer = await judge({ rt: runtime, fetch: f.fetch, request });
+  assert.deepEqual(answer, { ok: true, ...verdict, usage: null });
+});

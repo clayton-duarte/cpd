@@ -30,8 +30,9 @@ export interface JudgeRequest {
 
 export type Verdict = "duplicate" | "supersedes" | "contradicts" | "independent";
 export type Failure = { code: "judge_unreachable" | "judge_refused" | "judge_bad_reply"; message: string; details: Record<string, unknown> };
+export type Usage = { tokens_in: number; tokens_out: number; cost: number | null };
 export type Answer =
-  | { ok: true; verdict: Verdict; quote: string; reason: string; topic: string; short: string }
+  | { ok: true; verdict: Verdict; quote: string; reason: string; topic: string; short: string; usage?: Usage | null }
   | { ok: false; error: Failure };
 
 export interface JudgeDeps {
