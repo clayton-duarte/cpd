@@ -214,6 +214,18 @@ impl State {
         })
     }
 
+    /// The records in force, oldest first.
+    #[allow(dead_code)] // used by `curate_run` once implemented
+    pub(super) fn in_force_records(&self) -> Vec<&Indexed> {
+        self.in_force()
+    }
+
+    /// Whether the record has a curation (topic and short).
+    #[allow(dead_code)] // used by `curate_run` once implemented
+    pub(super) fn is_curated(&self, id: &RecordId) -> bool {
+        self.curated.contains_key(id)
+    }
+
     /// The records in force that are not curated yet, oldest first.
     pub fn uncurated(&self) -> Vec<&Indexed> {
         self.in_force()
