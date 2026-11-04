@@ -99,6 +99,9 @@ export function Transcript(props: {
   onLoadEarlier(): void;
   tailEpoch: number;
   sizes?: SizeObserver;
+  sessionKey?: string;
+  thinking?: "folded" | "expanded";
+  tools?: "grouped" | "expanded";
 }): JSX.Element {
   const defaultSizes = useMemo(() => browserSizes(), []);
   const sizes = props.sizes ?? defaultSizes;
