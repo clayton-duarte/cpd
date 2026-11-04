@@ -1,5 +1,5 @@
 import { WebError } from "../protocol/domain.ts";
-import type { Transport } from "../protocol/runtime.ts";
+import type { Disposable, Transport } from "../protocol/runtime.ts";
 import type { CpdElectronBridge } from "./channels.ts";
 
 export function createElectronTransport(bridge: Pick<CpdElectronBridge, "sendWeb" | "onWebMessage">): Transport {
