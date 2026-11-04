@@ -51,6 +51,7 @@ mod push;
 pub mod reactions;
 pub(crate) mod rebase;
 mod reply;
+mod repost;
 mod rerun;
 pub mod review;
 #[cfg(test)]
@@ -106,6 +107,8 @@ pub enum Command {
     Rerun(Args),
     /// Post the Workflow's pull request to Slack for review (§9.8b)
     Post(post::PostArgs),
+    /// Repeat the Workflow's post in its Slack thread (§9.8b2)
+    Repost(repost::RepostArgs),
     /// Merge a clean pull request on GitHub with a method the repo allows (§9.10)
     Merge(merge::MergeArgs),
 }
@@ -147,6 +150,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Reply(args) => reply::reply(ports, args),
         Command::Rerun(args) => rerun::rerun(ports, args),
         Command::Post(args) => post::post(ports, args),
+        Command::Repost(args) => repost::repost(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
     }
 }
