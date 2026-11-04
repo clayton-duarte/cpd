@@ -304,7 +304,7 @@ head
 │   ├─ strong[data-part="subject"]   {first}   KEPT element and text (Inbox.test 1: `strong` = "Review PR 9"); font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate (12.5px, #f3ead9)
 │   └─ span[data-part="age"]   {age}          font-mono text-meta text-muted-foreground shrink-0
 └─ span[data-part="line2"]   flex w-full items-baseline gap-1.5 truncate text-[12px] text-muted-foreground
-    ├─ span[data-part="kind"]   {row.kind}   KEPT hook and text (Inbox.test 1: exactly "review-requested"); font-mono text-[10.5px] text-fg-dim? NO: row sits on bg-background, so text-fg-dim is allowed (the column is `bg-background`)
+    ├─ span[data-part="kind"]   {row.kind}   KEPT hook and text (Inbox.test 1: exactly "review-requested"); font-mono text-[10.5px] text-fg-dim (allowed: the inbox column is `bg-background`)
     └─ span ×(one per `rest` line, key = line index)   text exactly ` {line}` (leading space)   KEPT (Inbox.test 1: textContent contains "second line"); text-muted-foreground
 ```
 `{age}` from `row.ageSeconds` s: `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d` (board: `38s`, `4m`, `1h`, `22h`).
@@ -331,7 +331,7 @@ The board's per-row badge (`2 ✕ · 14 ✓ · conflict`, `18 ✓`) has no sourc
 | Snooze | `data-part="bar-snooze"` | `Snooze` + `kbd` `S` | `h-6 rounded-[5px] border border-edge px-2 text-fg-strong` | **disabled** always (A4: no Snooze duration to choose in this bar) |
 | Dismiss | `data-part="bar-dismiss"` | `Dismiss` + `kbd` `E` | same as Snooze | **disabled** always (A4) |
 
-`kbd`: `font-mono text-muted-foreground` (`#aba3af`) for `S`/`E`; the `⏎` in `Open` inherits the button colour. Textual content of each button is the label, a space, the key: `Open ⏎`, `Snooze S`, `Dismiss E` (the `kbd` is a child; `textContent` is `Open⏎`-free: write the space as a literal `" "` text node so `textContent` is `Open ⏎`). Disabled buttons: `disabled` attribute, `aria-disabled` implied, `opacity-50`, no handler. **Resolution:** `inbox.snooze`/`inbox.dismiss` exist in `CockpitAction` and cpd may list them as inline row buttons (they then render in `[data-part="actions"]` as in Phase 2, `Dismiss`, `Snooze 15m`); the bar's `Snooze S`/`Dismiss E` stay disabled because the bar has no duration choice or confirmation UI and A4 fixes them disabled.
+`kbd`: `font-mono text-muted-foreground` (`#aba3af`) for `S`/`E`; the `⏎` in `Open` inherits the button colour. The `textContent` of each button is the label, one space, the key: `Open ⏎`, `Snooze S`, `Dismiss E` (a literal `" "` text node between the label and the `kbd`). Disabled buttons: `disabled` attribute, `aria-disabled` implied, `opacity-50`, no handler. **Resolution:** `inbox.snooze`/`inbox.dismiss` exist in `CockpitAction` and cpd may list them as inline row buttons (they then render in `[data-part="actions"]` as in Phase 2, `Dismiss`, `Snooze 15m`); the bar's `Snooze S`/`Dismiss E` stay disabled because the bar has no duration choice or confirmation UI and A4 fixes them disabled.
 
 ### 2e. Keyboard and focus
 
