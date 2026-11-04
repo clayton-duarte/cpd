@@ -31,6 +31,8 @@ export function AskCard(props: {
   dialog: AskDialog;
   readOnly: boolean;
   onRespond(response: DialogResponse): void;
+  asker?: string;
+  recommended?: readonly { readonly questionIndex: number; readonly label: string }[];
 }): React.JSX.Element {
   const { dialog, readOnly, onRespond } = props;
   const [picks, setPicks] = useState<readonly Pick[]>(() => dialog.questions.map(() => EMPTY));

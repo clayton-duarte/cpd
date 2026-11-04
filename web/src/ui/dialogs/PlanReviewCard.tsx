@@ -3,10 +3,30 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Dialog, DialogResponse } from "../../protocol/domain.ts";
 
+export interface PlanReviewExtras {
+  readonly subtitle?: string;
+  readonly revision?: string;
+  readonly previous?: { readonly revision: string; readonly verdict: string; readonly note?: string };
+  readonly onDiff?: () => void;
+  readonly workflows?: readonly {
+    readonly name: string;
+    readonly route: string;
+    readonly status: string;
+    readonly flag?: string;
+    readonly summary: string;
+    readonly jobs: readonly { readonly name: string; readonly role: string; readonly tier: string; readonly overlap?: boolean }[];
+  }[];
+  readonly overlaps?: readonly string[];
+  readonly risks?: readonly string[];
+  readonly outOfScope?: readonly string[];
+  readonly stats?: string;
+}
+
 export function PlanReviewCard(props: {
   dialog: Extract<Dialog, { method: "cpd_plan_review" }>;
   readOnly: boolean;
   onRespond(response: DialogResponse): void;
+  review?: PlanReviewExtras;
 }): React.JSX.Element {
   const { dialog, readOnly, onRespond } = props;
   const [asking, setAsking] = useState(false);
