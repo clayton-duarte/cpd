@@ -459,9 +459,7 @@ pub fn curate_with(
     vectors.mark_checked(context, &picked, &at)?;
     checked.insert(picked);
     let remaining = due(&state, &checked, now).len();
-    Ok(report(
-        new, count, fts_only, &tally, remaining, context,
-    ))
+    Ok(report(new, count, fts_only, &tally, remaining, context))
 }
 
 #[derive(Args, Debug)]
