@@ -59,18 +59,6 @@ pub struct Config {
     pub lead_runner: WorkerRunner,
     /// The runner of each new Manager Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `lead_runner` (Q11).
     pub manager_runner: WorkerRunner,
-    /// `context_engine_enabled`: the operator kill switch for the holographic engine.
-    pub context_engine_enabled: bool,
-    /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
-    pub context_engine_bridge: String,
-    /// `""` is the venv beside the bridge: see [`Config::context_engine_python_path`].
-    pub context_engine_python: String,
-    /// `""` is `$CPD_HOME/engines/holographic`: see [`Config::context_engine_dir`].
-    pub context_engine_dir: String,
-    /// The deadline of one search/sync spawn.
-    pub context_engine_timeout_ms: u32,
-    /// The deadline of a full reindex spawn.
-    pub context_engine_reindex_timeout_ms: u32,
     pub timeouts: Timeouts,
     pub watch: Watch,
     pub inbox: Inbox,
@@ -389,26 +377,6 @@ impl Config {
             WorkerRunner::parse(text_of(&v)?)
         })?;
 
-        let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
-            Value::Boolean(b) => Ok(b),
-            other => Err(format!("must be a boolean, not {}", other.type_str())),
-        })?;
-        let context_engine_bridge = r.get("context_engine_bridge", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_python = r.get("context_engine_python", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_dir = r.get("context_engine_dir", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_timeout_ms =
-            r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
-        let context_engine_reindex_timeout_ms =
-            r.get("context_engine_reindex_timeout_ms", 600000, |v| {
-                int(v, 1, u32::MAX)
-            })?;
-
         let positive =
             |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
@@ -519,12 +487,6 @@ impl Config {
             experimental,
             lead_runner,
             manager_runner,
-            context_engine_enabled,
-            context_engine_bridge,
-            context_engine_python,
-            context_engine_dir,
-            context_engine_timeout_ms,
-            context_engine_reindex_timeout_ms,
             timeouts,
             watch,
             inbox,
@@ -551,59 +513,6 @@ impl Config {
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
         Ok(bin_dir.join("..").join("share").join("cpd").join("pi"))
-    }
-
-    /// The bridge script's path: `context_engine_bridge`, else
-    /// `<dir of the cpd binary>/../share/cpd/holographic/bridge.py` (contract §8.2).
-    /// Whether the default exists is for the engine to say (`engine_missing`).
-    pub fn context_engine_bridge_path(&self) -> Result<PathBuf, CpdError> {
-        if !self.context_engine_bridge.is_empty() {
-            return Ok(PathBuf::from(&self.context_engine_bridge));
-        }
-        let exe = std::env::current_exe().map_err(|e| {
-            CpdError::new(
-                ErrorCode::ConfigInvalid,
-                format!("cannot find the cpd binary to locate the holographic bridge: {e}."),
-            )
-            .with("key", "context_engine_bridge")
-        })?;
-        let bin_dir = exe.parent().expect("an executable path has a parent");
-        Ok(bin_dir
-            .join("..")
-            .join("share")
-            .join("cpd")
-            .join("holographic")
-            .join("bridge.py"))
-    }
-
-    /// The interpreter's path: `context_engine_python`, else `<bridge dir>/venv/bin/python`, the
-    /// dotfiles venv (contract §8.2).
-    pub fn context_engine_python_path(&self) -> Result<PathBuf, CpdError> {
-        if !self.context_engine_python.is_empty() {
-            return Ok(PathBuf::from(&self.context_engine_python));
-        }
-        let bridge = self.context_engine_bridge_path()?;
-        let dir = bridge.parent().expect("a bridge path has a parent");
-        Ok(dir.join("venv").join("bin").join("python"))
-    }
-
-    /// The engine's data directory: `context_engine_dir`, else `$CPD_HOME/engines/holographic`.
-    pub fn context_engine_dir(&self, home: &CpdHome) -> PathBuf {
-        if self.context_engine_dir.is_empty() {
-            home.root().join("engines").join("holographic")
-        } else {
-            PathBuf::from(&self.context_engine_dir)
-        }
-    }
-
-    /// The deadline of one search/sync spawn.
-    pub fn context_engine_timeout(&self) -> Duration {
-        Duration::from_millis(u64::from(self.context_engine_timeout_ms))
-    }
-
-    /// The deadline of a full reindex spawn.
-    pub fn context_engine_reindex_timeout(&self) -> Duration {
-        Duration::from_millis(u64::from(self.context_engine_reindex_timeout_ms))
     }
 }
 
