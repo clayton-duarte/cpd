@@ -80,6 +80,15 @@ describe("readmodel", () => {
     expect(tree.cursor).toBe(8);
   });
 
+  it("readmodel parses the merging count into the plan counts", async () => {
+    const { cpd } = fakeCpd({
+      context: [context("c1")],
+      plan: [plan("p1", "c1", { counts: { draft: 0, queued: 1, running: 2, merging: 4, merged: 3, failed: 0, cancelled: 0 } })],
+    });
+    const { tree } = await createReadModel(cpd).loadAll(null);
+    expect(tree.contexts[0]!.plans[0]!.counts.merging).toBe(4);
+  });
+
   it("session state dot derives from state and open inbox items", async () => {
     const { cpd } = fakeCpd({
       context: [context("c1")],
@@ -284,4 +293,67 @@ it("buildTree lists a non-lead Lead as a fork once under its Context", async () 
   expect(ids(c1.sessions)[0]).toBe("m1");
   expect(ids(c1.plans[0]!.sessions)[0]).toBe("l1");
   expect(all.sort()).toEqual(["cf", "l1", "m1", "pf"]);
+});
+
+// pro-d45: dot rules.
+const dotsById = async (r: Replies): Promise<Record<string, unknown>> => {
+  const tree = await treeOf(r);
+  const all = tree.contexts.flatMap((c) => [...c.sessions, ...c.plans.flatMap((p) => p.sessions)]);
+  return Object.fromEntries(all.map((s) => [s.ref.id, s.dot.attention]));
+};
+
+it("a session dot ignores blue inbox urgency", async () => {
+  const dots = await dotsById({
+    context: [context("c1")],
+    session: [session("a", { role: "lead", state: "idle" }), session("b", { role: "lead", state: "idle" })],
+    inbox: [
+      item(1, { kind: "dialog", session: "a", urgency: "blue" }),
+      item(2, { kind: "dialog", session: "b", urgency: "blue" }),
+      item(3, { kind: "unread", session: "b", urgency: "white" }),
+    ],
+  });
+  expect(dots["a"]).toBeNull();
+  expect(dots["b"]).toBe("white");
+});
+
+it("a session dot takes the highest ranked urgency in the order red yellow magenta cyan white", async () => {
+  const sessions = ["s1", "s2", "s3", "s4", "s5"];
+  const urgencies = (xs: string[], s: string): Obj[] => xs.map((u, n) => item(n + 1, { kind: "dialog", session: s, urgency: u }));
+  const dots = await dotsById({
+    context: [context("c1")],
+    session: sessions.map((id) => session(id, { role: "lead", state: "idle" })),
+    inbox: [
+      ...urgencies(["white", "cyan", "magenta", "yellow", "red"], "s1"),
+      ...urgencies(["white", "cyan", "magenta", "yellow"], "s2"),
+      ...urgencies(["white", "cyan", "blue", "magenta"], "s3"),
+      ...urgencies(["white", "blue", "cyan"], "s4"),
+      ...urgencies(["white"], "s5"),
+    ],
+  });
+  expect(dots).toMatchObject({ s1: "red", s2: "yellow", s3: "magenta", s4: "cyan", s5: "white" });
+});
+
+it("only plan-review job-stuck and drafts-parked items colour a Lead dot", async () => {
+  const kinds: Array<[string, string | null]> = [
+    ["plan-review", "red"],
+    ["job-stuck", "yellow"],
+    ["drafts-parked", "cyan"],
+    ["pr-closed", null],
+    ["pr-ready", null],
+  ];
+  const dots = await dotsById({
+    context: [context("c1")],
+    plan: kinds.map(([k]) => plan(`p-${k}`, "c1", { lead_session: `l-${k}` })),
+    session: kinds.map(([k]) => session(`l-${k}`, { role: "lead", plan: `p-${k}`, plan_lead: true, state: "idle" })),
+    inbox: kinds.map(([k, u], n) => item(n + 1, { kind: k, plan: `p-${k}`, urgency: u ?? "red" })),
+  });
+  for (const [k, u] of kinds) expect(dots[`l-${k}`], k).toBe(u);
+  // another kind colours the session that owns it
+  const owned = await dotsById({
+    context: [context("c1")],
+    plan: [plan("p1", "c1", { lead_session: "l1" })],
+    session: [session("l1", { role: "lead", plan: "p1", plan_lead: true, state: "idle" })],
+    inbox: [item(1, { kind: "pr-ready", plan: "p1", session: "l1", urgency: "yellow" })],
+  });
+  expect(owned["l1"]).toBe("yellow");
 });

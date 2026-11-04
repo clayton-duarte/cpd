@@ -19,7 +19,7 @@ export interface RawSession {
 export interface RawInboxItem {
   id: number | null; kind: string; label: string; urgency: Urgency; opened_at: string; age_seconds: number;
   context: StrOrNull; plan: StrOrNull; job: StrOrNull; session: StrOrNull; url: StrOrNull;
-  snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull;
+  snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull; workflow: StrOrNull;
 }
 export interface RawPlanShow { plan: { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; lead_session: StrOrNull }; counts: PlanCounts; jobs: Obj[]; workflows: Obj[]; review: Obj | null; escalations: unknown[]; cursor: number }
 export interface ParsedInbox {
@@ -71,7 +71,7 @@ function oneOf<T extends string>(o: Obj, f: string, c: string, set: readonly T[]
 }
 function counts(o: Obj, c: string): PlanCounts {
   const k = obj(o["counts"], c, "counts");
-  return { draft: num(k, "draft", c), queued: num(k, "queued", c), running: num(k, "running", c), merged: num(k, "merged", c), failed: num(k, "failed", c), cancelled: num(k, "cancelled", c) };
+  return { draft: num(k, "draft", c), queued: num(k, "queued", c), running: num(k, "running", c), merged: num(k, "merged", c), failed: num(k, "failed", c), cancelled: num(k, "cancelled", c), ...(typeof k["merging"] === "number" && Number.isFinite(k["merging"]) ? { merging: k["merging"] } : {}) };
 }
 const cursorOf = (r: Reply, c: string): number => num(r, "events_cursor", c);
 
@@ -107,6 +107,11 @@ export function parseSessionList(reply: Reply): RawSession[] {
     };
   });
 }
+function workflowOf(data: unknown): StrOrNull {
+  if (typeof data !== "object" || data === null) return null;
+  const w = (data as Record<string, unknown>)["workflow"];
+  return typeof w === "string" && w !== "" ? w : null;
+}
 export function parseInboxList(reply: Reply): ParsedInbox {
   const c = "inbox list";
   const hidden = obj(reply["hidden"], c, "hidden");
@@ -117,7 +122,7 @@ export function parseInboxList(reply: Reply): ParsedInbox {
       id, kind: str(o, "kind", c), label: str(o, "label", c), urgency: str(o, "urgency", c) as Urgency, opened_at: str(o, "opened_at", c),
       age_seconds: num(o, "age_seconds", c), context: strN(o, "context", c), plan: strN(o, "plan", c), job: strN(o, "job", c),
       session: strN(o, "session", c), url: strN(o, "url", c), snoozed_until: strN(o, "snoozed_until", c),
-      dismissed_at: strN(o, "dismissed_at", c), claimed_at: strN(o, "claimed_at", c),
+      dismissed_at: strN(o, "dismissed_at", c), claimed_at: strN(o, "claimed_at", c), workflow: workflowOf(o["data"]),
     };
   });
   return {
@@ -143,16 +148,17 @@ export function parsePlanShow(reply: Reply): RawPlanShow {
 
 // ---- builders ------------------------------------------------------------
 
-const RANK: readonly string[] = ["red", "yellow", "magenta", "blue", "cyan", "white"];
-const LEAD_KINDS = ["plan-review", "job-stuck", "pr-closed"];
+const RANK: readonly string[] = ["red", "yellow", "magenta", "cyan", "white"];
+const LEAD_KINDS = ["plan-review", "job-stuck", "drafts-parked"];
 
 function visible(i: RawInboxItem): boolean {
   return i.snoozed_until === null && i.dismissed_at === null && i.claimed_at === null;
 }
 function linked(s: RawSession, i: RawInboxItem): boolean {
+  if (i.urgency === "blue") return false;
   if (i.session === s.id) return true;
   if (!s.plan_lead || i.plan === null || i.plan !== s.plan) return false;
-  return LEAD_KINDS.includes(i.kind) || (i.kind === "pr-ready" && (i.urgency === "red" || i.urgency === "yellow"));
+  return LEAD_KINDS.includes(i.kind);
 }
 function sessionNode(s: RawSession, inbox: RawInboxItem[]): SessionNode {
   const key = s.key !== null && s.key !== "" ? s.key : s.name ?? s.id;
@@ -288,10 +294,12 @@ function rowActions(id: number, kind: string): InboxRowAction[] {
   add("Dismiss", { kind: "inbox.dismiss", itemId: id });
   return acts;
 }
-export function buildInbox(parsed: ParsedInbox): InboxModel {
+const PLAN_LEAD_ROW_KINDS: readonly string[] = ["plan-review", "drafts-parked", "pr-ready", "pr-closed"];
+export function buildInbox(parsed: ParsedInbox, sessions: readonly RawSession[] = []): InboxModel {
+  const leadOf = (plan: StrOrNull): StrOrNull => (plan === null ? null : sessions.find((s) => s.plan_lead && s.plan === plan)?.id ?? null);
   const rows: InboxRow[] = parsed.rows.map((i) => ({
     id: i.id ?? -1, kind: i.kind, label: i.label, urgency: i.urgency, contextId: i.context, planId: i.plan, jobKey: i.job,
-    sessionId: i.session, url: i.url, openedAt: i.opened_at, ageSeconds: i.age_seconds,
+    sessionId: PLAN_LEAD_ROW_KINDS.includes(i.kind) ? leadOf(i.plan) ?? i.session : i.session, workflow: i.workflow, url: i.url, openedAt: i.opened_at, ageSeconds: i.age_seconds,
     actions: i.id === null ? [] : rowActions(i.id, i.kind),
   }));
   return { openCount: rows.length, engineRunning: parsed.engineRunning, hidden: parsed.hidden, rows, cursor: parsed.cursor };
@@ -301,11 +309,12 @@ export function createReadModel(cpd: Cpd): ReadModel {
   async function loadPanes(panes: PaneSet, planId: string | null): Promise<PaneUpdate> {
     const wantTree = panes.has("tree");
     const wantInbox = panes.has("inbox") || wantTree;
+    const wantSessions = wantTree || panes.has("inbox");
     const wantPlan = panes.has("plan") && planId !== null;
     const [ctxR, planR, sessR, inboxR, showR] = await Promise.all([
       wantTree ? cpd.json(["context", "list"]) : undefined,
       wantTree ? cpd.json(["plan", "list"]) : undefined,
-      wantTree ? cpd.json(["session", "list"]) : undefined,
+      wantSessions ? cpd.json(["session", "list"]) : undefined,
       wantInbox ? cpd.json(["inbox", "list"]) : undefined,
       wantPlan ? cpd.json(["plan", "show", "--plan", planId]) : undefined,
     ]);
@@ -317,7 +326,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
         cursor: Math.min(cursorOf(ctxR, "context list"), cursorOf(planR, "plan list"), cursorOf(sessR, "session list"), inbox.cursor),
       });
     }
-    if (panes.has("inbox") && inbox !== undefined) out.inbox = buildInbox(inbox);
+    if (panes.has("inbox") && inbox !== undefined) out.inbox = buildInbox(inbox, sessR === undefined ? [] : parseSessionList(sessR));
     if (panes.has("plan")) out.plan = showR === undefined ? null : buildPlanView(parsePlanShow(showR));
     return out;
   }

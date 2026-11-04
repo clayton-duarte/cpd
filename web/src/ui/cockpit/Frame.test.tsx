@@ -81,7 +81,10 @@ function show(el: ReactNode): HTMLElement {
 type SlotProps = { tree: ReactNode; plan: ReactNode; chat: ReactNode; inbox: ReactNode; header?: ReactNode; status?: ReactNode };
 const AnyShell = Shell as unknown as (p: SlotProps) => ReactNode;
 const panes = { tree: <p>T</p>, plan: <p>P</p>, chat: <p>C</p>, inbox: <p>I</p> };
-const labels = (c: HTMLElement) => Array.from(c.querySelector("[data-shell]")!.children).map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-column"));
+const labels = (c: HTMLElement) =>
+  Array.from(c.querySelectorAll('[data-shell] > header, [data-shell] > footer, [data-shell] aside, [data-shell] [data-column="center"]')).map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-column"));
+/** Direct children of [data-shell]: header, the one columns group, footer. */
+const shellParts = (c: HTMLElement) => Array.from(c.querySelector("[data-shell]")!.children).map((e) => e.tagName === "DIV" ? e.getAttribute("data-part") : e.tagName);
 
   it("Header shows the C-P-D emblem text", () => {
   const c = show(<Header />);
@@ -114,12 +117,14 @@ it("Shell renders header and status slots around the panes", () => {
   expect(shell.lastElementChild?.tagName).toBe("FOOTER");
   expect(shell.lastElementChild?.textContent).toBe("S");
   expect(shell.querySelector('[data-column="center"]')!.children.length).toBe(2);
+  expect(shellParts(c)).toEqual(["HEADER", "columns-group", "FOOTER"]);
 });
 
 it("Shell without header or status renders as before", () => {
   const c = show(<AnyShell {...panes} />);
   expect(labels(c)).toEqual(["Context tree column", "center", "Inbox column"]);
   expect(c.querySelector("header, footer")).toBeNull();
+  expect(shellParts(c)).toEqual(["columns-group"]);
   mounted?.unmount();
   const c2 = show(<AnyShell {...panes} header={<span>H</span>} />);
   expect(labels(c2)).toEqual(["Cockpit header", "Context tree column", "center", "Inbox column"]);

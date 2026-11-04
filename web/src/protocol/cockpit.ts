@@ -3,7 +3,7 @@ import { WebError, type SessionRef, type SessionState } from "./domain.ts";
 
 export type Urgency = "red" | "yellow" | "magenta" | "blue" | "cyan" | "white"; // seen live: red, magenta; the rest from docs/commands.md:3910 (unverified, O15)
 
-export interface PlanCounts { draft: number; queued: number; running: number; merged: number; failed: number; cancelled: number }
+export interface PlanCounts { draft: number; queued: number; running: number; merged: number; failed: number; cancelled: number; merging?: number }
 
 export interface SessionDot {
   readonly state: SessionState;
@@ -17,6 +17,7 @@ export interface SessionNode {
   readonly jobKey: string | null; // third segment of `key` for a Worker; null otherwise
   readonly archived: boolean; // archived_at !== null
   readonly dot: SessionDot;
+  readonly createdAt?: string;
 }
 export interface PlanNode {
   readonly id: string;
@@ -27,6 +28,7 @@ export interface PlanNode {
   readonly counts: PlanCounts;
   readonly leadSessionId: string | null;
   readonly sessions: readonly SessionNode[]; // the Plan's sessions: the Lead first, then Workers in `session list` order
+  readonly createdAt?: string;
 }
 export interface ContextNode {
   readonly id: string;
@@ -36,6 +38,7 @@ export interface ContextNode {
   readonly openQuestions: number;
   readonly sessions: readonly SessionNode[]; // sessions of the Context with plan === null (Manager, forks)
   readonly plans: readonly PlanNode[];
+  readonly createdAt?: string;
 }
 export interface ContextTreeModel {
   readonly contexts: readonly ContextNode[];
@@ -79,6 +82,7 @@ export interface InboxRow {
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;
+  readonly workflow?: string | null; // the Workflow key for PR kinds, from the item's data; null when none
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
 }
@@ -97,6 +101,8 @@ export type CockpitAction =
   | { kind: "inbox.claim"; itemId: number }
   | { kind: "inbox.approve"; itemId: number }
   | { kind: "pr.post"; planId: string; workflow: string }
+  | { kind: "pr.merge"; planId: string; workflow: string }
+  | { kind: "engine.start" }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
@@ -121,6 +127,8 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "inbox.claim": ["itemId"],
     "inbox.approve": ["itemId"],
     "pr.post": ["planId", "workflow"],
+    "pr.merge": ["planId", "workflow"],
+    "engine.start": [],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
   };

@@ -85,13 +85,41 @@ it("user message renders attachment chips", () => {
   m.unmount();
 });
 
-it("assistant message renders a card with typeset markdown and a stamp", () => {
+it("assistant text renders as a bubble without an extra bordered card", () => {
   const item: TranscriptItem = { kind: "assistant", id: "a1", at: localIso, streaming: false, blocks: [{ type: "text", text: "**bold**" }] };
   const m = mount(<Transcript {...base} items={[item]} sessionKey="ctx:plan" />);
-  const card = m.container.querySelector('article[data-kind="assistant"] [data-part="card"]') as HTMLElement;
-  expect(card).not.toBeNull();
-  expect(card.querySelector(".typeset-chat strong")?.textContent).toBe("bold");
-  expect(card.querySelector('[data-part="stamp"]')?.textContent).toBe("ctx:plan · 13:58");
+  const art = m.container.querySelector('article[data-kind="assistant"]') as HTMLElement;
+  const bubble = art.querySelector('[data-slot="bubble"]') as HTMLElement;
+  expect(bubble).not.toBeNull();
+  expect(bubble.getAttribute("data-align")).toBe("start");
+  expect(art.querySelector('[data-part="card"]')).toBeNull();
+  const content = bubble.querySelector('[data-slot="bubble-content"]') as HTMLElement;
+  expect(content.querySelector(".typeset-chat strong")?.textContent).toBe("bold");
+  expect(content.querySelector('[data-part="stamp"]')?.textContent).toBe("ctx:plan · 13:58");
+  for (const e of [art, ...art.querySelectorAll("*")]) {
+    const tokens = (e.getAttribute("class") ?? "").split(/\s+/);
+    expect(tokens).not.toContain("bg-card");
+    expect(tokens).not.toContain("border-border");
+  }
+  m.unmount();
+});
+
+it("thinking renders as a folded trace with one rail", () => {
+  const item: TranscriptItem = { kind: "assistant", id: "a1", streaming: false, blocks: [{ type: "thinking", text: "pondering deeply" }] };
+  const m = mount(<Transcript {...base} items={[item]} />);
+  const t = m.container.querySelector('[data-kind="thinking"]') as HTMLElement;
+  expect(t).not.toBeNull();
+  expect(t.getAttribute("data-state")).toBe("closed");
+  expect(t.closest('[data-slot="trace"]') ?? t.querySelector('[data-slot="trace"]')).not.toBeNull();
+  expect(t.textContent).not.toContain("pondering deeply");
+  expect(t.querySelector('[data-part="label"]')?.textContent).toBe("Thinking");
+  const pill = t.querySelector('[data-slot="trace-collapsible-trigger"]') as HTMLElement;
+  expect(pill.className).not.toMatch(/rounded-xl|(^|\s)border(\s|$)/);
+  act(() => pill.click());
+  expect(t.getAttribute("data-state")).toBe("open");
+  expect(t.querySelector('[data-part="thinking-body"]')?.textContent).toBe("pondering deeply");
+  expect(t.querySelectorAll('[data-part="rail"]').length).toBe(1);
+  expect(t.querySelector('[data-part="thinking-body"] [data-part="rail"]')).toBeNull();
   m.unmount();
 });
 

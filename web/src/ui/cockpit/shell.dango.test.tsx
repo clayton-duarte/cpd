@@ -39,9 +39,9 @@ vi.mock("react-resizable-panels", async () => {
         };
         handle.current = h;
       }
-      (panelRef as { current: Handle | null }).current = handle.current;
+      if (panelRef !== undefined) (panelRef as { current: Handle | null }).current = handle.current;
       React.useEffect(() => {
-        registry.set(id, onResize as () => void);
+        if (onResize !== undefined) registry.set(id, onResize as () => void);
         return () => {
           registry.delete(id);
         };
@@ -53,6 +53,7 @@ vi.mock("react-resizable-panels", async () => {
       return React.createElement("div", { role: "separator", tabIndex: 0, ...rest }, children as never);
     },
     usePanelRef: () => React.useRef(null),
+    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: () => {} }),
   };
 });
 
@@ -202,7 +203,7 @@ it("plan pane can be zoomed over the chat", () => {
 
 it("plan split exposes a keyboard operable separator", () => {
   const m = shell();
-  const sep = m.container.querySelector('[role="separator"]');
+  const sep = m.container.querySelector('[role="separator"][aria-label="Resize plan view and chat"]');
   expect(sep).not.toBeNull();
   expect(sep?.getAttribute("aria-label")).toBe("Resize plan view and chat");
   expect(sep?.getAttribute("data-part")).toBe("split-handle");
@@ -215,11 +216,9 @@ it("shell keeps its landmarks and data hooks", () => {
   const c = m.container;
   const root = c.querySelector("div[data-shell]");
   expect(root).not.toBeNull();
-  expect([...(root?.children ?? [])].map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-column"))).toEqual([
+  expect([...(root?.children ?? [])].map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-part"))).toEqual([
     "Cockpit header",
-    "Context tree column",
-    "center",
-    "Inbox column",
+    "columns-group",
     "Status bar",
   ]);
   const center = root?.querySelector('div[data-column="center"]');

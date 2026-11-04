@@ -10,27 +10,31 @@ import { Markdown } from "./Markdown.tsx";
 import { CompactionRow, FoldRow, formatClock } from "./Folds.tsx";
 import { FileTextIcon, ImageIcon } from "lucide-react";
 import { Button } from "../components/button.tsx";
+import { Bubble, BubbleContent } from "../components/bubble.tsx";
+import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } from "../components/trace.tsx";
 import { glyphClass } from "../dango-status.ts";
 import { ToolGroup } from "./ToolGroup.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
 
-const BTN_PILL = "[&::-webkit-details-marker]:hidden";
-
 function ThinkingPill(props: { text: string; time: string | null; defaultOpen: boolean }): JSX.Element {
   const [open, setOpen] = useState(props.defaultOpen);
   return (
-    <details data-kind="thinking" open={open} onToggle={(e) => setOpen(e.currentTarget.open)} className="group self-start">
-      <summary
-        className={`flex h-6 cursor-pointer list-none items-center gap-2 rounded-xl border border-border px-2.5 text-[12px] text-muted-foreground hover:bg-row-hover ${BTN_PILL}`}
-      >
-        <span data-part="caret" aria-hidden="true" className="font-mono text-[10px] group-open:rotate-90">▸</span>
-        <span data-part="label">Thinking</span>
-        {props.time === null ? null : <span data-part="meta" className="font-mono text-fg-dim">{props.time}</span>}
-      </summary>
-      <div data-part="thinking-body" className="mt-1 ml-1 whitespace-pre-wrap border-l-2 border-border pl-3 text-body text-muted-foreground">
-        {props.text}
-      </div>
-    </details>
+    <Trace data-kind="thinking" data-state={open ? "open" : "closed"} className="self-start">
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger className="px-1 text-[12px]">
+          <span data-part="caret" aria-hidden="true" className="sr-only" />
+          <span data-part="label">Thinking</span>
+          {props.time === null ? null : <span data-part="meta" className="font-mono text-fg-dim">{props.time}</span>}
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent className="mt-1 mb-0 ml-1 border-l-0 pl-0">
+          <div data-part="rail" className="border-l pl-3">
+            <div data-part="thinking-body" className="text-body whitespace-pre-wrap text-muted-foreground">
+              {props.text}
+            </div>
+          </div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 }
 
@@ -84,14 +88,16 @@ const Item = memo(function Item(props: {
         <article data-kind="assistant" className="flex flex-col gap-1.5">
           {item.blocks.map((b, i) =>
             b.type === "text" ? (
-              <div key={i} data-part="card" className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card px-3.5 py-2.5">
-                <Markdown text={b.text} />
-                {i === lastText && sessionKey !== undefined ? (
-                  <span data-part="stamp" className="self-end font-mono text-meta text-muted-foreground">
-                    {clock === null ? sessionKey : `${sessionKey} · ${clock}`}
-                  </span>
-                ) : null}
-              </div>
+              <Bubble key={i} variant="ghost" align="start">
+                <BubbleContent className="flex flex-col gap-1.5">
+                  <Markdown text={b.text} />
+                  {i === lastText && sessionKey !== undefined ? (
+                    <span data-part="stamp" className="self-end font-mono text-meta text-muted-foreground">
+                      {clock === null ? sessionKey : `${sessionKey} · ${clock}`}
+                    </span>
+                  ) : null}
+                </BubbleContent>
+              </Bubble>
             ) : (
               <ThinkingPill key={`${i}:${thinking}`} text={b.text} time={clock} defaultOpen={thinking === "expanded"} />
             ),
@@ -119,9 +125,7 @@ function RowBody(props: { row: Row; sessionKey: string | undefined; thinking: "f
   const body =
     row.kind === "item" ? (
       row.item.kind === "tool" ? (
-        <div data-part="tool-rail" className="pl-3 shadow-[inset_2px_0_0_var(--input)]">
-          <ToolRow tool={row.item} />
-        </div>
+        <ToolRow key={props.tools} tool={row.item} defaultOpen={props.tools === "expanded"} />
       ) : (
         <Item item={row.item} sessionKey={props.sessionKey} thinking={props.thinking} />
       )

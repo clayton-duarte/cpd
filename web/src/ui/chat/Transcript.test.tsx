@@ -33,9 +33,12 @@ it("renders user and assistant messages", () => {
 
 it("assistant thinking blocks are collapsed behind Thinking…", () => {
   const m = mount(<Transcript {...base} items={[assistant]} />);
-  const d = m.container.querySelector('details[data-kind="thinking"]') as HTMLDetailsElement;
-  expect(d.open).toBe(false);
-  expect(d.querySelector("summary")?.textContent).toBe("▸Thinking");
+  const d = m.container.querySelector('[data-kind="thinking"]') as HTMLElement;
+  expect(d.getAttribute("data-state")).toBe("closed");
+  expect(d.querySelector('[data-part="label"]')?.textContent).toBe("Thinking");
+  expect(d.textContent).not.toContain("pondering");
+  act(() => (d.querySelector('[data-slot="trace-collapsible-trigger"]') as HTMLElement).click());
+  expect(d.getAttribute("data-state")).toBe("open");
   expect(d.textContent).toContain("pondering");
   m.unmount();
 });

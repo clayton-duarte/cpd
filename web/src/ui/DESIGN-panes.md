@@ -218,6 +218,8 @@ No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸`
 
 ## 2. Attention Inbox
 
+The web right column is the flat Inbox only. The TUI's machine block (hostname, CPU, GPU and memory) is not built (pro-d36). The Inbox is the TUI attention engine (`tui/src/widgets/inbox.rs`), so it follows that file: one flat list in `cpd inbox list` order, with no tier groups, no per-tier counts, no kind text, no inline buttons, no engine banner and no key footer. Secondary actions live in a right-click menu (pro-d40).
+
 ### 2a. Props
 
 ```ts
@@ -229,20 +231,22 @@ export function Inbox(props: {
   onSelectSession(sessionId: string): void;       // KEPT
 }): ReactElement;
 ```
-No new props. The 340px column is the Shell's grid track and its `border-l` is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c); `Inbox` fills it: `aside[aria-label="Inbox"]` (KEPT; nested in the column aside) `flex h-full min-h-0 w-full flex-col overflow-hidden`. **Resolution:** the board's `aside.pane[aria-label="Attention inbox"]` label is **not** used; Phase 2's `Inbox` is pinned by `App.test` and `Inbox.test`.
+No new props. The inbox panel is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c, 22% of the row at start, 14% to 45%); `Inbox` fills it: `aside[aria-label="Inbox"]` (KEPT; nested in the column aside) `flex h-full min-h-0 w-full flex-col overflow-hidden`. **Resolution:** the board's `aside.pane[aria-label="Attention inbox"]` label is **not** used; Phase 2's `Inbox` is pinned by `App.test` and `Inbox.test`.
 
-Tier of a row = `inboxDisplay(row.urgency)` (DESIGN 2d). Mapping, tier order of display:
+**Row order.** The rows are shown in the order of `inbox.rows` (the `cpd inbox list` order). The component does not sort, group or rank.
 
-| tier | tierLabel | urgency | glyph | label/count colour (token, board hex) |
-|---|---|---|---|---|
-| 1 | `blocking` | `red` | blocked | `text-status-blocked` `#e17f6e` |
-| 2 | `delivery` | `yellow` | landing | `text-status-landing` `#c29653` |
-| 3 | `review` | `blue` | focus | `text-status-focus` `#7aa2ce` |
-| 4 | `decide` | `magenta` | decision | `text-status-decision` `#ca88a3` |
-| 5 | `in flight` | `cyan` | active | `text-status-active` `#67ada7` |
-| 6 | `unread` | `white` | unread | `text-muted-foreground` `#aba3af` |
+**Glyph of a row** = `inboxDisplay(row.urgency).glyph` (DESIGN 2d), in its tone colour. The urgency colour mapping is the Phase 2 one, without the tier:
 
-**Resolution:** the board colours the `unread` label and count `#aba3af`, `urgencyDisplay` tone `unread` is `text-foreground` (`#d8d2cc`); the board's rendered value wins for the **label and the count**; the **glyph** stays `glyph-unread` (`#d8d2cc`, also the board's). `row.kind` never changes tier, glyph or colour (DESIGN 2d).
+| urgency | glyph | tone colour (token, board hex) |
+|---|---|---|
+| `red` | blocked | `text-status-blocked` `#e17f6e` |
+| `yellow` | landing | `text-status-landing` `#c29653` |
+| `blue` | focus | `text-status-focus` `#7aa2ce` |
+| `magenta` | decision | `text-status-decision` `#ca88a3` |
+| `cyan` | active | `text-status-active` `#67ada7` |
+| `white` | unread | `glyph-unread` `#d8d2cc` (the board's) |
+
+`row.kind` never changes glyph or colour (DESIGN 2d).
 
 ### 2b. DOM outline
 
@@ -259,128 +263,112 @@ aside[aria-label="Inbox"]
 aside[aria-label="Inbox"]
 ├─ div[data-part="inbox-header"]   flex h-9 shrink-0 items-center gap-2 px-[14px]                    (36px)
 │   ├─ h2     "Inbox" + span.sr-only " ({inbox.openCount})"        text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
-│   │         textContent is exactly `Inbox (${inbox.openCount})`     KEPT (Inbox.test 3: "Inbox (2)"); the visible text is "Inbox", the count is in the Total badge
-│   ├─ span[data-part="total"][aria-hidden="true"]   {rows.length}    font-mono text-meta text-fg-strong
-│   ├─ span.flex-1
-│   └─ div[data-part="counts"][aria-hidden="true"]   flex gap-2 font-mono text-meta
-│       └─ span[data-part="count"][data-tier="{1..6}"][data-urgency="{u}"][title="{n} {tierLabel}"]  ×6, tier order 1 to 6, always all six
-├─ p[role="status"]   only when !inbox.engineRunning; text exactly "Engine is not running"   KEPT; px-[14px] pb-1.5 text-meta text-status-blocked
-├─ p[data-empty]      only when inbox.rows.length === 0; text exactly "Nothing needs you"     KEPT; px-[14px] py-3 text-muted-foreground
-├─ div[data-part="groups"]   flex-1 min-h-0 overflow-y-auto px-2 flex flex-col
-│   └─ section[data-part="group"][data-tier][data-urgency][aria-labelledby="inbox-group-{tier}"]  ×(non-empty tiers, tier order)   mb-1.5 flex flex-col gap-0.5
-│       ├─ h3[data-part="group-label"][id="inbox-group-{tier}"]   {tierLabel}   font-mono text-meta px-2 pb-0.5 pt-1.5 {tier colour}
-│       └─ ul   m-0 flex list-none flex-col gap-0.5 p-0
-│           └─ li[data-kind][data-urgency] ×rows of that tier   (2c)
-└─ div[data-part="footer"]   shrink-0 border-t border-border px-[14px] py-2 font-mono text-meta text-fg-dim
-      text exactly "J/K move · ⏎ open · S snooze · E dismiss"      (U+00B7 separators, U+23CE)
+│   │         textContent is exactly `Inbox (${inbox.openCount})`     KEPT (Inbox.test 3: "Inbox (2)")
+│   └─ span[data-part="total"][aria-hidden="true"]   {rows.length}    font-mono text-meta text-fg-strong
+├─ p[data-empty]      only when inbox.rows.length === 0; text exactly "up to date, drink some water"   KEPT hook; px-[14px] py-3 text-muted-foreground
+└─ div[data-part="rows"]   flex-1 min-h-0 overflow-y-auto px-2 flex flex-col gap-0.5
+    └─ li[data-kind][data-urgency][data-id]   ×rows, in `inbox.rows` order   (2c)
 ```
-- **Counts** `{n}`: the number of `inbox.rows` whose `inboxDisplay(urgency).tier` equals the count's tier (computed from the rows, **not** hard-coded as in the board). Text of `span[data-part="count"]` is `{n}`; colour = the tier colour of 2a; a zero count is `text-fg-dim` instead. **Total** is `inbox.rows.length` (= `openCount` by the contract of `cockpit.ts`; `h2` keeps `openCount` for Phase 2, the badge is the computed value). Counts and the total are `aria-hidden`; the section headings carry the meaning.
-- **Groups**: rows of a tier keep their source order (cpd's rank order); groups appear in tier order 1 to 6; empty tiers render no group. The `h3` text is only `tierLabel` (no count in it). `li[data-kind]` DOM order therefore equals tier-then-source order (for rows already sorted by urgency, the Phase 2 order).
-- The old `engine` banner position (after the h2) is kept.
-- Scrolling: `div[data-part="groups"]` scrolls (`overflow-y-auto`). **Resolution:** the board clips (`overflow: hidden`); Phase 2 and VERIFY require every pane to scroll (`app.css.test` 3).
-- `inbox.hidden` (claimed, dismissed, snoozed counts) is not drawn (Not wired).
+- The total is the visible count of the one list (`rows.length`). It is the single count of the Inbox; the per-tier count strip is removed. **Assumption:** the TUI header count (`───<Inbox>───n─`, `inbox.rs:577`) is kept as this total, and only the per-tier counts are removed.
+- `div[data-part="rows"]` replaces the Phase 2 `div[data-part="groups"]` (there are no groups).
+- The list scrolls (`overflow-y-auto`, `app.css.test` 3). The TUI's `▲ n more` / `▼ n more` cues are Not wired (2h).
+- The Phase 2 engine banner, the per-tier groups and the footer are removed.
 
 ### 2c. Row
 
-`li[data-kind="{row.kind}"][data-urgency="{row.urgency}"]` (KEPT both), plus new `data-id="{row.id}"`, `data-tier="{tier}"`, `data-focused="true|false"`, `tabIndex` (roving, 2e). `key={row.id}`. className: `row-item flex gap-2.5 rounded-[7px] p-2 outline-none` + (`data-focused="true"` → `bg-sidebar-accent`-equivalent tint `bg-[rgba(122,162,206,.13)]` written as `bg-status-focus/[.13]`; else `hover:bg-row-hover`) + `focus-visible:ring-1 focus-visible:ring-ring`. (Board: focused `rgba(122,162,206,0.13)`; the board's inline background disables its hover, here hover applies to unfocused rows only, per DESIGN 1.2 item 9.)
+`li[data-kind="{row.kind}"][data-urgency="{row.urgency}"][data-id="{row.id}"]`. `data-kind` and `data-urgency` are KEPT. `data-id` is new. There is no `data-tier` and no `data-focused` (no tiers, no focus model). className: `flex gap-2.5 rounded-[7px] p-2` + `hover:bg-row-hover` (1.2 item 9). The row has no keyboard handler (2e).
 
 ```
-li[data-kind][data-urgency][data-id][data-tier][data-focused]
-├─ span[aria-hidden="true"][data-part="glyph"]   className={cn(glyphClass[inboxDisplay(urgency).glyph], "mt-1.5")}     (margin-top 6px)
+li[data-kind][data-urgency][data-id]
+├─ span[aria-hidden="true"][data-part="glyph"]   className={glyphClass[inboxDisplay(urgency).glyph]} (2a)     mt-1.5
 └─ div[data-part="body"]   flex min-w-0 flex-1 flex-col gap-[3px]
-    ├─ {head}   (below)
-    ├─ a[href="{row.url}"]   only when row.url !== null; text exactly "Link"   KEPT (Inbox.test 1: `a[href]` exists)   self-start font-mono text-[10.5px] text-status-focus-bright hover:underline
-    ├─ div[data-part="actions"]   only when row.actions.length > 0   flex flex-wrap gap-1.5      (inline buttons, 2d)
-    └─ div[data-part="bar"][role="group"][aria-label="Row actions"]   only when focused   (2d)
+    ├─ div[data-part="line1"]   flex w-full items-baseline gap-2
+    │   ├─ (link kind with a url, see below) a[href="{row.url}"][data-part="link"]
+    │   │     ├─ strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong underline truncate
+    │   │     └─ span[aria-hidden="true"]  link cue (lucide ExternalLinkIcon, size 12)   text-muted-foreground
+    │   ├─ (otherwise) strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate
+    │   └─ span[data-part="age"]  {age}   font-mono text-meta text-muted-foreground shrink-0
+    └─ span[data-part="subtitle"]   only when the label has a non-empty second line   text-muted-foreground text-[12px] truncate
+          text: the label after its first line break (`rest`), aligned under the label (indented past the glyph column)
 ```
-**Head** (`first` = `row.label.split("\n")[0] ?? ""`, `rest` = the other lines):
-- `row.sessionId !== null`: `button[type="button"][data-action="open-session"]`, **KEPT hook**, click → `onSelectSession(row.sessionId)` (Inbox.test 1, 2: exists on the row with a session, absent without; click calls `onSelectSession("s1")` exactly once). It wraps the subject and sub lines.
-- `row.sessionId === null`: a `div[data-part="head"]` (same children, same className, no `data-action`, not focusable).
-- className `flex min-w-0 flex-col gap-px text-left` (both).
 
-```
-head
-├─ span[data-part="line1"]   flex w-full items-baseline gap-2
-│   ├─ strong[data-part="subject"]   {first}   KEPT element and text (Inbox.test 1: `strong` = "Review PR 9"); font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate (12.5px, #f3ead9)
-│   └─ span[data-part="age"]   {age}          font-mono text-meta text-muted-foreground shrink-0
-└─ span[data-part="line2"]   flex w-full items-baseline gap-1.5 truncate text-[12px] text-muted-foreground
-    ├─ span[data-part="kind"]   {row.kind}   KEPT hook and text (Inbox.test 1: exactly "review-requested"); font-mono text-[10.5px] text-fg-dim (allowed: the inbox column is `bg-background`)
-    └─ span ×(one per `rest` line, key = line index)   text exactly ` {line}` (leading space)   KEPT (Inbox.test 1: textContent contains "second line"); text-muted-foreground
-```
-`{age}` from `row.ageSeconds` s: `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d` (board: `38s`, `4m`, `1h`, `22h`).
+- `first` = `row.label.split("\n")[0] ?? ""`; `rest` = the label after its first line break, shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
+- **Link kinds.** `row.url !== null` and `row.kind` is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy` (TUI `is_link`, `inbox.rs:492-494`): the label is the link. Clicking the label opens `row.url` (native anchor; TUI `mod.rs:591-601`). The link cue is the only extra mark. Other rows have no link.
+- **Age** `{age}` from `row.ageSeconds` (DESIGN 2c Phase 2 rule, unchanged): `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`. The TUI shows `42s`, `5m`, `2d` (`inbox.rs:673-676`); its hour form is **unverified** (`read/age.rs` was not read), so the web keeps `h`.
+- Row 1 is cut with an ellipsis before the age (`truncate`); row 2 is cut with an ellipsis as well. Nothing else is cut.
 
-The board's per-row badge (`2 ✕ · 14 ✓ · conflict`, `18 ✓`) has no source field: Not wired.
+**Left click** (TUI `inbox.rs:289-327`). The click target is the row body (the subject and the subtitle). For a link kind the label is the link, and the rest of the row runs the kind's click:
 
-### 2d. Inline buttons and the focused-row action bar
+| `row.kind` | left click |
+|---|---|
+| `dialog`, `unread`, `loop-guard` | select the Session: `onSelectSession(row.sessionId)` |
+| `pr-ready`, `pr-closed`, `plan-review`, `drafts-parked` | select the Plan's Lead: `onSelectSession(row.sessionId)`, the chat target cpd sends for the row (`cockpit.ts` `InboxRow.sessionId`). **Assumption:** the Inbox props have no Plan lookup, so the Lead is the row's `sessionId`; a row without one does nothing (flagged). |
+| `review-requested` | copy `row.url` to the clipboard (the TUI's `set-buffer -w`) |
+| `engine-down` | start the engine: **Not wired** (2h) |
+| any other kind | nothing (the TUI's question, curate-retire and models-changed dialogs are Not wired, 2h) |
 
-**Inline buttons** `div[data-part="actions"]`: one `button[type="button"]` per `row.actions` entry, in order (KEPT; Phase 2 buttons have no hook), key `a.label`, text exactly `a.label` (KEPT: Inbox.test 2 finds `Claim` and `Snooze 15m` by exact text), click → `onAction(a.action)` (the typed action cpd sent, passed unchanged). Look by `a.action.kind`, `Button variant="outline" size="sm"` (h-7) overridden to `h-6 rounded-[5px] px-2.5 text-[12px] font-semibold`:
+A row with a left-click action has the click target as a native `button[type="button"]`, so keyboard Tab reaches it; it carries the KEPT hook `data-action="open-session"` when that action selects a Session. A row with no left-click action (or no `sessionId` for a Session-selecting kind) has a plain `div` body.
 
-| `action.kind` | tone prop | className |
+### 2d. Right-click menu
+
+Right click on a row opens a shadcn/ui context menu (`context-menu.tsx`, 2f) on the `li`. There is no menu on `engine-down` (TUI `mod.rs:566`). Entries, in this order (TUI `inbox.rs:359-370`, `:420-450`); an entry shows only when its condition holds:
+
+| Entry | Condition (TUI) | Action |
 |---|---|---|
-| `inbox.approve` | `landing` | `border-status-landing/60 text-status-landing-bright` (board `Approve deploy`: border `rgba(194,150,83,.6)`, text `#e4bb7f`) |
-| `inbox.claim` | `focus` | `border-status-focus/60 text-status-focus-bright` (board `Claim → codereview`: border `rgba(122,162,206,.6)`, text `#a1c6ef`) |
-| any other kind (`inbox.snooze`, `inbox.dismiss`, `pr.post`, ...) | none | `border-edge text-fg-strong` (board default: border `#3a3640`, text `#f3ead9`) |
+| `Go to Lead` | `pr-closed`, `pr-ready` with a Plan | the Plan's Lead, as the left click above (`onSelectSession(row.sessionId)`) |
+| `Copy Link` | `row.url !== null` | copy `row.url` to the clipboard |
+| `RePost` | `pr-ready`, Plan present, the row says `review overdue` | `pr.post` (`planId`, workflow key) |
+| `Merge` | `pr-ready`, the row says `ready to merge` | **Not wired**: there is no merge action in `CockpitAction`; the entry is shown disabled |
+| `Post` | `pr-ready`, the row says `ready for user review`, Plan present | `pr.post` (`planId`, workflow key) |
+| `Approve` | `deploy`: first in the choices | `inbox.approve` with `row.id` |
+| `Claim` | `review-requested`: first in the choices | `inbox.claim` with `row.id` |
+| `Snooze 15 min` | every kind | `inbox.snooze`, `duration: "15m"` |
+| `Snooze 1 h` | every kind | `inbox.snooze`, `duration: "1h"` |
+| `Snooze until tomorrow 09:00` | every kind | `inbox.snooze`, `duration: "tomorrow"` (the 09:00 is the TUI's label; the server's meaning of `tomorrow` is **unverified**) |
+| `Dismiss` | every kind | `inbox.dismiss` with `row.id` |
 
-**Copy.** The label is **cpd's** `a.label`, verbatim. The board's `Approve deploy` and `Claim → codereview` are the labels cpd is expected to send for those two actions (unverified); the web never rewrites them, never invents a button, and there is no `Approve deploy` or `Claim` button for a row that has no such entry in `row.actions`. Only `inbox.approve` and `inbox.claim` are tone-coloured; they exist as actions (`actionArgs`: `inbox approve <id>`, `inbox claim <id>`).
-
-**Action bar** (only on the focused row, `div[data-part="bar"][role="group"][aria-label="Row actions"]`, `mt-0.5 flex gap-1 text-[11.5px]`), three `button[type="button"]`, exact:
-
-| Button | hook | text | className | behaviour |
-|---|---|---|---|---|
-| Open | `data-part="bar-open"` | `Open` + `kbd` `⏎` | `h-6 rounded-[5px] bg-primary px-2 font-semibold text-primary-foreground` (board `#7aa2ce` on `#1c1a20`) | `row.sessionId !== null` → `onSelectSession(sessionId)`; `sessionId === null` → `disabled` |
-| Snooze | `data-part="bar-snooze"` | `Snooze` + `kbd` `S` | `h-6 rounded-[5px] border border-edge px-2 text-fg-strong` | **disabled** always (A4: no Snooze duration to choose in this bar) |
-| Dismiss | `data-part="bar-dismiss"` | `Dismiss` + `kbd` `E` | same as Snooze | **disabled** always (A4) |
-
-`kbd`: `font-mono text-muted-foreground` (`#aba3af`) for `S`/`E`; the `⏎` in `Open` inherits the button colour. The `textContent` of each button is the label, one space, the key: `Open ⏎`, `Snooze S`, `Dismiss E` (a literal `" "` text node between the label and the `kbd`). Disabled buttons: `disabled` attribute, `aria-disabled` implied, `opacity-50`, no handler. **Resolution:** `inbox.snooze`/`inbox.dismiss` exist in `CockpitAction` and cpd may list them as inline row buttons (they then render in `[data-part="actions"]` as in Phase 2, `Dismiss`, `Snooze 15m`); the bar's `Snooze S`/`Dismiss E` stay disabled because the bar has no duration choice or confirmation UI and A4 fixes them disabled.
+- Choices dispatch through `onAction` with the typed action (the Phase 2 shape). `Approve` and `Claim` show only when the row carries `inbox.approve` / `inbox.claim` in `row.actions`. The three snoozes and `Dismiss` show on every row.
+- `Go to Lead`, `Copy Link` and the Merge/Post/RePost conditions are the TUI's. `Post` and `RePost` need the workflow key, which `InboxRow` does not carry (**unverified**): when the key is absent, the entry is shown disabled.
+- Entries are plain items; a choice closes the menu.
 
 ### 2e. Keyboard and focus
 
-- **Focused row** `focusedId`: component state (`useState<number | null>`). The **effective** focused row is `rows.find(r => r.id === focusedId)` or, when none matches (initial, or the row left the list), the first row **in display order** (tier order, then source order); no rows → none. It is derived at render; no effect.
-- Roving tabindex: the effective focused `li` has `tabIndex={0}`, every other `li` `tabIndex={-1}`. `data-focused="true"` on exactly that li (none when there are no rows). The action bar renders on it only.
-- Focus changes: `focus` event or `click` anywhere in a row sets `focusedId` to that row (the click on inline buttons also does).
-- Keys, handled by one `onKeyDown` on `div[data-part="groups"]`, only when `event.target` is an `li[data-kind]` (a key pressed on a button, link or input inside a row is left to the browser, so Enter on `Claim` still activates `Claim`) and no `metaKey`/`ctrlKey`/`altKey`:
-
-| Key (case-insensitive for letters) | Effect |
-|---|---|
-| `j` | move to the next row in display order (clamped at the last, no wrap); sets `focusedId`; moves DOM focus to that `li` (`li.focus()`); `preventDefault()` |
-| `k` | previous row (clamped at the first); same |
-| `Enter` | when the effective row has `sessionId !== null` → `onSelectSession(sessionId)` (the same path as the kept `data-action="open-session"` button); otherwise nothing; `preventDefault()` |
-| `s`, `e` | nothing (Snooze and Dismiss are disabled, A4); the event is not prevented |
-
-- No global listener: `J/K` work while focus is inside the inbox. Tab order: one stop for the roving `li`, then the buttons inside it in DOM order (head button, `Link`, inline buttons, bar buttons).
-- The footer text `J/K move · ⏎ open · S snooze · E dismiss` is shown always (it states the board's hints; `S` and `E` are present but inert, A4).
+- The Inbox has no keys of its own, as the TUI Inbox has none (`mod.rs:9`). There is no `onKeyDown`, no `j`/`k`, no `Enter` handler and no footer.
+- Tab order: the row's native buttons and links in document order. The context menu opens by the platform context-menu key (Shift+F10), as the menu part provides (library behaviour, unverified).
 
 ### 2f. States
 
 | State | Rendering |
 |---|---|
 | `inbox === null` | 2b first outline: `Inbox` heading and `Loading inbox…` |
-| rows empty | header (`Inbox`, total `0`, six zero counts in `text-fg-dim`), `p[data-empty]` "Nothing needs you", the footer; no `groups` content (`div[data-part="groups"]` still rendered, empty) |
-| engine stopped | `p[role="status"]` "Engine is not running" above the list, rows still shown |
-| row with `url` | `Link` anchor |
-| row without `sessionId` | `div` head, no `open-session` button, bar `Open ⏎` disabled |
-| row without actions | no `[data-part="actions"]` |
+| rows empty | header (`Inbox`, total `0`), `p[data-empty]` "up to date, drink some water"; no `rows` content |
+| engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row |
+| row with `url` of a link kind | the label is the link (2c) |
+| row without `sessionId` | the click target is a `div`; its click does nothing |
+| row without actions | the menu shows only the entries whose conditions hold (2d) |
 | urgency known, kind unknown | renders by urgency (DESIGN 2d) |
-| 0 counts in a tier | count shown `0` in `text-fg-dim`, no group |
 
 ### 2g. Phase 2 tests
 
 | Test (file) | Pins | Status |
 |---|---|---|
-| `Inbox.test.tsx` "renders inbox rows by kind" | `li[data-kind]` order `["review-requested","deploy"]` (tier order = source order for red then yellow); `data-urgency="red"`; `[data-part="kind"]` text; `strong` text; `second line`; `a[href]`; `button[data-action="open-session"]` present/absent | KEPT unchanged |
-| `Inbox.test.tsx` "row actions call onAction with the typed action" | exact-text buttons `Claim`, `Snooze 15m`; `onAction` called exactly twice; `open-session` click → `onSelectSession("s1")` once | KEPT unchanged (the bar's disabled buttons `Open ⏎`, `Snooze S`, `Dismiss E` do not match those texts) |
+| `Inbox.test.tsx` "renders inbox rows by kind" | `li[data-kind]` order `["review-requested","deploy"]`; `data-urgency="red"`; `strong` text; `second line`; `a[href]`; `button[data-action="open-session"]` present/absent | **changed**: the kind text (`[data-part="kind"]`) is gone; the order is the `inbox.rows` order, no tier order; the row's second line is the subtitle |
+| `Inbox.test.tsx` "row actions call onAction with the typed action" | exact-text buttons `Claim`, `Snooze 15m`; `onAction` called exactly twice | **changed**: there are no inline buttons; the same actions are reached from the right-click menu (`Claim`, `Snooze 15 min`) |
 | `Inbox.test.tsx` "shows the open item count" | `aside[aria-label="Inbox"] h2` textContent `Inbox (2)` | KEPT unchanged |
-| `PlanView.test.tsx` "renders workflows with their jobs and statuses" | `section[aria-label="Plan p1"] h2` contains `Web UI`; text `Review r1: approved`; `section[data-workflow="wf-a"]` contains `main`; `a[href]` text contains `#7 open`; `li[data-job]` keys `["job-1","job-2"]`; `data-status="running"`; contains `#1 running`; `section[aria-label="Explore jobs"]` contains `li[data-job="job-x"]` | KEPT unchanged |
-| `PlanView.test.tsx` "shows job needs" | `li[data-job="job-2"]` contains `needs: job-1, job-0`; `job-1` has no `needs:` | KEPT unchanged (sr-only span in the `li`) |
-| `PlanView.test.tsx` "shows an empty state when no plan is selected" | `p[data-empty]` text `No plan selected`; no `section` | KEPT unchanged |
-| `App.test.tsx` 1 | `section[aria-label="Plan pane"] section[aria-label="Plan plan"]`; `aside[aria-label="Inbox"]` contains `Nothing needs you` | KEPT unchanged |
+| `PlanView.test.tsx` (all) | Plan view pins (DESIGN-panes 1) | KEPT unchanged |
+| `App.test.tsx` 1 | `section[aria-label="Plan pane"] section[aria-label="Plan plan"]`; `aside[aria-label="Inbox"]` contains `up to date, drink some water` | **changed**: the empty copy (was `Nothing needs you`) |
 | `AppMemo.test.tsx` | `PlanView`/`Inbox` mocked; render counts 1 | KEPT unchanged (props identity unchanged: `onRetryJob` is not passed) |
 
-Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action="open-session"`, `li[data-kind]`, `aside[aria-label="Inbox"]`, `section[aria-label="Plan {id}"]`, `section[aria-label="Workflow {key}"]`, `section[aria-label="Explore jobs"]`, `p[data-empty]` (both copies), `p[role="status"]`.
+Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action="open-session"`, `li[data-kind]`, `aside[aria-label="Inbox"]`, `section[aria-label="Plan {id}"]`, `section[aria-label="Workflow {key}"]`, `section[aria-label="Explore jobs"]`, `p[data-empty]`.
 
 ### 2h. Not wired (omitted, never faked)
 
-`Snooze S` and `Dismiss E` (rendered disabled, A4); the `S` and `E` keys; per-row badges (`2 ✕ · 14 ✓ · conflict`, `18 ✓`); the board's subject/sub strings that cpd does not send (the row shows `label` lines only); `Approve deploy` / `Claim → codereview` as fixed copy (only cpd's `a.label` is shown); `inbox.hidden` counts (claimed, dismissed, snoozed); jump to a row's context/plan (`contextId`, `planId`, `jobKey` unused); the unread tier's `replied` copy.
+- Engine-down left click (`start the engine`): no `CockpitAction` starts the engine.
+- `Merge` and the `Merging` spinner in the glyph cell: no merge action in `CockpitAction`.
+- Left click for `question` (opens the Manager), `curate-retire` (checklist dialog) and `models-changed` (text dialog) of the TUI.
+- The TUI's `▲ n more` / `▼ n more` scroll cues and the wheel step of three items.
+- Key handling of the TUI's Plan and dialog views; the Inbox has no keys (2e).
+- Per-row badges (`2 ✕ · 14 ✓ · conflict`, `18 ✓`); the board's subject/sub strings that cpd does not send; `Approve deploy` / `Claim → codereview` as fixed copy (only cpd's `a.label` is used, when a row carries it); `inbox.hidden` counts (claimed, dismissed, snoozed); jump to a row's context/plan (`contextId`, `planId`, `jobKey` unused); the unread tier's `replied` copy; the board's `Snooze S` / `Dismiss E` action bar; the `S`, `E`, `J`, `K` and `Enter` keys.
 
 ---
 
@@ -388,4 +376,4 @@ Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action=
 
 Plan View: stepper has 9 `li`, current has `aria-current="step"` and `data-state="current"` (`phase: "dispatch"` → `li[data-phase="dispatch"]`; `phase: "plan"` → the text `planning`); node `li` has inline `left`/`top` and the 148×46 classes; DAG fixtures: (1) chain of 3 → `ncols=3`, `W=3·148+2·28=500`, `H=46`, two straight paths with `d` `M149 23H173M169 19.5L173 23 169 26.5` and `M325 23H349M345 19.5L349 23 345 26.5`; (2) one root with two dependents → `H=100`, root `top` 27, dependents `top` 0 and 54, paths `M149 50C162 50 160 23 173 23` and `M149 50C162 50 160 77 173 77`; (3) two roots into one target (fan-in) → `H=100`, roots `top` 0 and 54, target `top` 27, paths `M149 23C162 23 160 50 173 50` and `M149 77C162 77 160 50 173 50`; `data-state` `done` for a merged source (stroke opacity `.6`), `pending` otherwise (`stroke-dasharray="3 3"`); `Retry ▸` absent without `onRetryJob`, present and calling it with `(jobKey, wf.key)` with it, and never calls `onAction`; `Post PR` dispatches `{ kind: "pr.post", planId, workflow }`; subtitle `failed ×2`, `blocked on 2`; chip summary text; `No workflows yet`.
 
-Inbox: counts for rows (red, red, yellow, magenta) are `2 1 0 1 0 0` in tier order and total `4`; groups appear only for non-empty tiers in tier order; `data-focused="true"` on the first row initially; `j` moves, `k` back, clamped; `Enter` on the focused `li` calls `onSelectSession` once and `Enter` with `sessionId: null` calls nothing; `Snooze S` and `Dismiss E` buttons are `disabled`; footer text exact; age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).
+Inbox: rows are listed in `inbox.rows` order with no groups; total is `rows.length` (4 for the four-row fixture); no `data-tier`, no `data-focused`, no key handler, no footer text; `p[data-empty]` text exact `up to date, drink some water`; left click per kind (2c) calls `onSelectSession` once for a Session-selecting kind with `sessionId` set and nothing with `sessionId: null`; right-click menu entries and their order (2d); age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).

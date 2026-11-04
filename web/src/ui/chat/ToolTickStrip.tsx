@@ -13,7 +13,7 @@ export function ToolTickStrip(props: { readonly statuses: readonly ToolStatus[] 
   return (
     <span data-part="tick-strip" role="img" aria-label={label} className="flex gap-0.5">
       {props.statuses.map((s, i) => (
-        <span key={i} data-part="tick" data-status={s} className={`block h-[10px] w-[3px] rounded-[1px] ${fill[s]}`} />
+        <span key={i} data-part="tick" data-status={s} className={`block h-2.5 w-0.5 rounded-[1px] ${fill[s]}`} />
       ))}
     </span>
   );
