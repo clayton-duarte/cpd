@@ -200,11 +200,11 @@ function TreeSection(props: {
   return (
     <Collapsible open={props.open} onOpenChange={props.onOpenChange} className="group/collapsible">
       <SidebarGroup className="px-2 py-0" {...props.groupAttrs}>
-        <SidebarGroupLabel asChild data-part={props.headerDataPart}>
+        <SidebarGroupLabel data-part={props.headerDataPart} className="p-0">
           <CollapsibleTrigger
             type="button"
             className={cn(
-              "w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+              "flex h-full w-full items-center rounded-md px-2 text-left hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               props.action !== undefined && "pr-7",
             )}
           >
