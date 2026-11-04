@@ -22,18 +22,18 @@ export const FoldRow = memo(function FoldRow(props: { item: FoldItem }): JSX.Ele
     <details data-kind="fold" data-fold={item.foldKind} open={item.defaultOpen} className="group">
       <summary
         data-part="marker"
-        className="flex h-6 cursor-pointer list-none items-center gap-2 rounded-[5px] px-2 text-[12px] hover:bg-row-hover [&::-webkit-details-marker]:hidden"
+        className="flex min-h-6 cursor-pointer list-none items-center gap-2 rounded-[5px] px-2 text-[12px] hover:bg-row-hover [&::-webkit-details-marker]:hidden"
       >
         <span data-part="phi" aria-hidden="true" className="w-3 font-display text-[15px] font-bold text-status-decision">
           φ
         </span>
         <span data-part="source" className="font-mono text-muted-foreground">{item.foldKind}</span>
-        <span data-part="marker-text" className="min-w-0 flex-1 truncate text-foreground">{item.title}</span>
+        <span data-part="marker-text" className="min-w-0 flex-1 break-words text-foreground">{item.title}</span>
         {time === null ? null : (
           <span data-part="time" className="font-mono text-meta text-fg-dim">{time}</span>
         )}
       </summary>
-      <div data-part="fold-body" className="mt-1 ml-5 rounded-[10px] border border-border bg-card px-3.5 py-2.5">
+      <div data-part="fold-body" className="mt-1 ml-5 border-l pl-4">
         <Markdown text={item.body} />
       </div>
     </details>
@@ -50,7 +50,7 @@ export const CompactionRow = memo(function CompactionRow(props: { item: Compacti
         <span data-part="label" className="font-mono">{label}</span>
         <span data-part="rule" aria-hidden="true" className="h-px flex-1 bg-border" />
       </summary>
-      <div data-part="compaction-body" className="mt-1 rounded-[10px] border border-border bg-card px-3.5 py-2.5">
+      <div data-part="compaction-body" className="mt-1 border-l pl-4">
         <Markdown text={item.summary} />
       </div>
     </details>
