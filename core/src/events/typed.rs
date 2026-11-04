@@ -269,11 +269,24 @@ impl NewEvent {
         tier: &str,
         attempts: i64,
     ) -> NewEvent {
-        make(
-            Kind::JobFailed,
-            text,
-            json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts}),
-        )
+        Self::job_failed_triaged(text, cause, detail, tier, attempts, None)
+    }
+
+    /// `job_failed` with the Gate failure triage's verdict as `data.triage` when there is one.
+    pub fn job_failed_triaged(
+        text: impl Into<String>,
+        cause: &str,
+        detail: &str,
+        tier: &str,
+        attempts: i64,
+        triage: Option<Value>,
+    ) -> NewEvent {
+        let mut data =
+            json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts});
+        if let Some(t) = triage {
+            data["triage"] = t;
+        }
+        make(Kind::JobFailed, text, data)
     }
 
     pub fn job_retried(text: impl Into<String>, tier: &str) -> NewEvent {
@@ -340,11 +353,23 @@ impl NewEvent {
         next_tier: &str,
         feedback: &str,
     ) -> NewEvent {
-        make(
-            Kind::AttemptRetry,
-            text,
-            json!({"outcome": outcome, "cause": cause, "next_tier": next_tier, "feedback": feedback}),
-        )
+        Self::attempt_retry_triaged(text, outcome, cause, next_tier, feedback, None)
+    }
+
+    /// `attempt_retry` with the Gate failure triage's verdict as `data.triage` when there is one.
+    pub fn attempt_retry_triaged(
+        text: impl Into<String>,
+        outcome: &str,
+        cause: &str,
+        next_tier: &str,
+        feedback: &str,
+        triage: Option<Value>,
+    ) -> NewEvent {
+        let mut data = json!({"outcome": outcome, "cause": cause, "next_tier": next_tier, "feedback": feedback});
+        if let Some(t) = triage {
+            data["triage"] = t;
+        }
+        make(Kind::AttemptRetry, text, data)
     }
 
     /// `attempt abort` (contract §5.2, commands.md §6.5): the Lead ended a running Attempt `failed` / `aborted`.
