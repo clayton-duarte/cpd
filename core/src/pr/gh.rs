@@ -2011,6 +2011,7 @@ mod tests {
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
             "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED","latestOpinionatedReviews":{{"nodes":[{{"state":"APPROVED","author":{{"__typename":"User","login":"alice"}}}}]}},
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
+            "reviewThreads":{{"nodes":[{{"id":"T1","isResolved":false}},{{"id":"T2","isResolved":true}}]}},
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
     }
@@ -2197,10 +2198,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -2264,6 +2265,7 @@ mod tests {
             (ReviewDecision::Approved, "T7", None)
         );
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
+        assert_eq!(a.open_threads, vec!["T1".to_owned()]);
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
         assert_eq!(

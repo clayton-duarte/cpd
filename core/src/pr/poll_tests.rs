@@ -25,7 +25,7 @@ fn node(number: i64) -> String {
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
         "isDraft":false,"state":"MERGED","createdAt":"opened","updatedAt":"U1","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
-        "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        "reviewThreads":{{"nodes":[]}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
 }
 
@@ -134,7 +134,7 @@ impl Handler for OpenGh {
                 let node = format!(
                     r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801",
                     "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
-                    "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
+                    "reviewThreads":{{"nodes":[]}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
                 );
                 Reply::ok(&format!(
                     r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#
@@ -446,7 +446,7 @@ impl Handler for ReopenGh {
                 let nodes = if self.state == "OPEN" {
                     r#"{"repository":{"nameWithOwner":"acme/pay"},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"T",
                     "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
-                    "commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#
+                    "reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#
                 } else {
                     ""
                 };

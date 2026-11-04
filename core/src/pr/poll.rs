@@ -1192,14 +1192,43 @@ mod due_reads_tests {
         );
     }
 
+    fn still_open(mut l: Listed, ids: &[&str]) -> Listed {
+        l.pr.open_threads = ids.iter().map(|s| (*s).to_owned()).collect();
+        l
+    }
+
     #[test]
-    fn open_feedback_is_due_with_an_unmoved_updated_at() {
+    fn a_stored_thread_still_open_is_not_due_with_an_unmoved_updated_at() {
+        assert!(
+            due_reads(
+                &[row("1", Some(vec![item()]))],
+                &[still_open(listed("1", PrState::Open), &["t1"])]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_stored_thread_no_longer_open_is_due_with_an_unmoved_updated_at() {
         assert_eq!(
             due_reads(
                 &[row("1", Some(vec![item()]))],
-                &[listed("1", PrState::Open)]
+                &[still_open(listed("1", PrState::Open), &["other"])]
             ),
             key()
+        );
+    }
+
+    #[test]
+    fn a_stored_item_of_another_kind_never_makes_a_pr_due() {
+        let mut other = item();
+        other.kind = Kind::Review;
+        assert!(
+            due_reads(
+                &[row("1", Some(vec![other]))],
+                &[listed("1", PrState::Open)]
+            )
+            .is_empty()
         );
     }
 
