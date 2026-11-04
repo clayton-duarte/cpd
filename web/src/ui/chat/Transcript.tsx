@@ -164,6 +164,7 @@ export function Transcript(props: {
   sessionKey?: string;
   thinking?: "folded" | "expanded";
   tools?: "grouped" | "expanded";
+  busy?: boolean; // stub: the working cue is not implemented yet
 }): JSX.Element {
   const defaultSizes = useMemo(() => browserSizes(), []);
   const sizes = props.sizes ?? defaultSizes;
