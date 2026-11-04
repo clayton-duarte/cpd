@@ -1,6 +1,6 @@
 # Dango v3 chat transcript: design contract (ChatHeader, transcript rows, folds, tools)
 
-Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`. This file is the contract for the chat surface: `ChatHeader`, the user bubble, the assistant card with typeset Markdown, the cpd Marker rows, the compaction divider, the Thinking row, Tool rows and Tool Groups, the pending, failed and queued rows. Tests are written from this file alone, the implementation from the tests and this file.
+Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`. This file is the contract for the chat surface: `ChatHeader`, the user bubble, the assistant text (a Bubble with no card) with typeset Markdown, the cpd Marker rows, the compaction divider, the Thinking row, Tool rows and Tool Groups, the pending, failed and queued rows. Tests are written from this file alone, the implementation from the tests and this file.
 
 It builds on `web/src/ui/DESIGN.md` (called **DESIGN.md**). Reused by reference, never restated: the hook names (DESIGN.md 1.1), the styling rules (1.2: Tailwind utilities, tokens not hex, `cn`, `data-tone`/`data-glyph` from `dango-status.ts`), the tokens (2b), the glyph classes (2c, `glyph-active`, `glyph-done`, `glyph-blocked`, ...), `glyphClass` / `toneClasses` (2d), the `Button` part (2f) and the typeset preset `typeset typeset-chat` (2g). Decisions: pro-d16, pro-d18, pro-d19, pro-d21, pro-n11, pro-n12, pro-n14, pro-n15; assumptions A1 to A6.
 
@@ -143,7 +143,7 @@ export function Transcript(props: {
   onLoadEarlier(): void;                   // KEPT
   tailEpoch: number;                       // KEPT
   sizes?: SizeObserver;                    // KEPT
-  /** The assistant card stamp `<key> · <time>`. Absent: the card shows no stamp. `ChatPane` passes `view.ref?.key ?? view.id`. */
+  /** The assistant text stamp `<key> · <time>`. Absent: the text shows no stamp. `ChatPane` passes `view.ref?.key ?? view.id`. */
   sessionKey?: string;
   /** The computed `busy` of 2.4.3. Absent or false: no working cue. Default false. */
   busy?: boolean;
@@ -210,7 +210,7 @@ Component: `Item`, case `assistant`. The article's children keep the order of `i
 ```
 article[data-kind="assistant"]                              KEPT.  flex flex-col gap-1.5
 ├─ (per thinking block, in order)  <ThinkingRow key={thinking} text={b.text} time={formatClock(item.at)} defaultOpen={thinking === "expanded"} />
-├─ (per text block, in order)  Bubble[variant="ghost"][align="start"][data-part="card"]    shadcn Bubble (2f); no fill, no border, no padding
+├─ (per text block, in order)  Bubble[variant="ghost"][align="start"][data-part="card"]    shadcn Bubble (2f); no fill, no border, no padding; the Phase 2 hook name `card` is KEPT (DESIGN.md 1.1) and names no card here
 │   └─ BubbleContent
 │       ├─ <Markdown text={b.text} />                       root element is div.typeset.typeset-chat (2.4.1)
 │       └─ span[data-part="stamp"]  (ONLY in the LAST text block of the article, and only when `sessionKey` is passed)

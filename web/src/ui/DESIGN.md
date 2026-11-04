@@ -118,7 +118,7 @@ Every token is defined once, in `app.css`. Raw values on `:root, .dark`; Tailwin
 |---|---|---|---|---|
 | `--surface-sunken` | `#19171c` | `oklch(0.209 0.010 303.6)` | `bg-surface-sunken` | status bar |
 | `--background` | `#1c1a20` | `oklch(0.223 0.012 300.6)` | `bg-background` | page, canvas |
-| `--card` | `#211f26` | `oklch(0.245 0.013 298.5)` | `bg-card` | cards, workflow cards, assistant message |
+| `--card` | `#211f26` | `oklch(0.245 0.013 298.5)` | `bg-card` | cards, workflow cards, the composer (assistant text has no card, DESIGN-chat 2.4) |
 | `--surface-raised` | `#26232c` | `oklch(0.263 0.017 300.4)` | `bg-surface-raised` | user message, popovers, `muted`, `accent` |
 | `--surface-pressed` | `#2b2731` | `oklch(0.281 0.019 303.4)` | `bg-surface-pressed` | pressed / neutral selected, `secondary` |
 | `--border` | `#2e2a33` | `oklch(0.293 0.017 305.4)` | `border-border` | hairlines (structure) |
