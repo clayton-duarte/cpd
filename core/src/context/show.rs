@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{ContextRow, Record, ShowArgs, curated, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -21,7 +21,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         return show_topic(&mut store, &id, topic);
     }
     if let Some(record) = &args.record {
-        return show_record(&mut store, &id, record);
+        return show_record(&mut store, &id, record, &config.machine);
     }
     let since = args
         .since
@@ -117,7 +117,12 @@ fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Out
 }
 
 /// `context show --record <id>` (§3.3): that one record in full.
-fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<Output, CpdError> {
+fn show_record(
+    store: &mut Store,
+    context: &ContextId,
+    id: &RecordId,
+    machine: &MachineName,
+) -> Result<Output, CpdError> {
     let (row, found) = store.read(|conn| {
         let row = ContextRow::require(conn, context)?;
         let found = conn
@@ -133,12 +138,25 @@ fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<
         Ok((row, found))
     })?;
     let (seq, record) = found.ok_or_else(|| {
-        CpdError::new(
-            ErrorCode::RecordNotFound,
-            format!("Context {context} has no record {id}."),
-        )
-        .with("context", context.as_str())
-        .with("record", id.to_string())
+        let err = if id.machine() == machine {
+            CpdError::new(
+                ErrorCode::RecordNotFound,
+                format!("Context {context} has no record {id}."),
+            )
+        } else {
+            CpdError::new(
+                ErrorCode::RecordNotFound,
+                format!(
+                    "Context {context} has no record {id}. {id} belongs to machine {}; this machine is {}, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.",
+                    id.machine(),
+                    machine
+                ),
+            )
+            .with("record_machine", id.machine().as_str())
+            .with("local_machine", machine.as_str())
+        };
+        err.with("context", context.as_str())
+            .with("record", id.to_string())
     })?;
     let markdown = render::single(&row.title, row.jira.as_deref(), &record);
     let mut v = record.to_json();

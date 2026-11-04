@@ -151,7 +151,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_tampered` | 1 | a write command, when the schema check fails (§4.3); read commands report it in `tamper` instead |
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2); `SQLITE_BUSY` and `SQLITE_LOCKED` both |
 | `internal` | 1 | a bug in cpd itself (for example a malformed Event built by a command), or a failed write to stdout other than EPIPE (no I/O error code exists). `store_failed` is for SQLite failures only |
-| `context_not_found`, `plan_not_found`, `workflow_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `context_not_found`, `plan_not_found`, `workflow_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6; `context show --record` of another machine's record adds `details.record_machine` and `details.local_machine`, §3.3) |
 | `no_merge_method` | 3 | `pr merge` (§9.10) or `pr post` (§9.8b) read the repo's settings and found squash, merge commit and rebase all off; `details` `{repo, number, squash, merge, rebase}` (pro-d254, pro-d261) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `required_check_not_passed` | 3 | `pr merge` (§9.10) re-read the pull request's head commit and a required check name is missing, pending or failed; `details` has `repo`, `number`, `missing`, `pending`, `failed` (lists of check names; hs-d743, hs-n571) |
@@ -350,7 +350,7 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 | Flag | Meaning |
 |---|---|
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
-| `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
+| `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
 
 **Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
@@ -378,6 +378,12 @@ Idempotent: read-only.
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "topic": "engine",
  "records": [{"id": "hs-d7", "short": "one engine per machine"}],
  "markdown": "- [hs-d7] one engine per machine"}
+```
+
+**`--record` of another machine's record** (decision pro-d2, User, 2026-11-03): Contexts are machine-local (contract §4.6), so a record exists only on the machine that wrote it. When `<id>`'s machine prefix (the part before `-<letter><n>`, §2.1) differs from this machine's `config.machine`, `context show --record <id>` is `record_not_found` (exit 3) with `details` `{context, record, record_machine, local_machine}`: `record_machine` the id's machine prefix, `local_machine` this machine's configured name. Its message is exactly `Context <context> has no record <id>. <id> belongs to machine <record_machine>; this machine is <local_machine>, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.`, with the placeholders filled. A missing record of **this** machine is unchanged: `record_not_found` (exit 3) with `details` `{context, record}` only and the message `Context <context> has no record <id>.`. Only `show --record` carries the machine details; the `--supersedes` refusals of §3.5 and `context answer` (§3.6) are unchanged.
+
+```json
+{"ok": false, "error": {"code": "record_not_found", "message": "Context building-cpd has no record pro-d7. pro-d7 belongs to machine pro; this machine is hs, and Contexts are machine-local, so another machine's records cannot be read here. The authoritative contract is in CONTEXT.md and docs/contract.md.", "details": {"context": "building-cpd", "record": "pro-d7", "record_machine": "pro", "local_machine": "hs"}}}
 ```
 
 ### 3.4 `context search`
