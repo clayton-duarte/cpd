@@ -29,7 +29,8 @@ function jump(row: InboxRow, h: Handlers): void {
 
 function Menu(props: { row: InboxRow } & Handlers): ReactElement {
   const { row, onAction, onSelectSession } = props;
-  const { id, planId, workflow, sessionId, url } = row;
+  const { id, planId, sessionId, url } = row;
+  const workflow = row.workflow ?? null;
   const own: ReactElement[] = [];
   if (row.kind === "pr-ready" && planId !== null && workflow !== null) {
     own.push(
