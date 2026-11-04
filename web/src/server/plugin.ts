@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { connect } from "node:net";
 import { promises as fsp, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
@@ -45,7 +46,7 @@ export function createServices(b: PluginBoundaries): Services {
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now })),
     durable: lazy(() =>
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
@@ -155,6 +156,9 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
         }),
     },
     fs: {
+      write: () => {
+        throw new Error("not implemented");
+      },
       stat: async (path) => {
         const s = await fsp.stat(path);
         return { size: s.size, identity: `${s.dev}:${s.ino}` };

@@ -63,6 +63,9 @@ export function createPiBackend(deps: {
   fs: FileBoundary;
   watch: WatchBoundary;
   git: GitBoundary;
+  cpdHome: string;
+  attachmentsDir: string;
+  now(): number;
   windowSize?: number;
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
