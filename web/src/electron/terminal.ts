@@ -25,10 +25,34 @@ export const DANGO_THEME = {
   brightWhite: "#f3ead9",
 };
 
-export const TERMINAL_FONT: { fontFamily: string; fontSize: number } = {
+export const TERMINAL_FONT: { fontFamily: string; fontSize: number; fontWeight: number } = {
   fontFamily: '"Maple Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", monospace',
   fontSize: 13,
+  fontWeight: 400, // stub: contract is 300
 };
+
+export const FONT_SIZE_MIN = 9;
+export const FONT_SIZE_MAX = 28;
+export const FONT_SIZE_DEFAULT = 13;
+export interface KeyEventLike { key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }
+export interface WheelEventLike { deltaY: number; deltaMode: number; clientX: number; clientY: number }
+
+// Stubs: behaviour not implemented yet.
+export function shiftEnterSequence(_event: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; isComposing: boolean }): string | null {
+  return null;
+}
+export function zoomAction(_event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "in" | "out" | "reset" | null {
+  return null;
+}
+export function nextFontSize(current: number, _action: "in" | "out" | "reset"): number {
+  return current;
+}
+export function createWheelAccumulator(): { push(deltaY: number, deltaMode: number, cellHeight: number): number } {
+  return { push: () => 0 };
+}
+export function isCmdV(_event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
+  return false;
+}
 
 export interface TerminalEngine {
   open(): void;
@@ -40,6 +64,15 @@ export interface TerminalEngine {
   onData(cb: (data: string) => void): void;
   onResize(cb: (size: PtySize) => void): void;
   setClipboardWriteHandler(handler: (text: string) => boolean): void;
+  fontSize(): number;
+  setFontSize(px: number): void;
+  cellHeight(): number;
+  setKeyHandler(handler: (event: KeyEventLike) => boolean): void;
+  setWheelHandler(handler: (event: WheelEventLike) => boolean): void;
+  appOwnsWheel(): boolean;
+  wheelStep(direction: "up" | "down", clientX: number, clientY: number): string;
+  input(data: string): void;
+  paste(text: string): void;
   dispose(): void;
 }
 export interface ResizeSource {
@@ -49,7 +82,7 @@ export interface TerminalHostDeps {
   engine: TerminalEngine;
   bridge: CpdElectronBridge;
   resize: ResizeSource;
-  clipboard: { writeText(text: string): Promise<void> };
+  clipboard: { writeText(text: string): Promise<void>; readText(): Promise<string> };
   view: { showTerminal(visible: boolean): void };
   pointer: { buttons(): number };
   onError(error: unknown): void;

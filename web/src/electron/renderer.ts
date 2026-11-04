@@ -44,6 +44,15 @@ async function boot(): Promise<void> {
     setClipboardWriteHandler: (handler) => {
       term.clipboardWriteHandler = handler;
     },
+    fontSize: () => { throw new Error("not implemented"); },
+    setFontSize: () => { throw new Error("not implemented"); },
+    cellHeight: () => { throw new Error("not implemented"); },
+    setKeyHandler: () => { throw new Error("not implemented"); },
+    setWheelHandler: () => { throw new Error("not implemented"); },
+    appOwnsWheel: () => { throw new Error("not implemented"); },
+    wheelStep: () => { throw new Error("not implemented"); },
+    input: () => { throw new Error("not implemented"); },
+    paste: () => { throw new Error("not implemented"); },
     dispose: () => term.dispose(),
   };
   await document.fonts?.ready;
@@ -58,7 +67,7 @@ async function boot(): Promise<void> {
       },
     },
     pointer: { buttons: () => buttons },
-    clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
+    clipboard: { writeText: (text) => navigator.clipboard.writeText(text), readText: () => navigator.clipboard.readText() },
     view: { showTerminal: createViewToggle(boolHidden(container), boolHidden(webuiRoot)) },
     onError: (error) => console.error(error),
   });
