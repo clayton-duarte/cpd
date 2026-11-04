@@ -347,11 +347,12 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
+cpd context show [<record>] [--context <id>] [--since <seq>] [--record <id>] [--topic <t>] [--all]
 ```
 
 | Flag | Meaning |
 |---|---|
+| `<record>` | positional, an alias of `--record <record>`: the same output and the same `record_not_found` (exit 3). Exclusive with `--record`, `--since` and `--topic` (`usage`, exit 2) |
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6). When `<id>`'s machine prefix is another machine's, the refusal adds `details.record_machine` and `details.local_machine` and its message is the cross-machine one below; a missing record of this machine keeps its error unchanged, with no machine details |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
@@ -430,25 +431,44 @@ Idempotent: read-only.
 ### 3.4 `context search`
 
 ```
-cpd context search <query> [--context <id>]
+cpd context search <query> [--context <id>] [--limit <n>] [--kind <k,k>] [--all]
 ```
 
-Searches the Context's curated records by topic and short form against the query string (hs-d655: on-demand retrieval). The Context is `--context`, else the selected Plan's (§1.3).
+Searches the Context's records (hs-d655: on-demand retrieval) and returns them ranked by the context engine's score. The Context is `--context`, else the selected Plan's (§1.3).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | a Context was selected (§1.3) | `context_required` | 2 |
+| the selected Plan exists (when the Context comes from `--plan` or `CPD_PLAN`) | `plan_not_found` | 4 |
 | the Context exists | `context_not_found` | 4 |
+| the query is not empty after trimming | `usage` | 2 |
+| every `--kind` name is a record kind | `usage` | 2 |
+| the engine accepts the query (a malformed query is refused) | `usage` | 2 |
+| the engine runs | `engine_failed` | 1 |
 
 | Flag | Meaning |
 |---|---|
-| `<query>` | search string to match against topics and short forms of curated records. Punctuation in the query is text, not FTS5 syntax; the operators kept and the rewrite are in docs/research/context-holographic.md `## Search contract`. |
+| `<query>` | the words are text. A quoted phrase, `AND`, `OR`, `NOT`, `NEAR(..)`, parentheses and a trailing `*` (prefix match) are kept as operators; the rewrite is in docs/research/context-holographic.md `## Search contract`. |
+| `--context <id>` | the Context to search; without it, the selected Plan's (§1.3). `--plan <id>` (env `CPD_PLAN`) selects the Plan |
+| `--limit <n>` | at most `n` records; default 20; `0` is every match |
+| `--kind <k,k>` | only these record kinds, comma-separated; default `decision,note,question,answer`. Any record kind name is accepted (`plan` and `brief` too); an unknown name is `usage` |
+| `--all` | include the records out of force, labelled as `context show` labels them (`(superseded by <id>)`, `[retired (<reason> <target>)]`), with `in_force: false`. Without it, a decision, note, question or answer out of force is dropped; a `plan` or `brief` is never in force and is not dropped by this |
+
+Matching and ranking: the engine scores each record against the query. Hits are mapped back to the Context's records, filtered by `--kind` and by force (`--all`), and sorted by score, highest first, then by `seq`, highest first. The engine is asked for `min(facts, max(5 × --limit, 80))` candidates, where `facts` is the number of records it holds (`--limit 0`: all of them). When filtering leaves fewer than `--limit` records and the engine returned every candidate it was asked for, it is asked once more for five times the first request, capped at `facts`. Hence a page may hold fewer than `--limit` records.
 
 **Callers** (Plan `explore-roles`, R10): as `context show` (§3.3): the Lead, the Manager and the **Worker**. An explore Worker (`scout` or `research`) may run it read-only, as its Spec's Deliverable section says; nothing enforces it (§2).
 
-Effects: none. Output: the records with curated topics or short forms matching the query, in score order, highest first (ties by `seq`, newer first). `records` is the list of matching hits, each `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is its curated short form, else its first line (at most 120 bytes); `in_force` is whether the record is in force. `markdown` renders one line per hit: `- [<id>] [<topic>] <short>` when the hit has a curated topic, and `- [<id>] <short>` when it has none (as before the topic was shown); the out-of-force labels of `context show` (§3.3) follow the line.
+Effects: none on the store. The engine's index of the Context (`<context>.db` in the engine directory: config `context_engine_dir`, default `$CPD_HOME/engines/holographic`) is brought up to date with the records added or curated since its last update.
 
-Idempotent: read-only.
+Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, topic, short, kind, at, seq, score, in_force}`: `topic` is the record's curated topic as a string, or `null` when it has none; `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `in_force` is whether the record is in force. `markdown` is one line per record, `- [<id>] [<topic>] <short>` when the record has a curated topic and `- [<id>] <short>` when it has none, with the out-of-force labels of `context show` (§3.3) after the line, joined by newlines.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "query": "engine",
+ "records": [{"id": "hs-d7", "topic": null, "short": "one engine per machine", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "seq": 42, "score": 1.5, "in_force": true}],
+ "markdown": "- [hs-d7] one engine per machine"}
+```
+
+Idempotent: yes; a rerun with nothing new to index returns the same records.
 
 ### 3.5 `context decide`, `context note`, `context ask`
 
@@ -601,7 +621,7 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then, when at least one curated topic is in force, the `Topics:` line between the header and the pointer line (`Topics: engine (3), store (1)`, the same line as `plan new` gives it, §4.1 step 3 and §3.3a; a snapshot at write time, no cap), then the pointer line (contract §4.6 "Consumers"). **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then, when at least one curated topic is in force, the `Topics:` line between the header and the pointer line (`Topics: engine (3), store (1)`, the same line as `plan new` gives it, §4.1 step 3 and §3.3a; a snapshot at write time, no cap), then the on-demand pointer (hs-d655) `Context on demand: cpd context search <query> --context <c> · cpd context show --context <c> --since <seq> · cpd context show --context <c> --record <id>` (contract §4.6 "Consumers"). No digest and no records are written: the Manager reads the Context on demand. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
@@ -1877,16 +1897,29 @@ Effects, for an explore Attempt that passes:
 cpd attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
-A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order, from the Worker's session file. `--lines` (default 40) keeps the last n. A partial last line of a file being written is skipped.
+A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order. The source is the Worker Session's `runner`:
+- `pi`: the Worker's session file (`sessions.file`). A partial last line of a file being written is skipped.
+- `durable`: the Attempt's store `run/<plan>/durable/<attempt>.sqlite`, the `entries` table. Only the rows whose `record` `kind` is `pi.assistant` are read, in `id` order: each `model[0].content` text block gives an `assistant: …` line and each `toolCall` block a `tool: <name>` line, as for `pi`. The `file` field is the `.sqlite` path. There is no partial-line rule.
+
+`--lines` (default 40) keeps the last n.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session is registered and its `file` is known and exists | `session_not_found` | 4 |
-| every complete line is a JSON session entry | `session_malformed` | 1 |
+| the Session is registered and its `file` is known and exists (`pi`); the store `run/<plan>/durable/<attempt>.sqlite` exists (`durable`) | `session_not_found` | 4 |
+| every complete line is a JSON session entry (`pi`); every `pi.assistant` row's `record` is an assistant entry, its `model[0]` an assistant message with a `content` array (`durable`) | `session_malformed` | 1 |
+
+Example for `pi`:
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "session": "c1a2…", "file": "/home/clayton/.pi/agent/sessions/…/…_c1a2….jsonl", "total": 412,
  "lines": ["tool: bash", "assistant: The schema compiles; committing."]}
+```
+
+Example for `durable`:
+
+```json
+{"ok": true, "attempt": "api-schema-a1", "session": "d4e5…", "file": "/home/clayton/.cpd/run/api-schema/durable/api-schema-a1.sqlite", "total": 57,
+ "lines": ["assistant: The schema compiles; committing.", "tool: bash"]}
 ```
 
 Read-only.
@@ -3501,7 +3534,7 @@ The engine, one per machine (§3.7, §6.6, D5).
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
-**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode; it opens no Inbox item and wakes the Plan's Lead only (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|

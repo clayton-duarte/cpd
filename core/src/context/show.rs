@@ -20,7 +20,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let Some(topic) = &args.topic {
         return show_topic(&mut store, &id, topic);
     }
-    if let Some(record) = &args.record {
+    if let Some(record) = args.record.as_ref().or(args.record_positional.as_ref()) {
         return show_record(&mut store, &id, record, &config.machine);
     }
     let since = args
