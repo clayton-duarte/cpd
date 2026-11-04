@@ -18,9 +18,9 @@ use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
-    SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
-    inbox, janitor, jira, liveness, models, open, parked, permanent, pr, react, restart, schedule,
-    sleep, team, titles, wake, workers,
+    SOURCE, archive, archive_leads, auto_merge, bump, closed, distill, escalations, host_alert,
+    hosts, inbox, janitor, jira, liveness, models, open, parked, permanent, pr, react, restart,
+    schedule, sleep, team, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
@@ -83,6 +83,8 @@ pub(super) struct Engine {
     pub team: team::State,
     /// E17: the merge reaction's run in flight and when the last one ended.
     pub react: react::State,
+    /// E23: the bump's run in flight and when each failed one ended.
+    pub bump: bump::State,
     /// E19: the Jira helper's run in flight and when the last failed one ended.
     pub jira: jira::State,
     /// E18: the auto-merge request's run in flight and when the last one failed.
@@ -157,6 +159,7 @@ impl Engine {
             titles: titles::Runs::default(),
             team: team::State::default(),
             react: react::State::default(),
+            bump: bump::State::default(),
             jira: jira::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),
@@ -275,7 +278,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 26] = [
+        let steps: [fn(&mut Engine); 27] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -296,6 +299,7 @@ impl Engine {
             react::run,
             jira::run,
             auto_merge::run,
+            bump::run,
             models::run,
             archive::run,
             sleep::run,

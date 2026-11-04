@@ -56,7 +56,6 @@ pub(super) enum Step {
     E19,
     E20,
     E22,
-    #[allow(dead_code)] // constructed by E23 once it is implemented
     E23,
 }
 
