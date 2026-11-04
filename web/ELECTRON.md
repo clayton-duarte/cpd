@@ -133,7 +133,7 @@ export interface MenuTemplateOptions { mode: UiMode; platform: NodeJS.Platform; 
 export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate;
 ```
 
-- Result, in order: `{ role: "appMenu" }` only when `platform === "darwin"`; then `{ label: "View", submenu: [...] }`; then `{ role: "windowMenu" }`.
+- Template order of `buildMenuTemplate`, on every platform: `{ role: "appMenu" }` only when `platform === "darwin"`; then `{ role: "editMenu" }`, on every platform (it is there so Cmd+C, Cmd+V, Cmd+X, Cmd+A and Cmd+Z work in WebUI; TUI ignores menu shortcuts, so the terminal's own key handler does its paste, see terminal.ts); then `{ label: "View", submenu: [...] }`; then `{ role: "windowMenu" }`. The template is therefore `[appMenu (darwin only), editMenu, View, windowMenu]`.
 - The View submenu is exactly two items in this order: `{ label: "TUI", type: "radio", checked: mode === "tui", click }` and `{ label: "WebUI", type: "radio", checked: mode === "webui", accelerator: "CmdOrCtrl+Shift+M", click }`. TUI has no accelerator. The `click` of each calls `onSelect("tui")` / `onSelect("webui")` (the click arguments are ignored).
 
 ### mode.ts (UI mode persistence and controller)
