@@ -4,7 +4,7 @@ import type { Config } from "../../durable-host/config.ts";
 import type { Input } from "../../durable-host/deliver.ts";
 import type { Connection } from "../../durable-host/server.ts";
 import type { Extension } from "@earendil-works/pi-durable";
-import { runHost, type Conversation, type Deps, type EventStream } from "../../durable-host/run.ts";
+import { runHost, type Conversation, type Deps, type ViewCall, type ViewStream } from "../../durable-host/run.ts";
 import { ev } from "../fake.ts";
 import { policyShow, shown } from "../answers.ts";
 
@@ -40,12 +40,13 @@ export const EPOCH = "epoch-1";
 export const line = (id: number, kind: string, over: Record<string, unknown> = {}) => JSON.stringify(ev(id, kind, { session: CONFIG.session, ...over }));
 export const entry = (id: number, kind: string) => ({ kind: "cpd-event", data: { id, kind, delivered_to: CONFIG.session } });
 
-/** A stream the test drives: `push` feeds a batch to the started listener, `settle` ends `closed`. `stop` settles `closed` with `{ reason: "stopped" }` as pi-durable does. */
-export type FakeStream = EventStream & {
+/** A watch the test drives: `push` feeds a value call (ops and the value after them) to the started listener, `fail` feeds a failed call, `settle` ends `closed` with a WatchEnd. `stop` settles `closed` with `{ kind: "stopped" }` as pi-durable does. */
+export type FakeStream = ViewStream & {
   started: number;
   stopped: number;
-  listener: ((events: readonly unknown[]) => Promise<void>) | undefined;
-  push(events: readonly unknown[]): Promise<void>;
+  listener: ((call: ViewCall) => Promise<void>) | undefined;
+  push(ops: readonly unknown[], value: unknown): Promise<void>;
+  fail(error: unknown): Promise<void>;
   settle(end: unknown): void;
 };
 
@@ -107,27 +108,31 @@ export function rig(over: RigOptions = {}) {
       settle = resolve;
     });
     const stream: FakeStream = {
-      snapshot: { type: "snapshot", n },
+      value: { type: "view", n },
       started: 0,
       stopped: 0,
       listener: undefined,
       closed,
-      start: (l) => {
+      start: (l: (call: ViewCall) => Promise<void>) => {
         stream.started++;
         stream.listener = l;
         notify();
       },
       stop: async () => {
         stream.stopped++;
-        settle({ reason: "stopped" });
+        settle({ kind: "stopped" });
         notify();
-        return { reason: "stopped" };
+        return { kind: "stopped" };
       },
-      push: async (events) => {
-        assert.ok(stream.listener !== undefined, `stream ${n} was not started: the host never registered its listener`);
-        await stream.listener!(events);
+      push: async (ops, value) => {
+        assert.ok(stream.listener !== undefined, `watch ${n} was not started: the host never registered its listener`);
+        await stream.listener!({ kind: "value", value, ops, retired: false });
       },
-      settle: (end) => {
+      fail: async (error) => {
+        assert.ok(stream.listener !== undefined, `watch ${n} was not started: the host never registered its listener`);
+        await stream.listener!({ kind: "failed", error });
+      },
+      settle: (end: unknown) => {
         settle(end);
         notify();
       },
@@ -327,7 +332,7 @@ export function rig(over: RigOptions = {}) {
   /** A connected client that said hello and attached (without a cursor, unless given). */
   const attach = async (cursor?: { epoch: string; seq: number }): Promise<FakeClient> => {
     const client = connect();
-    client.send({ type: "hello", protocol: 1, min_protocol: 1, client: "test" });
+    client.send({ type: "hello", protocol: 2, min_protocol: 2, client: "test" });
     client.send({ type: "attach", req: "attach-1", ...(cursor === undefined ? {} : { cursor }) });
     await drain();
     return client;

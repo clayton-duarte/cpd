@@ -47,6 +47,7 @@ mod driver_stall;
 mod driver_verify;
 mod feedback_surface;
 mod gate;
+mod grounding_guard;
 mod host_repair;
 mod job;
 mod job_addendum;

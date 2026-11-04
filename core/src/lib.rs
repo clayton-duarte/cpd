@@ -21,9 +21,11 @@ pub mod output;
 pub mod ask;
 pub mod attempt;
 pub mod board;
+pub mod classifier;
 pub mod config;
 pub mod context;
 pub mod driver;
+pub mod embedding;
 pub mod events;
 pub mod gate;
 pub mod git;
@@ -65,9 +67,17 @@ mod agent_key_tests;
 #[cfg(test)]
 mod ambient_ports_tests;
 #[cfg(test)]
+mod classifier_adapter_tests;
+#[cfg(test)]
+mod classifier_tests;
+#[cfg(test)]
 mod clock_tests;
 #[cfg(test)]
 mod ids_scan_tests;
+#[cfg(test)]
+mod embedding_adapter_tests;
+#[cfg(test)]
+mod embedding_tests;
 #[cfg(test)]
 mod incident_tests;
 #[cfg(test)]

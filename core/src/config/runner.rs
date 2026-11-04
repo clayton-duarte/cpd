@@ -1,10 +1,10 @@
-//! `worker_runner` (contract §8.2): which runner starts a Worker. The closed parse makes any other value unrepresentable.
+//! The Worker runner (contract §8.2): which runner starts a Worker. The closed parse makes any other value unrepresentable.
 
 use serde::Serialize;
 
 use super::Config;
-use super::migrate::top_level_line;
-use crate::error::{CpdError, ErrorCode};
+use super::experimental::{self, Feature};
+use crate::error::CpdError;
 use crate::home::CpdHome;
 
 /// `pi` (pi in a tmux pane, the default) or `durable` (the durable runner, `pi/durable-worker/`).
@@ -41,20 +41,6 @@ impl WorkerRunner {
     }
 }
 
-/// The comment of the `worker_runner` line a click on the runner pill writes.
-pub const TOGGLE_COMMENT: &str = "set by a click on the status line's runner pill (pro-d199); a started Attempt keeps its runner";
-
-/// The text of a `config.toml` whose top-level `worker_runner` line is `worker_runner = "<to>" # <TOGGLE_COMMENT>`.
-/// The old line is replaced whole; when absent, the line goes after the last top-level `key = value` line before the
-/// first table (at the end when there is no table). Every other byte is unchanged.
-pub fn set_in_text(text: &str, to: WorkerRunner) -> String {
-    let line = format!("worker_runner = \"{}\" # {TOGGLE_COMMENT}", to.as_str());
-    if let Some((start, body_end, _, _)) = top_level_line(text, "worker_runner") {
-        return format!("{}{line}{}", &text[..start], &text[body_end..]);
-    }
-    insert_top_level(text, &line)
-}
-
 /// `text` with `line` (no newline) inserted after the last top-level `key = value` line before the first table (at the
 /// end when there is no table).
 pub(super) fn insert_top_level(text: &str, line: &str) -> String {
@@ -80,28 +66,9 @@ pub(super) fn insert_top_level(text: &str, line: &str) -> String {
     format!("{head}{sep}{line}\n{tail}")
 }
 
-/// Flips `worker_runner` in `$CPD_HOME/config.toml` atomically and returns the new value.
+/// Flips `durable_workers` in the `[experimental]` table of `$CPD_HOME/config.toml` atomically and returns the new runner.
 pub fn toggle(home: &CpdHome) -> Result<WorkerRunner, CpdError> {
-    let path = home.config();
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        let code = if e.kind() == std::io::ErrorKind::NotFound {
-            ErrorCode::ConfigMissing
-        } else {
-            ErrorCode::ConfigInvalid
-        };
-        CpdError::new(code, format!("cannot read config.toml: {e}."))
-            .with("path", path.display().to_string())
-    })?;
-    let (config, _) = Config::parse(&text, &path)?;
-    let to = config.worker_runner.flipped();
-    let new = set_in_text(&text, to);
-    Config::parse(&new, &path)?;
-    crate::atomic::write_atomic(&path, &new).map_err(|e| {
-        CpdError::new(
-            ErrorCode::ConfigInvalid,
-            format!("cannot write config.toml: {e}."),
-        )
-        .with("path", path.display().to_string())
-    })?;
+    let to = Config::load(home)?.worker_runner().flipped();
+    experimental::set(home, Feature::DurableWorkers, to == WorkerRunner::Durable)?;
     Ok(to)
 }

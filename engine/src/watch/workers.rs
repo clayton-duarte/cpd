@@ -91,7 +91,7 @@ pub(super) fn run(engine: &mut Engine) {
     let (long, short) = (counts.long(), counts.short());
     // pro-d199: read afresh every tick; a config that does not parse sets nothing (no stale fallback).
     let runner = match Config::load(&engine.home) {
-        Ok(fresh) => fresh.worker_runner,
+        Ok(fresh) => fresh.worker_runner(),
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
     // What was last set: the two workers texts and the incident value, one string (no value holds a newline).
