@@ -17,7 +17,7 @@ export function installQuitMarker(ctx: QuitCtx, host: { env: Record<string, stri
   const marker = host.env.CPD_QUIT_MARKER;
   if (!marker) return;
   ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-    const editor = new CustomEditor(tui, theme, keybindings) as unknown as SubmitEditor;
+    const editor = new CustomEditor(tui, theme, keybindings, { embedWorkingStatus: true }) as unknown as SubmitEditor;
     let original: ((text: string) => void) | undefined;
     Object.defineProperty(editor, "onSubmit", {
       configurable: true,
