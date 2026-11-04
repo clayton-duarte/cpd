@@ -4,9 +4,10 @@ export interface TranscriptState {
   readonly items: readonly TranscriptItem[];
   readonly hasEarlier: boolean;
   readonly cursor: Cursor | null;
+  readonly tailEpoch: number;
 }
 
-export const emptyTranscript: TranscriptState = { items: [], hasEarlier: false, cursor: null };
+export const emptyTranscript: TranscriptState = { items: [], hasEarlier: false, cursor: null, tailEpoch: 0 };
 
 /** Moves an orphan result `orphan:<callId>` into the tool item that now has that callId. */
 function adopt(items: readonly TranscriptItem[]): readonly TranscriptItem[] {
@@ -35,13 +36,13 @@ function mergeById(items: readonly TranscriptItem[], incoming: readonly Transcri
   return out;
 }
 
-export function setTail(window: Window): TranscriptState {
-  return { items: adopt(window.items), hasEarlier: window.hasEarlier, cursor: window.cursor };
+export function setTail(window: Window, _previous?: TranscriptState): TranscriptState {
+  return { items: adopt(window.items), hasEarlier: window.hasEarlier, cursor: window.cursor, tailEpoch: 0 };
 }
 export function prependEarlier(state: TranscriptState, window: Window): TranscriptState {
   const known = new Set(state.items.map((i) => i.id));
   const older = window.items.filter((i) => !known.has(i.id));
-  return { items: adopt([...older, ...state.items]), hasEarlier: window.hasEarlier, cursor: window.cursor };
+  return { items: adopt([...older, ...state.items]), hasEarlier: window.hasEarlier, cursor: window.cursor, tailEpoch: state.tailEpoch };
 }
 export function appendItems(state: TranscriptState, items: readonly TranscriptItem[]): TranscriptState {
   return { ...state, items: adopt(mergeById(state.items, items)) };

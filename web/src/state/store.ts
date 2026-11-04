@@ -16,7 +16,7 @@ export interface PendingSubmission {
   readonly text: string;
   readonly imageCount: number;
   readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "failed";
+  readonly state: "sending" | "sent" | "failed";
   readonly error?: WireError;
 }
 export interface SessionView {
@@ -55,7 +55,8 @@ export type StoreAction =
   | { type: "selectSession"; sessionId: string | null }
   | { type: "selectPlan"; planId: string | null }
   | { type: "submitPending"; submission: Omit<PendingSubmission, "state"> }
-  | { type: "dismissPending"; clientSubmissionId: string };
+  | { type: "dismissPending"; clientSubmissionId: string }
+  | { type: "serverBatch"; messages: ServerMessage[] };
 
 export const initialState: AppState = {
   connection: "connecting",
@@ -157,6 +158,8 @@ export function reduce(state: AppState, action: StoreAction): AppState {
         ...state,
         session: { ...state.session, pending: [...state.session.pending, { ...action.submission, state: "sending" }] },
       };
+    case "serverBatch":
+      return state;
     case "dismissPending":
       if (state.session === null) return state;
       return {

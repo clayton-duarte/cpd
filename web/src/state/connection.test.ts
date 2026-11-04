@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Disposable, Transport } from "../protocol/runtime.ts";
 import { FakeScheduler } from "../testing/scheduler.ts";
-import { createConnection } from "./connection.ts";
+import { FRAME_MS, PENDING_ECHO_MS, createConnection } from "./connection.ts";
 import { createStore } from "./store.ts";
 
 class Fake implements Transport {
@@ -110,5 +110,96 @@ describe("connection", () => {
     expect(scheduler.pending()).toBe(0);
     connection.close();
     expect(store.getState().connection).toBe("closed");
+  });
+
+  const texts = (store: ReturnType<typeof createStore>): string[] =>
+    ((store.getState().session?.transcript.items[0] as { blocks: { text: string }[] } | undefined)?.blocks ?? []).map((b) => b.text);
+  const delta = (text: string, sessionId = "s1") => ({ type: "session.delta", sessionId, itemId: "a:1", blockIndex: 0, blockType: "text", text });
+  const attachedSession = () => {
+    const ctx = setup();
+    ctx.connection.start();
+    ctx.connection.selectSession("s1");
+    ctx.transport.emitStatus("open");
+    ctx.transport.emitMessage({
+      type: "session.window", sessionId: "s1", mode: "tail",
+      window: { items: [{ kind: "assistant", id: "a:1", blocks: [{ type: "text", text: "" }], streaming: true }], hasEarlier: false, cursor: null },
+    });
+    return ctx;
+  };
+
+  it("session.append and session.delta are applied once per frame", () => {
+    const { transport, scheduler, store } = attachedSession();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    transport.emitMessage(delta("a"));
+    transport.emitMessage(delta("b"));
+    transport.emitMessage({ type: "session.append", sessionId: "s1", items: [{ kind: "user", id: "u:1", text: "x", attachments: [] }] });
+    expect(FRAME_MS).toBe(16);
+    expect(listener).not.toHaveBeenCalled();
+    expect(texts(store)).toEqual([""]);
+    scheduler.advance(FRAME_MS - 1);
+    expect(listener).not.toHaveBeenCalled();
+    scheduler.advance(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(texts(store)).toEqual(["ab"]);
+    expect(store.getState().session?.transcript.items.map((i) => i.id)).toEqual(["a:1", "u:1"]);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("adjacent deltas of one block are merged", () => {
+    const { transport, scheduler, store } = attachedSession();
+    const spy = vi.spyOn(store, "dispatch");
+    transport.emitMessage(delta("a"));
+    transport.emitMessage(delta("b"));
+    transport.emitMessage(delta("c"));
+    scheduler.advance(FRAME_MS);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ type: "serverBatch", messages: [delta("abc")] });
+  });
+
+  it("a non-batched message flushes the buffer first and keeps order", () => {
+    const { transport, scheduler, store } = attachedSession();
+    const spy = vi.spyOn(store, "dispatch");
+    transport.emitMessage(delta("a"));
+    transport.emitMessage({ type: "session.status", sessionId: "s1", busy: true, queued: [] });
+    expect(spy.mock.calls.map(([a]) => a.type)).toEqual(["serverBatch", "server"]);
+    expect(texts(store)).toEqual(["a"]);
+    expect(store.getState().session?.busy).toBe(true);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("selecting another session drops buffered messages", () => {
+    const { transport, scheduler, store, connection } = attachedSession();
+    const spy = vi.spyOn(store, "dispatch");
+    transport.emitMessage(delta("a"));
+    expect(scheduler.pending()).toBe(1);
+    connection.selectSession("s2");
+    expect(scheduler.pending()).toBe(0);
+    scheduler.advance(FRAME_MS);
+    expect(spy.mock.calls.map(([a]) => a.type)).toEqual(["selectSession"]);
+  });
+
+  it("close drops buffered messages and the timer", () => {
+    const { transport, scheduler, store, connection } = attachedSession();
+    const spy = vi.spyOn(store, "dispatch");
+    transport.emitMessage(delta("a"));
+    expect(scheduler.pending()).toBe(1);
+    connection.close();
+    expect(scheduler.pending()).toBe(0);
+    scheduler.advance(FRAME_MS);
+    expect(spy.mock.calls.map(([a]) => a.type)).toEqual(["connection"]);
+  });
+
+  it("a sent pending row is dismissed after 30 seconds", () => {
+    const { transport, scheduler, store, connection } = attachedSession();
+    connection.submit({ text: "hi", images: [], whenBusy: "followUp" });
+    transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "id1", queued: false });
+    expect(store.getState().session?.pending[0]?.state).toBe("sent");
+    expect(PENDING_ECHO_MS).toBe(30000);
+    scheduler.advance(PENDING_ECHO_MS - 1);
+    expect(store.getState().session?.pending).toHaveLength(1);
+    scheduler.advance(1);
+    expect(store.getState().session?.pending).toEqual([]);
+    expect(scheduler.pending()).toBe(0);
   });
 });

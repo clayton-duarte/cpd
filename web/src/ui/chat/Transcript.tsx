@@ -11,7 +11,7 @@ export interface PendingSubmission {
   readonly text: string;
   readonly imageCount: number;
   readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "failed";
+  readonly state: "sending" | "sent" | "failed";
   readonly error?: WireError;
 }
 

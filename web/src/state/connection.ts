@@ -31,6 +31,8 @@ export interface Connection {
   action(action: CockpitAction): string;
   close(): void;
 }
+export const FRAME_MS = 16;
+export const PENDING_ECHO_MS = 30000;
 const DEFAULT_BACKOFF = { baseMs: 500, maxMs: 10_000 };
 
 // Required fields per server message type: [field, primitive type] (the full shapes are the server's contract).
