@@ -213,14 +213,14 @@ fn auto_approved_proposals_append_one_records_retired_event() {
         1
     );
     let (seq_curated, seq_retired) = (
-        f.count("SELECT max(seq) FROM events WHERE kind = 'context-curated'"),
-        f.count("SELECT max(seq) FROM events WHERE kind = 'records-retired'"),
+        f.count("SELECT max(id) FROM events WHERE kind = 'context-curated'"),
+        f.count("SELECT max(id) FROM events WHERE kind = 'records-retired'"),
     );
     assert!(
         seq_retired > seq_curated,
         "records-retired follows context-curated"
     );
-    let payload = f.count("SELECT count(*) FROM events WHERE kind = 'records-retired' AND payload LIKE '%hs-n2%' AND payload LIKE '%hs-n3%' AND payload NOT LIKE '%hs-n4%'");
+    let payload = f.count("SELECT count(*) FROM events WHERE kind = 'records-retired' AND data LIKE '%hs-n2%' AND data LIKE '%hs-n3%' AND data NOT LIKE '%hs-n4%'");
     assert_eq!(payload, 1);
 }
 
@@ -276,7 +276,7 @@ fn a_proposal_with_an_existing_row_of_any_status_writes_nothing_new() {
         assert_eq!(f.row("hs-n2"), before, "{status}");
         assert_eq!(f.row("hs-n3").0, "approved", "{status}");
         assert_eq!(f.retired_events(), 1, "{status}");
-        let named = f.count("SELECT count(*) FROM events WHERE kind = 'records-retired' AND payload LIKE '%hs-n3%' AND payload NOT LIKE '%hs-n2%'");
+        let named = f.count("SELECT count(*) FROM events WHERE kind = 'records-retired' AND data LIKE '%hs-n3%' AND data NOT LIKE '%hs-n2%'");
         assert_eq!(named, 1, "{status}");
     }
 }
