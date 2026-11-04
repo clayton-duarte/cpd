@@ -25,14 +25,14 @@
     "verify:steps": "pnpm run verify:migrations && pnpm run verify:portable && pnpm run typecheck && pnpm run verify:pi && pnpm run verify:fmt && pnpm run verify:build && pnpm run verify:clippy && pnpm run verify:web && pnpm run verify:node && pnpm run verify:rust"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.3.0",
-    "@earendil-works/pi-coding-agent": "1.3.0",
-    "@earendil-works/pi-ai": "1.3.0",
-    "@earendil-works/pi-codemode": "1.3.0",
-    "@earendil-works/pi-durable": "1.3.0"
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-codemode": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "^1.3.0",
+    "@earendil-works/pi-tui": "^1.5.0",
     "@sinonjs/fake-timers": "15.0.0",
     "@types/node": "^22.20.5",
     "@types/sinonjs__fake-timers": "15.0.1",

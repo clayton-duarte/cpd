@@ -15,6 +15,7 @@ use crate::output::Output;
 pub const LOOP_GUARD_LABEL: &str = "φ: loop guard";
 
 pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
+    crate::plan::archive::refuse_agent_caller("session resume")?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
     let (event, target) = env.store.write("session resume", |tx| {

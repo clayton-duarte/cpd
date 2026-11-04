@@ -1,4 +1,4 @@
-//! `cpd tui action runner --client <name>` (pro-d199): flips the `worker_runner` line of config.toml, sets the global
+//! `cpd tui action runner --client <name>` (pro-d199): flips `durable_workers` in the `[experimental]` table of config.toml, sets the global
 //! `@cpd_runner` at once and refreshes the clicking client; it opens no store, touches no Attempt, sends no signal. The
 //! tmux is the fake server of an `Fx`; the config is a file of the test's own temporary home.
 
@@ -47,11 +47,14 @@ fn tmux_calls(fx: &Fx, since: usize) -> Vec<String> {
 
 #[test]
 fn tui_action_runner_flips_the_config_line_and_sets_the_option_and_refreshes_the_client() {
-    let fx = with_config("worker_runner = \"pi\"\n");
+    let fx = with_config("");
     let before = fx.calls("tmux").len();
     action(&fx, &["runner", "--client", CLIENT]);
     let text = std::fs::read_to_string(config(&fx)).unwrap();
-    assert!(text.contains("worker_runner = \"durable\""), "{text}");
+    assert!(
+        text.contains("[experimental]\ndurable_workers = true"),
+        "{text}"
+    );
     let calls = tmux_calls(&fx, before);
     assert!(
         calls
@@ -72,8 +75,9 @@ fn tui_action_runner_flips_the_config_line_and_sets_the_option_and_refreshes_the
 }
 
 #[test]
-fn tui_action_runner_changes_only_the_worker_runner_line_of_the_config() {
-    let fx = with_config("# mine\nconcurrency = 5\nworker_runner = \"durable\"   # old\n");
+fn tui_action_runner_changes_only_the_durable_workers_line_of_the_config() {
+    let fx =
+        with_config("# mine\nconcurrency = 5\n[experimental]\ndurable_workers = true   # old\n");
     let before = std::fs::read_to_string(config(&fx)).unwrap();
     action(&fx, &["runner", "--client", CLIENT]);
     let after = std::fs::read_to_string(config(&fx)).unwrap();
@@ -82,18 +86,18 @@ fn tui_action_runner_changes_only_the_worker_runner_line_of_the_config() {
     let changed: Vec<_> = old.iter().zip(&new).filter(|(a, b)| a != b).collect();
     assert_eq!(changed.len(), 1, "only one line differs: {changed:?}");
     assert!(
-        changed[0].0.starts_with("worker_runner = \"durable\""),
+        changed[0].0.starts_with("durable_workers = true"),
         "{changed:?}"
     );
     assert!(
-        changed[0].1.starts_with("worker_runner = \"pi\" # "),
+        changed[0].1.starts_with("durable_workers = false"),
         "{changed:?}"
     );
 }
 
 #[test]
 fn tui_action_runner_touches_no_attempt_and_sends_no_signal() {
-    let fx = with_config("worker_runner = \"pi\"\n");
+    let fx = with_config("");
     let before = fx.calls("tmux").len();
     action(&fx, &["runner", "--client", CLIENT]);
     assert!(
@@ -119,7 +123,7 @@ fn tui_action_runner_touches_no_attempt_and_sends_no_signal() {
 #[test]
 fn tui_action_runner_with_a_broken_config_says_so_on_the_client_and_leaves_the_file() {
     let fx = with_config("");
-    let broken = "version = 1\nworker_runner = [\n";
+    let broken = "version = 1\n[experimental]\ndurable_workers = [\n";
     std::fs::write(config(&fx), broken).unwrap();
     let before = fx.calls("tmux").len();
     action(&fx, &["runner", "--client", CLIENT]); // exits 0 and prints nothing

@@ -25,7 +25,8 @@ fn migrate_reports_the_applied_names_in_order() {
             "drop-plannotator-ports",
             "open-tier-worker-tier",
             "drop-review-lead-tier",
-            "drop-inbox-review-context"
+            "drop-inbox-review-context",
+            "worker-runner-to-experimental"
         ]
     );
 
