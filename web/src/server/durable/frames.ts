@@ -56,8 +56,8 @@ export interface Gap {
   readonly upTo: number;
 }
 export interface Dialect {
-  applyView(frame: { view: unknown }): { transcript: DurableTranscript };
-  applyOps(frame: { ops: unknown[] }): DialectOutput;
+  applyBase(frame: { view: unknown }): { transcript: DurableTranscript };
+  applyIncrement(frame: { ops: unknown[] }): DialectOutput;
   applyHistory(frame: { entries: readonly unknown[]; next?: string }): void;
   readonly gap: Gap | undefined;
   readonly transcript: DurableTranscript;
@@ -271,7 +271,7 @@ const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) =
 
 type Delta = DialectOutput["deltas"][number];
 
-export function createDialect(): Dialect {
+function createV1Dialect(): Dialect {
   const cache = new Map<number, { raw: unknown; parsed: Parsed }>();
   const alias = new Map<number, string>(); // assistant entry id -> the live item id it replaced
   let view: View | null = null;
@@ -444,7 +444,7 @@ export function createDialect(): Dialect {
       for (const id of cache.keys()) if (id < first && (below === undefined || id > below)) below = id;
       return below === undefined || below >= view.before ? undefined : { after: below, upTo: view.before };
     },
-    applyView(frame) {
+    applyBase(frame) {
       try {
         const next = adopt(frame.view);
         const fresh = ingest(next.entries);
@@ -457,7 +457,7 @@ export function createDialect(): Dialect {
       }
       return { transcript };
     },
-    applyOps(frame) {
+    applyIncrement(frame) {
       const out: DialectOutput = { append: [], update: [], deltas: [] };
       if (view === null) return protocolError("ops frame before any view");
       const ops = arr(frame.ops, "ops");
@@ -538,6 +538,23 @@ export function createDialect(): Dialect {
         throw protocolFrom(e, "history");
       }
     },
+  };
+}
+export function createDialect(protocol: 1 | 2): Dialect {
+  if (protocol === 1) return createV1Dialect();
+  const notImplemented = (): never => {
+    throw new Error("not implemented");
+  };
+  return {
+    get transcript(): DurableTranscript {
+      return notImplemented();
+    },
+    get gap(): Gap | undefined {
+      return notImplemented();
+    },
+    applyBase: notImplemented,
+    applyIncrement: notImplemented,
+    applyHistory: notImplemented,
   };
 }
 function questionsOf(raw: unknown): Question[] {

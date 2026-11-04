@@ -25,8 +25,10 @@ class FakeHost {
   models = [{ provider: "anthropic", model_id: "claude", name: "Claude", thinking_levels: ["off", "high"], context_window: 200000 }];
   listModels = vi.fn(async () => this.models);
   initial: HostFrame[];
-  constructor(initial: HostFrame[]) {
+  protocol: 1 | 2;
+  constructor(initial: HostFrame[], protocol: 1 | 2 = 2) {
     this.initial = initial;
+    this.protocol = protocol;
   }
   deliver(frame: HostFrame): void {
     if (this.handlers.length === 0) this.pending.push(frame);
@@ -35,7 +37,7 @@ class FakeHost {
   client(): HostClient {
     const self = this;
     return {
-      welcome: { type: "welcome", protocol: 2, host_version: "1", pi_durable: "1.5.0", session: "s1", role: "worker", epoch: "e1", client_id: "c1", cwd: "/work", limits: { client_line: 1e6 } },
+      welcome: { type: "welcome", protocol: self.protocol, host_version: "1", pi_durable: self.protocol === 2 ? "1.5.0" : "1.3.0", session: "s1", role: "worker", epoch: "e1", client_id: "c1", cwd: "/work", limits: { client_line: 1e6 } },
       attach: async () => {
         for (const f of self.initial) self.deliver(f);
         return { type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" };
@@ -126,6 +128,29 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number } = {}) {
 function ofType<T extends SessionServerMessage["type"]>(messages: SessionServerMessage[], type: T) {
   return messages.filter((m): m is Extract<SessionServerMessage, { type: T }> => m.type === type);
 }
+/** Attach without awaiting forever: the first-frame timer of a backend that ignores the frames fires on the FakeScheduler. */
+async function setupProtocol(protocol: 1 | 2, initial: HostFrame[]) {
+  const host = new FakeHost(initial, protocol);
+  const scheduler = new FakeScheduler();
+  const backend = createDurableBackend({
+    connect: async () => host.client(),
+    cpd: { json: vi.fn(async (_args: readonly string[]) => ({}) as Readonly<Record<string, unknown>>) },
+    git: { branch: async () => "main" },
+    scheduler,
+  });
+  const messages: SessionServerMessage[] = [];
+  const attached = backend.attach(SESSION, (m) => messages.push(m)).then(
+    (handle) => ({ handle, error: null as unknown }),
+    (error: unknown) => ({ handle: null, error }),
+  );
+  await tick();
+  scheduler.advance(10_000);
+  const outcome = await attached;
+  await tick();
+  return { host, messages, ...outcome };
+}
+const chatEntry = (i: number, text: string): Obj => ({ id: i, conversationId: "root", kind: "cpd-chat", model: [{ role: "user", content: text, timestamp: i }], data: { client_id: "c1", request_id: "cs1" } });
+
 const ids = (w: Window) => w.items.map((i) => i.id);
 const range = (a: number, b: number) => Array.from({ length: b - a }, (_, k) => `u:${a + k}`);
 
@@ -276,5 +301,36 @@ describe("durable backend", () => {
     host.deliver(opsFrame([["s", ["docs", "pi.inbox", "items"], []]], 4));
     await tick();
     expect(ofType(messages, "session.status").at(-1)?.queued).toEqual([]);
+  });
+
+  it("a protocol 2 host streams view and ops into session messages", async () => {
+    const { messages, host, error } = await setupProtocol(2, [viewFrame([userEntry(1), chatEntry(2, "typed in web")])]);
+    expect(error).toBeNull();
+    expect(ids(ofType(messages, "session.window")[0]!.window)).toEqual(["u:1", "u:2"]);
+    const mark = messages.length;
+    host.deliver(opsFrame([["s", ["docs", "pi.live", "run"], RUN], ["p", ["entries"], 2, 0, [userEntry(3)]]]));
+    await tick();
+    const after = messages.slice(mark);
+    expect(ofType(after, "session.status").at(-1)?.busy).toBe(true);
+    expect(ofType(after, "session.append").flatMap((m) => m.items.map((i) => i.id))).toEqual(["u:3"]);
+    host.deliver(opsFrame([["s", ["docs", "pi.live", "generation"], { attempt: 1 }], ["s", ["docs", "pi.live", "generation", "message"], { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "pending", timestamp: 4 }]], 3));
+    host.deliver(opsFrame([["a", ["docs", "pi.live", "generation", "message", "content", 0, "text"], "chunk"]], 4));
+    await tick();
+    const live = ofType(messages, "session.append").flatMap((m) => m.items).find((i) => i.kind === "assistant");
+    expect(live).toMatchObject({ streaming: true });
+    expect(ofType(messages, "session.delta")).toMatchObject([{ itemId: live?.id, blockIndex: 0, text: "chunk" }]);
+  });
+
+  it("a protocol 1 host still streams snapshot and events into session messages", async () => {
+    const snapshot = { type: "snapshot", snapshot: { type: "snapshot", entries: [userEntry(1), userEntry(2)], inbox: [], agent: {} } } as unknown as HostFrame;
+    const { messages, host, error } = await setupProtocol(1, [snapshot]);
+    expect(error).toBeNull();
+    expect(ids(ofType(messages, "session.window")[0]!.window)).toEqual(["u:1", "u:2"]);
+    const mark = messages.length;
+    host.deliver({ type: "events", events: [{ type: "run_start" }, { type: "entry_appended", entry: userEntry(3) }] } as unknown as HostFrame);
+    await tick();
+    const after = messages.slice(mark);
+    expect(ofType(after, "session.status").at(-1)?.busy).toBe(true);
+    expect(ofType(after, "session.append").flatMap((m) => m.items.map((i) => i.id))).toEqual(["u:3"]);
   });
 });

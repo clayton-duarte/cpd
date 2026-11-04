@@ -93,7 +93,7 @@ export function createDurableBackend(deps: {
       const sessionId = session.ref.id;
       const client = await deps.connect(session.socketPath);
       const capabilities = capabilitiesOf(session.tierOptions);
-      const dialect = createDialect();
+      const dialect = createDialect(1);
       const subscriptions: Disposable[] = [];
 
       let disposed = false;
@@ -222,12 +222,12 @@ export function createDurableBackend(deps: {
       let frames: Promise<void> = Promise.resolve();
       const onStream = async (frame: Extract<HostFrame, { type: "view" | "ops" }>): Promise<void> => {
         if (disposed) return;
-        let out: ReturnType<typeof dialect.applyOps> = { append: [], update: [], deltas: [] };
+        let out: ReturnType<typeof dialect.applyIncrement> = { append: [], update: [], deltas: [] };
         if (frame.type === "view") {
-          dialect.applyView(frame);
+          dialect.applyBase(frame);
           out = { ...out, replaced: true };
         } else {
-          out = dialect.applyOps(frame);
+          out = dialect.applyIncrement(frame);
         }
         if (dialect.transcript.before === undefined) historyExhausted = true;
         await fillGap();
@@ -291,7 +291,7 @@ export function createDurableBackend(deps: {
           if (frame.type === "view" && !applied) {
             applied = true;
             try {
-              dialect.applyView(frame);
+              dialect.applyBase(frame);
             } catch (e) {
               snapshotError = e;
             }
