@@ -28,6 +28,22 @@ A prototype is a quick way to preview a visual change in the live cockpit before
 
 5. **Real implementation.** An approved change is built through the TDD template on main's code: docs, red tests that pin the exact rows, implementation, then open (hs-d341).
 
+## Previewing the web UI
+
+(pro-d34)
+
+`scripts/preview-web.sh` is the sibling of `scripts/preview-tui.sh`. Where the TUI preview swaps the cockpit's views, the web preview runs the Vite dev server of a preview worktree, so the WebUI can be seen on `localhost:5173` while the installed cpd keeps the engine and the Leads.
+
+```
+sh scripts/preview-web.sh on [<worktree>] | off | status
+```
+
+- **`on [<worktree>]`** creates the git worktree on branch `preview/web` from `origin/main` when it is missing. The default path is `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`. It links `node_modules` and `web/node_modules` from the repo when they are absent. It starts the Vite dev server, or respawns it when it is running, with `pnpm --dir <worktree> --filter cpd-web-client run dev --host` on port 5173, in the window `web` of the cockpit's work session, without the session identity variables. It builds Electron (`build:electron`) only when `CPD_PREVIEW_ELECTRON=1`. It sets the tmux option `@cpd_web_preview` to `<worktree name> <sha>` and writes `web-state` in `${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}`. It prints the command that points Electron at the server: `CPD_ELECTRON_DEV_URL=http://localhost:5173 pnpm --dir <worktree>/web run electron`. It never kills Electron.
+- **`off`** respawns the window `web` on the primary checkout, unsets the option `@cpd_web_preview` and removes `web-state`.
+- **`status`** prints the worktree and the sha, or `no web preview`.
+
+The preview worktree is never changed with `git checkout`, `git reset` or `git clean`. The matching scripts in `web/package.json` are `preview:on` and `preview:off`.
+
 ## Limits
 
 A preview costs one release build of the worktree. The engine's pi chat (pi/lib/render.ts) is not reached by the view, so messages there don't appear in the preview. A branch missing a breaking migration of main is refused by the install guard; merge main first.
