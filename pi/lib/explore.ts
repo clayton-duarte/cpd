@@ -172,3 +172,28 @@ export function exploreGuard(role: string | undefined, env: Record<string, strin
   if (kind === undefined) return undefined;
   return exploreVerdict(kind, call, { cwd, home: env.CPD_HOME || `${homedir()}/.cpd`, plan: env.CPD_PLAN ?? "" }, isInsideRepo);
 }
+
+const READERS = new Set(["cat", "head", "tail", "sed", "grep", "rg", "awk", "less", "more", "jq", "wc", "cut", "sort", "nl", "bat"]);
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The refusal of a Lead's read of an explore artefact (<CPD_HOME>/run/<plan>/explore/): the `read` tool, or a bash simple command that is a file reader. */
+export function leadExploreGuard(role: string | undefined, env: Record<string, string | undefined>, call: { name: string; arguments: Record<string, unknown> }): Verdict {
+  if (role !== "lead") return undefined;
+  const home = env.CPD_HOME || `${homedir()}/.cpd`;
+  const bases = ["$CPD_HOME", "${CPD_HOME}", "~/.cpd", "$HOME/.cpd", "${HOME}/.cpd", home, `${homedir()}/.cpd`].map(escapeRe).join("|");
+  const re = new RegExp(`^(?:${bases})/run/[^/]+/explore(?:/|$)`);
+  const hit = (w: string): boolean => re.test(w.replace(/^["']+/, "").replace(/^@/, "").replace(/^~(?=\/)/, homedir()).replace(/^["']+/, "")) || re.test(w.replace(/^["'@]+/, ""));
+  const refusal = refuse("artefact", "$CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job");
+  const name = call.name.toLowerCase();
+  if (name === "read") {
+    const p = call.arguments.path ?? call.arguments.file_path;
+    return typeof p === "string" && hit(p) ? refusal : undefined;
+  }
+  if (name === "bash" && typeof call.arguments.command === "string") {
+    for (const words of simpleCommands(call.arguments.command)) {
+      const c = strip(words);
+      if (c && READERS.has(c.name) && c.args.some(hit)) return refusal;
+    }
+  }
+  return undefined;
+}

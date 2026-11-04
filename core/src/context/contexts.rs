@@ -4,14 +4,16 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Jira;
-use super::record::{Draft, Record, superseding};
+use super::distill::State;
+use super::prose_supersedes::prose_supersession_targets;
+use super::record::{Draft, Record, may_supersede, superseding};
 use crate::args::Text;
 use crate::clock::now;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind, SessionId};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
@@ -193,7 +195,7 @@ impl<'a> Contexts<'a> {
     }
 
     /// Writes one record (§4.6 "A write"): in one transaction, validates it
-    /// (`record_not_found`, `question_answered`), inserts the row and appends
+    /// (`record_not_found`), inserts the row and appends
     /// `context-record`. `command` is the transaction's `txns.command`. A retry
     /// of this machine's latest record writes nothing.
     pub fn write(
@@ -203,6 +205,20 @@ impl<'a> Contexts<'a> {
         by: super::record::By,
         text: &Text,
         draft: Draft,
+    ) -> Result<Written, CpdError> {
+        self.write_confirmed(context, command, by, text, draft, false)
+    }
+
+    /// [`Contexts::write`]; a decision or note whose text names an in-force record after `supersedes`, `overrules` or
+    /// `replaces` that `draft` does not list is refused (`supersedes_unlinked`), unless `no_supersedes`.
+    pub fn write_confirmed(
+        &mut self,
+        context: &ContextId,
+        command: &str,
+        by: super::record::By,
+        text: &Text,
+        draft: Draft,
+        no_supersedes: bool,
     ) -> Result<Written, CpdError> {
         let machine = self.machine.clone();
         let next = |conn: &Connection| -> Result<Next, CpdError> {
@@ -222,7 +238,13 @@ impl<'a> Contexts<'a> {
             }) {
                 return Ok(Next::Retry(seq, record));
             }
+            if let Some((seq, record)) = in_force_duplicate(conn, context, &draft, text.as_str())? {
+                return Ok(Next::Retry(seq, record));
+            }
             check_links(conn, context, &draft)?;
+            if !no_supersedes {
+                check_prose(conn, context, &draft, text.as_str())?;
+            }
             let mut stmt = conn.prepare(
                 "SELECT id FROM context_records WHERE context = ?1 AND machine = ?2 AND kind = ?3",
             )?;
@@ -243,7 +265,7 @@ impl<'a> Contexts<'a> {
                 already: true,
             });
         }
-        self.store.write(command, |tx| {
+        let written = self.store.write(command, |tx| {
             // The number is taken again inside the write transaction: only one writer at a time.
             let number = match next(tx)? {
                 Next::Retry(seq, record) => {
@@ -274,32 +296,78 @@ impl<'a> Contexts<'a> {
                 seq,
                 already: false,
             })
-        })
+        })?;
+        // Best-effort telemetry: a failed mark never fails the write.
+        if let (false, Some(session)) = (written.already, &by.session) {
+            let mut exclude = vec![written.record.id.clone()];
+            exclude.extend(draft.supersedes().iter().cloned());
+            let _ =
+                super::reads::mark_used_for(self.store, context, session, text.as_str(), &exclude);
+        }
+        Ok(written)
+    }
+
+    /// The Session of the environment (`CPD_SESSION`, else `PI_SESSION_ID`), when it is a known Session.
+    pub(crate) fn env_session(store: &mut Store) -> Option<SessionId> {
+        super::reads::env_session(store)
+    }
+
+    /// Best-effort: mark the records `text` cites that `session` read in `context` as used.
+    pub(crate) fn mark_cited(
+        store: &mut Store,
+        context: &ContextId,
+        session: &SessionId,
+        text: &str,
+    ) {
+        let _ = super::reads::mark_used_for(store, context, session, text, &[]);
     }
 }
 
+/// An in-force record of the same kind as `draft` with the same trimmed text and the same supersedes list (§4.6 "A write").
+fn in_force_duplicate(
+    conn: &Connection,
+    context: &ContextId,
+    draft: &Draft,
+    text: &str,
+) -> Result<Option<(i64, Record)>, CpdError> {
+    if !matches!(draft.kind(), RecordKind::Decision | RecordKind::Note) {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq",
+        Record::COLUMNS
+    ))?;
+    let records = stmt
+        .query_map([context.as_str()], Record::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let Some(highest) = records.last().map(|(seq, _)| *seq) else {
+        return Ok(None);
+    };
+    let retired = super::inforce::retired(conn, context)?;
+    let found = super::inforce::in_force_without(&records, highest, &retired)
+        .into_iter()
+        .find(|(_, r)| {
+            r.kind() == draft.kind()
+                && r.text.trim() == text.trim()
+                && r.supersedes() == draft.supersedes()
+        })
+        .cloned();
+    Ok(found)
+}
+
 /// §4.6 "A write": `supersedes` names an existing record of a kind the writing
-/// record may supersede (`supersedes_invalid` otherwise), `question` an existing question; and an answer's question has no answer yet (§3.5).
+/// record may supersede (`supersedes_invalid` otherwise).
 fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<(), CpdError> {
-    let exists = |id: &RecordId, kind: RecordKind| -> rusqlite::Result<bool> {
-        conn.query_row(
-            "SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2 AND kind = ?3",
-            params![context.as_str(), id.to_string(), kind.as_str()],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|found| found.is_some())
-    };
-    let not_found = |id: &RecordId, kind: RecordKind| {
-        CpdError::new(
-            ErrorCode::RecordNotFound,
-            format!("Context {context} has no {} {id}.", kind.as_str()),
-        )
-        .with("context", context.as_str())
-        .with("record", id.to_string())
-        .with("kind", kind.as_str())
-    };
-    if let Some(id) = draft.supersedes() {
+    let mut seen = Vec::new();
+    for id in draft.supersedes() {
+        if seen.contains(&id) {
+            return Err(CpdError::new(
+                ErrorCode::SupersedesInvalid,
+                format!("{id} is named twice in --supersedes."),
+            )
+            .with("record", id.to_string()));
+        }
+        seen.push(id);
         let found: Option<String> = conn
             .query_row(
                 "SELECT kind FROM context_records WHERE context = ?1 AND id = ?2",
@@ -331,30 +399,47 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
             .with("allowed", allowed));
         }
     }
-    match draft {
-        Draft::Answer { question } => {
-            if !exists(question, RecordKind::Question)? {
-                return Err(not_found(question, RecordKind::Question));
-            }
-            let answer: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM context_records WHERE context = ?1 AND kind = 'answer' AND question = ?2 ORDER BY seq LIMIT 1",
-                    params![context.as_str(), question.to_string()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match answer {
-                Some(answer) => Err(CpdError::new(
-                    ErrorCode::QuestionAnswered,
-                    format!("Question {question} is already answered by {answer}."),
-                )
-                .with("question", question.to_string())
-                .with("answer", answer)),
-                None => Ok(()),
-            }
-        }
-        _ => Ok(()),
+    Ok(())
+}
+
+/// The in-force records of the Context that the text of a decision or note names after a supersession verb, that the
+/// draft may supersede and does not list: `supersedes_unlinked`.
+fn check_prose(
+    conn: &Connection,
+    context: &ContextId,
+    draft: &Draft,
+    text: &str,
+) -> Result<(), CpdError> {
+    let writer = draft.kind();
+    if superseding(writer).is_empty() {
+        return Ok(());
     }
+    let named = prose_supersession_targets(text);
+    if named.is_empty() {
+        return Ok(());
+    }
+    let state = State::read(conn, context)?;
+    let in_force = state.in_force_ids();
+    let unlisted: Vec<String> = named
+        .iter()
+        .filter(|id| {
+            !draft.supersedes().contains(id)
+                && may_supersede(writer, id.kind())
+                && in_force.contains(&id.to_string())
+        })
+        .map(ToString::to_string)
+        .collect();
+    if unlisted.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::SupersedesUnlinked,
+        format!(
+            "The text names {} after a supersession verb, but --supersedes does not list it. Add --supersedes, or --no-supersedes to confirm the text is no supersession.",
+            unlisted.join(", ")
+        ),
+    )
+    .with("ids", unlisted))
 }
 
 /// The `context-record` Event of a record (§5.2).

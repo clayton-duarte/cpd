@@ -9,22 +9,21 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context list` | List the Contexts (§3.2) | Lead, Manager | |
 | `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager, Worker | |
 | `cpd context topics` | List the curated topics in force with their record counts (§3.3a) | Lead, Manager, Worker | |
-| `cpd context search` | Search the Context's records, ranked by the holographic engine (§3.3) | Lead, Manager, Worker | |
-| `cpd context reindex` | Rebuild the Context's holographic engine index (§3.3) | Lead, Manager | |
+| `cpd context search` | Search the Context's records, ranked by in-process full-text search (§3.4) | Lead, Manager, Worker | |
 | `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
 | `cpd context note` | Record a note (§3.4) | Lead, Manager | |
-| `cpd context ask` | Record a question (§3.4) | Lead, Manager | |
-| `cpd context answer` | Record the answer to a question (§3.5) | Lead, Manager | |
 | `cpd context rename` | Change a Context's title (§3.7) | | yes |
 | `cpd context archive` | Archive the Context with its Plans and their Sessions (§3.8) | | yes |
 | `cpd context unarchive` | Unarchive the Context with its Plans and their Sessions (§3.9) | | yes |
 | `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
+| `cpd context curate` | Curate the next record with its neighbours (§3.13a) | Lead | |
 | `cpd context owner` | Set or change the owner of a Context (§3.13) | Lead, Manager | |
 | `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
 | `cpd context curation` | List the pending retirements (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
+| `cpd context reads` | List the Context records Sessions have read or cited (§3.18) | Lead, Manager, Worker | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |
@@ -147,6 +146,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd config tiers` | Set the four Tier keys of config.toml (§14.2a) | | |
 | `cpd config tiers set` | Set the four Tier keys of config.toml (§14.2a) | | yes |
+| `cpd config experimental` | Print or set the Experimental Features (§14.2b) | | yes |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
 | `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
 | `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |

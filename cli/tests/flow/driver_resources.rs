@@ -26,7 +26,6 @@ use serde_json::{Value, json};
 
 use super::driver::{JOB, PLAN, fixture, seed_home, seed_rows, store};
 
-const COMMAND_RECORD: &str = r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
 const OTHER_RECORD: &str = r#"{"by":"attempt","plan":"other","job":"db","attempt":"db-a1","at":"2026-10-26T21:41:00.000Z"}"#;
 
 /// A `Spawn` over the `FakeSpawn` whose `spawn` keeps a copy (a `dup`, the same open file description) of each descriptor of a
@@ -247,7 +246,7 @@ const BOTH: &str = "[resources.e2e-port]\n[resources.db]\n";
 #[test]
 fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_nothing() {
     let w = world(BOTH, &["e2e-port"]);
-    let _other = w.hold("e2e-port", COMMAND_RECORD);
+    let _other = w.hold("e2e-port", &common::command_record());
 
     let run = w.dispatch(JOB);
 
@@ -260,7 +259,7 @@ fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_
     assert_eq!(w.fx.fakes.spawn.launches_but_janitor(), []);
     assert_eq!(
         fs::read_to_string(w.lock("e2e-port")).unwrap(),
-        COMMAND_RECORD
+        common::command_record()
     );
 }
 
@@ -268,7 +267,7 @@ fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_
 fn resource_hold_taking_is_all_or_none_across_two_resources() {
     let w = world(BOTH, &["db", "e2e-port"]);
     // `db` sorts first and is free: the starter takes it, finds `e2e-port` held, and must not keep `db`.
-    let _other = w.hold("e2e-port", COMMAND_RECORD);
+    let _other = w.hold("e2e-port", &common::command_record());
 
     let error = refused(&w.dispatch(JOB), "resource_busy", 3);
 
@@ -308,7 +307,7 @@ fn resource_hold_job_dispatch_refuses_resource_busy_and_changes_nothing() {
 #[test]
 fn resource_hold_job_show_has_no_waiting_for_on_other_jobs() {
     let w = world(BOTH, &["db", "e2e-port"]);
-    let _held = w.hold("e2e-port", COMMAND_RECORD);
+    let _held = w.hold("e2e-port", &common::command_record());
     // A queued Job that lists none, a running one and a cancelled one that list some.
     add_job(&w.fx, "plain", &[]);
     add_job(&w.fx, "running", &["e2e-port"]);

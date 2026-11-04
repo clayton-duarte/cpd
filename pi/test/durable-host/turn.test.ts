@@ -93,6 +93,15 @@ test("context updates are stored before the input of a turn when cpd has news", 
   assert.ok(board >= 0 && f.calls.slice(board + 1).every((c) => key(c) !== "events-list"), "the board posts are taken last");
 });
 
+test("the turn-start records read is marked pushed", async () => {
+  const recordEvent = { id: 201, kind: "context-record", data: { record: "hs-n1", kind: "note", machine: "hs", seq: 5 } };
+  const f = fake(seat(), { ...news, "events-list": { ok: true, events: [recordEvent], next: 201 } });
+  await prepareTurn(f.port, newTurnState());
+  const shows = f.calls.filter((c) => key(c) === "context-show" && c.includes("--since"));
+  assert.ok(shows.length > 0, "the records were read");
+  for (const c of shows) assert.equal(c[c.length - 1], "--pushed", `the last argument of ${c.join(" ")}`);
+});
+
 test("no context update is stored when cpd has no news", async () => {
   const f = fake(seat(), { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [] }, "plan-show": { ok: true, jobs: [], workflows: [] } });
   await prepareTurn(f.port, newTurnState());

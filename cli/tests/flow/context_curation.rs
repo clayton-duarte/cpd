@@ -85,7 +85,7 @@ fn retire(fx: &Fx, flag: &str, ids: &str) -> common::Run {
 }
 
 fn shown(fx: &Fx) -> Value {
-    fx.cpd(&["context", "show", "--context", CTX]).ok()
+    fx.cpd(&["context", "show", "--context", CTX, "--all"]).ok()
 }
 
 fn item_line(md: &str, id: &str) -> String {

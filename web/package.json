@@ -14,6 +14,9 @@
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0"
+  },
   "devDependencies": {
     "@shadcn/react": "0.3.1",
     "@tailwindcss/vite": "4.3.3",

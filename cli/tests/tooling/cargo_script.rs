@@ -124,6 +124,69 @@ fn wrapper_path(tmp: &Path, with_sccache: bool) -> PathBuf {
 
 const NO_VARS: &[(&str, &str)] = &[];
 
+/// A PATH dir holding a fake cargo that prints the `CARGO_INCREMENTAL` it sees,
+/// and a fake sccache when asked.
+fn incremental_path(tmp: &Path, with_sccache: bool) -> PathBuf {
+    let path_dir = tmp.join("path");
+    fs::create_dir_all(&path_dir).unwrap();
+    write_executable(
+        &path_dir.join("cargo"),
+        "#!/bin/sh\necho CARGO_INCREMENTAL=${CARGO_INCREMENTAL-unset}\n",
+    );
+    if with_sccache {
+        fake_cargo(&path_dir.join("sccache"), "sccache");
+    }
+    path_dir
+}
+
+#[test]
+fn sccache_on_path_exports_cargo_incremental_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = incremental_path(tmp.path(), true);
+    assert_eq!(run_ok(&path_dir, NO_VARS), "CARGO_INCREMENTAL=0\n");
+}
+
+#[test]
+fn a_kept_sccache_wrapper_exports_cargo_incremental_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = incremental_path(tmp.path(), false);
+    assert_eq!(
+        run_ok(&path_dir, &[("RUSTC_WRAPPER", "sccache")]),
+        "CARGO_INCREMENTAL=0\n"
+    );
+}
+
+#[test]
+fn a_preset_cargo_incremental_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = incremental_path(tmp.path(), true);
+    for value in ["1", ""] {
+        assert_eq!(
+            run_ok(&path_dir, &[("CARGO_INCREMENTAL", value)]),
+            format!("CARGO_INCREMENTAL={value}\n")
+        );
+    }
+}
+
+#[test]
+fn without_sccache_cargo_incremental_stays_unset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = incremental_path(tmp.path(), false);
+    assert_eq!(run_ok(&path_dir, NO_VARS), "CARGO_INCREMENTAL=unset\n");
+}
+
+#[test]
+fn another_rustc_wrapper_leaves_cargo_incremental_unset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = incremental_path(tmp.path(), true);
+    for wrapper in ["other", ""] {
+        assert_eq!(
+            run_ok(&path_dir, &[("RUSTC_WRAPPER", wrapper)]),
+            "CARGO_INCREMENTAL=unset\n"
+        );
+    }
+}
+
 #[test]
 fn sccache_on_path_becomes_the_rustc_wrapper() {
     let tmp = tempfile::tempdir().unwrap();

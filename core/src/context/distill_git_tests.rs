@@ -59,7 +59,7 @@ fn decision(seq: i64, text_id: &str) -> Indexed {
         seq,
         text_id,
         "Use it.",
-        Draft::Decision { supersedes: None },
+        Draft::Decision { supersedes: vec![] },
     )
 }
 

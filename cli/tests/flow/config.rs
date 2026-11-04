@@ -60,15 +60,8 @@ fn config_defaults_context_distill_tier_to_gx() {
             "worker_tier": "H3",
             "lead_pi_packages": [],
             "pi_adapter": "",
-            "worker_runner": "pi",
             "lead_runner": "pi",
             "manager_runner": "pi",
-            "context_engine_enabled": true,
-            "context_engine_bridge": "",
-            "context_engine_python": "",
-            "context_engine_dir": "",
-            "context_engine_timeout_ms": 30000,
-            "context_engine_reindex_timeout_ms": 600000,
             "timeouts": {
                 "attempt_minutes": 30,
                 "ask_minutes": 60,
@@ -92,7 +85,8 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
             },
             "events": {"poll_ms": 200},
-            "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
+            "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"},
+            "experimental": {"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true}
         })
     );
 }
@@ -122,6 +116,17 @@ fn config_refuses_inbox_review_context_as_an_unknown_key() {
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
     assert_eq!(err["details"]["key"], "inbox.review_context");
+}
+
+/// pro-d1: the context_engine_* keys are removed: a config still setting one is refused like every unknown key.
+#[test]
+fn config_refuses_a_removed_context_engine_key_as_unknown() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &format!("{MINIMAL}context_engine_enabled = true\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "context_engine_enabled");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -272,15 +277,13 @@ context_distill_tier = "GX"
 worker_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
-context_engine_enabled = false
-context_engine_bridge = "/b/bridge.py"
-context_engine_python = "/b/venv/bin/python"
-context_engine_dir = "/b/engine"
-context_engine_timeout_ms = 4294967295
-context_engine_reindex_timeout_ms = 1
-worker_runner = "durable"
 lead_runner = "durable"
 manager_runner = "durable"
+[experimental]
+durable_workers = true
+write_curation = false
+failure_triage = false
+turn_question_guard = false
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1
@@ -324,12 +327,6 @@ work_session = "w"
         |v: &Value| -> Vec<String> { v["sources"].as_object().unwrap().keys().cloned().collect() };
     // The table names every key of the schema: the defaults list them all, so a new key cannot be missed.
     assert_eq!(source_keys(&out), source_keys(&defaults));
-    assert_eq!(out["config"]["context_engine_enabled"], false);
-    assert_eq!(out["config"]["context_engine_bridge"], "/b/bridge.py");
-    assert_eq!(out["config"]["context_engine_python"], "/b/venv/bin/python");
-    assert_eq!(out["config"]["context_engine_dir"], "/b/engine");
-    assert_eq!(out["config"]["context_engine_timeout_ms"], 4294967295u32);
-    assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["worker_tier"], "S3");

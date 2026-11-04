@@ -48,8 +48,8 @@ pub struct Team<'a> {
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
 static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
-/// Every condition of the kinds, in the order of the kinds. The only `engine-error` is a stalled `durable` Attempt
-/// (hs-d798, [`stalls`]); the engine's own errors go to the Manager (hs-d314). There is no `job-stuck` (hs-d318: a
+/// Every condition of the kinds, in the order of the kinds. The engine's own errors go to the Manager (hs-d314); a stalled
+/// `durable` Attempt is an `error` Event, not an item. There is no `job-stuck` (hs-d318: a
 /// stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
@@ -107,7 +107,6 @@ pub fn conditions_with(
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
-    all.extend(store.read(stalls)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
 }
@@ -115,47 +114,6 @@ pub fn conditions_with(
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
 /// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
 /// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
-fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
-           JOIN plans p ON p.id = a.plan
-           JOIN events e ON e.plan = a.plan AND e.attempt = a.id AND e.kind = 'error'
-                AND json_extract(e.data, '$.code') = 'worker_stalled'
-          WHERE a.status <> 'ended'
-          ORDER BY a.plan, a.id",
-    )?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut out = Vec::new();
-    for (plan, context, attempt, job) in rows {
-        let plan = id("Plan id", &plan, PlanId::parse)?;
-        let job = id("Job key", &job, JobKey::parse)?;
-        out.push(Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:driver/worker_stalled/{attempt}"),
-            label: format!("worker stalled: cpd job cancel {job} now, or cpd attempt abort {attempt} once that command lands"),
-            url: None,
-            context: Some(id("Context id", &context, ContextId::parse)?),
-            plan: Some(plan),
-            job: Some(job),
-            session: None,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
-}
-
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     #[derive(serde::Deserialize)]
     struct Cache {
@@ -650,7 +608,7 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 ///
 /// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
-/// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
+/// as they are, and no `engine-error` is opened (hs-d314: the failure goes to an `error` Event). A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
 fn review_requested(
     store: &mut Store,
@@ -663,8 +621,8 @@ fn review_requested(
     };
     let cache = match team::read_cache(home) {
         Ok(Some(cache)) => cache,
-        Ok(None) => return kept_review_items(store, None),
-        Err(e) => return kept_review_items(store, Some(&e)),
+        Ok(None) => return kept_review_items(store),
+        Err(_) => return kept_review_items(store),
     };
     let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
     let posts: Vec<&Post> = cache
@@ -678,7 +636,7 @@ fn review_requested(
     let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
     let lookup = match (team.github)(&refs) {
         Ok(lookup) => lookup,
-        Err(e) => return kept_review_items(store, Some(&e)),
+        Err(_) => return kept_review_items(store),
     };
     let read = |p: &Post| -> Option<&GhPr> {
         lookup
@@ -687,11 +645,7 @@ fn review_requested(
             .and_then(Option::as_ref)
     };
     if posts.iter().all(|p| read(p).is_none()) {
-        let none = CpdError::new(
-            ErrorCode::GhFailed,
-            "GitHub could not read any pull request posted in the team channel.",
-        );
-        return kept_review_items(store, Some(&none));
+        return kept_review_items(store);
     }
     let settled = settled_review_subjects(store)?;
     Ok(posts
@@ -745,35 +699,14 @@ fn settled_review_subjects(
     })
 }
 
-/// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.
-fn kept_review_items(
-    store: &mut Store,
-    why: Option<&CpdError>,
-) -> Result<Vec<Condition>, CpdError> {
-    let mut out: Vec<Condition> = store
+/// The open `review-requested` items as conditions (nothing changes), so a transient failure does not close them.
+fn kept_review_items(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
+    Ok(store
         .read(open_items)?
         .iter()
         .filter(|i| i.kind == Kind::ReviewRequested)
         .map(Condition::from)
-        .collect();
-    if let Some(e) = why {
-        let code = e.code().as_str();
-        out.push(Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:E8/team-review/{code}"),
-            label: format!("team review: {code}"),
-            url: None,
-            context: None,
-            plan: None,
-            job: None,
-            session: None,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
+        .collect())
 }
 
 /// `models-changed`: each provider file whose `changes.at` is within [`models::WINDOW`] and whose announced part is not empty.
@@ -1527,53 +1460,6 @@ mod tests {
         }
     }
 
-    // ---- question ----
-
-    /// A record of `kind` in `context` (made if need be); an `answer` answers `hs-q1`.
-    fn record(f: &mut Fixture, context: &str, id: &str, kind: &str) {
-        let a = if kind == "answer" { "'hs-q1'" } else { "NULL" };
-        f.sql(&format!(
-            "INSERT OR IGNORE INTO contexts (id, title, created_at, created_on) VALUES ('{context}', 'C', '{T}', 'm1');
-             INSERT INTO context_records (context, id, kind, at, machine, text, question)
-             VALUES ('{context}', '{id}', '{kind}', '{T}', 'hs', 't', {a});"
-        ));
-    }
-
-    #[test]
-    fn an_open_context_question_yields_no_condition() {
-        let mut f = fixture("dispatch");
-        record(&mut f, "ctx", "hs-q1", "question");
-        record(&mut f, "ctx", "hs-d1", "decision");
-        assert!(f.of(Kind::Question).is_empty());
-        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
-    }
-
-    /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
-    /// next reconcile, its condition no longer holding. The kind stays in the table's check for such history rows.
-    #[test]
-    fn an_open_question_item_an_older_engine_opened_is_closed_by_the_next_reconcile() {
-        let mut f = fixture("dispatch");
-        record(&mut f, "ctx", "hs-q1", "question");
-        f.sql(&format!(
-            "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
-             VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
-        ));
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
-        let open: i64 = f
-            .store
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT count(*) FROM inbox_items WHERE closed_at IS NULL",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .unwrap();
-        assert_eq!(open, 0);
-    }
-
     // ---- pull requests ----
 
     /// An open, authored, non-draft pull request `acme/shop#n` with the given checks, mergeable and review values.
@@ -2299,7 +2185,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_cache_keeps_the_items_and_says_so() {
+    fn an_unreadable_cache_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2323,17 +2209,9 @@ mod tests {
                 .count(),
             1
         );
-        let error = all
-            .iter()
-            .find(|c| c.kind == Kind::EngineError)
-            .expect("an engine-error condition");
-        assert_eq!(
-            (error.urgency, error.subject.as_str(), error.label.as_str()),
-            (
-                Urgency::Red,
-                "error:E8/team-review/store_failed",
-                "team review: store_failed"
-            )
+        assert!(
+            all.iter().all(|c| c.kind != Kind::EngineError),
+            "no engine-error for an unreadable cache"
         );
         std::fs::write(
             f.home.run_dir().join("team-review.json"),
@@ -2349,14 +2227,18 @@ mod tests {
             Some(team(&mut |_| panic!("unreadable"))),
         )
         .unwrap();
-        assert!(
-            all.iter().any(|c| c.kind == Kind::EngineError),
-            "another version is unreadable too"
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1,
+            "another version is unreadable too: kept"
         );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
-    fn a_github_that_fails_keeps_the_items_and_says_so() {
+    fn a_github_that_fails_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2382,12 +2264,7 @@ mod tests {
             1,
             "kept"
         );
-        assert_eq!(
-            all.iter()
-                .find(|c| c.kind == Kind::EngineError)
-                .map(|c| c.subject.as_str()),
-            Some("error:E8/team-review/gh_failed")
-        );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
@@ -2437,7 +2314,31 @@ mod tests {
             1,
             "every Workflow unreadable: the queue stays"
         );
-        assert!(all.iter().any(|c| c.kind == Kind::EngineError));
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
+    }
+
+    /// A `worker_stalled` Event is an `error` Event that wakes the Lead, and opens no Inbox item: no `engine-error`
+    /// condition for a running `durable` Attempt that stalled.
+    #[test]
+    fn a_worker_stalled_event_opens_no_engine_error_item() {
+        let mut f = fixture("dispatch");
+        f.job("w", "running");
+        f.sql(&format!(
+            "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, runner)
+             VALUES ('pay', 'w-a1', 'w', 1, 'S2', 'ladder', 'running', 'cpd/pay--w-a1', '/w', '{T}', 'durable');
+             INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+             VALUES (cpd_txn(), '{T}', 'error', 'ctx', 'pay', 'w', 'w-a1', 'x',
+                     '{{\"source\":\"driver\",\"code\":\"worker_stalled\",\"details\":{{\"attempt\":\"w-a1\",\"minutes\":1}}}}');"
+        ));
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&Kind::EngineError),
+            "a worker_stalled Event opens no engine-error item: {kinds:?}"
+        );
     }
 
     // ---- all together ----

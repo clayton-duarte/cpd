@@ -20,7 +20,7 @@ pub fn worker_runner(config: &Config) -> Check {
 
 /// [`worker_runner`] on `runner`.
 pub fn worker_runner_with(config: &Config, runner: &dyn Runner) -> Check {
-    if config.worker_runner == WorkerRunner::Pi {
+    if config.worker_runner() == WorkerRunner::Pi {
         return Check::pass(NAME, Severity::Error);
     }
     let dir = match config.pi_adapter_dir() {

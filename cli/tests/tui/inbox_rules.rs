@@ -139,19 +139,6 @@ fn a_lead_waiting_for_a_worker_opens_no_dialog_and_its_reply_turn_is_unread_hs_d
     assert_eq!(items[0].kind, Kind::Dialog);
 }
 
-#[test]
-fn a_question_opens_no_item_hs_d306() {
-    let fx = Fx::with_ports();
-    let env = &fx.env;
-    setup(&fx);
-    fx.cpd(&["context", "ask", "Why?", "--context", "ctx"]).ok();
-    assert!(found(env).is_empty());
-
-    fx.cpd(&["context", "answer", "hs-q1", "Because.", "--context", "ctx"])
-        .ok();
-    assert!(found(env).is_empty());
-}
-
 /// hs-d314: the engine's errors go to the Manager, not the Inbox, so E8 computes no `engine-error`, and an item an
 /// older engine opened for one closes at the next reconcile.
 #[test]

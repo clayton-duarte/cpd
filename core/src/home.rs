@@ -118,6 +118,11 @@ impl CpdHome {
         self.root.join("cpd.db")
     }
 
+    /// `vectors.db`: the derived vector cache of write-time curation (contract §4.6); `-wal` and `-shm` live beside it.
+    pub fn vectors_db(&self) -> PathBuf {
+        self.root.join("vectors.db")
+    }
+
     /// `contexts/`: the git stores of earlier versions, one folder per Context.
     /// Only migration 0007 reads it (contract §4.5); nothing creates it.
     pub fn old_contexts_dir(&self) -> PathBuf {
@@ -319,9 +324,12 @@ impl CpdHome {
     /// `run/<plan>/durable/<attempt>.sqlite`: a `durable` Worker's transcript, appended by its host every turn
     /// (contract §6.12 `storePath`). The driver watches it for the stall rule (§3.4 A4, hs-d798).
     pub fn durable_store(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan)
-            .join("durable")
-            .join(format!("{attempt}.sqlite"))
+        self.durable_dir(plan).join(format!("{attempt}.sqlite"))
+    }
+
+    /// `run/<plan>/durable`: the directory of a Plan's `durable` Worker transcripts.
+    pub fn durable_dir(&self, plan: &PlanId) -> PathBuf {
+        self.plan_dir(plan).join("durable")
     }
 
     /// `run/<plan>/logs/attempt-<attempt>.log`: the Attempt driver's stderr.

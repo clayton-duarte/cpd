@@ -110,6 +110,15 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
 
     let home = env.home.clone();
     let decision = env.store.read(|conn| decide(conn, &home, &plan, &wanted))?;
+    let spec_text = wanted.spec.as_ref().map(|s| {
+        [
+            s.goal.as_str(),
+            s.context.as_str(),
+            &s.acceptance.join("\n"),
+            &s.out_of_scope.join("\n"),
+        ]
+        .join("\n")
+    });
     let (job, already) = match decision {
         Decision::Already(job) => (job, true),
         Decision::Insert(_) => env.store.write(COMMAND, |tx| {
@@ -148,11 +157,33 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
+    if let (false, Some(text)) = (already, spec_text) {
+        mark_spec_reads(&mut env.store, &plan, &text);
+    }
     let mut out = json!({"job": {"key": job.key, "pr": job.workflow, "kind": job.kind, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "urgent": job.urgent}});
     if already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// Best-effort: the Session that added the Job used the records its Spec cites.
+fn mark_spec_reads(store: &mut crate::store::Store, plan: &PlanId, text: &str) {
+    let Some(session) = crate::context::Contexts::env_session(store) else {
+        return;
+    };
+    let context = store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT context FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get::<_, String>(0),
+        )?)
+    });
+    if let Ok(context) = context
+        && let Ok(context) = crate::ids::ContextId::parse(&context)
+    {
+        crate::context::Contexts::mark_cited(store, &context, &session, text);
+    }
 }
 
 /// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1).

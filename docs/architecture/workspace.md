@@ -2,8 +2,7 @@
 
 This note documents the worktree lifecycle cpd uses to run work: the **Lead Branch** and
 **Lead worktree** of one Workflow, the worktree of an Attempt, and the two clean-up paths
-— the `janitor` and `prune`. It documents the model's item 7 (`hs-d802`,
-`cpd context show --record hs-d802`), verified in
+— the `janitor` and `prune`. It documents the model's item 7 (`hs-d802` (a record of machine `hs`)), verified in
 [architecture-verification.md §7](../research/architecture-verification.md), which also
 records where the model's "per-attempt worktrees" is only partly true. Related notes:
 [[sdk]] (the engine that starts and cleans worktrees), [[job-lifecycle]] (the states a Job
@@ -93,16 +92,18 @@ is renamed aside, pruned, branch-deleted and deleted, idempotently ([contract
 `lead_worktree` is cleared and its worktrees and branches are removed by the next pass
 ([contract §7.1](../contract.md)).
 
+**The prune** (pro-d378, the same pass, before that clean-up) removes two whole directories, idempotently and with no Event: the `target` directory of the Lead of each `open`, `merged` or `cancelled` Workflow that has no queued or running Job and no Attempt starting, running or merging (the Lead worktree, its branch and its sources stay), and `run/<plan>/durable` of each archived or deleted Plan whose Attempts are all ended ([commands §29](../commands.md) §4a, [contract §3.7](../contract.md) E16, [contract §7.2](../contract.md)). Each removal is one `pruned` entry of the pass's output and one line in `run/janitor.log`.
+
 **`prune`** is the by-hand clean-up of leftover worktrees whose work already reached
 `origin/main`, run by the Manager after a Plan ([commands §23](../commands.md)). Its rules
 are `keep active / keep dirty / remove dropped / remove (HEAD an ancestor of origin/main, or
 a merged pull request's head) / keep not merged`; without `--apply` it prints what it would
 do ([commands §23](../commands.md)). It is the successor of
 [scripts/prune-worktrees.sh](../../scripts/prune-worktrees.sh), and the script now only
-`exec cpd prune "$@"` ([commands §23](../commands.md)). The janitor acts only on merged and
+`exec cpd prune "$@"` ([commands §23](../commands.md)). The janitor's worktree clean-up acts only on merged and
 cancelled Workflows (and swept Attempts); `prune` decides by what reached `origin/main` and
-takes `--drop` ([commands §29](../commands.md), [commands §23](../commands.md)). Both act
-on worktrees and branches only and touch no remote branch ([commands §23](../commands.md),
+takes `--drop` ([commands §29](../commands.md), [commands §23](../commands.md)). `prune` acts on
+worktrees and branches only; neither it nor the janitor touches a remote branch ([commands §23](../commands.md),
 [commands §29](../commands.md)).
 
 ## Sources
@@ -118,4 +119,4 @@ on worktrees and branches only and touch no remote branch ([commands §23](../co
 - [CONTEXT — Lead worktree](../CONTEXT.md), [CONTEXT — Attempt](../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 7
-- `hs-d802` (`cpd context show --record hs-d802`) — the model
+- `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model

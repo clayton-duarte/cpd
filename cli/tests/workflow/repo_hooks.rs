@@ -337,6 +337,7 @@ impl Core {
             catalog: &catalog,
             source: "hooks test",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         let attempt = AttemptId::parse("api-a1").unwrap();
         let mut store = Store::open(&home, 5000).unwrap();

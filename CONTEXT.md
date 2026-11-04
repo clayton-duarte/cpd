@@ -23,12 +23,18 @@ An entry is a bold term, a parenthesis with its kind and the Context record that
 The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
+**Neighbour curation** (mechanism, Experimental Feature `write_curation`):
+Checking a new Context record against its nearest in-force records at write time. It proposes pending retirements only; the User approves them. Contract §4.6.
+
+**Vector cache** (entity):
+`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
+
 **Permanent Context** (entity, pro-d338):
 One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.
 _Avoid_: default Context, system Context
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede others: `--supersedes` may repeat, and prose that says a record is superseded without linking it is refused, contract §4.6), a note, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
 
 **Context store**:
@@ -36,7 +42,7 @@ A Context's records, held only in the machine's database (tables `contexts` and 
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
-The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (search over all records), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
+The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (in-process full-text search over all records, no engine to install), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
@@ -174,7 +180,7 @@ The third stage: Documenting, Red testing, Implementing, Verifying and Deploying
 Reading the Context's records and the User's material (`context show`, `context note`).
 
 **Grilling** (step, pro-d146):
-The interview with the User, with `ask_user_question`, until unknowns are minimised (`context ask`, `context decide`).
+The interview with the User, with `ask_user_question`, until unknowns are minimised (`context decide`).
 
 **Clarifying** (step, pro-d146):
 Restating the Requirements, writing the records, and listing the assumptions the User accepts (`context decide`, `context note`).
@@ -278,7 +284,7 @@ The name of an agent in cpd's one hierarchy, Manager > Lead > Worker, mapped 1:1
 _Avoid_: `<context>-manager`, a free-text name for a Lead or a Worker
 
 **Worker runner** (term, pro-d165):
-What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by the config key `worker_runner` when an Attempt is created and stored on it; both are kept.
+What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by `durable_workers` in the `[experimental]` table of config.toml (contract §8.2), read through `Config::worker_runner()` when an Attempt is created and stored on it; both are kept.
 _Avoid_: engine, backend
 
 **Brief** (entity, B3):
@@ -351,6 +357,10 @@ _Avoid_: tool server, plugin
 **Attach** (mechanism, pro-d2, pro-d8):
 Giving an MCP server to one Session, explicitly with `cpd mcp attach <name>` (commands.md §24.1): not saved and never by default. Not tmux's attach (`cpd tui --attach`).
 _Avoid_: enable, load; install (as a word for it)
+
+**Experimental Feature** (term, pro-d366, pro-d367):
+A feature that is not permanent and can be turned on or off depending on how the User evaluates it. Its config lives only in the `[experimental]` table of config.toml, one bool key per feature (contract §8.2): `durable_workers` (the Worker runner), `write_curation`, `failure_triage` and `turn_question_guard`. The commands that show and set them are in commands.md §14.2b.
+_Avoid_: flag, beta; toggle (for a setting that is permanent)
 
 ## Checks and gates
 

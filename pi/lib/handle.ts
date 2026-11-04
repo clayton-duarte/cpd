@@ -1,5 +1,5 @@
 import { CpdError, installedIdentity, isObject } from "./cpd.ts";
-import { eventMessage, FOLLOW_UP, gated, STEER, leadRule, sessionMessage } from "./delivery.ts";
+import { eventMessage, FOLLOW_UP, gated, send, STEER, leadRule, sessionMessage } from "./delivery.ts";
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
@@ -91,7 +91,7 @@ export const MENTION_KINDS: ReadonlySet<string> = new Set([
 function deliverOnce(host: Host, r: Run, ev: CpdEvent, message: Parameters<typeof host.pi.sendMessage>[0], options: Parameters<typeof gated>[1]): void {
   if (r.delivered.has(ev.id)) return;
   r.delivered.add(ev.id);
-  host.pi.sendMessage(message, gated(r, options));
+  send(host, r, message, options);
 }
 
 async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {

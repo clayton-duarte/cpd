@@ -47,9 +47,14 @@ test("message: 1 record, in full, with its date; answers and supersedes name the
 
   const both = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [
     record(1, { id: "hs-n1", kind: "answer", text: "Yes.", question: "hs-q8" }),
-    record(2, { kind: "decision", text: "One table.", supersedes: "hs-d12" }),
+    record(2, { kind: "decision", text: "One table.", supersedes: ["hs-d12"] }),
   ])!;
   assert.deepEqual(both.content.split("\n").slice(1), ["- hs-n1 answer (2026-10-17 UTC): Yes. Answers hs-q8.", "- hs-n2 decision (2026-10-17 UTC): One table. Supersedes hs-d12."]);
+});
+
+test("message: a record superseding several records names every target", () => {
+  const m = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { kind: "decision", text: "One table.", supersedes: ["hs-d12", "hs-d13"] })])!;
+  assert.equal(m.content.split("\n")[1], "- hs-n1 decision (2026-10-17 UTC): One table. Supersedes hs-d12, hs-d13.");
 });
 
 test("message: a brief is shown short: its first line and its Plan, never the rest", () => {
@@ -138,7 +143,7 @@ test("a Manager's run with 3 new records by others gets one cpd-context message,
   assert.deepEqual(m.details.records, ["hs-n1", "hs-n2", "hs-n3"]);
   assert.deepEqual(recordCalls(f), [
     ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "100"],
-    ["context", "show", "--context", "ctx", "--since", String(SEQ0)],
+    ["context", "show", "--context", "ctx", "--since", String(SEQ0), "--pushed"],
   ]);
   assert.deepEqual(f.pi.sent, [], "it only returns the message: nothing is sent, so no turn");
 });

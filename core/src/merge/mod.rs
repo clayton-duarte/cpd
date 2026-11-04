@@ -17,12 +17,16 @@ mod linear_tests;
 #[path = "touches_tests.rs"]
 mod touches_tests;
 
+#[cfg(test)]
+mod triage_tests;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::attempt::ledger::{self, GateFacts, Stage};
+use crate::attempt::ledger::{self, GateFacts, Stage, Triage, TriageLabel};
+use crate::classifier::{Choice, Chosen, ClassifierPort, Label, PiClassifier};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Pipeline, run::run};
@@ -53,6 +57,56 @@ pub struct Ctx<'a> {
     pub source: &'a str,
     /// A9's `metrics` of an Attempt, recorded in the transaction that ends it.
     pub metrics: &'a dyn Fn(&Attempt) -> Option<Value>,
+    /// Gate failure triage (§3.4): asked once when an Attempt ends `gate_failed` and the flag is on.
+    pub classifier: &'a dyn ClassifierPort,
+}
+
+/// The real [`ClassifierPort`] for the merge: `PiClassifier` over `ports.runner` with `<pi adapter>/lib/classify.ts` and
+/// pi's agent directory (as `models::helper` finds them). When either cannot be found the classifier answers
+/// `classifier_unreachable` on every call, which the triage treats as no verdict.
+pub fn real_classifier(
+    config: &Config,
+    home: &CpdHome,
+    ports: &crate::ports::Ports,
+) -> Box<dyn ClassifierPort> {
+    let found = config
+        .pi_adapter_dir()
+        .and_then(|dir| crate::config::locate_pi().map(|pi| (dir, pi.agent_dir)));
+    match found {
+        Ok((dir, agent_dir)) => Box::new(PiClassifier::new(
+            ports.runner.clone(),
+            dir.join("lib").join("classify.ts"),
+            agent_dir,
+            home,
+        )),
+        Err(e) => Box::new(NoClassifier(e.message().to_owned())),
+    }
+}
+
+/// A shared fake classifier that always errs `classifier_unreachable`: no verdict, for callers that build a [`Ctx`] and do
+/// not test the triage.
+#[cfg(any(test, feature = "fakes"))]
+pub fn no_verdict_classifier() -> &'static crate::fakes::classifier::FakeClassifier {
+    static NONE: std::sync::LazyLock<crate::fakes::classifier::FakeClassifier> =
+        std::sync::LazyLock::new(|| {
+            crate::fakes::classifier::FakeClassifier::new(vec![Err(CpdError::new(
+                ErrorCode::ClassifierUnreachable,
+                "no classifier",
+            ))])
+        });
+    &NONE
+}
+
+/// A classifier that cannot be built: every question is `classifier_unreachable`.
+struct NoClassifier(String);
+
+impl ClassifierPort for NoClassifier {
+    fn choose(&self, _q: &Choice) -> Result<Chosen, CpdError> {
+        Err(CpdError::new(
+            ErrorCode::ClassifierUnreachable,
+            self.0.clone(),
+        ))
+    }
 }
 
 /// The result of [`merge`].
@@ -88,7 +142,7 @@ pub fn merge(
         .with("attempt", attempt.to_string())
         .with("status", target.status));
     }
-    let stepped = steps(store, ctx.home, ctx.config, &target);
+    let stepped = steps(store, ctx, &target);
     let Stepped {
         end,
         stale,
@@ -185,12 +239,8 @@ fn is_cpd_kind(target: &Attempt) -> bool {
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(
-    store: &mut Store,
-    home: &CpdHome,
-    config: &Config,
-    target: &Attempt,
-) -> Result<Stepped, CpdError> {
+fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, CpdError> {
+    let (home, config) = (ctx.home, ctx.config);
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -440,25 +490,14 @@ fn steps(
             }
         }
         if policy.gate.merge == Gate::Local
-            && let Some(end) = run_gate(
-                home,
-                config,
-                target,
-                Hook::PreCommit,
-                &policy.hooks.pre_commit,
-            )?
+            && let Some(end) =
+                run_gate(home, ctx, target, Hook::PreCommit, &policy.hooks.pre_commit)?
         {
             return Ok(Stepped::ends(end));
         }
         if cpd_kind
             && policy.gate.workflow == Gate::Local
-            && let Some(end) = run_gate(
-                home,
-                config,
-                target,
-                Hook::PreMerge,
-                &policy.hooks.pre_merge,
-            )?
+            && let Some(end) = run_gate(home, ctx, target, Hook::PreMerge, &policy.hooks.pre_merge)?
         {
             return Ok(Stepped::ends(end));
         }
@@ -706,11 +745,65 @@ pub fn gate_text_body(detail: &str) -> Option<String> {
     Some(body)
 }
 
+const TRIAGE_QUESTION: &str = "Why did this Gate fail?";
+
+/// The labels of the triage and what each means (contract §3.4 "Gate failure triage").
+const TRIAGE_LABELS: [Label<'static>; 3] = [
+    Label {
+        name: "code_or_test_defect",
+        definition: "A compile error, a failing test assertion, or a lint, clippy or fmt failure the Worker can fix on a retry.",
+    },
+    Label {
+        name: "spec_or_scope_violation",
+        definition: "Tests tampered, a file modified outside the Job's touches, a missing Spec precondition, or a migration freeze violation: the Lead must change the Job or Spec, or approve tests.",
+    },
+    Label {
+        name: "transient_or_infra",
+        definition: "A timeout, a network or registry hiccup, lock contention, or a tool crash.",
+    },
+];
+
+/// How many of the Gate output's last lines the classifier sees.
+const TRIAGE_TAIL_LINES: usize = 60;
+
+/// The classifier's verdict on a failed Gate; `None` when the flag is off or the classifier gave no usable answer
+/// (a classifier error never fails the merge).
+fn triage(ctx: &Ctx<'_>, target: &Attempt, facts: &GateFacts) -> Option<Triage> {
+    if !ctx.config.experimental.failure_triage {
+        return None;
+    }
+    let lines: Vec<&str> = facts.tail.lines().collect();
+    let tail = lines[lines.len().saturating_sub(TRIAGE_TAIL_LINES)..].join("\n");
+    let state = serde_json::json!({
+        "hook": facts.hook,
+        "command": facts.command,
+        "exit": facts.exit,
+        "tail": tail,
+        "kind": target.kind,
+        "tier": target.tier.to_string(),
+        "touches": target.touches,
+    });
+    let chosen = ctx
+        .classifier
+        .choose(&Choice {
+            state: &state,
+            question: TRIAGE_QUESTION,
+            labels: &TRIAGE_LABELS,
+        })
+        .ok()?;
+    let label = TriageLabel::parse(&chosen.label)?;
+    Some(Triage {
+        label,
+        confidence: chosen.confidence,
+        model: chosen.model,
+    })
+}
+
 /// Runs the Gate `hook` for `target` in its Attempt worktree at HEAD (§7.4 step 6, hs-d679). `None` when it passed or has no
 /// commands; `Some(end)` when it failed (`gate_failed`) or could not be judged (`gate_error`), carrying the hook tail and log.
 fn run_gate(
     home: &CpdHome,
-    config: &Config,
+    ctx: &Ctx<'_>,
     target: &Attempt,
     hook: Hook,
     pipeline: &Pipeline,
@@ -718,6 +811,7 @@ fn run_gate(
     if pipeline.is_empty() {
         return Ok(None);
     }
+    let config = ctx.config;
     let log = home.hook_log(&target.plan, &target.id, hook);
     let timeout = Duration::from_secs(u64::from(config.timeouts.gate_minutes) * 60);
     let operation = git::Operation {
@@ -735,15 +829,21 @@ fn run_gate(
             let tail = result.tail.unwrap_or_default();
             match result.outcome {
                 HookOutcome::Passed => Ok(None),
-                HookOutcome::Failed { exit, command } => Ok(Some(End::GateFailed {
-                    detail: gate_detail(hook, &log, GateEnd::Failed { exit, tail: &tail }),
-                    facts: GateFacts {
+                HookOutcome::Failed { exit, command } => {
+                    let detail = gate_detail(hook, &log, GateEnd::Failed { exit, tail: &tail });
+                    let facts = GateFacts {
                         hook: hook.as_str().to_owned(),
                         command,
                         exit,
                         tail,
-                    },
-                })),
+                    };
+                    let triage = triage(ctx, target, &facts);
+                    Ok(Some(End::GateFailed {
+                        detail,
+                        facts,
+                        triage,
+                    }))
+                }
                 HookOutcome::Error(why) => Ok(Some(End::Failed {
                     cause: Failure::GateError,
                     detail: gate_detail(

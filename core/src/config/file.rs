@@ -53,24 +53,12 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
-    /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
-    pub worker_runner: WorkerRunner,
+    /// The `[experimental]` table (contract §8.2); `durable_workers` picks the Worker runner, see [`Config::worker_runner`].
+    pub experimental: super::Experimental,
     /// The runner of each new Lead Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `manager_runner` (Q11).
     pub lead_runner: WorkerRunner,
     /// The runner of each new Manager Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `lead_runner` (Q11).
     pub manager_runner: WorkerRunner,
-    /// `context_engine_enabled`: the operator kill switch for the holographic engine.
-    pub context_engine_enabled: bool,
-    /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
-    pub context_engine_bridge: String,
-    /// `""` is the venv beside the bridge: see [`Config::context_engine_python_path`].
-    pub context_engine_python: String,
-    /// `""` is `$CPD_HOME/engines/holographic`: see [`Config::context_engine_dir`].
-    pub context_engine_dir: String,
-    /// The deadline of one search/sync spawn.
-    pub context_engine_timeout_ms: u32,
-    /// The deadline of a full reindex spawn.
-    pub context_engine_reindex_timeout_ms: u32,
     pub timeouts: Timeouts,
     pub watch: Watch,
     pub inbox: Inbox,
@@ -236,6 +224,16 @@ impl Watch {
 }
 
 impl Config {
+    /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
+    /// Derived from `experimental.durable_workers`.
+    pub fn worker_runner(&self) -> WorkerRunner {
+        if self.experimental.durable_workers {
+            WorkerRunner::Durable
+        } else {
+            WorkerRunner::Pi
+        }
+    }
+
     /// The four role defaults, ascending (checked at parse).
     pub fn role_tiers(&self) -> RoleTiers {
         RoleTiers {
@@ -294,7 +292,15 @@ impl Config {
             path,
             sources: Sources::new(),
         };
-        r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux", "presets"])?;
+        r.sections_are_tables(&[
+            "timeouts",
+            "watch",
+            "inbox",
+            "events",
+            "tmux",
+            "presets",
+            "experimental",
+        ])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| {
@@ -348,9 +354,21 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| {
-            WorkerRunner::parse(text_of(&v)?)
-        })?;
+        let experimental = {
+            let defaults = super::Experimental::default();
+            let mut flag = |name: &str, default: bool| {
+                r.get(&format!("experimental.{name}"), default, |v| match v {
+                    Value::Boolean(b) => Ok(b),
+                    other => Err(format!("must be a boolean, not {}", other.type_str())),
+                })
+            };
+            super::Experimental {
+                durable_workers: flag("durable_workers", defaults.durable_workers)?,
+                write_curation: flag("write_curation", defaults.write_curation)?,
+                failure_triage: flag("failure_triage", defaults.failure_triage)?,
+                turn_question_guard: flag("turn_question_guard", defaults.turn_question_guard)?,
+            }
+        };
         // The runner of each new Lead and Manager Session (contract §6.19, hs-d754 Q10); independent keys (Q11).
         let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| {
             WorkerRunner::parse(text_of(&v)?)
@@ -358,26 +376,6 @@ impl Config {
         let manager_runner = r.get("manager_runner", WorkerRunner::Pi, |v| {
             WorkerRunner::parse(text_of(&v)?)
         })?;
-
-        let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
-            Value::Boolean(b) => Ok(b),
-            other => Err(format!("must be a boolean, not {}", other.type_str())),
-        })?;
-        let context_engine_bridge = r.get("context_engine_bridge", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_python = r.get("context_engine_python", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_dir = r.get("context_engine_dir", String::new(), |v| {
-            Ok(text_of(&v)?.to_owned())
-        })?;
-        let context_engine_timeout_ms =
-            r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
-        let context_engine_reindex_timeout_ms =
-            r.get("context_engine_reindex_timeout_ms", 600000, |v| {
-                int(v, 1, u32::MAX)
-            })?;
 
         let positive =
             |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
@@ -486,15 +484,9 @@ impl Config {
             worker_tier,
             lead_pi_packages,
             pi_adapter,
-            worker_runner,
+            experimental,
             lead_runner,
             manager_runner,
-            context_engine_enabled,
-            context_engine_bridge,
-            context_engine_python,
-            context_engine_dir,
-            context_engine_timeout_ms,
-            context_engine_reindex_timeout_ms,
             timeouts,
             watch,
             inbox,
@@ -521,59 +513,6 @@ impl Config {
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
         Ok(bin_dir.join("..").join("share").join("cpd").join("pi"))
-    }
-
-    /// The bridge script's path: `context_engine_bridge`, else
-    /// `<dir of the cpd binary>/../share/cpd/holographic/bridge.py` (contract §8.2).
-    /// Whether the default exists is for the engine to say (`engine_missing`).
-    pub fn context_engine_bridge_path(&self) -> Result<PathBuf, CpdError> {
-        if !self.context_engine_bridge.is_empty() {
-            return Ok(PathBuf::from(&self.context_engine_bridge));
-        }
-        let exe = std::env::current_exe().map_err(|e| {
-            CpdError::new(
-                ErrorCode::ConfigInvalid,
-                format!("cannot find the cpd binary to locate the holographic bridge: {e}."),
-            )
-            .with("key", "context_engine_bridge")
-        })?;
-        let bin_dir = exe.parent().expect("an executable path has a parent");
-        Ok(bin_dir
-            .join("..")
-            .join("share")
-            .join("cpd")
-            .join("holographic")
-            .join("bridge.py"))
-    }
-
-    /// The interpreter's path: `context_engine_python`, else `<bridge dir>/venv/bin/python`, the
-    /// dotfiles venv (contract §8.2).
-    pub fn context_engine_python_path(&self) -> Result<PathBuf, CpdError> {
-        if !self.context_engine_python.is_empty() {
-            return Ok(PathBuf::from(&self.context_engine_python));
-        }
-        let bridge = self.context_engine_bridge_path()?;
-        let dir = bridge.parent().expect("a bridge path has a parent");
-        Ok(dir.join("venv").join("bin").join("python"))
-    }
-
-    /// The engine's data directory: `context_engine_dir`, else `$CPD_HOME/engines/holographic`.
-    pub fn context_engine_dir(&self, home: &CpdHome) -> PathBuf {
-        if self.context_engine_dir.is_empty() {
-            home.root().join("engines").join("holographic")
-        } else {
-            PathBuf::from(&self.context_engine_dir)
-        }
-    }
-
-    /// The deadline of one search/sync spawn.
-    pub fn context_engine_timeout(&self) -> Duration {
-        Duration::from_millis(u64::from(self.context_engine_timeout_ms))
-    }
-
-    /// The deadline of a full reindex spawn.
-    pub fn context_engine_reindex_timeout(&self) -> Duration {
-        Duration::from_millis(u64::from(self.context_engine_reindex_timeout_ms))
     }
 }
 
@@ -736,7 +675,15 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 6] = ["timeouts", "watch", "inbox", "events", "tmux", "presets"];
+const KNOWN_SECTIONS: [&str; 7] = [
+    "timeouts",
+    "watch",
+    "inbox",
+    "events",
+    "tmux",
+    "presets",
+    "experimental",
+];
 
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
 fn text_of(value: &Value) -> Result<&str, String> {

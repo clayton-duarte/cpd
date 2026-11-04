@@ -15,7 +15,6 @@ use cpd_core::plan::{jobs, locked_fingerprint};
 use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
-const COMMAND_RECORD: &str = r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
 const POLICY: &str = "[resources.e2e-port]\n[resources.db]\n";
 
 /// The engine in-process for E3: Plan `pay` (PR `repo` of the repo `acme/pay`, whose policy file is `policy`), one slot
@@ -141,7 +140,7 @@ fn all_errors(fx: &Fx) -> i64 {
 fn resource_hold_e3_keeps_a_job_queued_while_its_resource_is_held() {
     let fx = engine(POLICY);
     add(&fx, "api", &["e2e-port"], "");
-    let _other = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _other = hold(&fx, "e2e-port", &common::command_record());
 
     fx.watch_ticks(3).unwrap();
 
@@ -161,7 +160,7 @@ fn resource_hold_e3_starts_the_next_ready_job_past_a_held_one() {
     add(&fx, "api", &["e2e-port"], "");
     add(&fx, "web", &["db"], "");
     add(&fx, "ui", &[], "");
-    let _other = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _other = hold(&fx, "e2e-port", &common::command_record());
 
     fx.watch_first_tick().unwrap();
 
@@ -177,7 +176,7 @@ fn resource_hold_e3_starts_the_next_ready_job_past_a_held_one() {
 fn resource_hold_e3_starts_the_job_when_the_holder_ends() {
     let fx = engine(POLICY);
     add(&fx, "api", &["e2e-port"], "");
-    let other = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let other = hold(&fx, "e2e-port", &common::command_record());
     fx.watch_ticks(2).unwrap();
     assert_eq!((status(&fx, "api"), attempts(&fx)), ("queued".into(), 0));
 
@@ -194,7 +193,7 @@ fn resource_hold_e3_starts_the_job_when_the_holder_ends() {
 fn resource_hold_a_held_resource_is_not_a_spawn_failure() {
     let fx = engine(POLICY);
     add(&fx, "api", &["e2e-port"], "");
-    let other = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let other = hold(&fx, "e2e-port", &common::command_record());
 
     // A long hold: many ticks of virtual time, longer than the longest back-off (300 s).
     fx.watch_ticks(3).unwrap();
@@ -230,7 +229,7 @@ fn resource_hold_an_urgent_job_waits_too() {
         &["e2e-port"],
         &format!("UPDATE jobs SET urgent = 1 WHERE plan = '{PLAN}' AND key = 'hot';"),
     );
-    let other = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let other = hold(&fx, "e2e-port", &common::command_record());
 
     fx.watch_ticks(2).unwrap();
 
@@ -276,7 +275,7 @@ const ATTEMPT_RECORD: &str = r#"{"by":"attempt","plan":"other","job":"db","attem
 fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
     let fx = engine("[resources.e2e-port]\nslots = 2\n");
     add(&fx, "api", &["e2e-port"], "");
-    let _first = hold_slot(&fx, "e2e-port", 1, COMMAND_RECORD);
+    let _first = hold_slot(&fx, "e2e-port", 1, &common::command_record());
     let _second = hold_slot(&fx, "e2e-port", 2, ATTEMPT_RECORD);
 
     fx.watch_ticks(3).unwrap();
@@ -292,7 +291,7 @@ fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
         shown["job"]["waiting_for"],
         json!([{
             "resource": "e2e-port", "scope": "repo", "slots": 2,
-            "holders": [held(COMMAND_RECORD, 1), held(ATTEMPT_RECORD, 2)],
+            "holders": [held(&common::command_record(), 1), held(ATTEMPT_RECORD, 2)],
         }]),
         "the held command slots, each with its slot number, in the shape of `resource list`"
     );
@@ -302,7 +301,7 @@ fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
 fn job_starts_when_one_of_two_slots_is_free() {
     let fx = engine("[resources.e2e-port]\nslots = 2\n");
     add(&fx, "api", &["e2e-port"], "");
-    let _first = hold_slot(&fx, "e2e-port", 1, COMMAND_RECORD);
+    let _first = hold_slot(&fx, "e2e-port", 1, &common::command_record());
 
     fx.watch_first_tick().unwrap();
 
@@ -329,7 +328,7 @@ fn job_starts_when_one_of_two_slots_is_free() {
                 .join("locks/resource.repo.acme.pay.e2e-port.1.lock")
         )
         .unwrap(),
-        COMMAND_RECORD
+        common::command_record()
     );
 }
 
@@ -414,7 +413,7 @@ fn watch_skipped_job_gets_its_skip_order_once_and_keeps_it_across_ticks() {
 fn watch_skip_order_is_cleared_when_the_job_starts() {
     let fx = engine(POLICY);
     add(&fx, "api", &["e2e-port"], "");
-    let holder = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let holder = hold(&fx, "e2e-port", &common::command_record());
     fx.watch_ticks(2).unwrap();
     assert_eq!(
         skipped_n(&fx, "api"),

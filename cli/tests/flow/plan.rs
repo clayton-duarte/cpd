@@ -385,7 +385,9 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     );
 
     // The `plan` record in the Context store: no `repo`; `context show` lists the Plan's PR repos.
-    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let shown = fx
+        .cpd(&["context", "show", "--context", "ctx", "--all"])
+        .ok();
     let record = shown["records"]
         .as_array()
         .unwrap()
@@ -474,7 +476,9 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     .ok();
     fx.cpd(&["workflow", "cancel", "gone", "--plan", "pay"])
         .ok();
-    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let shown = fx
+        .cpd(&["context", "show", "--context", "ctx", "--all"])
+        .ok();
     let record = shown["records"]
         .as_array()
         .unwrap()
@@ -562,7 +566,9 @@ fn new_with_brief(fx: &Fx, id: &str, text: &str) -> Run {
 }
 
 fn briefs(fx: &Fx) -> Vec<Value> {
-    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let shown = fx
+        .cpd(&["context", "show", "--context", "ctx", "--all"])
+        .ok();
     shown["records"]
         .as_array()
         .unwrap()
@@ -608,7 +614,9 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
     assert_eq!(recorded[0]["data"]["record"], "m1-b1");
 
     // `context show` lists it short, under its Plan; `--record` prints it whole.
-    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let shown = fx
+        .cpd(&["context", "show", "--context", "ctx", "--all"])
+        .ok();
     let brief = &briefs(&fx)[0];
     assert_eq!(
         (&brief["text"], &brief["short"], &brief["plan"]),

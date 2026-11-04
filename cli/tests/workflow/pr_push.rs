@@ -289,6 +289,7 @@ impl Fx {
             catalog: &catalog,
             source: "attempt run",
             metrics: &|_| None,
+            classifier: cpd_core::merge::no_verdict_classifier(),
         };
         self.scoped(|| merge::merge(&mut self.store(), &ctx, &plan(), attempt))
             .unwrap()
