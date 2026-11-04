@@ -67,7 +67,7 @@ export function createDurableBackend(deps: {
       const sessionId = session.ref.id;
       const client = await deps.connect(session.socketPath);
       const capabilities = capabilitiesOf(session.tierOptions);
-      const dialect = createDialect(1);
+      const dialect = createDialect(client.welcome.protocol === 1 ? 1 : 2); // assertSupportedHost left only 1 and 2
       const subscriptions: Disposable[] = [];
 
       let disposed = false;
@@ -192,12 +192,12 @@ export function createDurableBackend(deps: {
         send({ type: "session.dialog", sessionId, dialog: result });
       };
 
-      // view and ops frames are applied one at a time, in order: a gap fill awaits the host between two of them.
+      // snapshot/events (protocol 1) and view/ops (protocol 2) frames are applied one at a time, in order: a gap fill awaits the host between two of them.
       let frames: Promise<void> = Promise.resolve();
-      const onStream = async (frame: Extract<HostFrame, { type: "view" | "ops" }>): Promise<void> => {
+      const onStream = async (frame: Extract<HostFrame, { type: "snapshot" | "events" | "view" | "ops" }>): Promise<void> => {
         if (disposed) return;
         let out: ReturnType<typeof dialect.applyIncrement> = { append: [], update: [], deltas: [] };
-        if (frame.type === "view") {
+        if (frame.type === "snapshot" || frame.type === "view") {
           dialect.applyBase(frame);
           out = { ...out, replaced: true };
         } else {
@@ -226,11 +226,19 @@ export function createDurableBackend(deps: {
         emitStatus(false);
       };
 
+      // A frame the dialect or the ops replica refuses is a session error; protocol 2 also detaches (the replica cannot be trusted).
+      const onStreamError = (error: unknown): void => {
+        fail(error);
+        if (client.welcome.protocol === 2 && !disposed) client.detach().catch(() => {}); // best effort: the host may already be closing
+      };
+
       const onLive = (frame: HostFrame): void => {
         switch (frame.type) {
+          case "snapshot":
+          case "events":
           case "view":
           case "ops":
-            frames = frames.then(() => onStream(frame)).catch(fail);
+            frames = frames.then(() => onStream(frame)).catch(onStreamError);
             return;
           case "host_state": {
             busy = frame.state !== "idle";
@@ -262,7 +270,7 @@ export function createDurableBackend(deps: {
         client.onFrame((frame) => {
           if (disposed) return;
           if (ready) return onLive(frame);
-          if (frame.type === "view" && !applied) {
+          if ((frame.type === "snapshot" || frame.type === "view") && !applied) {
             applied = true;
             try {
               dialect.applyBase(frame);

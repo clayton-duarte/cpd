@@ -12,11 +12,14 @@ export interface SocketFactory {
   connect(path: string): Promise<SocketLike>;
 }
 export const PROTOCOL = 2;
+export const MIN_PROTOCOL = 1;
 export const CLIENT_NAME = "cpd-web";
 
 export type HostFrame =
   | { type: "welcome"; protocol: number; host_version: string; pi_durable: string; session: string; role: string; epoch: string; client_id: string; cwd: string; limits: { client_line: number } }
-  | { type: "attached"; req: string; mode: "view" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
+  | { type: "attached"; req: string; mode: "snapshot" | "view" | "resume"; epoch: string; from_seq: number; head_seq: number; client_id: string }
+  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
+  | { type: "events"; epoch: string; seq: number; events: unknown[] }
   | { type: "view"; epoch: string; seq: number; view: unknown }
   | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
   | { type: "result"; req: string; data: Record<string, unknown> }
@@ -32,6 +35,8 @@ export type HostFrame =
 const FRAME_TYPES: ReadonlySet<string> = new Set([
   "welcome",
   "attached",
+  "snapshot",
+  "events",
   "view",
   "ops",
   "result",
@@ -176,7 +181,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       timer.dispose();
       resolve(outcome);
     };
-    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, min_protocol: PROTOCOL, client: CLIENT_NAME })}\n`);
+    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, min_protocol: MIN_PROTOCOL, client: CLIENT_NAME })}\n`);
   });
   onHandshake = null;
   if (first instanceof Error) {
