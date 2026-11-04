@@ -143,18 +143,7 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     }
     let _lock = Lock::take(&home, &context)?;
     let state = store.read(|conn| State::read(conn, &context))?;
-    let agent_dir = locate_pi()?.agent_dir;
-    let lib = config.pi_adapter_dir()?.join("lib");
-    let classifier = PiClassifier::new(
-        ports.runner.clone(),
-        lib.join("classify.ts"),
-        agent_dir,
-        &home,
-    );
-    let judge = BifrostJudge::new(&home, &config, ports.runner.clone());
     let run = Run {
-        classifier: &classifier,
-        judge: &judge,
         home: &home,
         config: &config,
         store: &mut store,
@@ -255,8 +244,6 @@ impl State {
 }
 
 struct Run<'a> {
-    classifier: &'a dyn ClassifierPort,
-    judge: &'a dyn JudgePort,
     home: &'a CpdHome,
     config: &'a Config,
     store: &'a mut Store,
@@ -564,7 +551,50 @@ pub(super) fn verify(
     Ok(Verified { checked, dropped })
 }
 
+/// The classifier and the judge, built on demand.
+pub(super) type Models = (Box<dyn ClassifierPort>, Box<dyn JudgePort>);
+
+/// `verify`, with the models built by `build` only when a duplicate/superseded proposal needs them: a run without
+/// one never builds them (so never locates pi).
+pub(super) fn verify_lazy(
+    build: &dyn Fn() -> Result<Models, CpdError>,
+    state: &State,
+    checked: Checked,
+) -> Result<Verified, CpdError> {
+    if checked
+        .proposals
+        .iter()
+        .all(|p| p.reason == Reason::Documented)
+    {
+        return Ok(Verified {
+            checked,
+            dropped: 0,
+        });
+    }
+    let (classifier, judge) = build()?;
+    verify(classifier.as_ref(), judge.as_ref(), state, checked)
+}
+
 impl Run<'_> {
+    /// Builds kev-4b and the judge; fails loud with `pi_not_found` when pi is not installed.
+    fn models(&self) -> Result<Models, CpdError> {
+        let agent_dir = locate_pi()?.agent_dir;
+        let lib = self.config.pi_adapter_dir()?.join("lib");
+        Ok((
+            Box::new(PiClassifier::new(
+                self.ports.runner.clone(),
+                lib.join("classify.ts"),
+                agent_dir,
+                self.home,
+            )),
+            Box::new(BifrostJudge::new(
+                self.home,
+                self.config,
+                self.ports.runner.clone(),
+            )),
+        ))
+    }
+
     /// The run (contract §4.6 "The distill run"), the lock held.
     fn run(mut self, state: &State, batch_size: usize) -> Result<Value, CpdError> {
         let uncurated = state.uncurated();
@@ -603,7 +633,7 @@ impl Run<'_> {
             Err(Fault::Invalid(problems, kept)) => return Err(self.invalid(upto, &problems, &kept)),
             Err(Fault::Pi(failure, tail)) => return Err(self.pi_failed(upto, &failure, tail)),
         };
-        let Verified { checked, dropped } = verify(self.classifier, self.judge, state, checked)?;
+        let Verified { checked, dropped } = verify_lazy(&|| self.models(), state, checked)?;
         let approved = checked
             .proposals
             .iter()

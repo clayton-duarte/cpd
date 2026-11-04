@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{Checked, State, Verified, verify};
+use super::{Checked, State, Verified, verify, verify_lazy};
 use crate::classifier::Chosen;
 use crate::context::curate::{Judged, Verdict};
 use crate::context::curation::{Approval, Curation, Proposal, Reason, propose_rejecting};
@@ -375,4 +375,29 @@ fn verified_proposals_are_written_approved_with_one_records_retired_event() {
         })
         .unwrap();
     assert_eq!(events, 1);
+}
+
+#[test]
+fn a_run_without_a_duplicate_or_superseded_proposal_builds_no_models() {
+    let documented = proposal("hs-d2", Reason::Documented, DOC, Approval::Pending);
+    let none = checked(&["hs-d2"], vec![documented]);
+    let build = || -> Result<super::Models, CpdError> {
+        Err(CpdError::new(ErrorCode::PiNotFound, "no pi install"))
+    };
+    let v = verify_lazy(&build, &state(), none).unwrap();
+    assert_eq!(v.dropped, 0);
+    assert_eq!(v.checked.proposals.len(), 1);
+    let v = verify_lazy(&build, &state(), checked(&["hs-d2"], vec![])).unwrap();
+    assert_eq!(v.checked.proposals.len(), 0);
+}
+
+#[test]
+fn a_duplicate_proposal_builds_the_models_and_fails_loud_without_pi() {
+    let build = || -> Result<super::Models, CpdError> {
+        Err(CpdError::new(ErrorCode::PiNotFound, "no pi install"))
+    };
+    let e = verify_lazy(&build, &state(), checked(&["hs-d2"], vec![duplicate()]))
+        .err()
+        .unwrap();
+    assert_eq!(e.code(), ErrorCode::PiNotFound);
 }
