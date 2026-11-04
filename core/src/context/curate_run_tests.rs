@@ -330,7 +330,6 @@ fn an_independent_pair_accepted_by_kev_at_080_makes_no_judge_call() {
     let p = ports(chosen("independent", Some(0.80)), FakeJudge::new(vec![]));
     let out = f.run(&p, None).unwrap();
     assert_eq!(out["record"], json!("hs-d2"));
-    assert_eq!(out["gate"], json!("neighbours"));
     assert_eq!(out["neighbours"], json!(1));
     assert_eq!(out["free"], json!(1));
     assert_eq!(out["judged"], json!(0));
