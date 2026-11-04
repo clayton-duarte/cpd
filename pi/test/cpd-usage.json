@@ -182,6 +182,19 @@
     },
     "required": []
   },
+  "context curate": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--record": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context curation": {
     "flags": {
       "--context": true,

@@ -35,7 +35,7 @@ use cpd_core::ids::{JobKey, PlanId};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
-const EXE: &str = "/opt/cpd/bin/cpd";
+pub(super) const EXE: &str = "/opt/cpd/bin/cpd";
 const SECS: fn(u64) -> Duration = Duration::from_secs;
 const MILLIS: fn(u64) -> Duration = Duration::from_millis;
 
@@ -68,10 +68,10 @@ impl Clock for Stepped {
     }
 }
 
-struct World {
-    clock: ManualClock,
+pub(super) struct World {
+    pub(super) clock: ManualClock,
     runner: Arc<FakeRunner>,
-    spawn: Arc<FakeSpawn>,
+    pub(super) spawn: Arc<FakeSpawn>,
     ports: Ports,
     until: Arc<AtomicBool>,
     /// The UTC time of the clock when the world was made.
@@ -125,17 +125,17 @@ fn world_with(
 }
 
 /// A world whose loop never stops by itself.
-fn world() -> World {
+pub(super) fn world() -> World {
     world_with(usize::MAX, |_| {}, |r| r)
 }
 
 impl World {
     /// The time `ms` milliseconds from where the world began, as the store writes it.
-    fn stamp(&self, ms: i64) -> String {
+    pub(super) fn stamp(&self, ms: i64) -> String {
         timestamp(self.start + time::Duration::milliseconds(ms))
     }
 
-    fn advance(&self, d: Duration) {
+    pub(super) fn advance(&self, d: Duration) {
         self.clock.advance(d);
     }
 
@@ -145,19 +145,19 @@ impl World {
         fx.engine.tmux = Tmux::new("testkit").with_runner(self.runner.clone());
     }
 
-    fn launches(&self) -> Vec<Launch> {
+    pub(super) fn launches(&self) -> Vec<Launch> {
         self.spawn.launches()
     }
 
     /// The only `Launch` so far.
-    fn launch(&self) -> Launch {
+    pub(super) fn launch(&self) -> Launch {
         let launches = self.launches();
         assert_eq!(launches.len(), 1, "one launch: {launches:?}");
         launches.into_iter().next().unwrap()
     }
 }
 
-fn fx_on(w: &World, config_extra: &str) -> Fx {
+pub(super) fn fx_on(w: &World, config_extra: &str) -> Fx {
     let mut fx = Fx::new(config_extra);
     w.attach(&mut fx);
     fx
@@ -751,22 +751,26 @@ fn e1_puts_a_waiting_session_back_to_working_and_leaves_an_idle_one_as_it_is() {
 // ---- E9: the distill run is started through the spawn ---------------------------------------------------------------
 
 /// A Context `ctx` whose newest uncurated record was written at `at`; one record is enough (`context_curation_min_records`).
-fn with_a_record(fx: &mut Fx, at: &str) {
+pub(super) fn with_a_record(fx: &mut Fx, at: &str) {
     fx.fixture(&format!("INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'm1-n1', 'note', '{at}', 'm1', 'A note');"));
 }
 
-const CURATION: &str = "context_curation_min_records = 1\n";
+pub(super) const CURATION: &str = "context_curation_min_records = 1\n";
+
+/// Distill's E9 tests are not about curation: the curate tick is off.
+const DISTILL_ONLY: &str =
+    "context_curation_min_records = 1\n[experimental]\nwrite_curation = false\n";
 
 /// A world and an engine with a record that is quiet: written 11 minutes before the clock's now.
 fn quiet_context() -> (World, Fx) {
     let w = world();
-    let mut fx = fx_on(&w, CURATION);
+    let mut fx = fx_on(&w, DISTILL_ONLY);
     w.advance(SECS(11 * 60));
     with_a_record(&mut fx, &w.stamp(0));
     (w, fx)
 }
 
-fn tick_e9(fx: &mut Fx) {
+pub(super) fn tick_e9(fx: &mut Fx) {
     distill::run(&mut fx.engine);
 }
 
@@ -862,7 +866,7 @@ fn e9_takes_the_next_smaller_batch_when_a_run_exited_and_the_state_did_not_chang
 #[test]
 fn e9_waits_until_the_newest_record_is_ten_minutes_old_on_the_clock() {
     let w = world();
-    let mut fx = fx_on(&w, CURATION);
+    let mut fx = fx_on(&w, DISTILL_ONLY);
     with_a_record(&mut fx, &w.stamp(0));
     w.advance(MILLIS(599_999));
     tick_e9(&mut fx);

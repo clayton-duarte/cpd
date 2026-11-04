@@ -58,6 +58,8 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 - `core/src/context/distill.rs`: `context distill` (hs-d549, hs-d551): the lock, batch.md/known.md/docs.md input, the pi run and its timeout, the distiller's output validation and check (FX1-FX3, hs-d549, hs-d551), the `propose` function and retirement (FX2), the `error` Event;
 - `core/src/context/distill_known.rs`: `known_md`, the content of known.md (contract §4.6 step 3): every curated record in force up to `KNOWN_FULL_MAX` = 80, above it the topics in use and the top-`KNOWN_K` = 8 neighbours of each batch record plus the forced records (`curate_neighbours.rs`);
 - `core/src/context/distill_prompt.md`: the distiller's prompt rules (FX9: ids from headers, batch.md record order, duplicate target is older, topic lowercase/digits/dash only, answer short form names question, doc flag rule, four examples, hs-d549, hs-d551), embedded with `include_str!`;
+- `core/src/context/curate_run.rs`: `cpd context curate` (commands.md §3.13a): the command, `next_record`, `curate_with` and `Models`;
+- `engine/src/watch/curate.rs`: the curation tick (contract §3.7 E9), called by E9;
 - engine E9 in `engine/src/watch/distill.rs` (FX4: batch parameter, retry smaller batches 60-30-15-5-1 on failure, hs-d549, hs-d551; it only decides and spawns, as E3 does);
 - paths through new `CpdHome` methods (`context_distill_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
 
