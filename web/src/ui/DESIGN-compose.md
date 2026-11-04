@@ -21,6 +21,7 @@ What ChatPane passes (source field → prop):
 | Prop | Value | Source |
 |---|---|---|
 | `Composer.settings` | `<TierSelector capabilities footer models busy onConfigure onRequestModels />` (props unchanged from Phase 2) | `view.capabilities`, `view.footer`, `view.models`, `view.busy`, `connection.configure`, `connection.listModels` |
+| `Composer.busy` | the computed `busy` of `DESIGN-chat.md` 2.4.3: `view.busy \|\| view.ref?.state === "working" \|\| view.pending.some((p) => p.state === "sending")` | `view.busy`, `view.ref`, `view.pending` (the same value ChatPane passes to `ChatHeader` and `Transcript`) |
 | `Composer.label` | `view.ref?.key ?? view.id` | `SessionRef.key` (`web/src/protocol/domain.ts`) |
 | `Footer.cwd` | `view.ref?.cwd` | `SessionRef.cwd?` |
 | `Footer.sessionKey` | `view.ref?.key ?? view.id` | `SessionRef.key` |
@@ -44,7 +45,7 @@ import type { Attachment, Capabilities, QueuedSubmission, WhenBusy } from "../..
 import type { FileReaderBoundary } from "./attachments.ts";
 
 export function Composer(props: {
-  // KEPT, unchanged
+  // KEPT, unchanged; `busy` is the computed value of DESIGN-chat.md 2.4.3 (ChatPane passes it)
   capabilities: Capabilities | null; busy: boolean; queued: readonly QueuedSubmission[];
   reader: FileReaderBoundary;
   onSubmit(input: { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy }): void;
@@ -67,7 +68,8 @@ Every hook is KEPT unless marked NEW.
 form[aria-label="Composer"][data-drop="idle|over"]                                   KEPT
      className: mx-4 flex flex-col rounded-[10px] border border-input bg-card
                 focus-within:border-ramune-bright
-                data-[drop=over]:border-dashed data-[drop=over]:border-ramune-bright data-[drop=over]:bg-status-focus/10
+                data-[drop=over]:border-dashed data-[drop=over]:border-primary data-[drop=over]:bg-primary/5
+├─ span[data-part="drop-cue"]  "Drop to attach"                  (only while data-drop="over")   NEW   className: px-3 pt-1.5 font-mono text-meta text-primary
 ├─ ul[aria-label="Queued"][data-part="queued-bar"]            (only when queued.length > 0)   NEW data-part
 │    className: m-0 flex list-none flex-wrap items-center gap-2 px-2.5 pb-0 pt-[7px]
 │  └─ li[data-queued="<clientSubmissionId>"][data-when-busy="followUp|steer"]   (data-queued KEPT; data-when-busy NEW)
@@ -82,9 +84,12 @@ form[aria-label="Composer"][data-drop="idle|over"]                              
 │    className: m-0 flex list-none flex-wrap gap-2 px-2.5 pt-[7px]
 │  └─ li[data-attachment="<name>"][data-kind="image|text"]                           KEPT
 │       className: flex h-6 items-center gap-1.5 rounded-md border border-edge bg-surface-raised pl-2 pr-1 font-mono text-[11.5px] text-foreground
+│     ├─ img[data-part="attachment-thumb"][alt="<name>"][src="data:<mimeType>;base64,<dataBase64>"]   NEW, images only; className h-6 w-[34px] rounded-[3px] object-cover
+│     ├─ span[data-part="attachment-name"]  {name}              NEW
 │     └─ button[type="button"][aria-label="Remove <name>"]  XIcon 12px                KEPT
 ├─ ul[role="alert"][aria-label="Rejected files"]              (only when rejected.length > 0)   KEPT
-│    className: m-0 list-none px-3 pt-1.5 text-key text-status-blocked-bright;  li text: "<name>: <message>"
+│    className: m-0 list-none px-3 pt-1.5 text-key text-status-blocked-bright
+│  └─ li[data-part="rejected-file"]  text `<name>: <reason>`   NEW hook; `reason` is `AttachmentRejection.message` (the readable text; the enum `reason` is the code)
 ├─ textarea[aria-label="Message"][rows=2]   KEPT aria-label (exact string; App.test and Composer.test select it)
 │    className: w-full resize-none border-0 bg-transparent px-3 py-2 text-[13.5px] leading-[1.5] text-fg-strong placeholder:text-fg-dim
 │               focus-visible:outline-none   (the card's focus-within border is the focus affordance, see 1.5)
@@ -144,7 +149,7 @@ The reasons (`small[data-reason]`) are collected below the action row, not after
 
 Every `Enter` / `Alt+Enter` path calls `preventDefault()` first (KEPT). Clicking `Steer`, `Follow-up`, `Send`, `Stop` calls the same functions as the keys. The form's `onSubmit` (the idle Send button, or implicit submit) does `enterTarget()` of Phase 2: `followUp` when idle; busy: follow-up if supported else steer (the button is not shown busy, so this path is only reachable idle; KEPT unchanged).
 
-Drag and drop (KEPT): `onDragEnter` / `onDragOver` with `Files` in `dataTransfer.types` → `preventDefault()`, `data-drop="over"`; `onDragLeave` → `idle`; `onDrop` → `preventDefault()`, `idle`, `add(filesFromDrop(...))`. Tests: `Composer.test` "dragging files over the composer shows a drop state and dropping adds attachments". The outer `div[data-chat-dropzone]` of ChatPane stays the page-wide target (`App.test`).
+Drag and drop: `onDragEnter` / `onDragOver` with `Files` in `dataTransfer.types` → `preventDefault()`, `data-drop="over"`; `onDragLeave` → `idle`; `onDrop` → `preventDefault()`, `stopPropagation()`, `idle`, `add(filesFromDrop(...))`. **Dropped files are added exactly once:** the Composer's `stopPropagation()` keeps a drop on the Composer from bubbling to the ChatPane dropzone, so the dropzone's `onDrop` does not run for it. A drop elsewhere in the chat column is added once by the dropzone through `ComposerHandle.addFiles`. The outer `div[data-chat-dropzone]` of ChatPane stays the page-wide target (`App.test`). Tests: `Composer.test` "dragging files over the composer shows a drop state and dropping adds attachments".
 
 ### 1.5 States
 
@@ -155,7 +160,7 @@ Drag and drop (KEPT): `onDragEnter` / `onDragOver` with `Files` in `dataTransfer
 | `capabilities === null` | textarea, file input and attach button `disabled`; placeholder `Not attached`; send buttons per `reasons` (all `null` when caps is `null`, but `submit` no-ops) |
 | a capability unsupported | that button `disabled` with `title={reason}` and the reason in `small[data-reason]`; others unaffected (KEPT) |
 | focus | the card border turns `#a1c6ef` (`focus-within:border-ramune-bright`); the textarea itself shows no outline. **Resolution:** the board draws `#a1c6ef` permanently (source caveat 10: "does not show state"); the Plan's decision is a focus border, so it is `border-input` (`#35313b`) at rest and `#a1c6ef` on `focus-within`. The 2px keyboard ring of DESIGN.md 1.2 item 8 still applies to every button inside. |
-| drag over | `data-drop="over"`: dashed `#a1c6ef` border and a 10% tint |
+| drag over | `data-drop="over"`: the form takes `border-primary bg-primary/5` (dashed border) and `span[data-part="drop-cue"]` reads `Drop to attach` |
 | queued present | chip bar at the top (only then) |
 
 ### 1.6 Not wired
