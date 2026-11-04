@@ -71,7 +71,7 @@ fn vectors_db_v2_creates_the_content_hash_column() {
         .put(&cid("cpd"), MODEL, &rid("hs-d1"), &[1.0], AT)
         .unwrap();
     let path = home.vectors_db();
-    assert_eq!(user_version(&path), 2);
+    assert_eq!(user_version(&path), 3);
     assert!(columns(&path).contains(&"content_hash".to_owned()));
     let conn = Connection::open(&path).unwrap();
     let (kind, not_null, default): (String, i64, String) = conn
@@ -96,7 +96,7 @@ fn version_1_file_is_upgraded_in_place_by_the_writer_and_keeps_its_rows() {
     store
         .put_hashed(&cid("cpd"), MODEL, &rid("hs-d2"), &[3.0], "abc")
         .unwrap();
-    assert_eq!(user_version(&path), 2);
+    assert_eq!(user_version(&path), 3);
     assert!(columns(&path).contains(&"content_hash".to_owned()));
     let got = store
         .get(&cid("cpd"), MODEL, &[rid("hs-d1"), rid("hs-d2")])
@@ -139,7 +139,7 @@ fn a_version_3_file_is_refused() {
     {
         let conn = Connection::open(home.vectors_db()).unwrap();
         conn.pragma_update(None, "application_id", APP_ID).unwrap();
-        conn.pragma_update(None, "user_version", 3_i32).unwrap();
+        conn.pragma_update(None, "user_version", 4_i32).unwrap();
         conn.execute_batch("CREATE TABLE t (x)").unwrap();
     }
     let store = VectorStore::at(&home);

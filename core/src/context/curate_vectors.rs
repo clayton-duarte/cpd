@@ -21,6 +21,21 @@ const BUSY_MS: u64 = 5000;
 const DDL: &str = "CREATE TABLE IF NOT EXISTS context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;";
 
+/// One `search_log` row.
+pub struct SearchLogRow<'a> {
+    pub context: &'a ContextId,
+    pub session: Option<&'a str>,
+    pub query: &'a str,
+    pub hybrid: bool,
+    pub candidates: u64,
+    pub floor_dropped: u64,
+    pub pending_hidden: u64,
+    pub hits: u64,
+    pub fts_ms: u64,
+    pub embed_ms: Option<u64>,
+    pub embed_tokens: Option<u64>,
+}
+
 /// The vector cache file.
 pub struct VectorStore {
     home: CpdHome,
@@ -152,6 +167,11 @@ impl VectorStore {
         conn.pragma_update(None, "user_version", VERSION)
             .map_err(|e| failed(path, "set user_version of", e))?;
         Ok(conn)
+    }
+
+    /// Appends one `search_log` row (contract §4.6 "The search log"). Stub: writes nothing yet.
+    pub fn log_search(&self, _row: &SearchLogRow<'_>) -> Result<(), CpdError> {
+        Ok(())
     }
 
     pub fn put(

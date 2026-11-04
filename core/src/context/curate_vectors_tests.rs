@@ -232,7 +232,7 @@ fn vectors_too_new_user_version_is_refused() {
         let conn = Connection::open(home.vectors_db()).unwrap();
         conn.pragma_update(None, "application_id", 1_668_703_587_i32)
             .unwrap();
-        conn.pragma_update(None, "user_version", 3_i32).unwrap();
+        conn.pragma_update(None, "user_version", 4_i32).unwrap();
         conn.execute_batch("CREATE TABLE t (x)").unwrap();
     }
     let store = VectorStore::at(&home);
@@ -269,5 +269,96 @@ fn vectors_second_open_of_a_new_file_keeps_wal_and_loses_no_row() {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!((app, version), (1_668_703_587, 2));
+    assert_eq!((app, version), (1_668_703_587, 3));
+}
+
+const V2_DDL: &str = "CREATE TABLE context_embeddings (context TEXT NOT NULL CHECK (length(context) BETWEEN 2 AND 40), model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 128), record TEXT NOT NULL CHECK (length(record) BETWEEN 1 AND 64), dims INTEGER NOT NULL CHECK (dims > 0), vector BLOB NOT NULL CHECK (length(vector) = dims * 4), at TEXT NOT NULL, content_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY (context, model, record)) STRICT, WITHOUT ROWID;
+CREATE TABLE context_checked (context TEXT NOT NULL, record TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (context, record)) STRICT, WITHOUT ROWID;";
+
+/// A version 2 file holding one row of `hs-d1`, made with raw rusqlite.
+fn version_2_file(path: &std::path::Path) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(V2_DDL).unwrap();
+    conn.execute(
+        "INSERT INTO context_embeddings (context, model, record, dims, vector, at, content_hash) VALUES ('cpd', 'm1', 'hs-d1', 2, ?1, ?2, 'h1')",
+        rusqlite::params![[1.0_f32, 2.0].iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>(), AT],
+    )
+    .unwrap();
+    conn.pragma_update(None, "application_id", 1_668_703_587_i32)
+        .unwrap();
+    conn.pragma_update(None, "user_version", 2_i32).unwrap();
+}
+
+#[test]
+fn vectors_db_upgrades_v2_to_v3_with_search_log() {
+    let (_dir, home) = home();
+    version_2_file(&home.vectors_db());
+    VectorStore::at(&home)
+        .put_hashed(&cid("cpd"), MODEL, &rid("hs-d2"), &[3.0], "h2")
+        .unwrap();
+    let conn = Connection::open(home.vectors_db()).unwrap();
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('search_log') ORDER BY cid")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "id",
+            "at",
+            "context",
+            "session",
+            "query",
+            "mode",
+            "candidates",
+            "floor_dropped",
+            "pending_hidden",
+            "hits",
+            "fts_ms",
+            "embed_ms",
+            "embed_tokens"
+        ]
+    );
+    let index: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_index_list('search_log') WHERE name = 'search_log_context_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(index, 1);
+}
+
+#[test]
+fn vectors_db_upgrade_keeps_vectors_rows() {
+    let (_dir, home) = home();
+    version_2_file(&home.vectors_db());
+    let store = VectorStore::at(&home);
+    store
+        .put_hashed(&cid("cpd"), MODEL, &rid("hs-d2"), &[3.0], "h2")
+        .unwrap();
+    assert_eq!(
+        store.embedded(&cid("cpd"), MODEL).unwrap(),
+        set(&["hs-d1", "hs-d2"])
+    );
+    let conn = Connection::open(home.vectors_db()).unwrap();
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    let hash: String = conn
+        .query_row(
+            "SELECT content_hash FROM context_embeddings WHERE record = 'hs-d1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(hash, "h1");
 }

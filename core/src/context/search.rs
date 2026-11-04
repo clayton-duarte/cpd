@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
-use super::curate_vectors::VectorStore;
+use super::curate_vectors::{SearchLogRow, VectorStore};
 use super::fts::{self, Doc, Scored};
 use super::hybrid::{rrf, semantic_list};
 use super::inforce;
@@ -282,6 +282,20 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         Channel::Search,
         &reads::search_reads(&page_hits),
     );
+    // Stub: the row's figures are not measured yet.
+    let _ = VectorStore::at(&home).log_search(&SearchLogRow {
+        context: &context,
+        session: None,
+        query: &query,
+        hybrid: mode == "hybrid",
+        candidates: 0,
+        floor_dropped: 0,
+        pending_hidden: 0,
+        hits: 0,
+        fts_ms: 0,
+        embed_ms: None,
+        embed_tokens: None,
+    });
     let mut out = json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
         "query": query,
