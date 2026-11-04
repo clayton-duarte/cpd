@@ -407,6 +407,18 @@
     },
     "required": []
   },
+  "context topics": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context unarchive": {
     "flags": {
       "--help": false

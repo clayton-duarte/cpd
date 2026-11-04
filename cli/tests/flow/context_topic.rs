@@ -133,3 +133,130 @@ fn a_retired_record_is_gone_from_its_topic() {
         .ok();
     assert_eq!(markdown(&topic(&fx, "engine")), "- [m1-n2] kept short");
 }
+
+fn topics(fx: &Fx) -> Value {
+    fx.cpd(&["context", "topics", "--context", CTX]).ok()
+}
+
+#[test]
+fn topics_lists_each_topic_in_force_with_its_count() {
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+    seed(&fx.env, "m1-n2", "note", 50, "b");
+    seed(&fx.env, "m1-n3", "note", 40, "c");
+    seed(&fx.env, "m1-n4", "note", 30, "d");
+    curate(
+        &fx.env,
+        &[
+            ("m1-n1", "store", "one"),
+            ("m1-n2", "engine", "two"),
+            ("m1-n3", "engine", "three"),
+        ],
+    );
+
+    let out = topics(&fx);
+    assert_eq!(out["context"]["id"], CTX, "{out}");
+    assert_eq!(
+        out["topics"],
+        serde_json::json!([{"topic": "engine", "count": 2}, {"topic": "store", "count": 1}]),
+        "{out}"
+    );
+    assert_eq!(markdown(&out), "engine (2), store (1)", "{out}");
+}
+
+#[test]
+fn topics_counts_only_records_in_force() {
+    let fx = fast();
+    for (i, id) in ["m1-n1", "m1-n2", "m1-n3", "m1-n4", "m1-n5"]
+        .iter()
+        .enumerate()
+    {
+        seed(&fx.env, id, "note", 60 - i as u32, "x");
+    }
+    curate(
+        &fx.env,
+        &[
+            ("m1-n1", "engine", "kept"),
+            ("m1-n2", "engine", "superseded"),
+            ("m1-n3", "engine", "retired"),
+            ("m1-n4", "store", "superseded alone"),
+            ("m1-n5", "store", "retired alone"),
+        ],
+    );
+    fx.cpd(&[
+        "context",
+        "note",
+        "Newer.",
+        "--supersedes",
+        "m1-n2",
+        "--context",
+        CTX,
+    ])
+    .ok();
+    fx.cpd(&[
+        "context",
+        "note",
+        "Newer.",
+        "--supersedes",
+        "m1-n4",
+        "--context",
+        CTX,
+    ])
+    .ok();
+    propose(
+        &mut fx.env.store(),
+        &ContextId::parse(CTX).unwrap(),
+        &[],
+        &[
+            Proposal {
+                record: "m1-n3".parse().unwrap(),
+                reason: Reason::Duplicate,
+                target: "m1-n1".into(),
+            },
+            Proposal {
+                record: "m1-n5".parse().unwrap(),
+                reason: Reason::Duplicate,
+                target: "m1-n1".into(),
+            },
+        ],
+    )
+    .unwrap();
+    fx.cpd(&["context", "retire", "--context", CTX, "--approve", "m1-n3"])
+        .ok();
+    fx.cpd(&["context", "retire", "--context", CTX, "--approve", "m1-n5"])
+        .ok();
+
+    let out = topics(&fx);
+    assert_eq!(
+        out["topics"],
+        serde_json::json!([{"topic": "engine", "count": 1}]),
+        "{out}"
+    );
+    assert_eq!(markdown(&out), "engine (1)", "{out}");
+}
+
+#[test]
+fn topics_of_a_context_without_curations_is_empty() {
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+
+    let out = topics(&fx);
+    assert_eq!(out["topics"], serde_json::json!([]), "{out}");
+    assert_eq!(out["markdown"], "", "{out}");
+}
+
+#[test]
+fn topics_without_a_context_is_refused() {
+    let fx = fast();
+    common::refused(&fx.cpd(&["context", "topics"]), "context_required", 2);
+}
+
+#[test]
+fn topics_of_an_unknown_context_is_refused() {
+    let fx = fast();
+    common::refused(
+        &fx.cpd(&["context", "topics", "--context", "nothing-here"]),
+        "context_not_found",
+        4,
+    );
+}

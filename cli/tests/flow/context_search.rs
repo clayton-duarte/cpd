@@ -124,6 +124,7 @@ fn the_result_keeps_the_design_frame_and_short_line() {
     let record = &out["records"][0];
     assert_eq!(record["id"], n1.as_str(), "{out}");
     assert_eq!(record["short"], "engine ranks the hits", "{out}");
+    assert_eq!(record["topic"], "ranking", "{out}");
     assert_eq!(record["kind"], "note", "{out}");
     assert!(record["at"].is_string(), "{out}");
     assert_eq!(record["seq"], 1, "{out}");
@@ -131,7 +132,41 @@ fn the_result_keeps_the_design_frame_and_short_line() {
     assert_eq!(record["in_force"], true, "{out}");
     assert_eq!(
         out["markdown"],
-        format!("- [{n1}] engine ranks the hits"),
+        format!("- [{n1}] [ranking] engine ranks the hits"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_curated_hit_carries_its_topic() {
+    let fx = env();
+    let n1 = note(&fx, "The store keeps the rows.");
+    curate(&fx, &n1, "store", "store keeps rows");
+
+    let out = fx
+        .cpd(&["context", "search", "store", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["topic"], "store", "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] [store] store keeps rows"),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_uncurated_hit_has_a_null_topic() {
+    let fx = env();
+    let n1 = note(&fx, "An uncurated note.");
+
+    let out = fx
+        .cpd(&["context", "search", "note", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+    assert!(out["records"][0]["topic"].is_null(), "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] An uncurated note."),
         "{out}"
     );
 }

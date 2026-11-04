@@ -103,7 +103,7 @@ fn a_lead_first_message_is_header_brief_and_pointer() {
         message,
         format!(
             "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\n\
-             Retry the failed payouts.\n\n{}\n",
+             Retry the failed payouts.\n\nTopics: ledger (1)\n\n{}\n",
             LEAD_POINTER
         )
     );
@@ -187,4 +187,106 @@ fn context_recent_days_is_not_a_config_key() {
     assert_eq!(run.exit, 1, "{err}");
     assert_eq!(err["code"], "config_invalid", "{err}");
     assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
+}
+
+fn notes(fx: &Fx, n: usize) {
+    for i in 1..=n {
+        fx.cpd(&["context", "note", &format!("Note {i}."), "--context", CTX])
+            .ok();
+    }
+}
+
+const LEAD_HEADER: &str = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.";
+const MANAGER_HEADER: &str =
+    "You are the Manager of Context ctx \"Payments\". Follow the cpd-manager skill.";
+
+/// Three curated notes: `engine` x2 and `store` x1.
+fn curate_three(fx: &Fx) {
+    notes(fx, 3);
+    curate(
+        &fx.env,
+        &[
+            ("m1-n1", "engine", "one"),
+            ("m1-n2", "engine", "two"),
+            ("m1-n3", "store", "three"),
+        ],
+    );
+}
+
+/// pro-d5: the Lead's first message is header, brief, `Topics: …`, pointer; blank-line separated, one final newline.
+#[test]
+fn the_lead_first_message_lists_the_topics_before_the_pointer() {
+    let fx = fx();
+    curate_three(&fx);
+    new_plan_with_brief(&fx, "pay", "Retry the failed payouts.\n");
+
+    let message = lead_message(&fx.env, "pay");
+    assert_eq!(
+        message,
+        format!(
+            "{LEAD_HEADER}\n\nRetry the failed payouts.\n\nTopics: engine (2), store (1)\n\n{LEAD_POINTER}\n"
+        )
+    );
+}
+
+/// pro-d5: the Manager's message, as written by `context manager` and as `session first-message` renders it.
+#[test]
+fn the_manager_first_message_lists_the_topics_before_the_pointer() {
+    let fx = fx();
+    curate_three(&fx);
+    fx.cockpit();
+    let out = fx.cpd(&["context", "manager", "--context", CTX]).ok();
+    let manager = out["manager"]["session"].as_str().unwrap().to_owned();
+    let expected =
+        format!("{MANAGER_HEADER}\n\nTopics: engine (2), store (1)\n\n{MANAGER_POINTER}\n");
+
+    let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
+    assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+
+    let out = fx
+        .cpd(&["session", "first-message", "--session", &manager])
+        .ok();
+    assert_eq!(out["text"].as_str().unwrap(), expected);
+    assert_eq!(fs::read_to_string(path).unwrap(), expected);
+}
+
+/// pro-d5: no curation in force, no `Topics:` line, in either message.
+#[test]
+fn a_first_message_without_curated_topics_has_no_topics_line() {
+    let fx = fx();
+    notes(&fx, 2);
+    fx.cockpit();
+    fx.cpd(&["context", "manager", "--context", CTX]).ok();
+    new_plan_with_brief(&fx, "pay", "Retry the failed payouts.\n");
+
+    let lead = lead_message(&fx.env, "pay");
+    assert!(!lead.contains("Topics:"), "{lead}");
+    let manager = fs::read_to_string(fx.env.cpd_home().join("run/ctx/manager-message.md")).unwrap();
+    assert!(!manager.contains("Topics:"), "{manager}");
+}
+
+/// pro-d5: a superseded curated record is not in force and is not counted.
+#[test]
+fn the_topics_line_counts_only_records_in_force() {
+    let fx = fx();
+    curate_three(&fx);
+    fx.cpd(&[
+        "context",
+        "note",
+        "Replaces the first.",
+        "--supersedes",
+        "m1-n1",
+        "--context",
+        CTX,
+    ])
+    .ok();
+    new_plan_with_brief(&fx, "pay", "Retry the failed payouts.\n");
+
+    let message = lead_message(&fx.env, "pay");
+    assert_eq!(
+        message,
+        format!(
+            "{LEAD_HEADER}\n\nRetry the failed payouts.\n\nTopics: engine (1), store (1)\n\n{LEAD_POINTER}\n"
+        )
+    );
 }
