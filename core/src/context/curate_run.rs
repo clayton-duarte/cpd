@@ -107,7 +107,7 @@ pub fn next_record(
 
 /// What one run counted.
 #[derive(Default)]
-struct Tally {
+pub(super) struct Tally {
     free: usize,
     judged: usize,
     disagreed: usize,
@@ -204,11 +204,7 @@ fn topics(store: &mut Store, context: &ContextId) -> Result<HashMap<RecordId, St
 }
 
 /// kev-4b's answer for one pair: `Err(())` for an error or a label that is none of the four.
-fn ask_kev(
-    classifier: &dyn ClassifierPort,
-    pair: &Pair,
-    unreachable: &mut bool,
-) -> Result<Screen, ()> {
+fn ask_kev(classifier: &dyn ClassifierPort, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()> {
     let part =
         |c: &Candidate| json!({"id": c.id.to_string(), "kind": c.kind.as_str(), "text": c.text});
     let state = json!({"new": part(pair.new), "neighbour": part(pair.other)});
@@ -220,7 +216,7 @@ fn ask_kev(
     let chosen = match classifier.choose(&choice) {
         Ok(chosen) => chosen,
         Err(e) => {
-            *unreachable |= matches!(
+            tally.kev_unreachable |= matches!(
                 e.code(),
                 ErrorCode::ClassifierUnreachable
                     | ErrorCode::ClassifierRefused
@@ -316,7 +312,7 @@ pub(super) struct Verified {
 }
 
 /// kev-4b, the screen, the judge and the confirmation of one pair (`new` the later record, `other` the earlier).
-/// `Err` only from the judge.
+/// `Err` only from the judge. kev-4b's usage and failure are recorded in `tally`.
 pub(super) fn verify_pair(
     classifier: &dyn ClassifierPort,
     judge: &dyn JudgePort,
@@ -324,6 +320,7 @@ pub(super) fn verify_pair(
     other: &Candidate,
     new_topic: Option<&str>,
     other_topic: Option<&str>,
+    tally: &mut Tally,
 ) -> Result<Verified, CpdError> {
     let pair = Pair {
         new,
@@ -331,8 +328,8 @@ pub(super) fn verify_pair(
         new_topic,
         other_topic,
     };
-    let mut kev_unreachable = false;
-    let kev = ask_kev(classifier, &pair, &mut kev_unreachable);
+    let kev = ask_kev(classifier, &pair, tally);
+    let kev_unreachable = tally.kev_unreachable;
     let outcome = match screen(kev) {
         _ if kev_unreachable => Outcome::Independent { why: None },
         Screened::AcceptIndependent => Outcome::Independent { why: None },
@@ -366,6 +363,8 @@ fn sweep(
     let all = candidates(&state);
     let topics = topics(store, context)?;
     let mut decisions = Vec::new();
+    // The sweep keeps no kev-4b telemetry: it reports only what it decided.
+    let mut tally = Tally::default();
     for row in pairs {
         let (Some(a), Some(b)) = (
             all.iter().find(|c| c.id == row.record),
@@ -382,6 +381,7 @@ fn sweep(
             other,
             topic(new),
             topic(other),
+            &mut tally,
         ) else {
             break;
         };
@@ -491,7 +491,7 @@ fn check_pairs(
             new_topic: topics.get(&new.id).map(String::as_str),
             other_topic: topics.get(&other.id).map(String::as_str),
         };
-        let kev = ask_kev(models.classifier, &pair, &mut tally.kev_unreachable);
+        let kev = ask_kev(models.classifier, &pair, tally);
         match screen(kev) {
             Screened::AcceptIndependent => tally.free += 1,
             Screened::Escalate(kev) => judge_pair(models, &pair, kev, tally)?,
@@ -678,19 +678,22 @@ pub fn curate_with(
         return Ok(json!({"context": context.as_str(), "skipped": "off"}));
     }
     let swept = sweep(store, context, models)?;
-    let mut out = curate_record(store, home, context, models, now, only)?;
+    let mut out = curate_record(store, home, context, models, now, clock, started, only)?;
     if swept != (0, 0) {
         out["swept"] = json!({"approved": swept.0, "rejected": swept.1});
     }
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)] // the injected ports, clock and start of one run
 fn curate_record(
     store: &mut Store,
     home: &CpdHome,
     context: &ContextId,
     models: &Models,
     now: OffsetDateTime,
+    clock: &dyn Clock,
+    started: std::time::Instant,
     only: Option<&RecordId>,
 ) -> Result<Value, CpdError> {
     let state = store.read(|conn| State::read(conn, context))?;

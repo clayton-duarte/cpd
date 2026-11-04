@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::curate::Candidate;
 use super::curate_judge::{BifrostJudge, JudgePort};
-use super::curate_run::verify_pair;
+use super::curate_run::{Tally, verify_pair};
 use super::curate_verdict::{Outcome, Reason as VerdictReason};
 use super::curation::{
     Approval, Curation, NotCurable, Proposal, Reason, not_curable, propose_rejecting,
@@ -512,7 +512,16 @@ pub(super) fn verify(
             continue;
         };
         let (new, other) = if a.seq > b.seq { (&a, &b) } else { (&b, &a) };
-        let verified = match verify_pair(classifier, judge, new, other, None, None) {
+        // distill logs no kev-4b telemetry: each pair's tally is discarded with its verdict.
+        let verified = match verify_pair(
+            classifier,
+            judge,
+            new,
+            other,
+            None,
+            None,
+            &mut Tally::default(),
+        ) {
             Ok(v) if !v.kev_unreachable => v,
             _ => {
                 asking = false;

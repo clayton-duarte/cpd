@@ -106,6 +106,7 @@ fn judged(verdict: Verdict, quote: &str) -> Judged {
         reason: "the same decision".into(),
         topic: "postgres-store".into(),
         short: "Use Postgres for the store".into(),
+        usage: None,
     }
 }
 
