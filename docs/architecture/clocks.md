@@ -62,9 +62,9 @@ sequenceDiagram
     Note over Eng,Poll: never overlapping; a 1.3 s poll + 5 s/5 s runs every 6.3 s
 ```
 
-## The repeat bump clock: 86 400 s (E23)
+## The overdue post clock: 86 400 s (E8; E23 is retired)
 
-The repeat bump (pro-d382; [contract §4.4](../contract.md) "The repeat bump"; [contract §3.7](../contract.md) E23) was to bump an unreviewed posted pull request again once 24 hours had passed since its last post. Nothing does so today: E23 sends nothing and writes nothing (pro-d386). The later change that raises an Inbox item with a RePost action (pro-d386) keeps this clock. It is a fixed clock: `BUMP_INTERVAL_SECS` = 86 400 is a constant in the code, not a `[watch]` key, and no config changes it. A row is due when `COALESCE(last_posted_at, posted_at)` is at most 86 400 seconds before now, compared as text in the format `posted_at` has. No step writes `last_posted_at` today ([contract §3.7](../contract.md) E23).
+A post whose pull request stays unreviewed for 24 hours is **overdue** (pro-d382, pro-d386, pro-d388; [contract §4.4](../contract.md) "The overdue post and the RePost"; [contract §2.2](../contract.md) "The authored pull request rule"). E8 reads the clock and relabels the pull request's Inbox row `review overdue`; **nothing is sent automatically**. The User's RePost action (`cpd pr repost`, commands §9.8b2) sends the one reminder and sets `last_posted_at`, which restarts the clock. **E23, the Step that was to send the bump, is retired** (pro-d388): the number is not reused. It is a fixed clock: `BUMP_INTERVAL_SECS` = 86 400 is a constant in the code, not a `[watch]` key, and no config changes it. A post is overdue when `COALESCE(last_posted_at, posted_at)` is at most 86 400 seconds before now, compared as text in the format `posted_at` has, and its pull request is still unreviewed (`posts::overdue`). Only `cpd pr post` and `cpd pr repost` write `last_posted_at`.
 
 ## How the two clocks interleave
 
