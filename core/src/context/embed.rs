@@ -3,7 +3,7 @@
 use clap::Args;
 use serde_json::json;
 
-use super::curate_run::{DIMS, EMBED_MODEL, bifrost_embedder};
+use super::curate_run::{DIMS, EMBED_MODEL, append_run, bifrost_embedder};
 use super::curate_vectors::{VectorStore, content_hash};
 use super::distill::State;
 use super::{ContextRow, Select};
@@ -61,6 +61,7 @@ pub(super) fn embed_records(
         } else {
             let e = embedder.embed(text, DIMS)?;
             store.put_hashed(context, &e.model, id, &e.vector, &hash)?;
+            report.embed_tokens += e.tokens.unwrap_or(0);
             report.embedded += 1;
         }
     }
@@ -77,8 +78,29 @@ pub(super) fn embed_run(
     records: &[(RecordId, String)],
     limit: usize,
 ) -> Result<EmbedReport, CpdError> {
-    let _ = (home, clock); // stub: no ms, no tokens, no log yet
-    embed_records(store, embedder, context, records, limit)
+    let started = clock.now();
+    let mut report = embed_records(store, embedder, context, records, limit)?;
+    report.ms = clock.now().saturating_duration_since(started).as_millis() as u64;
+    append_run(
+        home,
+        context,
+        json!({
+            "kind": "embed",
+            "at": crate::clock::timestamp(clock.utc()),
+            "context": context.as_str(),
+            "ms": report.ms,
+            "embed_tokens": report.embed_tokens,
+            "kev_tokens_in": 0,
+            "kev_tokens_out": 0,
+            "judge_tokens_in": 0,
+            "judge_tokens_out": 0,
+            "cost": null,
+            "embedded": report.embedded,
+            "skipped": report.skipped,
+            "remaining": report.remaining,
+        }),
+    );
+    Ok(report)
 }
 
 /// `context embed`.

@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::curate::{Judged, Verdict};
+use super::curate::{JudgeUsage, Judged, Verdict};
 use crate::config::catalog::node;
 use crate::config::{Config, locate_pi};
 use crate::error::{CpdError, ErrorCode};
@@ -93,8 +93,16 @@ struct Wire {
     topic: String,
     short: String,
     #[serde(default)]
-    #[allow(dead_code)] // stub: not read yet
-    usage: Option<Value>,
+    usage: Option<WireUsage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireUsage {
+    tokens_in: u64,
+    tokens_out: u64,
+    #[serde(default)]
+    cost: Option<f64>,
 }
 
 /// The helper's one line, parsed once into the typed answer or the error it carries.
@@ -112,7 +120,11 @@ fn parse(line: &str) -> Result<Judged, CpdError> {
                 reason: w.reason,
                 topic: w.topic,
                 short: w.short,
-                usage: None, // stub: the usage in `w.usage` is not read yet
+                usage: w.usage.map(|u| JudgeUsage {
+                    tokens_in: u.tokens_in,
+                    tokens_out: u.tokens_out,
+                    cost: u.cost,
+                }),
             })
         }
         Value::Bool(false) => {
