@@ -8,6 +8,8 @@
 # builds uncached), then exports RUSTC_WRAPPER=sccache (one compile cache per machine). A RUSTC_WRAPPER that
 # is already set is kept, including the empty value: `RUSTC_WRAPPER= scripts/cargo.sh ...`
 # opts out.
+# When RUSTC_WRAPPER is sccache (set here or kept) and CARGO_INCREMENTAL is unset, it
+# exports CARGO_INCREMENTAL=0: sccache refuses incremental builds, which only fill target/.
 # After the sccache step (the server must not inherit the slot's lock descriptor) it
 # takes one slot of the policy resource `cargo` (pro-d132) when all hold: (1)
 # CPD_CARGO_RESOURCE_HELD is unset or empty, (2) `cpd` is on PATH, (3) `cpd resource
@@ -73,6 +75,10 @@ EOF
 
 if [ -z "${RUSTC_WRAPPER+x}" ] && command -v sccache >/dev/null 2>&1; then
   start_sccache_server
+fi
+
+if [ "${RUSTC_WRAPPER:-}" = sccache ] && [ -z "${CARGO_INCREMENTAL+x}" ]; then
+  export CARGO_INCREMENTAL=0
 fi
 
 if [ -z "${CPD_CARGO_RESOURCE_HELD:-}" ] && command -v cpd >/dev/null 2>&1; then
