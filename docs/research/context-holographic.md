@@ -1,3 +1,5 @@
+> **Removed (pro-d1, pro-d9):** the holographic engine is gone and `cpd context search` is an in-memory FTS5 index now (contract §4.6 "The search rail"); only the `## Search contract` section (query rewrite R1-R10) of this note is still in force, the rest is history.
+
 # Adopting holographic as cpd's memory engine
 
 Design for Job `holo-docs`, Plan `context-on-demand`. It decides how cpd reaches

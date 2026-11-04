@@ -195,8 +195,14 @@ fn a_prose_target_of_an_unsupersedable_kind_or_unknown_id_is_not_refused() {
     let fx = two();
     assert_unlinked_refused(&fx);
     // hs-d1 is a decision: a note may not supersede it; hs-d9 does not exist.
-    fx.cpd(&["context", "note", "New. Supersedes hs-d1 and hs-d9.", "--context", CTX])
-        .ok();
+    fx.cpd(&[
+        "context",
+        "note",
+        "New. Supersedes hs-d1 and hs-d9.",
+        "--context",
+        CTX,
+    ])
+    .ok();
 }
 
 #[test]

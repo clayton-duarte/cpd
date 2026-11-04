@@ -1,28 +1,19 @@
-//! `cpd context search` answered by the holographic engine (docs/research/context-holographic.md
-//! `## Search contract` and `## Index and staleness`; contract §4.6; commands.md §3.3), in this
-//! process (`Fx`).
-//!
-//! Every test drives a fake bridge ([`common::FakeBridge`]) through the engine config keys; no test
-//! imports or runs holographic. The tests are red until `context search` and the engine client exist.
+//! `cpd context search` on an in-memory FTS5 table built per call (the Plan ctx-fts-remove-holo; commands.md §3.3), in
+//! this process (`Fx`). No engine, no bridge, no engine config: a test config is just the version and the machine.
 
 use crate::common;
 
-use common::FakeBridge;
 use common::fx::Fx;
 use cpd_core::context::curation::{Curation, propose};
 use cpd_core::ids::ContextId;
-use serde_json::{Value, json};
+use serde_json::json;
 
 const CTX: &str = "building-cpd";
 
-/// An `Fx` on machine `hs` whose `$CPD_HOME` points the engine at `bridge`, with Context `building-cpd`.
-fn env() -> (Fx, FakeBridge) {
+/// An `Fx` on machine `hs` with Context `building-cpd`.
+fn env() -> Fx {
     let fx = Fx::new();
-    let bridge = FakeBridge::new(&fx.env);
-    fx.env.write_config(&format!(
-        "version = 1\nmachine = \"hs\"\n{}",
-        bridge.config()
-    ));
+    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
     fx.cpd(&[
         "context",
         "new",
@@ -33,7 +24,7 @@ fn env() -> (Fx, FakeBridge) {
         "acme",
     ])
     .ok();
-    (fx, bridge)
+    fx
 }
 
 /// Records a note and returns its id.
@@ -56,34 +47,11 @@ fn decide(fx: &Fx, text: &str, supersedes: Option<&str>) -> String {
         .to_owned()
 }
 
-/// A `stats` whose watermark is ahead of every record, so a search sends no `index`.
-fn synced(facts: u64) -> String {
-    json!({"ok": true, "facts": facts, "indexed_seq": 1_000_000, "curated_at": "2999-01-01T00:00:00.000Z"}).to_string()
-}
-
-/// A `search` response with the hits in the given engine order.
-fn hits(hits: &[(&str, f64)]) -> String {
-    let hits: Vec<Value> = hits
-        .iter()
-        .map(|(record, score)| json!({"fact_id": 1, "record": record, "score": score}))
-        .collect();
-    json!({"ok": true, "hits": hits}).to_string()
-}
-
-/// [`hits`] over owned ids (for a generated list).
-fn hits_owned(hits: &[(String, f64)]) -> String {
-    let hits: Vec<Value> = hits
-        .iter()
-        .map(|(record, score)| json!({"fact_id": 1, "record": record, "score": score}))
-        .collect();
-    json!({"ok": true, "hits": hits}).to_string()
-}
-
 /// Writes a curation (the `short` a search lists) for `id` through the real `propose`, as a distill run does.
-fn curate(fx: &Fx, id: &str, short: &str) {
+fn curate(fx: &Fx, id: &str, topic: &str, short: &str) {
     let curations = [Curation {
         record: id.parse().unwrap(),
-        topic: "engine".into(),
+        topic: topic.into(),
         short: short.into(),
     }];
     propose(
@@ -116,28 +84,37 @@ fn retire(fx: &Fx, id: &str, reason: &str, target: &str) {
     ));
 }
 
-/// The two search requests a test made, as `(query, limit)` in order.
-fn searches(bridge: &FakeBridge) -> Vec<(String, u64)> {
-    bridge
-        .requests()
+/// Fixture: a retirement row `id` with `status` ('pending' has no decision).
+fn retire_as(fx: &Fx, id: &str, reason: &str, target: &str, status: &str) {
+    let decided = if status == "pending" {
+        "NULL, NULL".to_owned()
+    } else {
+        "'2026-01-01T00:00:00.000Z', 'user'".to_owned()
+    };
+    fx.env.sql(&format!(
+        "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at, decided_at, decided_by) \
+         VALUES ('{CTX}', '{id}', '{reason}', '{target}', '{status}', '2026-01-01T00:00:00.000Z', {decided});"
+    ));
+}
+
+/// Runs `cpd context search <args>` and returns the ids of the records, in order.
+fn search_ids(fx: &Fx, query: &str, extra: &[&str]) -> Vec<String> {
+    let mut args = vec!["context", "search", query, "--context", CTX];
+    args.extend(extra);
+    let out = fx.cpd(&args).ok();
+    out["records"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{out}"))
         .iter()
-        .filter(|request| request["cmd"] == "search")
-        .map(|request| {
-            (
-                request["query"].as_str().unwrap_or_default().to_owned(),
-                request["limit"].as_u64().expect("a search names a limit"),
-            )
-        })
+        .map(|r| r["id"].as_str().unwrap().to_owned())
         .collect()
 }
 
 #[test]
-fn the_result_is_the_design_frame_with_the_short_line() {
-    let (fx, bridge) = env();
+fn the_result_keeps_the_design_frame_and_short_line() {
+    let fx = env();
     let n1 = note(&fx, "The engine ranks the hits.");
-    curate(&fx, &n1, "engine ranks the hits");
-    bridge.reply("stats", &synced(1));
-    bridge.reply("search", &hits(&[(&n1, 0.42)]));
+    curate(&fx, &n1, "ranking", "engine ranks the hits");
 
     let out = fx
         .cpd(&["context", "search", "engine", "--context", CTX])
@@ -150,10 +127,7 @@ fn the_result_is_the_design_frame_with_the_short_line() {
     assert_eq!(record["kind"], "note", "{out}");
     assert!(record["at"].is_string(), "{out}");
     assert_eq!(record["seq"], 1, "{out}");
-    assert_eq!(
-        record["score"], 0.42,
-        "score is the engine's, higher better: {out}"
-    );
+    assert!(record["score"].as_f64().unwrap() > 0.0, "{out}");
     assert_eq!(record["in_force"], true, "{out}");
     assert_eq!(
         out["markdown"],
@@ -163,67 +137,97 @@ fn the_result_is_the_design_frame_with_the_short_line() {
 }
 
 #[test]
+fn a_search_for_a_record_id_returns_that_record_first() {
+    let fx = env();
+    let n1 = note(&fx, "The first thing.");
+    let n2 = note(&fx, &format!("Later I quote {n1} and {n1} again."));
+    assert_eq!(n1, "hs-n1");
+    assert_eq!(search_ids(&fx, &n1, &[])[0], n1);
+    assert!(search_ids(&fx, &n1, &[]).contains(&n2));
+}
+
+#[test]
+fn a_query_matches_curated_topic_and_short() {
+    let fx = env();
+    let n1 = note(&fx, "Plain words only.");
+    let n2 = note(&fx, "Other plain words.");
+    curate(&fx, &n1, "zebrafish", "a giraffe appears");
+    assert_eq!(search_ids(&fx, "zebrafish", &[]), std::slice::from_ref(&n1));
+    assert_eq!(search_ids(&fx, "giraffe", &[]), std::slice::from_ref(&n1));
+    assert!(!search_ids(&fx, "plain", &[]).is_empty());
+    assert!(!search_ids(&fx, "giraffe", &[]).contains(&n2));
+}
+
+#[test]
+fn porter_stemming_matches_word_forms() {
+    let fx = env();
+    let n1 = note(&fx, "The retrieval of facts is fast.");
+    note(&fx, "Nothing relevant.");
+    assert_eq!(search_ids(&fx, "retrieving", &[]), [n1]);
+}
+
+#[test]
+fn a_record_written_after_a_search_is_found_by_the_next_search() {
+    let fx = env();
+    note(&fx, "An early note.");
+    assert!(search_ids(&fx, "quokka", &[]).is_empty());
+    let n2 = note(&fx, "A quokka note.");
+    assert_eq!(search_ids(&fx, "quokka", &[]), [n2]);
+}
+
+#[test]
 fn out_of_force_records_are_hidden_unless_all() {
-    let (fx, bridge) = env();
+    let fx = env();
     let n1 = note(&fx, "Old note.");
     let n2 = note(&fx, "Retired note.");
     let n3 = note(&fx, "Live note.");
     decide(&fx, "The new decision.", Some(&n1));
     retire(&fx, &n2, "duplicate", "hs-n3");
-    bridge.reply("stats", &synced(3));
-    bridge.reply("search", &hits(&[(&n1, 0.9), (&n2, 0.8), (&n3, 0.1)]));
 
-    let visible = fx
-        .cpd(&["context", "search", "note", "--context", CTX])
-        .ok();
-    let ids: Vec<&str> = visible["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ids,
-        [n3.as_str()],
-        "an out-of-force record is hidden by default: {visible}"
-    );
+    assert_eq!(search_ids(&fx, "note", &[]), std::slice::from_ref(&n3));
 
     let all = fx
         .cpd(&["context", "search", "note", "--context", CTX, "--all"])
         .ok();
-    let ids: Vec<&str> = all["records"]
+    let mut got: Vec<(String, bool)> = all["records"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| r["id"].as_str().unwrap())
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_owned(),
+                r["in_force"].as_bool().unwrap(),
+            )
+        })
         .collect();
+    got.sort();
     assert_eq!(
-        ids,
-        [n1.as_str(), n2.as_str(), n3.as_str()],
-        "--all includes them, in the engine's order: {all}"
+        got,
+        [(n1, false), (n2, false), (n3, true)],
+        "--all includes them: {all}"
     );
-    assert_eq!(all["records"][0]["in_force"], false, "{all}");
-    assert_eq!(all["records"][1]["in_force"], false, "{all}");
-    assert_eq!(all["records"][2]["in_force"], true, "{all}");
 }
 
 #[test]
 fn all_labels_superseded_and_retired() {
-    let (fx, bridge) = env();
+    let fx = env();
     let n1 = note(&fx, "Old note.");
     let n2 = note(&fx, "Documented note.");
     decide(&fx, "The new decision.", Some(&n1));
     retire(&fx, &n2, "documented", "docs/a.md");
-    bridge.reply("stats", &synced(3));
-    bridge.reply("search", &hits(&[(&n1, 0.9), (&n2, 0.8)]));
 
     let all = fx
         .cpd(&["context", "search", "note", "--context", CTX, "--all"])
         .ok();
-    assert_eq!(
-        all["markdown"],
-        format!(
-            "- [{n1}] Old note. (superseded by hs-d1)\n- [{n2}] Documented note. [retired (documented docs/a.md)]"
+    let markdown = all["markdown"].as_str().unwrap();
+    let lines: Vec<&str> = markdown.lines().collect();
+    assert!(
+        lines.contains(&format!("- [{n1}] Old note. (superseded by hs-d1)").as_str()),
+        "{all}"
+    );
+    assert!(
+        lines.contains(
+            &format!("- [{n2}] Documented note. [retired (documented docs/a.md)]").as_str()
         ),
         "{all}"
     );
@@ -231,100 +235,44 @@ fn all_labels_superseded_and_retired() {
 
 #[test]
 fn kind_selects_the_searched_kinds_and_plan_is_selectable() {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "A note.");
-    let d1 = decide(&fx, "A decision.", None);
+    let fx = env();
+    let n1 = note(&fx, "A note about gizmos.");
+    let d1 = decide(&fx, "A decision about gizmos.", None);
     fx.env.sql(&format!(
         "INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) \
-         VALUES ('{CTX}', 'hs-p1', 'plan', '2026-01-01T00:00:00.000Z', 'hs', 'A Plan record.', 'p1', 'hs');"
+         VALUES ('{CTX}', 'hs-p1', 'plan', '2026-01-01T00:00:00.000Z', 'hs', 'A Plan about gizmos.', 'p1', 'hs');"
     ));
-    bridge.reply("stats", &synced(5));
-    bridge.reply("search", &hits(&[(&n1, 0.9), (&d1, 0.8), ("hs-p1", 0.5)]));
 
-    let default = fx.cpd(&["context", "search", "a", "--context", CTX]).ok();
-    let kinds: Vec<&str> = default["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["kind"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        kinds,
-        ["note", "decision"],
-        "the default kinds, never plan: {default}"
-    );
+    let mut default = search_ids(&fx, "gizmos", &[]);
+    default.sort();
+    let mut want = vec![n1.clone(), d1.clone()];
+    want.sort();
+    assert_eq!(default, want, "the default kinds, never plan");
 
     let plans = fx
-        .cpd(&["context", "search", "a", "--context", CTX, "--kind", "plan"])
+        .cpd(&[
+            "context",
+            "search",
+            "gizmos",
+            "--context",
+            CTX,
+            "--kind",
+            "plan",
+        ])
         .ok();
     let records = plans["records"].as_array().unwrap();
     assert_eq!(records.len(), 1, "--kind plan selects it: {plans}");
     assert_eq!(records[0]["id"], "hs-p1", "{plans}");
     assert_eq!(records[0]["kind"], "plan", "{plans}");
-    assert_eq!(
-        records[0]["in_force"], false,
-        "a plan record is never in force: {plans}"
-    );
-}
+    assert_eq!(records[0]["in_force"], false, "{plans}");
 
-#[test]
-fn the_over_fetch_retries_once_and_hidden_hits_do_not_count() {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "The one live note.");
-    let n2 = note(&fx, "The hidden note.");
-    decide(&fx, "The new decision.", Some(&n2));
-    // The engine returns more hits than the filtered page needs: the first search returns exactly
-    // N = max(limit*5, 80) = 80 hits, none of them in force, so cpd retries once with N*5 = 400.
-    let gone = |from: usize, to: usize| -> Vec<(String, f64)> {
-        (from..to).map(|i| (format!("hs-n{i}"), 0.1)).collect()
-    };
-    let mut first = gone(1000, 1079);
-    first.push((n2.clone(), 0.2));
-    let mut second = gone(2000, 2399);
-    second.push((n1.clone(), 0.5));
-    bridge.reply("stats", &synced(1000));
-    bridge.reply_n("search", 1, &hits_owned(&first));
-    bridge.reply_n("search", 2, &hits_owned(&second));
-
-    let out = fx
-        .cpd(&[
-            "context",
-            "search",
-            "note",
-            "--context",
-            CTX,
-            "--limit",
-            "1",
-        ])
-        .ok();
-    let ids: Vec<&str> = out["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ids,
-        [n1.as_str()],
-        "hidden hits never count against the limit: {out}"
-    );
-    assert_eq!(
-        searches(&bridge),
-        [("note".to_owned(), 80), ("note".to_owned(), 400)],
-        "one retry with a larger N: {:?}",
-        bridge.requests()
-    );
+    assert_eq!(search_ids(&fx, "gizmos", &["--kind", "decision"]), [d1]);
 }
 
 #[test]
 fn the_limit_defaults_to_20_and_zero_asks_for_all() {
-    let (fx, bridge) = env();
-    let ids = seed_notes(&fx, 200);
-    let all: Vec<(String, f64)> = ids.iter().map(|id| (id.clone(), 0.5)).collect();
-    let first: Vec<(String, f64)> = all[..100].to_vec();
-    bridge.reply("stats", &synced(200));
-    bridge.reply_n("search", 1, &hits_owned(&first));
-    bridge.reply_n("search", 2, &hits_owned(&all));
+    let fx = env();
+    seed_notes(&fx, 200);
 
     let default = fx
         .cpd(&["context", "search", "note", "--context", CTX])
@@ -332,7 +280,7 @@ fn the_limit_defaults_to_20_and_zero_asks_for_all() {
     assert_eq!(
         default["records"].as_array().unwrap().len(),
         20,
-        "the default page is 20: {default}"
+        "{default}"
     );
     assert_eq!(
         default["markdown"].as_str().unwrap().lines().count(),
@@ -340,62 +288,68 @@ fn the_limit_defaults_to_20_and_zero_asks_for_all() {
         "{default}"
     );
 
-    let every = fx
-        .cpd(&[
-            "context",
-            "search",
-            "note",
-            "--context",
-            CTX,
-            "--limit",
-            "0",
-        ])
-        .ok();
-    assert_eq!(
-        every["records"].as_array().unwrap().len(),
-        200,
-        "--limit 0 is no limit: {every}"
-    );
-    assert_eq!(
-        searches(&bridge),
-        [("note".to_owned(), 100), ("note".to_owned(), 200)],
-        "the over-fetch N for the default and for all: {:?}",
-        bridge.requests()
-    );
+    assert_eq!(search_ids(&fx, "note", &["--limit", "0"]).len(), 200);
 }
 
 #[test]
 fn exact_ties_break_by_newest_seq() {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "First.");
-    let n2 = note(&fx, "Second.");
-    let n3 = note(&fx, "Third.");
-    bridge.reply("stats", &synced(3));
-    bridge.reply("search", &hits(&[(&n1, 0.5), (&n2, 0.5), (&n3, 0.5)]));
+    let fx = env();
+    let n1 = note(&fx, "Alpha one.");
+    let n2 = note(&fx, "Alpha two.");
+    let n3 = note(&fx, "Alpha six.");
+    assert_eq!(search_ids(&fx, "alpha", &[]), [n3, n2, n1]);
+}
 
-    let out = fx
-        .cpd(&["context", "search", "note", "--context", CTX])
-        .ok();
-    let ids: Vec<&str> = out["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ids,
-        [n3.as_str(), n2.as_str(), n1.as_str()],
-        "exact ties break by seq descending: {out}"
-    );
+#[test]
+fn a_pending_duplicate_or_superseded_proposal_hides_the_record_unless_all() {
+    let fx = env();
+    let n1 = note(&fx, "Pending duplicate note.");
+    let n2 = note(&fx, "Pending superseded note.");
+    let n3 = note(&fx, "Plain note.");
+    retire_as(&fx, &n1, "duplicate", "hs-n3", "pending");
+    retire_as(&fx, &n2, "superseded", "hs-n3", "pending");
+
+    assert_eq!(search_ids(&fx, "note", &[]), std::slice::from_ref(&n3));
+    let mut all = search_ids(&fx, "note", &["--all"]);
+    all.sort();
+    assert_eq!(all, [n1, n2, n3]);
+}
+
+#[test]
+fn a_pending_documented_proposal_does_not_hide_the_record() {
+    let fx = env();
+    let n1 = note(&fx, "Pending documented note.");
+    retire_as(&fx, &n1, "documented", "docs/a.md", "pending");
+    assert_eq!(search_ids(&fx, "note", &[]), [n1]);
+}
+
+#[test]
+fn a_record_named_by_id_is_shown_even_with_a_pending_duplicate_proposal() {
+    let fx = env();
+    let n1 = note(&fx, "Pending duplicate note.");
+    note(&fx, "Plain note.");
+    retire_as(&fx, &n1, "duplicate", "hs-n2", "pending");
+    assert_eq!(search_ids(&fx, &n1, &[])[0], n1);
+}
+
+#[test]
+fn weak_tail_hits_are_dropped_by_the_relative_floor() {
+    let fx = env();
+    let strong = note(&fx, &"zebra ".repeat(40));
+    let filler =
+        "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor ".repeat(6);
+    for _ in 0..8 {
+        note(&fx, &format!("{filler} zebra {filler}"));
+    }
+    let ids = search_ids(&fx, "zebra", &["--limit", "0"]);
+    assert_eq!(ids[0], strong);
+    assert!(ids.len() < 9, "the weak tail is dropped: {ids:?}");
 }
 
 #[test]
 fn no_hits_is_success() {
-    let (fx, bridge) = env();
+    let fx = env();
     note(&fx, "A note.");
-    bridge.reply("stats", &synced(1));
-    bridge.reply("search", &json!({"ok": true, "hits": []}).to_string());
-
     let out = fx
         .cpd(&["context", "search", "nothing", "--context", CTX])
         .ok();
@@ -405,217 +359,49 @@ fn no_hits_is_success() {
 
 #[test]
 fn an_empty_query_and_a_bad_query_are_usage() {
-    let (fx, bridge) = env();
+    let fx = env();
     note(&fx, "A note.");
-
     let empty = fx.cpd(&["context", "search", "   ", "--context", CTX]);
     common::refused(&empty, "usage", 2);
-    assert!(
-        !bridge.log.exists(),
-        "an empty query never reaches the bridge"
-    );
 
-    bridge.reply("stats", &synced(1));
-    bridge.reply(
-        "search",
-        &json!({"ok": false, "error": "bad_query", "message": "fts5: syntax error"}).to_string(),
-    );
     let bad = fx.cpd(&["context", "search", "\"unterminated", "--context", CTX]);
     let error = common::refused(&bad, "usage", 2);
     assert_eq!(error["details"]["query"], "\"unterminated", "{error}");
-    assert_eq!(error["details"]["message"], "fts5: syntax error", "{error}");
+    assert!(error["details"]["message"].is_string(), "{error}");
 }
 
 #[test]
-fn a_missing_disabled_or_failed_engine_is_the_designed_code() {
-    let (fx, bridge) = env();
-    note(&fx, "A note.");
-
-    // Software missing: the bridge path names nothing.
-    fx.env.write_config(&format!(
-        "version = 1\nmachine = \"hs\"\ncontext_engine_bridge = \"{}/nope.py\"\ncontext_engine_python = \"/bin/sh\"\n",
-        fx.env.root().display()
-    ));
-    let missing = fx.cpd(&["context", "search", "note", "--context", CTX]);
-    let error = common::refused(&missing, "engine_missing", 4);
-    assert!(
-        error["details"]["bridge"]
-            .as_str()
-            .unwrap()
-            .ends_with("nope.py"),
-        "{error}"
-    );
-
-    // The operator's kill switch: no spawn. The key appears once (TOML forbids duplicates).
-    fx.env.write_config(&format!(
-        "version = 1\nmachine = \"hs\"\n{}",
-        bridge.config().replacen(
-            "context_engine_enabled = true",
-            "context_engine_enabled = false",
-            1
-        )
-    ));
-    let disabled = fx.cpd(&["context", "search", "note", "--context", CTX]);
-    common::refused(&disabled, "engine_disabled", 3);
-    assert!(!bridge.log.exists(), "a disabled engine spawns nothing");
-
-    // The bridge crashes: a non-zero exit is engine_failed.
-    bridge.install("exit 3\n");
-    fx.env.write_config(&format!(
-        "version = 1\nmachine = \"hs\"\n{}",
-        bridge.config()
-    ));
-    let failed = fx.cpd(&["context", "search", "note", "--context", CTX]);
-    common::refused(&failed, "engine_failed", 1);
-}
-
-#[test]
-fn a_search_syncs_only_the_new_and_changed_facts() {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "The curated note.");
-    let n2 = note(&fx, "The old note.");
-    curate(&fx, &n1, "curated note");
-    let n3 = note(&fx, "The new note.");
-    bridge.reply("stats", &json!({"ok": true, "facts": 3, "indexed_seq": 2, "curated_at": "2000-01-01T00:00:00.000Z"}).to_string());
-    bridge.reply(
-        "index",
-        &json!({"ok": true, "inserted": 2, "updated": 0}).to_string(),
-    );
-    bridge.reply("search", &hits(&[(&n3, 0.5)]));
-
-    fx.cpd(&["context", "search", "note", "--context", CTX])
-        .ok();
-    let commands = bridge.commands();
-    assert_eq!(
-        commands,
-        ["stats", "index", "search"],
-        "{:?}",
-        bridge.requests()
-    );
-    let requests = bridge.requests();
-    let indexed: Vec<&str> = requests
-        .iter()
-        .find(|request| request["cmd"] == "index")
-        .expect("an index request")["facts"]
-        .as_array()
-        .expect("facts")
-        .iter()
-        .map(|fact| fact["record"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        indexed,
-        [n1.as_str(), n3.as_str()],
-        "the changed curation and the new record, never the unchanged one: {:?}",
-        bridge.requests()
-    );
-    assert!(!indexed.contains(&n2.as_str()), "{:?}", bridge.requests());
-}
-
-/// Runs a search for `typed` against a fake engine that returns one note; returns the answer and the
-/// query the engine received.
-fn search_typed(typed: &str) -> (Value, String, String) {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "A note about retrieval.");
-    bridge.reply("stats", &synced(1));
-    bridge.reply("search", &hits(&[(&n1, 0.5)]));
-    let out = fx.cpd(&["context", "search", typed, "--context", CTX]).ok();
-    let sent = searches(&bridge);
-    assert_eq!(sent.len(), 1, "one search request: {:?}", bridge.requests());
-    (out, sent[0].0.clone(), n1)
-}
-
-/// Asserts `typed` is answered ok with the engine's record and reaches the engine as `sent`.
-fn assert_reaches_engine(typed: &str, sent: &str) {
-    let (out, got, n1) = search_typed(typed);
-    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
-    assert_eq!(got, sent, "typed {typed:?}: {out}");
-}
-
-#[test]
-fn a_bare_id_reaches_the_engine_quoted() {
-    assert_reaches_engine("hs-d655", "\"hs-d655\"");
-}
-
-#[test]
-fn a_dotted_token_reaches_the_engine_quoted() {
-    assert_reaches_engine("db.migrations", "\"db.migrations\"");
-}
-
-#[test]
-fn a_slashed_token_reaches_the_engine_quoted() {
-    assert_reaches_engine("plan/key", "\"plan/key\"");
-}
-
-#[test]
-fn an_apostrophe_reaches_the_engine_quoted() {
-    assert_reaches_engine("don't", "\"don't\"");
-}
-
-#[test]
-fn an_id_among_plain_words_reaches_the_engine_quoted() {
-    assert_reaches_engine(
-        "retrieval of hs-d655 today",
-        "retrieval of \"hs-d655\" today",
-    );
-}
-
-#[test]
-fn the_answer_echoes_the_query_as_typed() {
-    let (out, got, n1) = search_typed("hs-d655");
-    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
-    assert_eq!(out["query"], "hs-d655", "{out}");
-    assert_eq!(got, "\"hs-d655\"", "{out}");
-}
-
-#[test]
-fn a_short_page_retry_repeats_the_quoted_query() {
-    let (fx, bridge) = env();
-    let n1 = note(&fx, "The one live note.");
-    let n2 = note(&fx, "The hidden note.");
-    decide(&fx, "The new decision.", Some(&n2));
-    let gone = |from: usize, to: usize| -> Vec<(String, f64)> {
-        (from..to).map(|i| (format!("hs-n{i}"), 0.1)).collect()
-    };
-    let mut first = gone(1000, 1079);
-    first.push((n2.clone(), 0.2));
-    let mut second = gone(2000, 2399);
-    second.push((n1.clone(), 0.5));
-    bridge.reply("stats", &synced(1000));
-    bridge.reply_n("search", 1, &hits_owned(&first));
-    bridge.reply_n("search", 2, &hits_owned(&second));
-
-    let out = fx
-        .cpd(&[
-            "context",
-            "search",
-            "hs-d655",
-            "--context",
-            CTX,
-            "--limit",
-            "1",
-        ])
-        .ok();
-    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
-    assert_eq!(
-        searches(&bridge),
-        [
-            ("\"hs-d655\"".to_owned(), 80),
-            ("\"hs-d655\"".to_owned(), 400)
-        ],
-        "both requests carry the quoted query: {:?}",
-        bridge.requests()
-    );
-}
-
-#[test]
-fn a_prefix_phrase_and_operator_reach_the_engine_as_typed() {
-    for typed in ["retriev*", "\"first message\" OR digest"] {
-        assert_reaches_engine(typed, typed);
+fn punctuation_in_a_query_is_text() {
+    let fx = env();
+    let n1 = note(&fx, "See db.migrations and plan/key, don't panic.");
+    note(&fx, "Unrelated words.");
+    for typed in ["db.migrations", "plan/key", "don't"] {
+        assert_eq!(
+            search_ids(&fx, typed, &[]),
+            std::slice::from_ref(&n1),
+            "{typed}"
+        );
     }
-    // The prefix star and the operator stay outside the quotes of an id they follow or join.
-    assert_reaches_engine("pro-d217*", "\"pro-d217\"*");
-    assert_reaches_engine(
-        "\"first message\" OR hs-d655",
-        "\"first message\" OR \"hs-d655\"",
-    );
+    let out = fx
+        .cpd(&["context", "search", "hs-n1", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["id"], "hs-n1", "{out}");
+}
+
+#[test]
+fn search_needs_no_engine_config() {
+    let fx = env();
+    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    let n1 = note(&fx, "A note about quokkas.");
+    let out = fx
+        .cpd(&["context", "search", "quokkas", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+}
+
+#[test]
+fn context_reindex_is_no_longer_a_command() {
+    let fx = env();
+    let run = fx.cpd(&["context", "reindex", "--context", CTX]);
+    assert_eq!(run.exit, 2, "{run:?}");
 }

@@ -409,31 +409,41 @@ Idempotent: read-only.
 cpd context search <query> [--context <id>] [--limit <n>] [--kind <k,k>] [--all]
 ```
 
-Searches the Context's records (hs-d655: on-demand retrieval) and returns them ranked by the context engine's score. The Context is `--context`, else the selected Plan's (§1.3).
+Searches the Context's records by their id, topic, short form and text, ranked by an in-memory FTS5 index that is built on each call and never stored (contract §4.6 "The search rail"; hs-d655: on-demand retrieval; pro-d9). The Context is `--context`, else the selected Plan's (§1.3).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | a Context was selected (§1.3) | `context_required` | 2 |
 | the selected Plan exists (when the Context comes from `--plan` or `CPD_PLAN`) | `plan_not_found` | 4 |
 | the Context exists | `context_not_found` | 4 |
-| the query is not empty after trimming | `usage` | 2 |
-| every `--kind` name is a record kind | `usage` | 2 |
-| the engine accepts the query (a malformed query is refused) | `usage` | 2 |
-| the engine runs | `engine_failed` | 1 |
+| the query is empty after trimming | `usage` (`details.query`) | 2 |
+| the query is malformed FTS5, such as an unbalanced parenthesis or `NEAR(` among the kept operators: SQLite refuses it | `usage` (`details.query`, `details.message`, SQLite's message) | 2 |
+| a `--kind` value is not a record kind | `usage` (`details.kind`) | 2 |
 
 | Flag | Meaning |
 |---|---|
-| `<query>` | the words are text. A quoted phrase, `AND`, `OR`, `NOT`, `NEAR(..)`, parentheses and a trailing `*` (prefix match) are kept as operators; the rewrite is in docs/research/context-holographic.md `## Search contract`. |
-| `--context <id>` | the Context to search; without it, the selected Plan's (§1.3). `--plan <id>` (env `CPD_PLAN`) selects the Plan |
-| `--limit <n>` | at most `n` records; default 20; `0` is every match |
-| `--kind <k,k>` | only these record kinds, comma-separated; default `decision,note,question,answer`. Any record kind name is accepted (`plan` and `brief` too); an unknown name is `usage` |
-| `--all` | include the records out of force, labelled as `context show` labels them (`(superseded by <id>)`, `[retired (<reason> <target>)]`), with `in_force: false`. Without it, a decision, note, question or answer out of force is dropped; a `plan` or `brief` is never in force and is not dropped by this |
+| `<query>` | the search text. Words are text: an id such as `hs-d655`, a dotted or slashed token or an apostrophe is quoted for you, never FTS5 syntax. `"a phrase"`, `AND`, `OR`, `NOT`, `NEAR(..)`, parentheses and a trailing `*` (prefix match) are kept. The operators and the rewrite are in docs/research/context-holographic.md `## Search contract` |
+| `--limit <n>` | at most `n` records, default `20`; `0` is every match. Applied after rule (b) below |
+| `--kind <k,k>` | only these record kinds, comma-separated; default `decision,note,question,answer` |
+| `--all` | include the records that the selection below would hide (rule (a): out of force, or a pending duplicate or superseded retirement), each labelled as `context show` labels it. Without it they are hidden |
 
-Matching and ranking: the engine scores each record against the query. Hits are mapped back to the Context's records, filtered by `--kind` and by force (`--all`), and sorted by score, highest first, then by `seq`, highest first. The engine is asked for `min(facts, max(5 × --limit, 80))` candidates, where `facts` is the number of records it holds (`--limit 0`: all of them). When filtering leaves fewer than `--limit` records and the engine returned every candidate it was asked for, it is asked once more for five times the first request, capped at `facts`. Hence a page may hold fewer than `--limit` records.
+**Ranking.** The index is one FTS5 table over the Context's records, columns `id`, `topic`, `short` and `text` (tokenizer `porter unicode61`). `topic` and `short` are the record's curation (`record_curations`, §4.6 "The distiller curates"); an uncurated record has empty ones. Hits are ordered by `bm25` with the weights 10 for `id`, 2 for `topic`, 2 for `short` and 1 for `text`, lower first; the score shown is `-bm25`, higher is better. A record whose id equals the trimmed query, compared case-insensitively, is always first, with a score at least the top score (so `search pro-d300` returns `pro-d300` first, though other records quote it). Equal scores put the newer record (higher `seq`) first.
+
+**Selection**, two rules (contract §4.6 "The search rail"):
+- **(a) Before ranking, without `--all`:** a record is hidden when it is out of force (a superseded record, or one with an approved retirement) or when it has a `pending` `record_retirements` row whose reason is `duplicate` or `superseded`. Its target stays visible. A `pending` `documented` row hides nothing. A record whose id is the typed query is exempt from the pending rule.
+- **(b) After ranking:** a hit whose score is below `0.35` times the top hit's score is dropped (no hit is dropped when the top score is 0 or less). The record named by the query id is exempt. Zero hits is a valid answer, not an error. `--limit` is applied after this rule.
 
 **Callers** (Plan `explore-roles`, R10): as `context show` (§3.3): the Lead, the Manager and the **Worker**. An explore Worker (`scout` or `research`) may run it read-only, as its Spec's Deliverable section says; nothing enforces it (§2).
 
-Effects: none on the store. The engine's index of the Context (`<context>.db` in the engine directory: config `context_engine_dir`, default `$CPD_HOME/engines/holographic`) is brought up to date with the records added or curated since its last update.
+**Output** (`ok` true, the data):
+
+```json
+{"context": {"id": "host", "title": "…", "jira": null}, "query": "decision", "records": [{"id": "hs-d7", "short": "one engine per machine", "kind": "decision", "at": "…", "seq": 7, "score": 1.8, "in_force": true}], "markdown": "- [hs-d7] one engine per machine"}
+```
+
+`records` holds the hits in rank order, with `short` the curated short form, else the record's first line at most 120 bytes; `in_force` is false only with `--all`. `markdown` is one `- [<id>] <short>` line per hit, with ` (superseded by <id>)` after a superseded record and ` [retired (<reason> <target>)]` after one with an approved retirement, as `context show` labels them. Both are empty on no hits.
+
+Effects: none. Nothing is written, stored or indexed on disk, and no other process is started.
 
 Output: `context` is `{id, title, jira}`; `query` is the query as trimmed; `records` is a list of `{id, short, kind, at, seq, score, in_force}`: `short` is the record's curated short form, else the first line of its text cut at 120 bytes, `at` its time, `seq` its index position, `score` the engine's score; `markdown` is one line per record, `- [<id>] <short>` with the labels above, joined by newlines.
 
@@ -4164,7 +4174,6 @@ Checks, in order:
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
 | `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9); `lead_tier`, `manager_tier`, `context_distill_tier` and `worker_tier` are Tiers in the syntax of §5, each a valid rung of its model (contract §9 "Roles and ranges"), and they strictly ascend (`context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`). It also fails when a role default is not a rung of the catalog, or when a role's span (its floor to its ceiling, contract §9 "Roles and ranges") holds no valid rung; the error names the key. These replace the fixed ranges of hs-d562, pro-d82, hs-d554 and hs-d506 (pro-d328 to pro-d332). `review_lead_tier` is no longer checked: it is removed |
-| `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms` and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `worker_runner` (the check's name) | error | while `[experimental].durable_workers` is off (`pi`), passes without looking at anything; when it is on (`durable`), passes when `<pi_adapter>/durable-worker/main.ts` exists and pi's Node is at least 22.19.0 (the `engines.node` of the runner's package, contract §6.12): `found` is the Node version, `expected` is `>= 22.19.0` (contract §3.4 "The Worker runner and its seam") |
 | `host_runner` | error | when `lead_runner` and `manager_runner` are both `pi` and the store has no live durable Session (a `lead` or `manager` row with `runner = 'durable'` and `archived_at` null), passes without looking at anything; when either key is `durable` or such a live durable Session exists, passes when `<pi_adapter>/durable-host/main.ts` exists and pi's Node is at least 22.19.0 (contract §6.19): `found` is the Node version, `expected` is `>= 22.19.0` |

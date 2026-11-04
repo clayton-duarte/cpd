@@ -2,7 +2,6 @@
 //! chosen by the program's file name. Compiled only with the cargo feature `fakes`.
 
 pub mod classifier;
-pub mod context_engine;
 pub mod embedding;
 pub mod git;
 pub mod judge;

@@ -3,7 +3,6 @@
 //! Read-only, except the migration of a database's first open.
 
 mod check;
-mod holographic;
 mod host_runner;
 mod pi;
 mod state;
@@ -121,11 +120,6 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
     ));
     checks.push(state::watch(&home, store.as_mut()));
     checks.extend(tmux_restart(&home, zone));
-    checks.push(with_config(
-        "holographic",
-        Severity::Error,
-        &holographic::holographic,
-    ));
 
     let failed: Vec<&str> = checks
         .iter()
