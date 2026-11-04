@@ -403,7 +403,7 @@ fn push_rebased(
     require_open(env, &plan, args)?;
 
     if workflow.head_ref.is_some() {
-        return push_adopted(id, workflow, old, new);
+        return push_adopted(env, id, workflow, old, new);
     }
 
     // R' with the lease X0, then the merges that landed during the Gate, by rule P.
@@ -434,12 +434,16 @@ fn push_rebased(
         .with("exit", out.code)
         .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
+    if out.code == 0 {
+        reset_row(env, id, key)?;
+    }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
-    if tip != new
-        && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0
-        && let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)?
-    {
-        return Err(CpdError::new(
+    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
+        match git::push_commit(lead, branch, &tip)? {
+            Push::Pushed { new: true } => reset_row(env, id, key)?,
+            Push::Pushed { .. } | Push::Contained { .. } => {}
+            Push::Rejected { stderr } => {
+                return Err(CpdError::new(
                 ErrorCode::GitFailed,
                 format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --workflow {key}.", short(new), short(&tip)),
             )
@@ -447,11 +451,19 @@ fn push_rebased(
             .with("pr", key.as_str())
             .with("sha", tip.as_str())
             .with("stderr", stderr));
+            }
+        }
     }
 
     Ok(Output::success(
         json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true}),
     ))
+}
+
+/// After a push of new commits, the linked pull request row is reset (pro-d384).
+fn reset_row(env: &mut Env, id: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
+    env.store
+        .write(COMMAND, |tx| super::pulls::reset_after_push(tx, id, key))
 }
 
 /// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted Workflow (pro-d15).
@@ -466,6 +478,7 @@ fn onto_branch(workflow: &WorkflowRow) -> &str {
 /// The push of an adopted Workflow (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
 /// during the Gate go after R' the same way.
 fn push_adopted(
+    env: &mut Env,
     id: &PlanId,
     workflow: &WorkflowRow,
     old: &str,
@@ -475,14 +488,24 @@ fn push_adopted(
     let repo = Path::new(&workflow.repo);
     let remote = workflow.remote_branch();
     let mut pushed = match git::push_commit(lead, remote, new)? {
-        Push::Pushed { new } => new,
+        Push::Pushed { new } => {
+            if new {
+                reset_row(env, id, &workflow.key)?;
+            }
+            new
+        }
         Push::Contained { .. } => false,
         Push::Rejected { stderr } => return Err(rejected(id, workflow, new, stderr)),
     };
     let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", workflow.lead_branch))?;
     if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
         match git::push_commit(lead, remote, &tip)? {
-            Push::Pushed { new } => pushed |= new,
+            Push::Pushed { new } => {
+                if new {
+                    reset_row(env, id, &workflow.key)?;
+                }
+                pushed |= new;
+            }
             Push::Contained { .. } => {}
             Push::Rejected { stderr } => return Err(rejected(id, workflow, &tip, stderr)),
         }
