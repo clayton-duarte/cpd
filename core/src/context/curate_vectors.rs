@@ -166,6 +166,28 @@ impl VectorStore {
         Ok(())
     }
 
+    /// [`VectorStore::put`] with the content hash of the embedded text (see [`content_hash`]).
+    pub fn put_hashed(
+        &self,
+        _context: &ContextId,
+        _model: &str,
+        _record: &RecordId,
+        _vector: &[f32],
+        _hash: &str,
+    ) -> Result<(), CpdError> {
+        todo!("put_hashed")
+    }
+
+    /// The stored content hash of each of `ids` that has a row ('' when unknown).
+    pub fn hashes(
+        &self,
+        _context: &ContextId,
+        _model: &str,
+        _ids: &[RecordId],
+    ) -> Result<std::collections::HashMap<RecordId, String>, CpdError> {
+        todo!("hashes")
+    }
+
     pub fn get(
         &self,
         context: &ContextId,
@@ -241,4 +263,9 @@ impl VectorStore {
             .map(|t| RecordId::parse(t).map_err(|e| failed(path, "read", e.message())))
             .collect()
     }
+}
+
+/// Lowercase hex SHA-256 of the exact text sent to the embedder.
+pub fn content_hash(_text: &str) -> String {
+    todo!("content_hash")
 }

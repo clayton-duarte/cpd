@@ -19,6 +19,7 @@ mod context_curation;
 mod context_dedupe;
 mod context_distill;
 mod context_docs_gone;
+mod context_embed;
 mod context_inbox_cyan;
 mod context_manager;
 mod context_manager_by_user;

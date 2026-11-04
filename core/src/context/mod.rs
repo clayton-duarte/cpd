@@ -31,6 +31,8 @@ pub mod curate_run;
 mod curate_run_tests;
 pub mod curate_vectors;
 #[cfg(test)]
+mod curate_vectors_hash_tests;
+#[cfg(test)]
 mod curate_vectors_tests;
 pub mod curate_verdict;
 #[cfg(test)]
@@ -46,6 +48,9 @@ mod distill_known;
 mod distill_known_tests;
 #[cfg(test)]
 mod doc_flag_gone_tests;
+mod embed;
+#[cfg(test)]
+mod embed_tests;
 mod fts;
 #[cfg(test)]
 mod fts_tests;
@@ -126,6 +131,8 @@ pub enum Command {
     Distill(distill::DistillArgs),
     /// Curate the next record with its neighbours (§3.13a)
     Curate(curate_run::CurateArgs),
+    /// Embed the Context's in-force records into the vector cache, skipping unchanged ones
+    Embed(embed::EmbedArgs),
     /// Set or change the owner of a Context (§3.13)
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
@@ -380,6 +387,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
         Command::Curate(args) => curate_run::curate(args),
+        Command::Embed(args) => embed::embed(args),
         Command::Owner(args) => owner::owner(args),
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),
