@@ -136,6 +136,7 @@ impl PullRequest {
         let same_but_created_at = PolledPr {
             created_at: self.created_at.clone(),
             updated_at: self.polled()?.updated_at,
+            open_threads: listed.pr.open_threads.clone(),
             ..listed.pr.clone()
         };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
@@ -187,6 +188,7 @@ impl PullRequest {
             merged_at: self.merged_at.clone(),
             base_ref: self.base_ref.clone(),
             default_branch: self.default_branch.clone(),
+            open_threads: vec![],
         })
     }
 }
@@ -910,6 +912,7 @@ mod tests {
             merged_at: None,
             base_ref: None,
             default_branch: None,
+            open_threads: vec![],
         }
     }
 

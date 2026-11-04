@@ -1075,9 +1075,10 @@ fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
 
 /// Whether a stored open review thread is no longer among the polled open threads (a thread beyond the first 100 polled counts as closed).
 fn stored_thread_closed(row: &pulls::PullRequest, open_threads: &[String]) -> bool {
-    row.feedback.iter().flatten().any(|item| {
-        item.kind == super::comments::Kind::Thread && !open_threads.contains(&item.id)
-    })
+    row.feedback
+        .iter()
+        .flatten()
+        .any(|item| item.kind == super::comments::Kind::Thread && !open_threads.contains(&item.id))
 }
 
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or

@@ -418,6 +418,7 @@ fn opened_row(
         merged_at: None,
         base_ref,
         default_branch,
+        open_threads: vec![],
     })
 }
 
@@ -997,6 +998,7 @@ mod tests {
             merged_at: merged_at.map(str::to_owned),
             base_ref: None,
             default_branch: None,
+            open_threads: vec![],
         }
     }
 
