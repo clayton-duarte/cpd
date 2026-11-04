@@ -25,13 +25,19 @@ fn raw(home: &CpdHome) -> Connection {
     conn
 }
 
-/// The migrations that sort after `MIGRATION`, with the table each one changes and the statement that undoes
-/// its schema change (all are additive): the runner refuses `MIGRATION` while any of them is recorded as applied.
-/// The table's generated triggers name the column, so they are dropped first; the runner's reconcile recreates them.
-const LATER: &[(&str, &str)] = &[(
-    "pr_posts",
-    "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
-)];
+/// The migrations that sort after `MIGRATION` (`rewind` removes every one of them from the list), with the table each
+/// one changes and the statement that undoes its schema change (all are additive).
+/// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
+const LATER: &[(&str, &str)] = &[
+    (
+        "pr_posts",
+        "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
+    ),
+    (
+        "record_topics",
+        "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
+    ),
+];
 
 /// Makes the store as it was before the migration: it and the later ones are not recorded as applied.
 fn rewind(conn: &Connection) {
@@ -53,7 +59,7 @@ fn rewind(conn: &Connection) {
     assert!(removed >= 1, "{MIGRATION} is in the list of migrations");
     for (table, undo) in LATER {
         let triggers: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1")
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN (?1, 'history_tables')")
             .unwrap()
             .query_map(params![table], |r| r.get(0))
             .unwrap()

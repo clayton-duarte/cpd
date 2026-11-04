@@ -440,3 +440,44 @@ fn context_reindex_is_no_longer_a_command() {
     let run = fx.cpd(&["context", "reindex", "--context", CTX]);
     assert_eq!(run.exit, 2, "{run:?}");
 }
+
+/// Fixture: a provisional topic for `id` (a `record_topics` row, decision pro-d11).
+fn provisional(fx: &Fx, id: &str, topic: &str) {
+    fx.env.sql(&format!(
+        "INSERT INTO record_topics (context, record, topic, model, at) \
+         VALUES ('{CTX}', '{id}', '{topic}', 'kev-4b', '2026-11-03T00:00:00.000Z');"
+    ));
+}
+
+#[test]
+fn an_uncurated_hit_shows_its_provisional_topic() {
+    let fx = env();
+    let n1 = note(&fx, "An uncurated note.");
+    provisional(&fx, &n1, "engine");
+    let out = fx
+        .cpd(&["context", "search", "uncurated", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["topic"], "engine", "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] [engine] An uncurated note."),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_curated_hit_shows_the_curated_topic_not_the_provisional_one() {
+    let fx = env();
+    let n1 = note(&fx, "A curated note.");
+    provisional(&fx, &n1, "engine");
+    curate(&fx, &n1, "store", "store keeps rows");
+    let out = fx
+        .cpd(&["context", "search", "curated", "--context", CTX])
+        .ok();
+    assert_eq!(out["records"][0]["topic"], "store", "{out}");
+    assert_eq!(
+        out["markdown"],
+        format!("- [{n1}] [store] store keeps rows"),
+        "{out}"
+    );
+}

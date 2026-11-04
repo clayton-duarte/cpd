@@ -111,6 +111,8 @@ struct Tally {
     kev_unreachable: bool,
     retire: Vec<(RecordId, RecordId, Reason)>,
     labels: Vec<(RecordId, String, String)>,
+    /// `(record, topic, model)`: a provisional topic (`record_topics`).
+    provisional: Vec<(RecordId, String, String)>,
     contradicts: Vec<Value>,
 }
 
@@ -201,6 +203,70 @@ fn ask_kev(models: &Models, pair: &Pair, tally: &mut Tally) -> Result<Screen, ()
         verdict,
         confidence: chosen.confidence.unwrap_or(0.0),
     })
+}
+
+/// The question `kev-4b` answers for a record's provisional topic (decision pro-d11).
+const TOPIC_QUESTION: &str = "Which topic does the Context record belong to?";
+/// A provisional topic is written only at this confidence or above.
+const TOPIC_CONFIDENCE: f32 = 0.80;
+
+/// The provisional topic of `new` (an accepted-independent record with no curation and no row yet), chosen among the
+/// Context's curated topics in force. Fail-open: an error or a weak or unknown label records nothing.
+fn provisional_topic(
+    models: &Models,
+    store: &mut Store,
+    context: &ContextId,
+    new: &Candidate,
+    state: &State,
+    tally: &mut Tally,
+) -> Result<(), CpdError> {
+    if state.is_curated(&new.id) {
+        return Ok(());
+    }
+    let (topics, has_row) = store.read(|conn| {
+        let has_row: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM record_topics WHERE context = ?1 AND record = ?2)",
+            [context.as_str(), new.id.to_string().as_str()],
+            |r| r.get(0),
+        )?;
+        Ok((
+            super::curated::curated_topic_counts(conn, context)?,
+            has_row,
+        ))
+    })?;
+    if has_row || topics.is_empty() {
+        return Ok(());
+    }
+    let definitions: Vec<String> = topics
+        .iter()
+        .map(|(topic, _)| format!("The record is about {topic}."))
+        .collect();
+    let labels: Vec<Label> = topics
+        .iter()
+        .zip(&definitions)
+        .map(|((topic, _), definition)| Label {
+            name: topic,
+            definition,
+        })
+        .collect();
+    let state_json =
+        json!({"record": {"id": new.id.to_string(), "kind": new.kind.as_str(), "text": new.text}});
+    let choice = Choice {
+        state: &state_json,
+        question: TOPIC_QUESTION,
+        labels: &labels,
+    };
+    let Ok(chosen) = models.classifier.choose(&choice) else {
+        return Ok(());
+    };
+    if chosen.confidence.unwrap_or(0.0) >= TOPIC_CONFIDENCE
+        && topics.iter().any(|(topic, _)| *topic == chosen.label)
+    {
+        tally
+            .provisional
+            .push((new.id.clone(), chosen.label, chosen.model));
+    }
+    Ok(())
 }
 
 fn judge_pair(
@@ -333,8 +399,9 @@ fn write(
     context: &ContextId,
     state: &State,
     tally: &Tally,
+    at: &str,
 ) -> Result<(), CpdError> {
-    if tally.retire.is_empty() && tally.labels.is_empty() {
+    if tally.retire.is_empty() && tally.labels.is_empty() && tally.provisional.is_empty() {
         return Ok(());
     }
     let curations: Vec<Curation> = tally
@@ -359,10 +426,21 @@ fn write(
             target: target.to_string(),
         })
         .collect();
-    if curations.is_empty() && proposals.is_empty() {
-        return Ok(());
+    if !curations.is_empty() || !proposals.is_empty() {
+        propose_rejecting(store, context, &curations, &proposals, tally.rejected)?;
     }
-    propose_rejecting(store, context, &curations, &proposals, tally.rejected)?;
+    if !tally.provisional.is_empty() {
+        store.write("context curate", |tx| {
+            for (record, topic, model) in &tally.provisional {
+                tx.execute(
+                    "INSERT INTO record_topics (context, record, topic, model, at) VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT DO NOTHING",
+                    [context.as_str(), &record.to_string(), topic, model, at],
+                )?;
+            }
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
@@ -461,7 +539,12 @@ pub fn curate_with(
     fts_only |= fts;
     let count = found.len().min(K);
     check_pairs(models, new, &found, &all, &topics, &mut tally)?;
-    write(store, context, &state, &tally)?;
+    let retired_or_labelled = tally.retire.iter().any(|(r, _, _)| *r == picked)
+        || tally.labels.iter().any(|(r, _, _)| *r == picked);
+    if tally.free > 0 && !retired_or_labelled {
+        provisional_topic(models, store, context, new, &state, &mut tally)?;
+    }
+    write(store, context, &state, &tally, &at)?;
     vectors.mark_checked(context, &picked, &at)?;
     checked.insert(picked);
     let remaining = due(&state, &checked, now).len();
