@@ -1,10 +1,14 @@
 import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
-import type { ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
+import { useState } from "react";
+import type { CockpitAction, ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { formatCost } from "../../server/cockpit/cost.ts";
 import { dotDisplay, sessionDisplay } from "../dango-status.ts";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/context-menu.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
+import { Input } from "../components/input.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { Separator } from "../components/separator.tsx";
@@ -35,8 +39,147 @@ interface Handlers {
   onSelectPlan(planId: string): void;
   costsOn?: boolean;
   costs?: Costs;
+  menu?: MenuApi;
 }
 type Costs = { readonly contexts: Readonly<Record<string, number>>; readonly plans: Readonly<Record<string, number>> };
+
+// ---- context menus (pro-d46): items per row kind follow tui/src/tree/menu.rs ----
+interface PromptSpec {
+  readonly title: string;
+  readonly prompt: string;
+  readonly initial: string;
+  /** A confirmation: the prompt is the text, there is no input and the button is `confirm`. */
+  readonly confirm?: string;
+  /** Returns the action to run, or the error to show in the dialog. */
+  readonly submit: (value: string) => CockpitAction | string;
+}
+interface MenuApi {
+  act(action: CockpitAction): void;
+  ask(spec: PromptSpec): void;
+  /** Every Plan id in every Context. */
+  readonly taken: readonly string[];
+}
+interface MenuItem { readonly label: string; run(): void }
+type MenuKind = "context" | "permanent" | "plan" | "fork" | "archived";
+
+const PLAN_MAX = 24;
+const NO_ID_ERROR = "A title needs at least two letters or digits, the first a letter, to make an id.";
+
+/** tui/src/tree/slug.rs `derive`: lowercase ASCII slug, cut to `max`, `-2`, `-3`, ... while taken; null when no id fits. */
+export function deriveSlug(title: string, max: number, taken: readonly string[]): string | null {
+  let slug = "";
+  let dash = false;
+  for (const c of title) {
+    if (/^[A-Za-z0-9]$/.test(c)) {
+      if (slug === "" && !/^[A-Za-z]$/.test(c)) continue;
+      if (dash && slug !== "") slug += "-";
+      dash = false;
+      slug += c.toLowerCase();
+    } else dash = true;
+  }
+  const cut = (n: number): string => slug.slice(0, n).replace(/-+$/, "");
+  const base = cut(max);
+  if (base.length < 2) return null;
+  if (!taken.includes(base)) return base;
+  for (let n = 2; n < 10000; n++) {
+    const id = `${cut(max - 1 - String(n).length)}-${n}`;
+    if (!taken.includes(id)) return id;
+  }
+  return null;
+}
+
+const required = (what: "Title" | "Name", value: string): string | null => (value.trim() === "" ? `${what} is required.` : null);
+const copyId = (id: string): void => { void navigator.clipboard.writeText(id); };
+
+function renameItem(api: MenuApi, what: "Title" | "Name", initial: string, action: (v: string) => CockpitAction): MenuItem {
+  return {
+    label: "Rename\u2026",
+    run: () => api.ask({ title: "Rename", prompt: `${what}:`, initial, submit: (v) => required(what, v) ?? action(v.trim()) }),
+  };
+}
+const nameItem = (api: MenuApi, label: string, title: string, sourceId: string): MenuItem => ({
+  label,
+  run: () => api.ask({ title, prompt: "Name:", initial: "", submit: (v) => required("Name", v) ?? { kind: "session.fork", sourceId, name: v.trim() } }),
+});
+function newPlanItem(api: MenuApi, contextId: string): MenuItem {
+  return {
+    label: "New Plan\u2026",
+    run: () => api.ask({
+      title: "New Plan", prompt: "Title:", initial: "",
+      submit: (v) => {
+        const missing = required("Title", v);
+        if (missing !== null) return missing;
+        const planId = deriveSlug(v.trim(), PLAN_MAX, api.taken);
+        return planId === null ? NO_ID_ERROR : { kind: "plan.new", planId, contextId, title: v.trim() };
+      },
+    }),
+  };
+}
+const deleteItem = (api: MenuApi, id: string, action: CockpitAction): MenuItem => ({
+  label: "Delete",
+  run: () => api.ask({ title: "Delete", prompt: `Delete ${id}?`, initial: "", confirm: "Delete", submit: () => action }),
+});
+const copyItem = (id: string): MenuItem => ({ label: "Copy id", run: () => copyId(id) });
+const actItem = (api: MenuApi, label: string, action: CockpitAction): MenuItem => ({ label, run: () => api.act(action) });
+
+/** A Plan is quiet when archived or its Lead is stopped (the web's stand-in for the TUI's asleep). */
+const isPlanQuiet = (p: PlanNode): boolean => {
+  const lead = leadOf(p);
+  return p.archived || lead === undefined || lead.dot.state === "stopped";
+};
+
+/** Wraps the row button in a right-click menu; without a menu API the row is plain. */
+function RowMenu(props: { api: MenuApi | undefined; kind: MenuKind; items: readonly MenuItem[]; children: ReactElement }): ReactElement {
+  if (props.api === undefined) return props.children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuContent data-menu-kind={props.kind}>
+        {props.items.map((i) => (
+          <ContextMenuItem key={i.label} onSelect={i.run}>{i.label}</ContextMenuItem>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function PromptDialog(props: { spec: PromptSpec | null; onDone(action: CockpitAction | null): void }): ReactElement {
+  const { spec } = props;
+  const [value, setValue] = useState(spec?.initial ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [lastSpec, setLastSpec] = useState(spec);
+  if (spec !== lastSpec) { // a new prompt starts from its own initial value
+    setLastSpec(spec);
+    setValue(spec?.initial ?? "");
+    setError(null);
+  }
+  const submit = (): void => {
+    if (spec === null) return;
+    const out = spec.submit(value);
+    if (typeof out === "string") setError(out);
+    else props.onDone(out);
+  };
+  return (
+    <Dialog open={spec !== null} onOpenChange={(open) => { if (!open) props.onDone(null); }}>
+      <DialogContent>
+        <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="grid gap-3">
+          <DialogHeader>
+            <DialogTitle>{spec?.title ?? ""}</DialogTitle>
+            <DialogDescription>{spec?.prompt ?? ""}</DialogDescription>
+          </DialogHeader>
+          {spec?.confirm === undefined ? (
+            <Input autoFocus aria-label={spec?.prompt ?? ""} aria-invalid={error !== null} value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} />
+          ) : null}
+          {error === null ? null : <p role="alert" className="text-meta text-status-blocked-bright">{error}</p>}
+          <DialogFooter>
+            <button type="button" className="rounded-md border border-border px-3 py-1 text-sm" onClick={() => props.onDone(null)}>Cancel</button>
+            <button type="button" className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground" onClick={submit}>{spec?.confirm ?? "OK"}</button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /** The row's cost, drawn only while costs are on and the cost is known. */
 function RowCost({ on, value }: { on: boolean | undefined; value: number | undefined }): ReactElement | null {
@@ -131,8 +274,20 @@ function compareOrderKey(aDot: SessionDot, aCreated: string, bDot: SessionDot, b
 function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactElement {
   const { node } = props;
   const current = props.selectedSessionId === node.ref.id;
+  const api = props.menu;
+  const id = node.ref.id;
+  const items: MenuItem[] = api === undefined ? [] : [
+    { label: "Open", run: () => props.onSelectSession(id) },
+    renameItem(api, "Name", props.label, (name) => ({ kind: "session.rename", sessionId: id, name })),
+    nameItem(api, "Fork\u2026", "Fork", id),
+    copyItem(id),
+    // the selected Session may hold the chat slot, and the chat-slot Lead is never closed (commands.md 10.9)
+    ...(current ? [] : [actItem(api, "Close", { kind: "session.close", sessionId: id })]),
+    actItem(api, "Archive", { kind: "session.archive", sessionId: id }),
+  ];
   return (
     <SidebarMenuSubItem data-part="session-row">
+      <RowMenu api={api} kind="fork" items={items}>
       <SidebarMenuSubButton
         type="button"
         size="sm"
@@ -144,6 +299,7 @@ function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactE
         <Dot dot={node.dot} archived={node.archived} />
         <span className="min-w-0 flex-1 truncate font-mono">{props.label}</span>
       </SidebarMenuSubButton>
+      </RowMenu>
     </SidebarMenuSubItem>
   );
 }
@@ -158,8 +314,21 @@ function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
   const lead = leadOf(plan);
   const forks = plan.sessions.filter((s) => isFork(s) && s.ref.id !== plan.leadSessionId);
   const current = lead !== undefined && props.selectedSessionId === lead.ref.id;
+  const api = props.menu;
+  const rename = api === undefined ? [] : [renameItem(api, "Title", plan.title, (title) => ({ kind: "plan.rename", planId: plan.id, title }))];
+  const del = api !== undefined && isPlanQuiet(plan) ? [deleteItem(api, plan.id, { kind: "plan.delete", planId: plan.id })] : [];
+  const items: MenuItem[] = api === undefined ? [] : plan.archived
+    ? [...rename, copyItem(plan.id), actItem(api, "Unarchive", { kind: "plan.unarchive", planId: plan.id }), ...del]
+    : [
+        ...(lead === undefined ? [] : [nameItem(api, "New session\u2026", "New session", lead.ref.id)]),
+        ...rename,
+        copyItem(plan.id),
+        actItem(api, "Archive", { kind: "plan.archive", planId: plan.id }),
+        ...del,
+      ];
   return (
     <SidebarMenuSubItem role="treeitem" data-plan={plan.id} data-part="plan-row">
+      <RowMenu api={api} kind={plan.archived ? "archived" : "plan"} items={items}>
       <SidebarMenuSubButton
         type="button"
         isActive={current}
@@ -175,6 +344,7 @@ function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
         <RowCost on={props.costsOn} value={props.costs?.plans[plan.id]} />
         <Counters counts={plan.counts} />
       </SidebarMenuSubButton>
+      </RowMenu>
       {forks.length > 0 ? (
         <SidebarMenuSub>
           {forks.map((s) => (
@@ -196,9 +366,23 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   const forks = context.sessions.filter(isFork);
   const hasChildren = plans.length > 0 || forks.length > 0;
   const current = manager !== undefined && props.selectedSessionId === manager.ref.id;
+  const api = props.menu;
+  const permanent = isPermanent(context.id);
+  const archivedRow = props.allPlans && context.archived;
+  const deletable = !permanent && (context.archived || (context.plans.length > 0 && context.plans.every(isPlanQuiet)));
+  const del = api !== undefined && deletable ? [deleteItem(api, context.id, { kind: "context.delete", contextId: context.id })] : [];
+  const rename = api === undefined ? [] : [renameItem(api, "Title", context.title, (title) => ({ kind: "context.rename", contextId: context.id, title }))];
+  const items: MenuItem[] = api === undefined ? [] : permanent
+    ? [newPlanItem(api, context.id), copyItem(context.id)]
+    : archivedRow
+      ? [...rename, copyItem(context.id), actItem(api, "Unarchive", { kind: "context.unarchive", contextId: context.id }), ...del]
+      : [newPlanItem(api, context.id), ...rename, copyItem(context.id), actItem(api, "Archive", { kind: "context.archive", contextId: context.id }), ...del];
+  // in the Archive section a live Context only holds archived Plans: its own row has no menu
+  const rowApi = props.allPlans && !context.archived ? undefined : api;
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <SidebarMenuItem role="treeitem" data-context={context.id}>
+        <RowMenu api={rowApi} kind={permanent ? "permanent" : archivedRow ? "archived" : "context"} items={items}>
         <SidebarMenuButton
           type="button"
           isActive={current}
@@ -213,6 +397,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
           <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
           <RowCost on={props.costsOn} value={props.costs?.contexts[context.id]} />
         </SidebarMenuButton>
+        </RowMenu>
         {hasChildren ? (
           <>
             <CollapsibleTrigger asChild>
@@ -270,7 +455,7 @@ function TreeSection(props: {
   );
 }
 
-function ContextMenu(props: { contexts: ContextNode[]; allPlans: boolean } & Handlers): ReactElement {
+function ContextList(props: { contexts: ContextNode[]; allPlans: boolean } & Handlers): ReactElement {
   const { contexts, allPlans, ...handlers } = props;
   return (
     <SidebarMenu role="tree">
@@ -291,8 +476,14 @@ export function ContextTree(props: {
   /** Costs by Context id and Plan id; drawn only while `costsOn`. */
   costsOn?: boolean;
   costs?: Costs;
+  /** Runs a tree menu action; without it the rows have no menu. */
+  onAction?: (action: CockpitAction) => void;
 }): ReactElement {
-  const { tree, onNewContext, ...handlers } = props;
+  const { tree, onNewContext, onAction, ...rest } = props;
+  const [prompt, setPrompt] = useState<PromptSpec | null>(null);
+  const taken = (tree?.contexts ?? []).flatMap((c) => c.plans.map((p) => p.id));
+  const menu: MenuApi | undefined = onAction === undefined ? undefined : { act: onAction, ask: setPrompt, taken };
+  const handlers = menu === undefined ? rest : { ...rest, menu };
   const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
   const [standingOpen, setStandingOpen] = usePersistedBoolean("section:standing", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);
@@ -333,7 +524,7 @@ export function ContextTree(props: {
             ) : all.length === 0 ? (
               <p data-part="empty" className="px-2 text-fg-dim">No contexts</p>
             ) : (
-              <ContextMenu contexts={projectContexts} allPlans={false} {...handlers} />
+              <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
             )}
           </TreeSection>
         </ScrollArea>
@@ -344,12 +535,12 @@ export function ContextTree(props: {
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex flex-col gap-1 py-1">
                 <TreeSection label="Standing" open={standingOpen} onOpenChange={setStandingOpen} groupAttrs={{ "data-standing": true }}>
-                  <ContextMenu contexts={standing} allPlans={false} {...handlers} />
+                  <ContextList contexts={standing} allPlans={false} {...handlers} />
                 </TreeSection>
                 {archived.length > 0 ? <Separator /> : null}
                 {archived.length > 0 ? (
                   <TreeSection label="Archive" open={archivedOpen} onOpenChange={setArchivedOpen} groupAttrs={{ "data-archived": true }}>
-                    <ContextMenu contexts={archived} allPlans={true} {...handlers} />
+                    <ContextList contexts={archived} allPlans={true} {...handlers} />
                   </TreeSection>
                 ) : null}
               </div>
@@ -357,6 +548,7 @@ export function ContextTree(props: {
           </div>
         ) : null}
       </SidebarContent>
+      <PromptDialog spec={prompt} onDone={(action) => { setPrompt(null); if (action !== null) onAction?.(action); }} />
     </Sidebar>
   );
 }

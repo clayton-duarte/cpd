@@ -14,21 +14,20 @@ export function actionArgs(action: CockpitAction): readonly string[] {
     case "engine.start": return ["watch", "--ensure"];
     case "session.retier": return ["session", "retier", action.sessionId, "--tier", action.tier];
     case "plan.reject": return ["plan", "decide", action.review, "--reject", "--plan", action.planId];
-    case "plan.new":
-    case "context.rename":
-    case "plan.rename":
-    case "session.rename":
-    case "session.fork":
-    case "session.close":
-    case "context.archive":
-    case "plan.archive":
-    case "session.archive":
-    case "context.unarchive":
-    case "plan.unarchive":
-    case "session.unarchive":
-    case "context.delete":
-    case "plan.delete":
-      throw new Error("not implemented");
+    case "plan.new": return ["plan", "new", action.planId, `--context=${action.contextId}`, `--title=${action.title}`, "--by-user"];
+    case "context.rename": return ["context", "rename", action.contextId, `--title=${action.title}`];
+    case "plan.rename": return ["plan", "rename", `--plan=${action.planId}`, `--title=${action.title}`];
+    case "session.rename": return ["session", "rename", `--session=${action.sessionId}`, "--", action.name];
+    case "session.fork": return ["session", "fork", action.sourceId, `--name=${action.name}`];
+    case "session.close": return ["session", "close", action.sessionId];
+    case "context.archive": return ["context", "archive", action.contextId];
+    case "plan.archive": return ["plan", "archive", `--plan=${action.planId}`];
+    case "session.archive": return ["session", "archive", action.sessionId];
+    case "context.unarchive": return ["context", "unarchive", action.contextId];
+    case "plan.unarchive": return ["plan", "unarchive", `--plan=${action.planId}`];
+    case "session.unarchive": return ["session", "unarchive", action.sessionId];
+    case "context.delete": return ["context", "delete", action.contextId, "--yes"];
+    case "plan.delete": return ["plan", "delete", action.planId, "--yes"];
   }
 }
 // `cpd pr merge <owner>/<repo>#<n>`: the pull request is the Workflow's stored pull_request, listed by `pr poll --plan`.
@@ -44,9 +43,21 @@ async function mergeArgs(cpd: Cpd, planId: string, workflow: string): Promise<re
   }
   return ["pr", "merge", `${repo}#${number}`];
 }
+const NEEDS_SLOT: ReadonlySet<string> = new Set(["context.archive", "plan.archive", "session.archive", "session.close"]);
 export async function runAction(cpd: Cpd, raw: unknown): Promise<ActionOutput> {
   const action = parseCockpitAction(raw);
-  return cpd.json(action.kind === "pr.merge" ? await mergeArgs(cpd, action.planId, action.workflow) : actionArgs(action));
+  const args = action.kind === "pr.merge" ? await mergeArgs(cpd, action.planId, action.workflow) : actionArgs(action);
+  try {
+    return await cpd.json(args);
+  } catch (e) {
+    // the chat slot must be free: park once, then retry once
+    if (NEEDS_SLOT.has(action.kind) && e instanceof WebError && e.details?.["cpdCode"] === "in_chat_slot") {
+      // a failed park is not the answer: the retry reports the real error
+      await cpd.json(["session", "park"]).catch(() => undefined);
+      return cpd.json(args);
+    }
+    throw e;
+  }
 }
 export const WEB_UNBLOCKS = "User message from the web chat";
 export function sessionSendArgs(sessionId: string, text: string, unblocks?: string): readonly string[] {

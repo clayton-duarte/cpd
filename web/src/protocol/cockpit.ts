@@ -145,6 +145,20 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "engine.start": [],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
+    "plan.new": ["planId", "contextId", "title"],
+    "context.rename": ["contextId", "title"],
+    "plan.rename": ["planId", "title"],
+    "session.rename": ["sessionId", "name"],
+    "session.fork": ["sourceId", "name"],
+    "session.close": ["sessionId"],
+    "context.archive": ["contextId"],
+    "plan.archive": ["planId"],
+    "session.archive": ["sessionId"],
+    "context.unarchive": ["contextId"],
+    "plan.unarchive": ["planId"],
+    "session.unarchive": ["sessionId"],
+    "context.delete": ["contextId"],
+    "plan.delete": ["planId"],
   };
   if (typeof kind !== "string" || !Object.hasOwn(fields, kind)) throw new WebError("unknown_action", `unknown action kind ${String(kind)}`);
   for (const f of fields[kind]!) field(o, f, kind);

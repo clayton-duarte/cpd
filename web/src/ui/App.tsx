@@ -119,6 +119,7 @@ export function App(props: AppProps): ReactElement {
           onSelectPlan={onSelectPlan}
           costsOn={costsOn}
           costs={costs}
+          onAction={onAction}
         />
       }
       plan={!live ? null : <MemoPlan plan={cockpit.plan} onAction={onAction} />}

@@ -139,6 +139,29 @@ export function createConnection(options: ConnectionOptions): Connection {
     return id;
   };
 
+  const objectOf = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null);
+  /** A create action's reply names the new Plan and its Session: select and attach them. */
+  function selectCreated(output: unknown): void {
+    const out = objectOf(output);
+    if (out === null) return;
+    const planId = objectOf(out["plan"])?.["id"];
+    if (typeof planId === "string") {
+      store.dispatch({ type: "selectPlan", planId });
+      send({ type: "cockpit.selectPlan", planId });
+    }
+    const lead = objectOf(out["lead"])?.["session"];
+    const forked = objectOf(out["session"])?.["id"];
+    const next = typeof lead === "string" ? lead : typeof forked === "string" ? forked : null;
+    const before = store.getState().selectedSessionId;
+    if (next === null || next === before) return;
+    dropBuffer();
+    dropEchoTimers();
+    store.dispatch({ type: "selectSession", sessionId: next });
+    if (store.getState().connection !== "open") return;
+    if (before !== null) send({ type: "session.detach" });
+    send({ type: "session.attach", sessionId: next });
+  }
+
   transport.onMessage((raw) => {
     if (closed) return;
     let message: ServerMessage;
@@ -158,6 +181,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "action.result" && message.ok) selectCreated(message["output"]);
     if (message.type === "session.submitAck" && !message.queued && message.sessionId === store.getState().selectedSessionId) {
       const id = message.clientSubmissionId;
       echoTimers.get(id)?.dispose();
