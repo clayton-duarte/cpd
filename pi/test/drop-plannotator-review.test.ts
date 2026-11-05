@@ -45,6 +45,8 @@ test("drop-plannotator a plan-review Event shows the summary and writes only cha
   for (const e of written) {
     assert.equal("plannotator_id" in e, false);
     assert.ok(e.surface === undefined || e.surface === "chat");
+    assert.equal(e.summary, SUMMARY);
+    assert.equal(e.title, TITLE);
   }
   assert.deepEqual(f.pi.emitted.filter((e) => e.channel.startsWith("plannotator:")), []);
 });
