@@ -13,6 +13,8 @@
 # from origin/main on branch preview/web when missing, and never touched when present.
 # `on` also installs the frozen watchdog into ${CPD_PREVIEW_DIR}/watchdog and starts it (pid in
 # ${CPD_PREVIEW_DIR}/watchdog.pid, log in ${CPD_HOME:-~/.cpd}/run/preview-watchdog.log).
+# The watchdog relaunches Electron with CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html (Vite HMR);
+# when that URL fails to load, Electron loads the built renderer.
 # CPD_PREVIEW_ELECTRON=1 also builds the Electron bundle. While a preview is on, the
 # tmux server option @cpd_web_preview holds '<name> <sha>'. State: ${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}/web-state.
 # Safe to rerun.
@@ -24,6 +26,7 @@ state="$dir/web-state"
 cpd_home="${CPD_HOME:-${HOME:?HOME is not set}/.cpd}"
 wd_dir="$dir/watchdog"
 wd_pid="$dir/watchdog.pid"
+dev_url="http://localhost:5173/electron.html"
 
 usage() {
   echo "usage: sh $0 on [<worktree>] | off | status | reload [<worktree>]" >&2
@@ -74,7 +77,7 @@ start_watchdog() {
   mkdir -p "$wd_dir" "$cpd_home/run"
   cp "$repo/scripts/preview-watchdog.mjs" "$repo/web/src/electron/health.ts" \
     "$repo/web/src/electron/watchdog.ts" "$repo/web/src/electron/restore-points.ts" "$wd_dir/"
-  nohup node "$wd_dir/preview-watchdog.mjs" --worktree "$1" --home "$cpd_home" \
+  CPD_ELECTRON_DEV_URL="$dev_url" nohup node "$wd_dir/preview-watchdog.mjs" --worktree "$1" --home "$cpd_home" \
     --relaunch pnpm --dir "$1/web" exec electron . >>"$cpd_home/run/preview-watchdog.log" 2>&1 </dev/null &
   echo "$!" >"$wd_pid"
 }
@@ -123,7 +126,7 @@ on() {
   printf '%s\n%s\n' "$worktree" "$sha" >"$state"
   start_watchdog "$worktree"
   echo "previewing $worktree @ $sha at http://localhost:5173; revert with: sh $0 off" >&2
-  echo "Electron on it: CPD_ELECTRON_DEV_URL=http://localhost:5173 pnpm --dir $worktree/web run electron" >&2
+  echo "Electron on it: CPD_ELECTRON_DEV_URL=$dev_url pnpm --dir $worktree/web run electron" >&2
 }
 
 off() {
