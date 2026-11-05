@@ -2,6 +2,8 @@ export interface CostFile { readonly text: string; readonly mtimeMs: number; rea
 export interface CostDeps {
   cpd(argv: readonly string[]): Promise<string>;
   readFile(path: string): Promise<CostFile | null>;
+  /** The cumulative cost of a durable session's host store, `null` when it has no store. */
+  durableCost?(sessionId: string): Promise<{ cost: number | null; stamp: string } | null>;
 }
 
 const obj = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
@@ -54,6 +56,18 @@ async function fileCost(deps: CostDeps, path: string | null): Promise<number | n
   cache.set(path, { mtimeMs: f.mtimeMs, size: f.size, cost });
   return cost;
 }
+interface DurableCached { stamp: string; cost: number | null }
+const durableCache = new Map<string, DurableCached>();
+async function sessionCost(deps: CostDeps, s: Record<string, unknown>): Promise<number | null> {
+  const id = str(s["id"]);
+  if (s["runner"] !== "durable" || id === null || deps.durableCost === undefined) return fileCost(deps, str(s["file"]));
+  const d = await deps.durableCost(id);
+  if (d === null) { durableCache.delete(id); return null; }
+  const hit = durableCache.get(id);
+  if (hit !== undefined && hit.stamp === d.stamp) return hit.cost;
+  durableCache.set(id, { stamp: d.stamp, cost: d.cost });
+  return d.cost;
+}
 const total = (xs: (number | null)[]): number | null => (xs.some((x) => x !== null) ? xs.reduce<number>((a, x) => a + (x ?? 0), 0) : null);
 const PAGE = 5000;
 
@@ -80,7 +94,7 @@ export async function readCosts(deps: CostDeps): Promise<Record<string, number>>
     for (const p of arr(c["plans"])) {
       const pid = str(p["id"]);
       if (pid === null) continue;
-      const lead = await Promise.all(sessions.filter((s) => s["role"] === "lead" && s["plan"] === pid).map((s) => fileCost(deps, str(s["file"]))));
+      const lead = await Promise.all(sessions.filter((s) => s["role"] === "lead" && s["plan"] === pid).map((s) => sessionCost(deps, s)));
       const keys = new Set<string>([...stored.keys()].filter((k) => k.startsWith(`${pid}/`)));
       for (const w of workers) if (w["plan"] === pid) keys.add(`${pid}/${str(w["attempt"])}`);
       const atts = await Promise.all([...keys].map((k) => {
@@ -92,7 +106,7 @@ export async function readCosts(deps: CostDeps): Promise<Record<string, number>>
       const t = total([...lead, ...atts]);
       if (t !== null) { out[pid] = t; parts.push(t); }
     }
-    const mgr = await Promise.all(sessions.filter((s) => s["role"] === "manager" && s["context"] === c["id"]).map((s) => fileCost(deps, str(s["file"]))));
+    const mgr = await Promise.all(sessions.filter((s) => s["role"] === "manager" && s["context"] === c["id"]).map((s) => sessionCost(deps, s)));
     const id = str(c["id"]);
     const t = total([...parts, ...mgr]);
     if (id !== null && t !== null) out[id] = t;

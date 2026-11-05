@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { connect } from "node:net";
 import { promises as fsp, watch as fsWatch } from "node:fs";
@@ -83,9 +84,31 @@ export function createServices(b: PluginBoundaries): Services {
     if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `cpd exited ${r.exitCode}`);
     return r.stdout;
   };
+  const DURABLE_COST_SQL = `SELECT sum(
+  (SELECT coalesce(sum(json_extract(v.value,'$.cost.total')),0) FROM json_each(r.content,'$.models') v)
++ (SELECT coalesce(sum(json_extract(v.value,'$.cost.total')),0) FROM json_each(r.content,'$.tools') v)
+) AS cost
+FROM document_revisions r JOIN documents d ON d.id = r.document_id
+WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
+  const statOrNull = async (path: string) => fsp.stat(path).catch((e: unknown) => { if ((e as { code?: unknown }).code === "ENOENT") return null; throw e; });
+  const durableCost = async (id: string): Promise<{ cost: number | null; stamp: string } | null> => {
+    const file = `${b.cpdHome}/run/host/${id}.sqlite`;
+    const main = await statOrNull(file);
+    if (main === null) return null;
+    const wal = await statOrNull(`${file}-wal`);
+    const stamp = `${main.mtimeMs}:${main.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`;
+    // Built-in node:sqlite, not chord's binding: that one writes the host store (journal_mode, checkpoint on close).
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      const row = db.prepare(DURABLE_COST_SQL).get() as { cost: number | null } | undefined;
+      return { cost: row?.cost ?? null, stamp };
+    } finally {
+      db.close();
+    }
+  };
   const extras: Extras = {
     status: () => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null }),
-    costs: () => readCosts({ cpd: cpdText, readFile: b.readText }),
+    costs: () => readCosts({ cpd: cpdText, readFile: b.readText, durableCost }),
     logs: () => readLogs({ cpd: cpdText }),
     settings: () => readSettings(cpd),
     saveSettings: (changes) => saveSettings(cpd, changes),

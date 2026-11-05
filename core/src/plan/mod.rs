@@ -19,6 +19,9 @@ pub(crate) mod delete;
 pub mod display;
 #[cfg(test)]
 mod display_tier_tests;
+pub(crate) mod done;
+#[cfg(test)]
+mod done_tests;
 #[cfg(test)]
 mod explore_render_tests;
 #[cfg(test)]
@@ -34,7 +37,7 @@ mod lint_cmd;
 mod lint_tests;
 #[cfg(test)]
 mod lint_text_tests;
-mod list;
+pub(crate) mod list;
 pub(crate) mod lock;
 pub(crate) mod new;
 mod outline;
@@ -47,6 +50,8 @@ pub mod parked_wake;
 mod parked_wake_tests;
 mod phase;
 mod prs;
+#[cfg(test)]
+mod reeval_tests;
 mod rename;
 mod render;
 #[cfg(test)]
@@ -57,7 +62,7 @@ pub(crate) mod shape;
 pub mod shared;
 #[cfg(test)]
 mod shared_tests;
-mod show;
+pub(crate) mod show;
 #[cfg(test)]
 mod sql_trace;
 mod summary;
