@@ -316,3 +316,139 @@ fn the_flock_file_exists_after_the_start() {
     assert_eq!(err.code(), ErrorCode::HostRunning, "{}", err.message());
     drop(lock);
 }
+
+/// A Manager `id` of Context `ctx`, durable, with no Plan, `idle`.
+fn add_manager(fx: &mut Fx, id: &str) {
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+           VALUES ('{id}', 'manager', 'ctx', NULL, '{id}', '/', 'O3', 'idle', 't', 't', 'durable');"
+    ));
+}
+
+/// The sweep (contract §6.19): the row gets `column` set like a manual archive, and the host goes in one tick.
+fn assert_swept(fx: &mut Fx, spawn: &FakeSpawn, id: &str, column: &str) {
+    let sid = SessionId::parse(id).unwrap();
+    let (_pid, _lock) = hosts::start(&mut fx.engine, &sid).expect("the host starts");
+    assert_eq!(spawn.launches().len(), 1);
+    fx.fixture(&format!(
+        "UPDATE sessions SET {column} = '2026-01-01T00:00:00.000Z' WHERE id = '{id}';"
+    ));
+
+    hosts::run(&mut fx.engine);
+    let terms = spawn
+        .signals()
+        .iter()
+        .filter(|(_, s)| *s == Signal::Term)
+        .count();
+    assert_eq!(terms, 1, "one Term within one tick: {:?}", spawn.signals());
+
+    let signals = spawn.signals().len();
+    hosts::run(&mut fx.engine);
+    assert_eq!(spawn.launches().len(), 1, "no host is started again");
+    assert_eq!(spawn.signals().len(), signals, "no further signal");
+}
+
+#[test]
+fn archived_session_host_is_stopped_within_one_tick() {
+    let (mut fx, spawn, _clock) = live_fx();
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    assert_swept(&mut fx, &spawn, "lead1", "archived_at");
+}
+
+#[test]
+fn asleep_session_host_is_stopped_within_one_tick() {
+    let (mut fx, spawn, _clock) = live_fx();
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    assert_swept(&mut fx, &spawn, "lead1", "asleep_at");
+}
+
+#[test]
+fn archived_manager_host_is_stopped() {
+    let (mut fx, spawn, _clock) = live_fx();
+    add_manager(&mut fx, "mgr1");
+    assert_swept(&mut fx, &spawn, "mgr1", "archived_at");
+}
+
+/// A fake with `pi_adapter` set to a directory in `adapter` (the swap marker, contract §6.19), whose mtime is `marker_age`
+/// seconds ago, and a durable Lead `lead1` whose host runs with `state` and a pid file `pid_age` seconds old.
+fn stale_fx(
+    adapter: &tempfile::TempDir,
+    marker_age: u64,
+    pid_age: u64,
+    state: &str,
+) -> (Fx, Arc<FakeSpawn>) {
+    let marker = adapter.path().join("pi");
+    std::fs::create_dir_all(&marker).unwrap();
+    std::fs::write(marker.join("package.json"), "{}").unwrap();
+    let mut fx = Fx::new(&format!("pi_adapter = \"{}\"", marker.display()));
+    let spawn = Arc::new(FakeSpawn::new());
+    fx.engine.ports = Ports {
+        clock: Arc::new(ManualClock::new()),
+        runner: Arc::new(FakeRunner::new(ManualClock::new())),
+        spawn: spawn.clone(),
+        ..Ports::real()
+    };
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    fx.fixture(&format!(
+        "UPDATE sessions SET state = '{state}' WHERE id = 'lead1';"
+    ));
+    let id = SessionId::parse("lead1").unwrap();
+    let (_pid, _lock) = hosts::start(&mut fx.engine, &id).expect("the host starts");
+    let ago = |secs: u64| std::time::SystemTime::now() - Duration::from_secs(secs);
+    let set = |path: &std::path::Path, secs: u64| {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(ago(secs))
+            .unwrap();
+    };
+    set(&marker, marker_age);
+    set(&fx.engine.home.run_dir().join("host/lead1.pid"), pid_age);
+    (fx, spawn)
+}
+
+fn terms(spawn: &FakeSpawn) -> usize {
+    spawn
+        .signals()
+        .iter()
+        .filter(|(_, s)| *s == Signal::Term)
+        .count()
+}
+
+#[test]
+fn stale_idle_host_is_restarted() {
+    let adapter = tempfile::tempdir().unwrap();
+    let (mut fx, spawn) = stale_fx(&adapter, 10, 100, "idle");
+
+    hosts::run(&mut fx.engine);
+    assert_eq!(terms(&spawn), 1, "Term: {:?}", spawn.signals());
+    assert_eq!(spawn.launches().len(), 2, "a second host starts");
+
+    hosts::run(&mut fx.engine);
+    assert_eq!(terms(&spawn), 1, "nothing more");
+    assert_eq!(spawn.launches().len(), 2, "nothing more");
+}
+
+#[test]
+fn stale_busy_host_waits_until_idle() {
+    let adapter = tempfile::tempdir().unwrap();
+    let (mut fx, spawn) = stale_fx(&adapter, 10, 100, "working");
+
+    hosts::run(&mut fx.engine);
+    assert_eq!(terms(&spawn), 0, "a working host is left alone");
+    assert_eq!(spawn.launches().len(), 1);
+
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
+    hosts::run(&mut fx.engine);
+    assert_eq!(terms(&spawn), 1, "restarted once idle");
+    assert_eq!(spawn.launches().len(), 2);
+}
+
+#[test]
+fn fresh_idle_host_is_not_restarted() {
+    let adapter = tempfile::tempdir().unwrap();
+    let (mut fx, spawn) = stale_fx(&adapter, 100, 10, "idle");
+
+    hosts::run(&mut fx.engine);
+    assert_eq!(terms(&spawn), 0);
+    assert_eq!(spawn.launches().len(), 1);
+}
