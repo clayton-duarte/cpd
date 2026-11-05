@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { WebError } from "./protocol/domain.ts";
 import type { Disposable, Transport } from "./protocol/runtime.ts";
-import { App } from "./ui/App.tsx";
+import { Root } from "./ui/Root.tsx";
 import { browserFileReader, browserScheduler } from "./ui/browser-boundaries.ts";
 import "./ui/app.css";
 
@@ -43,4 +43,4 @@ if (hot === undefined) throw new Error("cpd web runs on the Vite dev server only
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");
 // No StrictMode: its simulated unmount would close the one-shot Connection.
-createRoot(root).render(<App transport={createHotTransport(hot)} scheduler={browserScheduler} reader={browserFileReader} />);
+createRoot(root).render(<Root transport={createHotTransport(hot)} scheduler={browserScheduler} reader={browserFileReader} />);

@@ -68,9 +68,11 @@ const capabilities = {
 
 let mounted: { unmount(): void } | null = null;
 beforeEach(() => { vi.spyOn(console, "error").mockImplementation(() => {}); });
-afterEach(() => { mounted?.unmount(); mounted = null; broken.panes.clear(); vi.restoreAllMocks(); });
+afterEach(() => { mounted?.unmount(); mounted = null; broken.panes.clear(); window.sessionStorage.clear(); vi.restoreAllMocks(); });
 
 function start(onCrash?: (r: unknown) => void): HTMLElement {
+  // The pane mocks hide the tree's select button, so the session is selected the way a reload does: from the saved selection.
+  window.sessionStorage.setItem("cpd.selection", JSON.stringify({ planId: "plan", sessionKey: "s1" }));
   const transport = new FakeTransport();
   const props = { transport, scheduler: new FakeScheduler(), reader, newId: () => "c1" };
   // App's optional onCrash prop does not exist yet: spread it untyped.
