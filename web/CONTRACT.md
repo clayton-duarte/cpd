@@ -117,6 +117,8 @@ export interface SessionRef {
 
 ### 3.3 Transcript items
 
+> **Amended by 12:** `AssistantItem.streaming` is also true for a pi live item (12.2), and the pi live items of 12 are ephemeral.
+
 Item ids are stable strings of the form `<prefix>:<source id>`; the same source always yields the same id (idempotence).
 
 ```ts
@@ -423,6 +425,8 @@ export type ClientMessage =
 `session.submit.images` holds only images (`WireImage`); text-file attachments are already inlined into `text` (6.9). `attachments` of the Composer (`Attachment`) never cross the wire.
 
 ### 4.2 Server to client
+
+> **Amended by 12:** adds the server message `session.remove` (12.1 L1).
 
 ```ts
 import type { Capabilities, Cursor, Dialog, DialogOutcome, FooterStats, ModelChoice, QueuedSubmission, SessionRef, TranscriptItem, Window, WireError } from "./domain.ts";
@@ -1566,6 +1570,8 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 ## 8. Capabilities: durable vs pi
 
+> **Amended by 12:** the pi "transcript source" row also has a live source, the pi live-stream socket (section 12), reconciled by item id with the JSONL tailer.
+
 > **Superseded by 10.8:** the column header "durable (host socket, pi-durable 1.5.0 protocol 2)" holds for both dialects (v1 pi-durable 1.3.0 and v2 pi-durable 1.5.0); the "transcript source" row is v2 only (v1: `snapshot` and `events` frames).
 
 `Capabilities` values per runner (fixed by the backends; `reason` strings are human text, tests match the `supported` flag and that `reason` is a non-empty string):
@@ -1817,3 +1823,89 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 - `Footer` (`web/src/ui/chat/Footer.tsx`) renders only the context card (`{footer, contextWindow?}`, DESIGN-compose 3). The session telemetry row (cwd, session key, tokens, cache, model, tier, thinking, cost, branch) is removed from the chat (pro-d57). Its data stays in `SessionView.footer` for the composer's tier selector (DESIGN-compose 2).
 
 ---
+
+## 12. Live pi stream: tokens and tool calls
+
+Normative for `web/src/server/pi/live.ts` (new), `web/src/server/pi/backend.ts`, `web/src/server/pi/jsonl.ts`, `web/src/protocol/wire.ts` and `web/src/state/{transcript,store,connection}.ts`. The frames are the pi live-stream socket of `docs/contract.md` §6.21 (protocol 1, written by `pi/lib/live-stream.ts`). **Why:** pi writes the `.jsonl` only when a message ends (§6.21 "Why"), so a pi Session shows no tokens until then. **Sources:** `scout-8.md` (the seams), `scout-6.md` (match keys), `docs/contract.md` §6.21.
+
+"Job assumption A6" below is the assumption of this section. It is not §1.3's A6.
+
+### 12.1 Decisions
+
+| Id | Decision |
+|---|---|
+| L1 | **Wire `session.remove`.** New server message `{type: "session.remove"; sessionId: string; itemId: string}`, the shape of `session.update` (`wire.ts:50`) with one `itemId` in place of `items`. Parsed like `session.update` (`connection.ts:53-55`): `sessionId` and `itemId` are strings. Client reducer `removeItems(state, itemId)` drops the item with that id; an unknown id returns the state unchanged (the same reference). It is not batched: a buffered batch is flushed first (§10.3 rule 4), so order holds. |
+| L2 | **`web/src/server/pi/live.ts`.** Connects to `${cpdHome}/run/pi/${sessionId}.sock` through an injected `connect`. Retries every `LIVE_RETRY_MS` = 1000 through the injected `Scheduler` while the socket is absent or after it closes. Stops on detach: closes the socket and disposes the timer. |
+| L3 | **Frames become items.** The table of 12.3. |
+| L4 | **Reconcile with the `.jsonl` tailer.** `jsonl.ts` reports the committed lines it applies; `backend.ts` removes a live item before its committed item is appended, and ignores frames of a committed message. Rules in 12.4. |
+| L5 | **User and toolResult messages are not made live.** The `.jsonl` serves them. |
+| L6 | **No socket, no change.** With no socket the backend behaves exactly as today: no live item, no `session.remove`, and no wire message for an absent socket. |
+
+**Job assumption A6** (webpi-docs): pi live items are ephemeral. The assistant item `live:<message.timestamp>` (streaming true) and the tool item `tool:<toolCallId>` are replaced by the committed `.jsonl` line with no duplicate. The socket is retried every 1 s while it is absent. **Inferred, not verified at runtime:** the `message.timestamp` of a `message_end` object equals that of the committed line (`scout-6.md` §1c; `docs/contract.md` §6.21 "Match keys"; a `message_end` handler may replace the message). If it does not hold, reconcile never removes the live item (12.6, point 3).
+
+### 12.2 Item ids
+
+| Item | Id | Fields | Made by |
+|---|---|---|---|
+| live assistant | `live:<message.timestamp>` | `streaming` true while open, false after `message_end` when it has text or thinking; `model` = `message.model` when present | `message_start` (assistant), or the `inflight` message |
+| live tool | `tool:<toolCallId>` | the same id as the committed tool item of the call (`jsonl.ts:246`, `tool:<callId>`), so the committed item replaces it | `tool_start`, or an `inflight` tool |
+| committed assistant | `a:<entry id>` (`jsonl.ts:239`) | `streaming` false | the `.jsonl` tailer |
+| committed tool | `tool:<callId>` | | the `.jsonl` tailer |
+
+- `live:<ts>` relies on `message.timestamp` being unique among the assistant messages of one Session (`scout-6.md` §4). Scout-6 saw no collision in three sampled Sessions; that is not a proof. A collision would merge two messages.
+- The `live:` prefix does not clash with the durable `live:<epoch>:<n>` (§3.3), because one Session has one runner.
+- `streaming` is true for a pi live item (amends §3.3).
+
+### 12.3 Frame-to-wire table
+
+Terms. `T` is the `message.timestamp` of the **open** message. The open message is set by a `message_start` of an assistant message or by the `inflight` message. A `delta` frame carries no timestamp, so it belongs to the open message. `blockIndex` counts the text and thinking blocks of the open message; toolCall content is not a block (`domain.ts:53`). `result.text` is the text blocks of `content` joined with `"\n"` (`domain.ts:60`, `jsonl.ts` `textOf`).
+
+| Frame | Condition | Wire message(s) | Effect on the open message |
+|---|---|---|---|
+| `hello` | `protocol` is 1 | none | a new connection starts with the `inflight` frame |
+| `hello` | `protocol` is not 1 | `session.error` `protocol_error` (12.5) | the source stops |
+| `inflight` | `message` is assistant and T is not committed | `session.append` `AssistantItem` `live:T`, `streaming: true`, `blocks` = its text and thinking blocks | open = T; `blockIndex` counter = its block count |
+| `inflight` | `message` is `null` | none | none |
+| `inflight` | each entry of `tools` | `session.append` `ToolItem` `tool:<toolCallId>` as `tool_start`, plus `tool_update` when `partialResult` is not `null` | none |
+| `agent_start`, `agent_end` | | none | none |
+| `message_start` | role assistant, T not committed | `session.append` `AssistantItem` `live:T`, `streaming: true`, `blocks: []`, `model` when present | open = T; counter = 0 |
+| `message_start` | role assistant, T committed | none | open = T; its frames are ignored |
+| `message_start` | role `user` or `toolResult` | none (L5) | none |
+| `delta` | kind `text` or `thinking`, phase `start` | none | the block index of `index` = counter; counter + 1 |
+| `delta` | kind `text` or `thinking`, phase `delta` | `session.delta` `{itemId: live:T, blockIndex, blockType: kind, text: delta}` | none |
+| `delta` | kind `text` or `thinking`, phase `end` | none | none |
+| `delta` | kind `toolcall`, any phase | none | none |
+| `tool_start` | | `session.append` `ToolItem` `tool:<toolCallId>`: `status` running, `name` = `toolName`, `args`, `callId` | the name and args are kept for the later updates |
+| `tool_update` | | `session.update` `ToolItem` with the kept name and args, `result` `{text, isError: false}`, `status` running | none |
+| `tool_end` | | `session.update` `ToolItem` with the kept name and args, `result` `{text, isError}`, `status` `done` (isError false) or `failed` (isError true) | none |
+| `message_end` | role assistant, T not committed, a text or thinking block in `message.content` | `session.update` `AssistantItem` `live:T`: `blocks` = the final text and thinking blocks, `streaming: false` | open cleared |
+| `message_end` | role assistant, T not committed, no text or thinking block | `session.remove` `live:T` (the rule of `domain.ts:53`) | open cleared |
+| `message_end` | role assistant, T committed | none | open cleared |
+| `message_end` | role `user` or `toolResult` | none | none |
+| `.jsonl` tailer | assistant line with T, committed | `session.remove` `live:T`, then `session.append` of `a:<entry id>` when the line yields an `AssistantItem` (12.4, rule 3) | none (committed) |
+| `.jsonl` tailer | toolResult line, `toolCallId` committed | the existing `session.update` of the tool item (`jsonl.ts:271-275`) | live frames of that `toolCallId` are ignored (12.4, rule 2) |
+
+Note: `ToolItem.result` is set while `status` is running (a partial output from `tool_update` or `inflight`). `domain.ts:71` says "running = no result yet". This is the one departure from that comment, and the committed result replaces the partial output.
+
+### 12.4 Reconcile rules
+
+1. **Committed sets.** Per attach, the backend keeps `committedTurns` (the `message.timestamp` of each committed assistant line) and `committedCalls` (the `toolCallId` of each committed toolResult line). `jsonl.ts` reports both for every line it applies, in the tail read and in every tailer push (`PushResult`).
+2. **Ignored frames.** A frame of a message T in `committedTurns` is ignored: `message_start`, `inflight` with that message, `message_end`, and the `delta` frames while T is open. A tool frame whose `toolCallId` is in `committedCalls` is ignored. Why: the committed tool item carries fields the live one lacks (the edit `diff`, `jsonl.ts:272`), and a full-replacement `session.update` from a late `tool_end` would drop them.
+3. **Committed assistant line.** For a committed assistant line with T, the batch emits `session.remove` `live:T` before its `session.append`. It does so for every such line, including a tool-only one that yields no `a:` item (`domain.ts:53`). A remove of an absent id is a no-op (L1).
+4. **Tool items.** A committed tool item has the id of the live one, so the append replaces it (`mergeById`, `transcript.ts:29-39`). A committed tool item is `running` until its toolResult line, so a live status set before that line is replaced by `running`, then by the result.
+5. **Either order.** Live first, then committed: the live item is removed and the committed one takes its place. Committed first, then live: the live frames are ignored (rule 2). Neither order gives a duplicate.
+
+### 12.5 Connection, errors and stop
+
+- **Path.** `${deps.cpdHome}/run/pi/${sessionId}.sock`, with `sessionId` = `ref.id` (`backend.ts:80`). `CPD_SESSION` is the Session id (§6.6), and `pi/lib/host.ts:92` falls back to it for the Session row id. The pi side names its socket `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (`pi/lib/live-stream.ts:35`).
+- **`connect`** is injected, as the durable backend's is (`durable/backend.ts:54`): `connect: (socketPath: string) => Promise<LiveSocket>`. It rejects when no socket listens. `LiveSocket` yields the lines of the socket and reports its close. The real one is built where the durable `connect` is built (`plugin.ts`).
+- **Retry.** An absent socket (`connect` rejects) and a closed socket both schedule `scheduler.after(LIVE_RETRY_MS, retry)`. Neither writes a wire message.
+- **Protocol errors.** A line that is not JSON, a frame whose `t` is not in 12.3, or a `hello` whose `protocol` is not 1 is a `protocol_error`. The source reports one `session.error` `{sessionId, error}` with `details: {line}`, closes the socket and stops for this attach. It does not retry, because a retry cannot read a frame the client does not know (the Job's decision; the error table of §7 gives `protocol_error` its `{field?, line?}`).
+- **Stop.** Detach closes the socket and disposes the timer. Messages after dispose are dropped (`backend.ts:143-145`).
+- **Read only.** The client writes nothing to the socket (`docs/contract.md` §6.21 "Safety").
+
+### 12.6 Open points and limits (not decided here)
+
+1. **Close while a message is open.** When the socket closes (pi exits or reloads, or the socket drops) the open live items stay as they are: an open message keeps `streaming: true` until a committed line replaces it. A message that never commits (pi killed mid-message) stays streaming. Not decided: remove the open live items on close, or set `streaming` false. The Lead decides.
+2. **A tail window drops live items.** A `session.window` of mode `tail` (sent by `reload`, `backend.ts:197-204`) replaces the transcript (`setTail`, `transcript.ts:41`). The live items are gone. The later deltas of the open message find no item and are ignored (`applyDelta`, `transcript.ts:69`) until its committed line arrives. The live source does not re-send the open message after a window.
+3. **Identity of `message.timestamp`** between the `message_end` object and the committed line (Job assumption A6, 12.1). If the identity fails, the live item of that message is never removed by reconcile.
