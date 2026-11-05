@@ -104,8 +104,10 @@ fn experimental_appears_in_config_json_with_sources() {
             "write_curation": true,
             "failure_triage": false,
             "turn_question_guard": true,
+            "durable_leads": false,
         })
     );
+    assert_eq!(sources["experimental.durable_leads"], Source::Default);
     assert_eq!(sources["experimental.failure_triage"], Source::File);
     assert_eq!(sources["experimental.durable_workers"], Source::Default);
     assert_eq!(sources["experimental.write_curation"], Source::Default);
