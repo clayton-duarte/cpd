@@ -1,3 +1,4 @@
+import type { Host } from "../lib/host.ts";
 import { blockingReason, reasonText as noblockReason, BOUND_SECONDS } from "../lib/noblock.ts";
 import { tooLong, unseen } from "../lib/askguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
@@ -9,6 +10,8 @@ export type Where = {
   home: string;
   /** The session's visible chat, in the shape `unseen` reads (contract §6.16, askguard.ts). */
   visible: readonly unknown[];
+  /** The loop guard's host (the lib's `toolCallGuard` reads `host.run` and `host.options.now`); absent: no per-turn bound. */
+  loop?: Host;
 };
 
 /** Contract §6.16: a block, a rewritten call, or nothing. The rewrite arm carries the new `arguments`. */
@@ -19,7 +22,7 @@ export type Verdict = { block: string } | { arguments: Record<string, unknown> }
  * (G25, G26), and no test-guard arm (G27). `role` picks the noblock reason tail; `where.visible` is the chat the G4 guard reads.
  */
 export function hostVerdict(
-  call: { id: string; name: string; arguments: Record<string, unknown> },
+  call: { id: string; name: string; arguments: Record<string, unknown>; parent?: { readonly taskId: unknown; readonly callId: string } },
   where: Where,
   role: "lead" | "manager",
 ): Verdict {

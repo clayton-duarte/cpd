@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Extension } from "@earendil-works/pi-durable";
+import type { Extension, ToolHooks } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
 import { ENTRY_TYPE } from "../../lib/loop-guard.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
@@ -279,5 +279,68 @@ test("the host registers every client submit and follower submission at the subm
       r.written.some((w) => (w as { entry?: { kind?: unknown } }).entry?.kind === ENTRY_TYPE),
       `the gate must count both submissions and trip; writes were ${JSON.stringify(r.written)}`,
     );
+  });
+});
+
+/** The host's `beforeTool` hook of the extension the host opened, called as pi-durable calls it. */
+const toolHook = (e: Extension) => {
+  const reg = e.hooks?.[0];
+  assert.ok(reg, "the host extension has its tool hook first");
+  return (name: string, args: Record<string, string>) => (reg.handlers as ToolHooks).beforeTool({ type: "toolCall", id: "c", name, arguments: args }, undefined as never, undefined as never);
+};
+
+test("a submit resets the per-turn loop counters", { timeout: 20_000 }, async () => {
+  await withHost({}, async (r) => {
+    await r.up();
+    const client = await r.attach();
+    const hook = toolHook(r.extensions[0]!);
+    const read = () => hook("read", { path: "/x" });
+    for (let i = 0; i < 6; i++) assert.equal(await read(), undefined, `read ${i + 1} runs`);
+    client.send({ type: "submit", req: "r1", text: "hello", when_busy: "followUp" });
+    await r.until(() => r.submitted.length >= 1);
+    // the submission starts a turn: the six reads before it no longer count, so 12 more run and the 13th is refused
+    for (let i = 0; i < 12; i++) assert.equal(await read(), undefined, `read ${i + 1} of the new turn runs`);
+    const refused = await read();
+    assert.match(String((refused as { block?: string } | undefined)?.block), /more than 12 consecutive read-only tool calls/);
+  });
+});
+
+/** A host with bound 1 whose breaker is tripped and whose run has settled: nothing pending, the next turn start is held. */
+async function tripped(r: Parameters<Parameters<typeof withHost>[1]>[0]) {
+  const hooks = await r.up();
+  const client = await r.attach();
+  client.send({ type: "submit", req: "r1", text: "hello", when_busy: "followUp" });
+  await r.until(() => r.submitted.length >= 1);
+  hooks.onLine(line(300, "job-failed"));
+  await r.until(() => r.submitted.length >= 2);
+  await r.drain();
+  assert.ok(r.written.some((w) => (w as { entry?: { kind?: unknown } }).entry?.kind === ENTRY_TYPE), "the second start tripped the breaker");
+  for (const done of r.finish.splice(0)) done("done");
+  await r.drain();
+  return { hooks, client };
+}
+const clearEntries = (r: { written: unknown[] }) =>
+  r.written.filter((w) => {
+    const e = (w as { entry?: { kind?: unknown; data?: { tripped?: unknown } } }).entry;
+    return e?.kind === ENTRY_TYPE && e.data?.tripped === false;
+  });
+
+test("a cpd-chat User prompt clears a tripped host", { timeout: 20_000 }, async () => {
+  await withHost({ sessionOver: { loop_guard_turns: 1 } }, async (r) => {
+    const { client } = await tripped(r);
+    client.send({ type: "submit", req: "r2", text: "carry on", when_busy: "followUp" });
+    await r.drain();
+    assert.equal(clearEntries(r).length, 1, "the User's prompt appends the cleared entry");
+    assert.equal(r.submitted.length, 3, "the prompt is submitted, not held");
+  });
+});
+
+test("a session-message without a sender does not clear a tripped host", { timeout: 20_000 }, async () => {
+  await withHost({ sessionOver: { loop_guard_turns: 1 } }, async (r) => {
+    const { hooks } = await tripped(r);
+    hooks.onLine(line(301, "session-message", { data: { text: "hi", from: null } }));
+    await r.drain();
+    assert.equal(clearEntries(r).length, 0, "no cleared entry");
+    assert.equal(r.submitted.length, 2, "the sender-less message is held, not submitted");
   });
 });
