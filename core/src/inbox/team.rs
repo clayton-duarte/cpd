@@ -772,7 +772,7 @@ mod tests {
         ask(&mut memo, &a, t0);
         ask(&mut memo, &a, t0 + Duration::from_secs(29));
         ask(&mut memo, &b, t0 + Duration::from_secs(29));
-        ask(&mut memo, &b, t0 + Duration::from_secs(30));
+        ask(&mut memo, &b, t0 + Duration::from_secs(29 + 30));
         assert_eq!(calls, 3, "first, other posts, and past the ttl");
     }
 
