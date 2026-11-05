@@ -69,6 +69,26 @@ test("a by-user Session queues turn-starting messages until the first prompt", a
   assert.deepEqual(after.options, { triggerTurn: true, deliverAs: "followUp" }, "as today");
 });
 
+test("a by-user Session starts its first turn for a session-message", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f, { by_user: true });
+  f.emit(ev(101, "session-message", { session: ID, text: "hello", data: { from: null, text: "hello", wake: false } }));
+  await f.drain();
+  const sm = f.pi.sent.find((s) => (s.message.details as any)?.id === 101);
+  assert.ok(sm, "the session-message is sent");
+  assert.deepEqual(sm.options, { triggerTurn: true, deliverAs: "steer" });
+
+  f.emit(ev(103, "job-merged", { data: { turn: true } }));
+  await f.drain();
+  const other = f.pi.sent.find((s) => (s.message.details as any)?.id === 103);
+  assert.ok(other, "the job-merged message is sent");
+  assert.equal(other.options.deliverAs, "nextTurn");
+  assert.ok(!other.options.triggerTurn, "every other Event stays queued");
+
+  assert.equal(first(await run(f)).length, 1);
+});
+
 test("a Session not by-user gets no first message", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());

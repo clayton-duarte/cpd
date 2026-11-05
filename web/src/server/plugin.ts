@@ -13,6 +13,7 @@ import { readCosts, type CostFile } from "./cockpit/cost.ts";
 import { readLogs } from "./cockpit/logs.ts";
 import { createReadModel } from "./cockpit/readmodel.ts";
 import { readSettings, saveSettings } from "./cockpit/settings.ts";
+import { createCockpitStream, type StreamChild } from "./cockpit/stream.ts";
 import { readStatus } from "./cockpit/status.ts";
 import { connectHost, type SocketFactory } from "./durable/client.ts";
 import { createDurableBackend } from "./durable/backend.ts";
@@ -25,6 +26,8 @@ import type { WatchBoundary } from "./pi/watch.ts";
 export interface PluginBoundaries {
   cpdExec: CpdExec;
   follow: FollowBoundary;
+  /** Spawns `cpd <args>` as the long-lived cockpit stream child; absent, the service uses the spawn refresh alone. */
+  stream?: (args: string[]) => StreamChild;
   socketFactory: SocketFactory;
   fs: FileBoundary;
   watch: WatchBoundary;
@@ -58,7 +61,7 @@ export function createServices(b: PluginBoundaries): Services {
     settings: () => readSettings(cpd),
     saveSettings: (changes) => saveSettings(cpd, changes),
   };
-  const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler, extras });
+  const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler, extras, ...(b.stream !== undefined ? { stream: createCockpitStream({ spawn: b.stream, scheduler: b.scheduler }) } : {}) });
   const registry = createRegistry({ snapshot: () => cockpit.snapshot(), cpdHome: b.cpdHome });
   // lazy: a backend is built on first attach so a host without sockets or files starts cleanly
   const lazy = (build: () => SessionBackend): SessionBackend => {
@@ -66,7 +69,7 @@ export function createServices(b: PluginBoundaries): Services {
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler })),
     durable: lazy(() =>
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
@@ -104,8 +107,9 @@ export interface ChildBoundary {
   spawn(
     file: string,
     args: string[],
-    options: { stdio: ["ignore", "pipe", "pipe"]; env?: NodeJS.ProcessEnv },
+    options: { stdio: ["ignore" | "pipe", "pipe", "pipe"]; env?: NodeJS.ProcessEnv },
   ): {
+    stdin?: { write(chunk: string): unknown; end(): unknown; on(event: "error", h: () => void): unknown } | null;
     stdout: { on(event: "data", h: (c: Buffer) => void): unknown };
     stderr: { on(event: "data", h: (c: Buffer) => void): unknown };
     on(event: "close", h: (code: number | null) => void): unknown;
@@ -113,7 +117,7 @@ export interface ChildBoundary {
   };
 }
 
-export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { execFile, spawn }): PluginBoundaries {
+export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { execFile, spawn: spawn as ChildBoundary["spawn"] }): PluginBoundaries {
   const cpdBin = env["CPD_BIN"] ?? "cpd";
   return {
     cpdExec: {
@@ -150,6 +154,34 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
           kill: () => { proc.kill(); },
         };
       },
+    },
+    stream: (args) => {
+      const proc = child.spawn(cpdBin, [...args], { stdio: ["pipe", "pipe", "pipe"], env: cpdChildEnv(env) });
+      let stderr = "";
+      let pending = "";
+      let lineHandler: (line: string) => void = () => undefined;
+      let exitHandler: (info: { code: number | null; stderr: string }) => void = () => undefined;
+      // a write to a dead child emits EPIPE here; the close event reports the exit
+      proc.stdin?.on("error", () => undefined);
+      proc.stderr.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
+      proc.stdout.on("data", (c: Buffer) => {
+        pending += c.toString("utf8");
+        let nl = pending.indexOf("\n");
+        while (nl >= 0) {
+          const line = pending.slice(0, nl);
+          pending = pending.slice(nl + 1);
+          lineHandler(line);
+          nl = pending.indexOf("\n");
+        }
+      });
+      proc.on("close", (code) => exitHandler({ code, stderr }));
+      return {
+        write: (line) => { proc.stdin?.write(line); },
+        endInput: () => { proc.stdin?.end(); },
+        kill: () => { proc.kill(); },
+        onLine: (h) => { lineHandler = h; },
+        onExit: (h) => { exitHandler = h; },
+      };
     },
     socketFactory: {
       connect: (path) =>

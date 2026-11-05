@@ -3,6 +3,7 @@ import type { FooterStats, SessionRef } from "../../protocol/domain.ts";
 import { PI_SEND_TEXT_MAX } from "../../protocol/domain.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
+import { FakeScheduler } from "../../testing/scheduler.ts";
 import { createPiBackend } from "./backend.ts";
 import type { GitBoundary } from "../../protocol/runtime.ts";
 import type { Cpd } from "../cockpit/cli.ts";
@@ -61,7 +62,9 @@ class FakeFile implements FileBoundary {
 }
 class FakeWatch implements WatchBoundary {
   disposed = 0;
+  started = 0;
   watch(): Disposable {
+    this.started += 1;
     return { dispose: () => void (this.disposed += 1) };
   }
 }
@@ -104,9 +107,10 @@ async function setup(opts: { text?: string; ref?: Partial<SessionRef>; branch?: 
     },
   };
   const out: SessionServerMessage[] = [];
-  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home", attachmentsDir: "/att", now: () => 1000 });
+  const scheduler = new FakeScheduler();
+  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home", attachmentsDir: "/att", now: () => 1000, scheduler });
   const attach = () => backend.attach({ ref: ref(opts.ref), file: opts.ref && "file" in opts.ref ? opts.ref.file : FILE, tierOptions: ["S1", "S2", "S3"] }, (m) => out.push(m));
-  return { fs, cpd, watch, gitCalls, out, attach };
+  return { fs, cpd, watch, gitCalls, out, attach, scheduler };
 }
 const types = (out: ServerMessage[]): string[] => out.map((m) => m.type);
 const find = <T extends ServerMessage["type"]>(out: ServerMessage[], type: T) =>
@@ -118,6 +122,9 @@ const rejects = async (p: Promise<unknown>) => {
     return e as { code?: string; message: string };
   }
   throw new Error("did not reject");
+};
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
 };
 const footerOf = (out: ServerMessage[]): FooterStats => find(out, "session.footer").footer;
 const attached = async (opts: Parameters<typeof setup>[0] = {}) => {
@@ -140,9 +147,6 @@ describe("pi backend", () => {
     expect(w.mode).toBe("tail");
     expect(w.window.items.map((i) => i.id)).toEqual(["u:m0"]);
     expect(find(s.out, "session.status").queued).toEqual([]);
-    const missing = await setup({ ref: { file: undefined } });
-    expect(await rejects(missing.attach())).toMatchObject({ code: "session_file_missing" });
-    expect(missing.out).toEqual([]);
     const down = await setup();
     down.cpd.failShow = true;
     await down.attach();
@@ -245,5 +249,67 @@ describe("pi backend", () => {
       text: `${JSON.stringify({ type: "model_change", id: "mc", provider: "p", modelId: "later" })}\n${userLine(0)}\n`,
     });
     expect(footerOf(withModelChange.out).model).toEqual({ state: "known", value: "p/later" });
+  });
+
+  it("attach with no session file yields an empty window and full capabilities", async () => {
+    const withFile = await attached();
+    const s = await attached({ ref: { file: undefined } });
+    expect(types(s.out).slice(0, 4)).toEqual(["session.attached", "session.window", "session.footer", "session.status"]);
+    const w = find(s.out, "session.window");
+    expect(w.mode).toBe("tail");
+    expect(w.window).toEqual({ items: [], hasEarlier: false, cursor: null });
+    expect(find(s.out, "session.attached").capabilities).toEqual(find(withFile.out, "session.attached").capabilities);
+    expect(s.handle.capabilities).toEqual(withFile.handle.capabilities);
+    expect(find(s.out, "session.status").busy).toBe(false);
+    expect(s.fs.stats).toEqual([]);
+    expect(s.watch.started).toBe(0);
+    await s.handle.dispose();
+    await withFile.handle.dispose();
+  });
+
+  it("submit on a session without a file polls cpd session show until the file is recorded", async () => {
+    const s = await attached({ ref: { file: undefined }, text: `${userLine(0)}\n` });
+    const shows = () => s.cpd.calls.filter((c) => c[1] === "show").length;
+    await s.handle.submit({ clientSubmissionId: "c1", text: "hello", images: [], whenBusy: "followUp" });
+    expect(s.cpd.calls.some((c) => c[1] === "send")).toBe(true);
+    expect(s.out.some((m) => m.type === "session.submitAck")).toBe(true);
+    const windows = () => s.out.filter((m) => m.type === "session.window").length;
+    expect(windows()).toBe(1);
+    const before = shows();
+    s.scheduler.advance(250);
+    await flush();
+    expect(shows()).toBe(before + 1);
+    expect(s.watch.started).toBe(0);
+    expect(windows()).toBe(1);
+    s.cpd.show = { ...s.cpd.show, file: FILE };
+    s.scheduler.advance(250);
+    await flush();
+    expect(s.fs.stats).toContain(FILE);
+    expect(windows()).toBe(2);
+    const last = s.out.filter((m) => m.type === "session.window").at(-1) as Extract<ServerMessage, { type: "session.window" }>;
+    expect(last.mode).toBe("tail");
+    expect(last.window.items.map((i) => i.id)).toEqual(["u:m0"]);
+    expect(s.watch.started).toBe(1);
+    const polled = shows();
+    s.scheduler.advance(250);
+    await flush();
+    expect(shows()).toBe(polled);
+    expect(s.scheduler.pending()).toBe(0);
+    await s.handle.dispose();
+  });
+
+  it("a session whose file never appears reports session_file_missing after the polls", async () => {
+    const s = await attached({ ref: { file: undefined } });
+    await s.handle.submit({ clientSubmissionId: "c1", text: "hello", images: [], whenBusy: "followUp" });
+    for (let i = 0; i < 20; i++) {
+      s.scheduler.advance(250);
+      await flush();
+    }
+    const errs = s.out.filter((m) => m.type === "session.error") as Array<Extract<ServerMessage, { type: "session.error" }>>;
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.sessionId).toBe("s1");
+    expect(errs[0]?.error.code).toBe("session_file_missing");
+    expect(s.scheduler.pending()).toBe(0);
+    await s.handle.dispose();
   });
 });

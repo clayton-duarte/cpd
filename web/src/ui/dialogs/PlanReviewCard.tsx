@@ -122,7 +122,8 @@ export function PlanReviewCard(props: {
     </ul>
   );
   const hasColumns = overlaps.length > 0 || risks.length > 0 || oos.length > 0;
-  const hasBody = dialog.summary.trim() !== "" || hasOthers || hasColumns;
+  const hasSummary = dialog.summary.trim() !== "";
+  const hasBody = true;
 
   return (
     <Item
@@ -140,6 +141,7 @@ export function PlanReviewCard(props: {
             return;
           if (e.target instanceof HTMLTextAreaElement) return;
           e.preventDefault();
+          if (!hasSummary) return;
           respond("approve");
         }}
       >
@@ -213,7 +215,7 @@ export function PlanReviewCard(props: {
               type="button"
               size="sm"
               data-action="approve"
-              disabled={submitting !== null}
+              disabled={submitting !== null || !hasSummary}
               onClick={() => respond("approve")}
             >
               {submitting === "approve" ? <Spinner /> : null}
@@ -279,7 +281,13 @@ export function PlanReviewCard(props: {
                   <div data-part="outline" id={`${dialog.id}-outline`}>
                     {hasOthers ? <h4 className={LABEL}>Outline</h4> : null}
                     <div className="max-w-[720px] text-sm text-foreground">
-                      <Markdown text={dialog.summary} />
+                      {hasSummary ? (
+                        <Markdown text={dialog.summary} />
+                      ) : (
+                        <p className="m-0 text-muted-foreground">
+                          No plan summary was rendered; approval is disabled.
+                        </p>
+                      )}
                     </div>
                   </div>
                   {workflows.length > 0 ? (

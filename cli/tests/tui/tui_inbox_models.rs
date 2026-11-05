@@ -21,6 +21,7 @@ use ratatui::backend::TestBackend;
 use serde_json::json;
 
 const CYAN: &str = "\u{F06F1}";
+const WHITE: &str = "\u{F0366}";
 const CLIENT: &str = "/dev/pts/9";
 const HEIGHT: u16 = 30;
 const AT: &str = "2026-10-25T14:00:00Z";
@@ -262,10 +263,10 @@ fn the_legends_cyan_tier_line_names_a_change_in_the_models_a_provider_offers() {
     let lines = legend_rows();
     let notice = lines
         .iter()
-        .find(|r| r.contains(CYAN) && r.contains("a cpd notice: curation, nothing blocks; also a change in the models a provider offers"))
+        .find(|r| r.contains(WHITE) && r.contains("a cpd notice: curation, nothing blocks; also a change in the models a provider offers"))
         .unwrap_or_else(|| panic!("the cyan tier's line:\n{}", lines.join("\n")));
     assert!(
-        notice.contains("cyan"),
+        notice.contains("white"),
         "the line names the tier: {notice:?}"
     );
 }

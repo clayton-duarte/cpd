@@ -91,7 +91,9 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_e
     );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
-    fx.fixture("UPDATE workflows SET jira = 'ABC-1';");
+    fx.fixture(
+        "UPDATE workflows SET jira = 'ABC-1', title = 'feat: ABC-1/Charge the card at checkout';",
+    );
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "ticketed: started");
@@ -101,6 +103,35 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_e
         "no further error: {:?}",
         texts(&mut fx, "error")
     );
+}
+
+#[test]
+fn e3_holds_an_open_job_whose_title_lacks_the_jira_key_then_starts_it_once_fixed() {
+    let mut fx = with_open_job("open-repo", "open", "jira_required = true\n");
+    fx.fixture("UPDATE workflows SET jira = 'ABC-1', title = 'Charge the card at checkout';");
+
+    ticks(&mut fx, 3);
+
+    assert_eq!(attempts(&mut fx), 0, "no Attempt for a bad title");
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!(
+        (plan.as_deref(), job.as_deref(), attempt.as_deref()),
+        (Some("pay"), Some("open-repo"), None)
+    );
+    assert_eq!(
+        (&data["source"], &data["code"]),
+        (&json!("watch"), &json!("jira_title_invalid")),
+        "{data}"
+    );
+    assert_eq!(fx.job_status("open-repo"), "queued");
+
+    fx.fixture("UPDATE workflows SET title = 'feat: ABC-1/Charge the card at checkout';");
+    tick(&mut fx);
+
+    assert_eq!(attempts(&mut fx), 1, "fixed: started");
+    assert_eq!(fx.count("error"), 1, "{:?}", texts(&mut fx, "error"));
 }
 
 /// Guard: a policy that leaves the key false never needs a ticket.

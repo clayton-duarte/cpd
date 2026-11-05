@@ -62,7 +62,12 @@ case "$*" in *typecheck*) [ -z "${TYPECHECK_FAILS:-}" ] || { echo "typecheck: er
 exit 0"#,
         );
         // Exits at once: no process outlives the test.
-        env.fake("node", r#"echo "node $*" >> "${ORDER_LOG:?}"; exit 0"#);
+        env.fake(
+            "node",
+            r#"echo "node $*" >> "${ORDER_LOG:?}"
+[ -z "${NODE_FIFO:-}" ] || echo started > "$NODE_FIFO"
+exit 0"#,
+        );
         // `kill -0` answers with $KILL0_STATUS (default 0: alive).
         env.fake(
             "kill",
@@ -140,16 +145,25 @@ exit 0"#,
         self.dir.join("watchdog.pid")
     }
 
-    /// The order log once the detached fake node has recorded its call (it is started in the background; spins, never sleeps).
+    fn node_fifo(&self) -> PathBuf {
+        self.env.root().join("node.fifo")
+    }
+
+    /// `on` with the fake node told to signal through a named pipe once it has recorded its call.
+    fn on_signalled(&self) -> Out {
+        let made = std::process::Command::new("mkfifo")
+            .arg(self.node_fifo())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let fifo = self.node_fifo();
+        self.on(&[("NODE_FIFO", fifo.to_str().unwrap())])
+    }
+
+    /// The order log once the detached fake node has recorded its call: blocks on the pipe it writes to (after `on_signalled`).
     fn order_with_node(&self) -> Vec<String> {
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            let order = self.order();
-            if order.iter().any(|l| l.starts_with("node ")) || std::time::Instant::now() > end {
-                return order;
-            }
-            std::thread::yield_now();
-        }
+        fs::read_to_string(self.node_fifo()).unwrap();
+        self.order()
     }
 
     fn state(&self) -> PathBuf {
@@ -501,7 +515,7 @@ fn on_installs_the_frozen_watchdog_copy_outside_the_worktree() {
 #[test]
 fn on_starts_the_watchdog_with_the_worktree_and_the_relaunch_command() {
     let p = Preview::new();
-    let out = p.on(&[]);
+    let out = p.on_signalled();
     assert_eq!(out.exit, 0, "{}", out.text);
     let order = p.order_with_node();
     let node = order
@@ -536,7 +550,7 @@ fn on_stops_a_running_watchdog_before_starting_another() {
     let p = Preview::new();
     fs::create_dir_all(&p.dir).unwrap();
     fs::write(p.watchdog_pid_file(), "4242\n").unwrap();
-    let out = p.on(&[]);
+    let out = p.on_signalled();
     assert_eq!(out.exit, 0, "{}", out.text);
     let order = p.order_with_node();
     let term = order

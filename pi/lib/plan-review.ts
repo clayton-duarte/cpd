@@ -9,7 +9,7 @@ export const REVIEW_LABEL = "φ: plan review";
 
 export type EntryStatus = "pending" | "approved" | "rejected" | "superseded" | "lost";
 /** A review of this session: the User decides in the chat dialog. */
-export type ReviewEntry = { plan: string; review: string; surface: "chat"; status: EntryStatus };
+export type ReviewEntry = { plan: string; review: string; surface: "chat"; status: EntryStatus; summary?: string; title?: string };
 
 const STATUSES: readonly string[] = ["pending", "approved", "rejected", "superseded", "lost"];
 
