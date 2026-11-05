@@ -39,6 +39,8 @@ mod pr_updating_tests;
 #[cfg(test)]
 mod reopen_tests;
 #[cfg(test)]
+mod review_plan_close_tests;
+#[cfg(test)]
 mod rows_review_tests;
 #[cfg(test)]
 mod rows_tests;

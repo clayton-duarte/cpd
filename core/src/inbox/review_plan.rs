@@ -103,6 +103,20 @@ Read `{home}/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and 
     }
 }
 
+/// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that
+/// `lookup` reports CLOSED or MERGED, or APPROVED by the viewer (`lookup.me`) in their latest review (pro-d416, A3), the
+/// way `review submit` finishes one: phase `done`, `locked_at`, `done_at` and one quiet `plan-done` Event. A Plan without
+/// `pr_subject` is never finished. Returns the finished Plan ids.
+///
+/// Stub: finishes nothing yet.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn finish_closed(
+    _store: &mut crate::store::Store,
+    _lookup: &super::team::Lookup,
+) -> Result<Vec<crate::ids::PlanId>, crate::error::CpdError> {
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
