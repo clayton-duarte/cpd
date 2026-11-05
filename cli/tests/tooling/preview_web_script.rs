@@ -54,7 +54,22 @@ esac"#,
 esac
 exit 0"#,
         );
-        env.fake("pnpm", "exit 0");
+        // Every fake of the reload flow appends to $ORDER_LOG, so the order across programs is readable.
+        env.fake(
+            "pnpm",
+            r#"echo "pnpm $*" >> "${ORDER_LOG:?}"
+case "$*" in *typecheck*) [ -z "${TYPECHECK_FAILS:-}" ] || { echo "typecheck: error TS2322" >&2; exit 1; } ;; esac
+exit 0"#,
+        );
+        // Exits at once: no process outlives the test.
+        env.fake("node", r#"echo "node $*" >> "${ORDER_LOG:?}"; exit 0"#);
+        // `kill -0` answers with $KILL0_STATUS (default 0: alive).
+        env.fake(
+            "kill",
+            r#"echo "kill $*" >> "${ORDER_LOG:?}"
+[ "$1" = -0 ] && exit "${KILL0_STATUS:-0}"
+exit 0"#,
+        );
         let worktree = env.root().join("cpd.preview.web");
         let dir = env.root().join("preview");
         Preview { env, worktree, dir }
@@ -65,7 +80,8 @@ exit 0"#,
         cmd.arg(SCRIPT)
             .args(args)
             .env("CPD_PREVIEW_DIR", &self.dir)
-            .env("CPD_WEB_PREVIEW_WORKTREE", &self.worktree);
+            .env("CPD_WEB_PREVIEW_WORKTREE", &self.worktree)
+            .env("ORDER_LOG", self.order_log());
         for (k, v) in vars {
             cmd.env(k, v);
         }
@@ -92,6 +108,48 @@ exit 0"#,
             .filter(|c| c[5] == verb)
             .map(|c| c[5..].to_vec())
             .collect()
+    }
+
+    fn order_log(&self) -> PathBuf {
+        self.env.root().join("order.log")
+    }
+
+    /// Lines of the fakes pnpm, node and kill, in the order they ran.
+    fn order(&self) -> Vec<String> {
+        fs::read_to_string(self.order_log())
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn run_dir(&self) -> PathBuf {
+        self.env.cpd_home().join("run")
+    }
+
+    fn health_file(&self, text: &str) {
+        fs::create_dir_all(self.run_dir()).unwrap();
+        fs::write(self.run_dir().join("preview-health.json"), text).unwrap();
+    }
+
+    fn watchdog_dir(&self) -> PathBuf {
+        self.dir.join("watchdog")
+    }
+
+    fn watchdog_pid_file(&self) -> PathBuf {
+        self.dir.join("watchdog.pid")
+    }
+
+    /// The order log once the detached fake node has recorded its call (it is started in the background; spins, never sleeps).
+    fn order_with_node(&self) -> Vec<String> {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let order = self.order();
+            if order.iter().any(|l| l.starts_with("node ")) || std::time::Instant::now() > end {
+                return order;
+            }
+            std::thread::yield_now();
+        }
     }
 
     fn state(&self) -> PathBuf {
@@ -327,4 +385,203 @@ fn a_bad_usage_exits_2() {
     }
     assert!(p.env.calls("tmux").is_empty());
     assert!(p.env.calls("git").is_empty());
+}
+
+const HEALTH: &str = r#"{"status":"healthy","reloadEpoch":3,"pid":4242,"startedAt":"2026-01-01T00:00:00.000Z","healthyAt":"2026-01-01T00:00:01.000Z"}"#;
+
+fn pos(order: &[String], needle: &str) -> usize {
+    order
+        .iter()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no {needle:?} in {order:?}"))
+}
+
+#[test]
+fn reload_runs_the_typecheck_before_the_build_and_the_signal() {
+    let p = Preview::new();
+    p.health_file(HEALTH);
+    let wt = p.worktree.display().to_string();
+    let out = p.run(&["reload", &wt], &[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order();
+    let check = pos(&order, "--filter cpd-web-client run typecheck");
+    let build = pos(&order, "--filter cpd-web-client run build:electron");
+    let usr1 = pos(&order, "kill -USR1 4242");
+    assert!(check < build && build < usr1, "{order:?}");
+    assert!(order[check].contains(&format!("--dir {wt}")), "{order:?}");
+    assert!(order[build].contains(&format!("--dir {wt}")), "{order:?}");
+}
+
+#[test]
+fn reload_stops_at_a_failed_typecheck_without_building_or_signalling() {
+    let p = Preview::new();
+    p.health_file(HEALTH);
+    let wt = p.worktree.display().to_string();
+    let out = p.run(&["reload", &wt], &[("TYPECHECK_FAILS", "1")]);
+    assert_eq!(out.exit, 1, "{}", out.text);
+    assert!(out.text.contains("TS2322"), "{}", out.text);
+    let order = p.order();
+    assert!(
+        order.iter().any(|l| l.contains("run typecheck")),
+        "{order:?}"
+    );
+    assert!(
+        !order.iter().any(|l| l.contains("build:electron")),
+        "{order:?}"
+    );
+    assert!(!order.iter().any(|l| l.starts_with("kill ")), "{order:?}");
+}
+
+#[test]
+fn reload_signals_the_pid_of_the_health_file() {
+    let p = Preview::new();
+    p.health_file(HEALTH);
+    let wt = p.worktree.display().to_string();
+    let out = p.run(&["reload", &wt], &[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let kills = p.env.calls("kill");
+    assert!(
+        kills.contains(&vec!["-0".to_owned(), "4242".to_owned()]),
+        "{kills:?}"
+    );
+    assert!(
+        kills.contains(&vec!["-USR1".to_owned(), "4242".to_owned()]),
+        "{kills:?}"
+    );
+
+    // A dead pid: a message, exit 1, no signal.
+    let dead = p.run(&["reload", &wt], &[("KILL0_STATUS", "1")]);
+    assert_eq!(dead.exit, 1, "{}", dead.text);
+    assert!(dead.text.contains("4242"), "{}", dead.text);
+    assert_eq!(
+        p.env
+            .calls("kill")
+            .iter()
+            .filter(|c| c[0] == "-USR1")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn reload_fails_when_the_health_file_has_no_pid() {
+    let p = Preview::new();
+    let wt = p.worktree.display().to_string();
+    // No health file at all, then one without a pid.
+    let missing = p.run(&["reload", &wt], &[]);
+    assert_eq!(missing.exit, 1, "{}", missing.text);
+    p.health_file(r#"{"status":"loading","reloadEpoch":1}"#);
+    let out = p.run(&["reload", &wt], &[]);
+    assert_eq!(out.exit, 1, "{}", out.text);
+    assert!(!out.text.is_empty());
+    assert!(
+        !p.order().iter().any(|l| l.starts_with("kill ")),
+        "{:?}",
+        p.order()
+    );
+}
+
+#[test]
+fn on_installs_the_frozen_watchdog_copy_outside_the_worktree() {
+    let p = Preview::new();
+    let out = p.on(&[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let frozen = p.watchdog_dir();
+    assert!(!frozen.starts_with(&p.worktree));
+    for f in [
+        "preview-watchdog.mjs",
+        "health.ts",
+        "watchdog.ts",
+        "restore-points.ts",
+    ] {
+        assert!(frozen.join(f).is_file(), "{f} missing in {frozen:?}");
+    }
+}
+
+#[test]
+fn on_starts_the_watchdog_with_the_worktree_and_the_relaunch_command() {
+    let p = Preview::new();
+    let out = p.on(&[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order_with_node();
+    let node = order
+        .iter()
+        .find(|l| l.starts_with("node "))
+        .unwrap_or_else(|| panic!("watchdog not started: {order:?}"));
+    let wt = p.worktree.display();
+    let home = p.env.cpd_home();
+    assert!(
+        node.contains(&format!(
+            "{}/preview-watchdog.mjs",
+            p.watchdog_dir().display()
+        )),
+        "{node}"
+    );
+    assert!(node.contains(&format!("--worktree {wt}")), "{node}");
+    assert!(
+        node.contains(&format!("--home {}", home.display())),
+        "{node}"
+    );
+    assert!(
+        node.ends_with(&format!("--relaunch pnpm --dir {wt}/web exec electron .")),
+        "{node}"
+    );
+    let pid = fs::read_to_string(p.watchdog_pid_file()).expect("pid file");
+    assert!(pid.trim().parse::<u32>().is_ok(), "{pid:?}");
+    assert!(home.join("run").is_dir());
+}
+
+#[test]
+fn on_stops_a_running_watchdog_before_starting_another() {
+    let p = Preview::new();
+    fs::create_dir_all(&p.dir).unwrap();
+    fs::write(p.watchdog_pid_file(), "4242\n").unwrap();
+    let out = p.on(&[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order_with_node();
+    let term = order
+        .iter()
+        .position(|l| l == "kill -TERM 4242" || l == "kill -15 4242" || l == "kill -SIGTERM 4242")
+        .unwrap_or_else(|| panic!("no SIGTERM to 4242: {order:?}"));
+    assert!(term < pos(&order, "node "), "{order:?}");
+    assert_ne!(
+        fs::read_to_string(p.watchdog_pid_file()).unwrap().trim(),
+        "4242"
+    );
+}
+
+#[test]
+fn off_stops_the_watchdog_and_removes_its_pid_file() {
+    let p = Preview::new();
+    fs::create_dir_all(&p.dir).unwrap();
+    fs::write(p.watchdog_pid_file(), "4242\n").unwrap();
+    let out = p.run(&["off"], &[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order();
+    assert!(
+        order.iter().any(|l| {
+            l == "kill -TERM 4242" || l == "kill -15 4242" || l == "kill -SIGTERM 4242"
+        }),
+        "{order:?}"
+    );
+    assert!(!p.watchdog_pid_file().exists());
+}
+
+#[test]
+fn off_without_a_watchdog_is_fine() {
+    let p = Preview::new();
+    let out = p.run(&["off"], &[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    assert!(!p.order().iter().any(|l| l.starts_with("kill ")));
+    // A dead pid in the file is simply removed, and nothing is signalled.
+    fs::create_dir_all(&p.dir).unwrap();
+    fs::write(p.watchdog_pid_file(), "4242\n").unwrap();
+    let out = p.run(&["off"], &[("KILL0_STATUS", "1")]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    assert!(!p.watchdog_pid_file().exists());
+    assert!(
+        !p.order()
+            .iter()
+            .any(|l| l.contains("-TERM") || l.contains("-15"))
+    );
 }
