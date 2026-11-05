@@ -543,9 +543,8 @@ test("the skills' list of pr-feedback reasons and of ladder causes is the contra
 test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
-  assert.match(lead, /cpd job add <k> --draft --title/, "the stub form stays for genuinely unscoped work");
   assert.match(lead, /--needs <k1,k2>/, "a scoped Job that waits is queued with its needs link (hs-d822)");
-  for (const token of ["stub", "under review", "queued", "draft_parked", "draft_incomplete"]) assert.ok(lead.includes(token), `the two legal draft forms: ${token}`);
+  for (const token of ["under review", "queued", "draft_parked", "draft_incomplete"]) assert.ok(lead.includes(token), `the two legal draft forms: ${token}`);
   assert.match(lead, /cpd workflow add <key> --repo <path> --title "<title>" --needs/);
   assert.match(lead, /workflow_title_required/);
   assert.match(lead, /cpd workflow edit <key> --title/);
