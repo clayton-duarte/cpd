@@ -568,3 +568,44 @@ test("loop guard intra-turn: the User prompt clears a trip caused by refusals", 
   assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
   await twelveThenRefused(f, "after the prompt");
 });
+
+const mcpCode = (name: string) => `await tools.${name}({ issueIdOrKey: "EEC-1" })`;
+
+async function writeResetsStreak(t: { after(fn: () => unknown): void }, tool: string, input: Record<string, unknown>, what: string) {
+  const f = await freshStart(t);
+  passes(await reads(f, 12), `${what}: reads`);
+  assert.ok(!refused(await call(f, tool, input)), `${what}: the write is not refused`);
+  await twelveThenRefused(f, `${what}: after the write`);
+}
+
+test("loop guard intra-turn: mcp write tool direct call resets the read streak", async (t) => {
+  for (const name of ["mcp__atlassian__editJiraIssue", "mcp__atlassian__transitionJiraIssue", "mcp__atlassian__createJiraIssue", "mcp__slack__slack_send_message"]) {
+    await writeResetsStreak(t, name, {}, name);
+  }
+});
+
+test("loop guard intra-turn: mcp write tool inside codemode resets the read streak", async (t) => {
+  for (const name of ["mcp__atlassian__editJiraIssue", "mcp__slack__slack_send_message"]) {
+    await writeResetsStreak(t, "codemode", { code: mcpCode(name) }, `codemode ${name}`);
+  }
+});
+
+test("loop guard intra-turn: read only mcp tools stay reads", async (t) => {
+  for (const name of ["mcp__atlassian__getJiraIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__slack__slack_read_channel"]) {
+    for (const [tool, input] of [[name, {}], ["codemode", { code: mcpCode(name) }]] as const) {
+      const f = await freshStart(t);
+      for (let i = 0; i < 12; i++) assert.ok(!refused(await call(f, tool, input)), `${name} ${tool} ${i + 1}`);
+      assert.ok(refused(await call(f, tool, input)), `${name} ${tool}: the 13th is refused`);
+    }
+  }
+});
+
+test("loop guard intra-turn: a state write resets the turn refusals", async (t) => {
+  const f = await freshStart(t);
+  await refuse(f, 2);
+  assert.ok(!refused(await bash(f, "cpd context note x")), "the state write passes");
+  passes(await reads(f, 12), "reads after the write");
+  assert.ok(refused(await bash(f, "rg foo")), "the 13th is refused");
+  assert.ok(!(await settled(f)).includes(LABEL), "not blocked");
+  assert.deepEqual(guardEntries(f), []);
+});
