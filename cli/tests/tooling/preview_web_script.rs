@@ -64,7 +64,7 @@ exit 0"#,
         // Exits at once: no process outlives the test.
         env.fake(
             "node",
-            r#"echo "node $*" >> "${ORDER_LOG:?}"
+            r#"echo "node $* CPD_ELECTRON_DEV_URL=$CPD_ELECTRON_DEV_URL" >> "${ORDER_LOG:?}"
 [ -z "${NODE_FIFO:-}" ] || echo started > "$NODE_FIFO"
 exit 0"#,
         );
@@ -301,7 +301,7 @@ fn on_sets_the_preview_option_and_writes_the_state_file() {
     );
     assert!(
         out.text.contains(&format!(
-            "CPD_ELECTRON_DEV_URL=http://localhost:5173 pnpm --dir {wt}/web run electron"
+            "CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html pnpm --dir {wt}/web run electron"
         )),
         "{}",
         out.text
@@ -537,7 +537,7 @@ fn on_starts_the_watchdog_with_the_worktree_and_the_relaunch_command() {
         "{node}"
     );
     assert!(
-        node.ends_with(&format!("--relaunch pnpm --dir {wt}/web exec electron .")),
+        node.contains(&format!("--relaunch pnpm --dir {wt}/web exec electron .")),
         "{node}"
     );
     let pid = fs::read_to_string(p.watchdog_pid_file()).expect("pid file");
@@ -597,5 +597,22 @@ fn off_without_a_watchdog_is_fine() {
         !p.order()
             .iter()
             .any(|l| l.contains("-TERM") || l.contains("-15"))
+    );
+}
+
+#[test]
+// The relaunch inherits the script environment, so the watchdog must see the dev URL.
+fn on_starts_the_watchdog_with_the_dev_url_in_its_environment() {
+    let p = Preview::new();
+    let out = p.on_signalled();
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order_with_node();
+    let node = order
+        .iter()
+        .find(|l| l.starts_with("node "))
+        .unwrap_or_else(|| panic!("watchdog not started: {order:?}"));
+    assert!(
+        node.ends_with("CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html"),
+        "{node}"
     );
 }
