@@ -50,6 +50,7 @@ export const Composer = forwardRef<
     onSubmit(s: ComposerSubmit): void;
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
+    sessionId: string;
     settings?: ReactNode;
     archived?: boolean;
   }

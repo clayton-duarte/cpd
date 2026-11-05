@@ -76,6 +76,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
       )}
       <Composer
         ref={composer}
+        sessionId={view.id}
         capabilities={view.capabilities}
         archived={view.archived ?? false}
         busy={isBusy}
