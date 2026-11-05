@@ -325,7 +325,7 @@ Right click on a row opens a shadcn/ui context menu (`context-menu.tsx`, 2f) on 
 | `Go to Lead` | `pr-closed`, `pr-ready` with a Plan | the Plan's Lead, as the left click above (`onSelectSession(row.sessionId)`) |
 | `Copy Link` | `row.url !== null` | copy `row.url` to the clipboard |
 | `RePost` | `pr-ready`, Plan present, the row says `review overdue` | `pr.post` (`planId`, workflow key) |
-| `Merge` | `pr-ready`, the row says `ready to merge` | **Not wired**: there is no merge action in `CockpitAction`; the entry is shown disabled |
+| `Merge` | `pr-ready`, the row says `ready to merge` | `pr.merge` (`planId`, `pull`), wired; the optimistic removal and rollback are stated in `DESIGN.md` ("After an action") |
 | `Post` | `pr-ready`, the row says `ready for user review`, Plan present | `pr.post` (`planId`, workflow key) |
 | `Approve` | `deploy`: first in the choices | `inbox.approve` with `row.id` |
 | `Claim` | `review-requested`: first in the choices | `inbox.claim` with `row.id` |
@@ -371,7 +371,7 @@ Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action=
 ### 2h. Not wired (omitted, never faked)
 
 - Engine-down left click (`start the engine`): no `CockpitAction` starts the engine.
-- `Merge` and the `Merging` spinner in the glyph cell: no merge action in `CockpitAction`.
+- The `Merging` spinner in the glyph cell: not wired.
 - Left click for `question` (opens the Manager), `curate-retire` (checklist dialog) and `models-changed` (text dialog) of the TUI.
 - The TUI's `▲ n more` / `▼ n more` scroll cues and the wheel step of three items.
 - Key handling of the TUI's Plan and dialog views; the Inbox has no keys (2e).
