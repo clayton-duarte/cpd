@@ -68,6 +68,7 @@ describe('boot', () => {
     expect(s.log).toContain('loadDevUrl:http://localhost:5173/electron.html');
     expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
   });
+  // A failing dev URL must not exit Electron: the built renderer loads instead.
   it('boot loads the built renderer when the dev URL fails to load', async () => {
     const url = 'http://localhost:5173/electron.html';
     const s = setup({ env: { CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });

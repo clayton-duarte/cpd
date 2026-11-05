@@ -601,6 +601,7 @@ fn off_without_a_watchdog_is_fine() {
 }
 
 #[test]
+// The relaunch inherits the script environment, so the watchdog must see the dev URL.
 fn on_starts_the_watchdog_with_the_dev_url_in_its_environment() {
     let p = Preview::new();
     let out = p.on_signalled();
