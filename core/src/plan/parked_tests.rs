@@ -86,12 +86,11 @@ fn stub(key: &str, needs: &[&str]) -> String {
 // --- The new rule: a stub is legal; a complete draft waiting on a work Job is parked. ---
 
 #[test]
-fn a_stub_draft_that_needs_nothing_is_legal() {
+fn an_incomplete_draft_with_no_review_is_parked() {
+    let (_d, mut s) = store("plan", &stub("k", &[]));
+    assert_eq!(parked(&mut s), ["k"], "plan: a stub is not exempt");
     let (_d, mut s) = store("dispatch", &stub("k", &[]));
-    assert!(
-        parked(&mut s).is_empty(),
-        "a stub is legal on its own (hs-d822)"
-    );
+    assert_eq!(parked(&mut s), ["k"], "dispatch: a stub is not exempt");
 }
 
 #[test]
@@ -202,14 +201,39 @@ fn the_door_refuses_a_complete_draft_that_needs_a_queued_work_job() {
 }
 
 #[test]
-fn the_door_allows_a_stub_that_waits_for_nothing() {
+fn the_door_refuses_a_stub_that_needs_a_queued_work_job() {
     let (_d, mut s) = store("dispatch", &job("a", "r", "work", "queued", true, &[]));
     let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
     let mut row = all[0].clone();
     (row.key, row.status, row.tier, row.spec, row.fingerprint) =
         ("k".into(), "draft".into(), None, None, None);
+    row.needs = vec!["a".into()];
+    let e = s
+        .read(|conn| door(conn, &plan(), "dispatch", &all, &row))
+        .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::DraftParked);
+}
+
+#[test]
+fn the_door_allows_a_draft_needing_a_merged_job() {
+    let (_d, mut s) = store("dispatch", &job("a", "r", "work", "merged", true, &[]));
+    let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
+    let mut row = all[0].clone();
+    (row.key, row.status, row.fingerprint) = ("k".into(), "draft".into(), None);
+    row.needs = vec!["a".into()];
     s.read(|conn| door(conn, &plan(), "dispatch", &all, &row))
-        .expect("a stub that waits for nothing is legal (hs-d822)");
+        .expect("a merged need is finished");
+}
+
+#[test]
+fn the_door_allows_a_draft_needing_a_draft_that_waits_on_nothing() {
+    let (_d, mut s) = store("dispatch", &job("a", "r", "work", "draft", true, &[]));
+    let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
+    let mut row = all[0].clone();
+    row.key = "b".into();
+    row.needs = vec!["a".into()];
+    s.read(|conn| door(conn, &plan(), "dispatch", &all, &row))
+        .expect("B needs draft A, A waits on nothing");
 }
 
 // --- Kept under the new rule. ---
