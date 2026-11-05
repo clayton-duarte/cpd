@@ -1,5 +1,4 @@
-//! The post ledger of `pr post`: the `pr_posts` row is written only AFTER the send resolves; an unknown outcome looks the
-//! message up in Slack (found: its ts is written; not found: nothing, retryable). In process on the janitor's `Rig`: the Slack helper (`node`) and
+//! The post ledger of `pr post`: the `pr_posts` row is written only AFTER an OK send; any error writes nothing and is retryable. In process on the janitor's `Rig`: the Slack helper (`node`) and
 //! `gh` are scripted on the runner, never real.
 
 use std::os::unix::fs::PermissionsExt;
@@ -17,8 +16,10 @@ const UNPARSEABLE: &str = r#"{"ok":false,"error":{"code":"slack_unparseable","me
 const FAILED: &str = r#"{"ok":false,"error":{"code":"slack_failed","message":"Slack refused before sending.","details":{}}}"#;
 const SENT: &str =
     r#"{"ok":true,"channel":"C0POLICY1","ts":"1700000000.000100","link":"https://slack.test/p1"}"#;
+/// An OK send whose empty `ts` the `pr_posts` CHECK refuses: the row write fails after the send.
+const SENT_UNSTORABLE: &str =
+    r#"{"ok":true,"channel":"C0POLICY1","ts":"","link":"https://slack.test/p0"}"#;
 const FOUND: &str = r#"{"ok":true,"found":true,"ts":"1700000000.000100"}"#;
-const NOT_FOUND: &str = r#"{"ok":true,"found":false}"#;
 
 /// The Slack helper: answers `reply` (exit 3) and records whether the Workflow's `pr_posts` row existed at the send.
 struct Helper {
@@ -42,7 +43,15 @@ impl Handler for Helper {
         } else {
             sends[0]
         };
-        Reply::exit(if reply == SENT { 0 } else { 3 }, &format!("{reply}\n"), "")
+        Reply::exit(
+            if reply == SENT || reply == SENT_UNSTORABLE {
+                0
+            } else {
+                3
+            },
+            &format!("{reply}\n"),
+            "",
+        )
     }
 }
 
@@ -153,62 +162,60 @@ impl Fx {
         rows(&mut Store::open(&self.rig.home, 5000).unwrap())
     }
 
-    fn node_calls(&self) -> usize {
-        self.rig
-            .fakes
-            .runner
-            .calls()
-            .iter()
-            .filter(|c| c.tool == "node")
-            .count()
+    fn ts(&self) -> String {
+        Store::open(&self.rig.home, 5000)
+            .unwrap()
+            .read(|c| {
+                Ok(
+                    c.query_row("SELECT ts FROM pr_posts WHERE workflow = 'api'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap()
     }
 }
 
-/// Row existence at each send, then a second post: a failing first send then a good one.
+/// Observed through the mocked send: no row when the send is called; after an OK send the row holds the returned ts.
 #[test]
-fn a_post_that_failed_before_sending_writes_no_pr_posts_row_and_can_be_retried() {
-    let fx = fixture(&[FAILED, SENT], NOT_FOUND);
+fn a_post_writes_its_pr_posts_row_only_after_the_send_resolves() {
+    let fx = fixture(&[SENT], FOUND);
+    fx.post().expect("posts");
+    assert_eq!(*fx.sends.lock().unwrap(), [false], "no row at the send");
+    assert_eq!(fx.rows(), 1, "the row exists after");
+    assert_eq!(fx.ts(), "1700000000.000100", "the row holds the sent ts");
+}
+
+#[test]
+fn a_send_failure_writes_no_pr_posts_row_and_a_second_post_sends() {
+    let fx = fixture(&[FAILED, SENT], FOUND);
     let error = fx.post().unwrap_err();
     assert_eq!(error.code().as_str(), "slack_failed", "{error:?}");
-    assert_eq!(*fx.sends.lock().unwrap(), [false], "no row at the send");
-    assert_eq!(fx.rows(), 0, "a post that failed wrote nothing");
+    assert_eq!(fx.rows(), 0, "a failed post wrote nothing");
     fx.post().expect("the retry posts");
-    assert_eq!(fx.node_calls(), 2, "the retry sent once more");
+    assert_eq!(fx.sends.lock().unwrap().len(), 2, "the retry sent once");
+    assert_eq!(fx.rows(), 1);
+}
+
+/// The lookup helper answers "found" so that any lookup inside `pr post` would write a row.
+#[test]
+fn an_unparseable_send_response_writes_no_pr_posts_row_and_is_retryable() {
+    let fx = fixture(&[UNPARSEABLE, SENT], FOUND);
+    let error = fx.post().unwrap_err();
+    assert_eq!(error.code().as_str(), "slack_unparseable", "{error:?}");
+    assert_eq!(fx.rows(), 0, "an unreadable answer wrote nothing");
+    fx.post().expect("the retry posts");
+    assert_eq!(fx.sends.lock().unwrap().len(), 2, "the retry sent again");
     assert_eq!(fx.rows(), 1);
 }
 
 #[test]
-fn an_unknown_outcome_whose_message_is_found_in_slack_writes_the_found_ts() {
-    let fx = fixture(&[UNPARSEABLE], FOUND);
-    let _ = fx.post();
-    let ts: String = Store::open(&fx.rig.home, 5000)
-        .unwrap()
-        .read(|c| {
-            Ok(
-                c.query_row("SELECT ts FROM pr_posts WHERE workflow = 'api'", [], |r| {
-                    r.get(0)
-                })?,
-            )
-        })
-        .unwrap_or_default();
-    assert_eq!(ts, "1700000000.000100", "the found message's ts is stored");
+fn a_store_failure_after_the_send_writes_no_pr_posts_row_and_is_retryable() {
+    let fx = fixture(&[SENT_UNSTORABLE, SENT], FOUND);
     let error = fx.post().unwrap_err();
-    assert_eq!(error.code().as_str(), "already_posted", "{error:?}");
-}
-
-#[test]
-fn an_unknown_outcome_whose_message_is_not_found_writes_nothing_and_can_be_retried() {
-    let fx = fixture(&[UNPARSEABLE, SENT], NOT_FOUND);
-    let _ = fx.post().unwrap_err();
-    assert_eq!(fx.rows(), 0, "an unfound message wrote nothing");
+    assert_eq!(error.code().as_str(), "store_failed", "{error:?}");
+    assert_eq!(fx.rows(), 0, "a failed row write left no row");
     fx.post().expect("the retry posts");
     assert_eq!(fx.sends.lock().unwrap().len(), 2, "the retry sent again");
-}
-
-#[test]
-fn a_post_writes_its_row_only_after_the_send_resolves() {
-    let fx = fixture(&[SENT], NOT_FOUND);
-    fx.post().expect("posts");
-    assert_eq!(*fx.sends.lock().unwrap(), [false], "no row at the send");
-    assert_eq!(fx.rows(), 1, "the row exists after");
+    assert_eq!(fx.rows(), 1);
 }
