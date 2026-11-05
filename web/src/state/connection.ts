@@ -1,4 +1,4 @@
-import type { CockpitAction } from "../protocol/cockpit.ts";
+import type { CockpitAction, SettingsChanges } from "../protocol/cockpit.ts";
 import { WebError, toWireError, type ConfigureChange, type DialogResponse, type WhenBusy, type WireImage } from "../protocol/domain.ts";
 import type { Disposable, Scheduler, Transport } from "../protocol/runtime.ts";
 import type { ClientMessage, ServerMessage } from "../protocol/wire.ts";
@@ -29,6 +29,9 @@ export interface Connection {
   listModels(): void;
   respond(dialogId: string, response: DialogResponse): void;
   action(action: CockpitAction): string;
+  readLogs(): void;
+  readSettings(): void;
+  saveSettings(changes: SettingsChanges): void;
   close(): void;
 }
 export const FRAME_MS = 16;
@@ -41,6 +44,9 @@ const REQUIRED: Readonly<Record<ServerMessage["type"], readonly (readonly [strin
   "cockpit.snapshot": [["tree", "object"], ["inbox", "object"]],
   "cockpit.patch": [["pane", "string"]],
   "cockpit.error": [["error", "object"]],
+  "logs.result": [["rows", "array"]],
+  "settings.result": [["settings", "object"]],
+  "settings.saved": [["ok", "boolean"]],
   "action.result": [["actionId", "string"], ["ok", "boolean"]],
   "session.attached": [SESSION, ["capabilities", "object"], ["meta", "object"]],
   "session.window": [SESSION, ["mode", "string"], ["window", "object"]],
@@ -246,6 +252,15 @@ export function createConnection(options: ConnectionOptions): Connection {
       const actionId = newId();
       send({ type: "cockpit.action", actionId, action });
       return actionId;
+    },
+    readLogs() {
+      send({ type: "logs.read" });
+    },
+    readSettings() {
+      send({ type: "settings.read" });
+    },
+    saveSettings(changes) {
+      send({ type: "settings.save", changes });
     },
     close() {
       if (closed) return;

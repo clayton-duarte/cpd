@@ -8,8 +8,12 @@ import type { Runner } from "../protocol/domain.ts";
 import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { createCpd, type CpdExec, type FollowBoundary } from "./cockpit/cli.ts";
-import { createCockpitService, type CockpitService } from "./cockpit/events.ts";
+import { createCockpitService, type CockpitService, type Extras } from "./cockpit/events.ts";
+import { readCosts, type CostFile } from "./cockpit/cost.ts";
+import { readLogs } from "./cockpit/logs.ts";
 import { createReadModel } from "./cockpit/readmodel.ts";
+import { readSettings, saveSettings } from "./cockpit/settings.ts";
+import { readStatus } from "./cockpit/status.ts";
 import { connectHost, type SocketFactory } from "./durable/client.ts";
 import { createDurableBackend } from "./durable/backend.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
@@ -27,6 +31,10 @@ export interface PluginBoundaries {
   git: GitBoundary;
   scheduler: Scheduler;
   cpdHome: string;
+  /** Runs `tmux <args>`; rejects on a non-zero exit. */
+  tmux(args: readonly string[]): Promise<string>;
+  /** Reads a whole text file with its stat; null when it does not exist. */
+  readText(path: string): Promise<CostFile | null>;
 }
 export interface Services {
   cockpit: CockpitService;
@@ -38,7 +46,19 @@ export interface Services {
 /** Pure wiring of the modules; nothing is started. */
 export function createServices(b: PluginBoundaries): Services {
   const cpd = createCpd(b.cpdExec);
-  const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler });
+  const cpdText = async (argv: readonly string[]): Promise<string> => {
+    const r = await b.cpdExec.run(argv);
+    if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `cpd exited ${r.exitCode}`);
+    return r.stdout;
+  };
+  const extras: Extras = {
+    status: () => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null }),
+    costs: () => readCosts({ cpd: cpdText, readFile: b.readText }),
+    logs: () => readLogs({ cpd: cpdText }),
+    settings: () => readSettings(cpd),
+    saveSettings: (changes) => saveSettings(cpd, changes),
+  };
+  const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler, extras });
   const registry = createRegistry({ snapshot: () => cockpit.snapshot(), cpdHome: b.cpdHome });
   // lazy: a backend is built on first attach so a host without sockets or files starts cleanly
   const lazy = (build: () => SessionBackend): SessionBackend => {
@@ -186,6 +206,19 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
         new Promise((resolve) => {
           execFile("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], (error, stdout) => resolve(error === null ? stdout.trim() || null : null));
         }),
+    },
+    tmux: (args) =>
+      new Promise((resolve, reject) => {
+        child.execFile("tmux", [...args], { maxBuffer: 1024 * 1024, env: cpdChildEnv(env) }, (error, stdout) => (error === null ? resolve(stdout) : reject(error)));
+      }),
+    readText: async (path) => {
+      try {
+        const [text, s] = await Promise.all([fsp.readFile(path, "utf8"), fsp.stat(path)]);
+        return { text, mtimeMs: s.mtimeMs, size: s.size };
+      } catch (e) {
+        if ((e as { code?: unknown }).code === "ENOENT") return null;
+        throw e;
+      }
     },
     scheduler: { now: () => Date.now(), after: (ms, run) => { const t = setTimeout(run, ms); return disposable(() => clearTimeout(t)); } },
     cpdHome: env["CPD_HOME"] ?? `${homedir()}/.cpd`,

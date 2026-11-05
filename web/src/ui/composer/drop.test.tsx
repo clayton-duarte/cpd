@@ -42,6 +42,9 @@ class FakeConnection implements Connection {
   listModels(): void {}
   respond(): void {}
   action(): string { return "a1"; }
+  readLogs(): void {}
+  readSettings(): void {}
+  saveSettings(): void {}
   close(): void {}
 }
 

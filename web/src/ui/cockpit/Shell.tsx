@@ -1,7 +1,8 @@
 import { ChevronDownIcon, ChevronUpIcon, MaximizeIcon, MinimizeIcon } from "lucide-react";
-import { useCallback, useState } from "react";
-import type { ReactElement, ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { MutableRefObject, ReactElement, ReactNode } from "react";
 import { Button } from "../components/button.tsx";
+import type { LayoutPanels } from "./layout.ts";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -19,8 +20,20 @@ export function Shell(props: {
   inbox: ReactNode;
   header?: ReactNode;
   status?: ReactNode;
+  /** Filled with the resizable panels, for `resetLayout`. */
+  panelsRef?: MutableRefObject<LayoutPanels | null>;
 }): ReactElement {
   const planRef = usePanelRef();
+  const treeRef = usePanelRef();
+  const centerRef = usePanelRef();
+  const inboxRef = usePanelRef();
+  const { panelsRef } = props;
+  useEffect(() => {
+    if (panelsRef === undefined) return;
+    const api = (ref: typeof planRef) => ({ resize: (size: string) => ref.current?.resize(size) });
+    panelsRef.current = { tree: api(treeRef), center: api(centerRef), inbox: api(inboxRef), plan: api(planRef) };
+    return () => { panelsRef.current = null; };
+  }, [panelsRef, treeRef, centerRef, inboxRef, planRef]);
   const chatRef = usePanelRef();
   const [mode, setMode] = useState<Mode>("open");
   const sync = useCallback(() => {
@@ -45,6 +58,7 @@ export function Shell(props: {
       >
         <ResizablePanel
           id="tree"
+          panelRef={treeRef}
           data-part="tree-panel"
           defaultSize="20%"
           minSize="12%"
@@ -62,7 +76,7 @@ export function Shell(props: {
           aria-label="Resize context tree and center"
           data-part="split-left"
         />
-        <ResizablePanel id="center" data-part="center-panel" defaultSize="58%" minSize="30%">
+        <ResizablePanel id="center" panelRef={centerRef} data-part="center-panel" defaultSize="58%" minSize="30%">
           <div
             data-column="center"
             data-part="center-frame"
@@ -158,6 +172,7 @@ export function Shell(props: {
         />
         <ResizablePanel
           id="inbox"
+          panelRef={inboxRef}
           data-part="inbox-panel"
           defaultSize="22%"
           minSize="14%"

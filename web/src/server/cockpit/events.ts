@@ -1,14 +1,14 @@
 import type { ActionOutput, CockpitAction } from "../../protocol/cockpit.ts";
 import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { CockpitPane, CockpitPaneData } from "../../protocol/wire.ts";
-import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
+import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsChanges, SettingsModel, StatusModel } from "../../protocol/cockpit.ts";
 import type { WireError } from "../../protocol/domain.ts";
 import { WebError, toWireError } from "../../protocol/domain.ts";
 import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from "./cli.ts";
 import { runAction } from "./actions.ts";
 import type { PaneUpdate, ReadModel } from "./readmodel.ts";
 
-export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string }
+export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string; readonly data: Readonly<Record<string, unknown>> }
 function malformed(line: string, field: string): never {
   throw new WebError("cpd_malformed_json", `event line: missing or mistyped field ${field}`, { field, command: line.slice(0, 200) });
 }
@@ -20,7 +20,7 @@ export function parseEventLine(line: string): CpdEvent {
   if (typeof o["id"] !== "number") return malformed(line, "id");
   if (typeof o["kind"] !== "string") return malformed(line, "kind");
   const s = (f: string): string | null => (typeof o[f] === "string" ? (o[f] as string) : null);
-  return { id: o["id"], kind: o["kind"], plan: s("plan"), context: s("context"), session: s("session"), job: s("job"), attempt: s("attempt"), at: s("at") ?? "", text: s("text") ?? "" };
+  return { id: o["id"], kind: o["kind"], plan: s("plan"), context: s("context"), session: s("session"), job: s("job"), attempt: s("attempt"), at: s("at") ?? "", text: s("text") ?? "", data: (typeof o["data"] === "object" && o["data"] !== null && !Array.isArray(o["data"]) ? o["data"] : {}) as Record<string, unknown> };
 }
 
 const TREE_KINDS = new Set("context-created context-grounded context-record context-renamed context-archived plan-created plan-phase plan-done plan-renamed plan-archived plan-review job-added job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status all-merged workflow-added workflow-edited workflow-cancelled workflow-started pr-opened pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep plan-deleted context-deleted inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed".split(" "));
@@ -40,7 +40,16 @@ export const SAFETY_REFRESH_MS = 30_000;
 export const FOLLOW_RESTART_BASE_MS = 1_000;
 
 export type CockpitUpdate = ({ kind: "pane" } & CockpitPaneData) | { kind: "error"; error: WireError };
-export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanViewModel | null; inbox: InboxModel | null }
+export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanViewModel | null; inbox: InboxModel | null; status?: StatusModel; costs?: CostModel }
+
+/** The machine status, costs, logs and settings reads; absent in tests of the panes alone. */
+export interface Extras {
+  status(): Promise<StatusModel>;
+  costs(): Promise<CostModel>;
+  logs(): Promise<LogRow[]>;
+  settings(): Promise<SettingsModel>;
+  saveSettings(changes: SettingsChanges): Promise<void>;
+}
 
 export interface CockpitService {
   start(): Promise<void>;
@@ -50,12 +59,15 @@ export interface CockpitService {
   selectPlan(planId: string | null): Promise<void>;
   subscribe(listener: (u: CockpitUpdate) => void): Disposable;
   runAction(action: CockpitAction): Promise<ActionOutput>;
+  readLogs(): Promise<LogRow[]>;
+  readSettings(): Promise<SettingsModel>;
+  saveSettings(changes: SettingsChanges): Promise<void>;
 }
 const RESTART_CAP_MS = 30_000;
 const CURSOR_AHEAD = 3;
 
-export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler }): CockpitService {
-  const { readModel, cpd, follow, scheduler } = deps;
+export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler; extras?: Extras }): CockpitService {
+  const { readModel, cpd, follow, scheduler, extras } = deps;
   const listeners = new Set<(u: CockpitUpdate) => void>();
   let snap: CockpitSnapshot = { tree: null, plan: null, inbox: null };
   let planId: string | null = null;
@@ -84,6 +96,25 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const refresh = async (panes: ReadonlySet<CockpitPane>): Promise<void> => {
     try { apply(await readModel.loadPanes(panes, planId)); } catch (e) { emitError(e); }
   };
+  const refreshExtras = async (): Promise<void> => {
+    if (extras === undefined) return;
+    try {
+      const status = await extras.status();
+      if (stopped) return;
+      snap = { ...snap, status };
+      emit({ kind: "pane", pane: "status", data: status });
+    } catch (e) { emitError(e); }
+    try {
+      const costs = await extras.costs();
+      if (stopped) return;
+      snap = { ...snap, costs };
+      emit({ kind: "pane", pane: "costs", data: costs });
+    } catch (e) { emitError(e); }
+  };
+  const need = (): Extras => {
+    if (extras === undefined) throw new WebError("internal", "settings and logs are not available");
+    return extras;
+  };
   const selected = (): { id: string; contextId: string } | null =>
     planId !== null && snap.plan !== null ? { id: planId, contextId: snap.plan.contextId } : planId !== null ? { id: planId, contextId: "" } : null;
 
@@ -92,6 +123,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       safety = null;
       if (stopped) return;
       if (planId !== null) void refresh(new Set<CockpitPane>(["plan"]));
+      void refreshExtras();
       scheduleSafety();
     });
   };
@@ -151,6 +183,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       if (stopped) return;
       startFollow();
       scheduleSafety();
+      void refreshExtras();
     },
     stop() {
       stopped = true;
@@ -175,5 +208,8 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       return { dispose: () => { listeners.delete(listener); } };
     },
     runAction: (action) => runAction(cpd, action),
+    readLogs: () => need().logs(),
+    readSettings: () => need().settings(),
+    saveSettings: (changes) => need().saveSettings(changes),
   };
 }

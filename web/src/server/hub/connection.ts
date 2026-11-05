@@ -1,6 +1,6 @@
 import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
 import { parseClientMessage } from "../../protocol/wire.ts";
-import type { ActionOutput, CockpitAction } from "../../protocol/cockpit.ts";
+import type { ActionOutput, CockpitAction, LogRow, SettingsChanges, SettingsModel } from "../../protocol/cockpit.ts";
 import type { ClientMessage, ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { CockpitSnapshot, CockpitUpdate } from "../cockpit/events.ts";
@@ -11,6 +11,9 @@ export interface CockpitService {
   selectPlan(planId: string | null): Promise<void>;
   subscribe(listener: (u: CockpitUpdate) => void): Disposable;
   runAction(action: CockpitAction): Promise<ActionOutput>;
+  readLogs?(): Promise<LogRow[]>;
+  readSettings?(): Promise<SettingsModel>;
+  saveSettings?(changes: SettingsChanges): Promise<void>;
 }
 export type SessionEmit = (message: SessionServerMessage) => void;
 export interface SessionHandle {
@@ -34,6 +37,11 @@ export interface HubDeps {
   send: (message: ServerMessage) => void;
 }
 export interface HubConnection { handle(raw: unknown): Promise<void>; close(): Promise<void> }
+
+const unsupported = <A extends unknown[], R>(f: ((...a: A) => Promise<R>) | undefined): ((...a: A) => Promise<R>) => {
+  if (f === undefined) throw new WebError("internal", "not available on this server");
+  return f;
+};
 
 // ---- the connection ----
 export function createHubConnection(deps: HubDeps): HubConnection {
@@ -61,7 +69,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       send({ type: "cockpit.error", error: toWireError(new WebError("internal", "cockpit not ready")) });
       return;
     }
-    send({ type: "cockpit.snapshot", tree: snap.tree, plan: snap.plan, inbox: snap.inbox });
+    send({ type: "cockpit.snapshot", tree: snap.tree, plan: snap.plan, inbox: snap.inbox, ...(snap.status === undefined ? {} : { status: snap.status }), ...(snap.costs === undefined ? {} : { costs: snap.costs }) });
     subscription ??= deps.cockpit.subscribe((u) => {
       if (u.kind === "error") send({ type: "cockpit.error", error: u.error });
       else send({ type: "cockpit.patch", pane: u.pane, data: u.data } as ServerMessage);
@@ -113,6 +121,28 @@ export function createHubConnection(deps: HubDeps): HubConnection {
           send({ type: "action.result", actionId: m.actionId, ok: true, output: await deps.cockpit.runAction(m.action) });
         } catch (e) {
           send({ type: "action.result", actionId: m.actionId, ok: false, error: toWireError(e) });
+        }
+        return;
+      case "logs.read":
+        try {
+          send({ type: "logs.result", rows: await unsupported(deps.cockpit.readLogs)() });
+        } catch (e) {
+          send({ type: "cockpit.error", error: toWireError(e) });
+        }
+        return;
+      case "settings.read":
+        try {
+          send({ type: "settings.result", settings: await unsupported(deps.cockpit.readSettings)() });
+        } catch (e) {
+          send({ type: "cockpit.error", error: toWireError(e) });
+        }
+        return;
+      case "settings.save":
+        try {
+          await unsupported(deps.cockpit.saveSettings)(m.changes);
+          send({ type: "settings.saved", ok: true });
+        } catch (e) {
+          send({ type: "settings.saved", ok: false, error: toWireError(e) });
         }
         return;
       case "session.attach": return attach(m.sessionId);
