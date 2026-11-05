@@ -1,9 +1,10 @@
-import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
+import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type SessionRef, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
 import { parseClientMessage } from "../../protocol/wire.ts";
 import type { ActionOutput, CockpitAction, LogRow, SettingsChanges, SettingsModel } from "../../protocol/cockpit.ts";
 import type { ClientMessage, ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { CockpitSnapshot, CockpitUpdate } from "../cockpit/events.ts";
+import type { CompletionTracker } from "../completion-service.ts";
 import type { Registry, ResolvedSession } from "./registry.ts";
 
 export interface CockpitService {
@@ -35,6 +36,7 @@ export interface HubDeps {
   registry: Registry;
   backends: Readonly<Record<Runner, SessionBackend>>;
   send: (message: ServerMessage) => void;
+  completion?: { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker };
 }
 export interface HubConnection { handle(raw: unknown): Promise<void>; close(): Promise<void> }
 
