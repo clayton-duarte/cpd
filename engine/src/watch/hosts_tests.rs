@@ -394,7 +394,7 @@ fn stale_fx(
     ));
     let id = SessionId::parse("lead1").unwrap();
     let (_pid, _lock) = hosts::start(&mut fx.engine, &id).expect("the host starts");
-    let ago = |secs: u64| std::time::SystemTime::now() - Duration::from_secs(secs);
+    let ago = |secs: u64| std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000 - secs);
     let set = |path: &std::path::Path, secs: u64| {
         std::fs::File::open(path)
             .unwrap()
