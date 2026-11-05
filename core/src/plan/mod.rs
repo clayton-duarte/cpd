@@ -20,6 +20,8 @@ pub mod display;
 #[cfg(test)]
 mod display_tier_tests;
 #[cfg(test)]
+mod done_tests;
+#[cfg(test)]
 mod explore_render_tests;
 #[cfg(test)]
 mod explore_tests;
