@@ -65,10 +65,29 @@ pub fn conditions_on(
     home: &CpdHome,
 ) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
+    // Any other process closing, dismissing or claiming a review-requested row changes this, so the memo misses.
+    // Not COUNT/MAX(id): E8's own opening of an item would otherwise miss the memo on its next tick.
+    let token = store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT MAX(closed_at), MAX(dismissed_at), MAX(claimed_at) \
+             FROM inbox_items WHERE kind = 'review-requested'",
+            [],
+            |row| {
+                Ok(format!(
+                    "{:?}",
+                    (
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    )
+                ))
+            },
+        )?)
+    })?;
     let mut github = |refs: &[(String, u64)]| {
         let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
         held.get_or_insert_with(Memo::default)
-            .get(refs, ports.clock.now(), |refs| {
+            .get(refs, &token, ports.clock.now(), |refs| {
                 team::github_lookup_with(&*ports.runner, home, refs)
             })
     };

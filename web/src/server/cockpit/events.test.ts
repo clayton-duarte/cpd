@@ -22,7 +22,7 @@ class FakeFollow implements FollowProcess {
   exit(code: number | null): void { for (const h of [...this.exitHandlers]) h({ code, stderr: "" }); }
 }
 
-function setup(gate?: () => Promise<void>) {
+function setup(gate?: () => Promise<void>, cpdOverride?: Cpd) {
   const scheduler = new FakeScheduler();
   const procs: FakeFollow[] = [];
   const follow: FollowBoundary = { start: (args) => { const p = new FakeFollow(args); procs.push(p); return p; } };
@@ -40,7 +40,7 @@ function setup(gate?: () => Promise<void>) {
       return out;
     },
   };
-  const cpd: Cpd = { json: async () => ({ ok: true }) };
+  const cpd: Cpd = cpdOverride ?? { json: async () => ({ ok: true }) };
   const service = createCockpitService({ readModel, cpd, follow, scheduler });
   const updates: CockpitUpdate[] = [];
   service.subscribe((u) => updates.push(u));
@@ -183,6 +183,16 @@ describe("cockpit service live updates", () => {
     const out = await service.runAction({ kind: "inbox.dismiss", itemId: 7 });
     await flush();
     expect(out).toEqual({ ok: true });
+    expect(loads).toEqual([{ panes: ["inbox", "tree"], planId: null }]);
+    service.stop();
+  });
+
+  it("a claim refused as not_claimable rejects with the error and still refreshes the inbox", async () => {
+    const refused: Cpd = { json: async () => { throw new Error("not_claimable: pull request acme/pay#5 is already approved; the item is closed."); } };
+    const { service, loads } = setup(undefined, refused);
+    await service.start();
+    await expect(service.runAction({ kind: "inbox.claim", itemId: 7 })).rejects.toThrow(/not_claimable/);
+    await flush();
     expect(loads).toEqual([{ panes: ["inbox", "tree"], planId: null }]);
     service.stop();
   });

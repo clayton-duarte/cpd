@@ -23,8 +23,8 @@ use crate::ports::Ports;
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// How long a GitHub answer is reused while the posts are the same. E8 runs every tick and the posts change at E11's
-/// 30-minute cadence; five minutes keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
-pub const GITHUB_TTL: Duration = Duration::from_secs(300);
+/// 30-minute cadence; thirty seconds keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
+pub const GITHUB_TTL: Duration = Duration::from_secs(30);
 
 /// The deadline of the GitHub call (the pull request poll's, `pr::gh::POLL_TIMEOUT`).
 const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
@@ -355,7 +355,12 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
 /// The last GitHub answer and when it came, so E8's tick does not ask again for the same posts within [`GITHUB_TTL`].
 /// A failure is held as well: a broken `gh` is asked again after the same time, not every tick.
 /// The posted pull requests asked, when, and the answer.
-type Held = (Vec<(String, u64)>, Instant, Result<Lookup, CpdError>);
+type Held = (
+    Vec<(String, u64)>,
+    String,
+    Instant,
+    Result<Lookup, CpdError>,
+);
 
 #[derive(Default)]
 pub struct Memo {
@@ -363,21 +368,24 @@ pub struct Memo {
 }
 
 impl Memo {
-    /// The held answer when `refs` are the same and it is younger than [`GITHUB_TTL`], else `fetch`'s.
+    /// The held answer when `refs` are the same and it is younger than [`GITHUB_TTL`] and the store's
+    /// invalidation `token` is unchanged, else `fetch`'s.
     pub fn get(
         &mut self,
         refs: &[(String, u64)],
+        token: &str,
         now: Instant,
         fetch: impl FnOnce(&[(String, u64)]) -> Result<Lookup, CpdError>,
     ) -> Result<Lookup, CpdError> {
-        if let Some((held, at, answer)) = &self.held
+        if let Some((held, held_token, at, answer)) = &self.held
             && held == refs
+            && held_token == token
             && now.saturating_duration_since(*at) < GITHUB_TTL
         {
             return answer.clone();
         }
         let answer = fetch(refs);
-        self.held = Some((refs.to_vec(), now, answer.clone()));
+        self.held = Some((refs.to_vec(), token.to_owned(), now, answer.clone()));
         answer
     }
 }
@@ -755,16 +763,16 @@ mod tests {
         let mut memo = Memo::default();
         let t0 = Instant::now();
         let mut ask = |memo: &mut Memo, refs: &[(String, u64)], at: Instant| {
-            memo.get(refs, at, |_| {
+            memo.get(refs, "", at, |_| {
                 calls += 1;
                 Ok(lookup.clone())
             })
             .unwrap();
         };
         ask(&mut memo, &a, t0);
-        ask(&mut memo, &a, t0 + Duration::from_secs(299));
-        ask(&mut memo, &b, t0 + Duration::from_secs(299));
-        ask(&mut memo, &b, t0 + Duration::from_secs(299 + 300));
+        ask(&mut memo, &a, t0 + Duration::from_secs(29));
+        ask(&mut memo, &b, t0 + Duration::from_secs(29));
+        ask(&mut memo, &b, t0 + Duration::from_secs(299 + 30));
         assert_eq!(calls, 3, "first, other posts, and past the ttl");
     }
 
@@ -776,7 +784,7 @@ mod tests {
         let mut calls = 0;
         for _ in 0..3 {
             let err = memo
-                .get(&a, t0, |_| {
+                .get(&a, "", t0, |_| {
                     calls += 1;
                     Err(CpdError::new(ErrorCode::GhFailed, "down"))
                 })

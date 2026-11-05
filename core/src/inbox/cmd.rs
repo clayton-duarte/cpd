@@ -577,7 +577,18 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
                 && current.closed_at.is_none()
                 && current.claimed_at.is_none()
             {
-                model::close_item(tx, &current, &timestamp(now))?;
+                let at = timestamp(now);
+                model::close_item(tx, &current, &at)?;
+                // A terminal reason is settled for good: E8 must not reopen the subject.
+                if matches!(
+                    reason,
+                    "merged" | "closed" | "approved" | "not-found" | "own"
+                ) {
+                    tx.execute(
+                        "UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1",
+                        params![current.id, at],
+                    )?;
+                }
             }
             Ok(())
         })?;
