@@ -5267,7 +5267,7 @@ A check that fails, whether `cpd plan show` returns an error or the message cann
 **What.** When due, the next `before_agent_start` of that Lead returns one message, `customType: "cpd-reminder"`, `display: false` (never shown to the User), with this `content`:
 
 ```
-cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or Workflow. Register it now (cpd job add <k> --draft --title "…", or cpd workflow add …) and name its key.
+cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or Workflow. Register it now (cpd job add <k> --title "…" --tier <T> --spec <file>, or cpd workflow add … with --jobs <file.json> after the lock; contract §2.2 "A parked draft") and name its key.
 ```
 
 It is added **at most once per run** and once it has been added the reminder is not due again until a later run ends with a message that fails the check. It is never delivered to a Session that is not a `lead` and never starts a turn (`triggerTurn: false`, as §15.1's messages).
