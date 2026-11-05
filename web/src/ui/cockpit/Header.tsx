@@ -4,7 +4,15 @@ import type { ReactElement } from "react";
 import { glyphClass } from "../dango-status.ts";
 import type { Glyph } from "../dango-status.ts";
 
+/** One breadcrumb crumb (DESIGN-panes 4.1). Stub: `Header` does not render crumbs yet. */
+export interface BreadcrumbCrumb {
+  readonly part: "host" | "group" | "manager" | "lead" | "worker";
+  readonly label: string;
+  readonly onClick?: () => void;
+}
+
 export interface HeaderProps {
+  readonly crumbs?: readonly BreadcrumbCrumb[];
   readonly location?: { readonly context: string; readonly plan: string | null } | null;
   readonly engine?: boolean | null;
   readonly onOpenSearch?: () => void;
