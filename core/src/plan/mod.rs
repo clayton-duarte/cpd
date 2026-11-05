@@ -50,6 +50,8 @@ pub mod parked_wake;
 mod parked_wake_tests;
 mod phase;
 mod prs;
+#[cfg(test)]
+mod reeval_tests;
 mod rename;
 mod render;
 #[cfg(test)]
