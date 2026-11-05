@@ -184,6 +184,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
 | `cpd janitor` | Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29) | | |
+| `cpd cockpit` | The WebUI backend's state and event stream (commands.md §11a) | | |
+| `cpd cockpit serve` | Serve snapshots and Events as NDJSON on stdout until stdin ends (commands.md §11a) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

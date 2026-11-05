@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, parsePending, parsePrOpened, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PendingPrJob, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { CpdError } from "../lib/cpd.ts";
-import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
+import { errEvent, Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
@@ -272,7 +272,7 @@ test("the Manager's cursor is the one for both sections: the next read starts af
   const [result] = await f.pi.fireWith("before_agent_start");
   f.pi.entries.push({ type: "custom_message", ...(result as any).message });
   await f.pi.fireWith("before_agent_start");
-  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100", "100", "100", "301", "301", "301", "301"]);
+  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100", "100", "301", "301", "301"]);
 });
 
 test("a failed Plan Events read fails the whole message: nothing added, the cursor stays, one error without a turn", async (t) => {
@@ -549,10 +549,47 @@ test("the Manager's digest counts engine errors by code", async (t) => {
   f.respond("events-list@plan-created", planEventsList([]));
   const err = (id: number, code: string) => ({ id, kind: "error", context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", data: { source: "watch", code, message: "m", details: {} } });
   f.respond("events-list@error", { ok: true, events: [err(401, "gh_failed"), err(402, "pr_start_failed")], next: 402 });
-  f.respond("events-list@error@machine", { ok: true, events: [err(403, "gh_failed")], next: 403 });
   const m = await beforeTurn(f);
-  assert.equal(m.content, "Errors: 3 (gh_failed x2, pr_start_failed x1): cpd events list --kind error --since 100");
-  assert.equal(m.details.event, 403);
+  assert.equal(m.content, "Errors: 2 (gh_failed x1, pr_start_failed x1): cpd events list --kind error --since 100");
+  assert.equal(m.details.event, 402);
+});
+
+/** A Manager of `context`: its own read answers `own`, the unscoped read answers `unscoped`; returns the turn's message. */
+async function digestOf(context: string, own: Record<string, unknown>[], unscoped: Record<string, unknown>[]) {
+  const f = new Fixture();
+  try {
+    await manager(f, { context });
+    nothingNew(f);
+    f.respond("events-list@plan-created", planEventsList([]));
+    f.respond("events-list@error", { ok: true, events: own, next: 0 });
+    f.respond("events-list@error@machine", { ok: true, events: unscoped, next: 0 });
+    return await beforeTurn(f);
+  } finally {
+    await f.close();
+  }
+}
+
+test("a Manager's digest counts only the errors of its own Context", async () => {
+  const m = await digestOf("ctx", [errEvent(401, "ctx")], [errEvent(402, "other"), errEvent(403, "other", "p9")]);
+  assert.equal(m.details.errors, 1);
+  assert.equal(m.details.event, 401);
+});
+
+test("a machine error (no Context, no Plan) reaches the Manager of the cpd Context", async () => {
+  const m = await digestOf("cpd", [errEvent(401, "cpd")], [errEvent(402, null), errEvent(403, "other")]);
+  assert.equal(m.details.errors, 2);
+  assert.equal(m.details.event, 402);
+});
+
+test("a machine error (no Context, no Plan) reaches the Manager of the host Context", async () => {
+  const m = await digestOf("host", [errEvent(401, "host")], [errEvent(402, null), errEvent(403, "other")]);
+  assert.equal(m.details.errors, 2);
+  assert.equal(m.details.event, 402);
+});
+
+test("a machine error does not reach a Manager of any other Context", async () => {
+  const m = await digestOf("ctx", [], [errEvent(402, null), errEvent(403, null)]);
+  assert.equal(m, undefined);
 });
 
 test("record lines are labelled UTC", () => {

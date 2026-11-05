@@ -906,3 +906,6 @@ export const stateCalls = (f: Fixture): string[] =>
 export function transportsStarted(transports: readonly unknown[], count = 1): Promise<void> {
   return waitFor(`${count} transport(s) pi connects`, () => transports.length >= count, 5000).then(() => {});
 }
+
+/** An `error` Event as `cpd events list --kind error` returns it, with its Context and Plan (null for a machine error). */
+export const errEvent = (id: number, context: string | null, plan: string | null = null) => ({ id, kind: "error", context, plan, at: "2026-10-21T15:00:00Z", text: "t", data: { source: "watch", code: "gh_failed", message: "m", details: {} } });

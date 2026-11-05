@@ -1,5 +1,5 @@
 import { CpdError, installedIdentity, isObject } from "./cpd.ts";
-import { eventMessage, FOLLOW_UP, gated, send, STEER, leadRule, sessionMessage } from "./delivery.ts";
+import { type Hold, eventMessage, FOLLOW_UP, gated, send, STEER, leadRule, sessionMessage } from "./delivery.ts";
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
@@ -88,10 +88,10 @@ export const MENTION_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /** §15.3: an Event id reaches pi at most once per activation; the check and the add are one synchronous step. */
-function deliverOnce(host: Host, r: Run, ev: CpdEvent, message: Parameters<typeof host.pi.sendMessage>[0], options: Parameters<typeof gated>[1]): void {
+function deliverOnce(host: Host, r: Run, ev: CpdEvent, message: Parameters<typeof host.pi.sendMessage>[0], options: Parameters<typeof gated>[1], hold: Hold = "all"): void {
   if (r.delivered.has(ev.id)) return;
   r.delivered.add(ev.id);
-  send(host, r, message, options);
+  send(host, r, message, options, hold);
 }
 
 async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
@@ -182,5 +182,5 @@ async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-me
     }
   }
   if (host.run !== r) return;
-  deliverOnce(host, r, ev, sessionMessage(ev, r.id, sender), STEER(true));
+  deliverOnce(host, r, ev, sessionMessage(ev, r.id, sender), STEER(true), "tripped"); // pro-d400, docs/commands.md §15.7a: a User message starts the first turn
 }

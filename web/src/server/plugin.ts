@@ -95,7 +95,7 @@ export function createServices(b: PluginBoundaries): Services {
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, live: () => createLiveSource({ connect: connectLive, scheduler: b.scheduler, cpdHome: b.cpdHome }) })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler, live: () => createLiveSource({ connect: connectLive, scheduler: b.scheduler, cpdHome: b.cpdHome }) })),
     durable: lazy(() =>
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
