@@ -36,7 +36,7 @@ export async function boot(deps: BootDeps): Promise<void> {
     try {
       await deps.loadDevUrl(win, devUrl);
     } catch (error) {
-      console.error(error);
+      console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
       await deps.loadFile(win, 'renderer/electron.html');
     }
   } else await deps.loadFile(win, 'renderer/electron.html');
