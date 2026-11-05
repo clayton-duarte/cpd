@@ -28,10 +28,11 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::Failed;
 use cpd_core::host::runner::Runner;
-use cpd_core::ids::{PlanId, WorkflowKey};
-use cpd_core::pr::{jira_sync, posts};
-use cpd_core::pr::posts::PostRecord;
+use cpd_core::ids::{OwnerLogin, RepoName};
+use cpd_core::policy::{PolicyKey, resolve};
 use cpd_core::ports::Ports;
+use cpd_core::pr::posts::PostRecord;
+use cpd_core::pr::{jira_sync, posts};
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -259,7 +260,9 @@ fn confirm_own_posts(engine: &mut Engine, answer: &Value) -> Result<usize, Failu
             .iter()
             .filter(|p| {
                 p["author_id"].as_str() == Some(me.as_str())
-                    && p["repo"].as_str().is_some_and(|r| r.eq_ignore_ascii_case(&repo))
+                    && p["repo"]
+                        .as_str()
+                        .is_some_and(|r| r.eq_ignore_ascii_case(&repo))
                     && p["number"].as_i64() == Some(number)
             })
             .filter_map(|p| Some((p["ts"].as_f64()?, p["ts_raw"].as_str()?)))
@@ -267,14 +270,17 @@ fn confirm_own_posts(engine: &mut Engine, answer: &Value) -> Result<usize, Failu
         let Some((_, ts_raw)) = earliest else {
             continue;
         };
-        let (Ok(plan_id), Ok(workflow)) = (PlanId::parse(&plan), WorkflowKey::parse(&key)) else {
+        // The policy of the pull request's repo (a repo with no file inherits its owner's), as the poll of E8 reads it.
+        let Some((owner, name)) = repo.split_once('/') else {
             continue;
         };
-        let enabled = engine
-            .store
-            .read(|conn| cpd_core::pr::policy_of_workflow(conn, &home, &plan_id, &workflow));
-        // A Workflow whose policy does not resolve is not confirmed; that is reported where the policy is used.
-        if !enabled.is_ok_and(|p| p.pr.post.enabled) {
+        let (Ok(owner), Ok(name)) = (OwnerLogin::parse(owner), RepoName::parse(name)) else {
+            continue;
+        };
+        // A policy that does not resolve confirms nothing; that is reported where the policy is used.
+        let enabled =
+            resolve(&home, &PolicyKey::Repo(owner, name)).is_ok_and(|r| r.policy.pr.post.enabled);
+        if !enabled {
             continue;
         }
         let new = engine
@@ -284,7 +290,10 @@ fn confirm_own_posts(engine: &mut Engine, answer: &Value) -> Result<usize, Failu
                 let record = PostRecord {
                     channel: channel.clone(),
                     ts: ts_raw.to_owned(),
-                    link: format!("https://{host}/archives/{channel}/p{}", ts_raw.replace('.', "")),
+                    link: format!(
+                        "https://{host}/archives/{channel}/p{}",
+                        ts_raw.replace('.', "")
+                    ),
                     posted_at: now.clone(),
                     reaction: None,
                     reacted_at: None,
