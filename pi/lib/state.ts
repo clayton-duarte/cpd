@@ -123,7 +123,7 @@ export class Facts {
   }
 
   isBlocked(): boolean {
-    return false;
+    return this.wanted().state === "blocked";
   }
 
   /** `blocked` with the label of the latest human reason while any is open; else `waiting` with the label of the latest agent reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */
