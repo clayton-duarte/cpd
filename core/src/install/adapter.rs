@@ -47,7 +47,7 @@ pub(super) fn preflight(install: &Install) -> Result<(), Stop> {
 
 /// Copies the directory `from` into the existing directory `to`, skipping the top-level entries named in `skip`
 /// (`cp -R from/. to/`, symlinks as symlinks).
-fn copy_tree(from: &Path, to: &Path, skip: &[&str]) -> io::Result<()> {
+pub(super) fn copy_tree(from: &Path, to: &Path, skip: &[&str]) -> io::Result<()> {
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         if skip.iter().any(|s| entry.file_name() == *s) {

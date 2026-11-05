@@ -4,6 +4,7 @@ use std::fs;
 use std::process::{Command, Output};
 use std::time::Duration;
 
+use super::adapter::copy_tree;
 use super::{Install, Stop, refused};
 use crate::ports::Ports;
 
@@ -11,7 +12,8 @@ use crate::ports::Ports;
 const PNPM_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
 /// Installs the root `package.json`'s dependencies beside `pi/`, in `<home>/.local/share/cpd`; does nothing
-/// when there is no package.json or it has no dependencies.
+/// when there is no package.json or it has no dependencies. Stages package.json, pnpm-lock.yaml,
+/// pnpm-workspace.yaml and, when present, `patches/` (replacing any stale copy) before running pnpm.
 pub(super) fn install_packages(ports: &Ports, install: &Install) -> Result<(), Stop> {
     let manifest = install.root.join("package.json");
     let bytes = match fs::read(&manifest) {
@@ -51,6 +53,23 @@ pub(super) fn install_packages(ports: &Ports, install: &Install) -> Result<(), S
                 dest.display()
             ))
         })?;
+    }
+    let patches = install.root.join("patches");
+    if patches.is_dir() {
+        let dest = share.join("patches");
+        let copy = |e: std::io::Error| {
+            refused(format!(
+                "cannot copy {} to {}: {e}",
+                patches.display(),
+                dest.display()
+            ))
+        };
+        match fs::remove_dir_all(&dest) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(copy(e)),
+            _ => {}
+        }
+        fs::create_dir(&dest).map_err(copy)?;
+        copy_tree(&patches, &dest, &[]).map_err(copy)?;
     }
     let mut cmd = Command::new("pnpm");
     cmd.args(["install", "--prod", "--frozen-lockfile"])
