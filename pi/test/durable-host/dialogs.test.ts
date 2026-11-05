@@ -136,3 +136,24 @@ test("every dialog broadcast happens once and changes the state via stateChanged
   created[1].resolve(true as unknown as object);
   await tick();
 });
+test("a secret or host approval request carries the approval flag", async () => {
+  for (const purpose of ["secret_approve", "host_approve"] as const) {
+    const { broadcasted, port } = makePort();
+    const dialogs = createDialogs(port);
+    void dialogs.select("Allow?", ["Allow once", "Deny"], { purpose });
+    const request = broadcasted.find((b) => b.type === "ui_request");
+    assert.ok(request, `${purpose} is broadcast`);
+    assert.equal(request.approval, true, `${purpose} carries approval: true`);
+  }
+});
+
+test("an ask_user_question headed Approval carries no approval flag", async () => {
+  const { broadcasted, port } = makePort();
+  const dialogs = createDialogs(port);
+  const questions = [{ question: "Approve the plan?", header: "Approval", options: [{ label: "yes", description: "d" }, { label: "no", description: "e" }] }];
+  void dialogs.questionnaire(questions, { purpose: "ask_user_question" });
+  const request = broadcasted.find((b) => b.type === "ui_request");
+  assert.ok(request, "the question is broadcast");
+  assert.notEqual(request.approval, true);
+  assert.ok(!("approval" in request) || request.approval === false, "no approval flag");
+});

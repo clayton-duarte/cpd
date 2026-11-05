@@ -53,6 +53,8 @@ export function createDialogs(port: DialogPort): Dialogs {
       created_at,
       ...(opts?.ms === undefined ? {} : { expires_at: created_at + opts.ms }),
       ...(opts?.toolCallId === undefined ? {} : { tool_call_id: opts.toolCallId }),
+      // STUB (hostfix-tests-a1): wrong on purpose, the flag is not derived from the purpose yet; it follows a questionnaire header.
+      ...(JSON.stringify(fields).includes('"header":"Approval"') ? { approval: true } : {}),
     } as Live);
     port.stateChanged();
     return { id, promise, outcome: () => outcome };
