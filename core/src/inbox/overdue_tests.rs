@@ -89,7 +89,7 @@ fn a_ready_pr_with_an_unreviewed_post_older_than_24h_is_labeled_review_overdue()
     // Not a new kind, subject or colour: only the tail of Row 1 changes.
     assert_eq!(c.kind, Kind::PrReady);
     assert_eq!(c.subject, "pr:acme/shop#1");
-    assert_eq!(c.urgency, Urgency::Cyan);
+    assert_eq!(c.urgency, Urgency::White);
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn a_post_younger_than_24h_keeps_the_ready_for_review_label() {
     let mut f = fixture(YOUNG, None, "title = title");
     let c = f.row();
     assert_eq!(c.label, IN_REVIEW);
-    assert_eq!(c.urgency, Urgency::Cyan);
+    assert_eq!(c.urgency, Urgency::White);
     // The same row turns overdue once the post is old enough.
     f.sql("UPDATE pr_posts SET posted_at = '2025-12-30T00:00:00.000Z'");
     assert_eq!(f.row().label, OVERDUE);

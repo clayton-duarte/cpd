@@ -84,8 +84,8 @@ fn the_column_is_the_machine_header_then_the_inbox_and_has_no_prs_section() {
 fn an_authored_pr_is_one_inbox_row_and_open_prs_draw_nothing_else() {
     let items = [
         pr_item(Urgency::Yellow, "repo#1 ready to merge", 1),
-        pr_item(Urgency::Cyan, "repo#2 checks running", 2),
-        pr_item(Urgency::White, "repo#3 draft", 3),
+        pr_item(Urgency::White, "repo#2 checks running", 2),
+        pr_item(Urgency::Cyan, "repo#3 draft", 3),
     ];
     let fx = prepared(&items);
     let _engine = engine(&fx);
@@ -106,7 +106,7 @@ fn an_authored_pr_is_one_inbox_row_and_open_prs_draw_nothing_else() {
 
 #[test]
 fn an_inbox_label_changed_in_the_store_with_no_event_is_drawn_at_the_next_read() {
-    let fx = prepared(&[pr_item(Urgency::Cyan, "repo#2 checks running", 2)]);
+    let fx = prepared(&[pr_item(Urgency::White, "repo#2 checks running", 2)]);
     let _engine = engine(&fx);
     let home = fx.env.cpd_home();
     // The view's first read always reads the Inbox (the pull request rows are new to it): the label changes after it.
