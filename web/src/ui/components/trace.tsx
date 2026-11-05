@@ -76,7 +76,7 @@ function TraceDescription({
     <span
       data-slot="trace-description"
       className={cn(
-        "max-w-[45%] min-w-0 shrink-0 truncate text-muted-foreground/70 tabular-nums",
+        "min-w-0 shrink-0 truncate text-muted-foreground/70 tabular-nums",
         className
       )}
       {...props}
