@@ -8,6 +8,12 @@ use crate::env::Env;
 use crate::error::CpdError;
 use crate::output::Output;
 
+/// `context list` read through the open `env`.
+#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
+pub(crate) fn list_in(_env: &mut Env) -> Result<Output, CpdError> {
+    unimplemented!("pro-d405 impl job")
+}
+
 /// `context list` (§3.2).
 pub(super) fn list() -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;

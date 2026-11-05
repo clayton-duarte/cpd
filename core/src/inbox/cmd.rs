@@ -189,6 +189,12 @@ fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError
     })
 }
 
+/// `inbox list` read through the open `env`.
+#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
+pub(crate) fn list_in(_env: &mut Env, _args: ListArgs) -> Result<Output, CpdError> {
+    unimplemented!("pro-d405 impl job")
+}
+
 /// `inbox list` (§21.1).
 fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
     let Env {

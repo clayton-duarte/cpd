@@ -72,6 +72,12 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
         .collect()
 }
 
+/// `plan show` read through the open `env`.
+#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
+pub(crate) fn show_in(_env: &mut Env, _args: ShowArgs) -> Result<Output, CpdError> {
+    unimplemented!("pro-d405 impl job")
+}
+
 /// `plan show` (§4.3).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();

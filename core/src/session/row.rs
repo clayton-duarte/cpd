@@ -439,6 +439,12 @@ pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// `session list` read through the open `env`.
+#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
+pub(crate) fn list_in(_env: &mut Env, _args: ListArgs) -> Result<Output, CpdError> {
+    unimplemented!("pro-d405 impl job")
+}
+
 /// `session list` (commands.md §10.1).
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;

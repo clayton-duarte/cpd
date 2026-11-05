@@ -139,8 +139,8 @@ struct InboxCli {
 }
 
 /// The four panes: what the list commands print (same functions), read through `$CPD_HOME` on `env`'s ports.
-fn panes(ports: &Ports) -> Value {
-    Ports::scope(ports, || {
+fn panes(env: &mut Env) -> Value {
+    Ports::scope(&env.ports.clone(), || {
         json!({
             "context": printed(crate::context::run(ContextCli::parse_from(["cpd", "list"]).command)),
             "plan": printed(crate::plan::run(PlanCli::parse_from(["cpd", "list"]).command)),
@@ -150,7 +150,7 @@ fn panes(ports: &Ports) -> Value {
     })
 }
 
-fn plan_show(ports: &Ports, id: String, plan: &str) -> Frame {
+fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
     let command = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
         Ok(cli) => cli.command,
         Err(e) => {
@@ -161,7 +161,7 @@ fn plan_show(ports: &Ports, id: String, plan: &str) -> Frame {
             };
         }
     };
-    match Ports::scope(ports, || crate::plan::run(command)) {
+    match Ports::scope(&env.ports.clone(), || crate::plan::run(command)) {
         Ok(out) => Frame::PlanShow {
             id,
             value: printed(Ok(out)),
@@ -176,7 +176,7 @@ enum Request {
     Answer(Frame),
 }
 
-fn request(ports: &Ports, line: &str) -> Request {
+fn request(env: &mut Env, line: &str) -> Request {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(line) else {
         return Request::Answer(Frame::usage(None, "A request is one JSON object per line."));
     };
@@ -198,7 +198,7 @@ fn request(ports: &Ports, line: &str) -> Request {
         return Request::Refresh;
     }
     match (id, obj.get("plan").and_then(Value::as_str)) {
-        (Some(id), Some(plan)) => Request::Answer(plan_show(ports, id, plan)),
+        (Some(id), Some(plan)) => Request::Answer(plan_show(env, id, plan)),
         _ => Request::Answer(Frame::usage(
             None,
             "`plan_show` needs a string `id` and a string `plan`.",
@@ -273,7 +273,6 @@ fn serve_frames(
 ) -> Result<(), CpdError> {
     let mut cursor = env.store.read(events::highest_id)?;
     let mut seq = 0u64;
-    let ports = env.ports.clone();
     macro_rules! emit {
         ($frame:expr) => {
             if !send(out, &$frame)? {
@@ -286,7 +285,7 @@ fn serve_frames(
             seq += 1;
             emit!(Frame::Snapshot {
                 seq,
-                panes: panes(&ports)
+                panes: panes(env)
             });
         }};
     }
@@ -296,7 +295,7 @@ fn serve_frames(
     let mut batch: Option<u64> = None;
     for item in input {
         match item {
-            Input::Line(line) => match request(&ports, &line) {
+            Input::Line(line) => match request(env, &line) {
                 Request::Refresh => snapshot!(),
                 Request::Answer(frame) => emit!(frame),
             },

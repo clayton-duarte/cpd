@@ -14,6 +14,11 @@ use crate::events::highest_id;
 use crate::output::Output;
 use crate::pr::pulls::PullRequest;
 
+#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
+pub(crate) fn list_in(_env: &mut Env, _args: ListArgs) -> Result<Output, CpdError> {
+    unimplemented!("pro-d405 impl job")
+}
+
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let (plans, cursor) = env.store.read(|conn| snapshot(conn, &args))?;
