@@ -50,7 +50,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   let closed = false;
   let subscription: Disposable | null = null;
   let generation = 0;
-  let attached: { sessionId: string; handle: SessionHandle } | null = null;
+  let attached: { sessionId: string; handle: SessionHandle; tracker: CompletionTracker | null } | null = null;
 
   const send = (m: ServerMessage): void => {
     if (!closed) deps.send(m);
@@ -62,6 +62,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
     generation += 1; // in-flight attaches and old emits are now stale
     const old = attached;
     attached = null;
+    old?.tracker?.dispose();
     if (old !== null) await old.handle.dispose();
   };
 
@@ -81,17 +82,26 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   const attach = async (sessionId: string): Promise<void> => {
     await detach();
     const mine = generation;
+    let tracker: CompletionTracker | null = null;
     try {
       const resolved = deps.registry.resolve(sessionId);
+      tracker = deps.completion?.track(resolved.ref, (m) => {
+        if (generation === mine && !closed) send(m);
+      }) ?? null;
+      const tracked = tracker;
       const handle = await deps.backends[resolved.ref.runner].attach(resolved, (m) => {
-        if (generation === mine) send(m);
+        if (generation !== mine) return;
+        tracked?.observe(m);
+        send(m);
       });
       if (generation !== mine || closed) {
+        tracker?.dispose();
         await handle.dispose();
         return;
       }
-      attached = { sessionId, handle };
+      attached = { sessionId, handle, tracker };
     } catch (e) {
+      tracker?.dispose();
       if (generation === mine) sessionError(sessionId, e);
     }
   };
