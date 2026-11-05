@@ -649,14 +649,24 @@ fn review_requested(
         .iter()
         .filter(|p| p.primary && p.ts >= cutoff)
         .collect();
-    if posts.is_empty() {
+    let plans = super::review_plan::open_plan_refs(store)?;
+    if posts.is_empty() && plans.is_empty() {
         return Ok(Vec::new());
     }
-    let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let mut refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    for (_, repo, number) in &plans {
+        if !refs.contains(&(repo.clone(), *number)) {
+            refs.push((repo.clone(), *number));
+        }
+    }
     let lookup = match (team.github)(&refs) {
         Ok(lookup) => lookup,
         Err(_) => return kept_review_items(store),
     };
+    super::review_plan::finish_closed(store, &lookup)?;
+    if posts.is_empty() {
+        return Ok(Vec::new());
+    }
     let read = |p: &Post| -> Option<&GhPr> {
         lookup
             .workflows
