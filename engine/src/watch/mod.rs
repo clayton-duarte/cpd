@@ -111,6 +111,8 @@ mod schedule_tests;
 mod shutdown_recovery_tests;
 mod sleep;
 #[cfg(test)]
+mod sleep_tests;
+#[cfg(test)]
 mod stacked_ready_tests;
 #[cfg(test)]
 mod stuck_explore_tests;

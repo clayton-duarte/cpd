@@ -159,4 +159,27 @@ describe("App", () => {
       images: [{ mimeType: "image/png", dataBase64: "QUJD" }], whenBusy: "followUp",
     });
   });
+
+  it("selecting an archived session disables the Composer", () => {
+    const transport = new FakeTransport();
+    const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+    mounted = view;
+    const archivedNode = { ...node, archived: true };
+    const archivedPlan = { ...snapshot.tree.contexts[0]!.plans[0]!, archived: true, sessions: [archivedNode] };
+    const tree = { ...snapshot.tree, contexts: [{ ...snapshot.tree.contexts[0]!, plans: [archivedPlan] }] };
+    act(() => transport.emitStatus("open"));
+    act(() => transport.emitMessage({ ...snapshot, tree }));
+    const trigger = view.container.querySelector<HTMLButtonElement>('[data-section="archive"] button');
+    expect(trigger).not.toBeNull();
+    act(() => { trigger!.click(); });
+    const row = view.container.querySelector<HTMLButtonElement>('[data-section="archive"] button[data-select="plan"]');
+    expect(row).not.toBeNull();
+    act(() => { row!.click(); });
+    act(() => {
+      transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref, footer } });
+    });
+    const ta = view.container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
+    expect(ta).not.toBeNull();
+    expect(ta!.disabled).toBe(true);
+  });
 });

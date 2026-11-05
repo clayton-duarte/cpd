@@ -285,6 +285,15 @@ pub(super) fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<S
     }
 }
 
+/// The ids of the durable Sessions: their cost is in the host store, not a session file.
+fn durable_ids(conn: &rusqlite::Connection) -> Result<std::collections::HashSet<String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT id FROM sessions WHERE runner = 'durable'")?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(ids)
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
     tree_at(store, None)
 }
@@ -311,8 +320,15 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
         fill_dots(&inbox, &heads, &mut leads);
+        let durable = durable_ids(conn)?;
+        let own = |s: &SessionNode| match durable.contains(s.id.as_str()) {
+            true => {
+                cost::durable_cost(&home.run_dir().join("host").join(format!("{}.sqlite", s.id)))
+            }
+            false => s.file.as_deref().and_then(|f| cost::own_cost(Path::new(f))),
+        };
         for s in &mut leads {
-            s.cost_usd = s.file.as_deref().and_then(|f| cost::own_cost(Path::new(f)));
+            s.cost_usd = own(s);
         }
         // Every Attempt of every Plan, in one query: the stored `metrics` is the only source when written, else the
         // Worker Session's file.
@@ -338,7 +354,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         // Context's archived section, oldest first (hs-d630, hs-d633).
         let mut all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
         for s in &mut all_managers {
-            s.cost_usd = s.file.as_deref().and_then(|f| cost::own_cost(Path::new(f)));
+            s.cost_usd = own(s);
         }
         let mut manager_costs: BTreeMap<ContextId, Vec<Option<f64>>> = BTreeMap::new();
         for s in &all_managers {

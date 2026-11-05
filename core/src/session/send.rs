@@ -254,6 +254,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
             Some(args.unblocks.as_str()),
             true,
         )?;
+        if target.runner == row::Runner::Durable {
+            super::moves::wake_durable(tx, &target.id)?;
+        }
         Ok((event, target))
     })?;
     if let Some(from) = &from {

@@ -142,6 +142,7 @@ fn due(engine: &mut Engine) -> Result<Vec<Due>, CpdError> {
 
 /// The hosts step of the engine tick (contract §6.19).
 pub fn run(engine: &mut Engine) {
+    sweep(engine);
     let due = match due(engine) {
         Ok(due) => due,
         Err(e) => {
@@ -160,10 +161,80 @@ pub fn run(engine: &mut Engine) {
     }
 }
 
+/// The durable Sessions that are archived or asleep, any role: their hosts are to be stopped (G6/G32).
+const SWEEP_SESSIONS: &str = "SELECT id FROM sessions
+  WHERE runner = 'durable' AND (archived_at IS NOT NULL OR asleep_at IS NOT NULL)
+  ORDER BY id";
+
+/// Stops the live host of every archived or asleep durable Session (contract §6.19); idempotent, no Event.
+fn sweep(engine: &mut Engine) {
+    let ids: Result<Vec<String>, CpdError> = engine.store.read(|conn| {
+        let mut stmt = conn.prepare(SWEEP_SESSIONS)?;
+        Ok(stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    });
+    let ids = match ids {
+        Ok(ids) => ids,
+        Err(e) => {
+            return engine.log.line(&format!(
+                "hosts: cannot read the Sessions to sweep: {}",
+                e.message()
+            ));
+        }
+    };
+    for id in ids {
+        let Ok(id) = SessionId::parse(&id) else {
+            continue;
+        };
+        if engine.hosts.pid(&id).is_some() || live_pid_file(engine, &id).is_some() {
+            stop(engine, &id);
+            engine
+                .log
+                .line(&format!("hosts: stopped the host of Session {id}"));
+        }
+    }
+}
+
+/// Whether the idle Session's host started before the adapter swap (contract §6.19): its pid file is older than the
+/// lstat mtime of the adapter symlink. Any unreadable time means not stale.
+fn stale_idle(engine: &mut Engine, session: &SessionId) -> bool {
+    let state: Result<String, CpdError> = engine.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |r| r.get(0),
+        )?)
+    });
+    if state.as_deref() != Ok("idle") {
+        return false;
+    }
+    let Ok(adapter) = engine.config.pi_adapter_dir() else {
+        return false;
+    };
+    let mtime = |m: std::io::Result<std::fs::Metadata>| m.and_then(|m| m.modified()).ok();
+    match (
+        mtime(std::fs::symlink_metadata(adapter)),
+        mtime(std::fs::metadata(pid_path(&engine.home, session))),
+    ) {
+        (Some(swap), Some(pid)) => pid < swap,
+        _ => false,
+    }
+}
+
+/// Stops a stale idle host and starts it again (contract §6.19); not a crash, so the bound is not used.
+fn reload(engine: &mut Engine, session: &SessionId) -> Result<(), CpdError> {
+    stop(engine, session);
+    start_ignoring_running(engine, session)
+}
+
 /// One due Session: adopt its live host, restart a dead one inside the bound, or start it (contract §6.19).
 fn due_one(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
     if let Some(pid) = engine.hosts.pid(&due.id) {
         if engine.ports.spawn.alive(pid) {
+            if stale_idle(engine, &due.id) {
+                return reload(engine, &due.id);
+            }
             return Ok(());
         }
         return restart(engine, due);
@@ -178,6 +249,9 @@ fn due_one(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
                 window_start: Some(engine.ports.clock.utc()),
             },
         );
+        if stale_idle(engine, &due.id) {
+            return reload(engine, &due.id);
+        }
         return Ok(());
     }
     start_ignoring_running(engine, &due.id)

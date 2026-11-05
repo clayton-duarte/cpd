@@ -8,8 +8,11 @@ export type QuitCtx = { ui: Pick<ExtensionContext["ui"], "setEditorComponent"> }
 
 type SubmitEditor = { onSubmit?: (text: string) => void };
 
+/** True for `/quit` and `/q` (trimmed). */
+export const isQuitCommand = (text: string): boolean => ["/quit", "/q"].includes(text.trim());
+
 /**
- * Installs the editor wrapper that writes the quit marker at `CPD_QUIT_MARKER` when the User submits exactly `/quit`
+ * Installs the editor wrapper that writes the quit marker at `CPD_QUIT_MARKER` when the User submits exactly `/quit` or `/q`
  * (trimmed), then lets the original submit run (pro-d361). pi's session_shutdown reason is always `quit`, so only the
  * editor can tell `/quit` from a signal. pi assigns `onSubmit` after `setEditorComponent`, so the assignment is intercepted.
  */
@@ -22,7 +25,7 @@ export function installQuitMarker(ctx: QuitCtx, host: { env: Record<string, stri
     Object.defineProperty(editor, "onSubmit", {
       configurable: true,
       get: () => original && ((text: string) => {
-        if (text.trim() === "/quit") {
+        if (isQuitCommand(text)) {
           mkdirSync(dirname(marker), { recursive: true });
           writeFileSync(marker, "");
         }

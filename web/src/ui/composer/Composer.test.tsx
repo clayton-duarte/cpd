@@ -78,10 +78,28 @@ it("while busy the send button still submits a follow-up", () => {
   m.unmount();
 });
 
-it("there is no stop control while busy and onAbort is never called", () => {
+const stop = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('[data-part="actions"] button[data-action="abort"]');
+
+it("Composer renders an enabled Stop button that calls onAbort while busy and abort is supported", () => {
   const { m, onAbort } = setup({ busy: true });
-  expect(m.container.querySelector('button[data-action="abort"]')).toBeNull();
-  expect(onAbort).not.toHaveBeenCalled();
+  const b = stop(m.container);
+  expect(b).not.toBeNull();
+  expect(b!.disabled).toBe(false);
+  expect(b!.getAttribute("aria-label")).toBe("Stop");
+  click(b!);
+  expect(onAbort).toHaveBeenCalledTimes(1);
+  m.unmount();
+});
+
+it("Composer renders no Stop button when not busy", () => {
+  const { m } = setup({ busy: false });
+  expect(stop(m.container)).toBeNull();
+  m.unmount();
+});
+
+it("Composer renders no Stop button when abort is unsupported", () => {
+  const { m } = setup({ busy: true, capabilities: { ...base, abort: { supported: false, reason: "unsupported" } } });
+  expect(stop(m.container)).toBeNull();
   m.unmount();
 });
 
@@ -139,5 +157,21 @@ it("without capabilities the textarea, attach button and send button are disable
   expect(m.container.querySelector<HTMLButtonElement>('button[data-action="send"]')!.disabled).toBe(true);
   expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
   expect(submits).toEqual([]);
+  m.unmount();
+});
+
+it("archived Composer is disabled with the archived placeholder", () => {
+  const m = mount(
+    <Composer capabilities={base} archived busy={false} queued={[]} reader={reader}
+      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
+  );
+  const t = textarea(m.container);
+  expect(t.disabled).toBe(true);
+  expect(t.placeholder).toMatch(/archived/i);
+  expect(t.placeholder).not.toContain("Enter to send");
+  const attach = m.container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
+  expect(attach.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
   m.unmount();
 });

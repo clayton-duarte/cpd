@@ -287,18 +287,18 @@ export const ToolRow = memo(function ToolRow(props: {
     (tool.result !== undefined && tool.result.text.trim() !== "");
 
   const line = (
-    <TraceLine status={traceStatus} className="font-mono text-xs">
+    <TraceLine status={traceStatus} className="text-sm font-sans">
       <TraceIcon data-part="glyph" data-tone={tone} data-glyph={tone}>
         <ToolIcon name={tool.name} status={tool.status} />
       </TraceIcon>
-      <span data-part="name" className="shrink-0 text-muted-foreground">
+      <span data-part="name" className="shrink-0 text-sm font-sans text-muted-foreground">
         {toolName(tool)}
       </span>
-      <TraceTitle data-part="detail" className="text-foreground">
+      <TraceTitle data-part="detail" className="font-mono text-xs text-muted-foreground/70">
         {toolDetail(tool)}
       </TraceTitle>
       {delta === null ? null : (
-        <TraceDescription data-part="delta" className="font-mono">
+        <TraceDescription data-part="delta" className="font-mono text-xs text-muted-foreground/70">
           <span data-part="added" className="text-status-done">
             {`+${delta.added}`}
           </span>{" "}
@@ -307,7 +307,7 @@ export const ToolRow = memo(function ToolRow(props: {
           </span>
         </TraceDescription>
       )}
-      <TraceDescription data-part="status" className="font-mono">
+      <TraceDescription data-part="status" className="font-mono text-xs text-muted-foreground/70">
         {statusOf(tool)}
       </TraceDescription>
     </TraceLine>

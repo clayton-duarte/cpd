@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { Capabilities, Dialog, FooterStats, ModelChoice, Window } from "../../protocol/domain.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
+import { WebError } from "../../protocol/domain.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import { createDurableBackend } from "./backend.ts";
-import type { SessionHandle } from "../hub/connection.ts";
+import type { SessionEmit, SessionHandle } from "../hub/connection.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
 import type { HostClient, HostFrame } from "./client.ts";
 
@@ -334,5 +335,143 @@ describe("durable backend", () => {
     const after = messages.slice(mark);
     expect(ofType(after, "session.status").at(-1)?.busy).toBe(true);
     expect(ofType(after, "session.append").flatMap((m) => m.items.map((i) => i.id))).toEqual(["u:3"]);
+  });
+
+  const APPROVAL_REQ = {
+    type: "ui_request",
+    id: "a1",
+    purpose: "secret_approve",
+    created_at: 1,
+    method: "select",
+    title: "Allow secret?",
+    options: ["Allow once", "Deny"],
+  } as unknown as HostFrame;
+  const approvalAnswer = (answer: string) => ({
+    method: "ask_user_question" as const,
+    outcome: "answered" as const,
+    result: { answers: [{ questionIndex: 0, question: "Allow secret?", kind: "option" as const, answer }], cancelled: false },
+  });
+  async function approvalSetup() {
+    const s = await setup([viewFrame([userEntry(0)])]);
+    s.host.deliver(APPROVAL_REQ);
+    await tick();
+    expect(ofType(s.messages, "session.dialog").map((m) => m.dialog.id)).toEqual(["a1"]);
+    return s;
+  }
+  it("answering an approval dialog Allow once sends ui_response Allow once", async () => {
+    const { handle, host } = await approvalSetup();
+    await handle.respond("a1", approvalAnswer("Allow once"));
+    expect(host.respond).toHaveBeenCalledWith("a1", { value: "Allow once" });
+  });
+  it("answering an approval dialog Deny sends ui_response Deny", async () => {
+    const { handle, host } = await approvalSetup();
+    await handle.respond("a1", approvalAnswer("Deny"));
+    expect(host.respond).toHaveBeenCalledWith("a1", { value: "Deny" });
+  });
+  it("cancelling an approval dialog sends ui_response Deny", async () => {
+    const { handle, host } = await approvalSetup();
+    await handle.respond("a1", { method: "ask_user_question", outcome: "cancelled" });
+    expect(host.respond).toHaveBeenCalledWith("a1", { value: "Deny" });
+  });
+
+  describe("attach retry", () => {
+    type Attach = (s: ResolvedSession, e: SessionEmit, signal?: AbortSignal) => Promise<SessionHandle>;
+    const unreachable = () => new WebError("host_unreachable", "no socket");
+    function retrySetup(connectImpl: (n: number, host: FakeHost) => Promise<HostClient>) {
+      const host = new FakeHost([viewFrame([userEntry(0)])]);
+      const scheduler = new FakeScheduler();
+      let calls = 0;
+      const backend = createDurableBackend({
+        connect: async () => connectImpl(++calls, host),
+        cpd: { json: vi.fn(async (_args: readonly string[]) => ({}) as Readonly<Record<string, unknown>>) },
+        git: { branch: async () => "main" },
+        scheduler,
+      });
+      const attach = backend.attach as Attach;
+      const controller = new AbortController();
+      const outcome: { handle: SessionHandle | null; error: unknown; settled: boolean } = { handle: null, error: null, settled: false };
+      const messages: SessionServerMessage[] = [];
+      const done = attach(SESSION, (m) => messages.push(m), controller.signal).then(
+        (handle) => {
+          outcome.handle = handle;
+          outcome.settled = true;
+        },
+        (error: unknown) => {
+          outcome.error = error;
+          outcome.settled = true;
+        },
+      );
+      return { host, scheduler, calls: () => calls, outcome, controller, done };
+    }
+
+    it("attach retries connect on host_unreachable until the socket appears", async () => {
+      const r = retrySetup(async (n, host) => {
+        if (n < 4) throw unreachable();
+        return host.client();
+      });
+      await tick();
+      expect(r.calls()).toBe(1);
+      expect(r.outcome.settled).toBe(false);
+      r.scheduler.advance(250);
+      await tick();
+      expect(r.calls()).toBe(2);
+      r.scheduler.advance(250);
+      await tick();
+      r.scheduler.advance(250);
+      await tick();
+      expect(r.calls()).toBe(4);
+      await r.done;
+      expect(r.outcome.error).toBeNull();
+      expect(r.outcome.handle).not.toBeNull();
+    });
+
+    it("attach fails host_unreachable after the 15 s retry window", async () => {
+      const r = retrySetup(async () => {
+        throw unreachable();
+      });
+      await tick();
+      for (let i = 0; i < 60 && !r.outcome.settled; i++) {
+        r.scheduler.advance(250);
+        await tick();
+      }
+      expect(r.calls()).toBeGreaterThan(1);
+      expect(r.scheduler.now()).toBeGreaterThanOrEqual(15_000);
+      expect(r.outcome.settled).toBe(true);
+      expect(r.outcome.error).toMatchObject({ code: "host_unreachable" });
+      expect(r.scheduler.pending()).toBe(0);
+    });
+
+    it("attach does not retry errors other than host_unreachable", async () => {
+      const r = retrySetup(async (n) => {
+        throw n === 1 ? unreachable() : new WebError("internal", "boom");
+      });
+      await tick();
+      r.scheduler.advance(250);
+      await tick();
+      r.scheduler.advance(15_000);
+      await tick();
+      expect(r.outcome.error).toMatchObject({ code: "internal" });
+      expect(r.calls()).toBe(2);
+      expect(r.scheduler.pending()).toBe(0);
+    });
+
+    it("dispose during attach retry stops further connect attempts", async () => {
+      const r = retrySetup(async () => {
+        throw unreachable();
+      });
+      await tick();
+      r.scheduler.advance(250);
+      await tick();
+      const before = r.calls();
+      expect(before).toBeGreaterThan(1);
+      r.controller.abort();
+      await tick();
+      expect(r.outcome.settled).toBe(true);
+      expect(r.outcome.error).toMatchObject({ code: "host_unreachable", details: { reason: "aborted" } });
+      r.scheduler.advance(20_000);
+      await tick();
+      expect(r.calls()).toBe(before);
+      expect(r.scheduler.pending()).toBe(0);
+    });
   });
 });

@@ -305,7 +305,7 @@ type Delta = DialectOutput["deltas"][number];
  * Left out, because the artefact marks it unverified or CONTRACT 10.9 puts it out of scope:
  * - `history` paging beyond the host's newest-50 window (the gap fill is typed but untested against a real host);
  * - live tool-call streaming ops, multi-round tool runs and window overflow ops (mocked frames only);
- * - `host_state.name` as the title, `runFailure` / `compactionFailure` / `generation.retry` display;
+ * - `host_state.name` as the title, `runFailure` / `generation.retry` display;
  * - `pi.reset` dividers, `cpd-event` / `cpd-first-message` entries and tool progress output;
  * - footer cost counts `pi.usage` models and tools `cost.total` as documented; whether tools overlap models is unverified.
  */
@@ -411,6 +411,17 @@ function createViewDialect(): ViewDialect {
     if (live !== undefined) out.push(live);
     for (const t of liveTools) tool({ ...t, name: t.name === "" ? (slots.get(t.callId)?.name ?? "") : t.name });
     for (const s of slots.values()) tool({ callId: s.callId, name: s.name, args: {} });
+    const failure = liveOf(v).compactionFailure;
+    if (isObj(failure)) {
+      out.push({
+        kind: "fold",
+        id: `cf:${String(failure.taskId)}`,
+        foldKind: "cpd",
+        title: `Compaction failed (${str(failure.trigger, "compactionFailure trigger")})`,
+        body: str(failure.error, "compactionFailure error"),
+        defaultOpen: true,
+      });
+    }
     const latestReview = [...pendingReviews].at(-1);
     if (latestReview !== undefined) {
       let title = `Plan review ${latestReview}`;
@@ -1078,6 +1089,24 @@ export function dialogFromRequest(
       }
     }
     return { id: req.id, method: "cpd_plan_review", title, summary, interactive: true };
+  }
+  if (req.method === "select" && (req.purpose === "secret_approve" || req.purpose === "host_approve")) {
+    const title = typeof req.title === "string" ? req.title : "Approval";
+    return {
+      id: req.id,
+      method: "ask_user_question",
+      questions: [
+        {
+          header: "Approval",
+          question: title,
+          options: [
+            { label: "Allow once", description: "" },
+            { label: "Deny", description: "" },
+          ],
+        },
+      ],
+      interactive: true,
+    };
   }
   if (req.method === "editor") return { kind: "editor", id: req.id };
   return { kind: "unsupported", id: req.id, method: req.method, purpose: req.purpose };

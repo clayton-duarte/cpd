@@ -59,7 +59,7 @@ mod hybrid;
 mod hybrid_tests;
 pub mod inforce;
 pub(crate) mod legacy;
-mod list;
+pub(crate) mod list;
 pub(crate) mod manager;
 mod owner;
 mod pending;

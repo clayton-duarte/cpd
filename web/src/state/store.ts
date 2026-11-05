@@ -6,6 +6,7 @@ import type { CockpitAction, ContextTreeModel, CostModel, InboxModel, LogRow, Pl
 import type { ServerMessage } from "../protocol/wire.ts";
 import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
+import { archiveNavigation, sessionArchived } from "./archiveNav.ts";
 import {
   appendItems, applyDelta, emptyTranscript, prependEarlier, removeItems, setTail, updateItems, type TranscriptState,
 } from "./transcript.ts";
@@ -36,6 +37,8 @@ export interface SessionView {
   readonly dialog: Dialog | null;
   readonly models: readonly ModelChoice[] | null;
   readonly error: WireError | null;
+  /** The session, its Plan or its Context is archived (derived from the tree). */
+  readonly archived?: boolean;
 }
 export interface AppState {
   readonly connection: ConnectionStatus;
@@ -231,7 +234,24 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
   }
 }
 
+/** Every writer of the tree goes through here: a live-to-archived selection leaves for the next live session. */
 export function reduce(state: AppState, action: StoreAction): AppState {
+  let next = reduceCore(state, action);
+  const tree = next.cockpit.tree;
+  if (tree !== state.cockpit.tree && tree !== null) {
+    const nav = archiveNavigation(state.cockpit.tree, tree, next.selectedSessionId);
+    if (nav !== null) {
+      next = reduceCore(reduceCore(next, { type: "selectPlan", planId: nav.planId }), { type: "selectSession", sessionId: nav.sessionId });
+    }
+  }
+  const archived = sessionArchived(next.cockpit.tree, next.selectedSessionId);
+  if (next.session !== null && (next.session.archived ?? false) !== archived) {
+    next = { ...next, session: { ...next.session, archived } };
+  }
+  return next;
+}
+
+function reduceCore(state: AppState, action: StoreAction): AppState {
   switch (action.type) {
     case "connection":
       return { ...state, connection: action.status, retryAttempt: action.retryAttempt ?? state.retryAttempt };
@@ -264,7 +284,7 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       };
     case "serverBatch": {
       let next = state;
-      for (const message of action.messages) next = reduce(next, { type: "server", message });
+      for (const message of action.messages) next = reduceCore(next, { type: "server", message });
       return next;
     }
     case "actionOptimistic":

@@ -59,6 +59,26 @@ for (const text of ["hello", "/quitx", "/quit now"]) {
   });
 }
 
+test("writes the quit marker when the User submits /q", (t) => {
+  const { editor, marker, submitted } = setup(t);
+  editor.onSubmit?.("/q");
+  assert.equal(existsSync(marker), true, "the marker file is written, as for /quit");
+  assert.deepEqual(submitted, ["/q"], "the original submit ran");
+});
+
+test("writes no marker for text that only starts with /q", (t) => {
+  // /q is the marker's trigger (pinned first, so this fails until /q is recognised); lookalikes are not.
+  const first = setup(t);
+  first.editor.onSubmit?.("/q");
+  assert.equal(existsSync(first.marker), true, "/q itself writes the marker");
+  for (const text of ["/query", "/q now", "/qx"]) {
+    const { editor, marker, submitted } = setup(t);
+    editor.onSubmit?.(text);
+    assert.equal(existsSync(marker), false, `no marker for ${text}`);
+    assert.deepEqual(submitted, [text], "the original submit ran");
+  }
+});
+
 test("without CPD_QUIT_MARKER nothing is installed", () => {
   assert.deepEqual(install({}), []);
 });
