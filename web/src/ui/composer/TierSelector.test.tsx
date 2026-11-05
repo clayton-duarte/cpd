@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { Capabilities, ConfigureChange, FooterStats, ModelChoice } from "../../protocol/domain.ts";
 import { mount } from "../../testing/render.tsx";
 import { TierSelector } from "./TierSelector.tsx";
@@ -21,36 +21,46 @@ const models: ModelChoice[] = [
   { model: "a/m2", name: "Model Two", thinkingLevels: ["off"], contextWindow: 1000 },
 ];
 
-const openPill = (c: HTMLElement) => click(c.querySelector('button[data-part="tier-pill"]')!);
-const sel = (c: HTMLElement, label: string) => c.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-const opts = (s: HTMLSelectElement) => Array.from(s.options).map((o) => o.value);
-function click(el: Element) { act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); }); }
-function choose(s: HTMLSelectElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
-    setter.call(s, value);
-    s.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+const trigger = (c: HTMLElement, label: string) => c.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+// Radix opens a dropdown menu on a primary-button pointerdown; its content is portalled into the body.
+function open(c: HTMLElement, label: string) {
+  act(() => { trigger(c, label).dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, ctrlKey: false })); });
 }
+const items = () => Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+const item = (text: string) => items().find((e) => e.textContent === text)!;
+function click(el: Element) { act(() => { (el as HTMLElement).click(); }); }
+
+afterEach(() => { document.body.innerHTML = ""; });
 
 it("lists tiers and models from the session capabilities", () => {
   const m = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
-  openPill(m.container);
-  expect(opts(sel(m.container, "Tier"))).toEqual(["S1", "S2", "S3"]);
-  expect(sel(m.container, "Tier").value).toBe("S2");
-  expect(opts(sel(m.container, "Model"))).toEqual(["a/m1", "a/m2"]);
-  expect(opts(sel(m.container, "Thinking level"))).toEqual(["off", "low", "high"]);
+  expect(trigger(m.container, "Tier").textContent).toBe("S2");
+  expect(trigger(m.container, "Model").textContent).toBe("Model One");
+  open(m.container, "Tier");
+  expect(items().map((e) => e.textContent)).toEqual(["S1", "S2", "S3"]);
+  expect(item("S2").getAttribute("aria-checked")).toBe("true");
   m.unmount();
+  const m2 = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
+  open(m2.container, "Model");
+  expect(items().map((e) => e.textContent)).toEqual(["Model One", "Model Two"]);
+  m2.unmount();
+  const m3 = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
+  open(m3.container, "Thinking level");
+  expect(items().map((e) => e.textContent)).toEqual(["off", "low", "high"]);
+  m3.unmount();
 });
 
 it("choosing a tier, model or thinking level calls onConfigure", () => {
   const calls: ConfigureChange[] = [];
   const onRequestModels = vi.fn();
   const m = mount(<TierSelector capabilities={caps()} footer={footer} models={models} busy={false} onConfigure={(c) => calls.push(c)} onRequestModels={onRequestModels} />);
-  openPill(m.container);
-  choose(sel(m.container, "Tier"), "S3");
-  choose(sel(m.container, "Model"), "a/m2");
-  choose(sel(m.container, "Thinking level"), "high");
+  open(m.container, "Tier");
+  click(item("S3"));
+  open(m.container, "Model");
+  expect(onRequestModels).toHaveBeenCalledTimes(1);
+  click(item("Model Two"));
+  open(m.container, "Thinking level");
+  click(item("high"));
   expect(calls).toEqual([
     { kind: "tier", tier: "S3" },
     { kind: "model", model: "a/m2" },
@@ -62,12 +72,10 @@ it("choosing a tier, model or thinking level calls onConfigure", () => {
 it("unsupported controls are disabled with a reason", () => {
   const c = caps({ model: { supported: false, reason: "follows tier" }, thinking: { supported: false, reason: "follows tier" } });
   const m = mount(<TierSelector capabilities={c} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
-  openPill(m.container);
-  const model = sel(m.container, "Model");
+  const model = trigger(m.container, "Model");
   expect(model.disabled).toBe(true);
   expect(model.title).toBe("follows tier");
-  expect(sel(m.container, "Thinking level").disabled).toBe(true);
-  expect(m.container.querySelector("small[data-reason]")?.textContent).toBe("follows tier");
-  expect(sel(m.container, "Tier").disabled).toBe(false);
+  expect(trigger(m.container, "Thinking level").disabled).toBe(true);
+  expect(trigger(m.container, "Tier").disabled).toBe(false);
   m.unmount();
 });

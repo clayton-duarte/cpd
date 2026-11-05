@@ -20,6 +20,10 @@ const tool = (id: string, over: Partial<ToolItem> = {}): ToolItem => ({
 });
 const answer = (text = "done"): TranscriptItem => ({ kind: "assistant", id: "a-text", streaming: false, blocks: [{ type: "text", text }] });
 
+// The Trace root or the TraceCollapsible inside it carries the open state; read whichever exists.
+const stateOf = (el: Element): string | null =>
+  (el.matches('[data-slot="trace-collapsible"]') ? el : el.querySelector('[data-slot="trace-collapsible"]'))?.getAttribute("data-state") ?? el.getAttribute("data-state");
+
 afterEach(() => {
   vi.restoreAllMocks();
   delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
@@ -67,15 +71,14 @@ it("consecutive thought and tool items group into a collapsed chain of thought",
   const chains = m.container.querySelectorAll<HTMLElement>('[data-kind="chain-of-thought"]');
   expect(chains.length, "one chain for the whole run").toBe(1);
   const chain = chains[0]!;
-  const collapsible = chain.querySelector<HTMLElement>('[data-slot="trace-collapsible"]')!;
-  expect(collapsible.getAttribute("data-state")).toBe("closed");
+  expect(stateOf(chain)).toBe("closed");
   const meta = chain.querySelector('[data-part="meta"]')?.textContent ?? "";
   expect(meta).toContain("3 steps");
   expect(meta).toMatch(/\d{2}:\d{2}/);
   expect(chain.textContent).not.toContain("pondering the plan");
   expect(m.container.querySelector('[data-kind="tool"]'), "no tool row while the chain is collapsed").toBeNull();
   act(() => chain.querySelector<HTMLElement>('[data-slot="trace-collapsible-trigger"]')!.click());
-  expect(chain.querySelector('[data-slot="trace-collapsible"]')?.getAttribute("data-state")).toBe("open");
+  expect(stateOf(chain)).toBe("open");
   expect(chain.querySelector('[data-kind="thinking"]')).not.toBeNull();
   expect(chain.querySelector('[data-kind="tool-group"]')).not.toBeNull();
   expect(m.container.querySelector('[data-kind="assistant"]')?.textContent).toContain("all done");

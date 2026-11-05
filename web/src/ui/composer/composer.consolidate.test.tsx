@@ -16,7 +16,7 @@ const caps: Capabilities = {
   dialogs: { mode: "interactive" },
 };
 const reader: FileReaderBoundary = { readBase64: async () => "QUJD", readText: async () => "txt" };
-const queued: QueuedSubmission[] = [{ clientSubmissionId: "q1", submissionId: "s1", text: "later", whenBusy: "followUp" }];
+const queued: QueuedSubmission[] = [{ clientSubmissionId: "q1", submissionId: 1, text: "later", whenBusy: "followUp" }];
 
 type Submit = { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy };
 function setup(over: { busy?: boolean; queued?: QueuedSubmission[] } = {}) {
