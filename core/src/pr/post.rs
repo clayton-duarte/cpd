@@ -31,53 +31,6 @@ pub struct PostArgs {
     plan: PlanArg,
 }
 
-/// Whether a failed send is KNOWN not to have sent the message; any other outcome (`slack_unparseable`,
-/// `slack_helper_failed`, a timeout) is unknown, and Slack is asked.
-fn known_not_sent(error: &CpdError) -> bool {
-    matches!(
-        error.code(),
-        ErrorCode::SlackAuth
-            | ErrorCode::SlackNotConfigured
-            | ErrorCode::SlackFailed
-            | ErrorCode::SlackRefused
-            | ErrorCode::SpawnFailed
-    )
-}
-
-/// Looks the message up in Slack after an unknown send outcome: the found message's `(ts, link)`, or `None`. Calls the
-/// `slack-lookup.ts` helper, which reads the channel's history since the send time for a message holding the PR url.
-/// A lookup that itself fails counts as not found.
-fn lookup_message(
-    env: &mut Env,
-    channel: &str,
-    since: &str,
-    url: &str,
-) -> Option<(String, String)> {
-    let call = slack::call(
-        &env.config,
-        "slack-lookup.ts",
-        &[("channel", channel), ("since", since), ("text", url)],
-        None,
-        DEADLINE,
-    )
-    .ok()?;
-    let argv: Vec<String> = std::iter::once(call.program.clone())
-        .chain(call.args.iter().cloned())
-        .collect();
-    let out = env.ports.runner.run(&call).ok()?;
-    let found = slack::answer(&out, &argv).ok()?;
-    if found["found"] == true {
-        let ts = found["ts"].as_str()?.to_owned();
-        let link = found["link"].as_str().map_or_else(
-            || format!("slack://channel?id={channel}&message={ts}"),
-            str::to_owned,
-        );
-        Some((ts, link))
-    } else {
-        None
-    }
-}
-
 /// Test constructor of the arguments: Workflow `key` of Plan `plan`.
 #[cfg(test)]
 pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
@@ -233,27 +186,11 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         )
         .with("argv", json!(argv))),
         Err(Failed::Timeout(e)) => Err(e),
-    };
-    match sent {
-        Ok(sent) => {
-            let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
-            record.channel = text("channel");
-            record.ts = text("ts");
-            record.link = text("link");
-        }
-        Err(e) => {
-            if known_not_sent(&e) {
-                return Err(e);
-            }
-            match lookup_message(&mut env, &channel, &since, &pull.url) {
-                Some((ts, link)) => {
-                    record.ts = ts;
-                    record.link = link;
-                }
-                None => return Err(e),
-            }
-        }
-    }
+    }?;
+    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
+    record.channel = text("channel");
+    record.ts = text("ts");
+    record.link = text("link");
     // (j)
     let stored = env.store.write("pr post", |tx| {
         let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
