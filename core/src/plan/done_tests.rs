@@ -13,7 +13,7 @@ use crate::ports::Ports;
 use crate::pr::PollArgs;
 use crate::store::Store;
 
-const NODE: &str = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"T",
+const NODE: &str = r#"{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"T",
     "isDraft":false,"state":"MERGED","createdAt":"2026-10-20T10:00:00Z","updatedAt":"U1","mergedAt":"2026-10-20T11:00:00Z","reviewDecision":null,
     "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
     "reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#;

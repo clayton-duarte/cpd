@@ -15,8 +15,8 @@ fn with_base(node: String, base: &str, default: Option<&str>) -> String {
         1,
     );
     let node = node.replacen(
-        r#""},"number":"#,
-        &format!(r#"","defaultBranchRef":{default}}},"number":"#),
+        r#","isArchived":false},"number":"#,
+        &format!(r#","isArchived":false,"defaultBranchRef":{default}}},"number":"#),
         1,
     );
     assert!(node.contains("defaultBranchRef"), "{node}");
