@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantItem, FoldItem, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
-import { assertSupportedHost, createDialect } from "./frames.ts";
+import { assertSupportedHost, createDialect, dialogFromRequest } from "./frames.ts";
+import type { HostFrame } from "./client.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -377,5 +378,41 @@ describe("durable frames v2 dialect", () => {
     const out = d.applyIncrement(opsV2([["p", ["entries"], 3, 0, [entry(4, "app.other", { role: "user", content: "y", timestamp: 1 })]]], 2));
     expect(out).toMatchObject({ append: [], update: [], deltas: [] });
     expect(d.transcript.items.map((i) => i.id)).toEqual(["u:1"]);
+  });
+
+  const selectReq = (purpose: string, title = "Allow it?"): HostFrame =>
+    ({ type: "ui_request", id: "a1", purpose, created_at: 1, method: "select", title, options: ["Allow once", "Deny"] }) as unknown as HostFrame;
+  const approvalDialog = (purpose: string) => {
+    const req = selectReq(purpose);
+    return dialogFromRequest(req as Extract<HostFrame, { type: "ui_request" }>, []);
+  };
+
+  for (const purpose of ["secret_approve", "host_approve"]) {
+    it(`select ui_request ${purpose} maps to an approval ask dialog`, () => {
+      const dialog = approvalDialog(purpose) as { questions?: { question: string; options: { label: string }[] }[] };
+      expect(dialog).toMatchObject({ id: "a1", method: "ask_user_question", interactive: true });
+      expect(dialog.questions).toHaveLength(1);
+      expect(dialog.questions?.[0]?.question).toContain("Allow it?");
+      expect(dialog.questions?.[0]?.options.map((o) => o.label)).toEqual(["Allow once", "Deny"]);
+    });
+  }
+
+  it("select ui_request with unknown purpose stays unsupported", () => {
+    expect(approvalDialog("something_else")).toMatchObject({ kind: "unsupported", id: "a1", method: "select", purpose: "something_else" });
+    expect(approvalDialog("secret_approve")).not.toMatchObject({ kind: "unsupported" });
+  });
+
+  it("compactionFailure renders a fold item", () => {
+    const items = load([user(1, "hi")], { "pi.live": { compactionFailure: { taskId: 5, trigger: "auto", error: "boom" } } });
+    const fold = items.find((i): i is FoldItem => i.kind === "fold" && i.id === "cf:5");
+    expect(fold).toMatchObject({ id: "cf:5", title: "Compaction failed (auto)", body: "boom", defaultOpen: true });
+  });
+
+  it("no fold item without compactionFailure", () => {
+    const items = load([user(1, "hi")], { "pi.live": {} });
+    expect(items.some((i) => i.id.startsWith("cf:"))).toBe(false);
+    expect(items.some((i) => i.id === "cf:5")).toBe(false);
+    const withIt = load([user(1, "hi")], { "pi.live": { compactionFailure: { taskId: 5, trigger: "auto", error: "boom" } } });
+    expect(withIt.length).toBe(items.length + 1);
   });
 });
