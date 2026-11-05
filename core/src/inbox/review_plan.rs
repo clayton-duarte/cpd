@@ -185,7 +185,7 @@ mod tests {
         assert!(text.contains("3. Use `/h/projects/pay` (`git show`"));
         assert!(text.ends_with(
             "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message.
-5. Begin the `Verdict` `ask_user_question` with the full PR URL `{url}`: the question's first words are `{url}`."
+5. Begin the `Verdict` `ask_user_question` with the full PR URL `https://github.com/acme/pay/pull/812`: the question's first words are `https://github.com/acme/pay/pull/812`."
         ));
     }
 }

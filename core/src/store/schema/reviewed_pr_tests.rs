@@ -3,8 +3,6 @@
 use super::*;
 use crate::store::Store;
 
-const PLAN: &str = "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p1', 'c1', 'P', 'grounding', 'l1', 't');";
-
 fn run(store: &mut Store, sql: &str) -> Result<(), crate::error::CpdError> {
     store.write("fixture", |tx| {
         tx.execute_batch(sql)?;
@@ -26,10 +24,10 @@ fn plan_reviewed_pr_migration_keeps_every_plan_with_null_columns() {
         &mut old,
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c1', 'C', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('l1', 'lead', 'c1', 'p1', 'p1', '/r', 'O2', 'stopped', 't', 't');",
+           VALUES ('l1', 'lead', 'c1', 'p1', 'p1', '/r', 'O2', 'stopped', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p1', 'c1', 'P', 'grounding', 'l1', 't');",
     )
     .unwrap();
-    run(&mut old, PLAN).unwrap();
     drop(old);
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none());

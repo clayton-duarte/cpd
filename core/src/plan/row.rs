@@ -129,12 +129,13 @@ impl PlanRow {
         })
     }
 
-    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them.
+    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them. `reviewed_pr` is null here: it needs a
+    /// read of the store, so `plan show` sets it with [`reviewed_pr`].
     pub fn to_json(&self) -> Value {
         json!({
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
             "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
-            "archived_at": self.archived_at, "outline": self.outline.as_ref().map(Outline::to_value),
+            "archived_at": self.archived_at, "outline": self.outline.as_ref().map(Outline::to_value), "reviewed_pr": Value::Null,
         })
     }
 }
