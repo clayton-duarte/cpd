@@ -19,6 +19,8 @@ mod blue_tests;
 #[cfg(test)]
 mod claim_refusal_tests;
 #[cfg(test)]
+mod claim_reuse_tests;
+#[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
 mod closed_tests;
