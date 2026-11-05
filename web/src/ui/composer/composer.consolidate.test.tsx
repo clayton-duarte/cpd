@@ -22,7 +22,7 @@ type Submit = { text: string; attachments: readonly Attachment[]; whenBusy: When
 function setup(over: { busy?: boolean; queued?: QueuedSubmission[] } = {}) {
   const submits: Submit[] = [];
   const m = mount(
-    <Composer capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
+    <Composer sessionId="s1" capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
       onSubmit={(i) => submits.push(i)} onAbort={vi.fn()} onCancelQueued={vi.fn()} settings={<span data-part="tier-selector" />} />,
   );
   return { m, submits };

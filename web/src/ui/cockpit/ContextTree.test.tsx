@@ -812,3 +812,18 @@ it("the prompt dialog refuses an empty or invalid slug", () => {
   expect(p.onAction).not.toHaveBeenCalled();
   m.unmount();
 });
+
+it("draft: archiving a session deletes only that session draft", () => {
+  window.localStorage.clear();
+  window.localStorage.setItem("cpd-ui:draft:s-cfork", "keep?");
+  window.localStorage.setItem("cpd-ui:draft:s-mgr", "other");
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, 'button[data-session="s-cfork"]'));
+  click(item("Archive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "session.archive", sessionId: "s-cfork" });
+  expect(window.localStorage.getItem("cpd-ui:draft:s-cfork")).toBeNull();
+  expect(window.localStorage.getItem("cpd-ui:draft:s-mgr")).toBe("other");
+  m.unmount();
+  window.localStorage.clear();
+});
