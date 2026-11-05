@@ -82,6 +82,7 @@ export interface InboxRow {
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;
+  readonly subject?: string; // the item's subject, e.g. `pr:<owner>/<repo>#<n>`
   readonly workflow?: string | null; // the Workflow key for PR kinds, from the item's data; null when none
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
@@ -100,8 +101,9 @@ export type CockpitAction =
   | { kind: "inbox.dismiss"; itemId: number }
   | { kind: "inbox.claim"; itemId: number }
   | { kind: "inbox.approve"; itemId: number }
-  | { kind: "pr.post"; planId: string; workflow: string }
-  | { kind: "pr.merge"; planId: string; workflow: string }
+  | { kind: "pr.post"; planId: string; workflow?: string; pull?: string }
+  | { kind: "pr.repost"; planId: string; workflow?: string; pull?: string }
+  | { kind: "pr.merge"; planId?: string; workflow?: string; pull?: string }
   | { kind: "engine.start" }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
@@ -140,8 +142,9 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "inbox.dismiss": ["itemId"],
     "inbox.claim": ["itemId"],
     "inbox.approve": ["itemId"],
-    "pr.post": ["planId", "workflow"],
-    "pr.merge": ["planId", "workflow"],
+    "pr.post": ["planId"],
+    "pr.repost": ["planId"],
+    "pr.merge": [],
     "engine.start": [],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],

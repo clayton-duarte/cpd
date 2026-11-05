@@ -19,7 +19,7 @@ export interface RawSession {
 export interface RawInboxItem {
   id: number | null; kind: string; label: string; urgency: Urgency; opened_at: string; age_seconds: number;
   context: StrOrNull; plan: StrOrNull; job: StrOrNull; session: StrOrNull; url: StrOrNull;
-  snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull; workflow: StrOrNull;
+  snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull; workflow: StrOrNull; subject?: string;
 }
 export interface RawPlanShow { plan: { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; lead_session: StrOrNull }; counts: PlanCounts; jobs: Obj[]; workflows: Obj[]; review: Obj | null; escalations: unknown[]; cursor: number }
 export interface ParsedInbox {
@@ -118,7 +118,9 @@ export function parseInboxList(reply: Reply): ParsedInbox {
   const rows = arr(reply, "items", c).map((v) => {
     const o = obj(v, c, "items[]");
     const id = o["id"] === null ? null : num(o, "id", c);
+    const subject = o["subject"];
     return {
+      ...(typeof subject === "string" ? { subject } : {}),
       id, kind: str(o, "kind", c), label: str(o, "label", c), urgency: str(o, "urgency", c) as Urgency, opened_at: str(o, "opened_at", c),
       age_seconds: num(o, "age_seconds", c), context: strN(o, "context", c), plan: strN(o, "plan", c), job: strN(o, "job", c),
       session: strN(o, "session", c), url: strN(o, "url", c), snoozed_until: strN(o, "snoozed_until", c),
@@ -285,22 +287,48 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
 }
 
 const SNOOZES: readonly [string, "15m" | "1h" | "tomorrow"][] = [["Snooze 15m", "15m"], ["Snooze 1h", "1h"], ["Snooze until tomorrow", "tomorrow"]];
-function rowActions(id: number, kind: string): InboxRowAction[] {
+function prPullOf(subject: string | undefined): string | null {
+  if (typeof subject !== "string" || !subject.startsWith("pr:")) return null;
+  const pull = subject.slice(3);
+  return pull.includes("/") && pull.includes("#") ? pull : null;
+}
+function prStatusOf(label: string): string | null {
+  const first = label.split("\n")[0] ?? "";
+  const idx = first.indexOf(" ");
+  return idx === -1 ? null : first.slice(idx + 1);
+}
+function rowActions(i: RawInboxItem): InboxRowAction[] {
   const acts: InboxRowAction[] = [];
   const add = (label: string, action: CockpitAction) => acts.push({ label, action });
-  if (kind === "review-requested") add("Claim", { kind: "inbox.claim", itemId: id });
-  if (kind === "deploy") add("Approve", { kind: "inbox.approve", itemId: id });
-  for (const [label, duration] of SNOOZES) add(label, { kind: "inbox.snooze", itemId: id, duration });
-  add("Dismiss", { kind: "inbox.dismiss", itemId: id });
+  if (i.kind === "engine-down") {
+    add("Start", { kind: "engine.start" });
+    return acts;
+  }
+  if (i.kind === "pr-ready") {
+    const pull = prPullOf(i.subject);
+    const status = prStatusOf(i.label);
+    if (status === "ready to merge" && pull !== null) {
+      add("Merge", { kind: "pr.merge", ...(i.plan !== null ? { planId: i.plan } : {}), pull });
+    } else if (status === "ready for user review" && i.plan !== null && pull !== null) {
+      add("Post", { kind: "pr.post", planId: i.plan, pull });
+    } else if (status === "review overdue" && i.plan !== null && pull !== null) {
+      add("RePost", { kind: "pr.repost", planId: i.plan, pull });
+    }
+  }
+  if (i.id === null) return acts;
+  if (i.kind === "review-requested") add("Claim", { kind: "inbox.claim", itemId: i.id });
+  if (i.kind === "deploy") add("Approve", { kind: "inbox.approve", itemId: i.id });
+  for (const [label, duration] of SNOOZES) add(label, { kind: "inbox.snooze", itemId: i.id, duration });
+  add("Dismiss", { kind: "inbox.dismiss", itemId: i.id });
   return acts;
 }
 const PLAN_LEAD_ROW_KINDS: readonly string[] = ["plan-review", "drafts-parked", "pr-ready", "pr-closed"];
 export function buildInbox(parsed: ParsedInbox, sessions: readonly RawSession[] = []): InboxModel {
   const leadOf = (plan: StrOrNull): StrOrNull => (plan === null ? null : sessions.find((s) => s.plan_lead && s.plan === plan)?.id ?? null);
   const rows: InboxRow[] = parsed.rows.map((i) => ({
-    id: i.id ?? -1, kind: i.kind, label: i.label, urgency: i.urgency, contextId: i.context, planId: i.plan, jobKey: i.job,
+    id: i.id ?? -1, kind: i.kind, ...(i.subject !== undefined ? { subject: i.subject } : {}), label: i.label, urgency: i.urgency, contextId: i.context, planId: i.plan, jobKey: i.job,
     sessionId: PLAN_LEAD_ROW_KINDS.includes(i.kind) ? leadOf(i.plan) ?? i.session : i.session, workflow: i.workflow, url: i.url, openedAt: i.opened_at, ageSeconds: i.age_seconds,
-    actions: i.id === null ? [] : rowActions(i.id, i.kind),
+    actions: rowActions(i),
   }));
   return { openCount: rows.length, engineRunning: parsed.engineRunning, hidden: parsed.hidden, rows, cursor: parsed.cursor };
 }

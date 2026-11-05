@@ -14,7 +14,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
-import type { CockpitAction, InboxModel, InboxRow, SnoozeDuration, Urgency } from "../../protocol/cockpit.ts";
+import type { CockpitAction, InboxModel, InboxRow, InboxRowAction, SnoozeDuration, Urgency } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../components/context-menu.tsx";
@@ -90,15 +90,29 @@ function jump(row: InboxRow, h: Handlers): void {
   } else if (sessionKinds.includes(row.kind) && row.sessionId !== null) h.onSelectSession(row.sessionId);
 }
 
+const PRIMARY_ACTION_KINDS: ReadonlySet<CockpitAction["kind"]> = new Set([
+  "pr.merge",
+  "pr.post",
+  "pr.repost",
+  "inbox.approve",
+  "inbox.claim",
+  "engine.start",
+]);
+
+/** The first action the read model built that is a primary kind; the UI derives nothing else. */
+function primaryActionOf(row: InboxRow): InboxRowAction | undefined {
+  return row.actions.find((a) => PRIMARY_ACTION_KINDS.has(a.action.kind));
+}
+
 function Menu(props: { row: InboxRow } & Handlers): ReactElement {
   const { row, onAction, onSelectSession } = props;
-  const { id, planId, sessionId, url } = row;
-  const workflow = row.workflow ?? null;
+  const { id, sessionId, url } = row;
   const own: ReactElement[] = [];
-  if (row.kind === "pr-ready" && planId !== null && workflow !== null) {
+  const primary = row.kind === "pr-ready" ? primaryActionOf(row) : undefined;
+  if (primary !== undefined) {
     own.push(
-      <ContextMenuItem key="merge" onSelect={() => onAction({ kind: "pr.merge", planId, workflow })}>
-        Merge
+      <ContextMenuItem key="primary" onSelect={() => onAction(primary.action)}>
+        {primary.label}
       </ContextMenuItem>,
     );
   }
@@ -152,6 +166,7 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
   const [first = "", ...rest] = row.label.split("\n");
   const second = rest.join(" ").trim();
   const linked = row.url !== null && linkKinds.includes(row.kind);
+  const primary = primaryActionOf(row);
   const item = (
     <Item variant="outline" size="sm" asChild data-kind={row.kind} data-urgency={row.urgency} data-id={row.id}>
       <a
@@ -163,18 +178,38 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
           jump(row, props);
         }}
       >
-        <ItemMedia>
-          <RowIcon kind={row.kind} urgency={row.urgency} />
+        <ItemMedia className="flex-col items-center justify-between gap-1 self-stretch group-has-[[data-slot=item-description]]/item:translate-y-0 group-has-[[data-slot=item-description]]/item:self-stretch">
+          <span className="flex h-[19.25px] items-center justify-center">
+            <RowIcon kind={row.kind} urgency={row.urgency} />
+          </span>
+          <span className="mt-auto block text-sm leading-normal">
+            <span data-part="age" className="font-mono text-[10px] text-muted-foreground">
+              {age(row.ageSeconds)}
+            </span>
+          </span>
         </ItemMedia>
-        <ItemContent>
+        <ItemContent className="justify-between self-stretch">
           <ItemTitle className={urgencyText[row.urgency]}>{first}</ItemTitle>
           {second === "" ? null : <ItemDescription>{second}</ItemDescription>}
         </ItemContent>
-        <ItemActions>
-          <span data-part="age" className="font-mono text-xs text-muted-foreground">
-            {age(row.ageSeconds)}
-          </span>
-          {linked ? <ExternalLinkIcon className="size-4 text-muted-foreground" /> : <ChevronRightIcon className="size-4 text-muted-foreground" />}
+        <ItemActions className="flex-col items-end justify-between gap-1.5 self-stretch">
+          {linked ? <ExternalLinkIcon className="mt-[1.5px] size-4 text-muted-foreground" /> : <ChevronRightIcon className="mt-[1.5px] size-4 text-muted-foreground" />}
+          {primary === undefined ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-part="item-action"
+              className="h-6 px-2 text-xs"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                props.onAction(primary.action);
+              }}
+            >
+              {primary.label}
+            </Button>
+          )}
         </ItemActions>
       </a>
     </Item>

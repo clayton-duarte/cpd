@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Cpd } from "./cli.ts";
-import { createReadModel, parseContextList } from "./readmodel.ts";
+import { buildInbox, createReadModel, parseContextList, parseInboxList } from "./readmodel.ts";
 import { WebError } from "../../protocol/domain.ts";
 
 type Obj = Record<string, unknown>;
@@ -386,5 +386,34 @@ describe("plan view resilience", () => {
     const update = await createReadModel(cpd).loadPanes(new Set(["tree", "inbox", "plan"]), "p1");
     expect(update.tree?.contexts.map((c) => c.id)).toEqual(["c1"]);
     expect(update.inbox?.openCount).toBe(1);
+  });
+});
+
+describe("inbox primary actions", () => {
+  const inboxOf = (items: Obj[], running = true) =>
+    buildInbox(parseInboxList({ items, engine: { running }, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, events_cursor: 1 }));
+  const first = (items: Obj[], running = true) => inboxOf(items, running).rows[0]!.actions[0];
+  const pr = (status: string, extra: Obj = {}): Obj => item(1, { kind: "pr-ready", label: `acme/api#3 ${status}\nmore`, plan: "p1", subject: "pr:acme/api#3", ...extra });
+
+  it("a pr-ready item ready to merge gets a Merge primary action with its pull", () => {
+    expect(first([pr("ready to merge")])).toEqual({ label: "Merge", action: { kind: "pr.merge", planId: "p1", pull: "acme/api#3" } });
+    expect(first([pr("ready to merge", { plan: null })])).toEqual({ label: "Merge", action: { kind: "pr.merge", pull: "acme/api#3" } });
+    expect(inboxOf([pr("ready to merge")]).rows[0]!.subject).toBe("pr:acme/api#3");
+  });
+  it("a pr-ready item ready for user review gets a Post action", () => {
+    expect(first([pr("ready for user review")])).toEqual({ label: "Post", action: { kind: "pr.post", planId: "p1", pull: "acme/api#3" } });
+  });
+  it("a pr-ready item with review overdue gets a RePost action", () => {
+    expect(first([pr("review overdue")])).toEqual({ label: "RePost", action: { kind: "pr.repost", planId: "p1", pull: "acme/api#3" } });
+  });
+  it("an engine-down item gets only a Start action", () => {
+    const row = inboxOf([item(null, { kind: "engine-down", label: "engine down" })], false).rows[0]!;
+    expect(row.actions).toEqual([{ label: "Start", action: { kind: "engine.start" } }]);
+  });
+  it("a pr-ready item without a pull subject gets no pr action", () => {
+    for (const subject of [undefined, "pr:nonsense", "session:x"]) {
+      const kinds = inboxOf([pr("ready to merge", { subject })]).rows[0]!.actions.map((a) => a.action.kind);
+      expect(kinds).toEqual(["inbox.snooze", "inbox.snooze", "inbox.snooze", "inbox.dismiss"]);
+    }
   });
 });

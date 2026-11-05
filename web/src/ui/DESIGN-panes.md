@@ -284,17 +284,20 @@ A row is a shadcn `Item` (`components/item.tsx`, base/item link pattern) in an `
 ItemGroup  min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5
 └─ Item[variant=outline][size=sm] asChild → a[data-kind][data-urgency][data-id]
    │   href = row.url, target=_blank, rel="noopener noreferrer" for a link kind with a url; else href="#" with preventDefault
-   ├─ ItemMedia → RowIcon (lucide, size-4, urgency text colour)
-   │     deploy Rocket; pr-ready/pr-closed GitPullRequest; review-requested GitPullRequestArrow; curate-retire Sparkles;
-   │     else by urgency: red CircleAlert, yellow CircleDot, magenta CircleHelp, blue Eye, cyan Bell, white MessageSquare
-   ├─ ItemContent
+   ├─ ItemMedia  flex-col justify-between self-stretch (full row height); three columns: media, text, actions
+   │   ├─ span.h-[19.25px] → RowIcon (lucide, size-4, urgency text colour), centred on the first text line
+   │   │     deploy Rocket; pr-ready/pr-closed GitPullRequest; review-requested GitPullRequestArrow; curate-retire Sparkles;
+   │   │     else by urgency: red CircleAlert, yellow CircleDot, magenta CircleHelp, blue Eye, cyan Bell, white MessageSquare
+   │   └─ span.mt-auto.block.text-sm.leading-normal → span[data-part="age"]  font-mono text-[10px] text-muted-foreground (baseline = last text line)
+   ├─ ItemContent  justify-between self-stretch
    │   ├─ ItemTitle  first label line, urgency text colour
    │   └─ ItemDescription  rest of the label joined by a space, only when non-empty
-   └─ ItemActions
-       ├─ span[data-part="age"]  font-mono text-xs text-muted-foreground
-       └─ ExternalLinkIcon (linked) or ChevronRightIcon, size-4 text-muted-foreground
+   └─ ItemActions  flex-col items-end justify-between self-stretch
+       ├─ ExternalLinkIcon (linked) or ChevronRightIcon, size-4 text-muted-foreground
+       └─ Button[type=button][variant=outline][size=sm][data-part="item-action"] h-6 px-2 text-xs, only with a primary action
 ```
 
+- **Primary action**: the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start` (built by the read model, pro-d52; the UI derives nothing). Its button calls `preventDefault` and `stopPropagation`, then `onAction(action)`: the jump and the link never fire. The right-click menu lists the same entry first for `pr-ready`.
 - Every row but `engine-down` is wrapped in the context menu (`ContextMenuTrigger asChild`).
 - `first` = `row.label.split("\n")[0] ?? ""`; the description is shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
 - **Link kinds** (`plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`; TUI `is_link`, `inbox.rs:492-494`) with a url: the row anchor opens `row.url` in a new tab, and the kind's left click below still runs.

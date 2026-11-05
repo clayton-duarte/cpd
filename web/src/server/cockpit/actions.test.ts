@@ -37,7 +37,7 @@ describe("actions", () => {
     expect(calls).toEqual([["inbox", "snooze", "4", "tomorrow"]]);
   });
 
-  it("pr.merge runs the cpd merge command for the workflow", async () => {
+  it("pr.merge without a pull resolves the stored pull through pr poll", async () => {
     // `cpd pr merge <owner>/<repo>#<n>` (commands.md 9.10): the pull request comes from the Workflow's stored pull_request.
     const { cpd, calls } = fakeCpd(async () => ({ ok: true, workflows: [{ key: "w1", pull_request: { repo: "acme/api", number: 3 } }], stored: true }));
     await runAction(cpd, { kind: "pr.merge", planId: "p1", workflow: "w1" });
@@ -126,5 +126,30 @@ describe("tree menu actions", () => {
     const busyRename = fakeCpd(async () => { throw busy(); });
     await expect(runAction(busyRename.cpd, { kind: "plan.rename", planId: "p1", title: "t" })).rejects.toMatchObject({ details: { cpdCode: "in_chat_slot" } });
     expect(busyRename.calls).toEqual([["plan", "rename", "--plan=p1", "--title=t"]]);
+  });
+
+  const polled = { ok: true, workflows: [{ key: "w1", pull_request: { repo: "acme/api", number: 3 } }] };
+
+  it("pr.merge with a pull runs pr merge with it", async () => {
+    const { cpd, calls } = fakeCpd();
+    await runAction(cpd, { kind: "pr.merge", pull: "acme/api#3" });
+    expect(calls).toEqual([["pr", "merge", "acme/api#3"]]);
+  });
+
+  it("pr.post with a pull and no workflow resolves the workflow through pr poll", async () => {
+    const { cpd, calls } = fakeCpd(async () => polled);
+    await runAction(cpd, { kind: "pr.post", planId: "p1", pull: "acme/api#3" });
+    expect(calls).toEqual([["pr", "poll", "--plan", "p1"], ["pr", "post", "--workflow", "w1", "--plan", "p1"]]);
+  });
+
+  it("pr.repost runs pr repost with the workflow and plan", async () => {
+    const { cpd, calls } = fakeCpd();
+    await runAction(cpd, { kind: "pr.repost", planId: "p1", workflow: "w1" });
+    expect(calls).toEqual([["pr", "repost", "--workflow", "w1", "--plan", "p1"]]);
+  });
+
+  it("pr post without a matching workflow fails with cpd_malformed_json", async () => {
+    const { cpd } = fakeCpd(async () => polled);
+    await expect(runAction(cpd, { kind: "pr.post", planId: "p1", pull: "acme/api#9" })).rejects.toMatchObject({ code: "cpd_malformed_json" });
   });
 });
