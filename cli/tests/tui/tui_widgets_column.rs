@@ -93,8 +93,8 @@ fn an_authored_pr_is_one_inbox_row_and_open_prs_draw_nothing_else() {
     let frames = show(&fx, 30, vec![Signal::Commit, gone()], &World::new());
     let wanted = [
         linked_item_row(PR_GLYPH, "repo#1 ready to merge", "5m"),
-        linked_item_row(PR_GLYPH, "repo#2 checks running", "5m"),
         linked_item_row(PR_GLYPH, "repo#3 draft", "5m"),
+        linked_item_row(PR_GLYPH, "repo#2 checks running", "5m"),
     ];
     let at = frame_with(&frames, 0, "the three rows", |r| {
         wanted.iter().all(|w| r.contains(w))
