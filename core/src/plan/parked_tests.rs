@@ -156,11 +156,11 @@ fn a_complete_draft_waiting_through_a_draft_on_a_work_job_is_parked() {
         &format!(
             "{}{}{}",
             job("w", "r", "work", "queued", true, &[]),
-            stub("d", &["w"]),
+            job("d", "r", "work", "draft", true, &["w"]),
             job("k", "r", "work", "draft", true, &["d"])
         ),
     );
-    assert_eq!(parked(&mut s), ["k"]);
+    assert_eq!(parked(&mut s), ["d", "k"]);
 }
 
 const WEB_NEEDS_R: &str =

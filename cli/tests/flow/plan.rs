@@ -2055,7 +2055,15 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = fx.keyed_repo("web");
-    // Its stubs are legal after the lock on their own, incomplete (hs-d822); a complete draft that waits would be parked.
+    // After the lock a Workflow is added with `--jobs`: its Job is queued, so it is no draft the review did not cover.
+    let jobs = fx.env.root().join("web-jobs.json");
+    let spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/web.rs"], "acceptance": ["cargo test"], "out_of_scope": []});
+    fx.install_catalog();
+    fs::write(
+        &jobs,
+        json!({"config": {"tier": "S2", "spec": spec}}).to_string(),
+    )
+    .unwrap();
     fx.cpd(&[
         "workflow",
         "add",
@@ -2070,26 +2078,13 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
         "config",
         "--needs",
         "pay",
+        "--jobs",
+        jobs.to_str().unwrap(),
         "--plan",
         "pay",
     ])
     .ok();
-    // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
-    assert_eq!(
-        inproc::show(&fx, "pay")["review"]["current"],
-        false,
-        "a stub draft is a draft the review did not cover"
-    );
-    fx.cpd(&[
-        "job",
-        "cancel",
-        "web-config",
-        "--reason",
-        "a stub of the template",
-        "--plan",
-        "pay",
-    ])
-    .ok();
+    // Its opener stub is a draft the review did not cover: cancelled, it is none, and the review stays current.
     fx.cpd(&[
         "job",
         "cancel",
