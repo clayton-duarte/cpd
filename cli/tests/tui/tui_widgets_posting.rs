@@ -381,6 +381,7 @@ fn a_picked_merge_hides_its_row_while_its_command_runs() {
 #[test]
 fn a_refused_post_brings_its_row_back_with_the_error_dialog() {
     let fx = rig("ready for user review");
+    cockpit(&fx);
     let _engine = engine(&fx);
     let key = gate_cpd(&fx);
     let before = database(&fx);
