@@ -3,7 +3,7 @@ import { FakeScheduler } from "../../testing/scheduler.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
 import type { Cpd, FollowBoundary, FollowProcess } from "./cli.ts";
-import type { PaneSet, ReadModel } from "./readmodel.ts";
+import type { PaneSet, PaneUpdate, ReadModel } from "./readmodel.ts";
 import { COALESCE_MS, SAFETY_REFRESH_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate } from "./events.ts";
 
 const tree = (cursor: number): ContextTreeModel => ({ contexts: [], cursor });
@@ -258,6 +258,55 @@ describe("cockpit service live updates", () => {
     await flush();
     await done;
     expect(resolved).toBe(true);
+    service.stop();
+  });
+});
+
+describe("cockpit service stale pane updates", () => {
+  const planAt = (cursor: number): PlanViewModel => ({ planId: "p1", contextId: "c", title: "P", cursor } as unknown as PlanViewModel);
+  const inboxAt = (cursor: number): InboxModel => ({ ...inbox, cursor });
+  const stale = (update: PaneUpdate) => {
+    const scheduler = new FakeScheduler();
+    const procs: FakeFollow[] = [];
+    const follow: FollowBoundary = { start: (args) => { const p = new FakeFollow(args); procs.push(p); return p; } };
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: tree(40), plan: planAt(10), inbox: inboxAt(10) }; },
+      async loadPanes() { return update; },
+    };
+    const service = createCockpitService({ readModel, cpd: { json: async () => ({ ok: true }) }, follow, scheduler });
+    const updates: CockpitUpdate[] = [];
+    service.subscribe((u) => updates.push(u));
+    return { service, scheduler, procs, updates };
+  };
+
+  it("apply_drops_stale_inbox_update", async () => {
+    const { service, procs, scheduler, updates } = stale({ inbox: inboxAt(5) });
+    await service.start();
+    procs[0]!.emit(ev(41, "inbox-opened"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(service.snapshot().inbox?.cursor).toBe(10);
+    expect(updates.filter((u) => u.kind === "pane" && u.pane === "inbox")).toEqual([]);
+    service.stop();
+  });
+
+  it("apply_drops_stale_tree_update", async () => {
+    const { service, procs, scheduler, updates } = stale({ tree: tree(30) });
+    await service.start();
+    procs[0]!.emit(ev(41, "context-created"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(service.snapshot().tree?.cursor).toBe(40);
+    expect(updates.filter((u) => u.kind === "pane" && u.pane === "tree")).toEqual([]);
+    service.stop();
+  });
+
+  it("apply_drops_stale_plan_update", async () => {
+    const { service, updates } = stale({ plan: planAt(5) });
+    await service.start();
+    await service.selectPlan("p1");
+    expect(service.snapshot().plan?.cursor).toBe(10);
+    expect(updates.filter((u) => u.kind === "pane" && u.pane === "plan")).toEqual([]);
     service.stop();
   });
 });

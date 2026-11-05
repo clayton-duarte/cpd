@@ -96,9 +96,9 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const emitError = (e: unknown): void => emit({ kind: "error", error: toWireError(e) });
   const apply = (u: PaneUpdate): void => {
     if (stopped) return;
-    if (u.tree !== undefined) { snap = { ...snap, tree: u.tree }; emit({ kind: "pane", pane: "tree", data: u.tree }); }
-    if (u.plan !== undefined) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
-    if (u.inbox !== undefined) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
+    if (u.tree !== undefined && (snap.tree === null || u.tree.cursor >= snap.tree.cursor)) { snap = { ...snap, tree: u.tree }; emit({ kind: "pane", pane: "tree", data: u.tree }); }
+    if (u.plan !== undefined && (u.plan === null || snap.plan === null || snap.plan.planId !== u.plan.planId || u.plan.cursor >= snap.plan.cursor)) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
+    if (u.inbox !== undefined && (snap.inbox === null || u.inbox.cursor >= snap.inbox.cursor)) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
   };
   let loop: Promise<void> | null = null;
   let queued: Set<CockpitPane> | null = null;

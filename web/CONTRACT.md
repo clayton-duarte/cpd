@@ -839,6 +839,8 @@ export function useStore<T>(store: Store, select: (s: AppState) => T): T; // Rea
 Reducer behaviours (every ServerMessage is `{type:"server"}`):
 
 - `cockpit.snapshot` sets the three panes and clears `cockpit.error`; `cockpit.patch` replaces exactly the named pane; `cockpit.error` sets `cockpit.error` and keeps the panes. (A failed attach is retried on a tree update by `connection.ts`, 6.2 below.)
+- Optimistic Inbox removal (pro-d426): each `state.optimistic[actionId]` entry is `{before, after, subject}`, where `subject?: string` is the removed row's subject (e.g. `pr:clayton-duarte/cpd#891`). A `cockpit.snapshot`, and a `cockpit.patch` with `pane: "inbox"`, while any optimistic action is in flight, sets `cockpit.inbox` to `syncOptimisticInbox(incoming, state.optimistic)`: every in-flight optimistic subject is filtered out of `incoming`, and each in-flight entry gets `before = incoming` and `after = filtered`. So every in-flight removal is re-applied across a refresh and stays hidden.
+- A `cockpit.patch` with `pane: "inbox"` whose `data.cursor < state.cockpit.inbox.cursor` is ignored (state unchanged): a newer Inbox is never replaced by an older one.
 - `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
@@ -847,7 +849,7 @@ Reducer behaviours (every ServerMessage is `{type:"server"}`):
 - `submitPending` adds a `sending` submission (with `at` and `images`, 11.2); `dismissPending` removes one.
 - `session.dialog` sets `dialog`; `session.dialogResolved` clears `dialog` only when its `dialogId` equals the active dialog's id; `session.models` sets `models`.
 - `session.completion` sets `completion` (`null` clears it). `completion` is `null` in the empty state of `selectSession` and until the first `session.completion`.
-- `action.result ok:false` sets `lastError` and removes the id from `pendingActionIds`; `ok:true` removes it from `pendingActionIds` and adds it to `completedActionIds` (11.2). The panes refresh through events.
+- `action.result ok:false` sets `lastError` and removes the id from `pendingActionIds`; `ok:true` removes it from `pendingActionIds` and adds it to `completedActionIds` (11.2). The panes refresh through events. Its optimistic rollback (pro-d426) is `syncOptimisticInbox(record.before, remaining)`, where `remaining` is every other in-flight `state.optimistic` entry: the other in-flight removals stay hidden, and `record.before` is the latest server Inbox.
 - `connection` sets `connection` and `retryAttempt`.
 
 #### `connection.ts`
@@ -998,6 +1000,7 @@ Service behaviours:
 8. `stop()` kills the follow process, disposes every timer and subscription; nothing fires afterwards. `selectPlan` stores the id and loads only the plan pane.
 9. `runAction(action)` delegates to `runAction(cpd, action)` of `actions.ts`; errors propagate as `WebError`.
 10. `refresh(panes)` (rules 3 and 5) always returns a promise that resolves only after the in-flight loop has drained every queued pane, so a call made while another refresh runs waits for that loop. `runAction` awaits that refresh before it resolves, so `action.result` is never sent while `snap.tree` is stale (for plan.new the tree already holds the new Plan and Lead session).
+11. Monotonic pane cursors (pro-d426): each pane update, whether from a coalesced `loadPanes` burst (rule 3) or from the `runAction` refresh (rule 10), is applied to the snapshot only when it is not older than the snapshot's pane: `tree` when `u.tree.cursor >= snap.tree.cursor` (or `snap.tree` is null); `inbox` when `u.inbox.cursor >= snap.inbox.cursor` (or `snap.inbox` is null); `plan` when `u.plan` is null, or `snap.plan` is null, or the planId differs (a different Plan is a new selection, not a stale one), or `u.plan.cursor >= snap.plan.cursor`. A null plan always applies. A stale update is dropped without emitting a `{kind:"pane"}` update.
 
 #### `actions.ts`
 
