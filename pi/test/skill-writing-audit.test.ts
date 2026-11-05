@@ -428,6 +428,20 @@ test("cpd-lead sends codebase reads to scout Jobs", () => {
   assert.deepEqual(bad, [], bad.join("\n"));
 });
 
+test("cpd-lead: a new User request on a done Plan is handled in the Plan, grounded by an explore Job, never routed to the Manager", () => {
+  const sec = section(lead, "### Documenting, Red testing, Implementing, Verifying");
+  const para = sec.split(/\n\s*\n/).flatMap((p) => p.split(/\n(?=- )/)).find((p) => p.replace(/^- /, "").startsWith("**A new request on a done Plan"));
+  assert.ok(para, "no bullet or paragraph starting with **A new request on a done Plan");
+  for (const token of ["scout", "research", "cpd workflow add", "dispatch"]) assert.ok(para.includes(token), `the done-Plan paragraph lacks ${token}`);
+  assert.match(para, /never[^.]*Manager|Manager[^.]*never/i, "the paragraph must refuse routing the request to the Manager");
+});
+
+test("cpd-lead: Exploring lists done among the phases an explore Job may be added in", () => {
+  const e = section(lead, "#### Exploring");
+  assert.match(e, /Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`/);
+  assert.ok(words(e) <= 220, `Exploring has ${words(e)} words, at most 220`);
+});
+
 const refSpec = files("cpd-lead").find((f) => f.name.endsWith("references/spec-files.md"))!.text;
 const docsDir = new URL("../../docs/", import.meta.url);
 const docText = (n: string) => readFileSync(new URL(n, docsDir), "utf8");

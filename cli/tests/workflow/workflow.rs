@@ -4388,7 +4388,8 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "UPDATE workflows SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
-                 UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
+                 UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+                 UPDATE jobs SET status = 'cancelled', cancel_reason = 'fixture: the PR is merged', cancel_requested_at = 't' WHERE plan = 'pay' AND status NOT IN ('merged', 'cancelled');",
                 lead = fx.lead.display()
             ))?;
             Ok(())
