@@ -165,3 +165,18 @@ test("a host error of a Manager is stored as a silent chat entry", async () => {
   assert.deepEqual(e.model, []);
   assert.ok(JSON.stringify(f.writes[0]).includes("cpd adapter: context updates: busy: store busy"));
 });
+
+test("a failed first message is retried at the next input", async () => {
+  // The host's startup read of a by-user-0 Session failed (run.ts sets `startupFailed`); the next turn-starting input stores the first message first, as for a by-user Session.
+  const f = fake(seat({ byUser: false }), { "session-first-message": FIRST, ...news });
+  const state = newTurnState();
+  state.startupFailed = true;
+  await prepareTurn(f.port, state);
+  assert.deepEqual(reads(f, "session", "first-message")[0], ["session", "first-message", "--session", ID]);
+  const stored = f.writes.filter((w) => w.entry.kind === "cpd-first-message");
+  assert.equal(stored.length, 1);
+  assert.deepEqual(stored[0]!.entry.data, { event: 120, delivered_to: ID });
+  assert.ok(hasText(stored[0]!, "Build the thing."));
+  await prepareTurn(f.port, state);
+  assert.equal(reads(f, "session", "first-message").length, 1, "stored once");
+});

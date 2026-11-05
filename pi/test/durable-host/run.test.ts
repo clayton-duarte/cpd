@@ -53,13 +53,14 @@ const MOVES: Record<string, readonly string[]> = {
   blocked: ["working", "idle", "waiting", "stopped"],
 };
 
-function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {}) {
+function rig(over: { role?: string; state?: string; firstMessage?: boolean; firstMessageFails?: boolean; liveRun?: boolean } = {}) {
   const session = { state: over.state ?? "stopped" };
   const calls: string[][] = [];
   const opens: Parameters<Deps["open"]>[0][] = [];
   const logs: string[] = [];
   const submitted: unknown[] = [];
   const closeCalls = { n: 0 };
+  const watchListener = { call: undefined as ((c: unknown) => Promise<void>) | undefined };
   const terminate = { handler: undefined as (() => void) | undefined };
   const ending = { code: undefined as number | undefined, error: undefined as unknown };
   let closeIt!: (v: unknown) => void;
@@ -83,6 +84,8 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {
         return { ok: true };
       }
       // Answers the startup first-message read of a fresh durable Plan Lead (contract §6.13 step 7): the text and its Event id.
+      if (over.firstMessageFails === true && line === `session first-message --session ${CONFIG.session}`) throw new CpdError("busy", "store busy");
+      if (line.startsWith("session report ")) return { ok: true };
       if (over.firstMessage === true && line === `session first-message --session ${CONFIG.session}`) return { ok: true, text: "Build the thing.", event: 120 };
       throw new Error(`unexpected cpd call: ${line}`);
     },
@@ -100,7 +103,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {
           if (over.firstMessage === true) return { id: 1, status: async () => "queued", wait: async () => "done" };
           throw new Error("the host submits nothing");
         },
-        watch: async () => ({ value: {}, start: () => {}, stop: async () => ({ kind: "stopped" }), closed: new Promise<unknown>(() => {}) }),
+        watch: async () => ({ value: over.liveRun === true ? { docs: { "pi.live": { run: { id: 1 } } } } : {}, start: (l: (c: unknown) => Promise<void>) => { watchListener.call = l; }, stop: async () => ({ kind: "stopped" }), closed: new Promise<unknown>(() => {}) }),
         abort: async () => {},
         abortSubmission: async () => "not_found",
         write: async () => ({}),
@@ -153,7 +156,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {
     terminate.handler!();
     return await until("the host to end", () => ending.code);
   };
-  return { calls, opens, logs, submitted, closeCalls, ending, closeIt: (v: unknown) => closeIt(v), until, states, up, stop, drain };
+  return { watchListener, calls, opens, logs, submitted, closeCalls, ending, closeIt: (v: unknown) => closeIt(v), until, states, up, stop, drain };
 }
 
 test("runHost opens the store at run/host/<session>.sqlite", { timeout: 20_000 }, async () => {
@@ -190,6 +193,37 @@ test("runHost reports nothing at start when the Session was not stopped", { time
     await r.stop();
     assert.deepEqual(r.states(), ["stopped"], state);
   }
+});
+
+test("after a restart with no active run the host reports idle", { timeout: 20_000 }, async () => {
+  // SIGKILL left the row `working`; nothing is running after the restart.
+  const r = rig({ state: "working" });
+  await r.up();
+  await r.drain();
+  assert.deepEqual(r.states(), ["idle"]);
+  await r.stop();
+});
+
+test("after a restart that resumes a run the host reports working until it settles", { timeout: 20_000 }, async () => {
+  const r = rig({ state: "working", liveRun: true });
+  await r.up();
+  await r.drain();
+  assert.ok(!r.states().includes("idle"), "no idle while the resumed run is live");
+  assert.ok(r.watchListener.call !== undefined, "the host watches the view");
+  await r.watchListener.call!({ kind: "value", value: { docs: { "pi.live": {} } }, ops: [], retired: false });
+  await r.drain();
+  assert.deepEqual(r.states(), ["idle"], "idle once the run ends");
+  await r.stop();
+});
+
+test("a by_user=0 first-message failure is reported once", { timeout: 20_000 }, async () => {
+  const r = rig({ firstMessageFails: true });
+  await r.up();
+  await r.drain();
+  const reports = r.calls.filter((a) => a[0] === "session" && a[1] === "report");
+  assert.equal(reports.length, 1, JSON.stringify(r.calls));
+  assert.deepEqual(reports[0]!.slice(0, 7), ["session", "report", "--what", "first message", "--code", "busy", "--message"]);
+  await r.stop();
 });
 
 test("runHost submits nothing and writes no report at start", { timeout: 20_000 }, async () => {

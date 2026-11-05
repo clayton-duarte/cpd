@@ -25,9 +25,9 @@ export type TurnPort = {
 
 /** What lives for one run of the host: the "once" memories of §6.13. */
 
-export type TurnState = { firstDone: boolean; firstFailed: boolean; firstEvent: number; contextFailed: boolean; lastError: string | undefined; reminded: boolean };
+export type TurnState = { firstDone: boolean; firstFailed: boolean; startupFailed: boolean; firstEvent: number; contextFailed: boolean; lastError: string | undefined; reminded: boolean };
 
-export const newTurnState = (): TurnState => ({ firstDone: false, firstFailed: false, firstEvent: 0, contextFailed: false, lastError: undefined, reminded: false });
+export const newTurnState = (): TurnState => ({ firstDone: false, firstFailed: false, startupFailed: false, firstEvent: 0, contextFailed: false, lastError: undefined, reminded: false });
 
 /** A host error: `what` and `code` are the memory's key. */
 export type HostError = { what: string; code: string; message: string; details?: Record<string, unknown> };
