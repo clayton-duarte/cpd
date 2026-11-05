@@ -39,9 +39,15 @@ impl Handler for Gh {
                 Reply::ok(&format!(r#"{{"headRefOid":"{SHA}"}}"#))
             }
             ["pr", "merge", ..] => write(self.write_ok),
-            ["repo", "view", _, "--json", "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"] => {
-                Reply::ok(r#"{"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false}"#)
-            }
+            [
+                "repo",
+                "view",
+                _,
+                "--json",
+                "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed",
+            ] => Reply::ok(
+                r#"{"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false}"#,
+            ),
             ["repo", "view", ..] => Reply::ok(r#"{"deleteBranchOnMerge":true}"#),
             ["run", "list", ..] => Reply::ok(
                 r#"[{"databaseId":11,"name":"ci","status":"completed","conclusion":"failure"}]"#,
@@ -73,7 +79,9 @@ struct Merge {
 }
 
 fn merge_it(rig: &Rig) -> bool {
-    let args = Merge::try_parse_from(["merge", "acme/pay#801"]).unwrap().args;
+    let args = Merge::try_parse_from(["merge", "acme/pay#801"])
+        .unwrap()
+        .args;
     Ports::scope(&rig.fakes.ports, || merge::merge(&rig.fakes.ports, args)).is_ok()
 }
 

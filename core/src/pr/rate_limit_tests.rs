@@ -12,9 +12,9 @@ use crate::host::runner::{FakeRunner, Reply};
 /// The poll's search on a `gh` that answers `reply`: the error and how many `gh` calls it made.
 fn searched(reply: Reply) -> (CpdError, usize) {
     let runner = FakeRunner::new(ManualClock::new()).on("gh", |_| true, reply);
-    let e = search_open(&runner, Path::new("/cpd-home"), &[])
-        .err()
-        .expect("the search did not answer");
+    let Err(e) = search_open(&runner, Path::new("/cpd-home"), &[]) else {
+        panic!("the search did not answer");
+    };
     (e, runner.calls().len())
 }
 
@@ -42,12 +42,21 @@ fn rate_limited_reply_pauses_until_reset() {
         ),
         (
             "already exceeded",
-            Reply::exit(1, "", "gh: API rate limit already exceeded for user ID 1.\n"),
+            Reply::exit(
+                1,
+                "",
+                "gh: API rate limit already exceeded for user ID 1.\n",
+            ),
         ),
     ] {
         let (e, calls) = searched(reply);
         assert_eq!(e.code(), ErrorCode::GhFailed, "{name}: A2, still gh_failed");
-        assert_eq!(flag(&e, "rate_limited"), Some(true), "{name}: {:?}", e.details());
+        assert_eq!(
+            flag(&e, "rate_limited"),
+            Some(true),
+            "{name}: {:?}",
+            e.details()
+        );
         assert_ne!(flag(&e, "transient"), Some(true), "{name}: never transient");
         assert_eq!(calls, 1, "{name}: no retry inside the poll");
     }

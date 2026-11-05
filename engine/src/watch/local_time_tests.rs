@@ -128,5 +128,8 @@ fn rate_guard_waits_reset_plus_grace() {
     );
     // At reset plus the grace: the poll may run.
     assert_eq!(wait_after_reset(GRACE), Duration::ZERO);
-    assert_eq!(wait_after_reset(GRACE + Duration::from_secs(5)), Duration::ZERO);
+    assert_eq!(
+        wait_after_reset(GRACE + Duration::from_secs(5)),
+        Duration::ZERO
+    );
 }

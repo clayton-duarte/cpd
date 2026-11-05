@@ -28,11 +28,11 @@ mod incident_tests;
 #[cfg(test)]
 mod open_reopen_tests;
 #[cfg(test)]
+mod poll_now_tests;
+#[cfg(test)]
 mod poll_tests;
 #[cfg(test)]
 mod poll_threads_tests;
-#[cfg(test)]
-mod poll_now_tests;
 #[cfg(test)]
 mod push_reset_tests;
 #[cfg(test)]

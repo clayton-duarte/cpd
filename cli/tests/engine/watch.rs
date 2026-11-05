@@ -3955,13 +3955,16 @@ fn gh_rate_limited() -> Reply {
     )
 }
 
+/// The time of each `gh` call, on the `ManualClock`.
+type Starts = Arc<Mutex<Vec<Duration>>>;
+
 /// `gh` answers the first search with 4987 requests left until a reset a minute later, the second with `then`, every later one with
 /// `last`. The time of each call, on the `ManualClock`, is noted, and so is the reset.
 fn gh_limited_after_a_poll(
     fx: &Ip,
     then: Reply,
     last: Reply,
-) -> (Arc<Mutex<Vec<Duration>>>, Arc<Mutex<Option<Duration>>>) {
+) -> (Starts, Arc<Mutex<Option<Duration>>>) {
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
     let reset = Arc::new(Mutex::new(None::<Duration>));
     let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
@@ -3999,7 +4002,10 @@ fn rate_limited_reply_pauses_until_reset() {
 
     // The second poll met the limit with one call (no retry in the poll); the third started at the stored reset plus the grace.
     let starts = starts.lock().unwrap();
-    let reset = reset.lock().unwrap().expect("the first poll stored a reset");
+    let reset = reset
+        .lock()
+        .unwrap()
+        .expect("the first poll stored a reset");
     assert_eq!(starts.len(), 3, "{starts:?}");
     assert!(
         starts[2] >= reset + RATE_GRACE,
@@ -4011,7 +4017,11 @@ fn rate_limited_reply_pauses_until_reset() {
         .into_iter()
         .filter(|e| e.3["code"] == "gh_failed")
         .collect();
-    assert_eq!(failed, vec![], "a rate-limit reply is a pause, not gh_failed");
+    assert_eq!(
+        failed,
+        vec![],
+        "a rate-limit reply is a pause, not gh_failed"
+    );
     assert_eq!(messages(&fx), Vec::<String>::new());
 }
 
@@ -4034,10 +4044,18 @@ fn rate_limited_reply_by_message_pauses_until_reset_too() {
         .unwrap();
 
     let starts = starts.lock().unwrap();
-    let reset = reset.lock().unwrap().expect("the first poll stored a reset");
-    assert!(starts[2] >= reset + RATE_GRACE, "{starts:?} reset {reset:?}");
+    let reset = reset
+        .lock()
+        .unwrap()
+        .expect("the first poll stored a reset");
     assert!(
-        fx.events("error").iter().all(|e| e.3["code"] != "gh_failed"),
+        starts[2] >= reset + RATE_GRACE,
+        "{starts:?} reset {reset:?}"
+    );
+    assert!(
+        fx.events("error")
+            .iter()
+            .all(|e| e.3["code"] != "gh_failed"),
         "{:?}",
         fx.events("error")
     );
@@ -4061,7 +4079,11 @@ fn other_gh_failures_still_raise_gh_failed() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     let data = &errors[0].3;
     assert_eq!(
-        (&data["source"], &data["code"], &data["details"]["transient"]),
+        (
+            &data["source"],
+            &data["code"],
+            &data["details"]["transient"]
+        ),
         (&json!("watch"), &json!("gh_failed"), &json!(false))
     );
     assert!(
@@ -4111,7 +4133,11 @@ fn pr_poll_now_file_triggers_immediate_poll() {
     .unwrap();
 
     let starts = starts.lock().unwrap();
-    assert_eq!(starts.len(), 2, "no second poll within the period: {starts:?}");
+    assert_eq!(
+        starts.len(),
+        2,
+        "no second poll within the period: {starts:?}"
+    );
     // Inside pr_poll_seconds, and not before the first poll ended: polls never overlap.
     assert!(starts[1] - starts[0] >= takes, "overlap: {starts:?}");
     assert!(
@@ -4119,7 +4145,7 @@ fn pr_poll_now_file_triggers_immediate_poll() {
         "the file did not bring the poll forward: {starts:?}"
     );
     // The file was gone when the second poll started (a request made during the poll is kept for the next one).
-    assert_eq!(file_at_call.lock().unwrap()[1], false);
+    assert!(!file_at_call.lock().unwrap()[1]);
     assert!(!poll_now_file(&fx).exists());
     assert_eq!(fx.events("error").len(), 0);
 }
