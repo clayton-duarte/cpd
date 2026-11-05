@@ -12,6 +12,8 @@ import { watchAttention } from "./attention.ts";
 import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL } from "./channels.ts";
 import { registerWebuiIpc } from "./cockpit-ipc.ts";
 import { resolveLoginPath } from "./env.ts";
+import { createHealthRecorder } from "./health.ts";
+import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController, modeFilePath } from "./mode.ts";
 import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
@@ -226,6 +228,23 @@ async function main(): Promise<void> {
 
   const startUpdate = async (window: { webContents: unknown }) => {
     const w = window as BrowserWindow;
+    const recorder = createHealthRecorder({
+      file: path.join(cpdHome, "run", "preview-health.json"),
+      crashLog: path.join(cpdHome, "run", "preview-crash.log"),
+      pid: process.pid,
+      now: () => new Date(),
+      fs: {
+        readFile: (f) => fs.readFile(f, "utf8"),
+        writeFile: (f, data) => fs.writeFile(f, data),
+        rename: (a, b) => fs.rename(a, b),
+        appendFile: (f, data) => fs.appendFile(f, data),
+        mkdir: async (dir) => {
+          await fs.mkdir(dir, { recursive: true });
+        },
+      },
+    });
+    await recorder.init();
+    attachHealth({ recorder, ipcMain, process, app, webContents: w.webContents });
     const openExternal = (url: string): unknown => electronShell.openExternal(url);
     w.webContents.setWindowOpenHandler(createExternalLinkHandler(openExternal));
     w.webContents.on("will-navigate", (event, url) => {

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { createBridge } from "./bridge.ts";
 import { UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL } from "./channels.ts";
+import { createHealthBridge } from "./health-bridge.ts";
 import type { UpdateBridge } from "./channels.ts";
 import type { BootstrapStatus, UpdateState } from "./update/types.ts";
 
@@ -17,4 +18,4 @@ const update: UpdateBridge = {
   onUpdateState: (cb: (s: UpdateState) => void) => subscribe(UPDATE_STATE_CHANNEL, cb),
 };
 
-contextBridge.exposeInMainWorld("cpdElectron", { ...createBridge(ipcRenderer), ...update });
+contextBridge.exposeInMainWorld("cpdElectron", { ...createBridge(ipcRenderer), ...update, ...createHealthBridge(ipcRenderer) });

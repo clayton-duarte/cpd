@@ -1,3 +1,4 @@
+import { CHANNELS } from "./channels.ts";
 import type { CrashReport } from "./health.ts";
 
 export interface HealthBridge {
@@ -5,6 +6,9 @@ export interface HealthBridge {
   reportCrash(info: CrashReport): void;
 }
 
-export function createHealthBridge(_ipc: { send(channel: string, ...args: unknown[]): void }): HealthBridge {
-  throw new Error("not implemented");
+export function createHealthBridge(ipc: { send(channel: string, ...args: unknown[]): void }): HealthBridge {
+  return {
+    reportHealthy: () => ipc.send(CHANNELS.healthOk),
+    reportCrash: (info) => ipc.send(CHANNELS.healthCrash, info),
+  };
 }
