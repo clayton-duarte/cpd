@@ -5254,7 +5254,7 @@ Decision hs-d540 (User): when the User creates a Lead or Manager from the tree, 
 
 Batch register (hs-d241, R2; the rule is hs-d239: no planned work lives only in a Lead's chat). A heuristic that nudges a Lead to register what it announced. It lives in its own module of the adapter (`pi/lib/reminder.ts`), with a few lines in `adapter.ts`.
 
-**When.** At pi's `before_agent_start`, for a Session of role `lead` only (never a Manager, never a Worker). It never starts, wakes or interrupts a turn: it only adds a message to the run that is starting.
+**When.** For a Session of role `lead` only (never a Manager, never a Worker). The future-work reminder is added at pi's `before_agent_start`: it never starts, wakes or interrupts a turn, it only adds a message to the run that is starting. The failed-Job reminder (**Failed Jobs**, below) is the one exception: it starts a turn.
 
 **The check**, made at the end of each run of the Lead (so it concerns the Lead's **last assistant message of that run**) and held for the next run. The reminder is due when both hold:
 
@@ -5273,7 +5273,20 @@ A check that fails, whether `cpd plan show` returns an error or the message cann
 cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or Workflow. Register it now (cpd job add <k> --draft --title "…", or cpd workflow add …) and name its key.
 ```
 
-It is added **at most once per run** and once it has been added the reminder is not due again until a later run ends with a message that fails the check. It is never delivered to a Session that is not a `lead` and never starts a turn (`triggerTurn: false`, as §15.1's messages).
+It is added **at most once per run** and once it has been added the reminder is not due again until a later run ends with a message that fails the check. The future-work reminder is never delivered to a Session that is not a `lead` and never starts a turn (`triggerTurn: false`, as §15.1's messages); the failed-Job reminder does start one (below).
+
+**Failed Jobs** (pro-d398; User, 2026-11-05 EST; supersedes pro-d396). A failed Job is never a final state: only `merged` and `cancelled` are final, so a failed Job is always unaddressed until a Lead disposes of it. A Lead disposes of it at once, in the turn that sees it: `cpd job retry <k> --tier <T>`; a fix Job (`cpd job add`); `cpd job cancel <k> --reason "<why>"` when it is superseded; or `ask_user_question` when the choice is the User's. A Lead never leaves a failed Job while idle, and never defers its retry to a background sleep or timer.
+
+- **The check** runs at every `agent_end` of a Lead with a plan, and makes ONE `cpd plan show --plan <plan>` call that serves it and the future-work check above. Every Job of the show whose status is `failed` counts, in list order, there is no `worked_on` test. It runs even when the run's last message has no assistant text, because it reads no message.
+- **Blocked.** While the Lead is blocked on a dialog (a pending `ask_user_question`) or on an open plan review, the check sends nothing and leaves the dedupe state unchanged.
+- **The message.** When due it sends ONE message at once, so an idle Lead is woken: `customType: "cpd-reminder"`, `display: false` (never shown to the User), `triggerTurn: true` as a follow-up (`pi/lib/delivery.ts`, which starts a turn so an idle Lead is woken; the loop guard of §15.15, L3 and L4, still gates it), `details: {rule: "failed-job-disposition", jobs: [<keys>]}`, and this `content`, `<k1, k2>` being the keys of the failed Jobs:
+
+  ```
+  cpd reminder: failed Job(s) <k1, k2> still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason "<why>" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.
+  ```
+
+- **The dedupe.** The fingerprint is the failed entries sorted by key, each as `key:attempts` (`attempts` is the length of the Job's attempts list), joined with `,`. The message is sent only when the fingerprint differs from the Run's `failedReminded`, and then `failedReminded` is set to it. So one fingerprint fires at most once per Run; a retry that fails again (its attempts grow) or another failed Job is a new fingerprint and fires again. When no Job is failed, `failedReminded` is cleared to empty.
+- **A failed check adds nothing.** A `cpd plan show` that fails, or a show whose `jobs` is not a list, a failed Job with no string `key`, or a failed Job whose `attempts` is not a list (refused as `bad_output`), adds no message and is only logged, as the future-work check's failures are. A Manager and a Worker get none and read no Plan for it.
 
 **Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
 
