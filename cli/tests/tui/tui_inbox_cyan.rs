@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 
 /// The tier glyphs, repeated here as the tests of `tui_tree.rs` do: cyan.
-const CYAN: &str = "\u{F06F1}";
+const WHITE: &str = "\u{F0366}";
 
 #[test]
 fn the_notice_tiers_colour_is_cyan_6_read_only_and_14_clickable_never_blue() {
@@ -60,15 +60,15 @@ fn the_legends_inbox_section_has_the_cyan_tier_line_in_bright_cyan_and_none_for_
         .position(|r| r.contains("a cpd notice: curation, nothing blocks"))
         .expect("the notice tier's line");
     let glyph = (0..buf.area.width)
-        .find(|x| buf[(*x, notice as u16)].symbol() == CYAN)
-        .expect("U+F06F1 on the notice line");
+        .find(|x| buf[(*x, notice as u16)].symbol() == WHITE)
+        .expect("U+F0366 on the notice line");
     assert_eq!(
         buf[(glyph, notice as u16)].fg,
-        Color::LightCyan,
-        "bright cyan (14): the legend's sample is drawn as the Inbox row is"
+        palette::color_clickable(Meaning::NotStarted),
+        "bright white (15): the legend's sample is drawn as the Inbox row is"
     );
     assert!(
-        lines[notice].contains("cyan"),
+        lines[notice].contains("white"),
         "the line names the tier: {:?}",
         lines[notice]
     );
@@ -77,7 +77,7 @@ fn the_legends_inbox_section_has_the_cyan_tier_line_in_bright_cyan_and_none_for_
         "a blocker only you can clear",
         "pull-request work",
         "a decision before the work runs",
-        "an unread reply",
+        "cyan, an unread reply",
     ] {
         assert!(lines.iter().any(|r| r.contains(text)), "{text}");
     }

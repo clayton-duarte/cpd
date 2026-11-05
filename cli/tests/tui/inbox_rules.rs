@@ -118,7 +118,7 @@ fn a_lead_waiting_for_a_worker_opens_no_dialog_and_its_reply_turn_is_unread_hs_d
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(
         (items[0].kind, items[0].urgency),
-        (Kind::Unread, Urgency::White)
+        (Kind::Unread, Urgency::Cyan)
     );
 
     // `blocked` is still the human's: a dialog, even under the label a Lead's wait used to carry.
