@@ -79,6 +79,8 @@ it("inbox tier filter lists all, blocker, delivery, decision, support, notice an
     expect(b.querySelectorAll("span")[1]?.className).toEqual(expect.stringContaining("font-mono"));
     expect((b as HTMLButtonElement).disabled).toBe(false);
   }
+  // the preview's markup: the count is a plain span, with no data-part marker (merge rule: preview wins)
+  expect(group?.querySelector('[data-part="filter-count"]')).toBeNull();
   const colours = ["text-fg-strong", "text-status-blocked-bright", "text-status-landing-bright", "text-status-decision-bright", "text-status-focus-bright", "text-status-active-bright", "text-fg-strong"];
   names.forEach((b, i) => expect(b.className).toContain(colours[i]!));
   m.unmount();
@@ -114,6 +116,10 @@ it("inbox filters collapse into a popover when the column is narrow", () => {
   const group = document.body.querySelector('[data-slot="popover-content"] [data-part="inbox-filters"]');
   expect(group?.getAttribute("data-orientation")).toBe("vertical");
   expect(group?.querySelectorAll('[data-slot="toggle-group-item"]')).toHaveLength(7);
+  expect(Array.from(group?.querySelectorAll('[data-slot="toggle-group-item"]') ?? []).map((b) => b.textContent)).toEqual([
+    "all4", "blocker2", "delivery1", "decision0", "support0", "notice0", "unread1",
+  ]);
+  expect(group?.querySelector('[data-part="filter-count"]')).toBeNull();
   click(group?.querySelector('[data-tier-filter="blocker"]'));
   expect(shown(m.container)).toEqual(["1", "2"]);
   expect(trigger?.textContent).toBe("1 tier2");
