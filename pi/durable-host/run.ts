@@ -34,7 +34,7 @@ import { hostExtension } from "./extension.ts";
 import { registerHostTools } from "./tools.ts";
 import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
-import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
+import { newTurnState, prepareTurn, reminderFor, reportHostError, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
 export type { ViewCall, ViewStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
@@ -275,7 +275,21 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     let prepared: Promise<void> = Promise.resolve();
     let preparing = 0;
     // §3.6 allows `stopped -> idle`, never `stopped -> working`.
-    if ((shown.session as { state?: unknown }).state === "stopped") reporter.want({ state: "idle" });
+    const rowState = (shown.session as { state?: unknown }).state;
+    if (rowState === "stopped") reporter.want({ state: "idle" });
+    // A row left `working` by a kill reports the live run (pi-durable resumes the interrupted run on open): working while one continues, idle when none.
+    const hasRun = (view: unknown): boolean => {
+      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
+      return live?.run !== undefined && live.run !== null;
+    };
+    let resumed = false;
+    if (rowState === "working") {
+      if (hasRun(current.value)) {
+        // The row already says working: no report, only the memory that the run ends in idle.
+        resumed = true;
+        hostState = "working";
+      } else setImmediate(() => (over ? undefined : reporter.want({ state: "idle" })));
+    }
 
     // The plan-review flow (§6.15): its summary and feedback files live in `$CPD_HOME/run/<plan>/` (review.rs `summary_review_md`).
     const readPlanFile = async (file: string): Promise<string> => {
@@ -427,22 +441,33 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // reads the Lead's first message and runs it as the first turn's input, counted by the cursor. A Session whose
     // conversation already holds its `cpd-first-message` entry (a restart) submits nothing and reads nothing.
     if (!session.byUser && !storedEntries.some((e) => { const entry = e as StoredEntry; return entry.kind === "cpd-first-message" && entry.data?.delivered_to === config.session; })) {
+      let out: Record<string, unknown> | undefined;
       try {
-        const out = await deps.cpd(["session", "first-message", "--session", config.session]);
+        out = await deps.cpd(["session", "first-message", "--session", config.session]);
         if (typeof out.text !== "string" || !Number.isSafeInteger(out.event)) throw new Error("cpd session first-message: the output lacks text or event");
+      } catch (e) {
+        // The next turn-starting input retries the read (prepareTurn); the failure is reported once.
+        turn.startupFailed = true;
+        failed("the first message at startup", e);
+        const err = toCpdError(e);
+        await reportHostError({ what: "first message", code: err.code, message: err.message }, port, turn);
+        out = undefined;
+      }
+      try {
+        if (out === undefined) throw undefined;
         const event = out.event as number;
         // The submit below is turn-starting: mark the first message done and its Event the cursor, so prepareTurn does
         // not ALSO store it as a silent write and the context update counts it (turn.ts).
         turn.firstDone = true;
         turn.firstEvent = Math.max(turn.firstEvent, event);
         await submit({
-          content: out.text,
+          content: (out.text as string),
           requestId: `first-message:${config.session}`,
           whenBusy: "followUp",
           entry: { kind: "cpd-first-message", data: { event, delivered_to: config.session } },
         });
       } catch (e) {
-        failed("the first message at startup", e);
+        if (e !== undefined) failed("the first message at startup", e);
       }
     }
 
@@ -559,10 +584,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       clientId: () => (from = `c${++nextClient}`),
     });
     server = srv;
-    const hasRun = (view: unknown): boolean => {
-      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
-      return live?.run !== undefined && live.run !== null;
-    };
     let lastView: unknown = first.value;
     const attachStream = (s: ViewStream): void => {
       s.start(async (call: ViewCall) => {
@@ -574,6 +595,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         srv.frame(ring.append([...call.ops]));
         const runEnd = hasRun(lastView) && !hasRun(call.value);
         lastView = call.value;
+        if (resumed && runEnd) {
+          resumed = false;
+          if (pending === 0) changed("idle");
+        }
         if (ring.shouldRebase(runEnd)) srv.frame(ring.rebase(call.value));
       });
       // pi-durable 1.5.0 (chord watch.d.ts): `stop()` idempotently stops future callbacks and settles `closed` with `{ kind: 'stopped' }`; any other kind is the watch ending on its own.

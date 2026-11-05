@@ -55,13 +55,14 @@ export async function prepareTurn(port: TurnPort, state: TurnState): Promise<voi
     await reportHostError({ what, code: err.code, message: err.message, ...(err.details === undefined ? {} : { details: err.details as Record<string, unknown> }) }, port, state);
   };
   let stored: readonly StoredEntry[] = [];
+  let startupRetry = false;
   try {
     stored = await port.entries();
   } catch (e) {
     port.log(`entries: ${toCpdError(e).message}`);
   }
   // The first message goes first and alone: while it is pending, or stored by this very call, the context update waits for the next turn (the first message's event is the cursor then).
-  if (seat.byUser && !state.firstDone) {
+  if ((seat.byUser || state.startupFailed) && !state.firstDone) {
     if (stored.some((e) => e.kind === "cpd-first-message" && e.data?.delivered_to === seat.id)) state.firstDone = true;
     else {
       try {
@@ -71,12 +72,17 @@ export async function prepareTurn(port: TurnPort, state: TurnState): Promise<voi
         await port.submit(toWrite({ customType: "cpd-first-message", content: out.text, display: false, details: { event, delivered_to: seat.id } }, `first-message:${seat.id}`));
         state.firstDone = true;
         state.firstFailed = false;
+        state.startupFailed = false;
         state.firstEvent = Math.max(state.firstEvent, event);
       } catch (e) {
         await fail("firstFailed", "first message", e);
+        // A by-user Session waits for its first message; a by_user=0 retry that fails again lets the context update go on.
+        if (!seat.byUser) startupRetry = true;
       }
-      state.reminded = false;
-      return;
+      if (!startupRetry) {
+        state.reminded = false;
+        return;
+      }
     }
   }
   try {
