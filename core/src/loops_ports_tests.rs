@@ -781,7 +781,7 @@ fn the_github_answer_is_reused_while_it_is_younger_than_its_ttl() {
     rig.on("gh", gh_answer());
     let mut s = store(&h.home);
     review_items(&rig, &h, &mut s);
-    rig.clock.advance(SECS(299));
+    rig.clock.advance(SECS(29));
     review_items(&rig, &h, &mut s);
     assert_eq!(gh_calls(&rig), 1);
 }
@@ -795,7 +795,7 @@ fn the_github_answer_is_asked_again_once_its_ttl_has_passed() {
     rig.on("gh", gh_answer());
     let mut s = store(&h.home);
     review_items(&rig, &h, &mut s);
-    rig.clock.advance(SECS(300));
+    rig.clock.advance(SECS(30));
     review_items(&rig, &h, &mut s);
     assert_eq!(gh_calls(&rig), 2);
 }
