@@ -1,5 +1,10 @@
 // The pi live-stream socket of a tmux pi Session (docs/contract.md §6.21). 
+import { mkdirSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Duplex } from "node:stream";
+import type { PiApi } from "./pi.ts";
 
 export interface LiveStreamDeps {
   /** Listens at `path`; throws when it cannot. `onConnection` gets each client as a duplex stream. */
@@ -149,4 +154,24 @@ export function createLiveStream(deps: LiveStreamDeps): LiveStream {
     },
     dispose: close,
   };
+}
+
+/** The real wiring: session_start to session_shutdown, and removed at process exit. */
+export function registerLiveStream(pi: PiApi, env: Record<string, string | undefined>): void {
+  if (!env.CPD_SESSION) return;
+  const live = createLiveStream({
+    listen: (path, onConnection) => {
+      const server = createServer(onConnection);
+      server.on("error", (e) => process.stderr.write(`pi live-stream socket: ${e.message}\n`)); // reported, never thrown into pi
+      server.listen(path);
+      return { close: () => void server.close() };
+    },
+    mkdir: (path, mode) => void mkdirSync(path, { recursive: true, mode }),
+    unlink: (path) => rmSync(path, { force: true }),
+    home: env.CPD_HOME || join(homedir(), ".cpd"),
+    session: env.CPD_SESSION,
+    stderr: (text) => void process.stderr.write(text),
+  });
+  live.attach(pi as never);
+  process.once("exit", () => live.dispose());
 }
