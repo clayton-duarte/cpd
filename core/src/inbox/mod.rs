@@ -35,6 +35,8 @@ mod follow_tests;
 #[cfg(test)]
 mod overdue_tests;
 #[cfg(test)]
+mod pr_swap_tests;
+#[cfg(test)]
 mod pr_tests;
 #[cfg(test)]
 mod pr_updating_tests;

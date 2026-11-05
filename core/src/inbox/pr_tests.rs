@@ -18,14 +18,14 @@ const POST: &str = "[pr.post]\nenabled = true\n";
 
 use Urgency::{Cyan, Red, White, Yellow};
 
-struct Fx {
+pub(super) struct Fx {
     _dir: tempfile::TempDir,
     home: CpdHome,
     store: Store,
 }
 
 /// A Context `ctx` with owner `acme`, a Plan `pay` and its Lead `l-pay` (working).
-fn fixture() -> Fx {
+pub(super) fn fixture() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
@@ -62,7 +62,7 @@ impl Fx {
     }
 
     /// An open authored pull request `acme/shop#n`: passed checks, clean, no review, comments read and none, on main.
-    fn workflow(&mut self, n: i64, assignments: &str) {
+    pub(super) fn workflow(&mut self, n: i64, assignments: &str) {
         let url = format!("https://github.com/acme/shop/pull/{n}");
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
@@ -148,7 +148,7 @@ impl Fx {
     }
 }
 
-fn is(f: &mut Fx, n: i64, urgency: Urgency, status: &str) {
+pub(super) fn is(f: &mut Fx, n: i64, urgency: Urgency, status: &str) {
     assert_eq!(
         f.status(n),
         (urgency, status.to_owned()),
