@@ -9,8 +9,8 @@ const entry = (type: string, ts: string, total: number) => JSON.stringify({ type
 const T = (s: number) => `2026-01-01T00:00:${String(s).padStart(2, "0")}.000Z`;
 const file = (lines: string[], mtimeMs = 1): CostFile => { const text = lines.join("\n") + "\n"; return { text, mtimeMs, size: text.length }; };
 
-interface Sess { role: string; context?: string | null; plan?: string | null; attempt?: string | null; file: string | null; archived_at?: string | null }
-interface World { contexts: { id: string; plans: { id: string }[] }[]; sessions: Sess[]; events?: { plan: string; attempt: string; data: { cost_usd: number | null } }[]; files: Record<string, CostFile | null> }
+interface Sess { id?: string; runner?: string; role: string; context?: string | null; plan?: string | null; attempt?: string | null; file: string | null; archived_at?: string | null }
+interface World { contexts: { id: string; plans: { id: string }[] }[]; sessions: Sess[]; events?: { plan: string; attempt: string; data: { cost_usd: number | null } }[]; files: Record<string, CostFile | null>; durable?: Record<string, { cost: number | null; stamp: string } | null> }
 function deps(w: World): CostDeps & { reads: string[] } {
   const reads: string[] = [];
   return {
@@ -18,11 +18,12 @@ function deps(w: World): CostDeps & { reads: string[] } {
     async cpd(argv) {
       const a = argv.join(" ");
       if (a.startsWith("context list")) return JSON.stringify({ ok: true, contexts: w.contexts });
-      if (a.startsWith("session list")) return JSON.stringify({ ok: true, sessions: w.sessions.map((s) => ({ context: null, plan: null, attempt: null, archived_at: null, ...s })) });
+      if (a.startsWith("session list")) return JSON.stringify({ ok: true, sessions: w.sessions.map((s) => ({ id: "", runner: "pi", context: null, plan: null, attempt: null, archived_at: null, ...s })) });
       if (a.startsWith("events list")) return JSON.stringify({ ok: true, events: (w.events ?? []).map((e, i) => ({ id: i + 1, kind: "attempt-ended", ...e })), next: (w.events ?? []).length });
       throw new Error(`unexpected cpd ${a}`);
     },
     async readFile(path) { reads.push(path); return w.files[path] ?? null; },
+    async durableCost(id) { return w.durable?.[id] ?? null; },
   };
 }
 const one = (id: string, f: CostFile): World => ({ contexts: [{ id: `c-${id}`, plans: [{ id }] }], sessions: [{ role: "lead", plan: id, context: `c-${id}`, file: `/f/${id}` }], files: { [`/f/${id}`]: f } });
@@ -100,6 +101,46 @@ describe("cost", () => {
     expect(costs["pl-ctx1"]).toBeCloseTo(4, 10);
     expect(costs["pl-ctx2"]).toBeCloseTo(2, 10);
     expect(costs["c-ctx"]).toBeCloseTo(4 + 2 + 10 + 20, 10);
+  });
+  it("counts a durable Lead and Manager in the plan and context totals", async () => {
+    const w: World = {
+      contexts: [{ id: "c-dur", plans: [{ id: "pl-dur" }] }],
+      sessions: [
+        { id: "l-dur", runner: "durable", role: "lead", plan: "pl-dur", context: "c-dur", file: null },
+        { id: "m-dur", runner: "durable", role: "manager", context: "c-dur", file: null },
+        { id: "l-pi", role: "lead", plan: "pl-dur", context: "c-dur", file: "/d/lead" },
+      ],
+      files: { "/d/lead": file([header(T(0)), assistant(T(1), 1)]) },
+      durable: { "l-dur": { cost: 0.75, stamp: "s1" }, "m-dur": { cost: 2.5, stamp: "s1" } },
+    };
+    const costs = await readCosts(deps(w));
+    expect(costs["pl-dur"]).toBeCloseTo(1.75, 10);
+    expect(costs["c-dur"]).toBeCloseTo(4.25, 10);
+  });
+  it("a durable session with no store is not counted", async () => {
+    const w: World = {
+      contexts: [{ id: "c-nos", plans: [{ id: "pl-nos" }] }],
+      sessions: [
+        { id: "l-nos", runner: "durable", role: "lead", plan: "pl-nos", context: "c-nos", file: null },
+        { id: "m-nos", runner: "durable", role: "manager", context: "c-nos", file: null },
+      ],
+      files: {},
+      durable: { "l-nos": null, "m-nos": { cost: 2, stamp: "s1" } },
+    };
+    const costs = await readCosts(deps(w));
+    expect(costs["pl-nos"]).toBeUndefined();
+    expect(costs["c-nos"]).toBeCloseTo(2, 10);
+  });
+  it("reads a durable store again when its stamp changes", async () => {
+    const w: World = {
+      contexts: [{ id: "c-stp", plans: [{ id: "pl-stp" }] }],
+      sessions: [{ id: "l-stp", runner: "durable", role: "lead", plan: "pl-stp", context: "c-stp", file: null }],
+      files: {},
+      durable: { "l-stp": { cost: 1, stamp: "s1" } },
+    };
+    expect((await readCosts(deps(w)))["pl-stp"]).toBeCloseTo(1, 10);
+    w.durable = { "l-stp": { cost: 3, stamp: "s2" } };
+    expect((await readCosts(deps(w)))["pl-stp"]).toBeCloseTo(3, 10);
   });
   it("formatCost formats the thresholds like the TUI", () => {
     const table: [number, string][] = [
