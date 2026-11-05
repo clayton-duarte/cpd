@@ -192,19 +192,27 @@ const mixed = () => [
   row(3, "deploy", "y1", { urgency: "yellow" }),
   row(4, "unread", "w1", { urgency: "white" }),
 ];
-const btn = (c: Element, name: string) => c.querySelector<HTMLButtonElement>(`button[data-tier-filter="${name}"]`);
+const btn = (c: Element, name: string) => c.querySelector<HTMLButtonElement>(`[data-slot="toggle-group-item"][data-tier-filter="${name}"]`);
 const countOf = (b: Element | null) => b?.querySelector('[data-part="filter-count"]')?.textContent;
 const shown = (c: Element) => items(c).map((li) => li.getAttribute("data-id"));
-const headerCount = (c: Element) => c.querySelector('[data-part="inbox-header"] > span')?.textContent;
+const on = (c: Element, name: string) => btn(c, name)?.getAttribute("data-state") === "on";
+const pressed = (c: Element, name: string) => btn(c, name)?.getAttribute("aria-pressed");
+const TIER_NAMES = ["blocker", "delivery", "decision", "support", "notice", "unread"];
 
 it("the filter bar has an all button and the six tier buttons with a count each", () => {
   const m = render(mixed());
-  const names = Array.from(m.container.querySelectorAll('[data-part="inbox-filters"] button')).map((b) => b.getAttribute("data-tier-filter"));
-  expect(names).toEqual(["all", "blocker", "delivery", "decision", "support", "notice", "unread"]);
-  expect(m.container.querySelector('[data-part="inbox-filters"]')?.getAttribute("aria-label")).toBe("Filter inbox by tier");
+  const group = m.container.querySelector('[data-slot="toggle-group"]');
+  expect(group?.getAttribute("data-part")).toBe("inbox-filters");
+  expect(group?.getAttribute("aria-label")).toBe("Filter inbox by tier");
+  const names = Array.from(group?.querySelectorAll('[data-slot="toggle-group-item"]') ?? []).map((b) => b.getAttribute("data-tier-filter"));
+  expect(names).toEqual(["all", ...TIER_NAMES]);
   for (const n of names) expect(countOf(btn(m.container, n ?? ""))).toMatch(/^\d+$/);
-  expect(btn(m.container, "blocker")?.textContent).toBe("blocker 2");
+  expect(btn(m.container, "blocker")?.textContent).toBe("blocker2");
   expect(btn(m.container, "blocker")?.querySelector('[data-part="filter-count"]')?.className).toContain("font-mono");
+  for (const n of ["all", ...TIER_NAMES]) {
+    expect(on(m.container, n)).toBe(true);
+    expect(pressed(m.container, n)).toBe("true");
+  }
   m.unmount();
 });
 
@@ -213,28 +221,38 @@ it("a tier with no rows is not disabled and shows 0", () => {
   const b = btn(m.container, "notice");
   expect(b?.disabled).toBe(false);
   expect(countOf(b)).toBe("0");
-  for (const el of m.container.querySelectorAll('[data-part="inbox-filters"] button')) expect((el as HTMLButtonElement).disabled).toBe(false);
+  for (const el of m.container.querySelectorAll('[data-slot="toggle-group-item"]')) expect((el as HTMLButtonElement).disabled).toBe(false);
   m.unmount();
 });
 
 it("the all button shows the total and every tier shows its own count", () => {
   const m = render(mixed());
   expect(countOf(btn(m.container, "all"))).toBe("4");
-  expect(["blocker", "delivery", "decision", "support", "notice", "unread"].map((n) => countOf(btn(m.container, n)))).toEqual(["2", "1", "0", "0", "0", "1"]);
+  expect(TIER_NAMES.map((n) => countOf(btn(m.container, n)))).toEqual(["2", "1", "0", "0", "0", "1"]);
   m.unmount();
 });
 
-it("clicking a tier filters the rows to that tier and the header count follows", () => {
+it("clicking a tier isolates it and the rows follow", () => {
   const m = render(mixed());
   click(btn(m.container, "blocker"));
   expect(shown(m.container)).toEqual(["1", "2"]);
-  expect(headerCount(m.container)).toBe("2");
-  expect(btn(m.container, "blocker")?.getAttribute("aria-pressed")).toBe("true");
-  expect(btn(m.container, "delivery")?.getAttribute("aria-pressed")).toBe("false");
-  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("false");
+  expect(on(m.container, "blocker")).toBe(true);
+  expect(pressed(m.container, "blocker")).toBe("true");
+  expect(on(m.container, "delivery")).toBe(false);
+  expect(pressed(m.container, "delivery")).toBe("false");
+  expect(on(m.container, "all")).toBe(false);
+  m.unmount();
+});
+
+it("after isolating, further tier clicks add and remove tiers", () => {
+  const m = render(mixed());
+  click(btn(m.container, "blocker"));
   click(btn(m.container, "unread"));
   expect(shown(m.container)).toEqual(["1", "2", "4"]);
-  expect(headerCount(m.container)).toBe("3");
+  click(btn(m.container, "blocker"));
+  expect(shown(m.container)).toEqual(["4"]);
+  expect(on(m.container, "blocker")).toBe(false);
+  expect(on(m.container, "unread")).toBe(true);
   m.unmount();
 });
 
@@ -243,16 +261,16 @@ it("clicking the active tier again returns to all", () => {
   click(btn(m.container, "blocker"));
   click(btn(m.container, "blocker"));
   expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
-  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("true");
-  expect(btn(m.container, "delivery")?.getAttribute("aria-pressed")).toBe("true");
+  expect(on(m.container, "all")).toBe(true);
+  expect(on(m.container, "delivery")).toBe(true);
   m.unmount();
 });
 
 it("selecting every tier returns to all", () => {
   const m = render(mixed());
   click(btn(m.container, "blocker"));
-  for (const n of ["delivery", "decision", "support", "notice", "unread"]) click(btn(m.container, n));
-  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("true");
+  for (const n of TIER_NAMES.slice(1)) click(btn(m.container, n));
+  expect(on(m.container, "all")).toBe(true);
   expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
   click(btn(m.container, "blocker"));
   expect(shown(m.container)).toEqual(["1", "2"]);
@@ -264,24 +282,40 @@ it("selecting every tier returns to all", () => {
 it("a selected tier with no rows shows the filter-empty message", () => {
   const m = render(mixed());
   click(btn(m.container, "notice"));
-  expect(btn(m.container, "notice")?.getAttribute("aria-pressed")).toBe("true");
+  expect(on(m.container, "notice")).toBe(true);
   expect(items(m.container)).toHaveLength(0);
   expect(m.container.querySelector("[data-empty]")?.textContent).toBe("no items in this filter");
-  expect(headerCount(m.container)).toBe("0");
   m.unmount();
 });
 
-it("the title and the filters share one header row with the group right-aligned and compact", () => {
+it("the title and the filters share one header row with the group right-aligned", () => {
   const m = render(mixed());
   const header = m.container.querySelector('[data-part="inbox-header"]');
   const group = m.container.querySelector('[data-part="inbox-filters"]');
-  expect(header?.className).toContain("flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5");
+  for (const c of ["flex", "h-8", "items-center", "justify-between"]) expect(header?.className).toContain(c);
+  expect(header?.className).not.toContain("flex-wrap");
   expect(group?.parentElement).toBe(header);
   expect(group?.className).toContain("ml-auto");
-  expect(group?.className).toContain("w-fit");
   expect(group?.className).not.toContain("w-full");
-  const b = btn(m.container, "blocker");
-  expect(b?.className).not.toContain("flex-1");
-  for (const c of ["h-6", "px-1.5", "text-[11px]"]) expect(b?.className).toContain(c);
+  m.unmount();
+});
+
+it("the filter items use the outline variant with a tier text colour and no fill", () => {
+  const m = render(mixed());
+  for (const n of ["all", ...TIER_NAMES]) {
+    const b = btn(m.container, n);
+    expect(b?.getAttribute("data-variant")).toBe("outline");
+    expect(b?.className).toMatch(/(^|\s)text-(status-[a-z]+-bright|fg-strong)(\s|$)/);
+    expect(b?.className).not.toMatch(/(^|\s)bg-status-/);
+  }
+  expect(btn(m.container, "blocker")?.className).toContain("text-status-blocked-bright");
+  m.unmount();
+});
+
+it("the Inbox title shows no count", () => {
+  const m = render(mixed());
+  const header = m.container.querySelector('[data-part="inbox-header"]');
+  expect(header?.querySelector("h2")?.textContent).toBe("Inbox");
+  expect(Array.from(header?.children ?? []).map((e) => e.tagName)).toEqual(["H2", "DIV"]);
   m.unmount();
 });

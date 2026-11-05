@@ -1,9 +1,8 @@
 import { useState, type ReactElement } from "react";
 import type { CockpitAction, InboxModel, InboxRow, SnoozeDuration, Urgency } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
-import { Button } from "../components/button.tsx";
-import { ButtonGroup } from "../components/button-group.tsx";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../components/context-menu.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
 import { LINK_CUE, age, glyphOf, linkKinds, sessionKinds, urgencyText } from "./inbox/format.ts";
 
 const SNOOZES: readonly [string, SnoozeDuration][] = [
@@ -15,58 +14,44 @@ const SNOOZES: readonly [string, SnoozeDuration][] = [
 interface TierSpec {
   readonly urgency: Urgency;
   readonly label: string;
-  readonly filled: string;
-  readonly outlined: string;
+  readonly textColor: string;
 }
 
 const TIERS: readonly TierSpec[] = [
   {
     urgency: "red",
     label: "blocker",
-    filled:
-      "border-status-blocked bg-status-blocked text-background hover:bg-status-blocked-bright hover:text-background",
-    outlined:
-      "border-status-blocked/60 bg-transparent text-status-blocked-bright hover:bg-status-blocked/15 hover:text-status-blocked-bright",
+    textColor:
+      "text-status-blocked-bright hover:text-status-blocked-bright data-[state=on]:text-status-blocked-bright",
   },
   {
     urgency: "yellow",
     label: "delivery",
-    filled:
-      "border-status-landing bg-status-landing text-background hover:bg-status-landing-bright hover:text-background",
-    outlined:
-      "border-status-landing/60 bg-transparent text-status-landing-bright hover:bg-status-landing/15 hover:text-status-landing-bright",
+    textColor:
+      "text-status-landing-bright hover:text-status-landing-bright data-[state=on]:text-status-landing-bright",
   },
   {
     urgency: "magenta",
     label: "decision",
-    filled:
-      "border-status-decision bg-status-decision text-background hover:bg-status-decision-bright hover:text-background",
-    outlined:
-      "border-status-decision/60 bg-transparent text-status-decision-bright hover:bg-status-decision/15 hover:text-status-decision-bright",
+    textColor:
+      "text-status-decision-bright hover:text-status-decision-bright data-[state=on]:text-status-decision-bright",
   },
   {
     urgency: "blue",
     label: "support",
-    filled:
-      "border-status-focus bg-status-focus text-background hover:bg-status-focus-bright hover:text-background",
-    outlined:
-      "border-status-focus/60 bg-transparent text-status-focus-bright hover:bg-status-focus/15 hover:text-status-focus-bright",
+    textColor:
+      "text-status-focus-bright hover:text-status-focus-bright data-[state=on]:text-status-focus-bright",
   },
   {
     urgency: "cyan",
     label: "notice",
-    filled:
-      "border-status-active bg-status-active text-background hover:bg-status-active-bright hover:text-background",
-    outlined:
-      "border-status-active/60 bg-transparent text-status-active-bright hover:bg-status-active/15 hover:text-status-active-bright",
+    textColor:
+      "text-status-active-bright hover:text-status-active-bright data-[state=on]:text-status-active-bright",
   },
   {
     urgency: "white",
     label: "unread",
-    filled:
-      "border-fg-strong bg-fg-strong text-background hover:bg-fg-strong/90 hover:text-background",
-    outlined:
-      "border-fg-dim/60 bg-transparent text-fg-strong hover:bg-fg-strong/15 hover:text-fg-strong",
+    textColor: "text-fg-strong hover:text-fg-strong data-[state=on]:text-fg-strong",
   },
 ];
 
@@ -182,66 +167,65 @@ export function Inbox(props: {
   onSelectSession(sessionId: string): void;
 }): ReactElement {
   const { inbox, onAction, onSelectSession } = props;
-  const [selected, setSelected] = useState<"all" | ReadonlySet<Urgency>>("all");
+  const [selectedTiers, setSelectedTiers] = useState<"all" | ReadonlySet<Urgency>>("all");
   const shell = "flex h-full min-h-0 w-full flex-col overflow-hidden";
   const heading = "text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground";
   const rows = inbox?.rows ?? [];
-  const count = (u: Urgency): number => rows.filter((r) => r.urgency === u).length;
-  const isAll = selected === "all";
-  const toggle = (u: Urgency): void => {
-    const next = new Set(selected === "all" ? [] : selected);
-    if (selected === "all" || !next.has(u)) next.add(u);
-    else next.delete(u);
-    setSelected(next.size === 0 || next.size === TIERS.length ? "all" : next);
+  const counts = new Map<Urgency, number>();
+  for (const t of TIERS) counts.set(t.urgency, 0);
+  for (const r of rows) counts.set(r.urgency, (counts.get(r.urgency) ?? 0) + 1);
+  const activeValues: string[] = selectedTiers === "all" ? ["all", ...TIERS.map((t) => t.urgency)] : Array.from(selectedTiers);
+  const toggleTier = (u: Urgency): void => {
+    if (selectedTiers === "all") {
+      setSelectedTiers(new Set<Urgency>([u]));
+      return;
+    }
+    const next = new Set(selectedTiers);
+    if (next.has(u)) next.delete(u);
+    else next.add(u);
+    setSelectedTiers(next.size === 0 || next.size === TIERS.length ? "all" : next);
   };
-  const shown = selected === "all" ? rows : rows.filter((r) => selected.has(r.urgency));
-  const chip = "h-6 px-1.5 text-[11px] font-medium shadow-none";
-  const Count = (p: { n: number }): ReactElement => (
-    <span data-part="filter-count" className="font-mono">
-      {p.n}
-    </span>
-  );
+  const shown = selectedTiers === "all" ? rows : rows.filter((r) => selectedTiers.has(r.urgency));
   return (
     <aside aria-label="Inbox" className={shell}>
-      <div data-part="inbox-header" className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 shrink-0">
-        <h2 className={heading}>Inbox</h2>
-        {inbox === null ? null : <span className="font-mono text-meta text-fg-strong">{shown.length}</span>}
-        <ButtonGroup aria-label="Filter inbox by tier" data-part="inbox-filters" className="ml-auto w-fit">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
+      <div data-part="inbox-header" className="flex h-8 shrink-0 items-center justify-between gap-1.5 px-2.5">
+        <h2 className={cn(heading, "shrink-0")}>Inbox</h2>
+        <ToggleGroup
+          type="multiple"
+          variant="outline"
+          size="sm"
+          value={activeValues}
+          aria-label="Filter inbox by tier"
+          data-part="inbox-filters"
+          className="ml-auto shrink-0"
+        >
+          <ToggleGroupItem
+            value="all"
             data-tier-filter="all"
-            aria-pressed={isAll}
-            onClick={() => setSelected("all")}
-            className={cn(
-              chip,
-              isAll
-                ? "border-fg-strong bg-fg-strong text-background hover:bg-fg-strong/90 hover:text-background"
-                : "border-fg-dim/60 bg-transparent text-fg-strong hover:bg-fg-strong/15 hover:text-fg-strong",
-            )}
+            onClick={() => setSelectedTiers("all")}
+            className="h-6 gap-1 px-1.5 text-xs text-fg-strong hover:text-fg-strong data-[state=on]:text-fg-strong"
           >
-            <span>all</span> <Count n={rows.length} />
-          </Button>
-          {TIERS.map((t) => {
-            const active = isAll || selected.has(t.urgency);
-            return (
-              <Button
-                key={t.urgency}
-                type="button"
-                variant="outline"
-                size="sm"
-                data-tier-filter={t.label}
-                data-urgency={t.urgency}
-                aria-pressed={active}
-                onClick={() => toggle(t.urgency)}
-                className={cn(chip, active ? t.filled : t.outlined)}
-              >
-                <span>{t.label}</span> <Count n={count(t.urgency)} />
-              </Button>
-            );
-          })}
-        </ButtonGroup>
+            <span>all</span>
+            <span data-part="filter-count" className="font-mono text-[10px] opacity-80">
+              {rows.length}
+            </span>
+          </ToggleGroupItem>
+          {TIERS.map((t) => (
+            <ToggleGroupItem
+              key={t.urgency}
+              value={t.urgency}
+              data-tier-filter={t.label}
+              data-urgency={t.urgency}
+              onClick={() => toggleTier(t.urgency)}
+              className={cn("h-6 gap-1 px-1.5 text-xs", t.textColor)}
+            >
+              <span>{t.label}</span>
+              <span data-part="filter-count" className="font-mono text-[10px] opacity-80">
+                {counts.get(t.urgency) ?? 0}
+              </span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </div>
       {inbox === null ? (
         <p className="px-[14px] text-fg-dim">Loading inbox…</p>
