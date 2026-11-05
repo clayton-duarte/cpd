@@ -141,3 +141,19 @@ it("without capabilities the textarea, attach button and send button are disable
   expect(submits).toEqual([]);
   m.unmount();
 });
+
+it("archived Composer is disabled with the archived placeholder", () => {
+  const m = mount(
+    <Composer capabilities={base} archived busy={false} queued={[]} reader={reader}
+      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
+  );
+  const t = textarea(m.container);
+  expect(t.disabled).toBe(true);
+  expect(t.placeholder).toMatch(/archived/i);
+  expect(t.placeholder).not.toContain("Enter to send");
+  const attach = m.container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
+  expect(attach.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
+  m.unmount();
+});

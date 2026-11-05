@@ -51,6 +51,7 @@ export const Composer = forwardRef<
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     settings?: ReactNode;
+    archived?: boolean;
   }
 >(function Composer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
