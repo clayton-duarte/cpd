@@ -152,15 +152,18 @@ export function parsePlanShow(reply: Reply): RawPlanShow {
 // ---- builders ------------------------------------------------------------
 
 const RANK: readonly string[] = ["red", "yellow", "magenta", "cyan", "white"];
+const SESSION_KINDS = ["dialog", "unread", "loop-guard"];
 const LEAD_KINDS = ["plan-review", "job-stuck", "drafts-parked"];
 
 function visible(i: RawInboxItem): boolean {
   return i.snoozed_until === null && i.dismissed_at === null && i.claimed_at === null;
 }
+// Mirrors tui/src/read/dot.rs::urgency (pro-d130, pro-d423).
 function linked(s: RawSession, i: RawInboxItem): boolean {
   if (i.urgency === "blue") return false;
-  if (i.session === s.id) return true;
+  if (SESSION_KINDS.includes(i.kind)) return i.session === s.id;
   if (!s.plan_lead || i.plan === null || i.plan !== s.plan) return false;
+  if (i.kind === "pr-ready") return i.urgency === "yellow" || i.urgency === "red";
   return LEAD_KINDS.includes(i.kind);
 }
 function sessionNode(s: RawSession, inbox: RawInboxItem[]): SessionNode {
