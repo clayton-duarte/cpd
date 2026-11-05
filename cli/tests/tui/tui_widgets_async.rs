@@ -382,8 +382,11 @@ fn drive(fx: &Fx, key: GateKey, run_command: cpd_tui::RunCommand, row: &str, act
         "the menu is closed before the command ends:\n{}",
         screen.join("\n")
     );
+    // a picked Post or Merge hides its own row while its command runs (tui_widgets_posting)
+    let hides = matches!(act, Act::Pick("Post" | "Merge"));
     assert!(
-        screen.iter().any(|r| r.contains(row)) && screen.iter().any(|r| r.contains(OTHER)),
+        (hides || screen.iter().any(|r| r.contains(row)))
+            && screen.iter().any(|r| r.contains(OTHER)),
         "the Inbox rows are still there:\n{}",
         screen.join("\n")
     );
