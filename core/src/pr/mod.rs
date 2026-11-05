@@ -33,6 +33,8 @@ mod poll_tests;
 mod poll_threads_tests;
 #[cfg(test)]
 mod push_reset_tests;
+#[cfg(test)]
+mod query_tests;
 
 pub mod auto_merge;
 pub mod closed;
