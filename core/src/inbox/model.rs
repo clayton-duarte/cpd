@@ -158,6 +158,10 @@ pub struct Condition {
     pub event: Option<i64>,
     /// When the item opens at, when not now: a `deploy` item's age counts from when its run began waiting.
     pub opened_at: Option<String>,
+    /// `review-requested`: the pull request's head commit when the item opens.
+    pub head_oid: Option<String>,
+    /// `review-requested` follow-up: the commit of the User's CHANGES_REQUESTED review.
+    pub reviewed_oid: Option<String>,
 }
 
 impl Condition {
@@ -210,6 +214,8 @@ impl From<&Item> for Condition {
             record: item.record.clone(),
             event: item.event,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         }
     }
 }
@@ -526,8 +532,8 @@ pub fn reconcile(
         }
         for c in new {
             tx.execute(
-                "INSERT INTO inbox_items (kind, urgency, subject, label, url, context, plan, job, session, record, event, opened_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO inbox_items (kind, urgency, subject, label, url, context, plan, job, session, record, event, opened_at, head_oid, reviewed_oid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     c.kind.as_str(),
                     c.urgency.as_str(),
@@ -541,6 +547,8 @@ pub fn reconcile(
                     c.record.as_ref().map(RecordId::to_string),
                     c.event,
                     c.opened_at.as_deref().unwrap_or(now),
+                    c.head_oid,
+                    c.reviewed_oid,
                 ],
             )?;
             let id = tx.last_insert_rowid();
@@ -621,6 +629,8 @@ mod tests {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         }
     }
 

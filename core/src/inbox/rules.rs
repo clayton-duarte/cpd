@@ -183,6 +183,8 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 record: None,
                 event: None,
                 opened_at: Some(r.created_at),
+                head_oid: None,
+                reviewed_oid: None,
             })
             .collect()),
         Err(message) => {
@@ -205,6 +207,8 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             });
             let _ = message;
             Ok(out)
@@ -253,6 +257,8 @@ fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -371,6 +377,8 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
         record: None,
         event: seat.event,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     }
 }
 
@@ -471,6 +479,8 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             });
         }
     }
@@ -514,6 +524,8 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -679,7 +691,13 @@ fn review_requested(
     let settled = settled_review_subjects(store)?;
     Ok(posts
         .into_iter()
-        .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
+        .filter(|post| {
+            let subject = format!("pr:{}#{}", post.repo, post.number);
+            match read(post).and_then(|w| team::followup_oids(w, &lookup.me)) {
+                Some((head, _)) => !settled.heads.contains(&(subject, head.to_owned())),
+                None => !settled.subjects.contains(&subject),
+            }
+        })
         .filter_map(|post| {
             let workflow = read(post)?;
             matches!(
@@ -693,6 +711,7 @@ fn review_requested(
                 .repo
                 .split_once('/')
                 .map_or(post.repo.as_str(), |(_, name)| name);
+            let followup = team::followup_oids(workflow, &lookup.me);
             Condition {
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
@@ -709,6 +728,8 @@ fn review_requested(
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: workflow.head_oid.clone(),
+                reviewed_oid: followup.map(|(_, reviewed)| reviewed.to_owned()),
             }
         })
         .collect())
@@ -716,16 +737,32 @@ fn review_requested(
 
 /// The subjects of the `review-requested` items, open or closed, that a dismissal or a claim settled for good (C1): closed items
 /// are kept, so the history is the memory.
-fn settled_review_subjects(
-    store: &mut Store,
-) -> Result<std::collections::HashSet<String>, CpdError> {
+fn settled_review_subjects(store: &mut Store) -> Result<Settled, CpdError> {
     store.read(|c| {
         let mut stmt = c.prepare(
-            "SELECT DISTINCT subject FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
+            "SELECT subject, head_oid FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
         )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<Result<_, _>>().map_err(CpdError::from)
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut settled = Settled::default();
+        for row in rows {
+            let (subject, head) = row?;
+            if let Some(head) = head {
+                settled.heads.insert((subject.clone(), head));
+            }
+            settled.subjects.insert(subject);
+        }
+        Ok(settled)
     })
+}
+
+/// What settled `review-requested` subjects: an initial item is suppressed by any of `subjects`, a follow-up item
+/// only by a settled item of its subject at the current head (`heads`).
+#[derive(Default)]
+struct Settled {
+    subjects: std::collections::HashSet<String>,
+    heads: std::collections::HashSet<(String, String)>,
 }
 
 /// The open `review-requested` items as conditions (nothing changes), so a transient failure does not close them.
@@ -791,6 +828,8 @@ fn models_changed(
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
