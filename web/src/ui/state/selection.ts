@@ -17,15 +17,22 @@ export function loadSelection(storage: SelectionStorage): PersistedSelection | n
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
   const { planId, sessionKey } = parsed as Record<string, unknown>;
-  if (typeof planId !== 'string' || typeof sessionKey !== 'string') return null;
+  if ((typeof planId !== 'string' && planId !== null) || typeof sessionKey !== 'string') return null;
   return { planId, sessionKey };
 }
 
 /** The Plan id of the selected session when that session is a Lead of a Plan; null for a Manager or no selection. */
-export function activeLeadPlanId(_tree: ContextTreeModel | null, _activeSessionId: string | null): string | null {
-  throw new Error('not implemented');
+export function activeLeadPlanId(tree: ContextTreeModel | null, activeSessionId: string | null): string | null {
+  if (tree === null || activeSessionId === null) return null;
+  for (const c of tree.contexts) {
+    for (const p of c.plans) {
+      if (p.sessions.some((s) => s.ref.id === activeSessionId)) return p.id;
+    }
+  }
+  return null;
 }
 /** The Plan to render: the loaded plan only when it is the active Lead's Plan; null otherwise. */
-export function visiblePlan(_activeLeadPlanId: string | null, _plan: PlanViewModel | null): PlanViewModel | null {
-  throw new Error('not implemented');
+export function visiblePlan(activeLeadPlanId: string | null, plan: PlanViewModel | null): PlanViewModel | null {
+  if (activeLeadPlanId === null || plan === null) return null;
+  return plan.planId === activeLeadPlanId ? plan : null;
 }
