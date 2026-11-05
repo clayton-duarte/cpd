@@ -62,7 +62,7 @@ export interface AppState {
   readonly session: SessionView | null;
   readonly lastError: WireError | null;
   /** Optimistic inbox edits by actionId: the inbox before and after, for rollback. */
-  readonly optimistic: Readonly<Record<string, { readonly before: InboxModel; readonly after: InboxModel }>>;
+  readonly optimistic: Readonly<Record<string, { readonly before: InboxModel; readonly after: InboxModel; readonly subject: string }>>;
   readonly pendingActionIds: readonly string[];
   readonly completedActionIds: readonly string[];
 }
@@ -194,18 +194,42 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
   }
 }
 
+/** Hides every in-flight optimistic subject from `incoming`; each entry then rebases on it. */
+export function syncOptimisticInbox(incoming: InboxModel, optimistic: AppState["optimistic"]): InboxModel {
+  const subjects = new Set(Object.values(optimistic).map((o) => o.subject));
+  const rows = incoming.rows.filter((r) => !(r.kind === "pr-ready" && r.subject !== undefined && subjects.has(r.subject)));
+  return rows.length === incoming.rows.length ? incoming : { ...incoming, rows };
+}
+
+function rebase(incoming: InboxModel, optimistic: AppState["optimistic"]): { inbox: InboxModel; optimistic: AppState["optimistic"] } {
+  if (Object.keys(optimistic).length === 0) return { inbox: incoming, optimistic };
+  const inbox = syncOptimisticInbox(incoming, optimistic);
+  const next: Record<string, AppState["optimistic"][string]> = {};
+  for (const [id, o] of Object.entries(optimistic)) next[id] = { ...o, before: incoming, after: inbox };
+  return { inbox, optimistic: next };
+}
+
 function reduceServer(state: AppState, message: ServerMessage): AppState {
   switch (message.type) {
-    case "cockpit.snapshot":
-      return { ...state, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: message.inbox, status: message.status ?? state.cockpit.status, costs: message.costs ?? state.cockpit.costs, error: null } };
+    case "cockpit.snapshot": {
+      const r = message.inbox === null ? { inbox: null, optimistic: state.optimistic } : rebase(message.inbox, state.optimistic);
+      return { ...state, optimistic: r.optimistic, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: r.inbox, status: message.status ?? state.cockpit.status, costs: message.costs ?? state.cockpit.costs, error: null } };
+    }
     case "logs.result":
       return { ...state, cockpit: { ...state.cockpit, logs: message.rows } };
     case "settings.result":
       return { ...state, cockpit: { ...state.cockpit, settings: message.settings } };
     case "settings.saved":
       return { ...state, cockpit: { ...state.cockpit, saved: message.ok ? { ok: true } : { ok: false, error: message.error } } };
-    case "cockpit.patch":
+    case "cockpit.patch": {
+      if (message.pane === "inbox") {
+        const cur = state.cockpit.inbox;
+        if (cur !== null && message.data.cursor < cur.cursor) return state;
+        const r = rebase(message.data, state.optimistic);
+        return { ...state, optimistic: r.optimistic, cockpit: { ...state.cockpit, inbox: r.inbox } };
+      }
       return { ...state, cockpit: { ...state.cockpit, [message.pane]: message.data } };
+    }
     case "cockpit.error":
       return { ...state, cockpit: { ...state.cockpit, error: message.error } };
     case "action.result": {
@@ -221,8 +245,8 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
             : [...settled.completedActionIds, message.actionId],
         };
       }
-      const rolledBack = record !== undefined && state.cockpit.inbox === record.after
-        ? { ...settled, cockpit: { ...settled.cockpit, inbox: record.before } }
+      const rolledBack = record !== undefined
+        ? { ...settled, cockpit: { ...settled.cockpit, inbox: syncOptimisticInbox(record.before, optimistic) } }
         : settled;
       return { ...rolledBack, lastError: message.error };
     }
@@ -300,7 +324,7 @@ function reduceCore(state: AppState, action: StoreAction): AppState {
       return {
         ...state,
         cockpit: { ...state.cockpit, inbox: after },
-        optimistic: { ...state.optimistic, [action.actionId]: { before: inbox, after } },
+        optimistic: { ...state.optimistic, [action.actionId]: { before: inbox, after, subject } },
       };
     }
     case "dismissPending":
