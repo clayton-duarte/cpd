@@ -37,7 +37,7 @@ export interface SessionView {
   readonly dialog: Dialog | null;
   readonly models: readonly ModelChoice[] | null;
   readonly error: WireError | null;
-  readonly completion: Completion | null;
+  readonly completion?: Completion | null; // optional until fixtures outside the test Job set it
   /** The session, its Plan or its Context is archived (derived from the tree). */
   readonly archived?: boolean;
 }
