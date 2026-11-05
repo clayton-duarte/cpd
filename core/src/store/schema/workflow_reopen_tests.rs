@@ -41,7 +41,8 @@ fn dump(store: &mut Store) -> String {
                 let rows = stmt
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
+                // `pr-archived` (a later migration) adds `pull_requests.archived`: not what this migration touches.
+                Ok(rows.into_iter().filter(|n| n != "archived").collect())
             })
             .unwrap();
         let pairs: Vec<String> = names.iter().map(|n| format!("'{n}', {n}")).collect();

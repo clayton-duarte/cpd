@@ -43,6 +43,8 @@ pub struct PullRequest {
     pub base_ref: Option<String>,
     /// The repo's default branch at the last poll; `None` = unknown.
     pub default_branch: Option<String>,
+    /// GitHub's `isArchived` of the repository at the last direct read; a search lists no archived PR, so it writes false.
+    pub archived: bool,
 }
 
 /// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
@@ -56,7 +58,7 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
 }
 
 pub(crate) const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
-                       mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch";
+                       mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch, archived";
 
 /// The items a `feedback` column holds: parsed once, here.
 fn feedback_of(text: Option<String>) -> rusqlite::Result<Option<Vec<Item>>> {
@@ -96,6 +98,7 @@ impl PullRequest {
             feedback: feedback_of(r.get(17)?)?,
             base_ref: r.get(18)?,
             default_branch: r.get(19)?,
+            archived: r.get(20)?,
         })
     }
 
@@ -136,7 +139,9 @@ impl PullRequest {
         let same_but_created_at = PolledPr {
             created_at: self.created_at.clone(),
             updated_at: self.polled()?.updated_at,
-            open_threads: listed.pr.open_threads.clone(),
+            // Not stored (`polled` yields none): a thread that closes without an `updatedAt` move is caught by `due_reads`
+            // and by the read's feedback (`read_held`), not by the listing.
+            open_threads: vec![],
             ..listed.pr.clone()
         };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
@@ -189,6 +194,7 @@ impl PullRequest {
             base_ref: self.base_ref.clone(),
             default_branch: self.default_branch.clone(),
             open_threads: vec![],
+            archived: self.archived,
         })
     }
 }
@@ -253,6 +259,7 @@ pub(super) fn owned_open(
                 feedback: feedback_of(r.get(19)?)?,
                 base_ref: r.get(20)?,
                 default_branch: r.get(21)?,
+                archived: r.get(22)?,
             };
             Ok((plan, key, pull))
         })?
@@ -325,7 +332,7 @@ pub(super) fn upsert(
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
                 merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
-                review_requested = ?12, updated_at = ?13, feedback = ?14, base_ref = ?15, default_branch = ?16 WHERE id = ?17",
+                review_requested = ?12, updated_at = ?13, feedback = ?14, base_ref = ?15, default_branch = ?16, archived = ?17 WHERE id = ?18",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -343,6 +350,7 @@ pub(super) fn upsert(
             feedback,
             polled.base_ref,
             polled.default_branch,
+            polled.archived,
             before.id
         ],
     )?;
@@ -395,8 +403,8 @@ fn insert(
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch, archived)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -416,7 +424,8 @@ fn insert(
             read.map(|r| r.updated_at.as_str()),
             read.map(|r| feedback_text(&r.items)),
             polled.base_ref,
-            polled.default_branch
+            polled.default_branch,
+            polled.archived
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -564,6 +573,7 @@ mod tests {
             feedback: None,
             base_ref: None,
             default_branch: None,
+            archived: false,
         }
     }
 
@@ -913,6 +923,7 @@ mod tests {
             base_ref: None,
             default_branch: None,
             open_threads: vec![],
+            archived: false,
         }
     }
 

@@ -153,9 +153,11 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         .filter(|row| {
             let found = listed_in(row).map(|l| l.membership).unwrap_or_default();
             let is_owned = owned.iter().any(|(_, _, o)| o.id == row.id);
-            (is_owned && listed_in(row).is_none())
-                || (row.authored && !found.authored)
-                || (row.review_requested && !found.review_requested)
+            // An archived PR was read once and is parked until a search lists it again (A4, pro-d392).
+            !row.archived
+                && ((is_owned && listed_in(row).is_none())
+                    || (row.authored && !found.authored)
+                    || (row.review_requested && !found.review_requested))
         })
         .collect();
     let keys: Vec<(String, i64)> = candidates
@@ -217,6 +219,13 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
+            continue;
+        }
+        let is_owned = owned
+            .iter()
+            .any(|(_, _, row)| row.repo == *repo && row.number == number);
+        // A PR the User neither owns nor authored is read for nothing here (A7, pro-d392).
+        if !is_owned && !listed.membership.authored {
             continue;
         }
         let mine = owned
@@ -1148,6 +1157,7 @@ mod due_reads_tests {
             feedback,
             base_ref: None,
             default_branch: None,
+            archived: false,
         };
         (
             PlanId::parse("plan").unwrap(),
@@ -1175,6 +1185,7 @@ mod due_reads_tests {
                 base_ref: None,
                 default_branch: None,
                 open_threads: vec![],
+                archived: false,
             },
             membership: Default::default(),
         }

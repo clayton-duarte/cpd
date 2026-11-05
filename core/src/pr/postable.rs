@@ -101,6 +101,7 @@ mod tests {
             feedback: Some(vec![]),
             base_ref: None,
             default_branch: None,
+            archived: false,
         }
     }
 
