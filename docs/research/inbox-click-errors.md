@@ -41,7 +41,7 @@ The refusal, verbatim (`core/src/pr/merge.rs:84-96`):
 
 Code `merge_not_clean`, class `Refused`, exit 3 (`core/src/error.rs:251`, `:549`). Rendered, as the tests pin it: `merge o/r#7: merge_not_clean: o/r#7 is OPEN and BLOCKED: only an OPEN pull request that is CLEAN is merged.` (`cli/tests/tui/tui_merge.rs:290`). Docs: `docs/commands.md:3039` (table row), `:160` (code row), `:4408` (the failure rule).
 
-The refusal is read **before** any write: `merge()` writes only when GitHub reads `MERGED` (`core/src/pr/merge.rs:81-83`, `store_merge` `:179-200`) or after a successful merge (`:112-116`). A refusal writes nothing.
+The refusal is read **before** any write: `merge()` writes only when GitHub reads `MERGED` (`core/src/pr/merge.rs:81-83`, `store_merge` `:174-200`) or after a successful merge (`:112-116`). A refusal writes nothing.
 
 ## (2) Where the error goes, and whether the TUI parses it
 
@@ -86,17 +86,17 @@ So: **precedence row 5; stale input `pull_requests.merge_state = 'clean'` (and `
 
 - `cpd pr poll`: arguments are only `--plan <id>` (`PollArgs`, `core/src/pr/mod.rs:140-144`; `PlanArg` `core/src/args.rs:23-27`). It polls **all** the User's open PRs, whatever `--plan` says (docs `docs/commands.md:2419`: "one poll of all of the User's open pull requests"). **There is no single-PR refresh.**
 - Cost: takes `locks/pr-poll.lock`, waits up to 60 s (`core/src/pr/poll.rs:41`, `take_lock_with` `:356`); one `search_open`, then `due_reads` comment reads (GraphQL, `:204`, `:1086-1103`) and check reads; it can hit `gh_rate_limited` (pro-d384, pro-d385). The merge action runs it once after a *successful* merge only (`tui/src/merge/mod.rs:164`).
-- Live reads that already exist: `pr merge` (`gh::view_for_merge` `core/src/pr/gh.rs:569-586`, `checks_for_merge` `:589-611`, `merge_methods`, `delete_branch_on_merge`); `inbox claim` (`team::github_lookup_with`, `core/src/inbox/cmd.rs:560`, pro-n345); `cpd pr view` (`core/src/pr/view.rs`, not read in depth).
+- Live reads that already exist: `pr merge` (`gh::view_for_merge` `core/src/pr/gh.rs:569-586`, `checks_for_merge` `:589-611`, `merge_methods`, `delete_branch_on_merge`); `inbox claim` (`team::github_lookup_with`, `core/src/inbox/cmd.rs:557`, pro-n345); `cpd pr view` (`core/src/pr/view.rs`, not read in depth).
 
 ## (5) Existing ways an action failure changes a row, and refusal codes
 
 `inbox_items` columns (as used in `core/src/inbox/model.rs:529`, `cmd.rs`): `id, kind, urgency, subject, label, url, context, plan, job, session, record, event, opened_at, closed_at, snoozed_until, dismissed_at, claimed_at`. **No error or message column.**
 
 Mechanisms that exist:
-- **`inbox claim` closes the item when GitHub says it is stale**, then refuses `not_claimable`: `core/src/inbox/cmd.rs:550-600` (`model::close_item(tx, &current, ..)` at `:556-562`; error built `:586-596`). This is the one precedent of a refusal that changes the row, and it works because `claim` reads live state.
+- **`inbox claim` closes the item when GitHub says it is stale**, then refuses `not_claimable`: `core/src/inbox/cmd.rs:570-596` (`model::close_item(tx, &current, ..)` at `:572-578`; error built `:586-596`). This is the one precedent of a refusal that changes the row, and it works because `claim` reads live state.
 - `inbox approve` closes the item on success (`cmd.rs:481-488`), not on failure.
 - Snooze and dismiss set `snoozed_until` / `dismissed_at` and append an Event (`cmd.rs:373-440`).
-- `pr merge` closes the `pr-ready` item and stores `merged` only when GitHub reads `MERGED` (`core/src/pr/merge.rs:179-200`, `close_pr_ready`).
+- `pr merge` closes the `pr-ready` item and stores `merged` only when GitHub reads `MERGED` (`core/src/pr/merge.rs:174-200`, `close_pr_ready`).
 - E8 reconciles from stored `pull_requests`, jobs and sessions only; no Event of a click failure feeds it. No error marker, no failure-driven snooze.
 
 Refusal codes:
@@ -136,7 +136,7 @@ Name grammar of `scripts/tests.sh` (`scripts/tests.sh:1-13` → `cpd test`, `cor
 
 `pr merge` already holds the live `mergeStateStatus` at refusal. Store it, so E8 re-derives the row on its next tick (at most one `tick_seconds`, default 5 s). No schema change, no new status, no TUI change.
 
-- `core/src/pr/merge.rs`, `merge()`: before returning `MergeNotClean` for an `OPEN` PR, call a new `store_refused_state(&repo, number, &view.merge_state)`, modelled on `store_merge` (`:179-186`): `Store::open(...)` and `store.write("pr merge", ..)`. It runs `UPDATE pull_requests SET merge_state = ?1, changed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE repo = ?2 AND number = ?3 AND state = 'open' AND merge_state <> ?1`, with `?1` = `MergeState::of_graphql(&view.merge_state)?.as_str()` (`core/src/pr/status.rs:362`; today `pub(super)`, reachable from `pr::merge`, which is in the same module tree). An unknown GitHub word is `gh_failed`, as in the poll. `MERGED` keeps `store_merge` (`:81-83`); other states (`CLOSED`) are left to the poll.
+- `core/src/pr/merge.rs`, `merge()`: before returning `MergeNotClean` for an `OPEN` PR, call a new `store_refused_state(&repo, number, &view.merge_state)`, modelled on `store_merge` (`:174-180`): `Store::open(...)` and `store.write("pr merge", ..)`. It runs `UPDATE pull_requests SET merge_state = ?1, changed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE repo = ?2 AND number = ?3 AND state = 'open' AND merge_state <> ?1`, with `?1` = `MergeState::of_graphql(&view.merge_state)?.as_str()` (`core/src/pr/status.rs:362`; today `pub(super)`, reachable from `pr::merge`, which is in the same module tree). An unknown GitHub word is `gh_failed`, as in the poll. `MERGED` keeps `store_merge` (`:81-83`); other states (`CLOSED`) are left to the poll.
 - `pr merge` must still return the same error (the dialog and `details` are unchanged); a failed store is added to the error as a detail, never swallowed.
 - Effect on the report: a PR now stored `blocked` / `behind` / `unknown` is not `clean`, so `classify` leaves row 5, E8 relabels in place or closes and reopens by colour (`core/src/inbox/model.rs:498-545`), and the row stops reading `ready to merge`.
 - Poll interplay: the next E5 poll overwrites `merge_state` from GraphQL. If GraphQL still says `CLEAN` while `gh pr view` says otherwise, the row flips back (*inferred*; the two reads use different fields). That is the argument for B.
@@ -148,7 +148,7 @@ New tests (each fails first on `origin/main`):
 3. `core/src/inbox/pr_tests.rs`: `a_stored_blocked_merge_state_is_not_a_ready_to_merge_row` (pins the contract the fix relies on, `merge_state` `blocked`/`behind` → not yellow `ready to merge`).
 4. `cli/tests/tui/tui_merge.rs`: extend `a_refused_merge_opens_the_failure_dialog_on_the_client_logs_it_and_runs_no_poll` with "and stores the state" or add `a_refused_merge_leaves_the_stored_state_of_the_read` (the dialog and the log are unchanged).
 
-Other clicks, same rule: a `Post` refusal (`pr_not_ready`, `post_disabled`, `already_posted`, …) is decided from the **stored** row and policy, so the row already shows the cause; the real gap is `store_failed` after a send. `claim` already closes on a stale PR (`cmd.rs:550-600`). `approve`: a `gh` failure leaves the row (correct, the deploy is still pending). Dismiss/snooze: a refusal means the item is closed or missing, and E8 has already closed it. So the generic rule needs only the Merge change, plus the user's choice below on a visible message.
+Other clicks, same rule: a `Post` refusal (`pr_not_ready`, `post_disabled`, `already_posted`, …) is decided from the **stored** row and policy, so the row already shows the cause; the real gap is `store_failed` after a send. `claim` already closes on a stale PR (`cmd.rs:570-596`). `approve`: a `gh` failure leaves the row (correct, the deploy is still pending). Dismiss/snooze: a refusal means the item is closed or missing, and E8 has already closed it. So the generic rule needs only the Merge change, plus the user's choice below on a visible message.
 
 ### B. Root cause: `updating` or `unknown` must never read `ready to merge`
 
