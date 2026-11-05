@@ -3943,6 +3943,187 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     );
 }
 
+/// The seconds E5 waits after GitHub's reset before it polls again (decision pro-d392).
+const RATE_GRACE: Duration = Duration::from_secs(3);
+
+/// What `gh api graphql` prints when the primary rate limit is spent: HTTP 200 with `errors` and no `data`, exit 1.
+fn gh_rate_limited() -> Reply {
+    Reply::exit(
+        1,
+        r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}"#,
+        "gh: API rate limit exceeded for user ID 1.\n",
+    )
+}
+
+/// `gh` answers the first search with 4987 requests left until a reset a minute later, the second with `then`, every later one with
+/// `last`. The time of each call, on the `ManualClock`, is noted, and so is the reset.
+fn gh_limited_after_a_poll(
+    fx: &Ip,
+    then: Reply,
+    last: Reply,
+) -> (Arc<Mutex<Vec<Duration>>>, Arc<Mutex<Option<Duration>>>) {
+    let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
+    let reset = Arc::new(Mutex::new(None::<Duration>));
+    let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
+    fx.route_fn("gh", move |_| {
+        let mut noted = noted.lock().unwrap();
+        noted.push(clock.elapsed());
+        match noted.len() {
+            1 => {
+                let reset_at = (clock.utc() + time::Duration::seconds(60))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap();
+                *stamped.lock().unwrap() = Some(clock.elapsed() + Duration::from_secs(60));
+                Reply::ok(&search_reply(4987, &reset_at))
+            }
+            2 => then.clone(),
+            _ => last.clone(),
+        }
+    });
+    (starts, reset)
+}
+
+#[test]
+fn rate_limited_reply_pauses_until_reset() {
+    let fx = polling("");
+    fx.manager("mgr1");
+    let (starts, reset) = gh_limited_after_a_poll(
+        &fx,
+        gh_rate_limited(),
+        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")),
+    );
+
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 3)
+        .unwrap();
+
+    // The second poll met the limit with one call (no retry in the poll); the third started at the stored reset plus the grace.
+    let starts = starts.lock().unwrap();
+    let reset = reset.lock().unwrap().expect("the first poll stored a reset");
+    assert_eq!(starts.len(), 3, "{starts:?}");
+    assert!(
+        starts[2] >= reset + RATE_GRACE,
+        "polled at {:?}, before the reset {reset:?} plus the grace: {starts:?}",
+        starts[2]
+    );
+    let failed: Vec<_> = fx
+        .events("error")
+        .into_iter()
+        .filter(|e| e.3["code"] == "gh_failed")
+        .collect();
+    assert_eq!(failed, vec![], "a rate-limit reply is a pause, not gh_failed");
+    assert_eq!(messages(&fx), Vec::<String>::new());
+}
+
+#[test]
+fn rate_limited_reply_by_message_pauses_until_reset_too() {
+    let fx = polling("");
+    let secondary = Reply::exit(
+        1,
+        "",
+        "gh: You have exceeded a secondary rate limit. API rate limit already exceeded for user ID 1.\n",
+    );
+    let (starts, reset) = gh_limited_after_a_poll(
+        &fx,
+        secondary,
+        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")),
+    );
+
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 3)
+        .unwrap();
+
+    let starts = starts.lock().unwrap();
+    let reset = reset.lock().unwrap().expect("the first poll stored a reset");
+    assert!(starts[2] >= reset + RATE_GRACE, "{starts:?} reset {reset:?}");
+    assert!(
+        fx.events("error").iter().all(|e| e.3["code"] != "gh_failed"),
+        "{:?}",
+        fx.events("error")
+    );
+}
+
+#[test]
+fn other_gh_failures_still_raise_gh_failed() {
+    let fx = polling("");
+    // A rate-limit reply first (a pause, nothing raised), then a 401 once the pause is over: that one is a gh_failed.
+    let (starts, _) = gh_limited_after_a_poll(
+        &fx,
+        gh_rate_limited(),
+        Reply::exit(1, "", "gh: HTTP 401: Bad credentials\n"),
+    );
+
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 3)
+        .unwrap();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let data = &errors[0].3;
+    assert_eq!(
+        (&data["source"], &data["code"], &data["details"]["transient"]),
+        (&json!("watch"), &json!("gh_failed"), &json!(false))
+    );
+    assert!(
+        data["details"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 401"),
+        "{data}"
+    );
+}
+
+/// `run/pr-poll-now`: a cpd command that changed a pull request on GitHub asks E5 for a poll at once (decision pro-d394).
+fn poll_now_file(fx: &Ip) -> PathBuf {
+    fx.env.cpd_home().join("run/pr-poll-now")
+}
+
+#[test]
+fn pr_poll_now_file_triggers_immediate_poll() {
+    let fx = engine_home("");
+    fx.engine_routes_polling();
+    // The poll period is an hour and a poll takes 2 s: only the file can bring the second poll forward.
+    fx.export("CPD_TEST_PR_POLL", "3600");
+    let takes = Duration::from_secs(2);
+    let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
+    let file_at_call = Arc::new(Mutex::new(Vec::<bool>::new()));
+    let (clock, noted, present, file) = (
+        fx.fakes.clock.clone(),
+        starts.clone(),
+        file_at_call.clone(),
+        poll_now_file(&fx),
+    );
+    fx.route_fn("gh", move |_| {
+        noted.lock().unwrap().push(clock.elapsed());
+        present.lock().unwrap().push(file.exists());
+        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
+    });
+
+    let (seen, file) = (starts.clone(), poll_now_file(&fx));
+    fx.watch_steps(move |nap| {
+        let polls = seen.lock().unwrap().len();
+        if polls >= 1 && !file.exists() && polls < 2 && nap < 100 {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, "").unwrap();
+        }
+        polls >= 2 || nap >= 200
+    })
+    .unwrap();
+
+    let starts = starts.lock().unwrap();
+    assert_eq!(starts.len(), 2, "no second poll within the period: {starts:?}");
+    // Inside pr_poll_seconds, and not before the first poll ended: polls never overlap.
+    assert!(starts[1] - starts[0] >= takes, "overlap: {starts:?}");
+    assert!(
+        starts[1] - starts[0] < Duration::from_secs(60),
+        "the file did not bring the poll forward: {starts:?}"
+    );
+    // The file was gone when the second poll started (a request made during the poll is kept for the next one).
+    assert_eq!(file_at_call.lock().unwrap()[1], false);
+    assert!(!poll_now_file(&fx).exists());
+    assert_eq!(fx.events("error").len(), 0);
+}
+
 // ---------- E3's back-off, E5's executable and E6, in-process ----------
 
 /// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
