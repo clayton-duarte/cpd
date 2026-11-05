@@ -11,7 +11,7 @@ use serde_json::json;
 use super::gh;
 use super::poll;
 use super::pulls;
-use super::status::{Required, required_states};
+use super::status::{MergeState, Required, required_states};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::runner::Runner;
@@ -82,6 +82,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         store_merge(&repo, number, view.merged_at.as_deref())?;
     }
     if view.state != "OPEN" || view.merge_state != "CLEAN" {
+        store_refused_state(&repo, number, &view.merge_state)?;
         return Err(CpdError::new(
             ErrorCode::MergeNotClean,
             format!(
@@ -167,9 +168,22 @@ fn refuse_unless_required_passed(
     .with("failed", failed))
 }
 
-/// Stub: stores the `merge_state` a refused merge read (not called yet).
-#[allow(dead_code, clippy::missing_const_for_fn)]
-fn store_refused_state() {}
+/// The `merge_state` a refused merge read, stored on the open `pull_requests` row (one transaction, no GitHub call), so
+/// the Inbox row relabels itself from it at the next reconcile. A word the table does not allow is not stored.
+fn store_refused_state(repo: &str, number: i64, merge_state: &str) -> Result<(), CpdError> {
+    let Ok(state) = MergeState::of_graphql(merge_state) else {
+        return Ok(());
+    };
+    let mut store = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)?;
+    store.write("pr merge", |tx| {
+        tx.execute(
+            "UPDATE pull_requests SET merge_state = ?1, changed_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE repo = ?2 AND number = ?3 AND state = 'open' AND merge_state != ?1",
+            rusqlite::params![state.as_str(), repo, number],
+        )?;
+        Ok(())
+    })
+}
 
 const STORE_BUSY_MS: u64 = 5000;
 
