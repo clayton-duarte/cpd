@@ -306,6 +306,44 @@ describe("durable backend", () => {
     expect(ofType(messages, "session.status").at(-1)?.queued).toEqual([]);
   });
 
+  it("a host_busy answer leaves the Tier unchanged", async () => {
+    const { handle, host, cpd, messages } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(opsFrame([["s", ["docs", "pi.live", "run"], RUN]]));
+    await tick();
+    cpd.json.mockImplementation(async (args: readonly string[]) => (args.includes("show") ? { switch: { tier: "S1", code: "host_busy", message: "not idle" } } : {}));
+    const mark = messages.length;
+    await handle.configure({ kind: "tier", tier: "S1" });
+    host.deliver(opsFrame([["s", ["docs", "pi.live", "run"], null]], 3));
+    await tick();
+    const tiers = ofType(messages.slice(mark), "session.footer").map((m) => m.footer.tier);
+    expect(tiers).not.toContainEqual({ state: "known", value: "S1" });
+    expect(cpd.json).toHaveBeenCalledWith(expect.arrayContaining(["session", "show"]));
+  });
+
+  const flagged = { type: "ui_request", id: "f1", purpose: "host_approve", approval: true, created_at: 1, method: "select", title: "Run it?", options: ["Allow once", "Deny"] } as unknown as HostFrame;
+  const headedApproval = { ...QUESTION_REQ, id: "h1", questions: [{ header: "Approval", question: "Sure?", options: [{ label: "Allow once", description: "" }, { label: "Deny", description: "" }] }] } as HostFrame;
+  const allowOnce = { method: "ask_user_question" as const, outcome: "answered" as const, result: { answers: [{ questionIndex: 0, question: "q", kind: "option" as const, answer: "Allow once" }], cancelled: false } };
+
+  it("a dialog is an approval only when the host flags it", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(flagged);
+    host.deliver(headedApproval);
+    await tick();
+    await handle.respond("f1", allowOnce);
+    await handle.respond("h1", allowOnce);
+    expect(host.respond).toHaveBeenCalledWith("f1", { value: "Allow once" });
+    expect(host.respond).toHaveBeenCalledWith("h1", { answer: allowOnce.result });
+  });
+
+  it("an ask_user_question headed Approval without the flag is a normal questionnaire", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(headedApproval);
+    await tick();
+    await handle.respond("h1", { method: "ask_user_question", outcome: "cancelled" });
+    expect(host.respond).toHaveBeenCalledWith("h1", { cancelled: true });
+    expect(host.respond).not.toHaveBeenCalledWith("h1", { value: "Deny" });
+  });
+
   it("a protocol 2 host streams view and ops into session messages", async () => {
     const { messages, host, error } = await setupProtocol(2, [viewFrame([userEntry(1), chatEntry(2, "typed in web")])]);
     expect(error).toBeNull();

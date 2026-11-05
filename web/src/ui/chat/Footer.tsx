@@ -43,6 +43,8 @@ export function Footer(props: {
     cacheWrite: number;
   };
   cacheHitPercent?: number;
+  attachError?: { code: string; message: string } | null;
+  onRetry?: () => void;
 }): JSX.Element {
   const f: FooterStats = props.footer ?? {
     model: NOT_ATTACHED,
