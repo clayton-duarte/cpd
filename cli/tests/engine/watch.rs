@@ -4116,18 +4116,23 @@ fn pr_poll_now_file_triggers_immediate_poll() {
         poll_now_file(&fx),
     );
     fx.route_fn("gh", move |_| {
-        noted.lock().unwrap().push(clock.elapsed());
+        let first = {
+            let mut noted = noted.lock().unwrap();
+            noted.push(clock.elapsed());
+            noted.len() == 1
+        };
         present.lock().unwrap().push(file.exists());
-        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
-    });
-
-    let (seen, file) = (starts.clone(), poll_now_file(&fx));
-    fx.watch_steps(move |nap| {
-        let polls = seen.lock().unwrap().len();
-        if polls >= 1 && !file.exists() && polls < 2 && nap < 100 {
+        if first {
+            // The request arrives during the first poll; E5 consumes it as the second starts.
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             fs::write(&file, "").unwrap();
         }
+        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
+    });
+
+    let seen = starts.clone();
+    fx.watch_steps(move |nap| {
+        let polls = seen.lock().unwrap().len();
         polls >= 2 || nap >= 200
     })
     .unwrap();
