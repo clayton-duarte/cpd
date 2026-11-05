@@ -46,7 +46,13 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
       const plans = parsePlanEvents(await call(["events", "list", "--context", context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)]));
       const pending = parsePending(await call(["context", "pending", "--context", context]));
       const errors = new Map<number, ErrorEvent>();
-      for (const scope of [["--context", context], []]) for (const e of parseErrorEvents(await call(["events", "list", ...scope, "--kind", "error", "--since", String(cursor)]))) errors.set(e.event, e);
+      const machineManager = context === "cpd" || context === "host";
+      for (const scope of [["--context", context], []]) {
+        for (const e of parseErrorEvents(await call(["events", "list", ...scope, "--kind", "error", "--since", String(cursor)]))) {
+          // own Context's errors for every Manager; machine errors (no Context, no Plan) only for the cpd and host Managers
+          if (e.context === context || (machineManager && e.context === null && e.plan === null)) errors.set(e.event, e);
+        }
+      }
       const posts = parseTaken(await call(["board", "take", "--session", r.id]));
       message = contextUpdate(context, r.id, events, records, plans, pending, { posts, errors: [...errors.values()], cursor });
     }
