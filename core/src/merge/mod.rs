@@ -902,6 +902,7 @@ fn is_refusal(code: ErrorCode) -> bool {
         ErrorCode::WorkflowTitleRequired
             | ErrorCode::DescriptionRequired
             | ErrorCode::JiraRequired
+            | ErrorCode::JiraTitleInvalid
             | ErrorCode::BaseNotFound
     )
 }

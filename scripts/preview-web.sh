@@ -1,14 +1,18 @@
 #!/bin/sh
 # Previews a worktree's web UI: the Vite dev server of the worktree runs in the
 # `web` window of the work session (localhost:5173, strictPort). Nothing is
-# installed; Electron is never started or killed here.
+# installed. Electron is never started or killed here; only the preview watchdog
+# (scripts/preview-watchdog.mjs, a frozen copy outside the worktree) is started and stopped.
 #
 #   sh scripts/preview-web.sh on [<worktree>]   dev server from the worktree
-#   sh scripts/preview-web.sh off               dev server on the primary checkout again
+#   sh scripts/preview-web.sh off               dev server on the primary checkout again, watchdog stopped
+#   sh scripts/preview-web.sh reload [<worktree>]  typecheck, build:electron, then SIGUSR1 to the Electron of the health file
 #   sh scripts/preview-web.sh status            prints '<worktree> <sha>' or 'no web preview'
 #
 # The default worktree is ${CPD_WEB_PREVIEW_WORKTREE:-<repo>/../cpd.preview.web}, created
 # from origin/main on branch preview/web when missing, and never touched when present.
+# `on` also installs the frozen watchdog into ${CPD_PREVIEW_DIR}/watchdog and starts it (pid in
+# ${CPD_PREVIEW_DIR}/watchdog.pid, log in ${CPD_HOME:-~/.cpd}/run/preview-watchdog.log).
 # CPD_PREVIEW_ELECTRON=1 also builds the Electron bundle. While a preview is on, the
 # tmux server option @cpd_web_preview holds '<name> <sha>'. State: ${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}/web-state.
 # Safe to rerun.
@@ -17,9 +21,12 @@ set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 dir="${CPD_PREVIEW_DIR:-${HOME:?HOME is not set}/.cache/cpd-preview}"
 state="$dir/web-state"
+cpd_home="${CPD_HOME:-${HOME:?HOME is not set}/.cpd}"
+wd_dir="$dir/watchdog"
+wd_pid="$dir/watchdog.pid"
 
 usage() {
-  echo "usage: sh $0 on [<worktree>] | off | status" >&2
+  echo "usage: sh $0 on [<worktree>] | off | status | reload [<worktree>]" >&2
   exit 2
 }
 
@@ -50,6 +57,53 @@ serve() {
   fi
 }
 
+# stop_watchdog: SIGTERM to the pid of the pid file when alive; the file is removed either way.
+stop_watchdog() {
+  [ -f "$wd_pid" ] || return 0
+  wpid=$(sed -n '1p' "$wd_pid")
+  case $wpid in
+    ''|*[!0-9]*) ;;
+    *) if env kill -0 "$wpid" 2>/dev/null; then env kill -TERM "$wpid" 2>/dev/null || true; fi ;;
+  esac
+  rm -f "$wd_pid"
+}
+
+# start_watchdog <worktree>: installs the frozen copy and starts the watchdog detached.
+start_watchdog() {
+  stop_watchdog
+  mkdir -p "$wd_dir" "$cpd_home/run"
+  cp "$repo/scripts/preview-watchdog.mjs" "$repo/web/src/electron/health.ts" \
+    "$repo/web/src/electron/watchdog.ts" "$repo/web/src/electron/restore-points.ts" "$wd_dir/"
+  nohup node "$wd_dir/preview-watchdog.mjs" --worktree "$1" --home "$cpd_home" \
+    --relaunch pnpm --dir "$1/web" exec electron . >>"$cpd_home/run/preview-watchdog.log" 2>&1 </dev/null &
+  echo "$!" >"$wd_pid"
+}
+
+reload() {
+  worktree=${1:-}
+  if [ -z "$worktree" ] && [ -f "$state" ]; then worktree=$(sed -n '1p' "$state"); fi
+  worktree=${worktree:-${CPD_WEB_PREVIEW_WORKTREE:-$repo/../cpd.preview.web}}
+  if ! checked=$(pnpm --dir "$worktree" --filter cpd-web-client run typecheck 2>&1); then
+    printf '%s\n' "$checked" >&2
+    echo "preview: typecheck failed; nothing built, nothing signalled" >&2
+    exit 1
+  fi
+  pnpm --dir "$worktree" --filter cpd-web-client run build:electron >&2
+  health="$cpd_home/run/preview-health.json"
+  rpid=
+  [ ! -f "$health" ] || rpid=$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$health" | sed -n '1p')
+  if [ -z "$rpid" ]; then
+    echo "preview: no pid in $health; is the Electron preview running?" >&2
+    exit 1
+  fi
+  if ! env kill -0 "$rpid" 2>/dev/null; then
+    echo "preview: Electron pid $rpid is not running" >&2
+    exit 1
+  fi
+  env kill -USR1 "$rpid"
+  echo "reloaded Electron pid $rpid from $worktree" >&2
+}
+
 on() {
   worktree=${1:-${CPD_WEB_PREVIEW_WORKTREE:-$repo/../cpd.preview.web}}
   read_config
@@ -67,6 +121,7 @@ on() {
   tmux_cmd set -g @cpd_web_preview "$(basename "$worktree") $sha"
   mkdir -p "$dir"
   printf '%s\n%s\n' "$worktree" "$sha" >"$state"
+  start_watchdog "$worktree"
   echo "previewing $worktree @ $sha at http://localhost:5173; revert with: sh $0 off" >&2
   echo "Electron on it: CPD_ELECTRON_DEV_URL=http://localhost:5173 pnpm --dir $worktree/web run electron" >&2
 }
@@ -76,6 +131,7 @@ off() {
   serve "$repo"
   tmux_cmd set -gu @cpd_web_preview
   rm -f "$state"
+  stop_watchdog
   echo "dev server is back on $repo" >&2
 }
 
@@ -91,5 +147,6 @@ case ${1:-} in
   on) [ $# -le 2 ] || usage; on "${2:-}" ;;
   off) [ $# -eq 1 ] || usage; off ;;
   status) [ $# -eq 1 ] || usage; status ;;
+  reload) [ $# -le 2 ] || usage; reload "${2:-}" ;;
   *) usage ;;
 esac

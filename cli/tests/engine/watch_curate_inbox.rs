@@ -1,5 +1,5 @@
 //! Engine step E8, the `curate-retire` Inbox item (contract §2.2 "Inbox item", §3.7; hs-d549,
-//! hs-d551): one cyan item per Context, its count following the pending rows, closed when none is.
+//! hs-d551): one white item per Context, its count following the pending rows, closed when none is.
 
 use crate::common;
 
@@ -108,7 +108,7 @@ impl Curate {
             "no {kind} item `{label}` of {context}: {items:?}"
         );
         let item = items.into_iter().find(|i| i["context"] == context).unwrap();
-        assert_eq!(item["urgency"], "cyan", "{item}");
+        assert_eq!(item["urgency"], "white", "{item}");
         assert_eq!(item["subject"], format!("{kind}:{context}"), "{item}");
         for null in ["plan", "job", "session", "record"] {
             assert!(item[null].is_null(), "{null} must be null: {item}");
@@ -172,7 +172,7 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
 }
 
 #[test]
-fn e8_opens_the_curate_items_cyan() {
+fn e8_opens_the_curate_items_white() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
     fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1"]);
@@ -181,7 +181,7 @@ fn e8_opens_the_curate_items_cyan() {
     assert!(
         fx.items("curate-retire")
             .iter()
-            .all(|i| i["urgency"] == "cyan"),
+            .all(|i| i["urgency"] == "white"),
         "{:?}",
         fx.items("curate-retire")
     );

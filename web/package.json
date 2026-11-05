@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "preview:on": "sh ../scripts/preview-web.sh on",
     "preview:off": "sh ../scripts/preview-web.sh off",
+    "preview:reload": "sh ../scripts/preview-web.sh reload",
     "dist:mac": "pnpm run build:electron && electron-builder --mac",
     "build:electron": "CPD_ELECTRON_TARGET=renderer vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=main vite build -c vite.electron.config.ts && CPD_ELECTRON_TARGET=preload vite build -c vite.electron.config.ts",
     "electron": "pnpm run build:electron && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && if [ \"$(node -p process.platform)\" = darwin ]; then for k in CFBundleName CFBundleDisplayName; do plutil -replace $k -string CPD node_modules/electron/dist/Electron.app/Contents/Info.plist; done; fi && electron ."

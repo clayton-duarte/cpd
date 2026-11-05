@@ -106,7 +106,7 @@ fn listed(env: &TestEnv) -> Vec<Value> {
 }
 
 #[test]
-fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_blue() {
+fn the_curation_notices_are_opened_with_urgency_white_and_no_inbox_output_prints_blue() {
     let env = fx();
     reconcile(&mut env.store(), &notices(&env), T0).unwrap();
 
@@ -115,7 +115,7 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
         .iter()
         .find(|i| i["kind"] == "curate-retire")
         .unwrap_or_else(|| panic!("curate-retire in {items:?}"));
-    assert_eq!(item["urgency"], "cyan", "{item}");
+    assert_eq!(item["urgency"], "white", "{item}");
     let stored: Vec<String> = env
         .store()
         .read(|c| {
@@ -127,10 +127,10 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
                 .collect::<Result<Vec<String>, _>>()?)
         })
         .unwrap();
-    assert_eq!(stored, ["cyan"], "the stored value");
+    assert_eq!(stored, ["white"], "the stored value");
 
     let list = env.cpd(&["inbox", "list"]).ok().to_string();
-    assert!(list.contains("\"urgency\":\"cyan\""), "{list}");
+    assert!(list.contains("\"urgency\":\"white\""), "{list}");
     let id = items[0]["id"].as_i64().unwrap().to_string();
     let outputs = [
         list,
@@ -154,7 +154,7 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
             .collect::<Vec<_>>()
     };
     let first = vec![
-        plain(Kind::Unread, Urgency::White, "w-old"),
+        plain(Kind::Unread, Urgency::Cyan, "c-old"),
         plain(Kind::Dialog, Urgency::Magenta, "m"),
         plain(Kind::PrReady, Urgency::Yellow, "y"),
         plain(Kind::Dialog, Urgency::Red, "r"),
@@ -162,7 +162,7 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
     reconcile(&mut env.store(), &first, T0).unwrap();
     let mut second = first.clone();
     second.extend(of(Kind::CurateRetire));
-    second.push(plain(Kind::Unread, Urgency::White, "w-new"));
+    second.push(plain(Kind::Unread, Urgency::Cyan, "c-new"));
     reconcile(&mut env.store(), &second, T1).unwrap();
 
     let order: Vec<(String, String)> = listed(&env)
@@ -178,9 +178,9 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
         ("red", "r".into()),
         ("yellow", "y".into()),
         ("magenta", "m".into()),
-        ("cyan", format!("curate-retire:{CTX}")),
-        ("white", "w-old".into()),
-        ("white", "w-new".into()),
+        ("cyan", "c-old".into()),
+        ("cyan", "c-new".into()),
+        ("white", format!("curate-retire:{CTX}")),
     ];
     assert_eq!(
         order,

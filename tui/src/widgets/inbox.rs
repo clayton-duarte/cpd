@@ -929,19 +929,25 @@ mod tests {
     }
 
     #[test]
-    fn a_curate_item_draws_its_own_glyph_in_the_cyan_colour_and_another_cyan_item_the_generic_one()
-    {
+    fn a_curate_item_draws_its_own_glyph_in_the_white_colour_and_another_white_item_the_generic_one()
+     {
+        let white = Some(palette::color_clickable(Meaning::NotStarted));
         let cyan = Some(palette::color_clickable(Meaning::Notice));
-        let row = |kind| glyph_of(&item(1, kind, Urgency::Cyan, "alpha: 2", OPENED));
+        let row = |kind| glyph_of(&item(1, kind, Urgency::White, "alpha: 2", OPENED));
         assert_eq!(
             row(Kind::CurateRetire),
-            ("\u{F116E}".to_owned(), cyan),
+            ("\u{F116E}".to_owned(), white),
             "a record to retire"
         );
         assert_eq!(
             row(Kind::Unread),
+            ("\u{F0366}".to_owned(), white),
+            "the generic system item takes its tier's glyph"
+        );
+        assert_eq!(
+            glyph_of(&item(1, Kind::Unread, Urgency::Cyan, "alpha: 2", OPENED)),
             ("\u{F06F1}".to_owned(), cyan),
-            "the generic system item is the cyan tier's"
+            "an unread reply is the cyan tier's"
         );
         // the other tiers: magenta is back to U+F173A
         let tier = |u| glyph_of(&item(1, Kind::PlanReview, u, "x", OPENED)).0;

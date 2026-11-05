@@ -52,6 +52,7 @@ const REQUIRED: Readonly<Record<ServerMessage["type"], readonly (readonly [strin
   "session.window": [SESSION, ["mode", "string"], ["window", "object"]],
   "session.append": [SESSION, ["items", "array"]],
   "session.update": [SESSION, ["items", "array"]],
+  "session.remove": [SESSION, ["itemId", "string"]],
   "session.delta": [SESSION, ["itemId", "string"], ["blockIndex", "number"], ["blockType", "string"], ["text", "string"]],
   "session.status": [SESSION, ["busy", "boolean"], ["queued", "array"]],
   "session.submitAck": [SESSION, ["clientSubmissionId", "string"], ["queued", "boolean"]],
