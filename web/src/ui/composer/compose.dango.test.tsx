@@ -22,7 +22,7 @@ function setup(over: { busy?: boolean; queued?: QueuedSubmission[]; settings?: R
   const submits: Submit[] = [];
   const onAbort = vi.fn();
   const m = mount(
-    <Composer capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
+    <Composer sessionId="s1" capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
       settings={over.settings}
       onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={() => {}} />,
   );

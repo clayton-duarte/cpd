@@ -249,4 +249,72 @@ describe("connection optimistic action", () => {
     connection.action({ kind: "pr.merge", planId: "p1", pull: "acme/api#3" });
     expect(seen).toEqual([0]);
   });
+
+  it("selectSession on an already selected but unattached session re-sends session.attach, and sends nothing when attached", () => {
+    const { transport, store, connection } = setup();
+    connection.start();
+    connection.selectSession("s1");
+    transport.emitStatus("open");
+    transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "session_not_found", message: "no" } });
+    expect(store.getState().session?.attached).toBe(false);
+    transport.sent.length = 0;
+    connection.selectSession("s1");
+    expect(transport.sent).toEqual([{ type: "session.attach", sessionId: "s1" }]);
+    expect(store.getState().session?.error).toBeNull();
+    transport.emitMessage({
+      type: "session.window", sessionId: "s1", mode: "tail",
+      window: { items: [], hasEarlier: false, cursor: null },
+    });
+    expect(store.getState().session?.attached).toBe(true);
+    transport.sent.length = 0;
+    connection.selectSession("s1");
+    expect(transport.sent).toEqual([]);
+  });
+
+  it("cockpit.patch tree and cockpit.snapshot retry session.attach after session_not_found only", () => {
+    const treeModel = { contexts: [], cursor: 1 };
+    const inboxModel = { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 };
+    const patch = { type: "cockpit.patch", pane: "tree", data: treeModel };
+    const snapshot = { type: "cockpit.snapshot", tree: treeModel, plan: null, inbox: inboxModel };
+    const attach = { type: "session.attach", sessionId: "s1" };
+    const notFound = { type: "session.error", sessionId: "s1", error: { code: "session_not_found", message: "no" } };
+    const opened = () => {
+      const ctx = setup();
+      ctx.connection.start();
+      ctx.connection.selectSession("s1");
+      ctx.transport.emitStatus("open");
+      return ctx;
+    };
+    // session_not_found: one attach per tree patch and per snapshot
+    const a = opened();
+    a.transport.emitMessage(notFound);
+    a.transport.sent.length = 0;
+    a.transport.emitMessage(patch);
+    expect(a.transport.sent).toEqual([attach]);
+    a.transport.emitMessage(snapshot);
+    expect(a.transport.sent).toEqual([attach, attach]);
+    // another error code: no retry
+    const b = opened();
+    b.transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "cpd_failed", message: "x" } });
+    b.transport.sent.length = 0;
+    b.transport.emitMessage(patch);
+    b.transport.emitMessage(snapshot);
+    expect(b.transport.sent).toEqual([]);
+    // attached: no retry
+    const c = opened();
+    c.transport.emitMessage(notFound);
+    c.transport.emitMessage({ type: "session.window", sessionId: "s1", mode: "tail", window: { items: [], hasEarlier: false, cursor: null } });
+    c.transport.sent.length = 0;
+    c.transport.emitMessage(patch);
+    c.transport.emitMessage(snapshot);
+    expect(c.transport.sent).toEqual([]);
+    // no session selected: no retry
+    const d = setup();
+    d.connection.start();
+    d.transport.emitStatus("open");
+    d.transport.sent.length = 0;
+    d.transport.emitMessage(patch);
+    d.transport.emitMessage(snapshot);
+    expect(d.transport.sent).toEqual([]);
+  });
 });

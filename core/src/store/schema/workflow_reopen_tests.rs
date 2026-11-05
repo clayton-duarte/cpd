@@ -42,11 +42,14 @@ fn dump(store: &mut Store) -> String {
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 // `pr-archived` (a later migration) adds `pull_requests.archived`: not what this migration touches.
+                // `pr-archived` (a later migration) adds `pull_requests.archived`: not what this migration touches.
                 // `codereview-followup` (a later migration) adds `plans.pr_subject` and `plans.changes_requested_at`.
+                // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: likewise not touched.
                 Ok(rows
                     .into_iter()
                     .filter(|n| {
                         !["archived", "pr_subject", "changes_requested_at"].contains(&n.as_str())
+                            && !n.starts_with("reviewed_")
                     })
                     .collect())
             })

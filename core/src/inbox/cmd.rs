@@ -741,6 +741,10 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
             "UPDATE plans SET pr_subject = ?2 WHERE id = ?1",
             params![plan.as_str(), item.subject],
         )?;
+        tx.execute(
+            "UPDATE plans SET reviewed_repo = ?2, reviewed_number = ?3, reviewed_title = ?4 WHERE id = ?1",
+            params![plan.as_str(), repo, i64::try_from(number).unwrap_or(i64::MAX), pr_title],
+        )?;
         Ok((
             model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?,
             plan,

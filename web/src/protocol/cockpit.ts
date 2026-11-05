@@ -72,6 +72,7 @@ export interface PlanViewModel {
   readonly workflows: readonly WorkflowView[];
   readonly jobs: readonly JobView[]; // all Jobs of the Plan in `seq` order
   readonly cursor: number; // events_cursor
+  readonly reviewedPr?: { readonly repo: string; readonly number: number; readonly url: string; readonly title: string; readonly state: string | null } | null; // `reviewed_pr` of plan show; null for a Plan with none
 }
 
 export interface InboxRowAction { readonly label: string; readonly action: CockpitAction }

@@ -35,9 +35,14 @@ fn dump(store: &mut Store) -> String {
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 // `codereview-followup` (a later migration) adds two `plans` columns: not what this migration touches.
+                // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: not what this migration touches.
                 Ok(rows
                     .into_iter()
-                    .filter(|n| n != "pr_subject" && n != "changes_requested_at")
+                    .filter(|n| {
+                        n != "pr_subject"
+                            && n != "changes_requested_at"
+                            && !n.starts_with("reviewed_")
+                    })
                     .collect())
             })
             .unwrap();

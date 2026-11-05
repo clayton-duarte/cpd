@@ -27,6 +27,8 @@ mod closed_tests;
 #[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
+mod dialog_link_tests;
+#[cfg(test)]
 mod dialog_tests;
 #[cfg(test)]
 mod dismiss_tests;

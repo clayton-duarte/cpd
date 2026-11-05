@@ -123,6 +123,7 @@ fn tests_centre(jobs: usize) -> Centre {
         jobs: (0..jobs).map(job).collect(),
         needs_user: read::NeedsUser::default(),
         events_cursor: 0,
+        reviewed_pr: None,
     };
     let boxes =
         boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);

@@ -25,6 +25,8 @@ export type Post = {
   /** Slack's own string, kept exact: the reactions API matches on the literal value (refresh.py 174-176). */
   ts_raw: string;
   author: string;
+  /** The author's Slack user id, the `(U…)` of the message header; "" when the header has none. */
+  author_id: string;
   /** The post is about this PR, as opposed to merely mentioning it: the first PR URL of the post. */
   primary: boolean;
   reactions: string[];
@@ -120,6 +122,7 @@ export function parseMessages(text: string, cutoff: number, me: string): Post[] 
     const ts = Number.parseFloat(tsRaw);
     if (Number.isNaN(ts) || ts < cutoff) continue;
     const author = block.split("(")[0]!.trim().split("<")[0]!.trim();
+    const author_id = /\((U[A-Z0-9]+)\)/.exec(block.split("\n")[0]!)?.[1] ?? "";
     const claim = slackClaim(block, me);
     const found = [...new Map(extractPrs(block).map((pr) => [`${pr[0]}#${pr[1]}`, pr])).values()];
     const primary = found[0];
@@ -133,6 +136,7 @@ export function parseMessages(text: string, cutoff: number, me: string): Post[] 
         ts,
         ts_raw: tsRaw,
         author,
+        author_id,
         primary: primary !== undefined && repo === primary[0] && number === primary[1],
         reactions: parseReactions(block),
         claim,

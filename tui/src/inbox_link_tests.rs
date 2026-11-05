@@ -391,9 +391,9 @@ fn a_long_label_is_cut_before_the_cue_and_the_age_keeps_its_column() {
 
 #[test]
 fn a_kind_that_is_no_link_draws_no_cue_and_opens_nothing() {
-    // a dialog with a url is no link kind; the review request beside it is the control: the frame holds its cue only
+    // pro-d412: a dialog with a url draws the cue, so this dialog has no url; the review request beside it is the control: the frame holds its cue only
     let (_dir, home) = home_with(&[
-        seed("dialog", "dialog:one", "dialog label", Some(URL)),
+        seed("dialog", "dialog:one", "dialog label", None),
         seed(
             "review-requested",
             "review-requested:acme/api#12",

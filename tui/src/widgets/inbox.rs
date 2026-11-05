@@ -47,6 +47,16 @@ pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) 
         && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
 }
 
+/// The `items` the Inbox lists while the pull requests of `posting` are being posted or merged: the row of such a pull request is
+/// dropped.
+pub(crate) fn shown(items: &[Item], posting: &std::collections::BTreeSet<String>) -> Vec<Item> {
+    items
+        .iter()
+        .filter(|item| !merges(posting, item))
+        .cloned()
+        .collect()
+}
+
 /// What a row of the section is, by its offset from the section's first row (the blank one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -409,6 +419,8 @@ pub enum Entry {
     /// `cpd pr repost`: on a `review overdue` row, in place of Post.
     RePost,
     GoToLead,
+    /// `Open Link`: the item's url in the browser (a `dialog` item with a url).
+    OpenLink,
     CopyLink,
     Choice(Choice),
 }
@@ -447,6 +459,10 @@ impl Entry {
                 entries.push(Entry::CopyLink);
             }
         }
+        if item.kind == Kind::Dialog && item.url.is_some() {
+            entries.push(Entry::OpenLink);
+            entries.push(Entry::CopyLink);
+        }
         entries.extend(Choice::entries(item.kind).into_iter().map(Entry::Choice));
         entries
     }
@@ -459,6 +475,7 @@ impl crate::menu::Entry for Entry {
             Entry::Post => "Post",
             Entry::RePost => "RePost",
             Entry::GoToLead => "Go to Lead",
+            Entry::OpenLink => "Open Link",
             Entry::CopyLink => "Copy Link",
             Entry::Choice(choice) => crate::menu::Entry::label(choice),
         }
@@ -492,7 +509,12 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 fn is_link(kind: Kind) -> bool {
     matches!(
         kind,
-        Kind::PlanReview | Kind::PrReady | Kind::PrClosed | Kind::ReviewRequested | Kind::Deploy
+        Kind::PlanReview
+            | Kind::PrReady
+            | Kind::PrClosed
+            | Kind::ReviewRequested
+            | Kind::Deploy
+            | Kind::Dialog
     )
 }
 

@@ -100,19 +100,22 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     if (u.plan !== undefined) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
     if (u.inbox !== undefined) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
   };
-  let running = false;
+  let loop: Promise<void> | null = null;
   let queued: Set<CockpitPane> | null = null;
-  const refresh = async (panes: ReadonlySet<CockpitPane>): Promise<void> => {
-    if (running) { queued = new Set([...(queued ?? []), ...panes]); return; }
-    running = true;
-    try {
-      let next: ReadonlySet<CockpitPane> | null = panes;
-      while (next !== null && !stopped) {
-        try { apply(await readModel.loadPanes(next, planId)); } catch (e) { emitError(e); }
-        next = queued;
-        queued = null;
-      }
-    } finally { running = false; }
+  const refresh = (panes: ReadonlySet<CockpitPane>): Promise<void> => {
+    queued = new Set([...(queued ?? []), ...panes]);
+    if (loop !== null) return loop;
+    const run = async (): Promise<void> => {
+      try {
+        while (queued !== null && !stopped) {
+          const next: ReadonlySet<CockpitPane> = queued;
+          queued = null;
+          try { apply(await readModel.loadPanes(next, planId)); } catch (e) { emitError(e); }
+        }
+      } finally { loop = null; queued = null; }
+    };
+    loop = run();
+    return loop;
   };
   const livePanes = (): Set<CockpitPane> => new Set<CockpitPane>(planId !== null ? ["tree", "inbox", "plan"] : ["tree", "inbox"]);
   const refreshExtras = async (): Promise<void> => {
@@ -300,7 +303,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       return { dispose: () => { listeners.delete(listener); } };
     },
     async runAction(action) {
-      try { return await runAction(cpd, action); } finally { if (!stopped) void refresh(livePanes()); }
+      try { return await runAction(cpd, action); } finally { if (!stopped) await refresh(livePanes()); }
     },
     readLogs: () => need().logs(),
     readSettings: () => need().settings(),

@@ -453,6 +453,7 @@ fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Ite
         })
         .filter(|(i, c)| {
             i.label != c.label
+                || (i.kind == Kind::Dialog && i.url != c.url)
                 || (i.kind == Kind::PrReady
                     && (i.url != c.url
                         || i.context != c.context
@@ -510,7 +511,12 @@ pub fn reconcile(
         let (gone, new) = diff(&open, conditions);
         let mut changes = Changes::default();
         for (item, c) in relabelled(&open, conditions) {
-            if item.kind == Kind::PrReady {
+            if item.kind == Kind::Dialog {
+                tx.execute(
+                    "UPDATE inbox_items SET label = ?2, url = ?3 WHERE id = ?1",
+                    params![item.id, c.label, c.url],
+                )?;
+            } else if item.kind == Kind::PrReady {
                 tx.execute(
                     "UPDATE inbox_items SET label = ?2, url = ?3, context = ?4, plan = ?5, session = ?6 WHERE id = ?1",
                     params![

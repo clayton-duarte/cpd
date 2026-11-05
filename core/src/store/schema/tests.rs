@@ -719,8 +719,8 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
             &mut store,
             "SELECT count(*) FROM pragma_table_info('plans')"
         ),
-        14
-    ); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`, `codereview-followup` `pr_subject` and `changes_requested_at`
+        17
+    ); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`, `codereview-followup` `pr_subject` and `changes_requested_at`, `plan-reviewed-pr` `reviewed_repo`, `reviewed_number` and `reviewed_title`
     assert_eq!(
         count(
             &mut store,

@@ -72,7 +72,7 @@ pub use age::age_text;
 pub use dot::{Dot, OrderKey, Work};
 pub use flow::{
     AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, Pull, Review,
-    UpdateState, WorkerRef, WorkflowNode, WorkflowStatus, chat_slot, flow, plan_boxes,
+    ReviewedPr, UpdateState, WorkerRef, WorkflowNode, WorkflowStatus, chat_slot, flow, plan_boxes,
     plan_boxes_at,
 };
 pub use follow::{Changes, Follow};

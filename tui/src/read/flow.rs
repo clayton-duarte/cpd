@@ -58,6 +58,20 @@ pub struct PlanBoxes {
     pub needs_user: NeedsUser,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+    /// The pull request a review Plan reviews (contract §2.2 Plan `reviewed_pr`); `None` for any other Plan.
+    pub reviewed_pr: Option<ReviewedPr>,
+}
+
+/// The pull request a review Plan reviews: `plan show`'s `reviewed_pr`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewedPr {
+    /// `<owner>/<name>`.
+    pub repo: String,
+    pub number: i64,
+    pub url: String,
+    pub title: String,
+    /// `None` when cpd has no row for the pull request.
+    pub state: Option<super::PrState>,
 }
 
 /// What of a Plan needs the User, from the Inbox's visible items (hs-d303): the plan view draws a failed Job, or a closed
@@ -379,9 +393,41 @@ fn boxes(
             )?,
             jobs,
             events_cursor: highest_id(conn)?,
+            reviewed_pr: read_reviewed_pr(conn, plan)?,
             plan: plan.clone(),
         })
     }
+}
+
+/// The pull request `plan` reviews, from `plan show`'s own read (`cpd_core::plan::row::reviewed_pr`), `None` for any other Plan.
+fn read_reviewed_pr(conn: &Connection, plan: &PlanId) -> Result<Option<ReviewedPr>, CpdError> {
+    let value = cpd_core::plan::row::reviewed_pr(conn, plan)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let what = format!("Plan {plan}'s reviewed_pr");
+    let text = |key: &str| {
+        value[key]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| bad_row(format!("{what} has no string {key}")))
+    };
+    let state = match value["state"].as_str() {
+        None => None,
+        Some("open") => Some(super::PrState::Open),
+        Some("closed") => Some(super::PrState::Closed),
+        Some("merged") => Some(super::PrState::Merged),
+        Some(other) => return Err(bad_row(format!("{what} has state {other:?}"))),
+    };
+    Ok(Some(ReviewedPr {
+        repo: text("repo")?,
+        number: value["number"]
+            .as_i64()
+            .ok_or_else(|| bad_row(format!("{what} has no number")))?,
+        url: text("url")?,
+        title: text("title")?,
+        state,
+    }))
 }
 
 /// The Workflows of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the Workflow the working Lead's turn concerns, `lead_work` the Plan phase's work.

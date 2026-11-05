@@ -217,6 +217,7 @@ test("main parses and answers without a process: the posts with ts, author, prim
     ts: 1790950000.0001,
     ts_raw: "1790950000.000100",
     author: "Ryan",
+    author_id: "U01",
     primary: true,
     reactions: ["eyes"],
     claim: { kind: "claimed", reason: "claimed with :eyes: in Slack" },

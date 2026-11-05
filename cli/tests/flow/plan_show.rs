@@ -182,6 +182,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
             "locked_at",
             "outline",
             "phase",
+            "reviewed_pr",
             "title"
         ]
     );
