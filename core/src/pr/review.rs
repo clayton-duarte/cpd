@@ -193,7 +193,11 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
                         None => None,
                     };
                     if let Some(plan) = &plan {
-                        finish_plan(tx, plan)?;
+                        if args.event == "APPROVE" {
+                            finish_plan(tx, plan)?;
+                        } else {
+                            request_changes(tx, plan)?;
+                        }
                     }
                     Ok(queued)
                 })
@@ -212,7 +216,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
 }
 
 /// Finishes a `codereview` Plan (FR10): `grounding → done` with `locked_at` and `done_at` the transaction's time, and a quiet `plan-done`.
-fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+pub(crate) fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', locked_at = (SELECT at FROM txns WHERE id = cpd_txn()), done_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND phase <> 'done'",
@@ -227,6 +231,16 @@ fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
                 .context(ContextId::parse("codereview")?),
         )?;
     }
+    Ok(())
+}
+
+/// REQUEST_CHANGES on a `codereview` Plan (pro-d416): the Plan stays open; `changes_requested_at` is the transaction's time.
+fn request_changes(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE plans SET changes_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND phase = 'grounding'",
+        [plan.as_str()],
+    )?;
     Ok(())
 }
 

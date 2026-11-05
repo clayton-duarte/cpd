@@ -19,6 +19,8 @@ mod blue_tests;
 #[cfg(test)]
 mod claim_refusal_tests;
 #[cfg(test)]
+mod claim_reuse_tests;
+#[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
 mod closed_tests;
@@ -33,6 +35,8 @@ mod dismiss_tests;
 #[cfg(test)]
 mod follow_tests;
 #[cfg(test)]
+mod followup_tests;
+#[cfg(test)]
 mod overdue_tests;
 #[cfg(test)]
 mod pr_tests;
@@ -40,6 +44,8 @@ mod pr_tests;
 mod pr_updating_tests;
 #[cfg(test)]
 mod reopen_tests;
+#[cfg(test)]
+mod review_plan_close_tests;
 #[cfg(test)]
 mod rows_review_tests;
 #[cfg(test)]

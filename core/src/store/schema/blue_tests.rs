@@ -106,6 +106,8 @@ fn blue_tier_migration_copies_every_review_requested_row_as_blue_and_every_other
         .into_iter()
         .map(|mut r| {
             r["claimed_at"] = Value::Null; // the column `inbox-claim` adds
+            r["head_oid"] = Value::Null; // the columns `codereview-followup` adds
+            r["reviewed_oid"] = Value::Null;
             if r["kind"] == "review-requested" {
                 r["urgency"] = Value::from("blue");
             }

@@ -223,6 +223,45 @@ fn mark_cited(store: &mut crate::store::Store, from: &crate::ids::SessionId, tex
     }
 }
 
+/// The message of `session send` to `id` on an opened `env`, from `from` (the User when none): the `session-message`
+/// Event, a durable target woken, a stopped pi target started in a parked window (hs-d725). Returns the Event, the target
+/// and the pane started.
+pub(crate) fn deliver(
+    env: &mut Env,
+    id: &SessionId,
+    from: &Option<SessionId>,
+    text: &str,
+    unblocks: Option<&str>,
+) -> Result<(i64, SessionId, Option<crate::host::PaneId>), CpdError> {
+    // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725); no cockpit refuses first.
+    let needs_pane = {
+        let target = env.store.read(|conn| row::load(conn, id))?;
+        check(&target)?;
+        needs_pane(env, &target)?
+    };
+    let (event, target) = env.store.write("session send", |tx| {
+        let target = row::load(tx, id)?;
+        check(&target)?;
+        if let Some(from) = from {
+            guard(tx, &target, from, text)?;
+        }
+        let event = write(tx, &target, from, text, unblocks, true)?;
+        if target.runner == row::Runner::Durable {
+            super::moves::wake_durable(tx, &target.id)?;
+        }
+        Ok((event, target))
+    })?;
+    if let Some(from) = from {
+        mark_cited(&mut env.store, from, text);
+    }
+    let pane = if needs_pane {
+        start_parked(env, &target, "session send")?
+    } else {
+        None
+    };
+    Ok((event, target.id, pane))
+}
+
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
@@ -234,41 +273,15 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let from = sender()?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
-    // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725); no cockpit refuses first.
-    let needs_pane = {
-        let target = env.store.read(|conn| row::load(conn, &id))?;
-        check(&target)?;
-        needs_pane(&env, &target)?
-    };
-    let (event, target) = env.store.write("session send", |tx| {
-        let target = row::load(tx, &id)?;
-        check(&target)?;
-        if let Some(from) = &from {
-            guard(tx, &target, from, text.as_str())?;
-        }
-        let event = write(
-            tx,
-            &target,
-            &from,
-            text.as_str(),
-            Some(args.unblocks.as_str()),
-            true,
-        )?;
-        if target.runner == row::Runner::Durable {
-            super::moves::wake_durable(tx, &target.id)?;
-        }
-        Ok((event, target))
-    })?;
-    if let Some(from) = &from {
-        mark_cited(&mut env.store, from, text.as_str());
-    }
-    let pane = if needs_pane {
-        start_parked(&mut env, &target, "session send")?
-    } else {
-        None
-    };
+    let (event, target, pane) = deliver(
+        &mut env,
+        &id,
+        &from,
+        text.as_str(),
+        Some(args.unblocks.as_str()),
+    )?;
     Ok(Output::success(json!({
-        "event": event, "session": target.id, "from": from, "unblocks": args.unblocks.as_str(),
+        "event": event, "session": target, "from": from, "unblocks": args.unblocks.as_str(),
         "started": pane.is_some(), "pane": pane.as_ref().map(|p| p.as_str()),
     })))
 }
