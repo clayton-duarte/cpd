@@ -1872,6 +1872,8 @@ mod tests {
             author: "ryan".to_owned(),
             decision: None,
             reviews: Vec::new(),
+            head_oid: None,
+            checks_state: None,
         }
     }
 
@@ -1880,6 +1882,7 @@ mod tests {
             reviews: vec![Review {
                 author: login.to_owned(),
                 state: "COMMENTED".to_owned(),
+                commit_oid: None,
             }],
             ..open_pr()
         }

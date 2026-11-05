@@ -59,8 +59,11 @@ fn pr(state: GhState, decision: Option<&str>, reviews: &[(&str, &str)]) -> GhPr 
             .map(|(author, state)| Review {
                 author: (*author).to_owned(),
                 state: (*state).to_owned(),
+                commit_oid: None,
             })
             .collect(),
+        head_oid: None,
+        checks_state: None,
     }
 }
 

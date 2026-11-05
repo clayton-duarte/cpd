@@ -113,6 +113,10 @@ pub struct GhPr {
     pub decision: Option<String>,
     /// `latestReviews`: the last review of each reviewer.
     pub reviews: Vec<Review>,
+    /// `headRefOid`: the pull request's head commit.
+    pub head_oid: Option<String>,
+    /// The state of the head commit's `statusCheckRollup`: `SUCCESS`, `PENDING`, `FAILURE`, ...
+    pub checks_state: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +130,8 @@ pub enum GhState {
 pub struct Review {
     pub author: String,
     pub state: String,
+    /// `commit { oid }`: the commit the review was made on.
+    pub commit_oid: Option<String>,
 }
 
 /// What one GitHub call answered: the User's login (`ME`) and each pull request, `None` for one it cannot read.
@@ -248,7 +254,7 @@ pub fn github_lookup_with(
             continue;
         };
         query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} }} }} }} }}"
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision headRefOid commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ state }} }} }} }} author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} commit {{ oid }} }} }} }} }}"
         ));
     }
     query.push_str(" }");
@@ -335,6 +341,7 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         .map(|r| Review {
             author: login(r),
             state: r["state"].as_str().unwrap_or_default().to_owned(),
+            commit_oid: r["commit"]["oid"].as_str().map(str::to_owned),
         })
         .collect();
     Ok(GhPr {
@@ -349,6 +356,10 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         author: login(raw),
         decision: raw["reviewDecision"].as_str().map(str::to_owned),
         reviews,
+        head_oid: raw["headRefOid"].as_str().map(str::to_owned),
+        checks_state: raw["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]
+            .as_str()
+            .map(str::to_owned),
     })
 }
 
@@ -413,6 +424,8 @@ mod tests {
             author: "ryan".to_owned(),
             decision: None,
             reviews: Vec::new(),
+            head_oid: None,
+            checks_state: None,
         }
     }
 
@@ -420,6 +433,7 @@ mod tests {
         Review {
             author: author.to_owned(),
             state: state.to_owned(),
+            commit_oid: None,
         }
     }
 

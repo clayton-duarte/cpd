@@ -31,6 +31,8 @@ mod dismiss_tests;
 #[cfg(test)]
 mod follow_tests;
 #[cfg(test)]
+mod followup_tests;
+#[cfg(test)]
 mod overdue_tests;
 #[cfg(test)]
 mod pr_tests;

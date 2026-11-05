@@ -160,6 +160,8 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
         author: "ryan".to_owned(),
         decision: None,
         reviews: Vec::new(),
+        head_oid: None,
+        checks_state: None,
     };
     let lookup = Lookup {
         me: "clayton-duarte".to_owned(),
