@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, parsePending, parsePrOpened, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PendingPrJob, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { CpdError } from "../lib/cpd.ts";
-import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
+import { errEvent, Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
