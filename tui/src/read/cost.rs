@@ -61,6 +61,13 @@ pub(crate) fn own_cost(path: &Path) -> Option<f64> {
     )
 }
 
+/// The stamp of a durable host store at `path`: stub, the main file only (the implementation adds the `-wal`).
+#[allow(dead_code)]
+pub(crate) fn durable_store_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
 /// An Attempt's cost: the stored `$.cost_usd` when `metrics` is written (`no_metrics` false), else the own cost of its
 /// Worker Session's `file`; the two are never added.
 pub(crate) fn attempt_cost(

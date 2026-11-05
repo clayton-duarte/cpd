@@ -2,6 +2,8 @@ export interface CostFile { readonly text: string; readonly mtimeMs: number; rea
 export interface CostDeps {
   cpd(argv: readonly string[]): Promise<string>;
   readFile(path: string): Promise<CostFile | null>;
+  /** The cumulative cost of a durable session's host store, `null` when it has no store. */
+  durableCost(sessionId: string): Promise<{ cost: number | null; stamp: string } | null>;
 }
 
 const obj = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);

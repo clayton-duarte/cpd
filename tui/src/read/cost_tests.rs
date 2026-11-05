@@ -12,7 +12,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
-use crate::read::cost::{CostCache, total};
+use crate::read::cost::{CostCache, durable_store_stamp, total};
 use crate::read::{self, ContextNode, PlanNode, SessionNode};
 
 const NOW: &str = "2026-10-18T15:07:30.000Z";
@@ -608,4 +608,92 @@ fn a_changed_session_file_shows_its_new_cost_at_the_next_snapshot() {
     near(lead_of(&t, "ctx", "p1").cost_usd, 1.75);
     near(pl(&t, "ctx", "p1").cost_usd, 1.75);
     near(ctx(&t, "ctx").cost_usd, 1.75);
+}
+
+// ---- durable Lead and Manager: the cost is read from the host store (commands.md §17)
+
+/// Writes the host store of `id` under the fixture's home with a `pi.usage` document of `models` and `tools` costs.
+fn host_store(fx: &Fx, id: &str, models: f64, tools: f64) {
+    let dir = fx.dir.path().join("home").join("run").join("host");
+    fs::create_dir_all(&dir).unwrap();
+    let conn = rusqlite::Connection::open(dir.join(format!("{id}.sqlite"))).unwrap();
+    conn.execute_batch(&format!(
+        "CREATE TABLE documents (id TEXT PRIMARY KEY, kind TEXT, retired_at TEXT);
+         CREATE TABLE document_revisions (document_id TEXT, kind TEXT, content TEXT, revision INTEGER);
+         INSERT INTO documents (id, kind, retired_at) VALUES ('d1', '\"pi.usage\"', NULL);
+         INSERT INTO document_revisions (document_id, kind, content, revision)
+         VALUES ('d1', 'base', '{{\"models\":{{\"m\":{{\"cost\":{{\"total\":{models}}}}}}},\"tools\":{{\"t\":{{\"cost\":{{\"total\":{tools}}}}}}}}}', 1);"
+    ))
+    .unwrap();
+}
+
+fn durable(id: &str) -> String {
+    format!("UPDATE sessions SET runner = 'durable' WHERE id = '{id}';")
+}
+
+#[test]
+fn durable_session_cost_is_read_from_the_host_store() {
+    let mut fx = Fx::new();
+    host_store(&fx, "l-p1", 0.5, 0.25);
+    fx.run(&(context("ctx") + &plan("p1", "ctx", None) + &durable("l-p1")));
+    let t = fx.tree();
+    near(lead_of(&t, "ctx", "p1").cost_usd, 0.75);
+}
+
+#[test]
+fn durable_store_stamp_includes_the_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("l-p1.sqlite");
+    let wal = dir.path().join("l-p1.sqlite-wal");
+    fs::write(&store, b"main").unwrap();
+    fs::write(&wal, b"w").unwrap();
+    let before = durable_store_stamp(&store);
+    assert!(before.is_some());
+    fs::write(&wal, b"wal grew").unwrap();
+    assert_ne!(durable_store_stamp(&store), before);
+    let grown = durable_store_stamp(&store);
+    let touched = fs::OpenOptions::new().write(true).open(&wal).unwrap();
+    touched
+        .set_modified(SystemTime::now() + Duration::from_secs(3600))
+        .unwrap();
+    assert_ne!(durable_store_stamp(&store), grown);
+}
+
+#[test]
+fn plan_and_context_totals_include_durable_lead_and_manager() {
+    let mut fx = Fx::new();
+    let pi_lead = fx.file("lead.jsonl", &costing(&[1.0]));
+    host_store(&fx, "l-p2", 0.5, 0.25);
+    host_store(&fx, "m1", 2.0, 0.5);
+    fx.run(
+        &(context("ctx")
+            + &plan("p1", "ctx", Some(&pi_lead))
+            + &plan("p2", "ctx", None)
+            + &durable("l-p2")
+            + &manager("m1", "ctx", None, false)
+            + &durable("m1")),
+    );
+    let t = fx.tree();
+    near(pl(&t, "ctx", "p1").cost_usd, 1.0);
+    near(pl(&t, "ctx", "p2").cost_usd, 0.75);
+    near(ctx(&t, "ctx").cost_usd, 1.0 + 0.75 + 2.5);
+}
+
+#[test]
+fn a_missing_durable_store_is_not_counted() {
+    let mut fx = Fx::new();
+    let pi_lead = fx.file("lead.jsonl", &costing(&[1.0]));
+    host_store(&fx, "m1", 2.0, 0.5);
+    fx.run(
+        &(context("ctx")
+            + &plan("p1", "ctx", Some(&pi_lead))
+            + &plan("p2", "ctx", None)
+            + &durable("l-p2")
+            + &manager("m1", "ctx", None, false)
+            + &durable("m1")),
+    );
+    let t = fx.tree();
+    assert_eq!(lead_of(&t, "ctx", "p2").cost_usd, None);
+    assert_eq!(pl(&t, "ctx", "p2").cost_usd, None);
+    near(ctx(&t, "ctx").cost_usd, 1.0 + 2.5);
 }
