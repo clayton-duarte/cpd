@@ -67,7 +67,7 @@ class FakeLive implements LiveSource {
 const userLine = JSON.stringify({ type: "message", id: "u0", message: { role: "user", content: "hello" } });
 const assistantLine = (id: string, ts: number, content: unknown[]): string =>
   JSON.stringify({ type: "message", id, message: { role: "assistant", timestamp: ts, stopReason: "stop", content } });
-const text = (t: string) => ({ type: "text", text: t });
+const text = (t: string) => ({ type: "text" as const, text: t });
 const live = (ts: number): TranscriptItem => ({ kind: "assistant", id: `live:${ts}`, blocks: [text("so far")], streaming: true });
 const liveTool = (callId: string): TranscriptItem => ({ kind: "tool", id: `tool:${callId}`, callId, name: "read", args: {}, status: "running" });
 

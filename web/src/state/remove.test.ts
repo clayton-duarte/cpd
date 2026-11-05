@@ -34,8 +34,8 @@ describe("the store reducer", () => {
       server({ type: "session.attached", sessionId: "s1", capabilities: {} as Capabilities, title: "T", meta: { ref, footer } }),
       server({ type: "session.append", sessionId: "s1", items: [assistant("live:1", "a"), tool("c1")] }),
     );
-    expect(before.session.transcript.items).toHaveLength(2);
+    expect(before.session?.transcript.items).toHaveLength(2);
     const after = run(before, server({ type: "session.remove", sessionId: "s1", itemId: "live:1" }));
-    expect(after.session.transcript.items.map((i) => i.id)).toEqual(["tool:c1"]);
+    expect(after.session?.transcript.items.map((i) => i.id)).toEqual(["tool:c1"]);
   });
 });

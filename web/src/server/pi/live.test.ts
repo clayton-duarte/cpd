@@ -148,7 +148,7 @@ describe("live source", () => {
     expect((s.out[0] as { items: AssistantItem[] }).items[0]?.model).toBe("m/2");
   });
 
-  const running = (callId: string, name: string, args: object, result?: { text: string; isError: boolean }): ToolItem => ({
+  const running = (callId: string, name: string, args: Record<string, unknown>, result?: { text: string; isError: boolean }): ToolItem => ({
     kind: "tool",
     id: `tool:${callId}`,
     callId,
