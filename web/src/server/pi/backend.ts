@@ -14,7 +14,7 @@ import type {
   WhenBusy,
   WireImage,
 } from "../../protocol/domain.ts";
-import type { Disposable } from "../../protocol/runtime.ts";
+import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
@@ -69,8 +69,10 @@ export function createPiBackend(deps: {
   cpdHome: string;
   attachmentsDir: string;
   now(): number;
+  scheduler: Scheduler;
   windowSize?: number;
 }): SessionBackend {
+  void deps.scheduler;
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
   async function attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle> {
