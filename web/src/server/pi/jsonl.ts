@@ -171,9 +171,10 @@ export function createNormalizer(): PiNormalizer {
   const facts: JsonlFacts = {};
   const tools = new Map<string, ToolItem>();
   const pendingAsk = new Set<string>();
-  const pendingReviews = new Set<string>();
+  const pendingReviews = new Map<string, string>(); // dialog id -> title
+  const summaries = new Map<string, string>(); // dialog id -> summary
+  let unkeyedSummary = "";
   let planTitle: string | undefined;
-  let planSummary = "";
 
   function push(text: string, at: LinePosition): PushResult {
     const entry = parseLine(text, at);
@@ -303,7 +304,15 @@ export function createNormalizer(): PiNormalizer {
           body,
           defaultOpen: foldKind === "cpd-plan-summary",
         };
-        if (foldKind === "cpd-plan-summary") planSummary = body;
+        if (foldKind === "cpd-plan-summary") {
+          const rv = details.review;
+          if (typeof rv === "string" || typeof rv === "number") {
+            const dialogId = `review:${String(rv)}`;
+            summaries.set(dialogId, body);
+            const title = pendingReviews.get(dialogId);
+            if (title !== undefined) r.dialogsOpened.push({ id: dialogId, method: "cpd_plan_review", title, summary: body, interactive: true });
+          } else unkeyedSummary = body;
+        }
         r.added.push(fold);
         break;
       }
@@ -324,15 +333,13 @@ export function createNormalizer(): PiNormalizer {
         if (typeof review !== "string" && typeof review !== "number") break;
         const dialogId = `review:${String(review)}`;
         if (status === "pending") {
-          pendingReviews.add(dialogId);
-          r.dialogsOpened.push({
-            id: dialogId,
-            method: "cpd_plan_review",
-            title: planTitle ?? `Plan review ${String(review)}`,
-            summary: planSummary,
-            interactive: true,
-          });
+          const title = str(entry.data.title) ?? planTitle ?? `Plan review ${String(review)}`;
+          const summary = str(entry.data.summary) ?? summaries.get(dialogId) ?? unkeyedSummary;
+          unkeyedSummary = "";
+          pendingReviews.set(dialogId, title);
+          r.dialogsOpened.push({ id: dialogId, method: "cpd_plan_review", title, summary, interactive: true });
         } else if (status === "approved" || status === "rejected" || status === "superseded" || status === "lost") {
+          summaries.delete(dialogId);
           if (pendingReviews.delete(dialogId)) r.dialogsResolved.push(dialogId);
         }
         break;
