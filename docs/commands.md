@@ -22,6 +22,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
+11a. [`cockpit serve`](#11a-cockpit-serve)
 12. [`watch`](#12-watch)
 13. [`tui`](#13-tui)
 14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
@@ -3836,6 +3837,10 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 ```
 
 Idempotent: read-only; the same `--since` replays the same lines.
+
+## 11a. `cockpit serve`
+
+Skeleton: filled in by Job `cockpit-docs`, Attempt 1.
 
 ## 12. `watch`
 

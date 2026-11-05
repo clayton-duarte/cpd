@@ -3224,6 +3224,10 @@ The adapter renders `event.text` unchanged and reads neither `summary` nor `arte
 - **Re-exec on a new install** (hs-d140; hs-d55): between polls it checks its own executable path with the `(device, inode, mtime)` check of `core/src/host/exe.rs`, as `session run` and `attempt run` do (§3.4, §6.7); when it changed, it re-execs itself with the same argv except `--since`, which is the id of the last Event it printed (when it has printed none: the cursor it started from, its `--since`, or the highest id at its start), so no follower outlives an install and none loses or repeats an Event. The check runs in every mode.
 - `cpd events list` takes the same selection and prints one JSON value `{ok, events: [...], next: <id>}`, at most `--limit` (default 500) Events.
 
+### 5.5 `cpd cockpit serve`
+
+Skeleton: filled in by Job `cockpit-docs`, Attempt 1.
+
 ## 6. The tmux host
 
 ### 6.1 The server
