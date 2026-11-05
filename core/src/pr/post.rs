@@ -248,7 +248,10 @@ fn request_auto_merge(
         auto_merge::after_read(&*env.ports.runner, Path::new("."), read)
     };
     let (stored, reported) = match outcome {
-        Outcome::Enabled => (Some("enabled"), state("enabled", None)),
+        Outcome::Enabled => {
+            super::request_poll_now();
+            (Some("enabled"), state("enabled", None))
+        }
         Outcome::NotAllowed => (
             Some("none"),
             state(

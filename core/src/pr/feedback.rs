@@ -171,6 +171,7 @@ mod tests {
             feedback: None,
             base_ref: None,
             default_branch: None,
+            archived: false,
         }
     }
 

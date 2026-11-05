@@ -40,6 +40,7 @@ fn polled(checks: ChecksSummary) -> PolledPr {
         base_ref: Some("main".into()),
         default_branch: Some("main".into()),
         open_threads: vec![],
+        archived: false,
     }
 }
 

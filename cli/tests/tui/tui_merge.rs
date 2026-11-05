@@ -27,7 +27,7 @@ const CLIENT: &str = "/dev/pts/9";
 /// The reply of the direct read of `o/r#7` (`p0: repository`): merged.
 macro_rules! merged_lookup {
     () => {
-        r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"o/r"},"number":7,"url":"https://github.com/o/r/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":"2026-10-20T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#
+        r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"o/r","isArchived":false},"number":7,"url":"https://github.com/o/r/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":"2026-10-20T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#
     };
 }
 /// The reply of the search: no pull request.

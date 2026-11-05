@@ -814,6 +814,15 @@ macro_rules! pr_fields {
     };
 }
 
+/// The fields of a pull request the review-requested search selects: `pr_fields!` without the reviews, the checks rollup and
+/// the review threads, which nothing reads for a pull request the User neither owns nor authored (A7, pro-d392).
+macro_rules! slim_pr_fields {
+    () => {
+        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+         mergeable mergeStateStatus"
+    };
+}
+
 /// The poll query, two searches in one call, each the oldest 100 open pull
 /// requests: the User's (`search`) and those that request the User's review
 /// (`reviewRequests`). GitHub ignores an unknown search qualifier and answers 0
@@ -824,7 +833,7 @@ pub const SEARCH_QUERY: &str = concat!(
     pr_fields!(),
     " } } } reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
-    pr_fields!(),
+    slim_pr_fields!(),
     " } } } rateLimit { cost remaining resetAt } }"
 );
 
@@ -852,6 +861,8 @@ pub struct PolledPr {
     pub default_branch: Option<String>,
     /// The ids of the first 100 review threads that are not resolved: resolving one does not move `updatedAt` (pro-d231), so `due_reads` compares them with the stored open threads.
     pub open_threads: Vec<String>,
+    /// GitHub's `isArchived` of the repository: the searches say `archived:false`, so only the direct read can find it true.
+    pub archived: bool,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -939,6 +950,9 @@ struct RawRepoName {
     default_branch_ref: Option<RawBranch>,
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
+    /// Absent in the search reply; the direct read requires it.
+    #[serde(rename = "isArchived", default)]
+    is_archived: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -957,7 +971,7 @@ struct RawCommitNode {
     commit: Option<RawCommit>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct RawCommits {
     nodes: Vec<RawCommitNode>,
 }
@@ -987,8 +1001,10 @@ struct RawPr {
     mergeable: String,
     #[serde(rename = "mergeStateStatus")]
     merge_state: String,
+    /// Absent in the review-requested search (slim).
+    #[serde(default)]
     commits: RawCommits,
-    #[serde(rename = "reviewThreads")]
+    #[serde(rename = "reviewThreads", default)]
     review_threads: RawThreads,
     /// Selected by the direct read only (`read_absent`); `None` when the reply has no such key, `Some(Null)` for a null.
     #[serde(rename = "viewerDidAuthor", default)]
@@ -1001,7 +1017,7 @@ struct RawPr {
     viewer_review_request: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct RawThreads {
     nodes: Vec<RawThread>,
 }
@@ -1050,8 +1066,21 @@ struct Reply<'a> {
 
 impl Reply<'_> {
     fn fail(&self, message: String) -> CpdError {
-        failed(self.args, message, self.out.exit, &self.out.stderr)
-            .with("stdout", tail(&self.out.stdout, TAIL_LINES))
+        let e = failed(self.args, message, self.out.exit, &self.out.stderr)
+            .with("stdout", tail(&self.out.stdout, TAIL_LINES));
+        if self.rate_limited() {
+            e.with("rate_limited", true)
+        } else {
+            e
+        }
+    }
+
+    /// Whether `gh` said GitHub's rate limit is spent: a GraphQL `RATE_LIMITED` error or an "API rate limit" message. Never
+    /// transient and never retried (A2); E5 pauses on the mark.
+    fn rate_limited(&self) -> bool {
+        self.out.stdout.contains("\"RATE_LIMITED\"")
+            || self.out.stdout.contains("API rate limit")
+            || self.out.stderr.contains("API rate limit")
     }
 
     /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its
@@ -1135,6 +1164,7 @@ impl Reply<'_> {
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
             default_branch: raw.repository.default_branch_ref.map(|b| b.name),
+            archived: raw.repository.is_archived.unwrap_or(false),
             base_ref: raw.base_ref,
             number: raw.number,
             url: raw.url,
@@ -1461,6 +1491,9 @@ pub fn enable_auto_merge(
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no pull requests".
 pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<Search, CpdError> {
     let search = || {
+        // The poll is the answer to a request for one (`run/pr-poll-now`): consumed right before the search reads GitHub, so a
+        // request made after this point is kept for the next poll.
+        super::consume_poll_now();
         let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         parse_search(
@@ -1573,7 +1606,7 @@ pub fn read_absent(
 /// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
 fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError> {
     let extra = if viewer {
-        " viewerDidAuthor viewerLatestReviewRequest { id }"
+        " viewerDidAuthor viewerLatestReviewRequest { id } repository { isArchived }"
     } else {
         ""
     };
@@ -1965,6 +1998,11 @@ fn parse_lookup(
                             "gh api graphql answered {alias} without viewerLatestReviewRequest."
                         ))
                     })?;
+                    raw.repository.is_archived.ok_or_else(|| {
+                        reply.fail(format!(
+                            "gh api graphql answered {alias} without isArchived."
+                        ))
+                    })?;
                     membership = Membership {
                         authored,
                         review_requested: !request.is_null(),
@@ -2008,7 +2046,7 @@ mod tests {
 
     fn pr(repo: &str, number: i64, draft: bool, state: &str, rollup: &str) -> String {
         format!(
-            r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
+            r#"{{"repository":{{"nameWithOwner":"{repo}","isArchived":false}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
             "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED","latestOpinionatedReviews":{{"nodes":[{{"state":"APPROVED","author":{{"__typename":"User","login":"alice"}}}}]}},
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "reviewThreads":{{"nodes":[{{"id":"T1","isResolved":false}},{{"id":"T2","isResolved":true}}]}},
@@ -2201,7 +2239,7 @@ mod tests {
              baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
+             baseRefName reviewDecision mergeable mergeStateStatus } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -2283,8 +2321,8 @@ mod tests {
                 &format!(r#""baseRefName":"{base}","mergedAt":null"#),
             )
             .replace(
-                r#"{"nameWithOwner":"o/a"}"#,
-                r#"{"nameWithOwner":"o/a","defaultBranchRef":{"name":"main"}}"#,
+                r#"{"nameWithOwner":"o/a","isArchived":false}"#,
+                r#"{"nameWithOwner":"o/a","isArchived":false,"defaultBranchRef":{"name":"main"}}"#,
             )
         };
         let body = format!(
@@ -2596,13 +2634,16 @@ mod tests {
         assert!(!plain.contains("viewer"));
         assert_eq!(
             direct
-                .matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }")
+                .matches(" viewerDidAuthor viewerLatestReviewRequest { id } repository { isArchived } } }")
                 .count(),
             2
         );
         assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner defaultBranchRef { name } }"));
         assert_eq!(
-            direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""),
+            direct.replace(
+                " viewerDidAuthor viewerLatestReviewRequest { id } repository { isArchived }",
+                ""
+            ),
             plain
         );
     }

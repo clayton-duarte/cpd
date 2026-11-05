@@ -2839,6 +2839,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
                         || (table == "jobs" && v == "work")
                         || (table == "workflows" && v == "free")
                         || (table == "sessions" && v == 0)
+                        || (table == "pull_requests" && v == 0)
                         || (table == "sessions" && v == "pi")
                         || (table == "attempts" && v == "pi")
                 };

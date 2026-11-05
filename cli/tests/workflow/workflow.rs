@@ -2199,7 +2199,7 @@ pub(super) fn node(
     let review = review.map_or("null".to_owned(), |r| format!("\"{r}\""));
     let rollup = rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
     format!(
-        r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
+        r#"{{"repository":{{"nameWithOwner":"{repo}","isArchived":false}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
         "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":{merged},"reviewDecision":{review},{reviewers}
         "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
@@ -3389,8 +3389,10 @@ fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing
         "{text}"
     );
     assert_eq!(
-        text.matches("viewerDidAuthor viewerLatestReviewRequest { id } }")
-            .count(),
+        text.matches(
+            "viewerDidAuthor viewerLatestReviewRequest { id } repository { isArchived } }"
+        )
+        .count(),
         3,
         "{text}"
     );
@@ -4777,7 +4779,9 @@ fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_
     );
     assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner defaultBranchRef { name } } number url"#), "{}", calls[1][3]);
     assert!(
-        calls[1][3].contains("viewerDidAuthor viewerLatestReviewRequest { id } }"),
+        calls[1][3].contains(
+            "viewerDidAuthor viewerLatestReviewRequest { id } repository { isArchived } }"
+        ),
         "{}",
         calls[1][3]
     );
@@ -5939,8 +5943,8 @@ fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
 fn repointed(node: String, base: &str, default: &str) -> String {
     let node = based(node, base);
     let node = node.replacen(
-        r#""},"number":"#,
-        &format!(r#"","defaultBranchRef":{{"name":"{default}"}}}},"number":"#),
+        r#","isArchived":false},"number":"#,
+        &format!(r#","isArchived":false,"defaultBranchRef":{{"name":"{default}"}}}},"number":"#),
         1,
     );
     assert!(node.contains("defaultBranchRef"), "{node}");

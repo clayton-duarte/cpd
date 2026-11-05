@@ -23,7 +23,7 @@ struct Gh {
 
 fn node(number: i64) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
+        r#"{{"repository":{{"nameWithOwner":"acme/pay","isArchived":false}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
         "isDraft":false,"state":"MERGED","createdAt":"opened","updatedAt":"U1","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "reviewThreads":{{"nodes":[]}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
@@ -659,4 +659,261 @@ fn poll_skips_a_legacy_cancelled_workflow_not_open_on_github_without_an_error() 
         assert!(rig.errors().is_empty(), "{:?}", rig.errors());
         assert_eq!(legacy_status(&rig), ("cancelled".into(), "done".into()));
     }
+}
+
+// --- the holds, archived and checks-confirm rules (contract §7.6 steps 1, 3, 3b, 5; pro-d392) ---
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::gh::Listed;
+use super::pulls;
+
+const T1: &str = r#"[{"id":"T1","kind":"thread","last":"C1","author":"rev","bot":false,"path":"a.rs","outdated":false,"url":"https://github.com/acme/pay/pull/801#discussion_r1","excerpt":"fix this"}]"#;
+
+fn search_reply(nodes: &[String], review_nodes: &[String]) -> Reply {
+    Reply::ok(&format!(
+        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
+        nodes.len(),
+        nodes.join(","),
+        review_nodes.len(),
+        review_nodes.join(",")
+    ))
+}
+
+/// An open `acme/pay#number` as a search lists it, with the rollup state `rollup` and the open thread `T1` when `thread`.
+fn open_node(number: i64, rollup: &str, thread: bool) -> String {
+    let threads = if thread {
+        r#"[{"id":"T1","isResolved":false}]"#
+    } else {
+        "[]"
+    };
+    format!(
+        r#"{{"repository":{{"nameWithOwner":"acme/pay","isArchived":false}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
+        "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+        "reviewThreads":{{"nodes":{threads}}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{{"state":"{rollup}"}}}}}}]}}}}"#
+    )
+}
+
+/// The direct read's node of `acme/pay#number`: open, in a repository that is `archived` or not, the User a reviewer and no author.
+fn read_node(number: i64, archived: bool, did_author: bool) -> String {
+    format!(
+        r#"{{"repository":{{"nameWithOwner":"acme/pay","isArchived":{archived}}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
+        "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+        "viewerDidAuthor":{did_author},"viewerLatestReviewRequest":{{"id":"R1"}},
+        "reviewThreads":{{"nodes":[]}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+    )
+}
+
+fn query_of(call: &Call) -> String {
+    call.args.get(3).cloned().unwrap_or_default()
+}
+
+/// The in-process `gh`: the search lists `search` (author) and `review` (review-requested) nodes, or, when `listed` is
+/// false, nothing; a direct read of `#number` answers `read`; a checks read answers an empty check list.
+struct Scripted {
+    search: Vec<String>,
+    review: Vec<String>,
+    listed: AtomicBool,
+    read: String,
+}
+
+impl Handler for Scripted {
+    fn handle(&self, call: &Call) -> Reply {
+        let query = query_of(call);
+        if query.contains("search(type: ISSUE") {
+            return if self.listed.load(Ordering::SeqCst) {
+                search_reply(&self.search, &self.review)
+            } else {
+                search_reply(&[], &[])
+            };
+        }
+        if query.contains("viewerLatestReviewRequest") {
+            return Reply::ok(&format!(
+                r#"{{"data":{{"p0":{{"pullRequest":{}}}}}}}"#,
+                self.read
+            ));
+        }
+        if query.contains("reviewThreads") && query.contains(": repository(") {
+            let empty = serde_json::json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+            let mut data = serde_json::json!({"viewer": {"login": "me"}});
+            for i in 0..query.matches(": repository(").count() {
+                data[format!("p{i}")] = serde_json::json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
+            }
+            return Reply::ok(&serde_json::json!({"data": data}).to_string());
+        }
+        if query.contains("contexts(first: 100") {
+            let pull = serde_json::json!({"labels": {"nodes": []}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}}}]}});
+            return Reply::ok(
+                &serde_json::json!({"data": {"p0": {"pullRequest": pull}}}).to_string(),
+            );
+        }
+        Reply::exit(9, "", "unexpected gh call\n")
+    }
+}
+
+fn run_poll(rig: &Rig) -> serde_json::Value {
+    // `Env::open_with` reads `$CPD_HOME`: the one variable these tests set, to their own temp dir (as above).
+    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
+    let out = Ports::scope(&rig.fakes.ports, || {
+        poll(
+            &rig.fakes.ports,
+            PollArgs {
+                plan: PlanArg { plan: None },
+            },
+        )
+    })
+    .unwrap_or_else(|e| panic!("the poll failed: {e:?}"));
+    match out {
+        crate::output::Output::Success(map) => serde_json::Value::Object(map),
+        other => panic!("unexpected output {other:?}"),
+    }
+}
+
+/// How many direct reads (viewer fields) and checks reads the runner has seen, and how many of the reads ask `isArchived`.
+fn counts(rig: &Rig) -> (usize, usize, usize) {
+    let queries: Vec<String> = rig.fakes.runner.calls().iter().map(query_of).collect();
+    let reads: Vec<&String> = queries
+        .iter()
+        .filter(|q| q.contains("viewerLatestReviewRequest"))
+        .collect();
+    (
+        reads.len(),
+        reads.iter().filter(|q| q.contains("isArchived")).count(),
+        queries
+            .iter()
+            .filter(|q| q.contains("contexts(first: 100"))
+            .count(),
+    )
+}
+
+fn rig_with(gh: &Arc<Scripted>) -> Rig {
+    let rig = Rig::new();
+    let _ = (*rig.fakes.runner).clone().route("gh", gh.clone());
+    rig
+}
+
+/// A stored open row `acme/pay#900` no Workflow owns, with the User's review requested.
+fn store_review_requested(rig: &Rig) {
+    rig.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, review_requested)
+           VALUES ('acme/pay', 900, 'https://github.com/acme/pay/pull/900', 'T', 0, 'open', 'none', 'none', 'opened', 'opened', 1);",
+    );
+}
+
+fn scripted(search: Vec<String>, review: Vec<String>, listed: bool, read: String) -> Arc<Scripted> {
+    Arc::new(Scripted {
+        search,
+        review,
+        listed: AtomicBool::new(listed),
+        read,
+    })
+}
+
+#[test]
+fn holds_ignores_open_threads() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    let gh = scripted(vec![open_node(801, "", true)], vec![], true, String::new());
+    let _ = (*rig.fakes.runner).clone().route("gh", gh);
+    rig.sql(&format!(
+        "UPDATE pull_requests SET updated_at = 'U1', feedback = '{T1}' WHERE number = 801;"
+    ));
+
+    run_poll(&rig); // writes the row as the listing has it
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let row = store
+        .read(|c| pulls::find(c, "acme/pay", 801))
+        .unwrap()
+        .expect("the row");
+    let listed = Listed {
+        pr: super::gh::PolledPr {
+            open_threads: vec!["T1".to_owned()],
+            ..row.polled().unwrap()
+        },
+        membership: row.membership(),
+    };
+    assert!(
+        row.holds(&listed, None).unwrap(),
+        "a row whose columns match holds, whatever its open threads"
+    );
+    let second = run_poll(&rig);
+    assert_eq!(
+        second["changed"],
+        serde_json::json!([]),
+        "the second poll reports nothing changed: {second}"
+    );
+}
+
+#[test]
+fn archived_open_pr_is_read_once() {
+    let gh = scripted(vec![], vec![], false, read_node(900, true, false));
+    let rig = rig_with(&gh);
+    store_review_requested(&rig);
+
+    run_poll(&rig);
+    assert_eq!(counts(&rig).0, 1, "the first poll reads the PR once");
+    run_poll(&rig);
+    assert_eq!(counts(&rig).0, 1, "the archived PR is no candidate again");
+}
+
+#[test]
+fn archived_flag_cleared_when_listed() {
+    let gh = scripted(
+        vec![],
+        vec![open_node(900, "", false)],
+        false,
+        read_node(900, true, false),
+    );
+    let rig = rig_with(&gh);
+    store_review_requested(&rig);
+
+    run_poll(&rig);
+    run_poll(&rig);
+    assert_eq!(counts(&rig).0, 1, "archived: read once, then parked");
+    gh.listed.store(true, Ordering::SeqCst);
+    run_poll(&rig); // a search lists it again: archived is cleared
+    assert_eq!(counts(&rig).0, 1, "a listed PR is not read");
+    gh.listed.store(false, Ordering::SeqCst);
+    run_poll(&rig);
+    assert_eq!(
+        counts(&rig).0,
+        2,
+        "once unlisted again it is a candidate again"
+    );
+}
+
+#[test]
+fn owned_non_archived_absent_pr_is_still_read() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    let gh = scripted(vec![], vec![], false, read_node(801, false, true));
+    let _ = (*rig.fakes.runner).clone().route("gh", gh);
+
+    run_poll(&rig);
+    run_poll(&rig);
+    let (reads, asking_archived, _) = counts(&rig);
+    assert_eq!(reads, 2, "an owned PR in neither search is read each poll");
+    assert_eq!(asking_archived, 2, "each read asks isArchived");
+}
+
+#[test]
+fn checks_confirm_only_for_owned_or_authored() {
+    let rig = Rig::new();
+    let dir = rig.home.root().join("policy/acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pay.toml"), REQUIRED).unwrap();
+    let gh = scripted(
+        vec![],
+        vec![open_node(900, "SUCCESS", false)],
+        true,
+        String::new(),
+    );
+    let _ = (*rig.fakes.runner).clone().route("gh", gh);
+
+    run_poll(&rig);
+    assert_eq!(
+        counts(&rig).2,
+        0,
+        "a review-requested-only PR triggers no checks read"
+    );
 }

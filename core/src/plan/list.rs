@@ -138,6 +138,7 @@ fn workflow_row(r: &Row) -> rusqlite::Result<(String, Value)> {
             // Likewise not shown.
             base_ref: None,
             default_branch: None,
+            archived: false,
         }
         .to_json(),
     };

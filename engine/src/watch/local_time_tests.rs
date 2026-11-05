@@ -1,6 +1,8 @@
 //! The engine's sentences name times in the machine's local zone (PLAN local-time, pro-d41, pro-d42). The zone is
 //! `ManualClock`'s (EST5EDT: EST and EDT); no test reads the system zone.
 
+use std::time::Duration;
+
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -86,5 +88,48 @@ fn rate_limit_field_stays_utc() {
         !failure.message.contains("2026-10-20T11:00:00Z"),
         "{}",
         failure.message
+    );
+}
+
+/// The seconds E5 waits after GitHub's reset before it polls again (decision pro-d392): the grace.
+const GRACE: Duration = Duration::from_secs(3);
+
+/// How long the guard still waits, `past` after a reset stamped at the clock's start.
+fn wait_after_reset(past: Duration) -> Duration {
+    let clock = ManualClock::new();
+    let reset_at = clock.utc().format(&Rfc3339).unwrap();
+    clock.advance(past);
+    let out = serde_json::json!({"rate_limit": {"remaining": 12, "reset_at": reset_at}});
+    let (until, _) = rate_guard(&clock, &out, &clock.zone())
+        .unwrap()
+        .expect("12 requests left is below the floor");
+    until.saturating_duration_since(clock.now())
+}
+
+#[test]
+fn rate_guard_waits_reset_plus_grace() {
+    // Before the reset: the rest of the time to it, and the grace.
+    let clock = ManualClock::new();
+    let reset_at = (clock.utc() + time::Duration::seconds(60))
+        .format(&Rfc3339)
+        .unwrap();
+    let out = serde_json::json!({"rate_limit": {"remaining": 12, "reset_at": reset_at}});
+    let (until, _) = rate_guard(&clock, &out, &clock.zone()).unwrap().unwrap();
+    assert_eq!(until - clock.now(), Duration::from_secs(60) + GRACE);
+
+    // Past the reset by less than the grace: still waits, for what is left of it.
+    assert_eq!(
+        wait_after_reset(Duration::from_secs(1)),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        wait_after_reset(Duration::from_millis(2999)),
+        Duration::from_millis(1)
+    );
+    // At reset plus the grace: the poll may run.
+    assert_eq!(wait_after_reset(GRACE), Duration::ZERO);
+    assert_eq!(
+        wait_after_reset(GRACE + Duration::from_secs(5)),
+        Duration::ZERO
     );
 }

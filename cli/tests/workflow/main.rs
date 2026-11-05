@@ -19,6 +19,7 @@ mod pr_merge;
 mod pr_newest_run;
 mod pr_open;
 mod pr_open_jira;
+mod pr_poll_now;
 mod pr_post;
 mod pr_post_auto_merge;
 mod pr_post_flow;

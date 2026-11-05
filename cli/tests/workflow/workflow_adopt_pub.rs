@@ -34,7 +34,7 @@ const LIST_HEAD: [&str; 8] = [
 /// answers pull request 7.
 fn gh(env: &TestEnv) {
     let lookup = format!(
-        r#"{{"data":{{"p0":{{"pullRequest":{{"repository":{{"nameWithOwner":"acme/pay"}},"number":7,"url":"{URL}","title":"Polish the review submit",
+        r#"{{"data":{{"p0":{{"pullRequest":{{"repository":{{"nameWithOwner":"acme/pay","isArchived":false}},"number":7,"url":"{URL}","title":"Polish the review submit",
         "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
         "viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}}}}}}}"#
     );
