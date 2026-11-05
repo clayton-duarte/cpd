@@ -139,6 +139,35 @@ impl PlanRow {
     }
 }
 
+/// The pull request a review Plan reviews (contract §2.2 Plan `reviewed_pr`): null, or `{repo, number, url, title, state}`,
+/// the `state` read from the `pull_requests` row of `(repo, number)` now, null when there is none.
+pub fn reviewed_pr(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
+    type Stored = (Option<String>, Option<i64>, Option<String>);
+    let (repo, number, title): Stored = conn.query_row(
+        "SELECT reviewed_repo, reviewed_number, reviewed_title FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let (repo, number, title) = match (repo, number, title) {
+        (None, None, None) => return Ok(Value::Null),
+        (Some(repo), Some(number), Some(title)) => (repo, number, title),
+        _ => {
+            return Err(CpdError::bad_row(format!(
+                "Plan {plan} has a partial reviewed pull request"
+            )));
+        }
+    };
+    let state: Option<String> = conn
+        .query_row(
+            "SELECT state FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let url = crate::inbox::review_plan::pr_url(&repo, number.unsigned_abs());
+    Ok(json!({"repo": repo, "number": number, "url": url, "title": title, "state": state}))
+}
+
 /// Every Plan matching `filter` (SQL after `WHERE`), oldest first; a deleted Plan is no Plan (contract §2.2 "Deleted").
 pub(super) fn query(
     conn: &Connection,
