@@ -339,7 +339,6 @@ it("only plan-review job-stuck and drafts-parked items colour a Lead dot", async
     ["job-stuck", "yellow"],
     ["drafts-parked", "cyan"],
     ["pr-closed", null],
-    ["pr-ready", null],
   ];
   const dots = await dotsById({
     context: [context("c1")],
@@ -356,6 +355,47 @@ it("only plan-review job-stuck and drafts-parked items colour a Lead dot", async
     inbox: [item(1, { kind: "pr-ready", plan: "p1", session: "l1", urgency: "yellow" })],
   });
   expect(owned["l1"]).toBe("yellow");
+});
+
+it("a cyan or white pr-ready item linked to a Lead by session and plan fills no dot", async () => {
+  for (const urgency of ["cyan", "white"]) {
+    const dots = await dotsById({
+      context: [context("c1")],
+      plan: [plan("p1", "c1", { lead_session: "l1" })],
+      session: [session("l1", { role: "lead", plan: "p1", plan_lead: true, state: "idle" })],
+      inbox: [item(1, { kind: "pr-ready", plan: "p1", session: "l1", urgency })],
+    });
+    expect(dots["l1"], urgency).toBeNull();
+  }
+});
+
+it("a yellow or red pr-ready item of the Plan fills the Lead dot whether or not it names the session", async () => {
+  for (const urgency of ["yellow", "red"]) {
+    for (const named of ["l1", null]) {
+      const dots = await dotsById({
+        context: [context("c1")],
+        plan: [plan("p1", "c1", { lead_session: "l1" })],
+        session: [session("l1", { role: "lead", plan: "p1", plan_lead: true, state: "idle" })],
+        inbox: [item(1, { kind: "pr-ready", plan: "p1", session: named, urgency })],
+      });
+      expect(dots["l1"], `${urgency} ${named}`).toBe(urgency);
+    }
+  }
+});
+
+it("session-linked kinds other than dialog unread and loop-guard fill no dot", async () => {
+  const none: Array<[string, string]> = [["pr-closed", "red"], ["review-requested", "red"], ["pr-ready", "cyan"]];
+  const some = ["dialog", "unread", "loop-guard"];
+  const dots = await dotsById({
+    context: [context("c1")],
+    session: [...none.map(([k]) => k), ...some].map((k) => session(`s-${k}`, { role: "lead", state: "idle" })),
+    inbox: [
+      ...none.map(([k, u], n) => item(n + 1, { kind: k, session: `s-${k}`, urgency: u })),
+      ...some.map((k, n) => item(n + 10, { kind: k, session: `s-${k}`, urgency: "red" })),
+    ],
+  });
+  for (const [k] of none) expect(dots[`s-${k}`], k).toBeNull();
+  for (const k of some) expect(dots[`s-${k}`], k).toBe("red");
 });
 
 describe("plan view resilience", () => {
