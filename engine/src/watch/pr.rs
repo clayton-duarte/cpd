@@ -33,6 +33,10 @@ use cpd_core::ports::Ports;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
+/// The wait after GitHub's reset before E5 polls again (decision pro-d392): the first poll at the reset instant can still be refused.
+const RATE_GRACE: Duration = Duration::from_secs(3);
+/// The pause after a rate-limited reply when no reset is known (decision of the Lead, core-impl-engine-a1-q1).
+const RATE_FALLBACK: Duration = Duration::from_secs(60);
 /// The `cpd pr poll` child's deadline (contract §3.7): above `pr poll`'s own 15 s
 /// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
@@ -48,7 +52,13 @@ pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
         "PR_POLL",
         Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)),
     );
-    let after_last = engine.last_poll_end.map_or(now, |end| end + every);
+    // A cpd action changed a pull request on GitHub: poll at once (no floor), but never inside a rate-limit pause.
+    let asked = engine.home.run_dir().join(cpd_core::pr::POLL_NOW).exists();
+    let after_last = if asked {
+        now
+    } else {
+        engine.last_poll_end.map_or(now, |end| end + every)
+    };
     Some(
         engine
             .paused_until
@@ -115,6 +125,19 @@ fn apply(engine: &mut Engine, finished: Finished) {
         }
         Err(failure) => {
             engine.last_poll_end = Some(finished.ended);
+            if failure.details["rate_limited"] == true {
+                // A rate-limit reply is a pause until the stored reset plus the grace, not a machine error (A2).
+                let clock = &*engine.ports.clock;
+                let wait = engine.rate_reset.map_or(RATE_FALLBACK, |reset| {
+                    Duration::try_from(reset - clock.utc()).unwrap_or_default() + RATE_GRACE
+                });
+                engine.paused_until = Some(clock.now() + wait);
+                engine.log.line(&format!(
+                    "E5: GitHub's rate limit is spent: polling pauses {} s.",
+                    wait.as_secs()
+                ));
+                return;
+            }
             if let Some(failure) = transient(engine, failure) {
                 engine.fail(Step::E5, About::Machine, failure);
             }
@@ -134,6 +157,9 @@ fn apply(engine: &mut Engine, finished: Finished) {
             out["polled"]
         ));
     }
+    engine.rate_reset = out["rate_limit"]["reset_at"]
+        .as_str()
+        .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok());
     match rate_guard(&*engine.ports.clock, &out, &engine.ports.clock.zone()) {
         Ok(None) => engine.clear(Step::E5, &About::Machine),
         Ok(Some((until, failure))) => {
@@ -311,7 +337,7 @@ pub(super) fn rate_guard(
     }
     let reset = OffsetDateTime::parse(reset_at, &Rfc3339)
         .map_err(|e| unusable(format!("reset_at {reset_at:?} is not RFC 3339: {e}")))?;
-    let wait = (reset - clock.utc()).max(time::Duration::ZERO);
+    let wait = (reset + RATE_GRACE - clock.utc()).max(time::Duration::ZERO);
     let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
         code: ErrorCode::GhRateLimited.as_str().to_owned(),

@@ -71,6 +71,8 @@ pub(super) struct Engine {
     pub poll: Option<PollRun>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
+    /// The reset of GitHub's rate limit as the last poll reported it: where a rate-limited reply pauses to.
+    pub rate_reset: Option<OffsetDateTime>,
     /// The `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
     /// The `@cpd_host_alert` value last set on the tmux server (`None` when it was unset).
@@ -155,6 +157,7 @@ impl Engine {
             last_poll_end: None,
             poll: None,
             paused_until: None,
+            rate_reset: None,
             workers: None,
             host_alert: None,
             distill_started: HashMap::new(),

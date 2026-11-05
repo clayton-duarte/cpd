@@ -59,6 +59,7 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         if let Err(e) = gh::rerun_failed(runner, lead, run.id) {
             return Err(e.with("rerun", json!(rerun)));
         }
+        super::request_poll_now();
         rerun.push(json!({"id": run.id, "name": run.name}));
     }
     Ok(Output::success(

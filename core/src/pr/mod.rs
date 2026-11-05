@@ -150,6 +150,29 @@ pub struct PollArgs {
 }
 
 /// Runs `command` of the `pr` group. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+/// The run file (under `run/`) that asks E5 for a poll at once (decision pro-d394, A6).
+pub const POLL_NOW: &str = "pr-poll-now";
+
+/// Asks E5 for an immediate poll: writes `run/pr-poll-now` atomically. Called after a GitHub write succeeded. The request is a
+/// hint on top of a write that already happened, so a failure to write it does not fail the command: E5 polls on its period anyway.
+pub fn request_poll_now() {
+    if let Ok(home) = crate::home::CpdHome::from_env() {
+        request_poll_now_in(&home);
+    }
+}
+
+/// Removes the request [`request_poll_now`] wrote; the poll calls it as it starts to read GitHub.
+pub(crate) fn consume_poll_now() {
+    if let Ok(home) = crate::home::CpdHome::from_env() {
+        let _ = std::fs::remove_file(home.run_dir().join(POLL_NOW));
+    }
+}
+
+/// [`request_poll_now`] for a caller that holds the home (the engine).
+pub fn request_poll_now_in(home: &crate::home::CpdHome) {
+    let _ = crate::atomic::write_atomic(&home.run_dir().join(POLL_NOW), b"");
+}
+
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Open(args) => open::open(args),

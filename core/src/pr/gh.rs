@@ -1066,8 +1066,21 @@ struct Reply<'a> {
 
 impl Reply<'_> {
     fn fail(&self, message: String) -> CpdError {
-        failed(self.args, message, self.out.exit, &self.out.stderr)
-            .with("stdout", tail(&self.out.stdout, TAIL_LINES))
+        let e = failed(self.args, message, self.out.exit, &self.out.stderr)
+            .with("stdout", tail(&self.out.stdout, TAIL_LINES));
+        if self.rate_limited() {
+            e.with("rate_limited", true)
+        } else {
+            e
+        }
+    }
+
+    /// Whether `gh` said GitHub's rate limit is spent: a GraphQL `RATE_LIMITED` error or an "API rate limit" message. Never
+    /// transient and never retried (A2); E5 pauses on the mark.
+    fn rate_limited(&self) -> bool {
+        self.out.stdout.contains("\"RATE_LIMITED\"")
+            || self.out.stdout.contains("API rate limit")
+            || self.out.stderr.contains("API rate limit")
     }
 
     /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its
@@ -1478,6 +1491,9 @@ pub fn enable_auto_merge(
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no pull requests".
 pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<Search, CpdError> {
     let search = || {
+        // The poll is the answer to a request for one (`run/pr-poll-now`): consumed right before the search reads GitHub, so a
+        // request made after this point is kept for the next poll.
+        super::consume_poll_now();
         let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         parse_search(

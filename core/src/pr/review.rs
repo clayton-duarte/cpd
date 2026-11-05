@@ -163,6 +163,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     }
     let body = serde_json::to_vec(&review).expect("a JSON value serializes");
     let stdout = gh::post_review(&*ports.runner, repo, number, body)?;
+    super::request_poll_now();
     let posted: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
     let (Some(id), Some(url)) = (
         posted.get("id").filter(|v| v.is_number()),

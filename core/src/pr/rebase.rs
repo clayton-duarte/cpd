@@ -435,12 +435,16 @@ fn push_rebased(
         .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
     if out.code == 0 {
+        super::request_poll_now();
         reset_row(env, id, key)?;
     }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
     if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
         match git::push_commit(lead, branch, &tip)? {
-            Push::Pushed { new: true } => reset_row(env, id, key)?,
+            Push::Pushed { new: true } => {
+                super::request_poll_now();
+                reset_row(env, id, key)?
+            }
             Push::Pushed { .. } | Push::Contained { .. } => {}
             Push::Rejected { stderr } => {
                 return Err(CpdError::new(
@@ -490,6 +494,7 @@ fn push_adopted(
     let mut pushed = match git::push_commit(lead, remote, new)? {
         Push::Pushed { new } => {
             if new {
+                super::request_poll_now();
                 reset_row(env, id, &workflow.key)?;
             }
             new
@@ -502,6 +507,7 @@ fn push_adopted(
         match git::push_commit(lead, remote, &tip)? {
             Push::Pushed { new } => {
                 if new {
+                    super::request_poll_now();
                     reset_row(env, id, &workflow.key)?;
                 }
                 pushed |= new;

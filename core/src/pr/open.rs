@@ -248,7 +248,10 @@ fn find_or_create(
         title,
         description.unwrap_or_default(),
     ) {
-        Ok(created) => Ok(created),
+        Ok(created) => {
+            super::request_poll_now();
+            Ok(created)
+        }
         Err(failed) => workflow
             .bound_since()
             .and_then(|since| gh::head_pr(lead, workflow.remote_branch(), since))

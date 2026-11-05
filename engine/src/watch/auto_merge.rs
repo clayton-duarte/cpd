@@ -109,6 +109,9 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             return;
         }
     };
+    if refused.is_none() && !not_allowed {
+        cpd_core::pr::request_poll_now_in(&engine.home);
+    }
     let written = engine.store.write("engine E18", |tx| {
         posts::set_auto_merge(
             tx,

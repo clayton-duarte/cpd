@@ -108,6 +108,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("rebase", methods.rebase));
     };
     gh::merge_pr(runner, cwd, &repo, number, method, &view.head)?;
+    super::request_poll_now();
     // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
     let stored = match gh::view_for_merge(runner, cwd, &repo, number) {
         Ok(read) if read.state == "MERGED" => {

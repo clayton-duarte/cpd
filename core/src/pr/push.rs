@@ -94,6 +94,9 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
         }
     })?;
 
+    if pushed {
+        super::request_poll_now();
+    }
     Ok(Output::success(
         json!({"plan": id, "pr": key, "pushed": pushed, "sha": sha, "remote": remote}),
     ))
