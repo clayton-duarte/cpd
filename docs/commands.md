@@ -3850,7 +3850,7 @@ cpd cockpit serve
 
 No flags and no arguments; any argument is `usage` (exit 2). Callers: none. The WebUI backend (`web/src/server/`) starts it once and keeps it; it is not a command an agent or the User types, and not a cockpit action (§2). It reads requests on stdin and writes frames on stdout, one JSON object per line, each with a string field `t`. stderr carries logs only. It binds no socket and no port.
 
-**Lifecycle.** It opens the store as `cpd events follow` does (§11.2: it waits out a migration in progress). It then writes `hello`, writes snapshot 1 and sets its cursor to the highest Event id, so no Event before the start is replayed: the first snapshot carries the state. It serves until stdin reaches end of file, then exits 0. The parent's death closes stdin, so the process never outlives its parent.
+**Lifecycle.** It opens the store as `cpd events follow` does (§11.2: it waits out a migration in progress), once, as one Env (its store, home and ports). Every snapshot pane and every `plan_show` reply is read through that same open Env: `serve` never reads `$CPD_HOME` after start and never opens another store connection per snapshot (contract §5.5). It then writes `hello`, writes snapshot 1 and sets its cursor to the highest Event id, so no Event before the start is replayed: the first snapshot carries the state. It serves until stdin reaches end of file, then exits 0. The parent's death closes stdin, so the process never outlives its parent.
 
 ### Frames out
 
