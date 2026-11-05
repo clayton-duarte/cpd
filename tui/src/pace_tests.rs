@@ -132,6 +132,7 @@ fn centre(lead_dot: Option<Dot>, jobs: Vec<JobNode>) -> Centre {
         jobs,
         needs_user: NeedsUser::default(),
         events_cursor: 0,
+        reviewed_pr: None,
     };
     let boxes =
         boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);

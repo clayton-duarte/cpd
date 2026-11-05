@@ -58,6 +58,20 @@ pub struct PlanBoxes {
     pub needs_user: NeedsUser,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+    /// The pull request a review Plan reviews (contract §2.2 Plan `reviewed_pr`); `None` for any other Plan.
+    pub reviewed_pr: Option<ReviewedPr>,
+}
+
+/// The pull request a review Plan reviews: `plan show`'s `reviewed_pr`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewedPr {
+    /// `<owner>/<name>`.
+    pub repo: String,
+    pub number: i64,
+    pub url: String,
+    pub title: String,
+    /// `None` when cpd has no row for the pull request.
+    pub state: Option<super::PrState>,
 }
 
 /// What of a Plan needs the User, from the Inbox's visible items (hs-d303): the plan view draws a failed Job, or a closed
@@ -379,6 +393,7 @@ fn boxes(
             )?,
             jobs,
             events_cursor: highest_id(conn)?,
+            reviewed_pr: None,
             plan: plan.clone(),
         })
     }

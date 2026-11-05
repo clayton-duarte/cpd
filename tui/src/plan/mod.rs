@@ -934,6 +934,7 @@ fn sample_centre(workflows: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -
         jobs,
         needs_user,
         events_cursor: 0,
+        reviewed_pr: None,
     };
     let slot = ChatSlot {
         session: SessionId::parse("lead").unwrap(),
@@ -1060,6 +1061,8 @@ mod needs_tests;
 mod pill_label_tests;
 #[cfg(test)]
 mod pill_tier_tests;
+#[cfg(test)]
+mod review_box_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1161,6 +1164,7 @@ mod tests {
             jobs: (0..jobs).map(job).collect(),
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
+            reviewed_pr: None,
         };
         let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0)
             .with_margin(CHART_MARGIN);
