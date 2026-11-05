@@ -86,7 +86,7 @@ it("a label with a newline shows its second line muted on a second row", () => {
 it("an inbox row has no inline action buttons and no key footer", () => {
   const approve = { kind: "inbox.approve", itemId: 1 } as const;
   const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", actions: [{ label: "Approve", action: approve }] })]);
-  expect(m.container.querySelector("button")).toBeNull();
+  expect(m.container.querySelector("li button")).toBeNull();
   expect(m.container.querySelector('[data-part="actions"]')).toBeNull();
   expect(m.container.querySelector('[data-part="bar"]')).toBeNull();
   expect(m.container.querySelector('[data-part="footer"]')).toBeNull();
@@ -183,5 +183,105 @@ it("an empty inbox shows up to date, drink some water", () => {
   const m = render([]);
   expect(m.container.textContent).toContain("up to date, drink some water");
   expect(m.container.textContent).not.toContain("Nothing needs you");
+  m.unmount();
+});
+
+const mixed = () => [
+  row(1, "dialog", "r1", { urgency: "red" }),
+  row(2, "dialog", "r2", { urgency: "red" }),
+  row(3, "deploy", "y1", { urgency: "yellow" }),
+  row(4, "unread", "w1", { urgency: "white" }),
+];
+const btn = (c: Element, name: string) => c.querySelector<HTMLButtonElement>(`button[data-tier-filter="${name}"]`);
+const countOf = (b: Element | null) => b?.querySelector('[data-part="filter-count"]')?.textContent;
+const shown = (c: Element) => items(c).map((li) => li.getAttribute("data-id"));
+const headerCount = (c: Element) => c.querySelector('[data-part="inbox-header"] > span')?.textContent;
+
+it("the filter bar has an all button and the six tier buttons with a count each", () => {
+  const m = render(mixed());
+  const names = Array.from(m.container.querySelectorAll('[data-part="inbox-filters"] button')).map((b) => b.getAttribute("data-tier-filter"));
+  expect(names).toEqual(["all", "blocker", "delivery", "decision", "support", "notice", "unread"]);
+  expect(m.container.querySelector('[data-part="inbox-filters"]')?.getAttribute("aria-label")).toBe("Filter inbox by tier");
+  for (const n of names) expect(countOf(btn(m.container, n ?? ""))).toMatch(/^\d+$/);
+  expect(btn(m.container, "blocker")?.textContent).toBe("blocker 2");
+  expect(btn(m.container, "blocker")?.querySelector('[data-part="filter-count"]')?.className).toContain("font-mono");
+  m.unmount();
+});
+
+it("a tier with no rows is not disabled and shows 0", () => {
+  const m = render(mixed());
+  const b = btn(m.container, "notice");
+  expect(b?.disabled).toBe(false);
+  expect(countOf(b)).toBe("0");
+  for (const el of m.container.querySelectorAll('[data-part="inbox-filters"] button')) expect((el as HTMLButtonElement).disabled).toBe(false);
+  m.unmount();
+});
+
+it("the all button shows the total and every tier shows its own count", () => {
+  const m = render(mixed());
+  expect(countOf(btn(m.container, "all"))).toBe("4");
+  expect(["blocker", "delivery", "decision", "support", "notice", "unread"].map((n) => countOf(btn(m.container, n)))).toEqual(["2", "1", "0", "0", "0", "1"]);
+  m.unmount();
+});
+
+it("clicking a tier filters the rows to that tier and the header count follows", () => {
+  const m = render(mixed());
+  click(btn(m.container, "blocker"));
+  expect(shown(m.container)).toEqual(["1", "2"]);
+  expect(headerCount(m.container)).toBe("2");
+  expect(btn(m.container, "blocker")?.getAttribute("aria-pressed")).toBe("true");
+  expect(btn(m.container, "delivery")?.getAttribute("aria-pressed")).toBe("false");
+  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("false");
+  click(btn(m.container, "unread"));
+  expect(shown(m.container)).toEqual(["1", "2", "4"]);
+  expect(headerCount(m.container)).toBe("3");
+  m.unmount();
+});
+
+it("clicking the active tier again returns to all", () => {
+  const m = render(mixed());
+  click(btn(m.container, "blocker"));
+  click(btn(m.container, "blocker"));
+  expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
+  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("true");
+  expect(btn(m.container, "delivery")?.getAttribute("aria-pressed")).toBe("true");
+  m.unmount();
+});
+
+it("selecting every tier returns to all", () => {
+  const m = render(mixed());
+  click(btn(m.container, "blocker"));
+  for (const n of ["delivery", "decision", "support", "notice", "unread"]) click(btn(m.container, n));
+  expect(btn(m.container, "all")?.getAttribute("aria-pressed")).toBe("true");
+  expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
+  click(btn(m.container, "blocker"));
+  expect(shown(m.container)).toEqual(["1", "2"]);
+  click(btn(m.container, "all"));
+  expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
+  m.unmount();
+});
+
+it("a selected tier with no rows shows the filter-empty message", () => {
+  const m = render(mixed());
+  click(btn(m.container, "notice"));
+  expect(btn(m.container, "notice")?.getAttribute("aria-pressed")).toBe("true");
+  expect(items(m.container)).toHaveLength(0);
+  expect(m.container.querySelector("[data-empty]")?.textContent).toBe("no items in this filter");
+  expect(headerCount(m.container)).toBe("0");
+  m.unmount();
+});
+
+it("the title and the filters share one header row with the group right-aligned and compact", () => {
+  const m = render(mixed());
+  const header = m.container.querySelector('[data-part="inbox-header"]');
+  const group = m.container.querySelector('[data-part="inbox-filters"]');
+  expect(header?.className).toContain("flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5");
+  expect(group?.parentElement).toBe(header);
+  expect(group?.className).toContain("ml-auto");
+  expect(group?.className).toContain("w-fit");
+  expect(group?.className).not.toContain("w-full");
+  const b = btn(m.container, "blocker");
+  expect(b?.className).not.toContain("flex-1");
+  for (const c of ["h-6", "px-1.5", "text-[11px]"]) expect(b?.className).toContain(c);
   m.unmount();
 });

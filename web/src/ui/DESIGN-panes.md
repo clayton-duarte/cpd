@@ -220,6 +220,8 @@ No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸`
 
 The web right column is the flat Inbox only. The TUI's machine block (hostname, CPU, GPU and memory) is not built (pro-d36). The Inbox is the TUI attention engine (`tui/src/widgets/inbox.rs`), so it follows that file: one flat list in `cpd inbox list` order, with no tier groups, no per-tier counts, no kind text, no inline buttons, no engine banner and no key footer. Secondary actions live in a right-click menu (pro-d40).
 
+The header is one row (`data-part="inbox-header"`, `flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5`): `INBOX n` (n = shown rows) on the left and the tier filter ButtonGroup (`data-part="inbox-filters"`, `ml-auto w-fit`, buttons `h-6 px-1.5 text-[11px]`) on the right; it wraps right-aligned when the column is narrow. Buttons: `all`, then blocker (red), delivery (yellow), decision (magenta), support (blue), notice (cyan), unread (white), each `<label> <count>` with the count in a `data-part="filter-count"` `font-mono` span; none is ever disabled. Initial state is `all`; clicking a tier from `all` selects only it, clicking toggles it, and the state returns to `all` when the set is empty or holds all six. A tier is filled (`aria-pressed`) when selected or when `all` is; an empty filter shows `no items in this filter`.
+
 ### 2a. Props
 
 ```ts
