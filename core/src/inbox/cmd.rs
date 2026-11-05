@@ -189,18 +189,15 @@ fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError
     })
 }
 
-/// `inbox list` read through the open `env`.
-#[allow(dead_code, reason = "pro-d405 stub: the impl job wires it")]
-pub(crate) fn list_in(_env: &mut Env, _args: ListArgs) -> Result<Output, CpdError> {
-    unimplemented!("pro-d405 impl job")
-}
-
 /// `inbox list` (§21.1).
 fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
-    let Env {
-        home, mut store, ..
-    } = Env::open_with(ports)?;
-    let now = ports.clock.utc();
+    list_in(&mut Env::open_with(ports)?, args)
+}
+
+/// `inbox list` read through the open `env`.
+pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError> {
+    let now = env.ports.clock.utc();
+    let Env { home, store, .. } = env;
     let filter = |state| Filter {
         context: args.context.clone(),
         state,
@@ -247,7 +244,7 @@ fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
 
     let mut items = Vec::new();
     // An absent engine with no live Manager is an open item with no Context: neither `--closed` nor `--context` lists it.
-    let running = model::engine_running(&home)?;
+    let running = model::engine_running(home)?;
     if !running && !manager && !args.closed && args.context.is_none() {
         items.push(engine_down(now));
     }

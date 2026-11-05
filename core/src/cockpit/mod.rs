@@ -17,7 +17,6 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, FollowArgs, Scope};
 use crate::output::Output;
-use crate::ports::Ports;
 
 /// The interval of the `data_version` poll (contract §5.5).
 pub const POLL_MS: u64 = 10;
@@ -138,21 +137,36 @@ struct InboxCli {
     command: crate::inbox::cmd::Command,
 }
 
-/// The four panes: what the list commands print (same functions), read through `$CPD_HOME` on `env`'s ports.
+/// The four panes: what the list commands print (same functions), read through `env`.
 fn panes(env: &mut Env) -> Value {
-    Ports::scope(&env.ports.clone(), || {
-        json!({
-            "context": printed(crate::context::run(ContextCli::parse_from(["cpd", "list"]).command)),
-            "plan": printed(crate::plan::run(PlanCli::parse_from(["cpd", "list"]).command)),
-            "session": printed(crate::session::run(SessionCli::parse_from(["cpd", "list"]).command)),
-            "inbox": printed(crate::inbox::cmd::run(InboxCli::parse_from(["cpd", "list"]).command)),
-        })
+    let crate::context::Command::List(_) = ContextCli::parse_from(["cpd", "list"]).command else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::plan::Command::List(plan) = PlanCli::parse_from(["cpd", "list"]).command else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::session::Command::List(session) = SessionCli::parse_from(["cpd", "list"]).command
+    else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::inbox::cmd::Command::List(inbox) = InboxCli::parse_from(["cpd", "list"]).command
+    else {
+        unreachable!("`list` parses to List")
+    };
+    json!({
+        "context": printed(crate::context::list::list_in(env)),
+        "plan": printed(crate::plan::list::list_in(env, plan)),
+        "session": printed(crate::session::row::list_in(env, session)),
+        "inbox": printed(crate::inbox::cmd::list_in(env, inbox)),
     })
 }
 
 fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
-    let command = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
-        Ok(cli) => cli.command,
+    let args = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
+        Ok(PlanCli {
+            command: crate::plan::Command::Show(args),
+        }) => args,
+        Ok(_) => unreachable!("`show` parses to Show"),
         Err(e) => {
             return Frame::Error {
                 id: Some(id),
@@ -161,7 +175,7 @@ fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
             };
         }
     };
-    match Ports::scope(&env.ports.clone(), || crate::plan::run(command)) {
+    match crate::plan::show::show_in(env, args) {
         Ok(out) => Frame::PlanShow {
             id,
             value: printed(Ok(out)),
