@@ -1,3 +1,4 @@
+import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
@@ -74,6 +75,8 @@ export function createPiBackend(deps: {
   now(): number;
   scheduler: Scheduler;
   windowSize?: number;
+  /** One source per attach: pass a factory when the backend serves several sessions. */
+  live?: LiveSource | (() => LiveSource);
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
@@ -149,6 +152,18 @@ export function createPiBackend(deps: {
     };
 
     let disposed = false;
+    const live = typeof deps.live === "function" ? deps.live() : deps.live;
+    // `message.timestamp` of the committed assistant lines, and the `live:` items sent and not yet removed.
+    const committed = new Set<number>();
+    const liveIds = new Set<string>();
+    let turnsSeen = 0;
+    const syncTurns = (): number[] => {
+      const fresh = tail.normalizer.turns.slice(turnsSeen);
+      turnsSeen = tail.normalizer.turns.length;
+      for (const ts of fresh) committed.add(ts);
+      return fresh;
+    };
+    syncTurns();
     let busy = isBusy(tail.normalizer.facts);
     let watcher: Disposable | undefined;
     const out = (m: SessionServerMessage): void => {
@@ -183,6 +198,7 @@ export function createPiBackend(deps: {
     };
 
     const applyAppend = (r: PushResult): void => {
+      for (const ts of syncTurns()) if (liveIds.delete(`live:${ts}`)) out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
       if (r.added.length > 0) out({ type: "session.append", sessionId, items: r.added });
       if (r.updated.length > 0) out({ type: "session.update", sessionId, items: r.updated });
       for (const d of r.dialogsOpened) dialog(d);
@@ -210,6 +226,10 @@ export function createPiBackend(deps: {
       const next = await readTail(currentFile as string, deps.fs, windowSize);
       if (disposed) return;
       tail = next;
+      committed.clear();
+      liveIds.clear();
+      turnsSeen = 0;
+      syncTurns();
       busy = isBusy(tail.normalizer.facts);
       emitTail();
       startWatch(tail.normalizer, tail.endOffset, tail.identity);
@@ -218,6 +238,15 @@ export function createPiBackend(deps: {
     emit({ type: "session.attached", sessionId, capabilities, title: ref.title, meta: { ref, footer: footer() } });
     emitTail();
     startWatch(tail.normalizer, tail.endOffset, tail.identity);
+    live?.attach(
+      sessionId,
+      (m) => {
+        if (m.type === "session.append") for (const i of m.items) if (i.id.startsWith("live:")) liveIds.add(i.id);
+        if (m.type === "session.remove") liveIds.delete(m.itemId);
+        out(m);
+      },
+      (ts) => committed.has(ts),
+    );
 
     const POLL_MS = 250;
     const POLL_MAX = 20;
@@ -365,6 +394,7 @@ export function createPiBackend(deps: {
       },
       dispose() {
         disposed = true;
+        live?.detach();
         poll?.dispose();
         watcher?.dispose();
         return Promise.resolve();

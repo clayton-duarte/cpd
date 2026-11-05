@@ -20,8 +20,37 @@ import { createDurableBackend } from "./durable/backend.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
 import { createRegistry, type Registry } from "./hub/registry.ts";
 import { createPiBackend } from "./pi/backend.ts";
+import { createLiveSource, type LiveConnection } from "./pi/live.ts";
 import type { FileBoundary } from "./pi/window.ts";
 import type { WatchBoundary } from "./pi/watch.ts";
+
+/** A unix socket as lines. Connection errors (ENOENT, ECONNREFUSED, resets) are swallowed into `onClose`; nothing throws into the server. */
+function connectLive(path: string): LiveConnection {
+  const socket = connect(path);
+  socket.setEncoding("utf8");
+  let rest = "";
+  socket.on("error", () => {});
+  return {
+    onLine(cb) {
+      socket.on("data", (chunk: string) => {
+        rest += chunk;
+        let nl = rest.indexOf("\n");
+        while (nl >= 0) {
+          const line = rest.slice(0, nl);
+          rest = rest.slice(nl + 1);
+          if (line !== "") cb(line);
+          nl = rest.indexOf("\n");
+        }
+      });
+    },
+    onClose(cb) {
+      socket.once("close", cb);
+    },
+    close() {
+      socket.destroy();
+    },
+  };
+}
 
 export interface PluginBoundaries {
   cpdExec: CpdExec;
@@ -69,7 +98,7 @@ export function createServices(b: PluginBoundaries): Services {
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler, live: () => createLiveSource({ connect: connectLive, scheduler: b.scheduler, cpdHome: b.cpdHome }) })),
     durable: lazy(() =>
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
