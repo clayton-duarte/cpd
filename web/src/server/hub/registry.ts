@@ -27,8 +27,7 @@ export function createRegistry(deps: { snapshot: () => CockpitSnapshot; cpdHome:
       if (ref === undefined) throw new WebError("session_not_found", `no session ${sessionId}`, { sessionId });
       const tierOptions = [...new Set([...refs.map((r) => r.tier), ref.tier].filter((t): t is string => t !== undefined))].sort();
       if (ref.runner === "pi") {
-        if (ref.file === undefined) throw new WebError("session_file_missing", `session ${sessionId} has no transcript file`, { sessionId });
-        return { ref, file: ref.file, tierOptions };
+        return ref.file === undefined ? { ref, tierOptions } : { ref, file: ref.file, tierOptions };
       }
       const socketPath = socketPathOf(deps.cpdHome, sessionId);
       if (Buffer.byteLength(socketPath) > SOCKET_PATH_MAX) {

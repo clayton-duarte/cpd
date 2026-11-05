@@ -74,11 +74,10 @@ describe("registry", () => {
     expect((thrown(() => empty.resolve("a")) as WebError).code).toBe("session_not_found");
   });
 
-  it("a pi session without a file yields session_file_missing", () => {
+  it("resolve returns a pi session without a file", () => {
     const registry = createRegistry({ snapshot: () => snapshotOf([], [{ id: "pi-nofile", runner: "pi" }]), cpdHome: "/h" });
-    const e = thrown(() => registry.resolve("pi-nofile"));
-    expect(e).toBeInstanceOf(WebError);
-    expect((e as WebError).code).toBe("session_file_missing");
-    expect((e as WebError).details).toEqual({ sessionId: "pi-nofile" });
+    const r = registry.resolve("pi-nofile");
+    expect(r).toEqual({ ref: expect.objectContaining({ id: "pi-nofile", runner: "pi" }), tierOptions: expect.any(Array) });
+    expect("file" in r).toBe(false);
   });
 });

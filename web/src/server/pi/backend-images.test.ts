@@ -3,6 +3,7 @@ import type { SessionRef } from "../../protocol/domain.ts";
 import { PI_SEND_TEXT_MAX, IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64 } from "../../protocol/domain.ts";
 import type { Disposable, GitBoundary } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
+import { FakeScheduler } from "../../testing/scheduler.ts";
 import { createPiBackend } from "./backend.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import type { SessionHandle } from "../hub/connection.ts";
@@ -69,7 +70,7 @@ async function setup(opts: { text: string; attachmentsDir?: string; now?: number
   const watch = new FakeWatch();
   const git: GitBoundary = { branch: () => Promise.resolve("main") };
   const out: SessionServerMessage[] = [];
-  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home/cpd", attachmentsDir: opts.attachmentsDir ?? "/att", now: () => opts.now ?? 1000 });
+  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home/cpd", attachmentsDir: opts.attachmentsDir ?? "/att", now: () => opts.now ?? 1000, scheduler: new FakeScheduler() });
   const handle: SessionHandle = await backend.attach({ ref: ref(), file: FILE, tierOptions: ["S1", "S2", "S3"] }, (m) => out.push(m));
   return { fs, cpd, out, handle };
 }
