@@ -9,10 +9,15 @@ import {
   GitPullRequestArrowIcon,
   GitPullRequestIcon,
   ListFilterIcon,
+<<<<<<< ours
+=======
+  LoaderCircleIcon,
+>>>>>>> theirs
   MessageSquareIcon,
   RocketIcon,
   SparklesIcon,
 } from "lucide-react";
+<<<<<<< ours
 import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import type { CockpitAction, InboxModel, InboxRow, InboxRowAction, SnoozeDuration, Urgency } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
@@ -22,6 +27,61 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, 
 import { Popover, PopoverContent, PopoverTrigger } from "../components/popover.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
 import { age, linkKinds, sessionKinds, urgencyText } from "./inbox/format.ts";
+=======
+import {
+  type ReactElement,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import type {
+  CockpitAction,
+  CurationRecord,
+  InboxModel,
+  InboxRow,
+  SnoozeDuration,
+  Urgency,
+} from "../../protocol/cockpit.ts";
+import { cn } from "../../lib/utils.ts";
+import { Button } from "../components/button.tsx";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "../components/context-menu.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/dialog.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "../components/item.tsx";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/popover.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
+import {
+  age,
+  linkKinds,
+  sessionKinds,
+  urgencyText,
+} from "./inbox/format.ts";
+>>>>>>> theirs
 
 const SNOOZES: readonly [string, SnoozeDuration][] = [
   ["Snooze 15 min", "15m"],
@@ -74,20 +134,70 @@ const TIERS: readonly TierSpec[] = [
 ];
 
 interface Handlers {
+<<<<<<< ours
   onAction(action: CockpitAction): void;
   onSelectSession(sessionId: string): void;
+=======
+  onAction(action: CockpitAction): string | void;
+  onSelectSession(sessionId: string): void;
+  onSelectPlan?(planId: string): void;
+  onOpenCurate?(row: InboxRow): void;
+  pendingActionIds?: readonly string[];
+  completedActionIds?: readonly string[];
+>>>>>>> theirs
 }
 
 function copy(text: string): void {
   void navigator.clipboard.writeText(text);
 }
 
+<<<<<<< ours
 /** Left click, per kind (TUI inbox.rs jump). */
 function jump(row: InboxRow, h: Handlers): void {
   if (row.kind === "engine-down") h.onAction({ kind: "engine.start" });
   else if (row.kind === "review-requested") {
     if (row.url !== null) copy(row.url);
   } else if (sessionKinds.includes(row.kind) && row.sessionId !== null) h.onSelectSession(row.sessionId);
+=======
+function openExternalUrl(url: string): void {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function selectRowSession(row: InboxRow, h: Handlers): void {
+  if (row.planId !== null) h.onSelectPlan?.(row.planId);
+  if (row.sessionId !== null) h.onSelectSession(row.sessionId);
+}
+
+/** Left click, per kind (TUI inbox.rs jump). */
+function jump(row: InboxRow, h: Handlers): void {
+  if (row.kind === "engine-down") {
+    h.onAction({ kind: "engine.start" });
+    return;
+  }
+  if (row.kind === "curate-retire") {
+    selectRowSession(row, h);
+    h.onOpenCurate?.(row);
+    return;
+  }
+  if (row.kind === "review-requested") {
+    if (row.url !== null) {
+      copy(row.url);
+      openExternalUrl(row.url);
+    }
+    return;
+  }
+  if (row.kind === "deploy") {
+    if (row.url !== null) openExternalUrl(row.url);
+    return;
+  }
+  if (row.sessionId !== null && sessionKinds.includes(row.kind)) {
+    selectRowSession(row, h);
+    return;
+  }
+  if (row.url !== null) {
+    openExternalUrl(row.url);
+  }
+>>>>>>> theirs
 }
 
 const PRIMARY_ACTION_KINDS: ReadonlySet<CockpitAction["kind"]> = new Set([
@@ -99,26 +209,123 @@ const PRIMARY_ACTION_KINDS: ReadonlySet<CockpitAction["kind"]> = new Set([
   "engine.start",
 ]);
 
+<<<<<<< ours
 /** The first action the read model built that is a primary kind; the UI derives nothing else. */
 function primaryActionOf(row: InboxRow): InboxRowAction | undefined {
   return row.actions.find((a) => PRIMARY_ACTION_KINDS.has(a.action.kind));
+=======
+function primaryActionOf(
+  row: InboxRow,
+): { readonly label: string; readonly action: CockpitAction } | null {
+  const fromRow = row.actions.find((a) =>
+    PRIMARY_ACTION_KINDS.has(a.action.kind),
+  );
+  if (fromRow !== undefined) return fromRow;
+  if (row.kind === "engine-down") {
+    return { label: "Start", action: { kind: "engine.start" } };
+  }
+  if (row.kind === "deploy") {
+    return {
+      label: "Approve",
+      action: { kind: "inbox.approve", itemId: row.id },
+    };
+  }
+  if (row.kind === "review-requested") {
+    return { label: "Claim", action: { kind: "inbox.claim", itemId: row.id } };
+  }
+  if (row.kind === "pr-ready") {
+    const first = row.label.split("\n")[0] ?? "";
+    const space = first.indexOf(" ");
+    const status = space === -1 ? "" : first.slice(space + 1);
+    const pull =
+      typeof row.subject === "string" && row.subject.startsWith("pr:")
+        ? row.subject.slice(3)
+        : undefined;
+    const workflow = row.workflow ?? undefined;
+    if (
+      status === "ready to merge" &&
+      (pull !== undefined || (row.planId !== null && workflow !== undefined))
+    ) {
+      return {
+        label: "Merge",
+        action: {
+          kind: "pr.merge",
+          ...(row.planId !== null ? { planId: row.planId } : {}),
+          ...(workflow !== undefined ? { workflow } : {}),
+          ...(pull !== undefined ? { pull } : {}),
+        },
+      };
+    }
+    if (
+      status === "ready for user review" &&
+      row.planId !== null &&
+      (pull !== undefined || workflow !== undefined)
+    ) {
+      return {
+        label: "Post",
+        action: {
+          kind: "pr.post",
+          planId: row.planId,
+          ...(workflow !== undefined ? { workflow } : {}),
+          ...(pull !== undefined ? { pull } : {}),
+        },
+      };
+    }
+    if (
+      status === "review overdue" &&
+      row.planId !== null &&
+      (pull !== undefined || workflow !== undefined)
+    ) {
+      return {
+        label: "RePost",
+        action: {
+          kind: "pr.repost",
+          planId: row.planId,
+          ...(workflow !== undefined ? { workflow } : {}),
+          ...(pull !== undefined ? { pull } : {}),
+        },
+      };
+    }
+  }
+  return null;
+>>>>>>> theirs
 }
 
 function Menu(props: { row: InboxRow } & Handlers): ReactElement {
   const { row, onAction, onSelectSession } = props;
   const { id, sessionId, url } = row;
+<<<<<<< ours
   const own: ReactElement[] = [];
   const primary = row.kind === "pr-ready" ? primaryActionOf(row) : undefined;
   if (primary !== undefined) {
     own.push(
       <ContextMenuItem key="primary" onSelect={() => onAction(primary.action)}>
+=======
+  const primary = primaryActionOf(row);
+  const own: ReactElement[] = [];
+  if (primary !== null && row.kind === "pr-ready") {
+    own.push(
+      <ContextMenuItem
+        key={primary.label}
+        onSelect={() => onAction(primary.action)}
+      >
+>>>>>>> theirs
         {primary.label}
       </ContextMenuItem>,
     );
   }
+<<<<<<< ours
   if (sessionId !== null && (row.kind === "pr-ready" || row.kind === "pr-closed")) {
     own.push(
       <ContextMenuItem key="lead" onSelect={() => onSelectSession(sessionId)}>
+=======
+  if (
+    sessionId !== null &&
+    (row.kind === "pr-ready" || row.kind === "pr-closed")
+  ) {
+    own.push(
+      <ContextMenuItem key="lead" onSelect={() => selectRowSession(row, props)}>
+>>>>>>> theirs
         Go to Lead
       </ContextMenuItem>,
     );
@@ -134,6 +341,7 @@ function Menu(props: { row: InboxRow } & Handlers): ReactElement {
     <ContextMenuContent>
       {own}
       {own.length > 0 ? <ContextMenuSeparator /> : null}
+<<<<<<< ours
       {row.kind === "deploy" ? <ContextMenuItem onSelect={() => onAction({ kind: "inbox.approve", itemId: id })}>Approve</ContextMenuItem> : null}
       {row.kind === "review-requested" ? <ContextMenuItem onSelect={() => onAction({ kind: "inbox.claim", itemId: id })}>Claim</ContextMenuItem> : null}
       {SNOOZES.map(([label, duration]) => (
@@ -142,6 +350,37 @@ function Menu(props: { row: InboxRow } & Handlers): ReactElement {
         </ContextMenuItem>
       ))}
       <ContextMenuItem onSelect={() => onAction({ kind: "inbox.dismiss", itemId: id })}>Dismiss</ContextMenuItem>
+=======
+      {row.kind === "deploy" ? (
+        <ContextMenuItem
+          onSelect={() => onAction({ kind: "inbox.approve", itemId: id })}
+        >
+          Approve
+        </ContextMenuItem>
+      ) : null}
+      {row.kind === "review-requested" ? (
+        <ContextMenuItem
+          onSelect={() => onAction({ kind: "inbox.claim", itemId: id })}
+        >
+          Claim
+        </ContextMenuItem>
+      ) : null}
+      {SNOOZES.map(([label, duration]) => (
+        <ContextMenuItem
+          key={duration}
+          onSelect={() =>
+            onAction({ kind: "inbox.snooze", itemId: id, duration })
+          }
+        >
+          {label}
+        </ContextMenuItem>
+      ))}
+      <ContextMenuItem
+        onSelect={() => onAction({ kind: "inbox.dismiss", itemId: id })}
+      >
+        Dismiss
+      </ContextMenuItem>
+>>>>>>> theirs
     </ContextMenuContent>
   );
 }
@@ -150,8 +389,15 @@ function RowIcon(props: { kind: string; urgency: Urgency }): ReactElement {
   const { kind, urgency } = props;
   const cls = cn("size-4 shrink-0", urgencyText[urgency]);
   if (kind === "deploy") return <RocketIcon className={cls} />;
+<<<<<<< ours
   if (kind === "pr-ready" || kind === "pr-closed") return <GitPullRequestIcon className={cls} />;
   if (kind === "review-requested") return <GitPullRequestArrowIcon className={cls} />;
+=======
+  if (kind === "pr-ready" || kind === "pr-closed")
+    return <GitPullRequestIcon className={cls} />;
+  if (kind === "review-requested")
+    return <GitPullRequestArrowIcon className={cls} />;
+>>>>>>> theirs
   if (kind === "curate-retire") return <SparklesIcon className={cls} />;
   if (urgency === "red") return <CircleAlertIcon className={cls} />;
   if (urgency === "yellow") return <CircleDotIcon className={cls} />;
@@ -162,11 +408,23 @@ function RowIcon(props: { kind: string; urgency: Urgency }): ReactElement {
 }
 
 function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
+<<<<<<< ours
   const { row } = props;
+=======
+  const {
+    row,
+    onAction,
+    onOpenCurate,
+    pendingActionIds = [],
+    completedActionIds = [],
+  } = props;
+  const [activeActionId, setActiveActionId] = useState<string | null>(null);
+>>>>>>> theirs
   const [first = "", ...rest] = row.label.split("\n");
   const second = rest.join(" ").trim();
   const linked = row.url !== null && linkKinds.includes(row.kind);
   const primary = primaryActionOf(row);
+<<<<<<< ours
   const item = (
     <Item variant="outline" size="sm" asChild data-kind={row.kind} data-urgency={row.urgency} data-id={row.id}>
       <a
@@ -212,6 +470,116 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
           )}
         </ItemActions>
       </a>
+=======
+  const startAsyncAction = (action: CockpitAction): void => {
+    const id = onAction(action);
+    if (typeof id === "string") setActiveActionId(id);
+  };
+  const buttonAction: {
+    readonly label: string;
+    readonly run: () => void;
+  } | null =
+    primary !== null
+      ? { label: primary.label, run: () => startAsyncAction(primary.action) }
+      : row.kind === "curate-retire" && row.contextId !== null
+        ? { label: "Curate", run: () => onOpenCurate?.(row) }
+        : row.id >= 0
+          ? {
+              label: "Dismiss",
+              run: () =>
+                startAsyncAction({ kind: "inbox.dismiss", itemId: row.id }),
+            }
+          : null;
+  const isActionPending =
+    activeActionId !== null && pendingActionIds.includes(activeActionId);
+  const isActionCompleted =
+    activeActionId !== null && completedActionIds.includes(activeActionId);
+  const item = (
+    <Item
+      variant="outline"
+      size="sm"
+      role="button"
+      tabIndex={0}
+      data-kind={row.kind}
+      data-urgency={row.urgency}
+      data-id={row.id}
+      onClick={() => jump(row, props)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          jump(row, props);
+        }
+      }}
+      className="cursor-pointer hover:bg-accent/50"
+    >
+      <ItemMedia className="flex-col items-center justify-between gap-1 self-stretch group-has-[[data-slot=item-description]]/item:translate-y-0 group-has-[[data-slot=item-description]]/item:self-stretch">
+        <div className="flex h-[19.25px] items-center justify-center">
+          <RowIcon kind={row.kind} urgency={row.urgency} />
+        </div>
+        <span className="mt-auto block text-sm leading-normal">
+          <span
+            data-part="age"
+            className="font-mono text-[10px] text-muted-foreground"
+          >
+            {age(row.ageSeconds)}
+          </span>
+        </span>
+      </ItemMedia>
+      <ItemContent className="justify-between self-stretch">
+        <ItemTitle className={urgencyText[row.urgency]}>
+          {linked && row.url !== null ? (
+            <a
+              href={row.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="hover:underline"
+            >
+              {first}
+            </a>
+          ) : (
+            first
+          )}
+        </ItemTitle>
+        {second === "" ? null : <ItemDescription>{second}</ItemDescription>}
+      </ItemContent>
+      <ItemActions className="flex-col items-end justify-between gap-1.5 self-stretch">
+        {linked && row.url !== null ? (
+          <a
+            href={row.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open external link"
+            data-part="item-link"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-[1.5px] rounded-xs text-muted-foreground transition-colors hover:text-fg-strong"
+          >
+            <ExternalLinkIcon className="size-4" />
+          </a>
+        ) : (
+          <ChevronRightIcon className="mt-[1.5px] size-4 text-muted-foreground" />
+        )}
+        {buttonAction === null || isActionCompleted ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-part="item-action"
+            disabled={isActionPending}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!isActionPending) buttonAction.run();
+            }}
+            className="h-6 gap-1 px-2 text-xs"
+          >
+            {isActionPending ? (
+              <LoaderCircleIcon className="size-3 animate-spin" />
+            ) : null}
+            <span>{buttonAction.label}</span>
+          </Button>
+        )}
+      </ItemActions>
+>>>>>>> theirs
     </Item>
   );
   if (row.kind === "engine-down") return item;
@@ -225,25 +593,65 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
 
 export function Inbox(props: {
   inbox: InboxModel | null;
-  onAction(action: CockpitAction): void;
+  onAction(action: CockpitAction): string | void;
   onSelectSession(sessionId: string): void;
+  onSelectPlan?(planId: string): void;
+  pendingActionIds?: readonly string[];
+  completedActionIds?: readonly string[];
 }): ReactElement {
+<<<<<<< ours
   const { inbox, onAction, onSelectSession } = props;
   const [selectedTiers, setSelectedTiers] = useState<"all" | ReadonlySet<Urgency>>("all");
+=======
+  const {
+    inbox,
+    onAction,
+    onSelectSession,
+    onSelectPlan,
+    pendingActionIds,
+    completedActionIds,
+  } = props;
+  const [selectedTiers, setSelectedTiers] = useState<
+    "all" | ReadonlySet<Urgency>
+  >("all");
+  const [curateRow, setCurateRow] = useState<InboxRow | null>(null);
+  const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
+  const openCurate = (row: InboxRow): void => {
+    const records: readonly CurationRecord[] = row.curation ?? [];
+    setCheckedIds(new Set(records.map((r) => r.id)));
+    setCurateRow(row);
+  };
+>>>>>>> theirs
   const [collapsed, setCollapsed] = useState(false);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
   const shell = "relative flex h-full min-h-0 w-full flex-col overflow-hidden";
+<<<<<<< ours
   const heading = "text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground";
+=======
+  const heading =
+    "text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground";
+
+>>>>>>> theirs
   const rows = inbox?.rows ?? [];
   const counts = new Map<Urgency, number>();
   for (const t of TIERS) counts.set(t.urgency, 0);
   for (const r of rows) counts.set(r.urgency, (counts.get(r.urgency) ?? 0) + 1);
+<<<<<<< ours
   const activeValues: string[] = selectedTiers === "all" ? ["all", ...TIERS.map((t) => t.urgency)] : Array.from(selectedTiers);
+=======
+
+  const allSelected = selectedTiers === "all";
+  const activeValues: string[] = allSelected
+    ? ["all", ...TIERS.map((t) => t.urgency)]
+    : Array.from(selectedTiers);
+
+>>>>>>> theirs
   const toggleTier = (u: Urgency): void => {
     if (selectedTiers === "all") {
       setSelectedTiers(new Set<Urgency>([u]));
       return;
+<<<<<<< ours
     }
     const next = new Set(selectedTiers);
     if (next.has(u)) next.delete(u);
@@ -260,6 +668,39 @@ export function Inbox(props: {
       const available = headerEl.clientWidth;
       const required = measureEl.scrollWidth;
       if (available > 0 && required > 0) setCollapsed(available < required);
+=======
+    }
+    const next = new Set(selectedTiers);
+    if (next.has(u)) {
+      next.delete(u);
+    } else {
+      next.add(u);
+    }
+    if (next.size === 0 || next.size === TIERS.length) {
+      setSelectedTiers("all");
+      return;
+    }
+    setSelectedTiers(next);
+  };
+
+  const filteredRows =
+    selectedTiers === "all"
+      ? rows
+      : rows.filter((r) => selectedTiers.has(r.urgency));
+
+  const countsKey = TIERS.map((t) => counts.get(t.urgency) ?? 0).join(",");
+
+  useLayoutEffect(() => {
+    const headerEl = headerRef.current;
+    const measureEl = measureRef.current;
+    if (!headerEl || !measureEl) return;
+    const check = (): void => {
+      const available = headerEl.clientWidth;
+      const required = measureEl.scrollWidth;
+      if (available > 0 && required > 0) {
+        setCollapsed(available < required);
+      }
+>>>>>>> theirs
     };
     check();
     if (typeof ResizeObserver === "undefined") return;
@@ -268,6 +709,21 @@ export function Inbox(props: {
     ro.observe(measureEl);
     return () => ro.disconnect();
   }, [countsKey, rows.length]);
+<<<<<<< ours
+=======
+
+  useEffect(() => {
+    const headerEl = headerRef.current;
+    const measureEl = measureRef.current;
+    if (!headerEl || !measureEl) return;
+    const available = headerEl.clientWidth;
+    const required = measureEl.scrollWidth;
+    if (available > 0 && required > 0) {
+      setCollapsed(available < required);
+    }
+  }, [countsKey, rows.length]);
+
+>>>>>>> theirs
   const renderFilterItems = (): ReactElement => (
     <>
       <ToggleGroupItem
@@ -277,6 +733,7 @@ export function Inbox(props: {
         className="h-6 gap-1.5 px-1.5 text-xs text-fg-strong hover:text-fg-strong data-[state=on]:text-fg-strong"
       >
         <span>all</span>
+<<<<<<< ours
         <span data-part="filter-count" className="font-mono text-[10px] opacity-80">
           {rows.length}
         </span>
@@ -300,6 +757,29 @@ export function Inbox(props: {
   );
   const label = selectedTiers === "all" ? "all" : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`;
   const filterItem = "inline-flex h-6 items-center px-1.5 text-xs";
+=======
+        <span className="font-mono text-[10px] opacity-80">{rows.length}</span>
+      </ToggleGroupItem>
+      {TIERS.map((t) => {
+        const count = counts.get(t.urgency) ?? 0;
+        return (
+          <ToggleGroupItem
+            key={t.urgency}
+            value={t.urgency}
+            data-tier-filter={t.label}
+            data-urgency={t.urgency}
+            onClick={() => toggleTier(t.urgency)}
+            className={cn("h-6 gap-1.5 px-1.5 text-xs", t.textColor)}
+          >
+            <span>{t.label}</span>
+            <span className="font-mono text-[10px] opacity-80">{count}</span>
+          </ToggleGroupItem>
+        );
+      })}
+    </>
+  );
+
+>>>>>>> theirs
   return (
     <aside aria-label="Inbox" className={shell}>
       <div
@@ -309,19 +789,42 @@ export function Inbox(props: {
       >
         <span className={cn(heading, "shrink-0")}>Inbox</span>
         <div className="flex shrink-0 items-center">
+<<<<<<< ours
           <div className={filterItem}>
+=======
+          <div className="inline-flex h-6 items-center px-1.5 text-xs">
+>>>>>>> theirs
             <span>all</span>
             <span className="ml-1.5 font-mono text-[10px]">{rows.length}</span>
           </div>
           {TIERS.map((t) => (
+<<<<<<< ours
             <div key={t.urgency} className={filterItem}>
               <span>{t.label}</span>
               <span className="ml-1.5 font-mono text-[10px]">{counts.get(t.urgency) ?? 0}</span>
+=======
+            <div
+              key={t.urgency}
+              className="inline-flex h-6 items-center px-1.5 text-xs"
+            >
+              <span>{t.label}</span>
+              <span className="ml-1.5 font-mono text-[10px]">
+                {counts.get(t.urgency) ?? 0}
+              </span>
+>>>>>>> theirs
             </div>
           ))}
         </div>
       </div>
+<<<<<<< ours
       <div ref={headerRef} data-part="inbox-header" className="flex h-8 shrink-0 items-center justify-between gap-8 px-2.5">
+=======
+      <div
+        ref={headerRef}
+        data-part="inbox-header"
+        className="flex h-8 shrink-0 items-center justify-between gap-8 px-2.5"
+      >
+>>>>>>> theirs
         <h2 className={cn(heading, "shrink-0")}>Inbox</h2>
         {collapsed ? (
           <Popover>
@@ -333,6 +836,7 @@ export function Inbox(props: {
                 data-part="inbox-filters-trigger"
                 aria-label="Filter inbox by tier"
                 className="ml-auto h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
+<<<<<<< ours
               >
                 <ListFilterIcon className="size-3.5 text-muted-foreground" />
                 <span>{label}</span>
@@ -350,6 +854,34 @@ export function Inbox(props: {
                 data-part="inbox-filters"
                 className="w-full"
               >
+=======
+              >
+                <ListFilterIcon className="size-3.5 text-muted-foreground" />
+                <span>
+                  {allSelected
+                    ? "all"
+                    : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`}
+                </span>
+                <span className="font-mono text-[10px] opacity-80">
+                  {filteredRows.length}
+                </span>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-auto min-w-[8.5rem] p-1.5"
+            >
+              <ToggleGroup
+                type="multiple"
+                variant="outline"
+                size="sm"
+                orientation="vertical"
+                value={activeValues}
+                aria-label="Filter inbox by tier"
+                data-part="inbox-filters"
+                className="w-full"
+              >
+>>>>>>> theirs
                 {renderFilterItems()}
               </ToggleGroup>
             </PopoverContent>
@@ -371,6 +903,7 @@ export function Inbox(props: {
       </div>
       {inbox === null ? (
         <p className="px-[14px] text-fg-dim">Loading inbox…</p>
+<<<<<<< ours
       ) : shown.length === 0 ? (
         <p data-empty className="px-[14px] py-3 text-muted-foreground">
           {rows.length === 0 ? "up to date, drink some water" : "no items in this filter"}
@@ -382,6 +915,125 @@ export function Inbox(props: {
           ))}
         </ItemGroup>
       )}
+=======
+      ) : filteredRows.length === 0 ? (
+        <p data-empty className="px-[14px] py-3 text-muted-foreground">
+          up to date, drink some water
+        </p>
+      ) : (
+        <ItemGroup className="min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5">
+          {filteredRows.map((row) => (
+            <InboxItemRow
+              key={row.id}
+              row={row}
+              onAction={onAction}
+              onSelectSession={onSelectSession}
+              {...(onSelectPlan !== undefined ? { onSelectPlan } : {})}
+              {...(pendingActionIds !== undefined ? { pendingActionIds } : {})}
+              {...(completedActionIds !== undefined
+                ? { completedActionIds }
+                : {})}
+              onOpenCurate={openCurate}
+            />
+          ))}
+        </ItemGroup>
+      )}
+      <Dialog
+        open={curateRow !== null}
+        onOpenChange={(open) => {
+          if (!open) setCurateRow(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {curateRow?.contextId
+                ? `Retire records of ${curateRow.contextId}`
+                : "Retire records"}
+            </DialogTitle>
+            <DialogDescription>
+              Checked records will be retired; unchecked records will be kept.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex max-h-64 flex-col gap-2 overflow-y-auto py-1">
+            {(curateRow?.curation ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No pending records to retire.
+              </p>
+            ) : (
+              (curateRow?.curation ?? []).map((rec) => {
+                const checked = checkedIds.has(rec.id);
+                return (
+                  <label
+                    key={rec.id}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border p-2 text-xs hover:bg-accent/40"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = new Set(checkedIds);
+                        if (next.has(rec.id)) next.delete(rec.id);
+                        else next.add(rec.id);
+                        setCheckedIds(next);
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <div className="font-mono font-medium text-fg-strong">
+                        {rec.id}{" "}
+                        <span className="font-normal text-muted-foreground">
+                          — {rec.detail}
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground">{rec.text}</div>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCurateRow(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (curateRow?.contextId) {
+                  const all = curateRow.curation ?? [];
+                  const approve = all
+                    .filter((r) => checkedIds.has(r.id))
+                    .map((r) => r.id)
+                    .join(",");
+                  const reject = all
+                    .filter((r) => !checkedIds.has(r.id))
+                    .map((r) => r.id)
+                    .join(",");
+                  if (approve !== "" || reject !== "") {
+                    onAction({
+                      kind: "context.retire",
+                      contextId: curateRow.contextId,
+                      approve,
+                      reject,
+                    });
+                  } else if (curateRow.id >= 0) {
+                    onAction({ kind: "inbox.dismiss", itemId: curateRow.id });
+                  }
+                }
+                setCurateRow(null);
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+>>>>>>> theirs
     </aside>
   );
 }

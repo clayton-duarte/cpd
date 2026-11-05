@@ -19,6 +19,12 @@ export function actionArgs(action: CockpitAction): readonly string[] {
       return ["pr", "merge", action.pull];
     }
     case "engine.start": return ["watch", "--ensure"];
+    case "context.retire": {
+      const args = ["context", "retire", `--context=${action.contextId}`];
+      if (typeof action.approve === "string" && action.approve !== "") args.push(`--approve=${action.approve}`);
+      if (typeof action.reject === "string" && action.reject !== "") args.push(`--reject=${action.reject}`);
+      return args;
+    }
     case "session.retier": return ["session", "retier", action.sessionId, "--tier", action.tier];
     case "plan.reject": return ["plan", "decide", action.review, "--reject", "--plan", action.planId];
     case "plan.new": return ["plan", "new", action.planId, `--context=${action.contextId}`, `--title=${action.title}`, "--by-user"];
