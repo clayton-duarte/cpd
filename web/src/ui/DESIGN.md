@@ -1043,6 +1043,10 @@ An archived fork Session has no Delete.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
 
+## 5. Live UI micro-interactions and the Lead-following PlanView (pro-d62, pro-d65)
+
+<!-- skeleton: sections 5.1 to 5.3 are written in the next commit -->
+
 ## 4. Amendments pro-d48..pro-d61: where each decision is contracted
 
 Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
