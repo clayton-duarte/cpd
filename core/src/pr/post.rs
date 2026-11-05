@@ -31,6 +31,24 @@ pub struct PostArgs {
     plan: PlanArg,
 }
 
+/// Stub (not wired): whether a failed send is KNOWN not to have sent the message, so its `pr_posts` row is dropped; an
+/// unknown outcome (`slack_unparseable`, `store_failed` after the send) keeps the row.
+#[allow(dead_code)]
+pub(super) fn known_not_sent(_error: &CpdError) -> bool {
+    unimplemented!("the split of known-not-sent from unknown send outcomes")
+}
+
+/// Test constructor of the arguments: Workflow `key` of Plan `plan`.
+#[cfg(test)]
+pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
+    PostArgs {
+        workflow: WorkflowArg {
+            workflow: Some(key),
+        },
+        plan: PlanArg { plan: Some(plan) },
+    }
+}
+
 fn record_json(post: &PostRecord) -> Value {
     json!({"channel": post.channel, "ts": post.ts, "link": post.link, "posted_at": post.posted_at,
            "reaction": post.reaction, "reacted_at": post.reacted_at})
