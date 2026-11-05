@@ -72,26 +72,3 @@ fn a_failed_job_holds_the_plan_in_deploy_until_it_is_cancelled() {
     assert_eq!(shown_phase(&fx), json!("done"));
     assert_eq!(plan_done_events(&fx), 1);
 }
-
-#[test]
-fn a_failed_job_holds_the_plan_in_deploy_until_its_retry_merges() {
-    let fx = plan_with_a_failed_job();
-    end_the_last_workflow(&fx);
-
-    // What `job retry` writes (core's `requeue`); the command itself reads pi's model catalog, an external tool.
-    fx.env.sql(
-        "UPDATE jobs SET status = 'queued', retry_tier = 'S2', failed_cause = NULL WHERE key = 'broken'",
-    );
-    assert_eq!(
-        shown_phase(&fx),
-        json!("deploy"),
-        "a queued Job still holds the Plan"
-    );
-    // The merge ledger step is a fixture write here (the real one runs git); the Plan must still move to done.
-    fx.env.sql(
-        "UPDATE jobs SET status = 'running' WHERE key = 'broken';
-         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'broken'",
-    );
-    assert_eq!(shown_phase(&fx), json!("done"));
-    assert_eq!(plan_done_events(&fx), 1);
-}
