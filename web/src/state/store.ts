@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type {
   Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError,
 } from "../protocol/domain.ts";
-import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
+import type { CockpitAction, ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
@@ -65,6 +65,7 @@ export type StoreAction =
   | { type: "selectPlan"; planId: string | null }
   | { type: "submitPending"; submission: Omit<PendingSubmission, "state"> }
   | { type: "dismissPending"; clientSubmissionId: string }
+  | { type: "actionOptimistic"; actionId: string; action: CockpitAction }
   | { type: "serverBatch"; messages: ServerMessage[] };
 
 export const initialState: AppState = {
@@ -208,6 +209,8 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       for (const message of action.messages) next = reduce(next, { type: "server", message });
       return next;
     }
+    case "actionOptimistic":
+      return state; // stub: not implemented
     case "dismissPending":
       if (state.session === null) return state;
       return {
