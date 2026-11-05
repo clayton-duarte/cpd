@@ -1044,7 +1044,7 @@ An archived fork Session has no Delete.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
 
-## 4. Amendments pro-d48..pro-d65: where each decision is contracted
+## 4. Amendments pro-d48..pro-d66: where each decision is contracted
 
 Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
 
@@ -1066,6 +1066,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d61 chat items | Chain of Thought grouping; image thumbnails on optimistic and echoed user messages | DESIGN-chat 2.3.1, 2.4.2, 2.7; CONTRACT 11.3 |
 | pro-d62 live micro-interactions | collapsible height animations; Chain of Thought opens while busy and collapses when the turn ends; synthetic `Thinking…` step; step and message entry animations; transcript auto-scroll rules | 5.1, 5.2 |
 | pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; empty state `Select a lead to see plans`; header `min-h-11`, title truncates | 5.3 |
+| pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
 
@@ -1114,3 +1115,16 @@ Records: pro-d62 (User approved the live changes in the running preview; this se
 - **Header.** `div[data-part="title-row"]` is `flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16`: `min-h-11` (44 px minimum, the row grows when it wraps) replaces the fixed `h-11`. The title `h2` is `max-w-full min-w-0 truncate` with `title={plan.title}` as its native tooltip. `plan-key`, `review` and `escalations` are `shrink-0`.
 
 **Tests this section changes.** `cockpit/PlanView.test.tsx` expects the empty text `Select a lead to see plans` (was `No plan selected`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.
+
+### 5.4 Trace rows (pro-d66)
+
+Record: pro-d66 (User approved the change in the live preview, `/Users/Clayton.Duarte/projects/cpd.preview.web`). It unifies the trace rows of the chat: `FoldRow` (`web/src/ui/chat/Folds.tsx`), `ToolRow` (`web/src/ui/chat/ToolRow.tsx`) and `ToolGroup` (`web/src/ui/chat/ToolGroup.tsx`) take the same typography as `ChainOfThoughtRow` and `ReasoningBlock`. Where DESIGN-chat.md sections 2.4.2, 3.1, 3.2 and 3.4 give other classes for these rows, this section wins (recency). DESIGN-chat.md is not edited here.
+
+The contract is stated before the code and the tests. The code on this branch does not carry it yet; the code Job makes it so.
+
+- **Phi mark (`FoldRow`).** `TraceIcon[data-part="phi"]` (`size-4`) renders U+03C6 (`φ`) with the class `font-display font-bold text-[18px] leading-none -translate-y-[1.5px] select-none`. It replaces the size and colour of DESIGN-chat.md 3.1 (`text-[15px] text-status-decision`).
+- **Fold labels.** `TraceLine` takes the default `text-sm font-sans`, with no `text-xs` override. `span[data-part="source"]` takes the default `text-sm font-sans`. `TraceTitle[data-part="marker-text"]` is `font-mono text-xs text-muted-foreground/70`.
+- **Middle dot before the time.** When the time is non-null, a `span` with `aria-hidden="true"` and class `shrink-0 font-mono text-xs text-muted-foreground/70` renders U+00B7 (`·`) immediately before `TraceDescription[data-part="time"]`. The time is `font-mono text-xs`. The dot is not rendered when the time is null.
+- **Tool rows and tool groups.** `TraceLine` and `span[data-part="name"]` take the default `text-sm font-sans`. `TraceTitle[data-part="detail"]` (`ToolRow`) and `TraceTitle[data-part="summary"]` (`ToolGroup`) are `font-mono text-xs text-muted-foreground/70`. The `TraceDescription` elements of these rows (`delta`, `status`, `totals`) are `font-mono text-xs text-muted-foreground/70`.
+- **Description width (`web/src/ui/components/trace.tsx`).** `max-w-[45%]` is removed from `TraceDescription`. Its base class is `min-w-0 shrink-0 truncate text-muted-foreground/70 tabular-nums`, and a `className` is merged after it.
+- **Not changed.** The chevron and collapsible animations (5.1), the Chain of Thought (5.2), and the `Trace`, `TraceCollapsible` and `TraceCollapsibleTrigger` parts.
