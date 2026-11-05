@@ -67,9 +67,20 @@ it("shows job needs", () => {
   m.unmount();
 });
 
-it("shows an empty state when no plan is selected", () => {
+it("PlanView renders the empty state Select a lead to see plans when plan is null", () => {
   const m = mount(<PlanView plan={null} onAction={vi.fn()} />);
-  expect(m.container.querySelector("p[data-empty]")?.textContent).toBe("No plan selected");
+  expect(m.container.querySelector("[data-empty]")?.textContent).toBe("Select a lead to see plans");
   expect(m.container.querySelector("section")).toBeNull();
+  m.unmount();
+});
+
+it("PlanView header has min-h-11 and a truncating title", () => {
+  const m = mount(<PlanView plan={plan} onAction={vi.fn()} />);
+  const row = m.container.querySelector('[data-part="title-row"]');
+  expect(row?.classList.contains("min-h-11")).toBe(true);
+  expect(row?.classList.contains("h-11")).toBe(false);
+  const h2 = m.container.querySelector("section h2");
+  expect(h2?.classList.contains("truncate")).toBe(true);
+  expect(h2?.getAttribute("title")).toBe("Web UI");
   m.unmount();
 });
