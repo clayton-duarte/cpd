@@ -77,7 +77,7 @@ export function Shell(props: {
           data-part="split-left"
           onDoubleClick={() => treeRef.current?.resize("20%")}
         />
-        <ResizablePanel id="center" data-part="center-panel" defaultSize="50%" minSize="30%">
+        <ResizablePanel id="center" panelRef={centerRef} data-part="center-panel" defaultSize="50%" minSize="30%">
           <div
             data-column="center"
             data-part="center-frame"

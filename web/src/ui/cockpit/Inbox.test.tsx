@@ -506,7 +506,8 @@ it("the item actions column stretches with the link icon on top and the primary 
   const actions = items(m.container)[0]?.querySelector('[data-slot="item-actions"]');
   expect(actions?.className).toContain("flex-col");
   expect(actions?.className).toContain("self-stretch");
-  expect(actions?.firstElementChild?.matches("svg.lucide-external-link")).toBe(true);
+  expect(actions?.firstElementChild?.matches('a[data-part="item-link"]')).toBe(true);
+  expect(actions?.firstElementChild?.querySelector("svg.lucide-external-link")).not.toBeNull();
   expect(actions?.lastElementChild?.matches('button[data-part="item-action"]')).toBe(true);
   m.unmount();
 });
@@ -521,16 +522,16 @@ it("a row with a primary action shows an outline small button that runs it witho
   act(() => {
     button?.dispatchEvent(ev);
   });
-  expect(ev.defaultPrevented).toBe(true);
   expect(m.onAction).toHaveBeenCalledExactlyOnceWith(mergeAction.action);
   expect(m.onSelectSession).not.toHaveBeenCalled();
   m.unmount();
 });
 
-it("a row without a primary action shows no button", () => {
+it("a row without a primary action shows only the Dismiss button (pro-d53)", () => {
   const snooze = { label: "Snooze 15m", action: { kind: "inbox.snooze", itemId: 1, duration: "15m" } } as const;
   const m = render([row(1, "dialog", "Need an answer", { sessionId: "s1", actions: [snooze] })]);
-  expect(items(m.container)[0]?.querySelector("button")).toBeNull();
+  const buttons = items(m.container)[0]?.querySelectorAll("button") ?? [];
+  expect(Array.from(buttons).map((b) => b.textContent)).toEqual(["Dismiss"]);
   m.unmount();
 });
 

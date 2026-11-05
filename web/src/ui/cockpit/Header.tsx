@@ -8,7 +8,6 @@ import {
   BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
-  BreadcrumbSeparator,
 } from "../components/breadcrumb.tsx";
 import { glyphClass } from "../dango-status.ts";
 import type { Glyph } from "../dango-status.ts";
@@ -76,8 +75,8 @@ export function Header(props: HeaderProps): ReactElement {
                     : `breadcrumb-${crumb.part}`;
               return (
                 <Fragment key={`${crumb.part}:${crumb.label}`}>
-                  {i > 0 ? <BreadcrumbSeparator>/</BreadcrumbSeparator> : null}
                   <BreadcrumbItem>
+                    {i > 0 ? <span data-slot="breadcrumb-separator" aria-hidden="true" className="text-muted-foreground">/</span> : null}
                     {crumb.onClick !== undefined ? (
                       <BreadcrumbLink
                         render={<button type="button" />}
