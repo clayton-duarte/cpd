@@ -7,7 +7,7 @@ import {
   MessageSquareIcon,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, MutableRefObject, RefObject } from "react";
 import type {
   QueuedSubmission,
   ToolItem,
@@ -409,7 +409,32 @@ function RowBody(props: {
   return <ToolGroup tools={row.tools} mode={props.tools} />;
 }
 
-function TranscriptAutoScroll(props: {
+/** Stub: whether the synthetic live chain shows after the last row while busy. */
+export function showTrailingLiveChain(
+  busy: boolean,
+  lastRowIsChain: boolean,
+): boolean {
+  void busy;
+  void lastRowIsChain;
+  throw new Error("not implemented");
+}
+
+/** Stub: ResizeObserver-backed pin of the viewport to the bottom. */
+export function TranscriptAutoScroll(props: {
+  tailEpoch: number;
+  items: readonly TranscriptItem[];
+  queuedCount: number;
+  pendingCount: number;
+  busy: boolean;
+  viewportRef: RefObject<HTMLDivElement | null>;
+  contentRef: RefObject<HTMLDivElement | null>;
+  pinnedRef: MutableRefObject<boolean>;
+}): null {
+  void props;
+  throw new Error("not implemented");
+}
+
+function TailAutoScroll(props: {
   tailEpoch: number;
   items: readonly TranscriptItem[];
   queuedCount: number;
@@ -449,6 +474,7 @@ export interface TranscriptProps {
   items: readonly TranscriptItem[];
   hasEarlier: boolean;
   loadingEarlier?: boolean;
+  busy?: boolean;
   onLoadEarlier(): void;
   tailEpoch: number;
   queued: readonly QueuedSubmission[];
@@ -469,7 +495,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
       scrollEdgeThreshold={SCROLL_EDGE_THRESHOLD}
       defaultScrollPosition="end"
     >
-      <TranscriptAutoScroll
+      <TailAutoScroll
         tailEpoch={props.tailEpoch}
         items={props.items}
         queuedCount={props.queued.length}
