@@ -94,6 +94,19 @@ describe("connection", () => {
     expect(store.getState().lastError?.code).toBe("protocol_error");
   });
 
+  it("session.completion is accepted when well formed and rejected when a key is missing", () => {
+    const { transport, store, connection } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    const completion = { label: "open_work", text: "Open work · 40%", score: 40, tone: "decision" };
+    transport.emitMessage({ type: "session.completion", sessionId: "s1", completion });
+    expect(store.getState().lastError).toBeNull();
+    transport.emitMessage({ type: "session.completion", completion });
+    expect(store.getState().lastError?.code).toBe("protocol_error");
+    transport.emitMessage({ type: "session.completion", sessionId: "s1" });
+    expect(store.getState().lastError?.code).toBe("protocol_error");
+  });
+
   it("close stops reconnecting", () => {
     const { transport, scheduler, store, connection } = setup();
     connection.start();

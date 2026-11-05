@@ -1,5 +1,5 @@
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
-import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
+import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
 import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
 
 
@@ -55,6 +55,7 @@ export type ServerMessage =
   | { type: "session.footer"; sessionId: string; footer: FooterStats }
   | { type: "session.title"; sessionId: string; title: string | null }
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
+  | { type: "session.completion"; sessionId: string; completion: Completion | null }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId null: not tied to a session (invalid_message, session_not_found of an attach)
@@ -154,6 +155,30 @@ function parseChanges(o: Obj): SettingsChanges {
     }
   }
   return { ...(Object.keys(tiers).length > 0 ? { tiers } : {}), ...(Object.keys(experimental).length > 0 ? { experimental } : {}) };
+}
+
+const COMPLETION_LABELS: readonly string[] = ["safe_to_archive", "unanswered_ask", "open_work", "unrecorded_decision", "unescalated_issue"];
+const COMPLETION_TONES: readonly string[] = ["done", "decision", "blocked"];
+const refuse = (message: string, field: string): WebError => new WebError("protocol_error", message, { field });
+
+function parseCompletion(v: unknown): Completion | null {
+  if (v === null) return null;
+  if (!isObj(v)) throw refuse("session.completion: completion must be an object or null", "completion");
+  const { label, text, score, tone } = v;
+  if (typeof label !== "string" || !COMPLETION_LABELS.includes(label)) throw refuse("session.completion: unknown label", "label");
+  if (typeof text !== "string") throw refuse("session.completion: text must be a string", "text");
+  if (typeof score !== "number" || !Number.isFinite(score)) throw refuse("session.completion: score must be a finite number", "score");
+  if (typeof tone !== "string" || !COMPLETION_TONES.includes(tone)) throw refuse("session.completion: unknown tone", "tone");
+  return { label, text, score, tone } as Completion;
+}
+
+/** Parses an untrusted server message; only session.completion is parsed here, the rest is refused. */
+export function parseServerMessage(raw: unknown): ServerMessage {
+  if (!isObj(raw) || typeof raw["type"] !== "string") throw refuse("server message must be an object with a string type", "type");
+  if (raw["type"] !== "session.completion") throw refuse(`unsupported server message type ${raw["type"]}`, "type");
+  const sessionId = raw["sessionId"];
+  if (typeof sessionId !== "string" || sessionId === "") throw refuse("session.completion: sessionId must be a non-empty string", "sessionId");
+  return { type: "session.completion", sessionId, completion: parseCompletion(raw["completion"]) };
 }
 
 export function parseClientMessage(raw: unknown): ClientMessage {

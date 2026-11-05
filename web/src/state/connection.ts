@@ -59,6 +59,7 @@ const REQUIRED: Readonly<Record<ServerMessage["type"], readonly (readonly [strin
   "session.footer": [SESSION, ["footer", "object"]],
   "session.title": [SESSION],
   "session.models": [SESSION, ["models", "array"]],
+  "session.completion": [SESSION],
   "session.dialog": [SESSION, ["dialog", "object"]],
   "session.dialogResolved": [SESSION, ["dialogId", "string"], ["outcome", "string"]],
   "session.error": [["error", "object"]],
@@ -84,6 +85,9 @@ function parseServerMessage(raw: unknown): ServerMessage {
   }
   if (type === "session.error" && m["sessionId"] !== null && typeof m["sessionId"] !== "string") {
     throw new WebError("protocol_error", "session.error: sessionId must be string or null", { field: "sessionId" });
+  }
+  if (type === "session.completion" && m["completion"] !== null && kindOf(m["completion"]) !== "object") {
+    throw new WebError("protocol_error", "session.completion: completion must be object or null", { field: "completion" });
   }
   return m as unknown as ServerMessage;
 }
