@@ -1,25 +1,134 @@
-import type { ReactElement, ReactNode } from "react";
+import { ChevronRightIcon, MoreHorizontalIcon } from "lucide-react";
+import { Slot } from "radix-ui";
+import * as React from "react";
+import { cn } from "../../lib/utils.ts";
 
-/** Red-test stub: the implementation Worker replaces this file. */
-type StubProps = { children?: ReactNode; [prop: string]: unknown };
-export function Breadcrumb(_props: StubProps): ReactElement | null {
-  return null;
+function Breadcrumb({ className, ...props }: React.ComponentProps<"nav">) {
+  return (
+    <nav
+      aria-label="breadcrumb"
+      data-slot="breadcrumb"
+      className={cn(className)}
+      {...props}
+    />
+  );
 }
-export function BreadcrumbList(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbList({ className, ...props }: React.ComponentProps<"ol">) {
+  return (
+    <ol
+      data-slot="breadcrumb-list"
+      className={cn(
+        "flex flex-wrap items-center gap-1.5 text-xs wrap-break-word text-muted-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
-export function BreadcrumbItem(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
+  return (
+    <li
+      data-slot="breadcrumb-item"
+      className={cn("inline-flex items-center gap-1", className)}
+      {...props}
+    />
+  );
 }
-export function BreadcrumbLink(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbLink({
+  asChild,
+  render,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"a"> & {
+  asChild?: boolean;
+  render?: React.ReactElement;
+}) {
+  const mergedClassName = cn("transition-colors hover:text-foreground", className);
+  if (render !== undefined && React.isValidElement(render)) {
+    return React.cloneElement(
+      render as React.ReactElement<Record<string, unknown>>,
+      {
+        "data-slot": "breadcrumb-link",
+        className: mergedClassName,
+        ...props,
+      },
+      children,
+    );
+  }
+  const Comp = asChild ? Slot.Root : "a";
+  return (
+    <Comp
+      data-slot="breadcrumb-link"
+      className={mergedClassName}
+      {...props}
+    >
+      {children}
+    </Comp>
+  );
 }
-export function BreadcrumbPage(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbPage({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="breadcrumb-page"
+      role="link"
+      aria-disabled="true"
+      aria-current="page"
+      className={cn("font-normal text-foreground", className)}
+      {...props}
+    />
+  );
 }
-export function BreadcrumbSeparator(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbSeparator({
+  children,
+  className,
+  ...props
+}: React.ComponentProps<"li">) {
+  return (
+    <li
+      data-slot="breadcrumb-separator"
+      role="presentation"
+      aria-hidden="true"
+      className={cn("[&>svg]:size-3.5", className)}
+      {...props}
+    >
+      {children ?? <ChevronRightIcon />}
+    </li>
+  );
 }
-export function BreadcrumbEllipsis(_props: StubProps): ReactElement | null {
-  return null;
+
+function BreadcrumbEllipsis({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="breadcrumb-ellipsis"
+      role="presentation"
+      aria-hidden="true"
+      className={cn(
+        "flex size-5 items-center justify-center [&>svg]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      <MoreHorizontalIcon />
+      <span className="sr-only">More</span>
+    </span>
+  );
 }
+
+export {
+  Breadcrumb,
+  BreadcrumbEllipsis,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+};

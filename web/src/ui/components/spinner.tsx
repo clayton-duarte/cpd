@@ -1,7 +1,17 @@
-import type { ReactElement, ReactNode } from "react";
+import * as React from "react"
+import { Loader2Icon } from "lucide-react"
+import { cn } from "../../lib/utils.ts"
 
-/** Red-test stub: the implementation Worker replaces this file. */
-type StubProps = { children?: ReactNode; [prop: string]: unknown };
-export function Spinner(_props: StubProps): ReactElement | null {
-  return null;
+function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
+  return (
+    <Loader2Icon
+      data-slot="spinner"
+      role="status"
+      aria-label="Loading"
+      className={cn("size-4 animate-spin", className)}
+      {...props}
+    />
+  )
 }
+
+export { Spinner }

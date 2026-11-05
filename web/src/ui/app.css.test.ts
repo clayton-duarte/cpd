@@ -58,8 +58,8 @@ it("the transcript log scrolls on its own", () => {
     display: "flex",
     "flex-direction": "column",
   });
-  expectDecls('[role="log"]', decls('[role="log"]'), { flex: "1", "min-height": "0", "overflow-y": "auto" });
-  expect(declsMatching(/jump-to-bottom/).get("position"), "jump button: position").toBe("absolute");
+  // The MessageScroller primitive owns the log's scrolling and jump button (pro-d55), so app.css has no [role="log"] rule.
+  expect(css, "no [role=log] rule").not.toMatch(/\[role="log"\]\s*\{/);
 });
 
 it("the context tree, plan and inbox scroll independently", () => {
