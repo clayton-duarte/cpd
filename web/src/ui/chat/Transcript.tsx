@@ -45,7 +45,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
   useMessageScroller,
-  useMessageScrollerScrollable,
 } from "../components/message-scroller.tsx";
 import { Spinner } from "../components/spinner.tsx";
 import {
@@ -93,7 +92,7 @@ function ReasoningBlock(props: {
     <TraceLine status={props.running ? "running" : undefined}>
       <TraceIcon>{props.running ? <Spinner /> : <BrainIcon />}</TraceIcon>
       <TraceTitle data-part="label">
-        {props.running ? "Thinking" : "Thought"}
+        {props.running ? "Thinking…" : "Thought"}
       </TraceTitle>
       {props.time === null ? null : (
         <TraceDescription data-part="meta" className="font-mono text-xs">
@@ -122,40 +121,61 @@ function ReasoningBlock(props: {
   );
 }
 
+function LiveThinkingStep(): JSX.Element {
+  return (
+    <Trace
+      data-kind="thinking"
+      data-part="live-thinking"
+      className="animate-in fade-in-0 slide-in-from-top-1 duration-200"
+    >
+      <TraceLine status="running">
+        <TraceIcon>
+          <Spinner />
+        </TraceIcon>
+        <TraceTitle data-part="label">Thinking…</TraceTitle>
+      </TraceLine>
+    </Trace>
+  );
+}
+
 function ChainOfThoughtRow(props: {
   row: Extract<Row, { kind: "chain" }>;
   thinking: "folded" | "expanded";
   tools: "grouped" | "expanded";
+  active?: boolean;
 }): JSX.Element {
-  const { row, thinking, tools } = props;
+  const { row, thinking, tools, active = false } = props;
+  const isRunning = row.running || active;
+  const showSyntheticThinking = active && !row.running;
   const defaultOpen = thinking === "expanded" || tools === "expanded";
   const [open, setOpen] = useState<boolean | undefined>(undefined);
   useEffect(() => {
     setOpen(undefined);
   }, [defaultOpen]);
 
-  const isOpen = open ?? defaultOpen;
+  const isOpen = open ?? (isRunning || defaultOpen);
   const clock = formatClock(row.at);
+  const totalSteps = row.stepCount + (showSyntheticThinking ? 1 : 0);
   const parts: string[] = [
-    `${row.stepCount} ${row.stepCount === 1 ? "step" : "steps"}`,
+    `${totalSteps} ${totalSteps === 1 ? "step" : "steps"}`,
   ];
   if (row.failedCount > 0) parts.push(`${row.failedCount} failed`);
   if (clock !== null) parts.push(clock);
 
   return (
-    <Trace data-kind="chain-of-thought">
+    <Trace data-kind="chain-of-thought" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
       <TraceCollapsible open={isOpen} onOpenChange={setOpen}>
         <TraceCollapsibleTrigger>
           <TraceLine
             status={
-              row.running
+              isRunning
                 ? "running"
                 : row.failedCount > 0
                   ? "error"
                   : undefined
             }
           >
-            <TraceIcon>{row.running ? <Spinner /> : <BrainIcon />}</TraceIcon>
+            <TraceIcon>{isRunning ? <Spinner /> : <BrainIcon />}</TraceIcon>
             <TraceTitle data-part="label">Chain of Thought</TraceTitle>
             <TraceDescription data-part="meta" className="font-mono text-xs">
               {parts.join(" · ")}
@@ -169,26 +189,34 @@ function ChainOfThoughtRow(props: {
           {row.steps.map((step) => {
             if (step.kind === "thinking") {
               return (
-                <ReasoningBlock
-                  key={step.key}
-                  text={step.text}
-                  time={formatClock(step.at)}
-                  defaultOpen={thinking === "expanded"}
-                  running={step.running}
-                />
+                <div key={step.key} className="animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                  <ReasoningBlock
+                    text={step.text}
+                    time={formatClock(step.at)}
+                    defaultOpen={thinking === "expanded"}
+                    running={step.running}
+                  />
+                </div>
               );
             }
             if (step.kind === "tool") {
               return (
-                <Trace key={step.key} data-part="tool-rail">
+                <Trace
+                  key={step.key}
+                  data-part="tool-rail"
+                  className="animate-in fade-in-0 slide-in-from-top-1 duration-200"
+                >
                   <ToolRow tool={step.tool} />
                 </Trace>
               );
             }
             return (
-              <ToolGroup key={step.key} tools={step.tools} mode={tools} />
+              <div key={step.key} className="animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                <ToolGroup tools={step.tools} mode={tools} />
+              </div>
             );
           })}
+          {showSyntheticThinking ? <LiveThinkingStep /> : null}
         </TraceCollapsibleContent>
       </TraceCollapsible>
     </Trace>
@@ -283,7 +311,7 @@ const Item = memo(function Item(props: {
     case "user": {
       const clock = formatClock(item.at);
       return (
-        <Message align="end" data-kind="user">
+        <Message align="end" data-kind="user" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
           <MessageContent>
             <UserAttachments attachments={item.attachments} />
             <Bubble
@@ -319,7 +347,7 @@ const Item = memo(function Item(props: {
       });
       const fullText = textParts.join("\n\n");
       return (
-        <Message data-kind="assistant">
+        <Message data-kind="assistant" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
           <MessageContent>
             {item.blocks.map((b, i) =>
               b.type === "text" ? (
@@ -379,6 +407,7 @@ function RowBody(props: {
   sessionKey: string | undefined;
   thinking: "folded" | "expanded";
   tools: "grouped" | "expanded";
+  activeChain?: boolean;
 }): JSX.Element {
   const { row } = props;
   if (row.kind === "chain") {
@@ -387,13 +416,17 @@ function RowBody(props: {
         row={row}
         thinking={props.thinking}
         tools={props.tools}
+        active={props.activeChain ?? false}
       />
     );
   }
   if (row.kind === "item") {
     if (row.item.kind === "tool") {
       return (
-        <Trace data-part="tool-rail">
+        <Trace
+          data-part="tool-rail"
+          className="animate-in fade-in-0 slide-in-from-top-1 duration-200"
+        >
           <ToolRow tool={row.item} />
         </Trace>
       );
@@ -409,17 +442,15 @@ function RowBody(props: {
   return <ToolGroup tools={row.tools} mode={props.tools} />;
 }
 
-/** Stub: whether the synthetic live chain shows after the last row while busy. */
+/** Whether the synthetic live chain shows after the last row while busy. */
 export function showTrailingLiveChain(
   busy: boolean,
   lastRowIsChain: boolean,
 ): boolean {
-  void busy;
-  void lastRowIsChain;
-  throw new Error("not implemented");
+  return busy && !lastRowIsChain;
 }
 
-/** Stub: ResizeObserver-backed pin of the viewport to the bottom. */
+/** ResizeObserver-backed pin of the viewport to the bottom. */
 export function TranscriptAutoScroll(props: {
   tailEpoch: number;
   items: readonly TranscriptItem[];
@@ -430,40 +461,83 @@ export function TranscriptAutoScroll(props: {
   contentRef: RefObject<HTMLDivElement | null>;
   pinnedRef: MutableRefObject<boolean>;
 }): null {
-  void props;
-  throw new Error("not implemented");
-}
-
-function TailAutoScroll(props: {
-  tailEpoch: number;
-  items: readonly TranscriptItem[];
-  queuedCount: number;
-  pendingCount: number;
-}): null {
   const { scrollToEnd } = useMessageScroller();
-  const scrollable = useMessageScrollerScrollable();
   const epochRef = useRef(props.tailEpoch);
-  const pinnedRef = useRef(true);
+  const prevPendingRef = useRef(props.pendingCount);
+  const prevQueuedRef = useRef(props.queuedCount);
+  const lastUserId = useMemo(() => {
+    for (let i = props.items.length - 1; i >= 0; i--) {
+      const it = props.items[i];
+      if (it?.kind === "user") return it.id;
+    }
+    return null;
+  }, [props.items]);
+  const prevLastUserIdRef = useRef(lastUserId);
+
+  const pinToBottom = () => {
+    const vp = props.viewportRef.current;
+    if (vp !== null) vp.scrollTop = vp.scrollHeight;
+    scrollToEnd({ behavior: "auto" });
+  };
 
   useEffect(() => {
-    pinnedRef.current = !scrollable.end;
-  }, [scrollable.end]);
+    const vp = props.viewportRef.current;
+    const content = props.contentRef.current;
+    if (vp === null) return;
+    let lastTop = vp.scrollTop;
+
+    const onScroll = () => {
+      const dist = vp.scrollHeight - vp.scrollTop - vp.clientHeight;
+      if (vp.scrollTop < lastTop - 4 && dist > SCROLL_EDGE_THRESHOLD) {
+        props.pinnedRef.current = false;
+      } else if (dist <= SCROLL_EDGE_THRESHOLD) {
+        props.pinnedRef.current = true;
+      }
+      lastTop = vp.scrollTop;
+    };
+
+    vp.addEventListener("scroll", onScroll, { passive: true });
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined" && content !== null) {
+      ro = new ResizeObserver(() => {
+        if (props.pinnedRef.current) {
+          vp.scrollTop = vp.scrollHeight;
+          lastTop = vp.scrollTop;
+        }
+      });
+      ro.observe(content);
+    }
+    return () => {
+      vp.removeEventListener("scroll", onScroll);
+      ro?.disconnect();
+    };
+  }, [props.viewportRef, props.contentRef, props.pinnedRef]);
 
   useEffect(() => {
-    if (epochRef.current !== props.tailEpoch) {
-      epochRef.current = props.tailEpoch;
-      pinnedRef.current = true;
-      scrollToEnd({ behavior: "auto" });
+    const epochChanged = epochRef.current !== props.tailEpoch;
+    const newPending = props.pendingCount > prevPendingRef.current;
+    const newQueued = props.queuedCount > prevQueuedRef.current;
+    const newUserTurn =
+      lastUserId !== null && lastUserId !== prevLastUserIdRef.current;
+
+    epochRef.current = props.tailEpoch;
+    prevPendingRef.current = props.pendingCount;
+    prevQueuedRef.current = props.queuedCount;
+    prevLastUserIdRef.current = lastUserId;
+
+    if (epochChanged || newPending || newQueued || newUserTurn) {
+      props.pinnedRef.current = true;
+      pinToBottom();
       return;
     }
-    if (pinnedRef.current) {
-      scrollToEnd({ behavior: "smooth" });
-    }
+    if (props.pinnedRef.current) pinToBottom();
   }, [
     props.tailEpoch,
     props.items,
     props.queuedCount,
     props.pendingCount,
+    props.busy,
+    lastUserId,
     scrollToEnd,
   ]);
 
@@ -487,30 +561,47 @@ export interface TranscriptProps {
 
 export function Transcript(props: TranscriptProps): JSX.Element {
   const rows = useMemo(() => groupRows(props.items), [props.items]);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const isBusy = props.busy ?? false;
+  const lastRow = rows.length > 0 ? rows[rows.length - 1] : undefined;
+  const liveChain = showTrailingLiveChain(isBusy, lastRow?.kind === "chain");
   const empty =
-    rows.length === 0 && props.queued.length === 0 && props.pending.length === 0;
+    rows.length === 0 &&
+    props.queued.length === 0 &&
+    props.pending.length === 0 &&
+    !liveChain;
 
   return (
     <MessageScrollerProvider
       scrollEdgeThreshold={SCROLL_EDGE_THRESHOLD}
       defaultScrollPosition="end"
     >
-      <TailAutoScroll
+      <TranscriptAutoScroll
         tailEpoch={props.tailEpoch}
         items={props.items}
         queuedCount={props.queued.length}
         pendingCount={props.pending.length}
+        busy={isBusy}
+        viewportRef={viewportRef}
+        contentRef={contentRef}
+        pinnedRef={pinnedRef}
       />
       <MessageScroller
         data-part="transcript"
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         <MessageScrollerViewport
+          ref={viewportRef}
           aria-label="Conversation transcript"
           data-part="viewport"
           className="flex-1 overflow-x-hidden px-4 py-4"
         >
-          <MessageScrollerContent className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3">
+          <MessageScrollerContent
+            ref={contentRef}
+            className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3"
+          >
             {props.hasEarlier ? (
               <div className="flex justify-center py-1">
                 <Button
@@ -541,8 +632,9 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                 </EmptyHeader>
               </Empty>
             ) : null}
-            {rows.map((row) => {
+            {rows.map((row, idx) => {
               const isUser = row.kind === "item" && row.item.kind === "user";
+              const isLast = idx === rows.length - 1;
               return (
                 <MessageScrollerItem
                   key={row.key}
@@ -561,6 +653,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                       sessionKey={props.sessionKey}
                       thinking={props.thinking ?? "folded"}
                       tools={props.tools ?? "grouped"}
+                      activeChain={isBusy && isLast}
                     />
                   </div>
                 </MessageScrollerItem>
@@ -612,7 +705,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                   }));
                   return (
                     <li key={p.clientSubmissionId} data-pending={p.state}>
-                      <Message align="end">
+                      <Message align="end" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
                         <MessageContent>
                           <UserAttachments attachments={pendingAttachments} />
                           <Bubble
@@ -665,9 +758,43 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                 })}
               </ul>
             )}
+            {liveChain ? (
+              <MessageScrollerItem
+                key="live-chain"
+                data-row="live-chain"
+                className="flex w-full min-w-0 flex-col"
+              >
+                <div className="mr-auto w-full max-w-[85%] min-w-0 overflow-hidden">
+                  <ChainOfThoughtRow
+                    row={{
+                      kind: "chain",
+                      key: "live-chain",
+                      steps: [],
+                      stepCount: 0,
+                      thoughtCount: 0,
+                      toolCount: 0,
+                      running: false,
+                      failedCount: 0,
+                      at: new Date().toISOString(),
+                    }}
+                    thinking={props.thinking ?? "folded"}
+                    tools={props.tools ?? "grouped"}
+                    active
+                  />
+                </div>
+              </MessageScrollerItem>
+            ) : null}
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton data-action="jump-to-bottom" />
+        <MessageScrollerButton
+          data-action="jump-to-bottom"
+          onClick={() => {
+            pinnedRef.current = true;
+            if (viewportRef.current !== null) {
+              viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
+            }
+          }}
+        />
       </MessageScroller>
     </MessageScrollerProvider>
   );
