@@ -2106,6 +2106,8 @@ fn job_add_draft_needing_an_unfinished_job_is_refused_draft_parked() {
     plan(&fx.env, "pl", "dispatch");
     job_add(&fx, "pl", "a", "S2", &[]).ok();
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
+    // The stub escape is closed: a draft without Tier and Spec is a usage error, not a waiting stub.
+    draft_add_refused_usage(&fx, &["--needs", "a"]);
     let (txns, evs, rows) = (
         count(&fx.env, "txns"),
         count(&fx.env, "events"),
@@ -2139,6 +2141,8 @@ fn job_add_draft_in_a_waiting_workflow_is_refused_draft_parked() {
          VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
          INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'web', 'repo');",
     );
+    // The stub escape is closed: a draft without Tier and Spec is a usage error, not a waiting stub.
+    draft_add_refused_usage(&fx, &["--workflow", "web"]);
     let (txns, evs, rows) = (
         count(&fx.env, "txns"),
         count(&fx.env, "events"),
