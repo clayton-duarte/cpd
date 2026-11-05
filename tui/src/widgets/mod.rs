@@ -42,6 +42,8 @@ mod legend_cost_tests;
 #[cfg(test)]
 mod needs_tests;
 #[cfg(test)]
+mod posting_tests;
+#[cfg(test)]
 mod window_tests;
 
 use cpd_core::host::runner::Runner;
@@ -233,6 +235,14 @@ pub fn show_with<B: Backend>(
         config.events.poll_ms,
     )
 }
+
+/// The pull requests (`<owner>/<repo>#<n>`) whose Post or Merge a pick started and whose command has not ended: their Inbox
+/// rows are hidden, client-side and in memory only. Stub: nothing fills or empties it yet.
+pub(crate) type Posting = BTreeSet<String>;
+
+/// The result handler of a Post or Merge job on `pull`: a failure takes its entry out of `posting` at once. Stub: does nothing.
+#[allow(dead_code)] // unwired stub until the implementation Job
+pub(crate) fn posted(_posting: &mut Posting, _pull: &str, _failed: bool) {}
 
 /// The area the Dispatch column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
 /// each side.
