@@ -23,7 +23,7 @@ struct Gh {
 
 fn node(number: i64) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
+        r#"{{"repository":{{"nameWithOwner":"acme/pay","isArchived":false}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
         "isDraft":false,"state":"MERGED","createdAt":"opened","updatedAt":"U1","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "reviewThreads":{{"nodes":[]}},"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )

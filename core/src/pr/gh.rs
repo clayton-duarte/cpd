@@ -1982,6 +1982,11 @@ fn parse_lookup(
                             "gh api graphql answered {alias} without viewerLatestReviewRequest."
                         ))
                     })?;
+                    raw.repository.is_archived.ok_or_else(|| {
+                        reply.fail(format!(
+                            "gh api graphql answered {alias} without isArchived."
+                        ))
+                    })?;
                     membership = Membership {
                         authored,
                         review_requested: !request.is_null(),
