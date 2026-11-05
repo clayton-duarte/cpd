@@ -80,14 +80,46 @@ fn assert_refused(fx: &Fx, args: &[&str], expected: Value) {
     assert_eq!(archived(fx), before, "a refusal archives nothing");
 }
 
+fn archives_plan(fx: &Fx) {
+    fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"),
+        1
+    );
+}
+
 #[test]
-fn plan_archive_is_refused_while_the_plan_is_not_done() {
+fn plan_archive_succeeds_for_an_idle_grounding_plan_with_no_workflows() {
     let fx = Fx::with_ports();
     world(&fx, "grounding", "merged", "merged");
+    fx.env.sql("DELETE FROM jobs; DELETE FROM workflows;");
+    archives_plan(&fx);
+}
+
+#[test]
+fn plan_archive_succeeds_for_a_grounding_plan_with_only_a_merged_scout_job() {
+    let fx = Fx::with_ports();
+    world(&fx, "grounding", "merged", "merged");
+    fx.env.sql(&format!(
+        "DELETE FROM jobs; DELETE FROM workflows;
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                           fingerprint, created_txn, merged_sha, kind, summary, created_at)
+           VALUES ('pay', NULL, 'explore', 'E', 'H1', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, '{fp}', cpd_txn(),
+                   'def456', 'scout', 'found it', 't');",
+        fp = "a".repeat(64),
+    ));
+    archives_plan(&fx);
+}
+
+#[test]
+fn plan_archive_is_refused_for_a_cancelled_workflow_with_an_open_pull_request() {
+    let fx = Fx::with_ports();
+    world(&fx, "done", "cancelled", "merged");
     assert_refused(
         &fx,
         &["plan", "archive", "--plan", "pay"],
-        json!({"kind": "plan", "id": "pay", "plan": "pay", "reason": "Plan pay is in phase grounding (not done)."}),
+        json!({"kind": "workflow", "id": "api", "plan": "pay", "reason": "Workflow api of Plan pay is cancelled with an open pull request."}),
     );
 }
 
@@ -114,37 +146,31 @@ fn plan_archive_is_refused_while_a_job_is_failed() {
 }
 
 #[test]
-fn plan_archive_is_refused_while_the_lead_has_an_open_inbox_item() {
+fn plan_archive_succeeds_while_the_lead_has_an_open_inbox_item() {
     let fx = Fx::with_ports();
     finished(&fx);
-    let id = inbox(&fx, false, false, false);
-    assert_refused(
-        &fx,
-        &["plan", "archive", "--plan", "pay"],
-        json!({"kind": "inbox", "id": id.to_string(), "reason": format!("Session Lead pay has open Inbox item {id} (unread).")}),
-    );
+    inbox(&fx, false, false, false);
+    archives_plan(&fx);
 }
 
 #[test]
-fn a_snoozed_open_inbox_item_still_blocks_plan_archive() {
+fn plan_archive_succeeds_with_a_snoozed_open_inbox_item() {
     let fx = Fx::with_ports();
     finished(&fx);
-    let id = inbox(&fx, false, false, true);
-    assert_refused(
-        &fx,
-        &["plan", "archive", "--plan", "pay"],
-        json!({"kind": "inbox", "id": id.to_string(), "reason": format!("Session Lead pay has open Inbox item {id} (unread).")}),
-    );
+    inbox(&fx, false, false, true);
+    archives_plan(&fx);
 }
 
 #[test]
-fn context_archive_is_refused_while_a_plan_of_it_is_not_done() {
+fn context_archive_succeeds_for_an_idle_plan_that_is_not_done() {
     let fx = Fx::with_ports();
     world(&fx, "grounding", "merged", "merged");
-    assert_refused(
-        &fx,
-        &["context", "archive", "ctx"],
-        json!({"kind": "plan", "id": "pay", "plan": "pay", "reason": "Plan pay is in phase grounding (not done)."}),
+    fx.env.sql("DELETE FROM jobs; DELETE FROM workflows;");
+    fx.cpd(&["context", "archive", "ctx"]).ok();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM contexts WHERE archived_at IS NOT NULL"),
+        1
     );
 }
 
