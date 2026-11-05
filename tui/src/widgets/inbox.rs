@@ -48,10 +48,13 @@ pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) 
 }
 
 /// The `items` the Inbox lists while the pull requests of `posting` are being posted or merged: the row of such a pull request is
-/// dropped. Stub: keeps every item.
-#[allow(dead_code)] // unwired stub until the implementation Job
-pub(crate) fn shown(items: &[Item], _posting: &std::collections::BTreeSet<String>) -> Vec<Item> {
-    items.to_vec()
+/// dropped.
+pub(crate) fn shown(items: &[Item], posting: &std::collections::BTreeSet<String>) -> Vec<Item> {
+    items
+        .iter()
+        .filter(|item| !merges(posting, item))
+        .cloned()
+        .collect()
 }
 
 /// What a row of the section is, by its offset from the section's first row (the blank one).
