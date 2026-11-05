@@ -362,6 +362,8 @@ Mapping of a durable `ui_request` onto a `Dialog` (frames.ts):
 | `editor` after a `Change` answer | consumed (above) |
 | any other `method`/`purpose` (`confirm`, `input`, a `select` other than the three above, or an approval select with other options) | `protocol_error` `unsupported dialog <method>/<purpose>`; the backend answers it with `ui_response {cancelled: true}` so the host is not stuck |
 
+**The approval flag.** A dialog is an approval only when the host's `ui_request.purpose` is `secret_approve` or `host_approve` (docs/contract.md §6.15, the approval flag). No header, title or question text decides it: a `questionnaire` of `ask_user_question` is never an approval, whatever its `header` says. The `Approval` header in the table above is set on the Dialog this backend builds from an approval; it is never read as an input.
+
 **Approval answers (`secret_approve`, `host_approve`).** The answer arrives as `DialogResponse` `ask_user_question` `answered`, and the backend reads `result.answers[0]`. It sends `ui_response {id, value: "Allow once"}` only when that answer is an option (`kind: "option"`) with `answer` `"Allow once"`. Every other outcome sends `ui_response {id, value: "Deny"}`: `Deny`, a custom answer, an unanswered question, and `cancelled`. Fail closed. The backend keeps the purpose of each held approval request, so `respond` sends this `{value}` for it and not the `{answer}` of other questionnaires.
 
 ### 3.9 Attachments and errors
