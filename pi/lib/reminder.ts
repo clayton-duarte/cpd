@@ -82,3 +82,13 @@ export function lastAssistantText(messages: unknown): string | undefined {
   }
   return undefined;
 }
+
+/** Stub: the failed Jobs of `cpd plan show`, in list order, with their attempts count. */
+export function unaddressedFailedJobs(_show: Record<string, unknown>): { key: string; attempts: number }[] {
+  return [];
+}
+
+/** Stub: the failed-Job reminder text. */
+export function failedJobReminderText(_keys: string[]): string {
+  return "";
+}
