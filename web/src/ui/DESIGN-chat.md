@@ -394,7 +394,7 @@ Component: `FoldRow`, props **KEPT** `{ item: FoldItem }` (`memo`). `FoldKind` i
 TraceCollapsible[data-kind="fold"][data-fold={item.foldKind}][data-state="open"|"closed"]   KEPT hook; open only when item.defaultOpen (cpd-plan-summary)     div
 ├─ TraceCollapsibleTrigger[data-part="marker"]
 │   └─ Marker   (shadcn, variant "default", 2f)
-│       ├─ MarkerIcon: span[data-part="phi"][aria-hidden="true"]  "φ"    font-display text-[15px] font-bold text-status-decision      (EB Garamond 700, #ca88a3)
+│       ├─ MarkerIcon: span[data-part="phi"][aria-hidden="true"]  "φ"    font-display text-[15px] font-bold text-status-decision      (Roboto 700, #ca88a3)
 │       └─ MarkerContent
 │           ├─ span[data-part="source"]  {item.foldKind}          font-mono text-muted-foreground      (#aba3af)
 │           ├─ span[data-part="marker-text"]  {item.title}        text-foreground; wraps, no truncate      (#d8d2cc)

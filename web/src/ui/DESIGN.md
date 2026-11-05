@@ -177,16 +177,16 @@ Tailwind names: `text-anko`, `bg-mizu-bright`, ... (`--color-<hue>`, `--color-<h
 
 | Token | Value | Utility |
 |---|---|---|
-| `--font-sans` | `"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif` | `font-sans` (UI and prose) |
-| `--font-mono` | `"Maple Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace` | `font-mono` (keys, metrics, code) |
-| `--font-display` | `"EB Garamond", ui-serif, Georgia, serif` | `font-display` (the φ mark only) |
+| `--font-sans` | `"Roboto", sans-serif` | `font-sans` (UI and prose; bundled Roboto) |
+| `--font-mono` | `"Roboto Mono", monospace` | `font-mono` (keys, metrics, code; bundled Roboto Mono) |
+| `--font-display` | `var(--font-sans)` | `font-display` (the φ mark only; display = sans) |
 | `--font-heading` | `var(--font-sans)` | (read by typeset, 2g) |
 | `--text-meta` / `--text-meta--line-height` | `0.6875rem` (11px) / `1rem` | `text-meta` |
 | `--text-key` / `--text-key--line-height` | `0.78125rem` (12.5px) / `1.125rem` | `text-key` |
 | `--text-body` / `--text-body--line-height` | `0.8125rem` (13px) / `1.45` | `text-body` |
 | `--text-title` / `--text-title--line-height` | `0.9375rem` (15px) / `1.3` | `text-title` |
 
-Fonts are CSS stacks only (A3): no `@font-face`, no `@import` of a font, nothing bundled. When a family is not installed the next one in the stack renders. **Resolution:** the board loads JetBrains Mono from Google Fonts and names Maple Mono without loading it; here neither is loaded. `font-variant-ligatures: none` applies to `code, kbd, samp, pre, .font-mono` so `->` and `!=` read literally.
+Roboto and Roboto Mono are bundled (decision pro-d48): the variable fonts ship in `web/src/ui/fonts` (normal and italic each), are loaded with four `@font-face` rules in `app.css` (`font-display: block`), and their SIL OFL licences are kept next to the files. Display is the sans family. `font-variant-ligatures: none` applies to `code, kbd, samp, pre, .font-mono` so `->` and `!=` read literally.
 
 **Motion**: `--animate-glyph-spin: dango-spin 1.1s linear infinite;` (`@theme inline`).
 
