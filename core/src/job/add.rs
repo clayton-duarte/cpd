@@ -186,7 +186,7 @@ fn mark_spec_reads(store: &mut crate::store::Store, plan: &PlanId, text: &str) {
     }
 }
 
-/// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1).
+/// `--tier` and `--spec` are always required, `--draft` included (pro-d404).
 fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
     let missing: Vec<&str> = [
         ("--tier", args.tier.is_none()),
@@ -195,13 +195,13 @@ fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
     .into_iter()
     .filter_map(|(flag, lacks)| lacks.then_some(flag))
     .collect();
-    if missing.is_empty() || args.draft {
+    if missing.is_empty() {
         return Ok(());
     }
     Err(CpdError::new(
         ErrorCode::Usage,
         format!(
-            "{} required for a Job that is not a --draft: only a stub draft (--draft) may leave them out.",
+            "{} required for every Job, a --draft too: a draft without Tier and Spec is a stub, and a stub is never a waiting state.",
             missing.join(" and ")
         ),
     ))
