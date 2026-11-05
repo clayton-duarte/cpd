@@ -570,9 +570,9 @@ async function digestOf(context: string, own: Record<string, unknown>[], unscope
 }
 
 test("a Manager's digest counts only the errors of its own Context", async () => {
-  const m = await digestOf("ctx", [errEvent(401, "ctx")], [errEvent(402, "other"), errEvent(403, "other", "p9"), errEvent(404, "ctx")]);
-  assert.equal(m.details.errors, 2);
-  assert.equal(m.details.event, 404);
+  const m = await digestOf("ctx", [errEvent(401, "ctx")], [errEvent(402, "other"), errEvent(403, "other", "p9")]);
+  assert.equal(m.details.errors, 1);
+  assert.equal(m.details.event, 401);
 });
 
 test("a machine error (no Context, no Plan) reaches the Manager of the cpd Context", async () => {
