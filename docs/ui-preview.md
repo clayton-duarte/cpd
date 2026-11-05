@@ -64,6 +64,22 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
   - A fast-forward that cannot apply (a changed file with a conflicting local edit that survived) is reported `skipped: diverged`.
   - The sync reasons are `fetch-failed` | `diverged`. The `branch` and `dirty` reasons are removed.
 
+## Crash safety (pro-d64)
+
+### Health file and crash log
+
+### Renderer signals
+
+### Main wiring
+
+### Watchdog
+
+### Restore points
+
+### preview-web.sh
+
+### Limits
+
 ## Limits
 
 A preview costs one release build of the worktree. The engine's pi chat (pi/lib/render.ts) is not reached by the view, so messages there don't appear in the preview. A branch missing a breaking migration of main is refused by the install guard; merge main first.
