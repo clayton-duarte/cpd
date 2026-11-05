@@ -30,6 +30,7 @@ export interface DurableTranscript {
   readonly items: TranscriptItem[];
   readonly facts: DurableFacts;
   readonly before?: number;
+  readonly openDialog?: Dialog | undefined;
 }
 
 export const SUPPORTED_HOSTS: readonly { protocol: 1 | 2; piDurable: string }[] = [
@@ -140,6 +141,7 @@ type Parsed =
   | { kind: "item"; item: TranscriptItem }
   | { kind: "assistant"; item?: AssistantItem; tools: ToolBlock[]; tokens?: number }
   | { kind: "result"; callId: string; name: string; result: { text: string; isError: boolean }; patch?: string }
+  | { kind: "review"; review: string; status: string }
   | { kind: "none" };
 
 function parseEntry(rawEntry: unknown): { id: number; parsed: Parsed } {
@@ -199,18 +201,31 @@ function parseEntry(rawEntry: unknown): { id: number; parsed: Parsed } {
     const message = messageOf();
     const body = textOf(message.content);
     const foldKind = kind as FoldKind;
+    const foldData =
+      isObj(entry.data) && Object.keys(entry.data).length > 0
+        ? entry.data
+        : isObj(message.details)
+          ? message.details
+          : {};
     const fold: FoldItem = {
       kind: "fold",
       id: `f:${id}`,
       ...isoOf(message),
       foldKind,
-      title: foldTitle(foldKind, body, isObj(entry.data) ? entry.data : {}),
+      title: foldTitle(foldKind, body, foldData),
       body,
       defaultOpen: foldKind === "cpd-plan-summary",
     };
     return { id, parsed: { kind: "item", item: fold } };
   }
-  // pi.system, pi.reset, cpd-event, cpd-first-message, cpd-error, cpd-plan-review and any other kind: dropped (CONTRACT 6.4)
+  if (kind === "cpd-plan-review" && isObj(entry.data)) {
+    const review = entry.data.review;
+    const status = entry.data.status;
+    if ((typeof review === "string" || typeof review === "number") && typeof status === "string") {
+      return { id, parsed: { kind: "review", review: String(review), status } };
+    }
+  }
+  // pi.system, pi.reset, cpd-event, cpd-first-message, cpd-error and any other kind: dropped (CONTRACT 6.4)
   return { id, parsed: { kind: "none" } };
 }
 
@@ -310,6 +325,7 @@ function createViewDialect(): ViewDialect {
   let liveId: string | null = null;
   let liveCount = 0;
   let entryTokens: number | undefined;
+  let openDialog: Dialog | undefined;
 
   /** Parse every entry of the view that the cache has not seen (or sees changed); returns the ids first seen. */
   const ingest = (entries: readonly unknown[]): number[] => {
@@ -366,6 +382,7 @@ function createViewDialect(): ViewDialect {
       out.push(toolItem(block, slots.get(block.callId), results.get(block.callId)));
     };
     entryTokens = undefined;
+    const pendingReviews = new Set<string>();
     for (const id of ids) {
       const p = (cache.get(id) as { parsed: Parsed }).parsed;
       switch (p.kind) {
@@ -382,6 +399,10 @@ function createViewDialect(): ViewDialect {
         case "result":
           if (!called.has(p.callId)) out.push({ kind: "orphanResult", id: `orphan:${p.callId}`, callId: p.callId, name: p.name, result: p.result });
           break;
+        case "review":
+          if (p.status === "pending") pendingReviews.add(p.review);
+          else if (p.status === "approved" || p.status === "rejected" || p.status === "superseded" || p.status === "lost") pendingReviews.delete(p.review);
+          break;
         case "none":
           break;
       }
@@ -390,6 +411,26 @@ function createViewDialect(): ViewDialect {
     if (live !== undefined) out.push(live);
     for (const t of liveTools) tool({ ...t, name: t.name === "" ? (slots.get(t.callId)?.name ?? "") : t.name });
     for (const s of slots.values()) tool({ callId: s.callId, name: s.name, args: {} });
+    const latestReview = [...pendingReviews].at(-1);
+    if (latestReview !== undefined) {
+      let title = `Plan review ${latestReview}`;
+      let summary = "";
+      for (const item of [...out].reverse()) {
+        if (item.kind === "tool" && item.name === "cpd_plan_review" && typeof item.args.title === "string") {
+          title = item.args.title;
+          break;
+        }
+      }
+      for (const item of [...out].reverse()) {
+        if (item.kind === "fold" && item.foldKind === "cpd-plan-summary") {
+          summary = item.body;
+          break;
+        }
+      }
+      openDialog = { id: `review:${latestReview}`, method: "cpd_plan_review", title, summary, interactive: true };
+    } else {
+      openDialog = undefined;
+    }
     return out;
   };
 
@@ -417,6 +458,9 @@ function createViewDialect(): ViewDialect {
     },
     get before() {
       return view?.before;
+    },
+    get openDialog() {
+      return openDialog;
     },
   };
 
@@ -706,12 +750,18 @@ function createEventsDialect(): Dialect {
       const message = obj(arr(entry.model, "fold model")[0], "fold model[0]");
       const body = textOf(message.content);
       const foldKind = kind as FoldKind;
+      const foldData =
+        isObj(entry.data) && Object.keys(entry.data).length > 0
+          ? entry.data
+          : isObj(message.details)
+            ? message.details
+            : {};
       const fold: FoldItem = {
         kind: "fold",
         id: `f:${entryId}`,
         ...isoOf(message),
         foldKind,
-        title: foldTitle(foldKind, body, isObj(entry.data) ? entry.data : {}),
+        title: foldTitle(foldKind, body, foldData),
         body,
         defaultOpen: foldKind === "cpd-plan-summary",
       };

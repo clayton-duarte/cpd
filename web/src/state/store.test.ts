@@ -179,3 +179,35 @@ describe("store", () => {
     expect(store.getState().session?.transcript.items.map((i) => [i.id, (i as { text: string }).text])).toEqual([["u:1", "A"], ["u:2", "b"]]);
   });
 });
+
+describe("optimistic merge", () => {
+  const prRow = (id: number, subject: string, kind = "pr-ready"): InboxModel["rows"][number] => ({
+    id, kind, label: "ready to merge", urgency: "normal", contextId: null, planId: "p1", jobKey: null, sessionId: null,
+    url: null, subject, workflow: null, openedAt: "t", ageSeconds: 0, actions: [],
+  } as unknown as InboxModel["rows"][number]);
+  const rows = [prRow(1, "pr:acme/api#3"), prRow(2, "pr:acme/api#4"), prRow(3, "pr:acme/api#3", "review-requested")];
+  const withRows = { ...inbox, rows, openCount: 3 } as InboxModel;
+  const loaded = (): AppState => run(initialState, server({ type: "cockpit.snapshot", tree: tree(1), plan, inbox: withRows }));
+  const merge: StoreAction = { type: "actionOptimistic", actionId: "a1", action: { kind: "pr.merge", planId: "p1", pull: "acme/api#3" } };
+  const ids = (s: AppState): number[] => (s.cockpit.inbox?.rows ?? []).map((r) => r.id);
+
+  it("merge_action_removes_pr_row_optimistically", () => {
+    expect(ids(run(loaded(), merge))).toEqual([2, 3]);
+  });
+
+  it("merge_failure_rolls_back_row", () => {
+    const removed = run(loaded(), merge);
+    expect(ids(removed)).toEqual([2, 3]);
+    const failed = run(removed, server({ type: "action.result", actionId: "a1", ok: false, error: err }));
+    expect(ids(failed)).toEqual([1, 2, 3]);
+  });
+
+  it("merge_success_keeps_row_removed_until_refresh", () => {
+    const removed = run(loaded(), merge);
+    const ok = run(removed, server({ type: "action.result", actionId: "a1", ok: true, output: {} }));
+    expect(ids(ok)).toEqual([2, 3]);
+    const fresh = { ...withRows, rows: [rows[1]!], openCount: 1 } as InboxModel;
+    const refreshed = run(ok, server({ type: "cockpit.patch", pane: "inbox", data: fresh }));
+    expect(refreshed.cockpit.inbox).toEqual(fresh);
+  });
+});

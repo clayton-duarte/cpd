@@ -77,23 +77,28 @@ function click(el: HTMLElement) {
   act(() => el.click());
 }
 
-it("ask card renders question tabs and numbered options", () => {
+const choice = (c: HTMLElement, label: string) => c.querySelector<HTMLElement>(`[data-slot="questionnaire-choice"][data-option="${label}"]`) as HTMLElement;
+const step = (c: HTMLElement, i: number) => c.querySelector<HTMLElement>(`[data-slot="questionnaire-item"][data-question="${i}"]`) as HTMLElement;
+const next = (c: HTMLElement) => c.querySelector<HTMLElement>('[data-slot="questionnaire-next"]') as HTMLElement;
+
+it("ask card renders a questionnaire with one lettered step per question", () => {
   const { container, unmount } = ask([q(0), q(1)]);
-  const tabs = container.querySelectorAll('[role="tablist"] [role="tab"][data-part="tab"]');
-  expect(tabs.length).toBe(2);
-  const badges = Array.from(
-    container.querySelectorAll('fieldset[data-question="0"] [data-part="option"] [data-part="badge"]'),
-  ).map((b) => b.textContent);
-  expect(badges).toEqual(["1", "2", "3", "4"]);
+  expect(container.querySelector('[data-slot="questionnaire"][data-dialog="ask_user_question"]')).not.toBeNull();
+  expect(container.querySelector('[data-slot="questionnaire-progress"]')).not.toBeNull();
+  expect(container.querySelectorAll('[data-slot="questionnaire-item"]').length).toBe(2);
+  expect(step(container, 0).hasAttribute("data-active")).toBe(true);
+  const options = Array.from(step(container, 0).querySelectorAll('[data-part="options"] [data-part="option"]')).map((o) => o.getAttribute("data-option"));
+  expect(options).toEqual(["A0", "B0", "C0", "D0"]);
+  const letters = Array.from(step(container, 0).querySelectorAll('[data-slot="questionnaire-choice-shortcut"]')).map((b) => b.textContent);
+  expect(letters).toEqual(["A", "B", "C", "D"]);
+  expect(container.querySelector('[data-slot="questionnaire"]')?.getAttribute("data-shortcuts")).toBe("letters");
   unmount();
 });
 
-it("ask card shows the recommended badge", () => {
+it("ask card shows the recommended mark", () => {
   const { container, unmount } = ask([q(0)], [{ questionIndex: 0, label: "B0" }]);
-  const badges = container.querySelectorAll('[data-part="recommended"]');
-  expect(badges.length).toBe(1);
-  expect(badges[0]?.textContent).toBe("recommended");
-  expect(badges[0]?.closest('[data-option="B0"]')).not.toBeNull();
+  expect(choice(container, "B0").textContent).toContain("B0 (Recommended)");
+  expect(choice(container, "A0").textContent).not.toContain("Recommended");
   unmount();
 });
 
@@ -112,34 +117,42 @@ it("ask card shows the preview pane only when an option has a preview", () => {
   expect(c.querySelector('[data-layout="side-by-side"]')).not.toBeNull();
   expect(c.querySelector('[data-part="preview-pane"]')).not.toBeNull();
   expect(c.querySelector('[data-part="preview"]')?.textContent).toBe("");
-  click(c.querySelector<HTMLElement>('input[value="A1"]') as HTMLElement);
+  click(choice(c, "A1"));
   expect(c.querySelector('[data-part="preview"] strong')?.textContent).toBe("alpha preview");
-  expect(c.querySelector('[data-part="preview-focus"]')?.textContent).toBe("1 · A1");
+  expect(c.querySelector('[data-part="preview-focus"]')?.textContent).toBe("A1");
   withPreview.unmount();
 });
 
-it("ask card renders the dashed type something input", () => {
-  const { container, unmount } = ask([q(0)]);
-  const custom = container.querySelector('[data-part="custom"]');
-  expect(custom).not.toBeNull();
-  const input = custom?.querySelector<HTMLInputElement>('input[type="text"]');
-  expect(input?.placeholder).toBe("Type something.");
-  expect(custom?.querySelector('[data-part="badge"]')?.textContent).toBe("5");
+it("ask card renders the type something input on every step", () => {
+  const { container, unmount } = ask([q(0), q(1)]);
+  for (const i of [0, 1]) {
+    const input = step(container, i).querySelector<HTMLInputElement>('[data-slot="questionnaire-input"]');
+    expect(input?.getAttribute("aria-label")).toBe("Type something.");
+    expect(input?.placeholder).toBe("Type something.");
+  }
   unmount();
 });
 
-it("ask card submit footer counts answered questions", () => {
-  const { container, unmount } = ask([q(0), q(1)]);
-  const submit = () => container.querySelector('button[type="submit"]')?.textContent ?? "";
-  expect(submit()).toContain("Submit 0/2 answers");
-  expect(submit()).toContain("⏎");
-  click(container.querySelector<HTMLElement>('input[value="A0"]') as HTMLElement);
-  expect(submit()).toContain("Submit 1/2 answers");
-  click(container.querySelector<HTMLElement>('input[value="B1"]') as HTMLElement);
-  expect(submit()).toContain("Submit 2/2 answers");
-  expect(container.querySelector('[data-part="hints"]')?.textContent).toBe(
-    "↑↓ move · 1–4 pick · ⇥ next question · ⏎ submit · esc cancel",
-  );
+it("ask card submits from the last step with the answers of every step", () => {
+  const { container, responses, unmount } = ask([q(0), q(1)]);
+  expect(container.querySelector('[data-slot="questionnaire-submit"]')?.hasAttribute("hidden"), "Submit belongs to the last step").toBe(true);
+  click(choice(container, "A0"));
+  click(next(container));
+  click(choice(container, "B1"));
+  click(container.querySelector<HTMLElement>('[data-slot="questionnaire-submit"]') as HTMLElement);
+  expect(responses).toEqual([
+    {
+      method: "ask_user_question",
+      outcome: "answered",
+      result: {
+        answers: [
+          { questionIndex: 0, question: "Question 0?", kind: "option", answer: "A0" },
+          { questionIndex: 1, question: "Question 1?", kind: "option", answer: "B1" },
+        ],
+        cancelled: false,
+      },
+    },
+  ]);
   unmount();
 });
 
@@ -162,23 +175,35 @@ it("plan review card renders the revision header and section nav", () => {
 
 it("plan review card renders the decision bar with three actions", () => {
   const { container, unmount } = plan();
-  const bar = container.querySelector('footer[data-part="decision-bar"]');
+  const bar = container.querySelector('[data-slot="item-footer"][data-part="decision-bar"]');
   expect(bar).not.toBeNull();
-  expect(byText(container, "button", "Reject plan").getAttribute("data-action")).toBe("reject");
-  expect(byText(container, "button", "Request changes").getAttribute("data-action")).toBe("request-changes");
-  expect(byText(container, "button", "Approve & lock").textContent).toContain("⌘⏎");
+  const actions = container.querySelector('[data-slot="item-actions"][data-part="actions"]') as HTMLElement;
+  expect(byText(actions, "button", "Reject plan").getAttribute("data-action")).toBe("reject");
+  expect(byText(actions, "button", "Request changes").getAttribute("data-action")).toBe("request-changes");
+  expect(byText(actions, "button", "Approve & lock").textContent).toContain("⌘⏎");
   expect(container.querySelector("textarea")).toBeNull();
   click(byText(container, "button", "Request changes"));
   const area = container.querySelector("textarea");
   expect(area?.getAttribute("aria-label")).toBe("Feedback");
-  expect(area?.getAttribute("placeholder")).toBe("Feedback for the Lead — required to request changes");
+  expect(byText(container, "button", "Request changes").getAttribute("aria-expanded")).toBe("true");
   unmount();
+});
+
+it("plan review card sends each decision once and then disables the actions", () => {
+  const approve = plan();
+  click(byText(approve.container, "button", "Approve & lock"));
+  expect(approve.responses).toEqual([{ method: "cpd_plan_review", outcome: "approve" }]);
+  click(byText(approve.container, "button", "Reject plan"));
+  expect(approve.responses.length, "the buttons are disabled while submitting").toBe(1);
+  approve.unmount();
+  const reject = plan();
+  click(byText(reject.container, "button", "Reject plan"));
+  expect(reject.responses).toEqual([{ method: "cpd_plan_review", outcome: "reject" }]);
+  reject.unmount();
 });
 
 it("plan review card sends feedback with the decision", () => {
   const { container, responses, unmount } = plan();
-  click(byText(container, "button", "Approve & lock"));
-  click(byText(container, "button", "Reject plan"));
   click(byText(container, "button", "Request changes"));
   const area = container.querySelector("textarea") as HTMLTextAreaElement;
   const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -187,10 +212,6 @@ it("plan review card sends feedback with the decision", () => {
     area.dispatchEvent(new Event("input", { bubbles: true }));
   });
   click(byText(container, "button", "Send feedback"));
-  expect(responses).toEqual([
-    { method: "cpd_plan_review", outcome: "approve" },
-    { method: "cpd_plan_review", outcome: "reject" },
-    { method: "cpd_plan_review", outcome: "changes", feedback: "tighten scope" },
-  ]);
+  expect(responses).toEqual([{ method: "cpd_plan_review", outcome: "changes", feedback: "tighten scope" }]);
   unmount();
 });

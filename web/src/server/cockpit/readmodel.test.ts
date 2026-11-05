@@ -221,7 +221,7 @@ it("buildTree drops worker sessions", async () => {
   expect(ids(c1.plans[0]!.sessions)).toEqual(["s-lead"]);
 });
 
-it("buildTree drops archived sessions from the live lists", async () => {
+it("buildTree keeps archived sessions in the tree, where the UI files them under archive", async () => {
   const tree = await treeOf({
     context: [context("c1")],
     plan: [plan("p1", "c1")],
@@ -232,9 +232,9 @@ it("buildTree drops archived sessions from the live lists", async () => {
     ],
   });
   const c1 = tree.contexts[0]!;
-  expect(ids(c1.sessions)).toEqual([]);
-  expect(ids(c1.plans[0]!.sessions)).toEqual([]);
-  expect(c1.plans[0]!.leadSessionId).toBeNull();
+  expect(ids(c1.sessions)).toEqual(["m-old"]);
+  expect(ids(c1.plans[0]!.sessions)).toEqual(["l-old", "f-old"]);
+  expect(c1.plans[0]!.leadSessionId).toBe("l-old");
 });
 
 it("buildTree keeps one live Manager per Context, preferring one with a file then the newest", async () => {

@@ -8,9 +8,11 @@ const fold = (foldKind: FoldKind, defaultOpen: boolean): FoldItem => ({ kind: "f
 
 function open(item: FoldItem): { isOpen: boolean; title: string | undefined; kind: string | null; body: string } {
   const m = mount(<FoldRow item={item} />);
-  const d = m.container.querySelector('details[data-kind="fold"]') as HTMLDetailsElement;
-  const r = { isOpen: d.open, title: d.querySelector("[data-part=marker-text]")?.textContent ?? undefined, kind: d.getAttribute("data-fold"), body: d.textContent ?? "" };
-  expect(d.querySelector("strong")?.textContent).toBe("text");
+  const d = m.container.querySelector('[data-kind="fold"]') as HTMLElement;
+  const state = (d.matches('[data-slot="trace-collapsible"]') ? d : d.querySelector('[data-slot="trace-collapsible"]'))?.getAttribute("data-state") ?? d.getAttribute("data-state");
+  const r = { isOpen: state === "open", title: d.querySelector("[data-part=marker-text]")?.textContent ?? undefined, kind: d.getAttribute("data-fold"), body: d.textContent ?? "" };
+  if (r.isOpen) expect(d.querySelector("strong")?.textContent).toBe("text");
+  else expect(d.querySelector("strong"), "a closed fold does not render its body").toBeNull();
   m.unmount();
   return r;
 }

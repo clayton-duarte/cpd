@@ -48,7 +48,7 @@ The Phase 3/4 look of the frame is checked in section 6.
 | Read the `Session footer` bar | `model:`, `tier:`, `thinking:`, `context: <n>%`, `cost: $<x.xxx>`, `branch:`; a value that cannot be known shows `unknown` with the reason as hover text, never a made-up value. Cross-check tier/model/thinking with `cpd session show <id>` | chat bottom |
 | Before attach completes | footer shows `unknown` for all six (`not attached`) | footer |
 
-### 3. Live attach, paging, send, steer, abort
+### 3. Live attach, paging, send
 
 Repeat for the **durable** and the **pi** session.
 
@@ -57,9 +57,7 @@ Repeat for the **durable** and the **pi** session.
 | Select the session | transcript shows the tail window, at most 40 items, newest at the bottom | same, read from the session JSONL (`file` of `cpd session show <id>`) |
 | Click `Load earlier` | the previous 40 items are prepended, scroll position stays, button disappears when the start is reached | same |
 | Type in `Message`, click `Send` (or Enter) | your message appears, the reply streams live | same, delivered with `cpd session send`; the reply shows up as the JSONL file grows |
-| While the agent is busy, type text and click `Steer` | message delivered mid-run | `Steer` disabled, a reason is shown beside it and as hover text |
-| While busy, click `Follow up` | message queued (`Queued messages` list), runs after the turn; `Cancel queued message` removes it | `Follow up`/`Send` follow what the capabilities say; if disabled the reason is shown |
-| While busy, click `Abort` | the run stops | `Abort` disabled: "cpd has no command to abort a pi session turn" |
+| While the agent is busy, type text and press Enter or click `Send` | the message is sent as a follow-up (pro-d57: no Steer, Follow-up or Stop control exists) | `Send` follows the capabilities; no steer or abort control is shown (DESIGN-compose 1.6) |
 | Append to the session from outside (`cpd session send <id> "x" --unblocks "verify"`) | the new items appear live without reload | same |
 | Reload the page | reattaches to the same session tail | same |
 
@@ -111,7 +109,7 @@ Repeat for the **durable** and the **pi** session.
 ## 3. Known limitations (Phase 1, amended for Phase 2)
 
 - **Durable v1 and v2 (superseded by CONTRACT 10.8):** pi-durable 1.3.0 (protocol 1, `snapshot`/`events`) and 1.5.0 (protocol 2, `view`/`ops`) are both understood; v2 is tested only against mocked frames until `cpd:pi-1-5-upgrade` has merged. An unknown host version or frame shape fails loud with `unsupported_host_version` / `protocol_error`, never a silent fallback.
-- **pi sessions (A4):** read from the session JSONL and written through `cpd session send` / `cpd session retier`. No abort, steer, model or thinking change, or compaction (cpd has no command for them); a pending `ask_user_question` is read-only (cpd has no command that settles a held ask); plan reviews are answerable; images are accepted and sent as paths in the text (see the README section "Server behaviour and pi sessions"). The UI disables each control it cannot drive and shows the reason.
+- **pi sessions (A4):** read from the session JSONL and written through `cpd session send` / `cpd session retier`. No abort, steer, model or thinking change, or compaction (cpd has no command for them); a pending `ask_user_question` is answerable from the WebUI (pro-d60; the answer goes to the pi extension, CONTRACT 11.4); plan reviews are answerable; images are accepted and sent as paths in the text (see the README section "Server behaviour and pi sessions", CONTRACT 11.3). The UI disables each control it cannot drive and shows the reason.
 - **Dev bench:** runs only under `vite serve`; transport is Vite `server.ws` custom events (`cpd:c2s`, `cpd:s2c`); no auth beyond Vite's localhost bind; `vite build` output is not runnable.
 - **Phase 2 (CONTRACT 10.9):** no keep-mounted rows for selection, no in-app search, fold open state is not persisted across unmount, no v2 `history` paging beyond the host's newest-50 window, reference-style Markdown link definitions across segments do not resolve, from-null `cpd` nudges show as User messages, durable `cpd-event`/`cpd-first-message`/`cpd-error`/`cpd-plan-review` entries stay dropped.
 - **Unverified without a running v2 host:** tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title.
@@ -124,10 +122,10 @@ Repeat for the **durable** and the **pi** session.
 |---|---|---|---|---|
 | 1 | Cockpit frame and panes | [ ] | [ ] | |
 | 2 | Chat title and footer | [ ] | [ ] | |
-| 3 | Live attach, Load earlier, send, steer/follow up, abort | [ ] | [ ] (limits as expected) | |
+| 3 | Live attach, Load earlier, send (follow-up only, pro-d57) | [ ] | [ ] (limits as expected) | |
 | 4 | Image and file import | [ ] | [ ] (images sent as paths, as expected) | |
 | 5 | Tier / model / thinking | [ ] | [ ] (model, thinking disabled as expected) | |
-| 6 | Interactive dialogs | [ ] | [ ] (ask read-only, plan review answerable, as expected) | |
+| 6 | Interactive dialogs | [ ] | [ ] (ask and plan review answerable, §9 steps 23 and 24) | |
 | 7 | Streaming, Thinking…, tools, diffs, cpd and compaction folds | [ ] | [ ] | |
 
 ## 5. Phase 2 checklist (pro-d20)
@@ -190,7 +188,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | 5 | Find each glyph in the UI (tree dots, job nodes, inbox rows). Compare with the legend of shapes: triangle (failed), down arrow (landing), diamond (waiting on you), hollow diamond (draft), spinning arc (running), square (review), solid dot (done), neutral solid dot (unread), dashed ring (queued), ring (idle). In the browser's rendering settings enable "reduce motion" and reload. | Each status is a distinct shape as well as a colour (no colour-only status). With reduced motion the running arc no longer spins. |
 | **Cockpit shell** | | |
 | 6 | Measure the header, the status bar, the Context tree column and the Inbox column. | Header 44px high with a 1px bottom border `#2e2a33`; status bar 30px high, background `#19171c`, 1px top border; tree column 272px wide with a right border; inbox column 340px wide with a left border. The page has no outer scrollbar. |
-| 7 | Read the header. | Left: a φ mark in a serif face (28px, `#f3ead9`); then, when a Plan is shown, the breadcrumb `<context> / <plan>` in monospace 12px; right: `engine` with a glyph and `running` (green dot) when `cpd watch --check` says the engine runs. Stop the engine: the glyph becomes a triangle and the text `not running`. No search box is shown (command palette not wired). |
+| 7 | Read the header. | Left: a φ mark in a serif face (28px, `#f3ead9`); then, when a Plan is shown, the breadcrumb (DESIGN-panes 4.1; superseded by §9 step 12); right: `engine` with a glyph and `running` (green dot) when `cpd watch --check` says the engine runs. Stop the engine: the glyph becomes a triangle and the text `not running`. No search box is shown (command palette not wired). |
 | 8 | Read the status bar. | Right side: `Runner: pi`/`durable`/`none`, `State: <state>` with a glyph, `cpd: <version>` or `cpd: unknown`, all matching Phase 1 step 1. No Legend, Logs, Tiers, Workers, CPU/RAM or incident element appears. |
 | 9 | Read the Context tree: header row `CONTEXTS`. One row per Context, its Manager chat (id, Manager dot, counters). Under it one row per Plan (Lead dot, plan id, counters `planned`, `active`, `failed`, `done`). Forks are extra rows under their Context. Hover a row. | Each Plan row shows its Lead's dot and the four counters; each fork row shows its own dot. No Worker appears as a row. Archived items sit under `Archived (<n>)`. |
 | 10 | Click a Plan row, then a fork row. | The Plan row gets a blue tint (`rgba(122,162,206,.16)`) and brighter text; the Plan pane and its Lead chat open as in Phase 1 step 1. The fork row opens its chat. |
@@ -206,7 +204,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | **Tool rows** (DESIGN-chat.md) | | |
 | 17 | Find a turn with tool calls and one `edit`. Expand and collapse the group and a thinking fold. | The group has a 2px left rail, a summary line (`read <target> + N more steps`), a strip of one 3x10px tick per call (green, red for a failed call), `done in <s> · <n> failed`; each row is 22px: status glyph, verb (`read`, `bash`, `edit`), target, duration; a failed `bash` shows its output block with `… N more lines`; the `edit` row shows `+<added> −<removed>` and a diff with red removed and green added lines on dark backgrounds. `Thinking` is a collapsed pill that expands to the reasoning. |
 | **Composer and footer** (DESIGN-compose.md) | | |
-| 18 | Read the composer and footer; type text; press Enter; while the agent runs queue a follow-up. | Composer: 10px-radius card with a `#a1c6ef` border, a multi-line `Message` textarea, `Attach files`, the tier/model/thinking selector pill (`S2 claude-… high`), `Steer ⏎` as the one filled blue button, `Follow-up ⌥⏎`, `Stop ⌃C` in red outline while busy; a queued follow-up shows as a dashed chip with `Cancel queued follow-up`. Footer 30px, monospace 11px: cwd, key, branch, tokens, cost, a context meter, model and thinking; unknown values read `unknown` (Phase 1 step 2), never invented. Every Phase 1 and 2 behaviour (send, steer, abort, attach, drop, paste, rejections) still works; disabled controls keep their reason. |
+| 18 | Read the composer and footer; type text; press Enter; while the agent runs, press Enter again. | Superseded by §9 steps 14 to 16 (pro-d54, pro-d57): the composer has a header, a textarea and a footer with the attach button, the Tier, Model and Effort menus and `Send`; there is no Steer, Follow-up or Stop; the footer is only the `N% context` card. Earlier text, kept for history: Composer: 10px-radius card with a `#a1c6ef` border, the tier/model/thinking selector pill (`S2 claude-… high`); unknown values read `unknown` (Phase 1 step 2), never invented. Every Phase 1 and 2 behaviour (send, steer, abort, attach, drop, paste, rejections) still works; disabled controls keep their reason. |
 | **Ask card** (DESIGN-compose.md) | | |
 | 19 | Durable: make the agent call `ask_user_question` with 2 or 3 questions, one multi-select, one option with a preview. Pick answers with the mouse, then with the keyboard (1 to 4, arrows, Tab), and Submit; repeat with `Type something.` and with Esc. | A pink-bordered card, tabs per question with answered/unanswered marks, options with numbered badges and the `recommended` badge where given, the preview pane beside the options when two-column, `Submit N/M answers ⏎` as the one filled button; the answers reach the agent exactly as in Phase 1 step 6; Esc or `Cancel` cancels. A pi session shows the read-only card with its reason. |
 | **Plan review card** (DESIGN-compose.md) | | |
@@ -223,7 +221,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | 16 | Chat surface | [ ] | [ ] | |
 | 17 | Tool rows and thinking | [ ] | [ ] | |
 | 18 | Composer and footer | [ ] | [ ] | |
-| 19 | Ask card | [ ] | [ ] (read-only as expected) | |
+| 19 | Ask card | [ ] | [ ] (Questionnaire, §9 step 23) | |
 | 20 | Plan review card | [ ] | [ ] (answerable as expected) | |
 
 ## 7. Electron app checklist (pro-d21, pro-d23, pro-d24)
@@ -324,3 +322,40 @@ Specification: [`ELECTRON.md`](./ELECTRON.md), section "Auto-update and CLI boot
 | 6 | (d) CLI install waits for a running Attempt | [ ] | |
 | 7 | (d) CLI install after the Attempt ends | [ ] | |
 | 8 | (e) Dirty checkout skips | [ ] | |
+
+## 9. Checklist pro-d48..pro-d61 (approved preview, consolidated to main)
+
+Run on the cockpit at a window of at least 1280 px wide unless a step says otherwise. Each step names its contract. Expected results are what the approved preview shows; a difference is a defect unless the contract section says otherwise.
+
+### 9.1 Steps
+
+1. **Fonts (pro-d48, DESIGN.md 2b).** Open DevTools, select the `h2` `Inbox`. Computed `font-family` starts with `Roboto`; select a row's age: `Roboto Mono`. Expected: both load (no fallback `sans-serif` in the first position).
+2. **Tier filter (pro-d49, DESIGN-panes 2.4).** In the Inbox header, expected seven items in order `all`, `blocker`, `delivery`, `decision`, `support`, `notice`, `unread`, each `label count`, none disabled, right-aligned. Click `blocker`: only blocker rows show, and `blocker` stays on. Click `delivery`: blocker and delivery show (additive). Click `all`: every row shows. Select all six tiers: the filter resets to `all`.
+3. **Isolation (pro-d49).** With `all` selected, click `notice`: only notice rows show. Click `notice` again: back to `all`.
+4. **Gap and collapse (pro-d50, DESIGN-panes 2.4).** Expected: at least 32 px between `Inbox` and the filters. Narrow the Inbox column (drag the `split-right` handle) until the filters fit no longer: they become one `Filter inbox by tier` button. Open it: a vertical list of the same seven items. Expected: the button reads `all` or `N tiers` with the count.
+5. **Column defaults and double-click (pro-d50, DESIGN.md 3c).** Expected at start: tree 20%, centre 50%, Inbox 30%. Drag the handles away, then double-click `split-left`: the tree returns to 20%. Drag, then double-click `split-right`: the Inbox returns to 30%.
+6. **Reset layout (DESIGN.md 3g).** After step 5's drags, click `Reset layout`. Expected: tree 20%, centre 50%, Inbox 30%, Plan 40%, chat 60%.
+7. **Row layout (pro-d51, pro-d52, DESIGN-panes 2.5).** Expected: each row is an outlined item with three columns. The icon is at the top left and the age at the bottom left, the age on the last text line's baseline. The external-link icon (linked kinds) or the chevron is at the top right, the primary button at the bottom right (`Merge`, `Post`, `RePost`, `Approve`, `Claim`, `Start`, `Curate`, or `Dismiss`).
+8. **Links (pro-d53, DESIGN-panes 2.6).** Click the external-link icon of a `pr-ready` row: the PR opens in a new tab, and the row's Plan and Session do not change. Click the row body of a `pr-ready` row: its Plan and Session are selected, and the chat shows that Session.
+9. **Engine start (pro-d53).** With the engine stopped, the `engine-down` row shows `Start`. Click the row: the engine starts. Expected: the row's `Start` shows the spinner, then the row disappears once the engine reports ok.
+10. **Curate dialog (pro-d53, DESIGN-panes 2.6).** Click a `curate-retire` row. Expected: its Plan and Session are selected, and the dialog `Retire records of <context>` opens with one checkbox per record, all checked. Uncheck one and click `Confirm`: the dialog closes; the context's records are retired (`cpd context retire`).
+11. **Async action (pro-d53, DESIGN-panes 2.7).** Click `Dismiss` on a row. Expected: the button is disabled and shows a spinner, then the row leaves the list. Force a failure (for example a row whose action the engine refuses): the button is enabled again and a red error toast appears at the bottom right with the error code, dismissible with `Dismiss error`.
+12. **Breadcrumb (pro-d60, DESIGN-panes 4.1).** Select a Session of a Context. Expected: the header reads `<hostname> / contexts / <context> / <plan> / <worker or fork>`; `standing` for `cpd`, `host` or `codereview`. Click the host crumb: the host Manager chat opens. Click the Context crumb: the Context's Manager chat opens. Click the Plan crumb: the Plan and its Lead chat open.
+13. **Chat title (pro-d60, DESIGN-chat 1).** The chat header shows only the session title (or key when untitled). No breadcrumb, no toggle buttons and no run status are in it.
+14. **Composer (pro-d54, pro-d57, DESIGN-compose 1).** Expected: the composer has a header (queued messages and attachments), a textarea, and a footer with the attach button, the Tier, Model and Effort menus, and Send. There is no Steer, Follow-up or Stop control, while busy or idle. Type and press Enter: the message is sent as a follow-up. Send is disabled when empty.
+15. **Border pulse (pro-d58, DESIGN.md 2h).** Send a message: while the session is busy, the composer border pulses. When it is idle, the border is still.
+16. **Footer (pro-d57, DESIGN-compose 3).** Expected: no row of model, tier, cost, tokens or cwd above the composer. Only the `N% context` button, right-aligned. Hover it: a card shows `Context` and a bar.
+17. **Chat width and turns (pro-d57, DESIGN-chat 2.2).** Expected: user messages sit at the right and assistant messages at the left; each is at most 85% of the column width.
+18. **Sent time and copy (pro-d56, pro-d57, DESIGN-chat 2.3).** Expected: a user message shows `You · HH:MM` under it and a copy button with the tooltip `Copy`. An assistant message has no session key or stamp above or below it (pro-d59).
+19. **Auto-scroll (pro-d57, DESIGN-chat 2.8.1).** Scroll up by more than 160 px and send nothing: new messages do not move the view, and the jump-to-bottom button shows. Scroll back to the end: the view follows new messages.
+20. **Chain of Thought (pro-d61, DESIGN-chat 2.4.2).** A turn with thinking and tool calls shows one collapsed row `Chain of Thought` with `N steps` and a time. Expand it: the thoughts and the tool calls, in order. Two tools in a row are one `Tool Group`.
+21. **Tool rows (pro-d56, pro-d57, DESIGN-chat 3.2).** Each tool row is closed; an `edit` is closed too. A file path longer than 100 characters ends in `…`.
+22. **Image thumbnails (pro-d61, DESIGN-chat 2.3.1).** Attach an image and send it: the pending message shows its thumbnail at once, and after the echo the transcript message still shows it.
+23. **Questionnaire (pro-d56, DESIGN-compose 4).** In a pi session, have the agent ask a question with `ask_user_question`. Expected: a multi-step questionnaire in the chat; step through it with Next and Previous; answer; the agent continues in the session. `Escape` or Cancel ends it.
+24. **Plan review (pro-d56, DESIGN-compose 5).** In a session with a pending plan review, expected: an outlined card `Plan review · <title>` with the actions `Reject plan`, `Request changes`, `Approve & lock`. `Request changes` opens a feedback box; `Send feedback` is disabled when it is empty. `⌘⏎` approves when the focus is outside the feedback box.
+
+### 9.2 Results
+
+Record the date and time in America/Toronto (for example `2026-11-05 09:07 EST`), the browser, and for each step `pass` or `fail` with what you saw. A `fail` names the step number.
+
+---

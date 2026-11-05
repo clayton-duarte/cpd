@@ -41,6 +41,7 @@ export interface ContextNode {
   readonly createdAt?: string;
 }
 export interface ContextTreeModel {
+  readonly hostname?: string;
   readonly contexts: readonly ContextNode[];
   readonly cursor: number; // min of the events_cursor of the four commands
 }
@@ -74,6 +75,12 @@ export interface PlanViewModel {
 }
 
 export interface InboxRowAction { readonly label: string; readonly action: CockpitAction }
+export interface CurationRecord {
+  readonly id: string;
+  readonly text: string;
+  readonly detail: string;
+}
+
 export interface InboxRow {
   readonly id: number;
   readonly kind: string; // seen: pr-ready, dialog, unread, curate-retire; documented: plan-review, loop-guard, drafts-parked, pr-closed, review-requested, deploy, engine-down (scout-cockpit §1.3)
@@ -86,6 +93,7 @@ export interface InboxRow {
   readonly workflow?: string | null; // the Workflow key for PR kinds, from the item's data; null when none
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
+  readonly curation?: readonly CurationRecord[];
 }
 export interface InboxModel {
   readonly openCount: number; // items.length (the list holds open, visible items only)
@@ -105,6 +113,7 @@ export type CockpitAction =
   | { kind: "pr.repost"; planId: string; workflow?: string; pull?: string }
   | { kind: "pr.merge"; planId?: string; workflow?: string; pull?: string }
   | { kind: "engine.start" }
+  | { kind: "context.retire"; contextId: string; approve: string; reject: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
   | { kind: "plan.new"; planId: string; contextId: string; title: string }
@@ -146,6 +155,7 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "pr.repost": ["planId"],
     "pr.merge": [],
     "engine.start": [],
+    "context.retire": ["contextId"],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
     "plan.new": ["planId", "contextId", "title"],

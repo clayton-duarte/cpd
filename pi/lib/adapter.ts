@@ -5,6 +5,7 @@ import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
 import { noteQuestionTool, registerQuestionGuard } from "./question-guard.ts";
 import { dirname, join } from "node:path";
+import { registerLiveStream } from "./live-stream.ts";
 import { homedir } from "node:os";
 import { exploreGuard, leadExploreGuard } from "./explore.ts";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReminderCheck(host);
   registerLoopGuard(host);
   registerQuestionGuard(host);
+
+  registerLiveStream(pi, host.env); // contract §6.21
 
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {

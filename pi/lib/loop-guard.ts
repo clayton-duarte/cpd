@@ -69,13 +69,18 @@ const STATE_COMMAND = new RegExp(
     .join("|")})(?![A-Za-z0-9_-])|answer(?![A-Za-z0-9_-]))`,
 );
 
-/** L8: whether a tool call records state (resets the read streak); everything else is a read. */
+/** L8: the MCP write tools (Atlassian, Slack); one source for a direct tool name and a `tools.<name>` in codemode. */
+const MCP_WRITE_NAME = "(?:mcp__atlassian__(?:create|edit|transition|add|update|delete)[A-Za-z0-9_]*|mcp__slack__slack_(?:send|add|create|update)[A-Za-z0-9_]*)";
+const MCP_WRITE_TOOL = new RegExp(`^${MCP_WRITE_NAME}$`);
+const MCP_WRITE_CALL = new RegExp(`(?<![A-Za-z0-9_])tools\\.${MCP_WRITE_NAME}(?![A-Za-z0-9_])`);
+
+/** L8: whether a tool call records state (resets the read streak and turn refusals); everything else is a read. */
 export function isStateWrite(toolName: string, input: unknown): boolean {
-  if (STATE_TOOLS.has(toolName)) return true;
+  if (STATE_TOOLS.has(toolName) || MCP_WRITE_TOOL.test(toolName)) return true;
   const field = toolName === "bash" ? "command" : toolName === "codemode" ? "code" : undefined;
   if (field === undefined || !isObject(input)) return false;
   const text = input[field];
-  return typeof text === "string" && STATE_COMMAND.test(text);
+  return typeof text === "string" && (STATE_COMMAND.test(text) || (toolName === "codemode" && MCP_WRITE_CALL.test(text)));
 }
 
 const READ_STREAK_REASON =
@@ -87,8 +92,10 @@ const TOTAL_CALLS_REASON =
 export function toolCallGuard(host: Host, call: { toolName: string; input: unknown; parentToolCallId?: string }): string | undefined {
   const r = host.run;
   if (!r || !guarded(r) || call.parentToolCallId !== undefined) return undefined;
-  if (isStateWrite(call.toolName, call.input)) r.readStreak = 0;
-  else {
+  if (isStateWrite(call.toolName, call.input)) {
+    r.readStreak = 0;
+    r.turnRefusals = 0;
+  } else {
     r.totalCalls += 1;
     r.readStreak += 1;
   }

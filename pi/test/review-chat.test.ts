@@ -24,7 +24,7 @@ const entries = (f: Fixture) => f.pi.entries.filter((e: any) => e.type === "cust
 const decisions = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-decision");
 const summaries = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-summary");
 const decides = (f: Fixture) => f.argvs().filter((a) => a[1] === "decide");
-const chatEntry = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", ...over });
+const chatEntry = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", summary: SUMMARY, title: TITLE, ...over });
 const select = (f: Fixture) => waitFor("the select", () => f.pi.openDialog("select"));
 const nSelects = (f: Fixture) => f.pi.dialogs.filter((d) => d.kind === "select").length;
 const feedbackFile = (f: Fixture, review = "r1") => join(f.cpdHome, "run", "p1", `feedback-${review}.md`);

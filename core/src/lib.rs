@@ -22,6 +22,7 @@ pub mod ask;
 pub mod attempt;
 pub mod board;
 pub mod classifier;
+pub mod cockpit;
 pub mod config;
 pub mod context;
 pub mod driver;

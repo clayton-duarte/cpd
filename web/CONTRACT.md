@@ -33,7 +33,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | A1 | Browser to server transport is Vite `server.ws` custom events `cpd:c2s` (client to server) and `cpd:s2c` (server to client), through `import.meta.hot.send/on` in the browser. Dev bench only; no auth beyond Vite's localhost bind. |
 | A2 | Only existing dependencies (plus the one lifted line of pro-d17 and A7, `@earendil-works/chord` 1.5.0, used by the durable dialect for `applyImmutable`): react 19, react-dom, react-markdown, remark-gfm, vite, @vitejs/plugin-react, vitest, jsdom, typescript. No Tailwind, shadcn, radix, router. Unstyled semantic HTML plus one small plain CSS file (`web/src/ui/app.css`). UI tests use `react-dom/client` + `act` from `react` under `// @vitest-environment jsdom`, no testing-library. | **Superseded by 10.8 and 10.9:** Phase 2 adds no dependency (`web/package.json` and `pnpm-lock.yaml` stay byte-identical, A1 of Plan webui-phase2-fast); the durable v2 dialect applies ops with its own `applyOps` in `ops.ts`, not `applyImmutable`.
 | A3 | The durable backend speaks pi-durable **1.5.0** host protocol 2 only: a `view` base frame and `ops` frames (Chord ops applied with `applyImmutable`) of the `ConversationView` state (section 6.4), with full parity in live text, tool rows, busy, queue, folds, footer, paging by the host `history` command and dialogs. The `view` and `ops` shapes were verified by a real Harness run for text and entries (`$CPD_HOME/run/pi-1-5-upgrade/explore/live-check.md`); the thinking and tool-argument append paths are unverified (O20). The code keeps ONE dialect seam (`web/src/server/durable/frames.ts`). An unknown host version or frame shape fails loud with a typed `unsupported_host_version` / `protocol_error`, never a silent fallback. | **Superseded by 10.8:** web/ supports two dialects chosen by `welcome.protocol`: v1 (protocol 1, pi-durable 1.3.0, `snapshot`/`events` frames) and v2 (protocol 2, pi-durable 1.5.0, `view`/`ops` frames). v2 is tested only against mocked frames (A2 of Plan webui-phase2-fast).
-| A4 | pi-runner sessions: transcript read from the session JSONL (`file` of `cpd session list`), live by file watch, prompts through `cpd session send`, Tier through `cpd session retier`. There is NO `cpd session abort` and no way to answer a TUI dialog from outside (scout-cockpit §3, scout-pi §6), so for pi sessions abort, steer, images and interactive dialogs are declared unsupported in typed `capabilities` with a human reason; dialogs are shown read-only, reconstructed from the transcript; the UI disables those controls and shows the reason. |
+| A4 | pi-runner sessions: transcript read from the session JSONL (`file` of `cpd session list`), live by file watch, prompts through `cpd session send`, Tier through `cpd session retier`. There is NO `cpd session abort` and no TUI-state steer, so for pi sessions abort, steer and compaction are declared unsupported in typed `capabilities` with a human reason; images are supported (sent as `[Attached image: <path>]`, 11.3) and the `ask_user_question` and plan review dialogs are interactive (11.4). The UI disables the unsupported controls and shows the reason. |
 | A5 | Window size is **40** transcript items for the tail and for each `loadEarlier` page (`WINDOW_SIZE`). |
 | A6 | Every timer or clock is an injected `Scheduler`. No test uses real time, a real socket, a real file watcher, a real `cpd`/`git` process or the real network: all externals are injected boundaries, faked in the test. No test leaks a file, process, socket, handle or timer. |
 | A7 | Only paths under `web/` are touched, plus `pnpm-lock.yaml` for the one `@earendil-works/chord` 1.5.0 line of `web/package.json` (pro-d377, the lifted line of pro-d17). `pi/durable-host/**`, `pi/durable-worker/**`, the root `package.json`, `pnpm-workspace.yaml` and every other line of `pnpm-lock.yaml` are never touched. |
@@ -41,7 +41,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 ### 1.4 Limitations (stated plainly)
 
 - **A3, durable is 1.5.0 protocol 2 only.** A host whose `welcome.pi_durable` is not exactly `"1.5.0"`, or whose `welcome.protocol` is not 2, is refused with `unsupported_host_version` (version). A `view` or `ops` frame that does not match the shapes of section 6.4, or an op the applier refuses, is `protocol_error` (shape). The session shows that error; nothing is guessed. **Superseded by 10.8:** durable is no longer 1.5.0-only: `assertSupportedHost` accepts (protocol 1, pi_durable "1.3.0") and (protocol 2, pi_durable "1.5.0") and refuses every other pair with `unsupported_host_version`.
-- **A4, pi sessions cannot be driven fully.** For a pi session: no abort (no `cpd session abort` exists), no steer, no image attachments, no answering of dialogs, no model/thinking selection (the Tier decides, see 6.5), no compaction. Each is `{supported:false, reason}` in `capabilities`. Dialogs are read-only reconstructions. A queued-submission list does not exist (`queued` is always `[]`).
+- **A4, pi sessions cannot be driven fully.** For a pi session: no abort (no `cpd session abort` exists), no steer, no model/thinking selection (the Tier decides, see 6.5), no compaction. Each is `{supported:false, reason}` in `capabilities`. Images and interactive dialogs work (11.3, 11.4). A queued-submission list does not exist (`queued` is always `[]`).
 - Footer: pi sessions report cost and context % as `unknown` with a reason (a full-file scan is forbidden by 6.5; the window size of the model is not known). Durable cost is the cumulative cost of the Session's models (`docs['pi.usage']`, 6.4), so it keeps the cost of turns that a compaction removed from the transcript. No value is faked.
 - Phase 1 does not render `cpd` session messages (`customType` `cpd`, `cpd-error`) or other custom message types: they are dropped. Only the four fold kinds of 3.2 render. **Superseded by 10.1:** `cpd` custom messages are no longer dropped: a session-message from `null` is a User message, every other displayed `cpd` message is a collapsed fold of fold kind `cpd`; `cpd-error`, `cpd-first-message`, `cpd-reminder` and `display === false` stay dropped, and the durable entry kind `cpd-chat` is a user item (10.2).
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
@@ -303,7 +303,7 @@ export type DialogBody =
 
 export type Dialog = DialogBody & {
   readonly id: string; // durable: the held `ui_request.id`; pi: `call:<callId>` (ask_user_question) or `review:<review>` (plan review)
-  readonly interactive: boolean; // false = read-only reconstruction (A4); the UI renders no controls
+  readonly interactive: boolean; // false = read-only, no current producer; pi and durable dialogs are interactive (11.4); the UI renders no controls
 };
 export type DialogOutcome = "answered" | "cancelled" | "timeout" | "superseded" | "aborted"; // ui_resolved.outcome (protocol.ts)
 ```
@@ -469,7 +469,7 @@ Message semantics (server behaviour):
 - `session.delta` addresses `blocks[blockIndex]`: `blockIndex === blocks.length` creates a new block of `blockType`; a smaller index appends `text` to that block.
 - `session.submitAck` answers each `session.submit` that the backend accepted: `queued: true` when the host queued it behind a running turn, else false. A rejected submit answers `session.error` with `clientSubmissionId` set.
 - `session.status.busy` is true while a turn runs. `queued` lists accepted-but-not-started submissions (durable only; always `[]` for pi).
-- A `session.dialog` with `interactive: false` is a read-only reconstruction.
+- A `session.dialog` with `interactive: false` is read-only (no current producer; pi and durable dialogs are interactive, 11.4).
 - `action.result ok:true` carries `output` (section 5.4); `ok:false` carries the `cpd_failed` / `unknown_action` error.
 
 ### 4.3 Validation (parsed once at each edge)
@@ -646,7 +646,8 @@ export type CockpitAction =
   | { kind: "inbox.approve"; itemId: number }
   | { kind: "pr.post"; planId: string; workflow: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
-  | { kind: "plan.reject"; planId: string; review: string };
+  | { kind: "plan.reject"; planId: string; review: string }
+  | { kind: "context.retire"; contextId: string; approve: string; reject: string }; // 11.1
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
 ```
 
@@ -659,6 +660,7 @@ export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply o
 | `pr.post` | `["pr","post","--workflow",workflow,"--plan",planId]` | `docs/commands.md:2482` and `cpd pr post --help` (run this attempt). Caller is the Lead (`docs/commands.md:275`); allowed for the web User: unverified (O10) |
 | `session.retier` | `["session","retier",sessionId,"--tier",tier]` | scout-cockpit §3 |
 | `plan.reject` | `["plan","decide",review,"--reject","--plan",planId]` | scout-cockpit §3 (internal command; unverified that the web User may call it, O9) |
+| `context.retire` | `["context","retire","--context=<contextId>"]` plus `--approve=<approve>` and `--reject=<reject>` each only when non-empty (ids are comma-separated) | 11.1 (approved preview, `actions.ts`) |
 
 Pi prompt sending is not a cockpit action: it is `sessionSendArgs` (6.3, `actions.ts`).
 
@@ -799,10 +801,10 @@ Reducer behaviours (every ServerMessage is `{type:"server"}`):
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
 - `session.status` sets `busy` and `queued`. `session.footer` sets `footer`; `session.title` sets `title` (the header shows `title`; the footer and title also come from `session.attached.meta`).
-- `session.submitAck` removes the pending submission with that `clientSubmissionId` (reconciled). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` (and, when `sessionId` is null, `lastError`).
-- `submitPending` adds a `sending` submission; `dismissPending` removes one.
+- `session.submitAck` (not queued) marks the pending submission with that `clientSubmissionId` `state:"sent"`, or removes it when its echo is already in the transcript; a queued ack removes it (11.2). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` (and, when `sessionId` is null, `lastError`).
+- `submitPending` adds a `sending` submission (with `at` and `images`, 11.2); `dismissPending` removes one.
 - `session.dialog` sets `dialog`; `session.dialogResolved` clears `dialog` only when its `dialogId` equals the active dialog's id; `session.models` sets `models`.
-- `action.result ok:false` sets `lastError`; `ok:true` changes nothing (the panes refresh through events).
+- `action.result ok:false` sets `lastError` and removes the id from `pendingActionIds`; `ok:true` removes it from `pendingActionIds` and adds it to `completedActionIds` (11.2). The panes refresh through events.
 - `connection` sets `connection` and `retryAttempt`.
 
 #### `connection.ts`
@@ -835,7 +837,7 @@ Behaviours:
 - Every inbound raw message goes through `parseServerMessage` once. A parsed message is dispatched as `{type:"server", message}`. An invalid message is never dropped silently: the connection dispatches `{type:"server", message:{type:"session.error", sessionId:null, error: <the protocol_error WireError>}}` (the reducer stores it in `lastError`) and stays open.
 - `selectSession(id)`: dispatches `selectSession`; if a session was selected before, sends `session.detach` first; then, for a non-null id, `session.attach {sessionId}`. Selecting the same id again sends nothing.
 - `loadEarlier()`: sends `session.loadEarlier {sessionId, before: transcript.cursor}` only when `hasEarlier` and a session is selected; otherwise no message.
-- `submit(input)`: creates `clientSubmissionId` via `newId`, dispatches `submitPending` (`state:"sending"`, `imageCount = images.length`), sends `session.submit`, returns the id. Ack/failure arrive as server messages (reducer, above). Without a selected session: throws `WebError("not_attached")`.
+- `submit(input)`: creates `clientSubmissionId` via `newId`, dispatches `submitPending` (`state:"sending"`, `imageCount = images.length`, `images`, `at`), sends `session.submit`, returns the id. Ack/failure arrive as server messages (reducer, above). Without a selected session: throws `WebError("not_attached")`.
 - Other session methods send the matching `ClientMessage` with the selected `sessionId`, or throw `WebError("not_attached")` with no selected session.
 - Status `closed` (not caused by `close()`): dispatch `connection reconnecting` with `retryAttempt: n`, schedule `transport.connect()` after `delay(n)` through `scheduler.after`; each further `closed` status increases `n`; `open` resets `n` to 0. Only one reconnect timer is pending at a time.
 - `close()`: dispatches `connection closed`, cancels the pending reconnect timer, calls `transport.close()`; later status events do not schedule anything.
@@ -1210,7 +1212,7 @@ export function parseLine(text: string, at: LinePosition): JsonlEntry; // WebErr
 export interface JsonlFacts { cwd?: string; sessionId?: string; name?: string; model?: string /* provider/modelId */; thinking?: string; lastStopReason?: string; lastRole?: "user" | "assistant" | "toolResult" }
 export interface PushResult { added: TranscriptItem[]; updated: TranscriptItem[]; dialogsOpened: Dialog[]; dialogsResolved: string[]; factsChanged: boolean }
 export interface PiNormalizer { push(text: string, at: LinePosition): PushResult; readonly facts: JsonlFacts }
-export function createNormalizer(): PiNormalizer; // stateful: remembers tool calls (by callId), the last cpd_plan_review title, the last cpd-plan-summary body, pending ask_user_question calls and pending plan reviews
+export function createNormalizer(): PiNormalizer; // stateful: remembers tool calls (by callId), the last cpd_plan_review title, the cpd-plan-summary bodies by review id (`details.review`), pending ask_user_question calls and pending plan reviews
 export function normalizeText(text: string): { items: TranscriptItem[]; facts: JsonlFacts; openDialogs: Dialog[] }; // whole text, "\n"-separated lines numbered from 1; blank lines are skipped; applies `updated` into the item list by id
 export function countItems(entry: JsonlEntry): number; // items the entry adds in isolation: user/assistant(with text|thinking blocks)/tool calls/fold/compaction; toolResult, system, header and bookkeeping lines count 0
 ```
@@ -1224,15 +1226,15 @@ Line mapping (`type` of the entry; sample `scout-pi §1`):
 | `model_change` | `facts.model = provider + "/" + modelId`; `factsChanged` |
 | `thinking_level_change` | `facts.thinking = thinkingLevel`; `factsChanged` |
 | `message` role `system` | ignored (not a chat turn, scout-pi §1) |
-| `message` role `user` | `UserItem` `u:<id>` (`content` blocks as in 6.4: text joined `"\n"`, image blocks -> attachments); `at` = `timestamp` |
+| `message` role `user` | `UserItem` `u:<id>` (`content` blocks as in 6.4: text joined `"\n"`, image blocks -> attachments; `[Attached image: <path>]` lines are split out, 11.3); `at` = `timestamp` (a number is converted to ISO) or the message's own `timestamp` |
 | `message` role `assistant` | `AssistantItem` `a:<id>` when it has a `text`/`thinking` block (blocks in order; `model`), then one `ToolItem` `tool:<toolCall.id>` per `toolCall` block (`args = arguments`, `status:"running"`) in `added`; `facts.lastRole/lastStopReason` |
 | `message` role `toolResult` | the `ToolItem` with `callId === toolCallId`: replaced with `result {text, isError, durationMs}`, `status`, and (`name === "edit"`) `diff = details.patch ?? details.diff` (strings only), listed in `updated`; when no call was seen by this normalizer -> `OrphanResultItem` `orphan:<toolCallId>` (`name = toolName`) in `added`. Resolves a pending `ask_user_question` dialog `call:<id>` (`dialogsResolved`) |
 | `custom_message` | fold per 3.3: `customType` in the four fold kinds and `display !== false` -> `FoldItem` `f:<id>` (`body` = `content` string or its text blocks; `details` as in 3.3); `display === false`, `cpd-first-message`, `cpd-reminder` and every other `customType` -> dropped. Line fields unverified in a real file (O1) |
 | `compaction` | `CompactionItem` `c:<id>` with `summary` (string) and `tokensBefore` (number, optional). Shape unverified (O2); a line without a string `summary` -> `malformed_line` |
-| `custom` `customType: "cpd-plan-review"` | `data.status === "pending"` -> `dialogsOpened` a read-only plan-review Dialog `review:<data.review>` (`interactive:false`; `title` = `args.title` of the last `cpd_plan_review` tool call seen, else `"Plan review <review>"`; `summary` = body of the last `cpd-plan-summary` fold seen, else `""`); `data.status` in `approved|rejected|superseded|lost` -> `dialogsResolved: ["review:<review>"]` |
+| `custom` `customType: "cpd-plan-review"` | `data.status === "pending"` -> `dialogsOpened` a plan-review Dialog `review:<data.review>` (`interactive:true`, 11.4; `title` = `data.title` when the entry has it, else `args.title` of the last `cpd_plan_review` tool call seen, else `"Plan review <review>"`; `summary` = `data.summary` when the entry has it, else the body of the `cpd-plan-summary` fold whose `details.review` is this review, else `""`; never the summary of another review). The summary line arrives AFTER the pending entry in every real `.jsonl` (pi queues `sendMessage` until the turn ends, `appendEntry` writes at once), so when the `cpd-plan-summary` of a review that is still pending is folded, the normaliser emits `dialogsOpened` `review:<review>` again with that summary, replacing the open dialog; a review already resolved is not reopened. Pending reviews are kept by review id, each with its own title and summary; `data.status` in `approved|rejected|superseded|lost` -> `dialogsResolved: ["review:<review>"]` |
 | `custom` other, `label`, `branch_summary`, `session`-adjacent bookkeeping, any other `type` | ignored (pi adds entry kinds; this is deliberate forward-compatibility, only the lines of this table render) |
 
-Additionally an assistant `toolCall` named `ask_user_question` whose result has not been seen -> `dialogsOpened` `call:<callId>` (`interactive:false`, `questions` from `arguments.questions` when they pass `parseDialog`; invalid arguments open no dialog). Edit `details.diff`/`patch` in a real file: unverified (O3). A line that parses but has the wrong field types for its `type` (for example `message` without an object `message`) -> `malformed_line`.
+Additionally an assistant `toolCall` named `ask_user_question` whose result has not been seen -> `dialogsOpened` `call:<callId>` (`interactive:true`, 11.4; `questions` from `arguments.questions` when they pass `parseDialog`; invalid arguments open no dialog). Edit `details.diff`/`patch` in a real file: unverified (O3). A line that parses but has the wrong field types for its `type` (for example `message` without an object `message`) -> `malformed_line`.
 
 Behaviours: message lines normalise to user and assistant items; tool calls pair with tool results across lines; a result without its call becomes an orphan; compaction entries become compaction items; `model_change` and `thinking_level_change` update `facts`; cpd custom messages fold with the right `defaultOpen`; hidden custom messages are dropped; a malformed line throws `malformed_line` carrying the line number (`normalizeText`) or the byte offset; edit results carry a diff; dialogs reconstruct from tool calls and plan-review entries.
 
@@ -1287,9 +1289,9 @@ Behaviours:
 - Live: `append` events emit `session.append` (`added`), `session.update` (`updated`), `session.dialog` / `session.dialogResolved` for `dialogsOpened` / `dialogsResolved` (outcome `"answered"`; plan review `superseded` or `lost` -> `"superseded"`), `session.footer` when `factsChanged`, `session.status` when `busy` changed. `reset` -> re-reads the tail, emits a fresh `session.window {mode:"tail"}` (truncation or replacement resets the window) and restarts the watcher.
 - `busy` (Phase 1 choice, a file-derived approximation): `facts.lastRole === "user" || "toolResult"`, or `lastRole === "assistant"` with `lastStopReason` of `toolUse`/`pending`; false otherwise. `queued` is always `[]`.
 - `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`.
-- `submit`: `images.length > 0` -> `unsupported_capability` (reason of `capabilities.images`); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`.
+- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`.
 - `configure {kind:"tier"}`: `cpd.json(sessionRetierArgs(id, tier))` (applies at the next idle, scout-pi §6), then re-reads `cpd session show` and emits `session.footer`. `{kind:"model"|"thinking"}` -> `unsupported_capability`.
-- `abort`, `abortSubmission`, `compact`, `respond`, and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason).
+- `abort`, `abortSubmission`, `compact` and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason). `respond` answers the open dialog (11.4).
 - Footer: `model` = `facts.model` (a later `model_change` wins over `session show`) else `session show` `model`; `thinking` likewise; `tier` = `session show` `tier` else `ref.tier`; `cost` = unknown (`"pi session cost needs a full-file scan, which Phase 1 never does"`); `contextPercent` = unknown (`"the model's context window is not available for pi sessions"`); `branch` = `git.branch(ref.cwd)` (the git branch of the session cwd; `ref.cwd` missing -> unknown `"the session row has no cwd"`; `null` -> unknown `"not a git repository"`).
 - `dispose()` disposes the watcher; nothing is emitted afterwards.
 
@@ -1394,21 +1396,21 @@ export function OrphanRow(props: { item: OrphanResultItem }): JSX.Element;
 export function FoldRow(props: { item: FoldItem }): JSX.Element;
 export function CompactionRow(props: { item: CompactionItem }): JSX.Element;
 export function ChatHeader(props: { sessionKey: string; title: string | null }): JSX.Element;
-export function Footer(props: { footer: FooterStats | null }): JSX.Element;
+export function Footer(props: { footer: FooterStats | null; contextWindow?: number }): JSX.Element; // pro-d57: the context card only (11.8)
 ```
 
 **Transcript DOM.** `<div role="log" aria-label="Transcript">`. When `hasEarlier`: first child `<button data-action="load-earlier">Load earlier</button>` calling `onLoadEarlier` (absent when `hasEarlier` is false). Items in order:
 
-- user: `<article data-kind="user">` with the text (whitespace preserved), image attachments as `<span data-attachment="image">image/png</span>`.
-- assistant: `<article data-kind="assistant">`; a `text` block is `<ReactMarkdown remarkPlugins={[remarkGfm]}>` output; a `thinking` block is `<details data-kind="thinking"><summary>Thinking…</summary>…text…</details>`, closed. `streaming === true` adds `<span role="status" data-part="working">Working…</span>` as the last child (streaming working marker).
-- tool items: a maximal run of two or more consecutive `tool` items is wrapped in `<details open data-kind="tool-group"><summary>N tool calls</summary>` containing one `ToolRow` each (grouping, Phase 1 choice; scout-pi §4 notes the default pi style does not group); a single tool item renders its `ToolRow` directly. `orphanResult` -> `OrphanRow`; `fold` -> `FoldRow`; `compaction` -> `CompactionRow`.
-- after the transcript: `<ul aria-label="Queued messages">` with one `<li data-queued="<clientSubmissionId>">text</li>` per queued submission and one `<li data-pending="sending|failed">` per pending submission (text, then `sending…` or `failed: <error.message>`); the list is omitted when both are empty.
+- user: `<div data-kind="user">`, a shadcn `Message` with a muted `Bubble` holding the text (whitespace preserved), image thumbnails when `dataBase64` is present, and `You · HH:MM` (DESIGN-chat 2.3, 2.3.1; pro-d56, pro-d57, pro-d61).
+- assistant: `<div data-kind="assistant">` with muted Bubbles for text blocks (Markdown). Thinking blocks are rows of the Chain of Thought (DESIGN-chat 2.4.2, pro-d61). There is no session stamp (pro-d59).
+- tool steps: a run of consecutive thoughts and tools is one collapsed Chain of Thought row (DESIGN-chat 2.4.2); inside it two or more consecutive tools form a Tool Group (DESIGN-chat 3.4).
+- after the transcript: `<ul aria-label="Queued messages">` with one `<li data-queued="<clientSubmissionId>">` per queued submission (outline bubble, dashed text, `queued`) and one `<li data-pending="<state>">` per pending submission (DESIGN-chat 2.6, 2.7).
 
 **ToolRow DOM** (scout-pi §4, compact-tools). `<details data-kind="tool" data-tool="<name>" data-status="<status>">`, `open` attribute set only for `name === "edit"` (edit's body shows as a bounded preview by default, scout-pi §4). `<summary>`: `<span data-part="name">` (name with a leading `mcp__` removed, so `mcp__srv__tool` shows `srv__tool`), `<span data-part="detail">`, `<span data-part="status">`:
 
-- **detail** by tool: `read`, `write`, `edit`, `ls` -> `args.path`; `bash`, `powershell` -> first line of `args.command` cut at 160 chars + `…`; `grep` -> `/<pattern>/ in <path>`; `find` -> `<pattern> in <path>`; any other tool (`codemode`, `mcp__*`, others) -> the value of the first present key of `command, query, queries, q, url, urls, path, file_path, paths, pattern, prompt, question, claim, name, id, tool` (arrays joined `", "`), else the first argument's value; control characters and runs of spaces collapsed to one space, cut at 160 chars + `…` (scout-pi §4, `compact-tools-invocation.ts:60-74`). No arguments -> empty detail.
+- **detail** by tool: the table of DESIGN-chat 3.2 (paths and commands cut at 100 characters, other details at 160).
 - **status** text: `running` -> `Running`; `failed` -> `Failed` plus `: <reason>` where reason is the first non-empty line of `result.text` cut at 140 chars + `…`; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
-- **body** (inside the `<details>`): `edit` with a `diff` -> one `<div data-diff="add|remove|context">` per diff line (`add`: starts with `+` but not `+++`; `remove`: starts with `-` but not `---`; everything else `context`), plain text, the leading `+`/`-` kept. Every other tool -> `<pre data-part="output">` with `result.text`. The body shows at most `TOOL_PREVIEW_LINES` (10) lines; when there are more, a `<button data-action="expand-output">Show N more lines</button>` follows (`N` = remaining lines) and clicking it shows all lines (and the button disappears). A `running` tool without result has an empty body.
+- **body** (inside the row's closed `TraceCollapsibleContent`): DESIGN-chat 3.6 (a `CodeBlock`, the first 10 lines, `Show N more lines`).
 
 `OrphanRow`: `<article data-kind="orphan-result">` with `Result of <name> (call not loaded)` and the same output body rules.
 
@@ -1461,14 +1463,14 @@ export function Composer(props: {
 
 DOM and behaviour:
 
-- `<form aria-label="Composer" data-drop="idle|over">` containing `<textarea aria-label="Message">`. **Enter** (no Shift, not during IME composition) submits and clears the input; Shift+Enter inserts a newline. Submitting needs non-empty trimmed text or at least one attachment; otherwise nothing is sent. `onSubmit` receives the raw text (trimmed of trailing whitespace), the current attachments and `whenBusy`; after it the textarea, attachments and rejection list are cleared. `capabilities === null` (not attached) disables the textarea.
-- **Idle** (`busy === false`): `<button type="submit" data-action="send">Send</button>`, `whenBusy: "followUp"`.
-- **Busy**: instead of Send, `<button data-when-busy="steer">Steer</button>` and `<button data-when-busy="followUp">Follow up</button>` (the composer offers steer and follow-up while busy); Enter sends the first supported of followUp, steer. `<button data-action="abort">Abort</button>` is shown while busy and calls `onAbort`.
-- **Unsupported capabilities**: a control whose capability is `{supported:false, reason}` (`steer`, `followUp`, `abort`) is rendered with the `disabled` attribute, `title="<reason>"` and a sibling `<small data-reason>{reason}</small>`; it never fires its callback. (For a pi session: Steer and Abort disabled with their reasons; Follow up enabled.)
-- **Queued submissions**: `<ul aria-label="Queued">` with `<li data-queued="<id>">text <button aria-label="Cancel queued message">Cancel</button></li>`; the button calls `onCancelQueued(id)`, disabled with the reason when `abortSubmission` is unsupported. Omitted when `queued` is empty.
-- **File picker**: `<input type="file" multiple aria-label="Attach files">`; its `change` calls `addFiles(Array.from(input.files))`, then resets the input value. Accepted attachments render as chips `<ul aria-label="Attachments"><li data-attachment="<name>" data-kind="image|text">name <button aria-label="Remove <name>">×</button></li></ul>` (file picker adds attachment chips); the button removes that chip. Rejections render in `<ul role="alert" aria-label="Rejected files">` as `<li>name: message</li>`, replaced on each add.
+- Structure and keys: DESIGN-compose 1.2 and 1.4. `textarea[aria-label="Message"]`: Enter submits `{text, attachments, whenBusy: "followUp"}` and clears; Shift+Enter is a newline; IME composition is ignored.
+- **Send**: `button[data-action="send"][aria-label="Send"]`, disabled when there is nothing to send or `capabilities` is `null`; a click submits `whenBusy: "followUp"`.
+- **Busy**: no extra control (pro-d57). The prompt border pulses (`prompt-border-pulse`, DESIGN.md 2h) while busy or a send is pending. Send submits a follow-up. There is no Steer, Follow-up or Stop button.
+- **Unsupported capabilities**: the attach button and the file picker follow `capabilities`. There is no steer control to disable (pro-d57).
+- **Queued submissions**: header chips `ul[aria-label="Queued submissions"]` with `li[data-queued-chip]`, and `button[data-action="cancel-queued"]` when `abortSubmission` is supported.
+- **File picker**: the footer's `Attach files` button opens a hidden `input[type="file" multiple]`; its `change` calls `addFiles`.
 - **Paste**: on the textarea, a paste whose `clipboardData.files` is non-empty calls `preventDefault` and adds those files; text pastes are untouched.
-- **Drag and drop**: on the form, `dragenter`/`dragover` with `dataTransfer.types` including `"Files"` call `preventDefault` and set `data-drop="over"`; `dragleave` sets `idle`; `drop` calls `preventDefault`, sets `idle` and adds `filesFromDrop(dataTransfer)` (dragging files over the composer shows a drop state and dropping adds attachments). The `ComposerHandle.addFiles` goes through the same path.
+- **Drag and drop**: the chat dropzone (`ChatPane`, `data-chat-dropzone`) takes the drop and calls the Composer's `addFiles` once. The Composer shows `Drop to attach` while files are dragged over it (`data-drop="over"`, DESIGN-compose 1.2).
 - Image attachments are only accepted per `addFiles` (capability, count, size).
 
 #### `TierSelector.tsx`
@@ -1478,12 +1480,12 @@ export type ConfigureHandler = (change: ConfigureChange) => void;
 export function TierSelector(props: { capabilities: Capabilities | null; footer: FooterStats | null; models: readonly ModelChoice[] | null; busy: boolean; onConfigure: ConfigureHandler; onRequestModels(): void }): JSX.Element;
 ```
 
-`<fieldset aria-label="Session settings">` with three `<select>`s (pro-d10 item 3):
+`<div data-part="tier-selector">` with three shadcn `DropdownMenu`s with radio items on `InputGroupButton`s: `aria-label="Tier"`, `"Model"`, `"Thinking level"` (DESIGN-compose 2, pro-d55). The option rules below apply to the menus:
 
 - `aria-label="Tier"`: options = `capabilities.configure.tier.options` (plus the current known tier when missing from them); value = the footer tier when known. `change` -> `onConfigure({kind:"tier", tier})`. Not disabled by `busy` (cpd applies a Tier change at the next idle).
 - `aria-label="Model"`: options = `models` (value `model`, text `name`); before they are loaded one option showing the current model (or `unknown`); the first `focus` calls `onRequestModels()` once. `change` -> `onConfigure({kind:"model", model})`. Disabled while `busy`, with reason `A run is pending: the model changes when the session is idle` (the host refuses configure while a run is pending, scout-durable §7.4).
 - `aria-label="Thinking level"`: options = `thinkingLevels` of the model matching the footer model in `models` (plus the current level); `change` -> `onConfigure({kind:"thinking", level})`; same busy rule as Model.
-- Any select whose capability is `{supported:false, reason}` (`tier`, `model`, `thinking`) is `disabled` with `title="<reason>"` and a sibling `<small data-reason>`. `capabilities === null` disables all three. The lists of tiers and models come from the session capabilities and `session.models`.
+- Any menu trigger whose capability is `{supported:false, reason}` (`tier`, `model`, `thinking`) is `disabled` with `title="<reason>"`. `capabilities === null` disables all three. The lists of tiers, models and levels are as above.
 
 ### 6.10 ui-dialogs `web/src/ui/dialogs/`
 
@@ -1496,16 +1498,17 @@ export function PlanReviewCard(props: { dialog: Extract<Dialog, { method: "cpd_p
 
 **AskCard** (answer shape per scout-pi §5b-5c).
 
-- Interactive DOM: `<form aria-label="Questions" data-dialog="ask_user_question">` with one `<fieldset data-question="<i>">` per question (1 to 4): `<legend>{header}: {question}</legend>`, then the options with `<input type="radio" name="q<i>" value=label>` (single-select) or `<input type="checkbox" value=label>` (`multiSelect: true`), each with its label text and `<small>{description}</small>`. Single-select picks one option; multi-select picks many.
-- **Preview side by side**: each question is laid out as `<div data-layout="side-by-side"><div data-part="options">…</div><div data-part="preview">…</div></div>`; the preview pane renders (ReactMarkdown) the `preview` of the focused option (the option last focused or last toggled; none -> empty). Options without `preview` leave it empty.
-- **Custom row**: after the options, an automatic row (`Type something.`): radio (single) or checkbox (multi) plus `<input type="text" aria-label="Type something.">` for question `i`; typing in the text input selects the row (for single-select it deselects the options). The custom row is appended automatically to every question.
-- **Esc**: a `keydown` `Escape` inside the form calls `onRespond({method:"ask_user_question", outcome:"cancelled"})`. A `<button type="button" data-action="cancel">Cancel</button>` does the same.
-- **Submit**: `<button type="submit">Submit</button>`, enabled when at least one question is answered. It calls `onRespond({method:"ask_user_question", outcome:"answered", result})` with `result = {answers, cancelled:false, unanswered?}` where, per question index `i` in order: single-select with typed custom text -> `{questionIndex:i, question, kind:"custom", answer:text}`; single-select with an option -> `{questionIndex:i, question, kind:"option", answer:label, preview?: option.preview}`; multi-select with a selection and/or custom text -> `{questionIndex:i, question, kind:"multi", selected:[labels in option order], answer: customText ?? ""}`; a question with nothing chosen is omitted from `answers` and its index listed in `unanswered` (key absent when none). Submit sends answers per question index.
+- Interactive DOM: DESIGN-compose 4.2: `Questionnaire[aria-label="Questions"][data-dialog="ask_user_question"]`, one `QuestionnaireItem[data-question]` per question, options `[data-option]`, a preview pane, Cancel `[data-action="cancel"]`, Next, Previous, Skip and Submit (pro-d56). The answer payload is unchanged (below).
+- **Preview side by side**: `div[data-layout="side-by-side"]` when any option has a `preview` (DESIGN-compose 4.2).
+- **Custom text**: the `Type something.` input of each question (DESIGN-compose 4.2).
+- **Esc**: `Escape` inside the Questionnaire calls `onRespond({method:"ask_user_question", outcome:"cancelled"})`; the Cancel button does the same.
+- **Submit**: the Questionnaire's submit builds `{answers, cancelled:false, unanswered?}` as below and calls `onRespond({method:"ask_user_question", outcome:"answered", result})`; a question with nothing chosen goes to `unanswered`.
 - **Read-only**: `<section aria-label="Questions" data-dialog="ask_user_question" data-readonly>` with `<ol>` of questions (`header: question`, options as `<li>` with label and description, previews as text), no inputs, no buttons, plus `<p>` `Answer in the session's own terminal; this view is read-only.`
 
 **PlanReviewCard** (outcome mapping onto the wire: 3.8, derived from `plan-review.ts`, never invented).
 
-- Interactive DOM: `<section aria-label="Plan review" data-dialog="cpd_plan_review">` with `<h3>{title}</h3>` and the summary as ReactMarkdown (shows the plan title and summary), then `<button data-action="approve">Approve</button>` -> `onRespond({method:"cpd_plan_review", outcome:"approve"})`; `<button data-action="request-changes">Request changes</button>` reveals `<textarea aria-label="Feedback">` and `<button data-action="send-feedback">Send feedback</button>`, disabled until `feedback.trim() !== ""` (request changes requires feedback text), then `onRespond({..., outcome:"changes", feedback: trimmed})`; `<button data-action="reject">Reject</button>` -> `onRespond({..., outcome:"reject"})`.
+- Interactive DOM: DESIGN-compose 5.3: `Item` section `aria-label="Plan review" data-dialog="cpd_plan_review"` with `h3` = title, the summary as Markdown, `ItemActions` buttons `[data-action="approve"]`, `[data-action="request-changes"]`, `[data-action="reject"]` (and `diff` when passed), and the feedback `Textarea[aria-label="Feedback"]` with `[data-action="send-feedback"]`. Outcomes unchanged.
+- **No plan summary**: the plan body section is always rendered, even when `summary` is empty. When `summary.trim() === ""` the card shows the notice `No plan summary was rendered; approval is disabled.` and disables `[data-action="approve"]` (Approve & lock) and the Cmd/Ctrl+Enter shortcut; Change and Cancel keep working.
 - **Read-only**: title and summary only, no buttons, no textarea.
 
 ### 6.11 app `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`
@@ -1570,7 +1573,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 | Capability | durable (host socket, pi-durable 1.5.0 protocol 2) | pi (session JSONL) |
 |---|---|---|
-| `images` | supported; `maxCount 4`, `maxTotalBase64 786432`, png/jpeg/gif/webp (`protocol.ts:19-21`) | **unsupported**: `pi sessions are fed through "cpd session send", which takes text only` (A4) |
+| `images` | supported; `maxCount 4`, `maxTotalBase64 786432`, png/jpeg/gif/webp (`protocol.ts:19-21`) | **supported** for pi from the approved preview: each image is written to the attachments directory and sent as `[Attached image: <path>]` (11.3) |
 | `steer` | supported (`when_busy: "steer"`, `protocol.ts:42`) | **unsupported**: `cpd session send has no steer mode` (A4; O6) |
 | `followUp` | supported (`when_busy: "followUp"`) | supported: delivered by `cpd session send`; whether the engine steers or follows up a busy session is unverified (O6) |
 | `abort` | supported (`abort {background:false}`) | **unsupported**: `cpd has no "session abort" command (scout-cockpit §3)` (A4) |
@@ -1579,14 +1582,14 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `configure.model` | supported (`configure {model}`); refused by the host while a run is pending (UI disables it while busy) | **unsupported**: `a pi session's model follows its Tier; change the Tier instead` |
 | `configure.thinking` | supported (`configure {thinking_level}`), same busy rule | **unsupported**: same reason as model |
 | `configure.tier` | supported via `cpd session retier <id> --tier <T>` (applies at idle); `options` = `tierOptions` | supported via the same command |
-| `dialogs` | `{mode:"interactive"}` (`ui_request` / `ui_response`) | `{mode:"readonly", reason:"a pi session's dialogs are answered in its terminal; this view reconstructs them from the transcript (A4)"}` |
+| `dialogs` | `{mode:"interactive"}` (`ui_request` / `ui_response`) | `{mode:"interactive"}` as well: `ask_user_question` and plan review are answered from the WebUI (11.4) |
 | `queued` submissions | tracked from `submit` results and `inbox` (6.4) | always `[]` |
 | footer cost | sum of `docs['pi.usage']` models' `cost.total` (cumulative, 6.4) | `unknown` (no full-file scan) |
 | footer context % | `lastContextTokens / context_window` (approximation) | `unknown` |
 | footer model/thinking | `docs['pi.agent']` and `host_state.agent` | `cpd session show` + `model_change` / `thinking_level_change` lines |
 | footer branch | `git.branch(welcome.cwd)` | `git.branch(ref.cwd)` |
 | transcript source | host `view` and `ops` frames, server-side cache and window (6.4) | JSONL tail by byte range, live by file watch |
-| plan review Reject | `cpd plan decide --reject` via `CpdExec` (O9) | not available (read-only) |
+| plan review Reject | `cpd plan decide --reject` via `CpdExec` (O9) | available from the WebUI (11.4): `cpd plan decide --reject --plan <planKey>` |
 
 ## 9. Open items
 
@@ -1757,3 +1760,61 @@ Canonical homes (each declared exactly once under `web/src`, imported elsewhere)
 Phase 2 limitations (P2-A8): no keep-mounted rows for selection (selected text in an unmounted row is lost); no in-app search; fold open state is not persisted across unmount; no v2 `history` paging beyond the host's newest-50 view window; reference-style link definitions across Markdown segments do not resolve (10.6); from-null `cpd` nudges show as User messages (10.1); durable entry kinds `cpd-event`, `cpd-first-message`, `cpd-error`, `cpd-plan-review` stay dropped (10.2).
 
 Unverified without a running v2 host (unverified, tested only against mocked frames): tool-call streaming ops, multi-round tool runs, window overflow ops, history paging, `host_state.name` as title.
+
+---
+
+## 11. Amendments pro-d48..pro-d61 (wire, store, server)
+
+Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui`). Sources read: the approved preview snapshot (`/tmp/cpd-webui-consolidate-main/preview-snapshot`), its patch, and `origin/main`. Where this section and an earlier section differ, this section stands (the earlier text is kept for its history and is corrected in place where it is wrong today).
+
+### 11.1 Cockpit actions and read model
+
+- **`context.retire`** (new `CockpitAction`): `{ kind: "context.retire"; contextId: string; approve: string; reject: string }`. `approve` and `reject` are comma-separated record ids, either may be empty. `actions.ts` argv: `["context","retire","--context=<contextId>"]`, plus `--approve=<approve>` when non-empty and `--reject=<reject>` when non-empty. The parser requires `contextId` (the other two fields are strings).
+- **Curation records.** `InboxRow.curation?: readonly CurationRecord[]`, `CurationRecord { id: string; text: string; detail: string }`. For each `curate-retire` row with a `contextId`, the read model runs `cpd context curation --context=<id> --limit=10` (a failure is ignored: the row has no `curation`). It reads the reply's `retire[]` entries `{ record, text, reason, target }`: `id` = `record`, `text` = `text`, `detail` = `reason` and `target` joined by a space (empty parts dropped). Entries without string `record` and `text` are skipped.
+- **Host name.** `ContextTreeModel.hostname?: string`: the machine hostname, with a trailing `.local` removed; `host` when that is empty. Absent before the first tree read.
+- **Session resolution of an Inbox row** (`readmodel.ts` `resolveSessionId`): the row's own `session`; else the Plan's `lead_session`; else the live (not archived) session with `plan_lead` of that Plan; else, for `question` and `curate-retire` rows with a Context, the live Manager of that Context (role `manager`, no Plan). `null` when none exists.
+- **Lead rows.** A `pr-ready` row of red or yellow urgency counts as a Lead row for the tree (`LEAD_KINDS`, `readmodel.ts`).
+- **Plan counts.** `PlanCounts.merging` is a number in the read model (absent reads as 0).
+
+### 11.2 Store and connection (`web/src/state/store.ts`, `connection.ts`)
+
+- State: `pendingActionIds: readonly string[]` and `completedActionIds: readonly string[]`, both `[]` at start.
+- `actionStart {actionId}` adds the id to `pendingActionIds` (once). `connection.action(action)` dispatches `actionStart`, sends `cockpit.action {actionId, action}` and returns the `actionId` (a fresh id per call).
+- `action.result` removes the id from `pendingActionIds`. With `ok: true` it adds the id to `completedActionIds` (once). With `ok: false` it sets `lastError` to the wire error.
+- `dismissError` clears `lastError` and `cockpit.error`.
+- `submitPending` stores the submission with `at` (the given `at`, else the current time as ISO) and with its `images` (`WireImage[]`), so the optimistic row can show thumbnails (DESIGN-chat 2.3.1, 2.7).
+- `session.submitAck` for a non-queued submission marks the pending row `sent`, or removes it when the echoed user item is already in the transcript (matched on normalised text).
+- Matching: `normalizeUserText(text)` drops a leading `Message from <name>:` prefix and any trailing `[Attached image: …]` lines, then trims. A user item replaces the oldest pending row (state `sending` or `sent`) whose normalised text is equal.
+
+### 11.3 Images on submissions and the pi transcript
+
+- **Send.** A pi `session.submit` with `images` no longer fails. The backend writes each image to the attachments directory (`<tmpdir>/cpd-webui-attachments/`, `web/README.md`) as `<sessionId>-<stamp>-<i>.<ext>` (`png`, `jpg`, `gif`, `webp` by MIME type) and appends one `[Attached image: <path>]` line per image after a blank line to the text it sends with `cpd session send`. `PI_SEND_TEXT_MAX` applies to that text. `capabilities.images` for pi is `{supported: true, maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64}`.
+- **Echo.** The pi normaliser (`jsonl.ts`) reads each `[Attached image: <path>]` line of a user message: the line is removed from `text`, and the path becomes a `TranscriptAttachment {kind: "image", mimeType, dataBase64}`. `mimeType` from the extension (`png`, `jpg`/`jpeg`, `gif`, `webp`; default `image/png`). `dataBase64` is the file's base64 when it can be read; otherwise the attachment has no `dataBase64` and shows as a named attachment. Block images of the message (`ImageContent`) are kept as before, before the path images.
+- Durable sessions: `images` as in 6.9 and 6.4, unchanged.
+
+### 11.4 Interactive dialogs
+
+- **pi `ask_user_question`.** The normaliser opens `call:<callId>` with `interactive: true` (was `false`). `respond({method:"ask_user_question", outcome})`: a `session.dialogResolved` (`answered` or `cancelled`) goes out at once; the response goes to `<cpdHome>/run/ask/<sessionId>.json` as `{dialogId, result}` (`result` = the answer, or `{answers: [], cancelled: true}` on cancel). The pi extension `pi/ask-user-question/ask-user-question.ts` polls that file (every 120 ms when `CPD_SESSION` is set), reads it once, deletes it and resolves the questionnaire; it deletes a stale file at its own start and end. If the file is still there 350 ms later, the backend deletes it, sends `Escape` to the session's tmux pane (`cpd session show`, field `tmux_pane`, when present), and for an answer posts the summary (one `question => value` line per answer, multi-select values joined by `, `) with `cpd session send`.
+- **pi plan review.** The normaliser opens `review:<n>` with `interactive: true` for a `cpd-plan-review` entry with `status: "pending"`. `approve` and `reject` run `cpd plan decide <n> --approve|--reject --plan <planKey>`. `changes` writes the trimmed feedback to `<cpdHome>/run/<planKey>/feedback-<n>.md` and runs `cpd plan decide <n> --reject --feedback-file <path> --plan <planKey>`. `cancelled` sends nothing and resolves nothing.
+- **durable plan review.** `frames.ts` reads `cpd-plan-review` entries (`kind: "review"`) and keeps the pending reviews; the dialect's `openDialog` is the latest pending review as `{id: "review:<n>", method: "cpd_plan_review", title, summary, interactive: true}` (title: the latest `cpd_plan_review` tool item's `args.title`, else `Plan review <n>`; summary: the latest `cpd-plan-summary` fold body). `backend.ts` `syncTranscriptDialog` opens it when no UI-held plan review exists, and resolves the transcript review dialogs that are no longer open. Responses: `approve`/`reject` run `plan decide` as above; `changes` runs `plan decide --reject` and then `client.submit({text: feedback, whenBusy: "followUp", requestId: "feedback:<dialogId>"})`; `cancelled` resolves `cancelled` without a call.
+- **Capabilities.** `dialogs` is `{mode: "interactive"}` for pi (was `readonly`, A4). The read-only path of the dialog cards stays for any dialog with `interactive: false`.
+
+### 11.5 Chat and composer contract changes (for the wire)
+
+- The Composer sends `whenBusy: "followUp"` only (pro-d57). `steer` stays a valid wire value (durable) and stays unsupported for pi.
+- No new server message type. `session.dialog` and `session.dialogResolved` carry the pi and durable dialogs of 11.4.
+
+### 11.6 Cockpit UI facts the wire depends on
+
+- The Inbox row's left click and its `Start`, `Merge`, `Post`, `RePost`, `Approve`, `Claim` and `Dismiss` buttons go through `onAction` and the store ids of 11.2 (DESIGN-panes 2.6, 2.7).
+- The Header's breadcrumb is built from the tree, the plan and the selection (DESIGN-panes 4.1). A crumb click calls `connection.selectPlan` and `connection.selectSession`, which send `cockpit.selectPlan` and `session.attach` (6.2).
+
+### 11.7 Errors
+
+- An action failure shows the error code and message in the cockpit error Alert (DESIGN-panes 4.8). Its dismiss button dispatches `dismissError`.
+
+### 11.8 Footer
+
+- `Footer` (`web/src/ui/chat/Footer.tsx`) renders only the context card (`{footer, contextWindow?}`, DESIGN-compose 3). The session telemetry row (cwd, session key, tokens, cache, model, tier, thinking, cost, branch) is removed from the chat (pro-d57). Its data stays in `SessionView.footer` for the composer's tier selector (DESIGN-compose 2).
+
+---

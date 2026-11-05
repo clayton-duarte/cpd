@@ -218,9 +218,7 @@ No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸`
 
 ## 2. Attention Inbox
 
-The web right column is the flat Inbox only. The TUI's machine block (hostname, CPU, GPU and memory) is not built (pro-d36). The Inbox is the TUI attention engine (`tui/src/widgets/inbox.rs`), so it follows that file: one flat list in `cpd inbox list` order, with no tier groups, no per-tier counts, no kind text, no inline buttons, no engine banner and no key footer. Secondary actions live in a right-click menu (pro-d40).
-
-The header is one row (`data-part="inbox-header"`, `flex h-8 shrink-0 items-center justify-between gap-8 px-2.5`; gap-8 is the minimum space between title and filters): the `Inbox` h2 (`shrink-0`, no count beside it) on the left and, right-aligned on the same line, the shadcn ToggleGroup tier filter (`type="multiple" variant="outline" size="sm"`, `data-part="inbox-filters"`, `ml-auto shrink-0`; decision pro-d49, supersedes the ButtonGroup). Items: `all`, then blocker (red), delivery (yellow), decision (magenta), support (blue), notice (cyan), unread (white), each `h-6 gap-1.5 px-1.5 text-xs` with `<label>` and a count in a `data-part="filter-count"` `font-mono text-[10px]` span; vanilla outline styling, the Dango tier colour is the text colour only (`text-status-*-bright`, `all` uses `text-fg-strong`), no fill; none is ever disabled (a tier with no rows shows 0; `all` shows the total). Behaviour is isolate-then-additive and controlled (`value` = `all` plus the six urgencies when all, else the set; `onClick` handlers): initial state `all`; a tier click while `all` isolates it, then each click adds or removes that tier; the state returns to `all` when the set is empty or holds all six. On/off reads from `data-state` and `aria-pressed`. An empty filter shows `no items in this filter`.
+The web right column is the Inbox only. Its rows follow the TUI attention engine (`tui/src/widgets/inbox.rs`) in content and order: one list in `inbox.rows` order (the `cpd inbox list` order), with no tier groups and no engine banner. Since pro-d48..pro-d61 the Inbox is shaped by the approved preview: a tier-filter ToggleGroup in the header (2.4), shadcn `Item` rows with a media column and an actions column (2.5), links, selection and the curate dialog (2.6), and async action buttons (2.7). The right-click menu (2.3) stays.
 
 ### 2a. Props
 
@@ -229,153 +227,196 @@ import type { CockpitAction, InboxModel } from "../../protocol/cockpit.ts";
 
 export function Inbox(props: {
   inbox: InboxModel | null;                       // KEPT
-  onAction(action: CockpitAction): void;          // KEPT
+  onAction(action: CockpitAction): string | void; // CHANGED: returns the actionId from connection.action (2.7)
   onSelectSession(sessionId: string): void;       // KEPT
+  onSelectPlan?(planId: string): void;            // KEPT when passed: a row with a planId selects the Plan too (2.6)
+  pendingActionIds?: readonly string[];           // NEW: store.pendingActionIds (2.7)
+  completedActionIds?: readonly string[];         // NEW: store.completedActionIds (2.7)
 }): ReactElement;
 ```
-No new props. The inbox panel is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c, 30% of the row at start, 14% to 45%; the center is 50%, the tree 20%; double click on a split handle resets the tree to 20% or the inbox to 30%, pro-d50); `Inbox` fills it: `aside[aria-label="Inbox"]` (KEPT; nested in the column aside) `flex h-full min-h-0 w-full flex-col overflow-hidden`. **Resolution:** the board's `aside.pane[aria-label="Attention inbox"]` label is **not** used; Phase 2's `Inbox` is pinned by `App.test` and `Inbox.test`.
 
-**Row order.** The rows are shown in the order of `inbox.rows` (the `cpd inbox list` order). The component does not sort, group or rank.
+`App` passes `onAction={connection.action}` (which returns the id), `onSelectSession`, `onSelectPlan` and the two id arrays from the store. The inbox panel is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c: 30% at start, 14% to 45%, double-click on `split-right` resets it to 30%). `Inbox` fills it: `aside[aria-label="Inbox"]` `relative flex h-full min-h-0 w-full flex-col overflow-hidden`.
 
-**Glyph of a row** = `inboxDisplay(row.urgency).glyph` (DESIGN 2d), in its tone colour. The urgency colour mapping is the Phase 2 one, without the tier:
+**Urgency colour.** Each row's urgency maps to one text token, used by the row icon and the title:
 
-| urgency | glyph | tone colour (token, board hex) |
+| urgency | title and icon class | tier-filter text (2.4) |
 |---|---|---|
-| `red` | blocked | `text-status-blocked` `#e17f6e` |
-| `yellow` | landing | `text-status-landing` `#c29653` |
-| `blue` | focus | `text-status-focus` `#7aa2ce` |
-| `magenta` | decision | `text-status-decision` `#ca88a3` |
-| `cyan` | active | `text-status-active` `#67ada7` |
-| `white` | unread | `glyph-unread` `#d8d2cc` (the board's) |
-
-`row.kind` never changes glyph or colour (DESIGN 2d).
+| `red` | `text-status-blocked` | `blocker`: `text-status-blocked-bright` |
+| `yellow` | `text-status-landing` | `delivery`: `text-status-landing-bright` |
+| `magenta` | `text-status-decision` | `decision`: `text-status-decision-bright` |
+| `blue` | `text-status-focus` | `support`: `text-status-focus-bright` |
+| `cyan` | `text-status-active` | `notice`: `text-status-active-bright` |
+| `white` | `text-muted-foreground` | `unread`: `text-fg-strong` |
 
 ### 2b. DOM outline
 
-`inbox === null` (KEPT; unreachable from `App`, which gates by `live`):
+`inbox === null` (before the first snapshot; `App` gates the panes by `live`, so this is seen only in isolation):
+
 ```
 aside[aria-label="Inbox"]
-├─ div[data-part="inbox-header"]   flex h-9 shrink-0 items-center gap-2 px-[14px]
-│   └─ h2   text exactly "Inbox"      text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
-└─ p   text exactly "Loading inbox…"   (U+2026)   px-[14px] text-fg-dim
+├─ div[data-part="inbox-header"]   flex h-8 shrink-0 items-center justify-between gap-8 px-2.5
+│   └─ h2   text exactly "Inbox"    text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
+└─ p   text exactly "Loading inbox…"   px-[14px] text-fg-dim
 ```
 
 `inbox !== null`:
+
 ```
 aside[aria-label="Inbox"]
-├─ div[data-part="inbox-header"]   flex h-9 shrink-0 items-center gap-2 px-[14px]                    (36px)
-│   ├─ h2     "Inbox" + span.sr-only " ({inbox.openCount})"        text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
-│   │         textContent is exactly `Inbox (${inbox.openCount})`     KEPT (Inbox.test 3: "Inbox (2)")
-│   └─ span[data-part="total"][aria-hidden="true"]   {rows.length}    font-mono text-meta text-fg-strong
-├─ p[data-empty]      only when inbox.rows.length === 0; text exactly "up to date, drink some water"   KEPT hook; px-[14px] py-3 text-muted-foreground
-└─ div[data-part="rows"]   flex-1 min-h-0 overflow-y-auto px-2 flex flex-col gap-0.5
-    └─ li[data-kind][data-urgency][data-id]   ×rows, in `inbox.rows` order   (2c)
-```
-- The total is the visible count of the one list (`rows.length`). It is the single count of the Inbox; the per-tier count strip is removed. **Assumption:** the TUI header count (`───<Inbox>───n─`, `inbox.rs:577`) is kept as this total, and only the per-tier counts are removed.
-- `div[data-part="rows"]` replaces the Phase 2 `div[data-part="groups"]` (there are no groups).
-- The list scrolls (`overflow-y-auto`, `app.css.test` 3). The TUI's `▲ n more` / `▼ n more` cues are Not wired (2h).
-- The Phase 2 engine banner, the per-tier groups and the footer are removed.
-
-### 2c. Row
-
-A row is a shadcn `Item` (`components/item.tsx`, base/item link pattern) in an `ItemGroup`; icons are lucide.
-
-```
-ItemGroup  min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5
-└─ Item[variant=outline][size=sm] asChild → a[data-kind][data-urgency][data-id]
-   │   href = row.url, target=_blank, rel="noopener noreferrer" for a link kind with a url; else href="#" with preventDefault
-   ├─ ItemMedia  flex-col justify-between self-stretch (full row height); three columns: media, text, actions
-   │   ├─ span.h-[19.25px] → RowIcon (lucide, size-4, urgency text colour), centred on the first text line
-   │   │     deploy Rocket; pr-ready/pr-closed GitPullRequest; review-requested GitPullRequestArrow; curate-retire Sparkles;
-   │   │     else by urgency: red CircleAlert, yellow CircleDot, magenta CircleHelp, blue Eye, cyan Bell, white MessageSquare
-   │   └─ span.mt-auto.block.text-sm.leading-normal → span[data-part="age"]  font-mono text-[10px] text-muted-foreground (baseline = last text line)
-   ├─ ItemContent  justify-between self-stretch
-   │   ├─ ItemTitle  first label line, urgency text colour
-   │   └─ ItemDescription  rest of the label joined by a space, only when non-empty
-   └─ ItemActions  flex-col items-end justify-between self-stretch
-       ├─ ExternalLinkIcon (linked) or ChevronRightIcon, size-4 text-muted-foreground
-       └─ Button[type=button][variant=outline][size=sm][data-part="item-action"] h-6 px-2 text-xs, only with a primary action
+├─ div[aria-hidden="true"]   the measuring copy (2.4.2): invisible absolute -z-10 flex h-8 w-max items-center gap-8 px-2.5
+├─ div[data-part="inbox-header"]   flex h-8 shrink-0 items-center justify-between gap-8 px-2.5
+│   ├─ h2   "Inbox"        shrink-0; text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
+│   └─ the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (ml-auto shrink-0), or the collapsed trigger (2.4.2)
+├─ p[data-empty]     only when the filtered list is empty; text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
+└─ ItemGroup   min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5     (only when filtered rows exist)
+    └─ InboxItemRow ×filtered rows, in `inbox.rows` order (2.5)
+Dialog (2.6): the curate checklist, closed unless a curate-retire row was clicked.
 ```
 
-- **Primary action**: the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start` (built by the read model, pro-d52; the UI derives nothing). Its button calls `preventDefault` and `stopPropagation`, then `onAction(action)`: the jump and the link never fire. The right-click menu lists the same entry first for `pr-ready`.
-- Every row but `engine-down` is wrapped in the context menu (`ContextMenuTrigger asChild`).
-- `first` = `row.label.split("\n")[0] ?? ""`; the description is shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
-- **Link kinds** (`plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`; TUI `is_link`, `inbox.rs:492-494`) with a url: the row anchor opens `row.url` in a new tab, and the kind's left click below still runs.
-- **Age** `{age}` from `row.ageSeconds` (DESIGN 2c Phase 2 rule, unchanged): `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`. The TUI shows `42s`, `5m`, `2d` (`inbox.rs:673-676`); its hour form is **unverified** (`read/age.rs` was not read), so the web keeps `h`.
-- Row 1 is cut with an ellipsis before the age (`truncate`); row 2 is cut with an ellipsis as well. Nothing else is cut.
+- The Phase 2 `div[data-part="rows"]`, the `total` span and the `Inbox (n)` textContent are gone. The header carries no count beside the title; the counts are on the filter items (2.4).
+- The list scrolls itself (`overflow-y-auto`). The TUI's `▲ n more` / `▼ n more` cues are not built (2.9).
 
-**Left click** (TUI `inbox.rs:289-327`). The click target is the row body (the subject and the subtitle). For a link kind the label is the link, and the rest of the row runs the kind's click:
+### 2.3. Right-click menu
 
-| `row.kind` | left click |
-|---|---|
-| `dialog`, `unread`, `loop-guard` | select the Session: `onSelectSession(row.sessionId)` |
-| `pr-ready`, `pr-closed`, `plan-review`, `drafts-parked` | select the Plan's Lead: `onSelectSession(row.sessionId)`, the chat target cpd sends for the row (`cockpit.ts` `InboxRow.sessionId`). **Assumption:** the Inbox props have no Plan lookup, so the Lead is the row's `sessionId`; a row without one does nothing (flagged). |
-| `review-requested` | copy `row.url` to the clipboard (the TUI's `set-buffer -w`) |
-| `engine-down` | start the engine: **Not wired** (2h) |
-| any other kind | nothing (the TUI's question, curate-retire and models-changed dialogs are Not wired, 2h) |
+Every row except `engine-down` is wrapped in a shadcn `ContextMenu` (`context-menu.tsx`) with `ContextMenuTrigger asChild` around the `Item`. Entries, in this order; an entry shows only when its condition holds. Choices dispatch through `onAction`, and a choice closes the menu.
 
-A row with a left-click action has the click target as a native `button[type="button"]`, so keyboard Tab reaches it; it carries the KEPT hook `data-action="open-session"` when that action selects a Session. A row with no left-click action (or no `sessionId` for a Session-selecting kind) has a plain `div` body.
-
-### 2d. Right-click menu
-
-Right click on a row opens a shadcn/ui context menu (`context-menu.tsx`, 2f) on the `li`. There is no menu on `engine-down` (TUI `mod.rs:566`). Entries, in this order (TUI `inbox.rs:359-370`, `:420-450`); an entry shows only when its condition holds:
-
-| Entry | Condition (TUI) | Action |
+| Entry | Condition | Action |
 |---|---|---|
-| `Go to Lead` | `pr-closed`, `pr-ready` with a Plan | the Plan's Lead, as the left click above (`onSelectSession(row.sessionId)`) |
-| `Copy Link` | `row.url !== null` | copy `row.url` to the clipboard |
-| `RePost` | `pr-ready`, Plan present, the row says `review overdue` | `pr.post` (`planId`, workflow key) |
-| `Merge` | `pr-ready`, the row says `ready to merge` | **Not wired**: there is no merge action in `CockpitAction`; the entry is shown disabled |
-| `Post` | `pr-ready`, the row says `ready for user review`, Plan present | `pr.post` (`planId`, workflow key) |
-| `Approve` | `deploy`: first in the choices | `inbox.approve` with `row.id` |
-| `Claim` | `review-requested`: first in the choices | `inbox.claim` with `row.id` |
-| `Snooze 15 min` | every kind | `inbox.snooze`, `duration: "15m"` |
-| `Snooze 1 h` | every kind | `inbox.snooze`, `duration: "1h"` |
-| `Snooze until tomorrow 09:00` | every kind | `inbox.snooze`, `duration: "tomorrow"` (the 09:00 is the TUI's label; the server's meaning of `tomorrow` is **unverified**) |
+| the primary action label (`Merge`, `Post`, `RePost`) | `pr-ready` with a primary action (2.5) | that action |
+| `Go to Lead` | `pr-ready`, `pr-closed` with `sessionId` | select the row's Plan and Session (2.6) |
+| `Copy Link` | `pr-ready`, `pr-closed` with `url` | copy `row.url` to the clipboard |
+| (separator) | when any entry above is shown | |
+| `Approve` | `deploy` | `inbox.approve` with `row.id` |
+| `Claim` | `review-requested` | `inbox.claim` with `row.id` |
+| `Snooze 15 min`, `Snooze 1 h`, `Snooze until tomorrow 09:00` | every kind | `inbox.snooze` with `duration` `15m`, `1h`, `tomorrow` |
 | `Dismiss` | every kind | `inbox.dismiss` with `row.id` |
 
-- Choices dispatch through `onAction` with the typed action (the Phase 2 shape). `Approve` and `Claim` show only when the row carries `inbox.approve` / `inbox.claim` in `row.actions`. The three snoozes and `Dismiss` show on every row.
-- `Go to Lead`, `Copy Link` and the Merge/Post/RePost conditions are the TUI's. `Post` and `RePost` need the workflow key, which `InboxRow` does not carry (**unverified**): when the key is absent, the entry is shown disabled.
-- Entries are plain items; a choice closes the menu.
+Snoozes and `Dismiss` go straight through `onAction` (they are not tracked in `pendingActionIds`; 2.7 covers the row buttons only).
 
-### 2e. Keyboard and focus
+### 2.4. Tier filter (pro-d49, pro-d50)
 
-- The Inbox has no keys of its own, as the TUI Inbox has none (`mod.rs:9`). There is no `onKeyDown`, no `j`/`k`, no `Enter` handler and no footer.
-- Tab order: the row's native buttons and links in document order. The context menu opens by the platform context-menu key (Shift+F10), as the menu part provides (library behaviour, unverified).
+**Header control.** `ToggleGroup[type="multiple"][variant="outline"][size="sm"][data-part="inbox-filters"][aria-label="Filter inbox by tier"]`, right-aligned (`ml-auto shrink-0`), in the header row after the `Inbox` h2. The header is `justify-between` with `gap-8`, so the title and the filters are at least `gap-8` (32px) apart. Seven `ToggleGroupItem`s in this order, each `h-6 gap-1.5 px-1.5 text-xs`:
 
-### 2f. States
+| Order | `value` | `data-tier-filter` | label | count | text class |
+|---|---|---|---|---|---|
+| 1 | `all` | `all` | `all` | `rows.length` | `text-fg-strong` |
+| 2 | `red` | `blocker` | `blocker` | rows with `urgency === "red"` | `text-status-blocked-bright` |
+| 3 | `yellow` | `delivery` | `delivery` | `yellow` | `text-status-landing-bright` |
+| 4 | `magenta` | `decision` | `decision` | `magenta` | `text-status-decision-bright` |
+| 5 | `blue` | `support` | `support` | `blue` | `text-status-focus-bright` |
+| 6 | `cyan` | `notice` | `notice` | `cyan` | `text-status-active-bright` |
+| 7 | `white` | `unread` | `unread` | `white` | `text-fg-strong` |
+
+- Each item reads `<label> <count>`: the label in a `span`, the count in a `span.font-mono.text-[10px].opacity-80`. Counts are over **all** rows, not the filtered ones. No item is ever `disabled`, including at 0.
+- The toggle's `value` list is `["all", "red", …, "white"]` while `all` is selected, else the selected urgencies.
+- **Selection rules** (state: `"all"` or a set of urgencies; initial `"all"`):
+  - click `all` → `"all"`;
+  - click a tier while `"all"` → the set holds only that tier (**isolate**);
+  - click a tier while a set is active → toggle that tier; **additive**: later clicks add or remove tiers;
+  - a set that becomes empty (last tier cleared) or holds all six tiers → `"all"`.
+- The list shows the rows whose urgency is in the set (every row when `"all"`).
+
+**Collapse into a Popover (pro-d50).** The header measures itself with a `ResizeObserver` on the header and on the measuring copy (`measureRef`, the same items in a `w-max` row with `gap-8`). When the header's `clientWidth` is less than the copy's `scrollWidth`, the filters collapse:
+
+- The `ToggleGroup` is replaced by `Popover` > `PopoverTrigger asChild` > `Button[type="button"][variant="outline"][size="sm"][data-part="inbox-filters-trigger"][aria-label="Filter inbox by tier"]` (`ml-auto h-6 shrink-0`, `ListFilterIcon` size 3.5, the label `all` or `N tier` / `N tiers`, and the count `filteredRows.length`).
+- The `PopoverContent` (`align="end"`, `w-auto min-w-[8.5rem] p-1.5`) holds a `ToggleGroup` with the same `type`, `variant`, `size`, `value`, `aria-label`, `data-part="inbox-filters"` and the same seven items, with `orientation="vertical"` and `w-full`.
+- The measure runs on mount and whenever the tier counts or the row count change. The measuring copy shows the same labels and counts, in plain spans.
+
+### 2.5. Row (`Item`)
+
+Each row is a shadcn `Item` (`components/item.tsx`) with `variant="outline"` `size="sm"`, `role="button"`, `tabIndex={0}`, `data-kind`, `data-urgency`, `data-id`, `className="cursor-pointer hover:bg-accent/50"`, inside an `ItemGroup`. Three columns, full height:
+
+```
+Item[role=button][variant=outline][size=sm]   (the preview renders a role=button, not an <a>; see the note below)
+├─ ItemMedia  flex-col items-center justify-between gap-1 self-stretch          (column 1: media)
+│   ├─ div.flex.h-[19.25px].items-center.justify-center → RowIcon   lucide, size-4 shrink-0, urgency text colour
+│   │     deploy Rocket · pr-ready, pr-closed GitPullRequest · review-requested GitPullRequestArrow · curate-retire Sparkles
+│   │     else by urgency: red CircleAlert · yellow CircleDot · magenta CircleHelp · blue Eye · cyan Bell · white MessageSquare
+│   └─ span.mt-auto.block.text-sm.leading-normal → span[data-part="age"]   font-mono text-[10px] text-muted-foreground
+├─ ItemContent  justify-between self-stretch                                    (column 2: text)
+│   ├─ ItemTitle  className = urgency text colour
+│   │     first label line; when the row is linked (2.6): a[href=row.url][target=_blank][rel="noopener noreferrer"] hover:underline
+│   └─ ItemDescription   only when the rest of the label is non-empty (the rest joined by a space)
+└─ ItemActions  flex-col items-end justify-between gap-1.5 self-stretch         (column 3: actions)
+    ├─ linked row: a[data-part="item-link"][aria-label="Open external link"][href=row.url]  ExternalLinkIcon size-4 mt-[1.5px]
+    │   else: ChevronRightIcon size-4 mt-[1.5px] text-muted-foreground
+    └─ primary action or fallback (2.7): Button[type="button"][variant="outline"][size="sm"][data-part="item-action"] h-6 gap-1 px-2 text-xs
+```
+
+- **`Item` root.** The preview renders `role="button"` on the `Item` root, with the click, `Enter` and `Space` handled on the root. pro-d51 names `asChild <a>` for the root; the approved preview does not do that, so this contract follows the preview (flagged in the consolidate report).
+- The age is `age(row.ageSeconds)`: `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`.
+- Media and actions are full-height vertical columns (pro-d52): the icon sits at the top of column 1 and the age at the bottom, on the last text line's baseline (`mt-auto` + `leading-normal`); the external link or chevron sits at the top of column 3 and the primary button at the bottom.
+- `first` = `row.label.split("\n")[0]`; the description is the rest, joined by a space, trimmed, shown only when non-empty.
+- The row's `Item` is wrapped in the context menu (2.3), except `engine-down`, which has no menu.
+
+**Primary action** (`primaryActionOf`): the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start`. Without one, the UI derives it, in this order: `engine-down` → `Start` (`engine.start`); `deploy` → `Approve` (`inbox.approve`, `itemId: row.id`); `review-requested` → `Claim` (`inbox.claim`); `pr-ready` whose label's status reads `ready to merge` → `Merge` (`pr.merge` with `planId`, `workflow`, `pull`), `ready for user review` → `Post` (`pr.post`), `review overdue` → `RePost` (`pr.repost`), each when the Plan or pull is known. When there is no primary action: a `curate-retire` row with a `contextId` shows `Curate` (opens 2.6); any other row with `id >= 0` shows `Dismiss` (`inbox.dismiss`); otherwise no button.
+
+### 2.6. Selection, links and the curate dialog (pro-d53)
+
+**Clicking the row** (`jump`), by kind:
+
+| `row.kind` | click |
+|---|---|
+| `engine-down` | `engine.start` (the engine starts; the row's `Start` button does the same) |
+| `curate-retire` | select the row's Plan and Session (below), then open the curate dialog (below) |
+| `review-requested` | copy `row.url` to the clipboard and open it in a new tab (`noopener,noreferrer`); nothing when there is no url |
+| `deploy` | open `row.url` in a new tab; nothing when there is no url |
+| `dialog`, `unread`, `loop-guard`, `question`, `plan-review`, `drafts-parked`, `pr-ready`, `pr-closed`, with a `sessionId` | select the row's Plan and Session (below) |
+| any other kind with a `url` | open `row.url` in a new tab |
+
+- **Select both.** `selectRowSession`: `onSelectPlan(row.planId)` when `planId !== null`, then `onSelectSession(row.sessionId)` when `sessionId !== null`. The read model resolves a missing `sessionId` (`readmodel.ts`, `resolveSessionId`): the row's own session; else the Plan's `lead_session`; else the live Lead of the Plan (`plan_lead`, not archived); else, for `question` and `curate-retire` rows, the live Manager of the Context (role `manager`, no Plan). Null when none of these exists, and the click then selects nothing.
+- **Links.** A row is linked when `row.url !== null` and its kind is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`. The linked title `a` and the item-link icon `a` open `row.url` in a new tab and stop the click from reaching the row (`stopPropagation`), so they do not also select.
+- **Curate dialog.** `Dialog` (`dialog.tsx`), title `Retire records of <contextId>` (or `Retire records` without a contextId), description `Checked records will be retired; unchecked records will be kept.` Opening it checks every record. Each record is a `label` with a checkbox, the record id and `— <detail>`, and its `text`. With no records: `No pending records to retire.` Footer: `Cancel` (closes) and `Confirm`.
+- **Confirm**: with a `contextId`, `approve` = the checked record ids joined by `,`, `reject` = the unchecked ids joined by `,`; when either is non-empty it dispatches `context.retire {contextId, approve, reject}`; when both are empty and `row.id >= 0` it dispatches `inbox.dismiss`. Then it closes. Confirm is not tracked in `pendingActionIds`.
+- **Records.** `InboxRow.curation` holds the records of `cpd context curation --context=<id> --limit=10` (CONTRACT 5.3): `{ id, text, detail }`, `detail` = `reason` and `target` joined by a space.
+
+### 2.7. Async action buttons (pro-d53)
+
+The row buttons are `Approve`, `Claim`, `Merge`, `Post`, `RePost`, `Start` (the primary action) and `Dismiss` (the fallback). Each one is tracked:
+
+1. `connection.action(action)` mints `actionId`, dispatches `actionStart` (adds the id to `store.pendingActionIds`) and returns it. The row stores it as `activeActionId`.
+2. While `activeActionId` is in `pendingActionIds`, the button is `disabled` and its label is preceded by `LoaderCircleIcon` (`size-3 animate-spin`). A click while pending does nothing.
+3. `action.result` with `ok: true` removes the id from `pendingActionIds` and adds it to `completedActionIds`. While `activeActionId` is in `completedActionIds` the button is **not rendered** (it disappears).
+4. `action.result` with `ok: false` removes the id from `pendingActionIds` and sets `store.lastError` to the wire error. The button is enabled again, and the error shows as a dismissible destructive `Alert` (4.8).
+
+The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` and `completedActionIds: readonly string[]`, both `[]` at start.
+
+`Merge` is also optimistic: its Inbox row is removed at the click and restored on `ok: false`, unless the Inbox has changed since (DESIGN.md, "After an action").
+
+### 2.8. Empty and loading
 
 | State | Rendering |
 |---|---|
-| `inbox === null` | 2b first outline: `Inbox` heading and `Loading inbox…` |
-| rows empty | header (`Inbox`, total `0`), `p[data-empty]` "up to date, drink some water"; no `rows` content |
-| engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row |
-| row with `url` of a link kind | the label is the link (2c) |
-| row without `sessionId` | the click target is a `div`; its click does nothing |
-| row without actions | the menu shows only the entries whose conditions hold (2d) |
-| urgency known, kind unknown | renders by urgency (DESIGN 2d) |
+| `inbox === null` | the 2b first outline: `Inbox` heading and `Loading inbox…` |
+| no rows in the snapshot | the header (the filters at `all 0`), `p[data-empty]` `up to date, drink some water`; no list |
+| rows exist, the filter selects none | the same `p[data-empty]` copy; the header keeps its filters |
+| engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row with `Start` |
 
-### 2g. Phase 2 tests
+### 2.9. Not built (Inbox)
+
+- The TUI's `▲ n more` / `▼ n more` scroll cues and the wheel step of three items.
+- Keyboard shortcuts of the TUI Inbox. The Inbox has no keys beyond `Enter` / `Space` on a focused row.
+- The `inbox.hidden` counts, per-row badges (`2 ✕ · 14 ✓ · conflict`) and the TUI's kind text.
+- Jump to a row's Context (`contextId`) and job (`jobKey`).
+- Engine-down's button: built (2.5 `Start`). `Merging` spinner in the glyph cell: not built (`merging` is a Plan count, DESIGN-panes 4.x).
+
+### 2.10. Phase 2 and pro-d48..pro-d61 Inbox tests
 
 | Test (file) | Pins | Status |
 |---|---|---|
-| `Inbox.test.tsx` "renders inbox rows by kind" | `li[data-kind]` order `["review-requested","deploy"]`; `data-urgency="red"`; `strong` text; `second line`; `a[href]`; `button[data-action="open-session"]` present/absent | **changed**: the kind text (`[data-part="kind"]`) is gone; the order is the `inbox.rows` order, no tier order; the row's second line is the subtitle |
-| `Inbox.test.tsx` "row actions call onAction with the typed action" | exact-text buttons `Claim`, `Snooze 15m`; `onAction` called exactly twice | **changed**: there are no inline buttons; the same actions are reached from the right-click menu (`Claim`, `Snooze 15 min`) |
-| `Inbox.test.tsx` "shows the open item count" | `aside[aria-label="Inbox"] h2` textContent `Inbox (2)` | KEPT unchanged |
-| `PlanView.test.tsx` (all) | Plan view pins (DESIGN-panes 1) | KEPT unchanged |
-| `App.test.tsx` 1 | `section[aria-label="Plan pane"] section[aria-label="Plan plan"]`; `aside[aria-label="Inbox"]` contains `up to date, drink some water` | **changed**: the empty copy (was `Nothing needs you`) |
-| `AppMemo.test.tsx` | `PlanView`/`Inbox` mocked; render counts 1 | KEPT unchanged (props identity unchanged: `onRetryJob` is not passed) |
+| `Inbox.test.tsx` rows in `inbox.rows` order | `[data-slot="item"][data-kind]` in the order of the fixture; no `data-tier`; `[data-part="kind"]` absent | **changed** (the Phase 2 `li[data-kind]` is now the `Item` root) |
+| `Inbox.test.tsx` filter items | seven `[data-tier-filter]` in the order of 2.4, labels `all blocker delivery decision support notice unread`, `<label> <count>` text, counts over all rows, none `disabled` | **new** |
+| `Inbox.test.tsx` selection rules | the 2.4 rules, with the `value` list checked after each click | **new** |
+| `Inbox.test.tsx` collapse | with `ResizeObserver` and `clientWidth`/`scrollWidth` mocked (external), the trigger `[data-part="inbox-filters-trigger"]` appears and its popover holds a vertical ToggleGroup | **new** |
+| `Inbox.test.tsx` item layout | `ItemMedia` holds the icon and `[data-part="age"]`; `ItemActions` holds the link or chevron and `[data-part="item-action"]` | **new** |
+| `Inbox.test.tsx` selection | a click on a row with a `planId` and a `sessionId` calls `onSelectPlan` then `onSelectSession`; a `curate-retire` click opens `Retire records of <contextId>` | **new** |
+| `Inbox.test.tsx` async actions | the button is disabled with `animate-spin` while pending, disappears when completed, comes back enabled on `ok:false` | **new** |
+| `Inbox.test.tsx` "row actions call onAction with the typed action" | Phase 2 inline buttons | **changed**: the actions are the row's primary button and the right-click menu |
+| `Inbox.test.tsx` "shows the open item count" (`Inbox (2)`) | Phase 2 | **removed** (no count beside the title) |
+| `App.test.tsx` 1 | `aside[aria-label="Inbox"]` contains `up to date, drink some water` | KEPT |
+| `AppMemo.test.tsx` | `Inbox` mocked; render counts 1 | KEPT |
 
-Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action="open-session"`, `li[data-kind]`, `aside[aria-label="Inbox"]`, `section[aria-label="Plan {id}"]`, `section[aria-label="Workflow {key}"]`, `section[aria-label="Explore jobs"]`, `p[data-empty]`.
-
-### 2h. Not wired (omitted, never faked)
-
-- Engine-down left click (`start the engine`): no `CockpitAction` starts the engine.
-- `Merge` and the `Merging` spinner in the glyph cell: no merge action in `CockpitAction`.
-- Left click for `question` (opens the Manager), `curate-retire` (checklist dialog) and `models-changed` (text dialog) of the TUI.
-- The TUI's `▲ n more` / `▼ n more` scroll cues and the wheel step of three items.
-- Key handling of the TUI's Plan and dialog views; the Inbox has no keys (2e).
-- Per-row badges (`2 ✕ · 14 ✓ · conflict`, `18 ✓`); the board's subject/sub strings that cpd does not send; `Approve deploy` / `Claim → codereview` as fixed copy (only cpd's `a.label` is used, when a row carries it); `inbox.hidden` counts (claimed, dismissed, snoozed); jump to a row's context/plan (`contextId`, `planId`, `jobKey` unused); the unread tier's `replied` copy; the board's `Snooze S` / `Dismiss E` action bar; the `S`, `E`, `J`, `K` and `Enter` keys.
+Not changed: `data-kind`, `data-urgency`, `data-id` on the item root; `aside[aria-label="Inbox"]`; `p[data-empty]`.
 
 ---
 
@@ -383,4 +424,73 @@ Not changed: `data-workflow`, `data-job`, `data-action="post-pr"`, `data-action=
 
 Plan View: stepper has 9 `li`, current has `aria-current="step"` and `data-state="current"` (`phase: "dispatch"` → `li[data-phase="dispatch"]`; `phase: "plan"` → the text `planning`); node `li` has inline `left`/`top` and the 148×46 classes; DAG fixtures: (1) chain of 3 → `ncols=3`, `W=3·148+2·28=500`, `H=46`, two straight paths with `d` `M149 23H173M169 19.5L173 23 169 26.5` and `M325 23H349M345 19.5L349 23 345 26.5`; (2) one root with two dependents → `H=100`, root `top` 27, dependents `top` 0 and 54, paths `M149 50C162 50 160 23 173 23` and `M149 50C162 50 160 77 173 77`; (3) two roots into one target (fan-in) → `H=100`, roots `top` 0 and 54, target `top` 27, paths `M149 23C162 23 160 50 173 50` and `M149 77C162 77 160 50 173 50`; `data-state` `done` for a merged source (stroke opacity `.6`), `pending` otherwise (`stroke-dasharray="3 3"`); `Retry ▸` absent without `onRetryJob`, present and calling it with `(jobKey, wf.key)` with it, and never calls `onAction`; `Post PR` dispatches `{ kind: "pr.post", planId, workflow }`; subtitle `failed ×2`, `blocked on 2`; chip summary text; `No workflows yet`.
 
-Inbox: rows are listed in `inbox.rows` order with no groups; total is `rows.length` (4 for the four-row fixture); no `data-tier`, no `data-focused`, no key handler, no footer text; `p[data-empty]` text exact `up to date, drink some water`; left click per kind (2c) calls `onSelectSession` once for a Session-selecting kind with `sessionId` set and nothing with `sessionId: null`; right-click menu entries and their order (2d); age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).
+Inbox: rows are listed in `inbox.rows` order with no groups; the `all` filter count is `rows.length` (4 for the four-row fixture) and each tier count is over all rows; the seven filter items in the 2.4 order with `<label> <count>` text and none disabled; the 2.4 selection rules (isolate, additive, reset at empty or all six); the popover collapse appears when `clientWidth < scrollWidth` (mocked); no key handler and no footer text; `p[data-empty]` text exact `up to date, drink some water`; the click per kind (2.6) calls `onSelectPlan` then `onSelectSession` for a row with both ids, `onSelectSession` only when `planId` is null, and nothing for a row with `sessionId: null`; the async button states (2.7); right-click menu entries and their order (2.3); age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).
+
+## 4. Cockpit amendments pro-d48..pro-d61 (consolidate-docs)
+
+The contract of each item below is stated in full in the section it names. This section is the index for the cockpit decisions and the one place the Header's breadcrumb is specified.
+
+| Decision | Contract | Section |
+|---|---|---|
+| pro-d48 fonts | Roboto and Roboto Mono bundled; `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` | DESIGN.md 2b (already on main) |
+| pro-d49 tier filter | seven-item ToggleGroup, right-aligned, selection rules | 2.4 |
+| pro-d50 layout | `gap-8` title to filters; popover collapse; defaults 20 / 50 / 30; double-click resets | 2.4, 4.2 |
+| pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions | 2.5 |
+| pro-d52 columns | full-height media and actions columns; age and primary button at the bottom | 2.5 |
+| pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | 2.6, 2.7, 4.8 |
+| pro-d60 breadcrumb | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
+
+### 4.1 Header breadcrumb (pro-d60)
+
+`App.tsx` builds the crumbs (`useMemo`) and passes them to `Header` as `crumbs` (DESIGN.md 3a). Each crumb is `{ part, label, onClick? }`, `part` one of `host`, `group`, `manager`, `lead`, `worker`. The crumbs are a shadcn `Breadcrumb` (2f) in the header, `aria-label="Location"`, `data-part="breadcrumb"`, `font-mono text-xs`, separated by `/`.
+
+**Crumbs and their rules**, in order, for the active session (`session.sessionId`, else `selectedSessionId`) found in the tree:
+
+| Crumb | Shown when | `label` | `data-part` | Click |
+|---|---|---|---|---|
+| `host` | the tree has a `hostname`, or an active Context exists | `tree.hostname` (the machine hostname, `.local` removed), else `host` | `breadcrumb-host` | selects the host Manager: the non-archived `manager` session of Context `host`, else its first session (absent: no click) |
+| `group` | an active Context exists | `standing` for Contexts `cpd`, `host`, `codereview`; `archive` when the Context, the Plan or the session is archived; else `contexts` | `breadcrumb-group` | none |
+| `manager` | an active Context exists | the Context id | `breadcrumb-context` | selects the Context's non-archived `manager` session (else any `manager`) |
+| `lead` | the active session belongs to a Plan | the Plan id | `breadcrumb-plan` | selects the Plan and its Lead session (`onSelectPlan`, then `onSelectSession(leadSessionId)` when set) |
+| `worker` | the active session is a Worker of the Plan | the Worker's `jobKey`, else its key | `breadcrumb-worker` | selects the Worker's session |
+| `lead` (fork) | the active session is a fork of the Plan (not its Lead) | `<planId>·<first 4 characters of the session id>` | `breadcrumb-plan` | selects the fork |
+| `lead` (no Plan) | the active session has role `lead` and no Plan | its key | `breadcrumb-plan` | selects the session |
+
+- **Before the first tree snapshot**, with only `cockpit.plan` known: two crumbs, `manager` = `plan.contextId` and `lead` = `plan.planId`, no host and no group.
+- **Worker crumb:** the crumb exists and selects the Worker's session, but there is no Worker view of its own yet (the Worker's chat is the view). Stated here because pro-d60 says "prepared but no worker view yet".
+- The last crumb is the current page: `BreadcrumbPage` with `aria-current="page"`, `font-medium text-fg-strong`. Clickable crumbs are `BreadcrumbLink render={<button type="button" />}`; a crumb with no click is a `span`. Both carry the `data-part` above.
+- `Header` with no `crumbs` and a `location` (DESIGN 3a) renders the Phase 2 two-crumb form through the same parts.
+- The ChatHeader carries no breadcrumb (DESIGN-chat 1).
+
+### 4.2 Shell columns and double-click resets (pro-d50)
+
+The defaults (tree 20%, centre 50%, Inbox 30%), the double-click on `split-left` (`treeRef` → 20%) and on `split-right` (`inboxRef` → 30%), and the `overflow-hidden` tree aside are in DESIGN.md 3c. `Reset layout` (the Status Bar button, DESIGN.md 3g) restores the same three values and the plan 40% / chat 60% split.
+
+### 4.3 Sidebar ContextTree (no change)
+
+pro-d48..pro-d61 name no tree change. The tree is DESIGN.md 3d and 3g as they stand.
+
+### 4.4 Fonts and tokens (pro-d48)
+
+Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark, the Header's φ and the fold markers use `font-display`, which is the sans family.
+
+### 4.5 Inbox (pro-d49 to pro-d53)
+
+Section 2 of this file, in full (props 2a, tier filter 2.4, rows 2.5, links and curate 2.6, async actions 2.7).
+
+### 4.8 Cockpit error Alert (pro-d53)
+
+When an action fails (`action.result` `ok: false`), the store's `lastError` is set (CONTRACT 6.2) and the app shows one error toast:
+
+```
+div[data-part="cockpit-error-toast"]   fixed right-4 bottom-8 z-50 w-full max-w-md shadow-lg
+└─ Alert[variant="destructive"][class pr-9]
+    ├─ CircleAlertIcon size-4
+    ├─ AlertTitle         = the error's code
+    ├─ AlertDescription   = the error's message
+    └─ Button[type="button"][variant="ghost"][size="icon-sm"][aria-label="Dismiss error"]   absolute top-2 right-2; XIcon size-3.5
+```
+
+The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dismissError`, which clears both. The toast is dismissible and nothing else closes it.
+
+---

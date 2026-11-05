@@ -1,6 +1,18 @@
+import { BookmarkIcon } from "lucide-react";
 import type { JSX } from "react";
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { CompactionItem, FoldItem } from "../../protocol/domain.ts";
+import { Marker, MarkerContent } from "../components/marker.tsx";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "../components/trace.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 /** "HH:MM" (24 h, local zone) of an ISO timestamp; null when absent or invalid. */
@@ -15,44 +27,74 @@ export function formatTokens(n: number): string {
   return n < 1000 ? String(n) : `${Math.round(n / 100) / 10}k`;
 }
 
-export const FoldRow = memo(function FoldRow(props: { item: FoldItem }): JSX.Element {
+export const FoldRow = memo(function FoldRow(props: {
+  item: FoldItem;
+}): JSX.Element {
   const { item } = props;
+  const [open, setOpen] = useState(Boolean(item.defaultOpen));
   const time = formatClock(item.at);
   return (
-    <details data-kind="fold" data-fold={item.foldKind} open={item.defaultOpen} className="group">
-      <summary
-        data-part="marker"
-        className="flex min-h-6 cursor-pointer list-none items-center gap-2 rounded-[5px] px-2 text-[12px] hover:bg-row-hover [&::-webkit-details-marker]:hidden"
-      >
-        <span data-part="phi" aria-hidden="true" className="w-3 font-display text-[15px] font-bold text-status-decision">
-          φ
-        </span>
-        <span data-part="source" className="font-mono text-muted-foreground">{item.foldKind}</span>
-        <span data-part="marker-text" className="min-w-0 flex-1 break-words text-foreground">{item.title}</span>
-        {time === null ? null : (
-          <span data-part="time" className="font-mono text-meta text-fg-dim">{time}</span>
-        )}
-      </summary>
-      <div data-part="fold-body" className="mt-1 ml-5 border-l pl-4">
-        <Markdown text={item.body} />
-      </div>
-    </details>
+    <Trace data-kind="fold" data-fold={item.foldKind}>
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger data-part="marker">
+          <TraceLine className="text-xs">
+            <TraceIcon
+              data-part="phi"
+              className="font-display font-bold text-status-decision"
+            >
+              φ
+            </TraceIcon>
+            <span
+              data-part="source"
+              className="shrink-0 font-mono text-muted-foreground"
+            >
+              {item.foldKind}
+            </span>
+            <TraceTitle data-part="marker-text" className="text-foreground">
+              {item.title}
+            </TraceTitle>
+            {time === null ? null : (
+              <TraceDescription data-part="time" className="font-mono">
+                {time}
+              </TraceDescription>
+            )}
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent data-part="fold-body">
+          <Markdown text={item.body} />
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 });
 
-export const CompactionRow = memo(function CompactionRow(props: { item: CompactionItem }): JSX.Element {
+export const CompactionRow = memo(function CompactionRow(props: {
+  item: CompactionItem;
+}): JSX.Element {
   const { item } = props;
-  const label = item.tokensBefore === undefined ? "Context compacted" : `Context compacted · from ${formatTokens(item.tokensBefore)} tokens`;
+  const [open, setOpen] = useState(false);
+  const label =
+    item.tokensBefore === undefined
+      ? "Context compacted"
+      : `Context compacted · from ${formatTokens(item.tokensBefore)} tokens`;
   return (
-    <details data-kind="compaction" className="group">
-      <summary className="flex h-6 cursor-pointer list-none items-center gap-3 text-meta text-muted-foreground [&::-webkit-details-marker]:hidden">
-        <span data-part="rule" aria-hidden="true" className="h-px flex-1 bg-border" />
-        <span data-part="label" className="font-mono">{label}</span>
-        <span data-part="rule" aria-hidden="true" className="h-px flex-1 bg-border" />
-      </summary>
-      <div data-part="compaction-body" className="mt-1 border-l pl-4">
-        <Markdown text={item.summary} />
-      </div>
-    </details>
+    <Trace data-kind="compaction">
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger className="w-full">
+          <Marker variant="separator" className="w-full">
+            <MarkerContent
+              data-part="label"
+              className="inline-flex items-center gap-1.5 font-mono text-xs"
+            >
+              <BookmarkIcon className="size-3.5" />
+              {label}
+            </MarkerContent>
+          </Marker>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent data-part="compaction-body">
+          <Markdown text={item.summary} />
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 });

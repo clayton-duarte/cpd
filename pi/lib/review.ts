@@ -60,9 +60,10 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
     if (!isObject(latest) || latest.id !== review || latest.status === "approved" || latest.status === "rejected" || latest.status === "superseded") return;
     const summaryPath = paths.summary ?? summaryFile(host, plan, review);
     const content = readText(summaryPath);
+    if (content.trim() === "") throw new CpdError("summary_empty", `the summary file ${summaryPath} is empty`);
     if (host.run !== r) return;
     pi.sendMessage({ customType: SUMMARY_TYPE, content, display: true, details: { plan, review } }, { triggerTurn: false });
-    const entry: ReviewEntry = { plan, review, surface: "chat", status: "pending" };
+    const entry: ReviewEntry = { plan, review, surface: "chat", status: "pending", summary: content, ...(typeof latest.title === "string" ? { title: latest.title } : {}) };
     r.reviews.set(review, entry);
     pi.appendEntry(ENTRY_TYPE, entry);
     r.facts.open(`plan-review:${review}`, REVIEW_LABEL, "human");
