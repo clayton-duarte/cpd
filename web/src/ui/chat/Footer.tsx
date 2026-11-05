@@ -66,6 +66,16 @@ export function Footer(props: {
       data-part="telemetry"
       className="flex items-center justify-end gap-3 px-2.5 pb-1.5 text-xs text-muted-foreground"
     >
+      {props.attachError ? (
+        <span data-attach-status role="status" className="mr-auto flex items-center gap-2 text-destructive">
+          <span>
+            {props.attachError.code}: {props.attachError.message}
+          </span>
+          <Button type="button" variant="outline" size="sm" data-action="retry" onClick={props.onRetry}>
+            Retry
+          </Button>
+        </span>
+      ) : null}
       <HoverCard openDelay={10} closeDelay={100}>
         <HoverCardTrigger asChild>
           <Button

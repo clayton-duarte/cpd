@@ -291,7 +291,11 @@ function reduceCore(state: AppState, action: StoreAction): AppState {
         return { ...state, lastError: toWireError(e) };
       }
     case "selectSession":
-      if (action.sessionId === state.selectedSessionId) return state;
+      if (action.sessionId === state.selectedSessionId) {
+        // re-selecting the same id is a Retry: it only clears the attach error
+        if (state.session?.error == null) return state;
+        return { ...state, session: { ...state.session, error: null } };
+      }
       return {
         ...state,
         selectedSessionId: action.sessionId,
