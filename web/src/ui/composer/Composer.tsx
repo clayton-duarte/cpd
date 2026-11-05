@@ -51,6 +51,7 @@ export const Composer = forwardRef<
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     settings?: ReactNode;
+    archived?: boolean;
   }
 >(function Composer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
@@ -60,7 +61,8 @@ export const Composer = forwardRef<
   const [dropping, setDropping] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSend = capabilities !== null;
+  const archived = props.archived ?? false;
+  const canSend = capabilities !== null && !archived;
   const hasContent = text.trim() !== "" || attachments.length > 0;
   const canSubmit = canSend && hasContent;
   const stateRef = useRef({ attachments, capabilities, reader });
@@ -236,7 +238,7 @@ export const Composer = forwardRef<
           aria-label="Message"
           disabled={!canSend}
           rows={1}
-          placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+          placeholder={archived ? "Session is archived - unarchive to send messages" : "Ask anything… (Enter to send, Shift+Enter for newline)"}
           className="min-h-10 px-4 py-3 text-sm leading-relaxed"
           value={text}
           onChange={(e) => setText(e.target.value)}

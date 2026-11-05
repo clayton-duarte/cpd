@@ -17,11 +17,7 @@ import {
   SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
 } from "../components/sidebar.tsx";
 import { usePersistedBoolean } from "./persisted.ts";
-
-/** Standing Contexts in TUI order (PermanentContext::ALL), never sorted. */
-const PERMANENT_IDS = ["cpd", "host", "codereview"];
-const isPermanent = (id: string): boolean => PERMANENT_IDS.includes(id);
-const createdOf = (n: object): string => (n as { createdAt?: string }).createdAt ?? "";
+import { PERMANENT_IDS, STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
 
 const COUNTERS = [
   ["draft", "text-status-decision"],
@@ -202,7 +198,6 @@ function Counters({ counts }: { counts: PlanCounts }): ReactElement | null {
   );
 }
 
-const STOPPED: SessionDot = { state: "stopped", attention: null };
 
 function planWork(plan: PlanNode): "planning" | "dispatch" | "review" {
   if (plan.counts.draft > 0) return "planning";
@@ -250,27 +245,6 @@ function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode
   return <CircleIcon {...hooks} className={cn(base, "text-fg-dim")} />;
 }
 
-/** TUI Dot::tier: red 0, yellow 1, magenta 2, cyan 3, everything else (and working) 4. */
-function dotTier(dot: SessionDot): number {
-  if (dot.state === "working") return 4;
-  switch (dot.attention) {
-    case "red": return 0;
-    case "yellow": return 1;
-    case "magenta": return 2;
-    case "cyan": return 3;
-    default: return 4;
-  }
-}
-
-/** (tier, newest first); the stable sort keeps input order on ties. */
-function compareOrderKey(aDot: SessionDot, aCreated: string, bDot: SessionDot, bCreated: string): number {
-  const tierDiff = dotTier(aDot) - dotTier(bDot);
-  if (tierDiff !== 0) return tierDiff;
-  if (aCreated > bCreated) return -1;
-  if (aCreated < bCreated) return 1;
-  return 0;
-}
-
 function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactElement {
   const { node } = props;
   const current = props.selectedSessionId === node.ref.id;
@@ -305,9 +279,6 @@ function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactE
 }
 
 const isFork = (s: SessionNode): boolean => s.ref.role === "lead" && !s.archived;
-const leadOf = (p: PlanNode): SessionNode | undefined => p.sessions.find((s) => s.ref.id === p.leadSessionId);
-const managerOf = (c: ContextNode): SessionNode | undefined =>
-  c.sessions.find((s) => s.ref.role === "manager" && !s.archived);
 
 function PlanItem(props: { plan: PlanNode } & Handlers): ReactElement {
   const { plan } = props;

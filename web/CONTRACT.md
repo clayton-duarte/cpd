@@ -1347,6 +1347,11 @@ Behaviours:
 - `session.attach {sessionId}`: detaches the previous session first (dispose its handle), then `registry.resolve` (a `WebError` -> `session.error {sessionId, error}`; e.g. `session_not_found`), then `backends[resolved.ref.runner].attach(resolved, emit)`, selecting the backend by session runner. `emit` forwards a message only while this attach is still current and the connection open (a generation counter): messages of a detached session never leak. An `attach` that rejects -> `session.error`; an attach that resolves after a newer attach/detach/close disposes its handle and emits nothing.
 - `session.detach`: disposes the handle (once), forgets the session. Idempotent.
 - `session.loadEarlier|submit|abort|abortSubmission|compact|configure|listModels` and `dialog.respond`: when `sessionId` is not the attached one -> `session.error {sessionId, error: not_attached}`; otherwise the matching `SessionHandle` method (session messages route to the attached backend). `submit` passes `{clientSubmissionId, text, images, whenBusy}`. A rejection becomes `session.error {sessionId, clientSubmissionId?, error: toWireError(e)}` (`clientSubmissionId` for `submit` only): backend errors become session error messages.
+- **`/q` and `/quit` intercept (pro-d406; A3, A4).** In `session.submit`, when `text.trim()` is exactly `/q` or `/quit` (case-sensitive; `text` is the wire text, with text attachments already inlined, 6.9) and the session is a Manager, a Lead or a side fork, the hub does not submit it: no backend `submit`, no `session.submitAck`, nothing reaches the model, and images on that submit are not sent. The check runs at this one submit point, after the `not_attached` check, so both runners are covered (the tmux pi backend and the durable backend sit behind it). It never runs in the pi adapter (`pi/lib/turns.ts`) or the durable host (`pi/durable-host/run.ts`). Workers are not intercepted. By role:
+  - **Manager:** refused without a cpd call: `session.error {sessionId, clientSubmissionId, error: {code: "manager_not_archivable", message: "A Manager is archived only with its Context.", details: {sessionId}}}`.
+  - **Plan Lead** (the `leadSessionId` of its Plan, 5.1): runs `plan.archive` for its Plan. **Any other Lead or side fork:** runs `session.archive`. Both go through `runAction` (`actions.ts`, 5.4) with its park-and-retry for `in_chat_slot`, so `blockers()` is enforced exactly as for the cockpit.
+  - **Success:** no reply for the submission and no `action.result`. The archive reaches the client as a tree change, which the web handles as DESIGN 3h says.
+  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. The Composer marks that pending row `failed` (6.2) and the User stays where they are.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
 
 #### `plugin.ts`: the Vite plugin and the real boundaries (thin, ONE place)
@@ -1545,7 +1550,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 
 1. On start the app subscribes: after `emitStatus("open")` the transport has sent `{type:"cockpit.subscribe"}`; after the server's `cockpit.snapshot` the three panes (tree, plan area, inbox) render.
 2. Clicking a session in the tree sends `{type:"session.attach", sessionId}` (preceded by `session.detach` when another session was attached); after `session.attached` and `session.window {mode:"tail"}` the transcript tail renders in the chat slot.
-3. Typing a message and pressing Enter sends `{type:"session.submit", sessionId, clientSubmissionId, text, images:[], whenBusy:"followUp"}`.
+3. Typing a message and pressing Enter sends `{type:"session.submit", sessionId, clientSubmissionId, text, images:[], whenBusy:"followUp"}`, except a text of exactly `/q` or `/quit`, which the hub intercepts instead (6.6).
 4. A `session.dialog` message renders the dialog card; answering it sends `{type:"dialog.respond", sessionId, dialogId, response}`.
 5. Dropping an image file on the chat slot adds the attachment (reader returns base64) and the next submit carries it as `images:[{mimeType, dataBase64}]`.
 6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`.
@@ -1574,6 +1579,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
+| `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
 
 ## 8. Capabilities: durable vs pi
