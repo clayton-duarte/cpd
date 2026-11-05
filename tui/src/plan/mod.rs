@@ -271,7 +271,7 @@ fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>
             " no Lead session in the centre",
             palette::muted_text(),
         )),
-        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled(
+        Some(c) if c.plan.workflows.is_empty() && c.plan.reviewed_pr.is_none() => parts.push(Span::styled(
             "no Workflow yet: cpd workflow add",
             palette::muted_text(),
         )),
@@ -415,8 +415,20 @@ impl Ui {
         self.body = window;
         self.links = crate::link::Links::default();
         let Some(c) = centre else { return };
-        self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll);
-        (self.links, self.links_origin) = (c.boxes.links.clone(), c.boxes.links_origin);
+        // a review Plan with no Workflow draws the Review PR box, as wide as the window less the margin, instead of the (empty) chart
+        let review = match &c.plan.reviewed_pr {
+            Some(reviewed) if c.plan.workflows.is_empty() => Some(
+                boxes::review_box(
+                    reviewed,
+                    window.width.saturating_sub(2 * CHART_MARGIN.horizontal),
+                )
+                .with_margin(CHART_MARGIN),
+            ),
+            _ => None,
+        };
+        let drawn = review.as_ref().unwrap_or(&c.boxes);
+        self.scroll = drawn.chart.blit(f.buffer_mut(), window, self.scroll);
+        (self.links, self.links_origin) = (drawn.links.clone(), drawn.links_origin);
     }
 }
 

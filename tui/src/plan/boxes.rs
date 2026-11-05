@@ -16,7 +16,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Margin, Position, Rect},
     style::Modifier,
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::Widget,
 };
 
@@ -25,7 +25,9 @@ use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::buffer::copy_cells;
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, NeedsUser, PrFacts, Pull, WorkflowNode, WorkflowStatus, pr_look};
+use crate::read::{
+    JobNode, NeedsUser, PrFacts, PrState, Pull, ReviewedPr, WorkflowNode, WorkflowStatus, pr_look,
+};
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
@@ -554,6 +556,69 @@ pub fn layout(
     }
 }
 
+/// The Review PR box of a review Plan with no Workflow (pro-d412 A5), `width` columns wide: the title ` Review <repo name> `, the repo,
+/// the pull request's title and the link row `#<number> <state> 󱆭`. The whole body is the link to the pull request: the link row's is
+/// drawn, the two rows above it are covered by a link drawn on a scratch buffer (only its rect is kept).
+pub fn review_box(reviewed: &ReviewedPr, width: u16) -> Boxes {
+    const HEIGHT: u16 = 5;
+    let area = Rect::new(0, 0, width, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    let name = reviewed
+        .repo
+        .rsplit_once('/')
+        .map_or(reviewed.repo.as_str(), |(_, name)| name);
+    let title = Line::from(Span::styled(
+        format!(" Review {name} "),
+        palette::read_only_text(),
+    ));
+    let body = Text::from(vec![
+        Line::from(Span::styled(reviewed.repo.clone(), palette::read_only_text())),
+        Line::from(reviewed.title.clone()),
+    ]);
+    BoxWidget::new(Walls::Full, palette::muted_text(), body)
+        .title(title)
+        .render(area, &mut buf);
+    let inner = geometry(&Walls::Full, area).inner;
+    let mut links = Links::default();
+    if inner.width >= 3 {
+        let mut scratch = Buffer::empty(area);
+        let cover = " ".repeat(usize::from(inner.width - 2));
+        for y in inner.y..inner.y + 2 {
+            links.draw(
+                Link::new(&reviewed.url).text(cover.as_str()),
+                Rect::new(inner.x, y, inner.width, 1),
+                &mut scratch,
+            );
+        }
+    }
+    let mut text = vec![Span::styled(
+        format!("#{}", reviewed.number),
+        palette::clickable_text(),
+    )];
+    if let Some(state) = reviewed.state {
+        text.push(" ".into());
+        text.push(Span::styled(
+            match state {
+                PrState::Open => "open",
+                PrState::Merged => "merged",
+                PrState::Closed => "closed",
+            },
+            palette::fg_clickable(palette::pr_state(state)),
+        ));
+    }
+    let link = Link::new(&reviewed.url).text(Line::from(text));
+    links.draw(link, Rect::new(inner.x, inner.y + 2, inner.width, 1), &mut buf);
+    Boxes {
+        chart: Chart {
+            buf,
+            pills: Vec::new(),
+            columns: Vec::new(),
+        },
+        links,
+        links_origin: (0, 0),
+    }
+}
+
 impl Boxes {
     /// The same canvas with `margin` around it ([`Chart::with_margin`]).
     pub fn with_margin(self, margin: Margin) -> Boxes {
@@ -575,7 +640,7 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::read::{JobStatus, PrState};
+    use crate::read::JobStatus;
     use crate::test_text::rows;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, WorkflowKey};
