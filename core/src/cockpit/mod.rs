@@ -341,11 +341,7 @@ impl ChangeSource for DataVersion {
 /// `cpd cockpit serve`: stdin and stdout of the process, until stdin ends.
 pub fn run_stdio() -> Result<Output, CpdError> {
     let mut stdout = std::io::stdout().lock();
-    let started = Env::open().and_then(|env| {
-        let store =
-            crate::store::Store::open(&env.home, u64::from(env.config.timeouts.store_busy_ms))?;
-        Ok((env, store))
-    });
+    let started = Env::open().and_then(|env| Ok((env, Env::open()?.store)));
     let (mut env, store) = match started {
         Ok(v) => v,
         Err(e) => return fail(&mut stdout, e),
