@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type {
   Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError, WireImage,
 } from "../protocol/domain.ts";
-import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
+import type { CockpitAction, ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
@@ -58,6 +58,8 @@ export interface AppState {
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null;
   readonly lastError: WireError | null;
+  /** Optimistic inbox edits by actionId: the inbox before and after, for rollback. */
+  readonly optimistic: Readonly<Record<string, { readonly before: InboxModel; readonly after: InboxModel }>>;
   readonly pendingActionIds: readonly string[];
   readonly completedActionIds: readonly string[];
 }
@@ -69,6 +71,7 @@ export type StoreAction =
   | { type: "selectPlan"; planId: string | null }
   | { type: "submitPending"; submission: Omit<PendingSubmission, "state"> }
   | { type: "dismissPending"; clientSubmissionId: string }
+  | { type: "actionOptimistic"; actionId: string; action: CockpitAction }
   | { type: "actionStart"; actionId: string }
   | { type: "dismissError" }
   | { type: "serverBatch"; messages: ServerMessage[] };
@@ -80,6 +83,7 @@ export const initialState: AppState = {
   selectedSessionId: null,
   session: null,
   lastError: null,
+  optimistic: {},
   pendingActionIds: [],
   completedActionIds: [],
 };
@@ -199,20 +203,21 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
       return { ...state, cockpit: { ...state.cockpit, error: message.error } };
     case "action.result": {
       const pendingActionIds = state.pendingActionIds.filter((id) => id !== message.actionId);
+      const record = state.optimistic[message.actionId];
+      const { [message.actionId]: _settled, ...optimistic } = state.optimistic;
+      const settled = { ...state, pendingActionIds, optimistic };
       if (message.ok) {
         return {
-          ...state,
-          pendingActionIds,
-          completedActionIds: state.completedActionIds.includes(message.actionId)
-            ? state.completedActionIds
-            : [...state.completedActionIds, message.actionId],
+          ...settled,
+          completedActionIds: settled.completedActionIds.includes(message.actionId)
+            ? settled.completedActionIds
+            : [...settled.completedActionIds, message.actionId],
         };
       }
-      return {
-        ...state,
-        pendingActionIds,
-        lastError: message.error,
-      };
+      const rolledBack = record !== undefined && state.cockpit.inbox === record.after
+        ? { ...settled, cockpit: { ...settled.cockpit, inbox: record.before } }
+        : settled;
+      return { ...rolledBack, lastError: message.error };
     }
     default: {
       if (message.sessionId === null) {
@@ -259,6 +264,20 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       let next = state;
       for (const message of action.messages) next = reduce(next, { type: "server", message });
       return next;
+    }
+    case "actionOptimistic":
+    {
+      const inbox = state.cockpit.inbox;
+      if (action.action.kind !== "pr.merge" || inbox === null) return state;
+      const subject = `pr:${action.action.pull}`;
+      const rows = inbox.rows.filter((r) => !(r.kind === "pr-ready" && r.subject === subject));
+      if (rows.length === inbox.rows.length) return state;
+      const after = { ...inbox, rows };
+      return {
+        ...state,
+        cockpit: { ...state.cockpit, inbox: after },
+        optimistic: { ...state.optimistic, [action.actionId]: { before: inbox, after } },
+      };
     }
     case "dismissPending":
       if (state.session === null) return state;

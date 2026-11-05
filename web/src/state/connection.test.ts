@@ -230,3 +230,23 @@ describe("connection", () => {
     expect(transport.sent).toEqual([]);
   });
 });
+
+describe("connection optimistic action", () => {
+  it("connection_dispatches_optimistic_before_send", () => {
+    const { transport, store, connection } = setup();
+    const row = { id: 1, kind: "pr-ready", label: "ready to merge", urgency: "normal", contextId: null, planId: "p1", jobKey: null, sessionId: null, url: null, subject: "pr:acme/api#3", workflow: null, openedAt: "t", ageSeconds: 0, actions: [] };
+    const inbox = { openCount: 1, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [row], cursor: 1 };
+    connection.start();
+    transport.emitStatus("open");
+    transport.emitMessage({ type: "cockpit.patch", pane: "inbox", data: inbox });
+    expect(store.getState().cockpit.inbox?.rows).toHaveLength(1);
+    const seen: number[] = [];
+    const send = transport.send.bind(transport);
+    transport.send = (raw: unknown): void => {
+      if ((raw as { type?: string }).type === "cockpit.action") seen.push(store.getState().cockpit.inbox?.rows.length ?? -1);
+      send(raw);
+    };
+    connection.action({ kind: "pr.merge", planId: "p1", pull: "acme/api#3" });
+    expect(seen).toEqual([0]);
+  });
+});

@@ -381,6 +381,8 @@ The row buttons are `Approve`, `Claim`, `Merge`, `Post`, `RePost`, `Start` (the 
 
 The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` and `completedActionIds: readonly string[]`, both `[]` at start.
 
+`Merge` is also optimistic: its Inbox row is removed at the click and restored on `ok: false`, unless the Inbox has changed since (DESIGN.md, "After an action").
+
 ### 2.8. Empty and loading
 
 | State | Rendering |

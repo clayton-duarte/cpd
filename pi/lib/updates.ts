@@ -64,7 +64,7 @@ export type BoardPost = { at: string; from: string | null; fromName: string | nu
 /** A `pr-opened` Event of a Plan: its Workflow key, its pull request number and URL. */
 export type PrOpened = { event: number; plan: string; workflow: string; number: number | null; url: string };
 /** An `error` Event: its Event id and `data.code`. */
-export type ErrorEvent = { event: number; code: string };
+export type ErrorEvent = { event: number; code: string; context: string | null; plan: string | null };
 
 /** A plan-level explore Job of `context pending`, reduced to what the digest needs. */
 export type PendingJob = { key: string; kind: string; status: string; tier: string | null; title: string };
@@ -128,7 +128,7 @@ export function parseErrorEvents(out: Record<string, unknown>): ErrorEvent[] {
   if (!Array.isArray(out.events)) throw bad("events list", "`events` is not a list");
   return out.events.map((e) => {
     if (!isObject(e) || !Number.isSafeInteger(e.id) || !isObject(e.data) || typeof e.data.code !== "string") throw bad("events list", "an error Event lacks id or data.code");
-    return { event: e.id as number, code: e.data.code };
+    return { event: e.id as number, code: e.data.code, context: typeof e.context === "string" ? e.context : null, plan: typeof e.plan === "string" ? e.plan : null };
   });
 }
 
