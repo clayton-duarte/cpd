@@ -196,4 +196,68 @@ describe("cockpit service live updates", () => {
     expect(loads).toEqual([{ panes: ["inbox", "tree"], planId: null }]);
     service.stop();
   });
+
+  it("a plan.new action reply waits for an in-flight refresh to drain and for the tree to contain the new session", async () => {
+    let created = false;
+    const releases: (() => void)[] = [];
+    const withPlan = (): ContextTreeModel => ({
+      cursor: 41,
+      contexts: [{ id: "c1", plans: [{ id: "my-plan", contextId: "c1", sessions: [{ ref: { id: "s-lead9" } }], leadSessionId: "s-lead9" }], sessions: [] }],
+    } as unknown as ContextTreeModel);
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: tree(40), plan: null, inbox }; },
+      async loadPanes(panes: PaneSet) {
+        const snapshot = created ? withPlan() : tree(41); // the read sees the tree as of its start
+        await new Promise<void>((r) => { releases.push(r); });
+        return panes.has("tree") ? { tree: snapshot } : {};
+      },
+    };
+    const cpd: Cpd = { json: async () => { created = true; return { ok: true, plan: { id: "my-plan" }, lead: { session: "s-lead9" } }; } };
+    const scheduler = new FakeScheduler();
+    const procs: FakeFollow[] = [];
+    const follow: FollowBoundary = { start: (args) => { const p = new FakeFollow(args); procs.push(p); return p; } };
+    const service = createCockpitService({ readModel, cpd, follow, scheduler });
+    await service.start();
+    procs[0]!.emit(ev(41, "plan-done"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(releases).toHaveLength(1); // a refresh is held open, with the pre-plan tree
+    let reply: { hasNewSession: boolean } | null = null;
+    const hasSession = () => JSON.stringify(service.snapshot()?.tree).includes("s-lead9");
+    const done = service.runAction({ kind: "plan.new", planId: "my-plan", contextId: "c1", title: "My plan" }).then(() => { reply = { hasNewSession: hasSession() }; });
+    await flush();
+    expect(reply).toBeNull();
+    releases[0]!();
+    await flush();
+    expect(reply).toBeNull(); // the queued read, which sees the new session, is still pending
+    expect(releases).toHaveLength(2);
+    releases[1]!();
+    await flush();
+    await done;
+    expect(reply).toEqual({ hasNewSession: true });
+    service.stop();
+  });
+
+  it("awaiting refresh while another refresh runs resolves after the queued panes are loaded", async () => {
+    const releases: (() => void)[] = [];
+    const { service, procs, scheduler, loads } = setup(() => new Promise<void>((r) => { releases.push(r); }));
+    await service.start();
+    procs[0]!.emit(ev(41, "plan-done"));
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(loads).toEqual([{ panes: ["tree"], planId: null }]);
+    let resolved = false;
+    const done = service.selectPlan("p2").then(() => { resolved = true; }); // awaits refresh(plan) while one runs
+    await flush();
+    expect(resolved).toBe(false);
+    releases[0]!();
+    await flush();
+    expect(loads).toEqual([{ panes: ["tree"], planId: null }, { panes: ["plan"], planId: "p2" }]);
+    expect(resolved).toBe(false); // the queued plan load is still in flight
+    releases[1]!();
+    await flush();
+    await done;
+    expect(resolved).toBe(true);
+    service.stop();
+  });
 });

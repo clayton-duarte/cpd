@@ -55,7 +55,7 @@ async function mergeArgs(cpd: Cpd, planId: string, workflow: string): Promise<re
   return ["pr", "merge", `${repo}#${number}`];
 }
 async function polledWorkflows(cpd: Cpd, planId: string): Promise<Record<string, unknown>[]> {
-  const list = (await cpd.json(["pr", "poll", "--plan", planId]))["workflows"];
+  const list = (await cpd.json(["plan", "show", "--plan", planId]))["workflows"];
   return Array.isArray(list) ? list.filter((w): w is Record<string, unknown> => typeof w === "object" && w !== null) : [];
 }
 // post and repost take the Workflow key: find the one whose stored pull request is `<owner>/<repo>#<n>`.

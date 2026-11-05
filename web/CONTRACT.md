@@ -464,7 +464,7 @@ export type ServerMessage =
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
-  | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId null: not tied to a session (invalid_message, session_not_found of an attach)
+  | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId: the attempted id of a session.attach error (e.g. session_not_found); null: not tied to a session (invalid_message)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
 ```
@@ -804,8 +804,8 @@ export function useStore<T>(store: Store, select: (s: AppState) => T): T; // Rea
 
 Reducer behaviours (every ServerMessage is `{type:"server"}`):
 
-- `cockpit.snapshot` sets the three panes and clears `cockpit.error`; `cockpit.patch` replaces exactly the named pane; `cockpit.error` sets `cockpit.error` and keeps the panes.
-- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
+- `cockpit.snapshot` sets the three panes and clears `cockpit.error`; `cockpit.patch` replaces exactly the named pane; `cockpit.error` sets `cockpit.error` and keeps the panes. (A failed attach is retried on a tree update by `connection.ts`, 6.2 below.)
+- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
 - `session.status` sets `busy` and `queued`. `session.footer` sets `footer`; `session.title` sets `title` (the header shows `title`; the footer and title also come from `session.attached.meta`).
@@ -843,7 +843,8 @@ Behaviours:
 
 - `start()`: dispatches `connection connecting`, calls `transport.connect()`. On status `open`: dispatch `open` with `retryAttempt: 0`, send `cockpit.subscribe`, then send `cockpit.selectPlan` when a Plan is selected, then `session.attach` for the selected session if any (connect subscribes to the cockpit and reattaches the selected session).
 - Every inbound raw message goes through `parseServerMessage` once. A parsed message is dispatched as `{type:"server", message}`. An invalid message is never dropped silently: the connection dispatches `{type:"server", message:{type:"session.error", sessionId:null, error: <the protocol_error WireError>}}` (the reducer stores it in `lastError`) and stays open.
-- `selectSession(id)`: dispatches `selectSession`; if a session was selected before, sends `session.detach` first; then, for a non-null id, `session.attach {sessionId}`. Selecting the same id again sends nothing.
+- `selectSession(id)`: dispatches `selectSession`; if a session was selected before, sends `session.detach` first; then, for a non-null id, `session.attach {sessionId}`. Selecting the id that is already selected sends nothing while `session.attached` is true; when it is selected but not attached, the reducer resets the session (808) and `session.attach {sessionId}` is sent again, with no `session.detach` (that attach never succeeded).
+- Attach retry: when a `cockpit.snapshot`, or a `cockpit.patch` with `pane: "tree"`, arrives while the connection is `open`, a session is selected, `session.attached` is not true and `session.error.code` is `session_not_found`, `session.attach {sessionId}` is sent again for the selected id. This lets a session that appears in the tree after its attach was refused attach on the next tree update.
 - `loadEarlier()`: sends `session.loadEarlier {sessionId, before: transcript.cursor}` only when `hasEarlier` and a session is selected; otherwise no message.
 - `submit(input)`: creates `clientSubmissionId` via `newId`, dispatches `submitPending` (`state:"sending"`, `imageCount = images.length`, `images`, `at`), sends `session.submit`, returns the id. Ack/failure arrive as server messages (reducer, above). Without a selected session: throws `WebError("not_attached")`.
 - Other session methods send the matching `ClientMessage` with the selected `sessionId`, or throw `WebError("not_attached")` with no selected session.
@@ -961,6 +962,7 @@ Service behaviours:
 7. When the follow process exits while the service runs: restart `followArgs(lastCursor)` after `FOLLOW_RESTART_BASE_MS * 2^n` (n = consecutive restarts, reset by a received line, capped 30 000). Exit code 3 (`cursor_ahead`, `docs/commands.md` §11.2 precondition; live behaviour of `events follow` not run, O18) first reloads all panes (`loadAll`) and restarts from the new `tree.cursor`.
 8. `stop()` kills the follow process, disposes every timer and subscription; nothing fires afterwards. `selectPlan` stores the id and loads only the plan pane.
 9. `runAction(action)` delegates to `runAction(cpd, action)` of `actions.ts`; errors propagate as `WebError`.
+10. `refresh(panes)` (rules 3 and 5) always returns a promise that resolves only after the in-flight loop has drained every queued pane, so a call made while another refresh runs waits for that loop. `runAction` awaits that refresh before it resolves, so `action.result` is never sent while `snap.tree` is stale (for plan.new the tree already holds the new Plan and Lead session).
 
 #### `actions.ts`
 
