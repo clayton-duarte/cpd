@@ -10,8 +10,9 @@ use serde_json::json;
 
 use super::EditArgs;
 use super::add::{
-    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_workflows,
-    main_worktree, needs_refs, no_branch_clash, resolve_refs, stacked_on, wanted_base,
+    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, key_repo_policy,
+    known_workflows, main_worktree, needs_refs, no_branch_clash, resolve_refs, stacked_on,
+    wanted_base,
 };
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -104,22 +105,19 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
     // Whether `--base` names a Workflow is known only after `classify_base`; `decide` checks it.
     let retarget_shape = args.repo.is_none() && args.base.is_some() && needs.is_none();
-    let stored = env
-        .store
-        .read(|conn| {
-            editable_workflow(
-                conn,
-                &plan,
-                &key,
-                wants_title,
-                wants_others,
-                Shape {
-                    restack: restack_shape,
-                    retarget: retarget_shape,
-                },
-            )
-        })?
-        .0;
+    let (stored, stored_title) = env.store.read(|conn| {
+        editable_workflow(
+            conn,
+            &plan,
+            &key,
+            wants_title,
+            wants_others,
+            Shape {
+                restack: restack_shape,
+                retarget: retarget_shape,
+            },
+        )
+    })?;
     if stored.head_ref.is_some()
         && let Some(flag) = [
             (args.repo.is_some(), "--repo"),
@@ -151,12 +149,32 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         )?),
         None => None,
     };
+    let mut title = args.title.map(|t| t.to_string());
+    if wants_title && stored.head_ref.is_none() {
+        let jira = args
+            .jira
+            .as_ref()
+            .map(|j| j.to_string())
+            .or_else(|| stored.jira.as_ref().map(|j| j.to_string()));
+        let wanted_title = title.clone().or(stored_title);
+        if let (Some(jira), Some(wanted_title)) = (jira, wanted_title)
+            && key_repo_policy(&mut env, &plan, &in_repo)?
+                .2
+                .workflow
+                .jira_required
+        {
+            title = Some(
+                super::jira_title::conform(&wanted_title, &jira)
+                    .ok_or_else(|| crate::pr::open::jira_title_invalid(&plan, &key))?,
+            );
+        }
+    }
     let edits = Edits {
         repo: repo.as_ref().map(|r| r.display().to_string()),
         name,
         base,
         needs,
-        title: args.title.map(|t| t.to_string()),
+        title,
         jira: args.jira.map(|j| j.to_string()),
     };
 
