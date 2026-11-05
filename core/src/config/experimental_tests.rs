@@ -211,3 +211,23 @@ fn set_experimental_writes_one_key_atomically_keeping_comments() {
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
     assert_eq!(std::fs::read_to_string(home3.config()).unwrap(), broken);
 }
+
+#[test]
+fn durable_leads_defaults_to_false() {
+    let (config, _) = parse(BASE).unwrap();
+    assert!(!config.experimental.durable_leads);
+    // The key is known and parses when set.
+    let (config, _) = parse(&format!("{BASE}\n[experimental]\ndurable_leads = true\n")).unwrap();
+    assert!(config.experimental.durable_leads);
+}
+
+#[test]
+fn durable_leads_rejects_a_non_bool() {
+    let err = parse(&format!(
+        "{BASE}\n[experimental]\ndurable_leads = \"yes\"\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(err.details()["key"], json!("experimental.durable_leads"));
+    assert!(err.to_string().contains("must be a boolean"), "{err}");
+}

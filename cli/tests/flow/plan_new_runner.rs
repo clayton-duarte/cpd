@@ -81,3 +81,35 @@ fn a_rerun_with_a_different_runner_is_refused() {
     common::refused(&plan_new(&fx, "pl", Some("durable")), "plan_exists", 3);
     assert_eq!(runner_of(&fx, &lead), "pi");
 }
+
+#[test]
+fn durable_leads_true_makes_a_new_lead_durable() {
+    let fx = Fx::with_ports();
+    setup(&fx, "[experimental]\ndurable_leads = true");
+    let out = plan_new(&fx, "pl", None).ok();
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    assert_eq!(out["lead"]["pane"], Value::Null, "{out}");
+    assert_eq!(runner_of(&fx, &lead), "durable");
+}
+
+#[test]
+fn an_explicit_runner_beats_durable_leads() {
+    let fx = Fx::with_ports();
+    setup(&fx, "[experimental]\ndurable_leads = true");
+    let out = plan_new(&fx, "pl", Some("pi")).ok();
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    assert!(!out["lead"]["pane"].is_null(), "{out}");
+    assert_eq!(runner_of(&fx, &lead), "pi");
+}
+
+#[test]
+fn durable_leads_false_uses_lead_runner() {
+    let fx = Fx::with_ports();
+    setup(
+        &fx,
+        "lead_runner = \"durable\"\n[experimental]\ndurable_leads = false",
+    );
+    let out = plan_new(&fx, "pl", None).ok();
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    assert_eq!(runner_of(&fx, &lead), "durable");
+}

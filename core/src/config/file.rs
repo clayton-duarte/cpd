@@ -364,6 +364,7 @@ impl Config {
             };
             super::Experimental {
                 durable_workers: flag("durable_workers", defaults.durable_workers)?,
+                durable_leads: defaults.durable_leads,
                 write_curation: flag("write_curation", defaults.write_curation)?,
                 failure_triage: flag("failure_triage", defaults.failure_triage)?,
                 turn_question_guard: flag("turn_question_guard", defaults.turn_question_guard)?,
