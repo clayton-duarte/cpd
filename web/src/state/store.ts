@@ -158,6 +158,8 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
       return set({ title: message.title });
     case "session.models":
       return set({ models: message.models });
+    case "session.completion":
+      return message.sessionId === session.id ? set({ completion: message.completion }) : state;
     case "session.dialog":
       return set({ dialog: message.dialog });
     case "session.dialogResolved":

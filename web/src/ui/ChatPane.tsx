@@ -55,6 +55,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
       <ChatHeader
         sessionKey={sessionKey}
         title={view.title}
+        completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
       <Transcript

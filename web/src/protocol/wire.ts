@@ -157,9 +157,28 @@ function parseChanges(o: Obj): SettingsChanges {
   return { ...(Object.keys(tiers).length > 0 ? { tiers } : {}), ...(Object.keys(experimental).length > 0 ? { experimental } : {}) };
 }
 
-/** Parses an untrusted server message (stub: accepts nothing yet). */
-export function parseServerMessage(_raw: unknown): ServerMessage {
-  throw new WebError("protocol_error", "parseServerMessage is not implemented");
+const COMPLETION_LABELS: readonly string[] = ["safe_to_archive", "unanswered_ask", "open_work", "unrecorded_decision", "unescalated_issue"];
+const COMPLETION_TONES: readonly string[] = ["done", "decision", "blocked"];
+const refuse = (message: string, field: string): WebError => new WebError("protocol_error", message, { field });
+
+function parseCompletion(v: unknown): Completion | null {
+  if (v === null) return null;
+  if (!isObj(v)) throw refuse("session.completion: completion must be an object or null", "completion");
+  const { label, text, score, tone } = v;
+  if (typeof label !== "string" || !COMPLETION_LABELS.includes(label)) throw refuse("session.completion: unknown label", "label");
+  if (typeof text !== "string") throw refuse("session.completion: text must be a string", "text");
+  if (typeof score !== "number" || !Number.isFinite(score)) throw refuse("session.completion: score must be a finite number", "score");
+  if (typeof tone !== "string" || !COMPLETION_TONES.includes(tone)) throw refuse("session.completion: unknown tone", "tone");
+  return { label, text, score, tone } as Completion;
+}
+
+/** Parses an untrusted server message; only session.completion is parsed here, the rest is refused. */
+export function parseServerMessage(raw: unknown): ServerMessage {
+  if (!isObj(raw) || typeof raw["type"] !== "string") throw refuse("server message must be an object with a string type", "type");
+  if (raw["type"] !== "session.completion") throw refuse(`unsupported server message type ${raw["type"]}`, "type");
+  const sessionId = raw["sessionId"];
+  if (typeof sessionId !== "string" || sessionId === "") throw refuse("session.completion: sessionId must be a non-empty string", "sessionId");
+  return { type: "session.completion", sessionId, completion: parseCompletion(raw["completion"]) };
 }
 
 export function parseClientMessage(raw: unknown): ClientMessage {
