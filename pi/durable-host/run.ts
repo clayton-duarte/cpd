@@ -17,7 +17,7 @@ import { createRetier } from "./retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
-import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
+import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession, type Run } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
@@ -60,6 +60,9 @@ export type LoopRuntime = {
   turnStarts: number[];
   tripped: boolean;
 };
+
+/** The per-turn counters and the `info.role` the lib's `toolCallGuard` reads (contract §6.16 "The per-turn bounds"). */
+type TurnRuntime = LoopRuntime & { info: { role: "lead" | "manager" }; readStreak: number; totalCalls: number; turnRefusals: number };
 
 /**
  * The lib's window rule (`registerLoopGuard`, loop-guard.ts), pure: folds the self-started turn at `now` into `r.turnStarts`
@@ -172,11 +175,14 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const plan = session.plan ?? "";
     // §6.16 the loop guard: the runtime the lib's `holdTrip`/`clearTrip`/`trippedIn` read. `facts` satisfies the lib (the
     // blocked state is reported from `wanted()` by `loop.tripped`), and `loopHost` carries the effects the lib calls back into.
-    const loop: LoopRuntime & { facts: { open(key: string, label: string, kind: string): void; close(key: string): void } } = {
+    const loop: TurnRuntime & { facts: { open(key: string, label: string, kind: string): void; close(key: string): void } } = {
       role: session.role as "lead" | "manager",
-      info: { loopGuardTurns: session.loopGuardTurns },
+      info: { role: session.role as "lead" | "manager", loopGuardTurns: session.loopGuardTurns },
       turnStarts: [],
       tripped: false,
+      readStreak: 0,
+      totalCalls: 0,
+      turnRefusals: 0,
       facts: { open: () => {}, close: () => {} },
     };
     // §6.16 held deliveries: while the breaker is tripped an input that would start a turn is queued here, not submitted.
@@ -194,6 +200,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     // The adapter the lib calls: the pi entry (a silent conversation write) and the refresh.
     const loopHost = {
+      run: loop,
+      options: { now: () => deps.now().getTime() },
       pi: { appendEntry: (type: string, data: unknown) => void conversation.write({ type: "write", entry: { kind: type, data: data as Record<string, unknown>, model: [] } }).catch((e) => failed("writing a loop-guard entry", e)) },
       refresh: () => report(),
     } as unknown as Host;
@@ -229,7 +237,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // The build the start and a reload share: re-reads the prompt sources and the role skill, and rebuilds the extension modules.
     const build = async (): Promise<Extension> => {
       const policy = policySection(await deps.cpd(["policy", "show"]));
-      const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir(), visible: [] }, session.role as "lead" | "manager");
+      const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir(), visible: [], loop: loopHost }, session.role as "lead" | "manager");
       const sections = [...(base.sections ?? [])];
       if (skill !== undefined && skillDir !== undefined) sections.push(section("cpd-skills", () => skillsSection(skill, skillDir)));
       const codemode = createCodemodeExtension({ sandbox, namespaces: codemodeNamespaces(codemodeServers) });
@@ -357,9 +365,9 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     const submit = async (input: Input): Promise<Submission> => {
       // §6.16 the loop gate: every input that reaches the conversation — a client `submit` or a follower Event — is a
-      // submission the host makes, so it counts here, at the one gate. The User's own `session-message` (`inputOf` sets
-      // `reply: true` for it) does not count: it empties the window and clears a trip, as the adapter's `messageType === "user"` does.
-      const selfUser = input.reply === true && input.entry.kind === "cpd-event" && input.entry.data.kind === "session-message";
+      // submission the host makes, so it counts here, at the one gate. A cpd-chat User prompt (`reply: true`)
+      // that finds the breaker tripped does not count: it empties the window and clears the trip, as the adapter's `messageType === "user"` does; a sender-less session-message does not.
+      const selfUser = loop.tripped && input.reply === true && input.entry.kind === "cpd-chat";
       if (selfUser) {
         if (clearTrip(loopHost, loop as unknown as Run)) report();
       } else if (!loop.tripped) {
@@ -379,6 +387,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         heldLoop.push(input);
         return { id: -1, status: async () => "held", wait: async () => "unanswered" };
       }
+      if (starts) resetTurn(loop as unknown as Run);
       if (input.reply) reply = true;
       pending++;
       changed("working");
@@ -393,6 +402,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         void submission.wait().then(
           () => {
             if (--pending === 0) {
+              resetTurn(loop as unknown as Run);
               changed("idle");
               reply = false;
             }

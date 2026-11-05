@@ -1,4 +1,5 @@
 import type { Host } from "../lib/host.ts";
+import { toolCallGuard } from "../lib/loop-guard.ts";
 import { blockingReason, reasonText as noblockReason, BOUND_SECONDS } from "../lib/noblock.ts";
 import { tooLong, unseen } from "../lib/askguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
@@ -26,6 +27,11 @@ export function hostVerdict(
   where: Where,
   role: "lead" | "manager",
 ): Verdict {
+  // The per-turn bounds (contract §6.16) first, as the adapter does; a nested call (`parent`) is neither counted nor refused.
+  if (where.loop !== undefined) {
+    const refused = toolCallGuard(where.loop, { toolName: call.name, input: call.arguments, parentToolCallId: call.parent === undefined ? undefined : call.parent.callId });
+    if (refused !== undefined) return { block: refused };
+  }
   if (call.name === "edit" || call.name === "write") {
     const written = primaryCheckoutWrite(call.name, call.arguments, where.cwd, where.home);
     return written === undefined ? undefined : { block: mainReason(written) };
