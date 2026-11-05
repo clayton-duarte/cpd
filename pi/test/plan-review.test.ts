@@ -95,7 +95,7 @@ test("the review entry carries the summary and title", async (t) => {
   t.after(() => f.close());
   await lead(f);
   f.emit(reviewEvent(101));
-  await waitFor("the entry", () => entries(f).length === 1);
+  await f.drain();
   assert.equal(entries(f)[0].summary, SUMMARY);
   assert.equal(entries(f)[0].title, "T");
 });
