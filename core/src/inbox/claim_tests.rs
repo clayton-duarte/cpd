@@ -4,12 +4,18 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::datetime;
 
-use super::model::{Condition, Filter, Kind, State, list, reconcile};
+use super::cmd::{DismissArgs, claim_in};
+use super::model::{self, Condition, Filter, Kind, State, list, reconcile};
 use super::rules::{Team, conditions_with};
 use super::team::{GhPr, GhState, Lookup};
-use crate::error::CpdError;
+use crate::clock::ManualClock;
+use crate::env::Env;
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::runner::{FakeRunner, Reply};
+use crate::ports::Ports;
 use crate::store::Store;
+use std::sync::Arc;
 
 const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
 
@@ -233,4 +239,89 @@ fn a_claimed_item_is_left_out_of_the_visible_list_and_listed_with_the_open_items
         .unwrap();
     assert!(visible.is_empty(), "{visible:?}");
     assert_eq!(count_open(&mut store), 1);
+}
+
+/// What `gh api graphql` prints for `acme/pay#812`; the viewer is `clayton-duarte`.
+fn gh_reply(
+    state: &str,
+    draft: bool,
+    decision: Option<&str>,
+    author: &str,
+    reviews: &[(&str, &str)],
+) -> String {
+    let nodes: Vec<Value> = reviews
+        .iter()
+        .map(|(state, login)| json!({"state": state, "author": {"login": login}}))
+        .collect();
+    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": {
+        "title": "Add retries", "isDraft": draft, "state": state, "reviewDecision": decision,
+        "author": {"login": author}, "latestReviews": {"nodes": nodes}}}}})
+    .to_string()
+}
+
+/// A refused claim of the open item of `#812` when `gh` answers `answer`: the refusal and the row after it.
+fn refused_claim(answer: &str) -> (CpdError, model::Item) {
+    let (_dir, home, mut store) = store();
+    std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n").unwrap();
+    write_cache(&home, NOW, &[(812, "1.1", 3600.0)]);
+    let open = reviews(&mut store, &home, NOW, &[812]);
+    run(&mut store, &open, "2026-01-01T00:00:00.000Z");
+    let id = store.read(model::open_items).unwrap()[0].id;
+    let clock = ManualClock::new();
+    let runner = FakeRunner::new(clock.clone());
+    let _ = runner.clone().on("gh", |_| true, Reply::ok(answer));
+    let ports = Ports {
+        clock: Arc::new(clock),
+        runner: Arc::new(runner),
+        ..Ports::real()
+    };
+    let env = Env::open_home_with(&ports, home.clone()).unwrap();
+    let err = claim_in(&ports, env, DismissArgs { id }).expect_err("the claim is refused");
+    let row = store.read(|c| model::get(c, id)).unwrap().unwrap();
+    (err, row)
+}
+
+#[test]
+fn claim_refusal_terminal_reason_dismisses_item() {
+    let terminal = [
+        ("merged", gh_reply("MERGED", false, None, "ryan", &[])),
+        ("closed", gh_reply("CLOSED", false, None, "ryan", &[])),
+        (
+            "approved",
+            gh_reply("OPEN", false, Some("APPROVED"), "ryan", &[]),
+        ),
+        (
+            "not-found",
+            r#"{"data":{"viewer":{"login":"clayton-duarte"},"p0":null}}"#.to_owned(),
+        ),
+        ("own", gh_reply("OPEN", false, None, "clayton-duarte", &[])),
+    ];
+    for (reason, answer) in terminal {
+        let (err, row) = refused_claim(&answer);
+        assert_eq!(err.code(), ErrorCode::NotClaimable, "{reason}");
+        assert_eq!(err.details()["reason"], reason);
+        assert!(row.closed_at.is_some(), "{reason}: closed");
+        assert_eq!(
+            row.dismissed_at, row.closed_at,
+            "{reason}: dismissed with the close"
+        );
+    }
+    let open = [
+        ("draft", gh_reply("OPEN", true, None, "ryan", &[])),
+        (
+            "changes-requested",
+            gh_reply("OPEN", false, Some("CHANGES_REQUESTED"), "ryan", &[]),
+        ),
+        (
+            "in-review",
+            gh_reply("OPEN", false, None, "ryan", &[("COMMENTED", "bea")]),
+        ),
+    ];
+    for (reason, answer) in open {
+        let (err, row) = refused_claim(&answer);
+        assert_eq!(err.code(), ErrorCode::NotClaimable, "{reason}");
+        assert_eq!(err.details()["reason"], reason);
+        assert!(row.closed_at.is_some(), "{reason}: closed");
+        assert_eq!(row.dismissed_at, None, "{reason}: not dismissed");
+    }
 }

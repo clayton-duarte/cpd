@@ -88,7 +88,7 @@ pub struct SnoozeArgs {
 pub struct DismissArgs {
     /// The item's id
     #[arg(value_name = "id")]
-    id: i64,
+    pub(crate) id: i64,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
@@ -515,7 +515,11 @@ fn stale_reason(pr: &team::GhPr, status: team::Status) -> Option<&'static str> {
 }
 
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open_with(ports)?;
+    claim_in(ports, Env::open_with(ports)?, args)
+}
+
+/// [`claim`] on an opened `env`: what a test hands in instead of `$CPD_HOME`.
+pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result<Output, CpdError> {
     let now = ports.clock.utc();
     let item = env.store.read(|conn| open_item(conn, args.id))?;
     if item.claimed_at.is_some() {
