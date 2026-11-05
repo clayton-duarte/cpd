@@ -6,8 +6,8 @@ import type { WireError } from "../../protocol/domain.ts";
 import { WebError, toWireError } from "../../protocol/domain.ts";
 import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from "./cli.ts";
 import { runAction } from "./actions.ts";
-import type { PaneUpdate, ReadModel } from "./readmodel.ts";
-import type { CockpitStream } from "./stream.ts";
+import { buildPlanView, mapPanes, parsePlanShow, type PaneUpdate, type ReadModel } from "./readmodel.ts";
+import type { CockpitStream, StreamPanes, StreamSnapshot } from "./stream.ts";
 
 export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string; readonly data: Readonly<Record<string, unknown>> }
 function malformed(line: string, field: string): never {
@@ -36,7 +36,7 @@ export function panesFor(event: CpdEvent, selectedPlan: { id: string; contextId:
   return panes;
 }
 
-export const COALESCE_MS = 250;
+export const COALESCE_MS = 16;
 export const SAFETY_REFRESH_MS = 30_000;
 export const FOLLOW_RESTART_BASE_MS = 1_000;
 
@@ -65,10 +65,13 @@ export interface CockpitService {
   saveSettings(changes: SettingsChanges): Promise<void>;
 }
 const RESTART_CAP_MS = 30_000;
+const SESSION_STATES: readonly string[] = ["working", "waiting", "blocked", "idle", "stopped"];
+type Obj = Record<string, unknown>;
+type RawPanes = { context: Obj; plan: Obj; session: Obj; inbox: Obj };
 const CURSOR_AHEAD = 3;
 
 export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler; extras?: Extras; stream?: CockpitStream }): CockpitService {
-  const { readModel, cpd, follow, scheduler, extras } = deps;
+  const { readModel, cpd, follow, scheduler, extras, stream } = deps;
   const listeners = new Set<(u: CockpitUpdate) => void>();
   let snap: CockpitSnapshot = { tree: null, plan: null, inbox: null };
   let planId: string | null = null;
@@ -82,6 +85,9 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   let coalesce: Disposable | null = null;
   let restart: Disposable | null = null;
   let safety: Disposable | null = null;
+  let raw: RawPanes | null = null;
+  let snapEmit: Disposable | null = null;
+  let planDue = false;
 
   const emit = (u: CockpitUpdate): void => {
     if (stopped) return;
@@ -135,7 +141,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     safety = scheduler.after(SAFETY_REFRESH_MS, () => {
       safety = null;
       if (stopped) return;
-      void refresh(livePanes());
+      if (stream?.ready() !== true) void refresh(livePanes());
       void refreshExtras();
       scheduleSafety();
     });
@@ -145,6 +151,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     try { event = parseEventLine(line); } catch (e) { emitError(e); return; }
     restarts = 0;
     lastCursor = Math.max(lastCursor, event.id);
+    if (stream?.ready() === true) return;
     const panes = panesFor(event, selected());
     if (panes.size === 0) return;
     for (const p of panes) pending.add(p);
@@ -180,8 +187,70 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
           lastCursor = all.tree.cursor;
         } catch (e) { emitError(e); }
       }
-      if (!stopped) startFollow();
+      if (!stopped && stream?.ready() !== true) startFollow();
     });
+  };
+  const stopFollow = (): void => {
+    for (const x of procSubs) x.dispose();
+    procSubs = [];
+    proc?.kill();
+    proc = null;
+    restart?.dispose(); restart = null;
+  };
+
+  const checkOk = (v: unknown, pane: string): Obj => {
+    if (typeof v !== "object" || v === null || v["ok" as keyof typeof v] !== true) throw new WebError("cpd_malformed_json", `cockpit stream ${pane} pane is not an ok object`, { field: pane });
+    return v as Obj;
+  };
+  const toRaw = (p: StreamPanes): RawPanes => ({ context: checkOk(p.context, "context"), plan: checkOk(p.plan, "plan"), session: checkOk(p.session, "session"), inbox: checkOk(p.inbox, "inbox") });
+  const emitRaw = (): void => {
+    if (raw === null) return;
+    try { const m = mapPanes(raw); apply({ tree: m.tree, inbox: m.inbox }); } catch (e) { emitError(e); }
+  };
+  const loadPlanView = async (): Promise<void> => {
+    const id = planId;
+    if (id === null || stream === undefined) return;
+    try {
+      const v = await stream.planShow(id);
+      if (stopped || planId !== id) return;
+      if (v === "down") { await refresh(new Set<CockpitPane>(["plan"])); return; }
+      apply({ plan: buildPlanView(parsePlanShow(v as Obj)) });
+    } catch (e) { emitError(e); }
+  };
+  const onSnapshot = (s: StreamSnapshot): void => {
+    if (stopped) return;
+    stopFollow();
+    try { raw = toRaw(s.panes); } catch (e) { emitError(e); return; }
+    if (snapEmit === null) {
+      snapEmit = scheduler.after(COALESCE_MS, () => {
+        snapEmit = null;
+        emitRaw();
+        if (planDue) { planDue = false; void loadPlanView(); }
+      });
+    }
+  };
+  const onStreamEvent = (event: CpdEvent): void => {
+    if (stopped) return;
+    lastCursor = Math.max(lastCursor, event.id);
+    if (panesFor(event, selected()).has("plan")) planDue = true;
+    if (event.kind !== "session-state" || event.session === null || raw === null) return;
+    const to = event.data["to"];
+    if (typeof to !== "string" || !SESSION_STATES.includes(to)) { emitError(new WebError("cpd_malformed_json", "session-state event without a valid data.to", { field: "to" })); return; }
+    const rows = raw.session["sessions"];
+    if (!Array.isArray(rows)) return;
+    let hit = false;
+    const sessions = rows.map((r: unknown) => {
+      if (typeof r === "object" && r !== null && (r as Obj)["id"] === event.session) { hit = true; return { ...(r as Obj), state: to }; }
+      return r;
+    });
+    if (!hit) return;
+    raw = { ...raw, session: { ...raw.session, sessions } };
+    try { apply({ tree: mapPanes(raw).tree }); } catch (e) { emitError(e); }
+  };
+  const onStreamState = (ready: boolean): void => {
+    if (stopped) return;
+    if (ready) stopFollow();
+    else if (proc === null && restart === null) startFollow();
   };
 
   return {
@@ -194,12 +263,21 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
         lastCursor = all.tree.cursor;
       } catch (e) { started = false; throw e; }
       if (stopped) return;
-      startFollow();
+      if (stream !== undefined) {
+        stream.onSnapshot(onSnapshot);
+        stream.onEvent(onStreamEvent);
+        stream.onError(emitError);
+        stream.onState?.(onStreamState);
+        stream.start();
+      }
+      if (stream?.ready() !== true) startFollow();
       scheduleSafety();
       void refreshExtras();
     },
     stop() {
       stopped = true;
+      stream?.stop();
+      snapEmit?.dispose(); snapEmit = null;
       for (const s of procSubs) s.dispose();
       procSubs = [];
       proc?.kill();
@@ -214,6 +292,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     selectedPlanId: () => planId,
     async selectPlan(id) {
       planId = id;
+      if (stream?.ready() === true && id !== null) { await loadPlanView(); return; }
       await refresh(new Set<CockpitPane>(["plan"]));
     },
     subscribe(listener) {
