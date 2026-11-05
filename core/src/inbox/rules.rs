@@ -436,10 +436,12 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
 /// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
-/// Session's, as is) when there is one: Row 2.
+/// Session's, as is) when there is one: Row 2. A reply turn already dismissed in a closed `unread` item never reopens
+/// (pro-d425): a reload or a non-reply turn returns the session to `idle` on the same reply Event, and only a newer reply turn opens a fresh item.
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!(
-        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)"
+        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0) \
+         AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.kind = 'unread' AND i.session = s.id AND i.closed_at IS NOT NULL AND i.dismissed_at IS NOT NULL AND COALESCE(i.event, 0) >= {LATEST_IDLE})"
     );
     Ok(seats(conn, LATEST_IDLE, &filter)?
         .into_iter()
@@ -1182,6 +1184,86 @@ mod tests {
         assert!(
             f.of(Kind::Unread).is_empty(),
             "stopped -> idle is a reload even when it says reply"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_reply_turn_never_reopens_as_unread_across_a_reload_or_a_non_reply_turn() {
+        const AT: &str = "2026-01-01T01:00:00.000Z";
+        fn run(f: &mut Fixture) {
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            reconcile(&mut f.store, &found, AT).unwrap();
+        }
+        fn rows(f: &mut Fixture, filter: &str) -> i64 {
+            f.store
+                .read(|c| {
+                    Ok(c.query_row(
+                        &format!("SELECT COUNT(*) FROM inbox_items WHERE kind = 'unread' {filter}"),
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .unwrap()
+        }
+        let mut f = fixture("dispatch");
+        let first = f.reply("l-pay");
+        run(&mut f);
+        assert_eq!(rows(&mut f, "AND closed_at IS NULL"), 1, "one open unread");
+        // The WebUI read flow: `cpd inbox dismiss`, no session-moved to chat.
+        f.store
+            .write("dismiss", |tx| {
+                tx.execute(
+                    "UPDATE inbox_items SET dismissed_at = ?1 WHERE kind = 'unread'",
+                    [AT],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        run(&mut f);
+        assert_eq!(
+            rows(&mut f, "AND closed_at IS NULL AND dismissed_at IS NOT NULL"),
+            1,
+            "the row stays open and dismissed"
+        );
+        for (mid, why) in [("stopped", "a reload"), ("working", "a non-reply turn")] {
+            f.state("l-pay", mid, None);
+            run(&mut f);
+            f.state("l-pay", "idle", None);
+            run(&mut f);
+            assert_eq!(
+                rows(&mut f, "AND closed_at IS NULL"),
+                0,
+                "{why} opens no new unread"
+            );
+            assert!(
+                f.of(Kind::Unread).is_empty(),
+                "{why} leaves no unread condition"
+            );
+            assert_eq!(
+                rows(&mut f, ""),
+                1,
+                "{why}: still the one closed, dismissed row"
+            );
+        }
+        f.state("l-pay", "working", None);
+        let second = f.reply("l-pay");
+        run(&mut f);
+        assert_ne!(first, second);
+        let open = f
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT event, dismissed_at IS NULL FROM inbox_items \
+                     WHERE kind = 'unread' AND closed_at IS NULL",
+                    [],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            open,
+            (second, true),
+            "a new reply turn opens a fresh unread"
         );
     }
 
