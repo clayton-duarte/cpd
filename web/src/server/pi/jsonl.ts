@@ -369,3 +369,8 @@ export function normalizeText(text: string): { items: TranscriptItem[]; facts: J
   });
   return { items, facts: n.facts, openDialogs: [...open.values()] };
 }
+
+/** The `message.timestamp` of a raw assistant JSONL line; undefined for any other line. Stub: not implemented. */
+export function assistantTimestamp(_rawLine: string): number | undefined {
+  throw new Error("not implemented");
+}

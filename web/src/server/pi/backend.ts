@@ -1,3 +1,4 @@
+import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
@@ -70,6 +71,7 @@ export function createPiBackend(deps: {
   attachmentsDir: string;
   now(): number;
   windowSize?: number;
+  live?: LiveSource;
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
