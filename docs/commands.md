@@ -1780,7 +1780,7 @@ Both are required for a `test` Job that is not a stub and refused for every othe
 
 ```
 cpd job add <key> --title <text> --tier <T> --spec <file> [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--draft] [--urgent] [--plan <id>]
-cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--draft] [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--plan <id>]
 ```
 
 `--tier` and `--spec` are always required, with `--draft` too (`usage`, exit 2; pro-d404): a draft exists only while it is being edited in the current turn or covered by a Plan review (contract §2.2 "A parked draft", rule 1). The only incomplete drafts are the template's stub drafts of `workflow add` before the lock (§9.4), which the Lead completes with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up Workflow is added after the lock with `workflow add <key> --repo … --needs … --jobs <file.json>` (§9.4), which queues its Jobs.

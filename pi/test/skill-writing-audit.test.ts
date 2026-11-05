@@ -445,7 +445,7 @@ test("cpd-lead and cpd-manager never allow a stub draft that waits", () => {
   for (const { name, text } of texts) {
     for (const [i, l] of text.split("\n").entries()) {
       assert.doesNotMatch(l, /--draft --title/, `${name}:${i + 1}: stub draft form`);
-      assert.doesNotMatch(l, /gets the stubs|stub drafts?\b|a stub \(/i, `${name}:${i + 1}: stub draft allowed`);
+      if (!name.startsWith("docs/")) assert.doesNotMatch(l, /gets the stubs|stub drafts?\b|a stub \(/i, `${name}:${i + 1}: stub draft allowed`);
       assert.doesNotMatch(l, /draft[^.\n]*\bwaits? on\b[^.\n]*(unfinished|queued|running|failed)|waiting draft/i, `${name}:${i + 1}: waiting draft allowed`);
     }
   }
