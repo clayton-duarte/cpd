@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CpdError } from "../../lib/cpd.ts";
 import { REMINDER_TEXT } from "../../lib/reminder.ts";
-import { newTurnState, prepareTurn, reminderFor, reportHostError, type Seat, type StoredEntry, type TurnPort, type Write } from "../../durable-host/turn.ts";
+import { NUDGE } from "../../lib/question-guard.ts";
+import { newTurnState, prepareTurn, questionGuardFor, reminderFor, reportHostError, type Seat, type StoredEntry, type TurnPort, type Write } from "../../durable-host/turn.ts";
 import { ID } from "../answers.ts";
 
 type Answer = Record<string, unknown> | Error;
@@ -164,4 +165,46 @@ test("a host error of a Manager is stored as a silent chat entry", async () => {
   assert.deepEqual(e.data, { kind: "error", code: "busy", what: "context updates" });
   assert.deepEqual(e.model, []);
   assert.ok(JSON.stringify(f.writes[0]).includes("cpd adapter: context updates: busy: store busy"));
+});
+
+test("a failed first message is retried at the next input", async () => {
+  // The host's startup read of a by-user-0 Session failed (run.ts sets `startupFailed`); the next turn-starting input stores the first message first, as for a by-user Session.
+  const f = fake(seat({ byUser: false }), { "session-first-message": FIRST, ...news });
+  const state = newTurnState();
+  state.startupFailed = true;
+  await prepareTurn(f.port, state);
+  assert.deepEqual(reads(f, "session", "first-message")[0], ["session", "first-message", "--session", ID]);
+  const stored = f.writes.filter((w) => w.entry.kind === "cpd-first-message");
+  assert.equal(stored.length, 1);
+  assert.deepEqual(stored[0]!.entry.data, { event: 120, delivered_to: ID });
+  assert.ok(hasText(stored[0]!, "Build the thing."));
+  await prepareTurn(f.port, state);
+  assert.equal(reads(f, "session", "first-message").length, 1, "stored once");
+});
+
+const asking = [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "I can use Postgres or SQLite. Which do you prefer?" }] }];
+const idle = { "plan-show": { ok: true, counts: { running: 0, queued: 0 } } };
+
+test("a Lead turn that ends with a plain-text question gets the question-guard nudge", async () => {
+  const f = fake(seat(), { ...idle, config: { ok: true, config: { experimental: {} } } });
+  const asked: string[] = [];
+  const nudge = await questionGuardFor(asking, f.port, newTurnState(), async (text) => {
+    asked.push(text);
+    return 0.95; // the mocked classifier: no model, no network
+  });
+  assert.equal(nudge, NUDGE);
+  assert.equal(asked.length, 1);
+  assert.ok(asked[0]!.includes("Which do you prefer?"));
+});
+
+test("the question guard is off when the flag is off", async () => {
+  const f = fake(seat(), { ...idle, config: { ok: true, config: { experimental: { turn_question_guard: false } } } });
+  let classified = 0;
+  const nudge = await questionGuardFor(asking, f.port, newTurnState(), async () => {
+    classified++;
+    return 0.95;
+  });
+  assert.ok(f.calls.some((c) => c[0] === "config"), "the flag is read from cpd config");
+  assert.equal(nudge, undefined);
+  assert.equal(classified, 0);
 });
