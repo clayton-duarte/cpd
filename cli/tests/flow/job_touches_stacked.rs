@@ -85,19 +85,12 @@ fn job_add_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_op
 #[test]
 fn job_edit_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_opened() {
     let (fx, _) = stacked_fx("waiting", false);
-    fx.cpd(&[
-        "job",
-        "add",
-        "k",
-        "--draft",
-        "--title",
-        "Title of k",
-        "--workflow",
-        "web",
-        "--plan",
-        "pl",
-    ])
-    .ok();
+    // A template stub (no Tier, no Spec) of PR `web`: `job add --draft` always takes both (pro-d404), so it is a fixture row.
+    fixture(
+        &fx.env,
+        "INSERT INTO jobs (plan, workflow, key, title, status, appended, kind, created_txn, created_at)
+         VALUES ('pl', 'web', 'k', 'Title of k', 'draft', 0, 'work', cpd_txn(), 't');",
+    );
     let mut spec = spec_json();
     spec["touches"] = json!(["nope/x.rs"]);
     let spec = write_spec(&fx.env, "edit.json", &spec.to_string());

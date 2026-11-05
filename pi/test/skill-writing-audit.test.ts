@@ -137,7 +137,7 @@ test("the Register planned work bullet states the draft rule once in at most 180
   const b = bulletOf(lead, "- **Register planned work at once.**");
   const line = lineOf(lead, "- **Register planned work at once.**");
   assert.ok(words(b) <= 180, `cpd-lead/SKILL.md:${line}: the Register bullet has ${words(b)} words, at most 180`);
-  for (const token of ["cpd job add <k> --draft --title", "--needs <k1,k2>", "draft_parked", "draft_incomplete", "stub", "under review"]) {
+  for (const token of ["--needs <k1,k2>", "draft_parked", "draft_incomplete", "under review"]) {
     assert.ok(b.includes(token), `cpd-lead/SKILL.md:${line}: the Register bullet lacks ${token}`);
   }
   assert.match(b, /decided work is (added )?queued/i, `cpd-lead/SKILL.md:${line}: the bullet must say decided work is added queued`);
@@ -426,4 +426,33 @@ test("cpd-lead sends codebase reads to scout Jobs", () => {
   if (!/cpd plan phase plan[^\n]*(only )?after[^\n]*explore[^\n]*merged|only after[^\n]*explore[^\n]*merged[^\n]*cpd plan phase plan|explore[^\n]*merged[^\n]*cpd plan phase plan/i.test(grilling))
     bad.push("### Grilling does not say `cpd plan phase plan` runs only after the explore Jobs merged");
   assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+const refSpec = files("cpd-lead").find((f) => f.name.endsWith("references/spec-files.md"))!.text;
+const docsDir = new URL("../../docs/", import.meta.url);
+const docText = (n: string) => readFileSync(new URL(n, docsDir), "utf8");
+
+test("draft is never a waiting state in the cpd-lead skill", () => {
+  assert.match(lead, /being edited/, "a draft exists only while being edited");
+  assert.match(lead, /pending (Plan )?review/, "or while covered by a pending review");
+  assert.doesNotMatch(lead, /--draft --title/, "no stub draft form");
+  assert.doesNotMatch(lead, /a stub \(/, "no stub description");
+  assert.doesNotMatch(lead, /gets the stubs/, "no stubs from workflow add");
+});
+
+test("cpd-lead and cpd-manager never allow a stub draft that waits", () => {
+  const texts = [...all.map((f) => ({ name: f.name, text: f.text })), { name: "spec-files.md", text: refSpec }, { name: "docs/contract.md", text: docText("contract.md") }, { name: "docs/commands.md", text: docText("commands.md") }];
+  for (const { name, text } of texts) {
+    for (const [i, l] of text.split("\n").entries()) {
+      assert.doesNotMatch(l, /--draft --title/, `${name}:${i + 1}: stub draft form`);
+      if (!name.startsWith("docs/")) assert.doesNotMatch(l, /gets the stubs|stub drafts?\b|a stub \(/i, `${name}:${i + 1}: stub draft allowed`);
+      assert.doesNotMatch(l, /draft[^.\n]*\bwaits? on\b[^.\n]*(unfinished|queued|running|failed)|waiting draft/i, `${name}:${i + 1}: waiting draft allowed`);
+    }
+  }
+});
+
+test("waiting work is queued with needs and missing information is a scout or research Job", () => {
+  for (const t of ["--needs", "scout", "research", "ask_user_question", "cpd_plan_review"]) assert.ok(lead.includes(t), `cpd-lead lacks ${t}`);
+  const b = bulletOf(lead, "- **Register planned work at once.**");
+  for (const t of ["--needs", "scout", "research", "ask_user_question", "cpd_plan_review"]) assert.ok(b.includes(t), `the Register rule lacks ${t}`);
 });

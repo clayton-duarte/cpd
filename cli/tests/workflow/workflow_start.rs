@@ -140,8 +140,31 @@ impl Fx {
         } else {
             args.push("--no-needs");
         }
+        let file = self.jobs_file(key);
+        if file.is_some() {
+            self.install_catalog();
+        }
+        if let Some(file) = &file {
+            args.extend(["--jobs", file]);
+        }
         self.cpd(&args).ok();
         self.cancel_stub(key, "pay");
+    }
+
+    /// After the lock `workflow add` needs `--jobs`: a file with the `config` Job, `None` before the lock (it is refused there).
+    fn jobs_file(&self, key: &str) -> Option<String> {
+        if self
+            .env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'")
+            == "plan"
+        {
+            return None;
+        }
+        let path = self.env.root().join(format!("{key}-jobs.json"));
+        let spec = serde_json::json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]});
+        let jobs = serde_json::json!({"config": {"tier": "S2", "spec": spec}});
+        std::fs::write(&path, jobs.to_string()).unwrap();
+        Some(path.to_str().unwrap().to_owned())
     }
 
     /// Cancels the stub draft `<pr>-config` of the shape: these tests add the Jobs they need, as a Lead cancels a stub it does not need.
@@ -253,6 +276,13 @@ impl Fx {
         ];
         args.extend(extra);
         args.extend(["--plan", "pay"]);
+        let file = self.jobs_file(key);
+        if file.is_some() {
+            self.install_catalog();
+        }
+        if let Some(file) = &file {
+            args.extend(["--jobs", file]);
+        }
         self.cpd(&args).ok();
         self.cancel_stub(key, "pay");
     }

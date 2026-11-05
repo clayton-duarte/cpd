@@ -10,6 +10,18 @@ fn error(run: &crate::common::Run) -> Value {
     v["error"].clone()
 }
 
+/// `Added::add` of shape `config` with `--jobs <file.json>`: a Workflow that waits, added after the lock, is created with queued
+/// template Jobs (pro-d404), never stub drafts.
+fn add_jobs(f: &Added, key: &str, repo: &std::path::Path, extra: &[&str]) -> crate::common::Run {
+    let plain = json!({"tier": "S2", "spec": {"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]}});
+    let path = f.fx.env.root().join(format!("jobs-{key}.json"));
+    std::fs::write(&path, json!({"config": plain}).to_string()).unwrap();
+    f.fx.install_catalog();
+    let mut args = extra.to_vec();
+    args.extend(["--jobs", path.to_str().unwrap()]);
+    f.add(key, repo, &args)
+}
+
 fn assert_refused(f: &Added, key: &str, shape: &str) {
     let other =
         f.fx.keyed_repo(&format!("other-{shape}"))
@@ -72,10 +84,8 @@ fn workflow_add_in_dispatch_refusal_covers_every_shape() {
 #[test]
 fn workflow_add_in_dispatch_with_no_needs_adds_a_workflow_without_needs() {
     let f = added("dispatch");
-    // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    let out = f
-        .add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
-        .ok();
+    // Stacked on PR `repo`, which has not merged: a waiting PR after the lock needs `--jobs` (`draft_parked` otherwise).
+    let out = add_jobs(&f, "fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
     assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
@@ -84,7 +94,7 @@ fn workflow_add_in_dispatch_with_no_needs_adds_a_workflow_without_needs() {
 fn workflow_add_in_dispatch_with_needs_links_the_workflow() {
     let f = added("dispatch");
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
-    let out = f.add("fix", &other, &["--needs", "repo"]).ok();
+    let out = add_jobs(&f, "fix", &other, &["--needs", "repo"]).ok();
     assert_eq!(out["workflow"]["needs"], json!(["repo"]));
     assert_eq!(f.needs_of("fix"), ["repo"]);
 }
@@ -120,11 +130,10 @@ fn workflow_add_in_plan_phase_needs_no_flag() {
 #[test]
 fn workflow_add_rerun_in_dispatch_without_a_flag_is_already() {
     let f = added("dispatch");
-    // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
-        .ok();
+    // Stacked on PR `repo`, which has not merged: a waiting PR after the lock needs `--jobs` (`draft_parked` otherwise).
+    add_jobs(&f, "fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
     assert_eq!(
-        f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"],
+        add_jobs(&f, "fix", &f.repo, &["--base", "pay/repo"]).ok()["already"],
         true
     );
 }
@@ -132,7 +141,7 @@ fn workflow_add_rerun_in_dispatch_without_a_flag_is_already() {
 /// A stacked PR (`--base` names a PR of the Plan in its repo, or that PR's Lead Branch) needs neither flag: its base is its link.
 fn assert_stacked_add_needs_no_flag(base: &str) {
     let f = added("dispatch");
-    let out = f.add("fix", &f.repo, &["--base", base]).ok();
+    let out = add_jobs(&f, "fix", &f.repo, &["--base", base]).ok();
     assert_eq!(out["workflow"]["needs"], json!([]), "{out}");
     assert_eq!(out["workflow"]["base_workflow"], "pay/repo", "{out}");
     assert_eq!(out["workflow"]["status"], "waiting", "{out}");

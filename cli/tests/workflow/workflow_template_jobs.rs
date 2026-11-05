@@ -325,58 +325,47 @@ fn jobs_on_a_workflow_that_waits_for_another_workflow_queue_the_jobs_too() {
     );
 }
 
-// Guards: these pass before the change and must keep passing.
-
-#[test]
-fn a_workflow_that_waits_for_another_workflow_still_lays_out_the_stubs() {
+/// A waiting Workflow after the lock is refused `draft_parked` without `--jobs` (hs-d731 superseded by pro-d404): the message
+/// names `--jobs <file.json>`, and nothing is written.
+fn assert_waiting_refused(extra: &[&str]) {
     let fx = crud("dispatch");
     fx.base_pr();
-    fx.add_k("tdd", &["--needs", "base"]).ok();
-    assert_eq!(
-        fx.rows_of_k(),
-        json!([
-            [
-                "k-docs",
-                "docs",
-                "Docs: Add retries",
-                "draft",
-                1,
-                false,
-                false,
-                ""
-            ],
-            [
-                "k-tests",
-                "test",
-                "Red tests: Add retries",
-                "draft",
-                1,
-                false,
-                false,
-                "k-docs"
-            ],
-            [
-                "k-impl",
-                "impl",
-                "Implement: Add retries",
-                "draft",
-                1,
-                false,
-                false,
-                "k-tests"
-            ],
-            [
-                "open-k",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                1,
-                true,
-                false,
-                ""
-            ],
-        ])
-    );
+    let before = fx.rows();
+    let run = fx.add_k("tdd", extra);
+    let error = refused(&run, "draft_parked", 3);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("--jobs <file.json>"), "{message}");
+    assert_eq!(fx.rows(), before, "a refusal wrote something");
+}
+
+#[test]
+fn after_lock_a_needs_workflow_without_jobs_is_refused_draft_parked() {
+    assert_waiting_refused(&["--needs", "base"]);
+}
+
+#[test]
+fn after_lock_a_base_workflow_without_jobs_is_refused_draft_parked() {
+    assert_waiting_refused(&["--no-needs", "--base", "base"]);
+}
+
+#[test]
+fn a_refused_waiting_workflow_adds_no_workflow_or_job_row() {
+    for extra in [
+        &["--needs", "base"][..],
+        &["--no-needs", "--base", "base"][..],
+    ] {
+        let fx = crud("dispatch");
+        fx.base_pr();
+        let run = fx.add_k("tdd", extra);
+        refused(&run, "draft_parked", 3);
+        let workflows: i64 = fx
+            .env
+            .query("SELECT count(*) FROM workflows WHERE key = 'k'");
+        let jobs: i64 = fx.env.query(
+            "SELECT count(*) FROM jobs WHERE workflow = 'k' OR key LIKE 'k-%' OR key = 'open-k'",
+        );
+        assert_eq!((workflows, jobs), (0, 0), "{extra:?}");
+    }
 }
 
 #[test]

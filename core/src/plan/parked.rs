@@ -97,15 +97,14 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
     Ok(all
         .iter()
         .filter(|j| j.is_draft() && j.kind != "open")
-        .filter(|j| j.missing().is_empty())
         .map(|j| j.key.clone())
         .collect())
 }
 
-/// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a complete draft
-/// (both Tier and Spec) that waits is refused `draft_parked`: it waits on a queued, running or failed Job (directly or
+/// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a draft
+/// that waits is refused `draft_parked`: it waits on a queued, running or failed Job (directly or
 /// through other drafts) or on its Workflow waiting for another Workflow. `others` are the Plan's Jobs as stored, `job` the row as it
-/// would be (never in `others`). Never refused: a stub, the `open` Job's draft, a complete draft that does not wait, any
+/// would be (never in `others`). Never refused: the `open` Job's draft, a draft that does not wait, any
 /// draft in phase `plan`.
 pub fn door(
     conn: &Connection,
@@ -114,7 +113,7 @@ pub fn door(
     others: &[Job],
     job: &Job,
 ) -> Result<(), CpdError> {
-    if !locked(phase) || !job.is_draft() || job.kind == "open" || !job.missing().is_empty() {
+    if !locked(phase) || !job.is_draft() || job.kind == "open" {
         return Ok(());
     }
     let all: Vec<Job> = others
@@ -132,7 +131,7 @@ pub fn door(
     Err(CpdError::new(
         ErrorCode::DraftParked,
         format!(
-            "Job {} would be a parked draft: a complete draft that waits for a queued, running or failed Job (directly or \
+            "Job {} would be a parked draft: a draft that waits for a queued, running or failed Job (directly or \
              through other drafts) or for another Workflow, and no current review covers it. The legal forms: add the Job it waits \
              for queued with --needs and no --draft; or put this complete draft under a Plan review (cpd_plan_review) in the \
              same turn.",
