@@ -7,6 +7,7 @@ import { WebError, toWireError } from "../../protocol/domain.ts";
 import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from "./cli.ts";
 import { runAction } from "./actions.ts";
 import type { PaneUpdate, ReadModel } from "./readmodel.ts";
+import type { CockpitStream } from "./stream.ts";
 
 export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string; readonly data: Readonly<Record<string, unknown>> }
 function malformed(line: string, field: string): never {
@@ -66,7 +67,7 @@ export interface CockpitService {
 const RESTART_CAP_MS = 30_000;
 const CURSOR_AHEAD = 3;
 
-export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler; extras?: Extras }): CockpitService {
+export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler; extras?: Extras; stream?: CockpitStream }): CockpitService {
   const { readModel, cpd, follow, scheduler, extras } = deps;
   const listeners = new Set<(u: CockpitUpdate) => void>();
   let snap: CockpitSnapshot = { tree: null, plan: null, inbox: null };

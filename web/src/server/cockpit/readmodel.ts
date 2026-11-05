@@ -392,6 +392,11 @@ function parseCuration(reply: Reply): CurationRecord[] {
   return out;
 }
 
+/** Pure mapping of the four raw cpd pane replies (a snapshot's panes) to the tree and inbox panes. */
+export function mapPanes(_raw: { context: Reply; plan: Reply; session: Reply; inbox: Reply }, _selectedPlan: string | null): { tree: ContextTreeModel; inbox: InboxModel } {
+  throw new Error("not implemented");
+}
+
 export function createReadModel(cpd: Cpd): ReadModel {
   async function loadPanes(panes: PaneSet, planId: string | null): Promise<PaneUpdate> {
     const wantTree = panes.has("tree");
