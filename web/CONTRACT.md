@@ -54,7 +54,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 |---|---|---|
 | protocol | `web/src/protocol/domain.ts`, `wire.ts` (also `parseClientMessage`, 10.9), `cockpit.ts` (also `parseCockpitAction`, 10.9), `runtime.ts` (also `GitBoundary`, 10.9) | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
 | state | `web/src/state/transcript.ts`, `store.ts`, `connection.ts` | `transcript.test.ts`, `store.test.ts`, `connection.test.ts` |
-| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts` | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts` |
+| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12) | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12) |
 | durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `ops.ts` (Phase 2, 10.8), `backend.ts` | `client.test.ts`, `frames.test.ts`, `ops.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
@@ -920,7 +920,7 @@ export interface CpdEvent { readonly id: number; readonly kind: string; readonly
 export function parseEventLine(line: string): CpdEvent; // `cpd_malformed_json` on bad JSON or a missing id/kind
 export function panesFor(event: CpdEvent, selectedPlan: { id: string; contextId: string } | null): ReadonlySet<CockpitPane>;
 
-export const COALESCE_MS = 250; // Phase 1 choice
+export const COALESCE_MS = 250; // Phase 1 choice; .4: 16
 export const SAFETY_REFRESH_MS = 30_000; // Phase 1 choice (pull-request rows change with no Event, scout-cockpit §2)
 export const FOLLOW_RESTART_BASE_MS = 1_000; // doubles per consecutive restart, cap 30_000 (Phase 1 choice)
 
@@ -948,8 +948,8 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
 
 Service behaviours:
 
-1. `start()` runs `readModel.loadAll(null)`, stores the snapshot, then starts `follow.start(followArgs(cursor))` exactly once, where `cursor` = `tree.cursor`. A failure of `loadAll` rejects `start()` with its `WebError` and starts no follow. A second `start()` is a no-op.
-2. Each follow line goes through `parseEventLine`; the service remembers `lastCursor = max(lastCursor, event.id)`; a malformed line emits `{kind:"error"}` and is skipped.
+1. `start()` runs `readModel.loadAll(null)`, stores the snapshot, then starts `follow.start(followArgs(cursor))` exactly once, where `cursor` = `tree.cursor`. A failure of `loadAll` rejects `start()` with its `WebError` and starts no follow. A second `start()` is a no-op. **.6:** the follow child runs while the cockpit stream is not ready, and is stopped by its first `hello`.
+2. Each follow line goes through `parseEventLine`; the service remembers `lastCursor = max(lastCursor, event.id)`; a malformed line emits `{kind:"error"}` and is skipped. **.5 and 13.8:** while the stream is ready, its `event` frames are the source of these lines.
 3. An event whose `panesFor` is non-empty adds those panes to a pending set; if no coalescing timer is pending one is scheduled `COALESCE_MS` later (`scheduler.after`). When it fires, `readModel.loadPanes(pending, selectedPlanId)` runs ONCE for the whole burst and one `{kind:"pane"}` update per pane is emitted. A burst of N events inside the window therefore triggers one refresh (never one CLI spawn per event or per render).
 4. An event kind in no list triggers no `loadPanes`.
 5. A failed refresh emits one `{kind:"error", error}` and keeps the previous snapshot; the pending set is cleared.
@@ -1630,8 +1630,9 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O23 | The window past five entries: its 50 and 100 bounds, the splice of its oldest entries and the `before` it sets, and a `view` frame after the first (a rebase) from a live host | 6.4 frames and backend | `pi-durable/dist/harness/view.d.ts` (read); `live-check.md` (five entries) |
 | O24 | `pi.usage` keeps the cost of turns that a compaction removed (cumulative per model): the live run showed the growth of a model's record over two runs; a compaction was not run | 6.4 facts | `live-check.md` |
 | O25 | Whether `busy` (`docs['pi.live'].run`) matches `host_state.state` while a dialog is held and the run waits on a `ui_request` | 6.4 backend (status) | not run |
+| O26 | Live output of `cpd cockpit serve` (not run): the frame shapes and the stdin EOF exit 0 are read from `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main`; the stdin EOF exit (13.1), the frame shapes (13.8) and the unverified limits (13.10) rest on them | 13.1, 13.8, 13.10 | commands.md §11a (read, not run) |
 
-Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O25 inline or is this section.
+Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O26 inline or is this section.
 
 ## 10. Phase 2 (pro-d20)
 
@@ -1910,3 +1911,87 @@ Note: `ToolItem.result` is set while `status` is running (a partial output from 
 1. **Close while a message is open.** When the socket closes (pi exits or reloads, or the socket drops) the open live items stay as they are: an open message keeps `streaming: true` until a committed line replaces it. A message that never commits (pi killed mid-message) stays streaming. Not decided: remove the open live items on close, or set `streaming` false. The Lead decides.
 2. **A tail window drops live items.** A `session.window` of mode `tail` (sent by `reload`, `backend.ts:197-204`) replaces the transcript (`setTail`, `transcript.ts:41`). The live items are gone. The later deltas of the open message find no item and are ignored (`applyDelta`, `transcript.ts:69`) until its committed line arrives. The live source does not re-send the open message after a window.
 3. **Identity of `message.timestamp`** between the `message_end` object and the committed line (Job assumption A6, 12.1). If the identity fails, the live item of that message is never removed by reconcile.
+
+## 13. Cockpit stream: `cpd cockpit serve` (Plan `cpd-realtime-engine`)
+
+Normative. Plan `cpd-realtime-engine` (its Job `webcockpit-docs`) decides the five points below. Where a statement of 6.3 is marked "Amended by 13.x" or "superseded by 13.x", section 13 wins and the older statement is void.
+
+Sources: `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main` (commit `665c0c159`). The frames, the requests and the exit behaviour are read there and are not run here (unverified, O26). The seams are in `$CPD_HOME/run/cpd-realtime-engine/explore/scout-7.md` (cited as scout-7).
+
+Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7): **PA1** one long-lived NDJSON process, stdin EOF exits 0; **PA2** snapshot panes equal the list commands' JSON, and snapshots are full; **PA4** the other per-request spawns stay (every `actions.ts` command, and each spawn of 6.3 that 13.6 does not replace); **PA5** the web server uses the stream while it is up and the spawn refresh while it is down or not yet ready, and the child restarts with backoff.
+
+### 13.1 Decision 1: the child (`web/src/server/cockpit/stream.ts`)
+
+- `stream.ts` owns exactly one long-lived child, `cpd cockpit serve` (no arguments; `cockpitServeArgs()` = `["cockpit","serve"]`). `stream.ts` spawns nothing. The spawn is `CockpitStreamBoundary.start(): StreamProcess` in `cli.ts`, the only module that runs `cpd` (2.1). `plugin.ts` builds the real boundary and tests fake it (A6). `StreamProcess` has the shape of `FollowProcess` (6.3) plus `write(line)` and `closeStdin()`.
+- stdin is a pipe that stays open for the child's whole life. Requests are written to it as lines.
+- stdout is split into lines as `events follow` is (`FollowProcess.onLine`, 6.3). stderr is logs only; its tail is kept for an exit message (13.9).
+- `stop()` closes stdin, then kills the child (SIGTERM). Either alone ends it: stdin EOF exits 0 (PA1). A parent that dies closes its end of stdin, so the child never outlives its parent.
+- `stream.ts` reports typed frames and the ready state. It reads no pane and builds no model; the mapping is in 13.8 and lives in `events.ts`.
+
+### 13.2 Ready state
+
+- The stream is **ready** from the child's `hello` until that child exits. Before `hello`, and between an exit and the next child's `hello`, it is not ready. Readiness belongs to one child: a new child is not ready until its own `hello`.
+
+### 13.3 Decision 2: snapshot panes and `plan_show`
+
+- The service takes the panes of a `snapshot` frame as the cockpit's panes. It keeps the parsed rows of the last applied snapshot: `contexts`, `plans`, `sessions`, `inbox`, and `cursor` (the minimum of the four `events_cursor`). The rows are parsed by the read model's own functions (`parseContextList`, `parsePlanList`, `parseSessionList`, `parseInboxList`, 6.3) and the tree and inbox are built by its own builders (`buildTree`, `buildInbox`). `events.ts` holds no copy of a parser or a builder.
+- The plan view is not a snapshot pane (the `plan` pane of a snapshot is `cpd plan list`). It is read by a `plan_show` request when a Plan is selected, answered by a `plan_show` frame, then `parsePlanShow` and `buildPlanView` as in 6.3.
+- A request carries a string id that the service chooses, unique within its child, and the plan id it asks for. A reply for a Plan that is no longer selected is dropped.
+
+### 13.4 Decision 3: coalescing
+
+- `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
+- A `snapshot` frame stores its rows at once. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
+
+### 13.5 Decision 4: the `session-state` patch
+
+- An `event` frame of kind `session-state` with a non-null `session` changes the stored row of that session: its `state` becomes `data.to`. `data.to` must be one of the five states of 3.2; otherwise it is an error (13.8) and nothing changes.
+- A session not among the stored rows is not patched. A Worker is not in the tree (scout-7 §4), and a session registered in the same batch is not stored yet.
+- The tree is rebuilt by `buildTree` over the stored rows. The dot is therefore computed by the read model's own dot rule (5.1), with `attention` taken from the stored inbox rows. The tree pane is emitted in the same tick, with no coalescing wait. Target: under 5 ms (unverified, not measured).
+- The next `snapshot` replaces the stored rows and so reconciles the patch.
+- Only `session-state` patches the panes. Every other kind waits for the snapshot that follows its batch (5.5: a batch's `event` frames come before its snapshot).
+
+### 13.6 Decision 5: fallback and readiness
+
+- While the stream is not ready, the service runs 6.3 unchanged: the `events follow` child from `followArgs(lastCursor)`, the coalesced refresh of 13.4 through `loadPanes` (spawn), and the plan pane through `loadPanes`.
+- The follow child runs while the stream is not ready. `start()` starts it as 6.3 says. The first `hello` stops it. A child's exit starts it again from `lastCursor`. `lastCursor` is the highest Event id seen from either source, so Events committed while the stream was down come back through `events follow --since`, and the next snapshot carries the state.
+- `start()` still runs `loadAll` by spawn first (6.3 rule 1), then starts the stream.
+- A `plan_show` request made while the stream is not ready, or in flight when the child exits, resolves `down` at once. The service then loads the plan by spawn.
+
+### 13.7 Restart backoff
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `STREAM_RESTART_BASE_MS` | 500 ms | the first restart waits this long |
+| `STREAM_RESTART_CAP_MS` | 10 000 ms | no restart waits longer |
+
+- The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
+- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off.
+- The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
+- Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
+
+### 13.8 Frame-to-pane mapping
+
+Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line that is not one JSON object, has no string `t`, or has fields its `t` does not take, is `cpd_malformed_json` (7).
+
+| Frame (`t`) | Accepted shape | Effect on the cockpit |
+|---|---|---|
+| `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
+| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. |
+| `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
+| `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
+| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. |
+| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (13.9). |
+| anything else | none | `cpd_malformed_json`: one error update, the line skipped, the child kept (as commands.md §11a: a malformed line keeps the process serving). |
+
+### 13.9 Failure rules
+
+- A child that exits while the stream is running is not ready. Its pending requests resolve `down` (13.6), the follow child starts (13.6), and a restart follows after the wait of 13.7. An exit caused by `stop()` is not a failure and emits nothing.
+- An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
+- A failed write to stdin means the child is gone: it is killed and handled as an exit.
+- A malformed frame never restarts the child (13.8).
+
+### 13.10 Tests and limits
+
+- Tests run without a real process, socket, timer or `cpd` (A6). `web/src/server/cockpit/stream.test.ts` (new; fake `StreamProcess`, fake Scheduler): ready only after `hello`; the backoff sequence of 13.7 and its reset at the first snapshot; `stop()` closes stdin, kills the child, cancels the wait and emits nothing afterwards; a request is answered, rejected, or resolved `down` when not ready and when the child exits. `web/src/server/cockpit/events.test.ts` (changed): the 16 ms coalescing of snapshot panes and of the spawn burst; the panes of a snapshot equal the spawn path's panes for the same replies; a `session-state` patch emits the tree in the same tick and the next snapshot replaces it; the follow child runs only while the stream is not ready.
+- Limits, stated plainly: the live output of `cpd cockpit serve` is unverified (O26); the 5 ms target is unmeasured; `seq` is informational, because one pipe keeps frames in order; no `hello` timeout is defined, so a child that never says `hello` stays not ready, with the spawn path serving the panes and no restart (unverified, O26).
