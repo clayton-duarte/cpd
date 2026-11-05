@@ -777,6 +777,8 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
+**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0`, no outer scroll). Contexts, Standing and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|standing|archive`, `data-state` `open|closed`); an open section is `flex-1 min-h-0`, so open sections share the height equally, and a closed one is `flex-none`, just its label row. Shadcn `Separator`s sit between sections that exist (Archive renders only when something is archived). Each open section scrolls in its own `ScrollArea`, and its label row is `sticky top-0 z-10 bg-background` so it stays in view while the content scrolls.
+
 **Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks or cursor (Not built). Costs are drawn only while the Status Bar's costs toggle is on (3b, Cost below).
 
 **Read model rules** (the read model keeps these; the component may rely on them):

@@ -112,12 +112,12 @@ it("context tree renders sections glyphs and counters", () => {
   m.unmount();
 });
 
-// pro-d44: the Archive section lives in the pinned bottom, closed by default, folded by its header.
+// pro-d44: the Archive section is its own tree section, closed by default, folded by its header.
 it("context tree archive section collapses", () => {
   const m = mount(<ContextTree {...props()} />);
   const group = m.container.querySelector("[data-archived]");
   expect(group?.textContent).toContain("Archive");
-  expect(group?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  expect(group?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   expect(m.container.querySelector("details, summary")).toBeNull();
   expect(m.container.querySelector('[data-context="c2"]')).toBeNull();
   const toggle = group?.querySelector('[data-slot="sidebar-group-label"] button') ?? null;

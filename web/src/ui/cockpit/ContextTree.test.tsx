@@ -259,7 +259,7 @@ it("the Archived group is closed by default and folds by section archive", () =>
   expect(group).not.toBeNull();
   expect(group?.tagName).not.toBe("DETAILS");
   expect(m.container.querySelector("nav, details, summary")).toBeNull();
-  expect(group?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  expect(group?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   expect(group?.querySelector('[data-context="c2"]')).toBeNull();
   expect(group?.textContent).toContain("Archive");
   click(header(m.container, "Archive"));
@@ -290,26 +290,60 @@ const ids = (root: ParentNode | null) => Array.from(root?.querySelectorAll("[dat
 const header = (c: ParentNode, name: string): HTMLElement | null =>
   Array.from(c.querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"] button')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
 
-it("the tree has three layers: Contexts, a separator and a pinned bottom with Standing and Archive", () => {
+const section = (c: ParentNode, name: string): HTMLElement | null => c.querySelector<HTMLElement>(`[data-part="tree-section"][data-section="${name}"]`);
+
+it("every open section is flex-1 and a closed section is flex-none", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const c = m.container;
-  const bottom = q(c, '[data-part="tree-pinned-bottom"]');
-  expect(bottom, "pinned bottom").not.toBeNull();
-  for (const cls of ["mt-auto", "max-h-[50%]", "shrink-0"]) expect(bottom?.className).toContain(cls);
-  expect(bottom?.querySelector('[data-slot="scroll-area"]'), "bottom scroll area").not.toBeNull();
-  expect(bottom?.querySelector("[data-standing]"), "standing").not.toBeNull();
-  expect(bottom?.querySelector("[data-archived]"), "archive").not.toBeNull();
-  expect(bottom?.querySelectorAll('[data-slot="separator"]').length, "separator inside bottom").toBeGreaterThanOrEqual(1);
-  const top = q(c, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
-  expect(top, "Contexts inside a scroll area").not.toBeNull();
-  expect(bottom?.contains(top)).toBe(false);
-  expect(c.querySelectorAll('[data-slot="separator"]').length, "separators").toBeGreaterThanOrEqual(2);
+  for (const name of ["contexts", "standing"]) {
+    expect(section(c, name)?.className, `${name} open`).toContain("flex-1");
+    expect(section(c, name)?.className).toContain("min-h-0");
+    expect(section(c, name)?.getAttribute("data-state")).toBe("open");
+  }
+  expect(section(c, "archive")?.className, "archive closed").toContain("flex-none");
+  expect(section(c, "archive")?.className).not.toContain("flex-1");
+  expect(section(c, "archive")?.getAttribute("data-state")).toBe("closed");
+  click(header(c, "Archive"));
+  expect(section(c, "archive")?.className, "archive open").toContain("flex-1");
+  click(header(c, "Standing"));
+  expect(section(c, "standing")?.className, "standing closed").toContain("flex-none");
   m.unmount();
+});
+
+it("no section has a max height of 50 percent", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(m.container.innerHTML).not.toContain("max-h-[50%]");
+  expect(q(m.container, '[data-part="tree-pinned-bottom"]')).toBeNull();
+  m.unmount();
+});
+
+it("each section label is sticky at the top of its section", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  for (const name of ["contexts", "standing", "archive"]) {
+    const sec = section(m.container, name);
+    const label = sec?.querySelector('[data-slot="sidebar-group-label"]');
+    expect(label, name).not.toBeNull();
+    for (const cls of ["sticky", "top-0", "z-10", "bg-background"]) expect(label?.className, `${name} ${cls}`).toContain(cls);
+    expect(label?.closest('[data-slot="scroll-area"]'), `${name} label in scroll area`).not.toBeNull();
+  }
+  m.unmount();
+});
+
+it("sections are separated by separators and Archive renders only when something is archived", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(m.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(2);
+  expect(section(m.container, "archive")).not.toBeNull();
+  m.unmount();
+  const none: ContextTreeModel = { cursor: 1, contexts: layered.contexts.filter((x) => !x.archived) };
+  const n = mount(<ContextTree {...props({ tree: none })} />);
+  expect(n.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(1);
+  expect(section(n.container, "archive")).toBeNull();
+  n.unmount();
 });
 
 it("the Contexts section lists live Contexts by dot tier then newest first", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
-  const top = q(m.container, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
+  const top = section(m.container, "contexts");
   expect(ids(top)).toEqual(["hot", "new", "old"]);
   m.unmount();
 });
@@ -340,7 +374,7 @@ it("the Archive section is closed by default and opens from its header", () => {
   expect(archive()).not.toBeNull();
   expect(archive()?.querySelector('[data-context="gone"]')).toBeNull();
   expect(header(m.container, "Archive")?.getAttribute("aria-expanded")).toBe("false");
-  expect(archive()?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  expect(archive()?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   click(header(m.container, "Archive"));
   expect(archive()?.querySelector('[data-context="gone"]')).not.toBeNull();
   click(header(m.container, "Archive"));
