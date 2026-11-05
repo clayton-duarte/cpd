@@ -4150,6 +4150,41 @@ fn pr_poll_now_file_triggers_immediate_poll() {
     assert_eq!(fx.events("error").len(), 0);
 }
 
+/// E5 removes `run/pr-poll-now` when it starts a poll (decision pro-d394), even when the poll child is faked and never removes it.
+#[test]
+fn e5_removes_the_poll_now_request_when_it_starts_the_poll() {
+    let fx = engine_home("");
+    fx.engine_base_routes();
+    fx.export("CPD_TEST_PR_POLL", "3600");
+    let file = poll_now_file(&fx);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "").unwrap();
+    // The faked poll child never removes the request. Without E5's removal the engine never naps (a request is always
+    // pending), so the nap bound could not end the run: after 5 polls the fake plays the real child and removes it.
+    let (polled, request) = (Arc::new(Mutex::new(0_usize)), file.clone());
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.route_fn("cpd", move |_| {
+        let mut polled = polled.lock().unwrap();
+        *polled += 1;
+        if *polled >= 5 {
+            let _ = fs::remove_file(&request);
+        }
+        Reply::ok(&poll.to_string())
+    });
+
+    // A fixed 100 naps (10 virtual ticks): the test cannot hang.
+    fx.watch_steps(|nap| nap >= 100).unwrap();
+
+    assert!(!file.exists(), "E5 left run/pr-poll-now in place");
+    let polls: Vec<_> = fx
+        .calls("cpd")
+        .into_iter()
+        .filter(|call| call.args.starts_with(&["pr".to_owned(), "poll".to_owned()]))
+        .collect();
+    assert_eq!(polls.len(), 1, "E5 polled every tick: {polls:?}");
+    assert_eq!(fx.events("error").len(), 0);
+}
+
 // ---------- E3's back-off, E5's executable and E6, in-process ----------
 
 /// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
