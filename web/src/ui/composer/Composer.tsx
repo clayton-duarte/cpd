@@ -1,141 +1,283 @@
-import { useImperativeHandle, useRef, useState } from "react";
-import { Paperclip } from "lucide-react";
-import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode, Ref } from "react";
-import type { Attachment, Capabilities, QueuedSubmission, Support, WhenBusy } from "../../protocol/domain.ts";
-import { addFiles, filesFromClipboard, filesFromDrop } from "./attachments.ts";
-import type { AttachmentRejection, FileLike, FileReaderBoundary } from "./attachments.ts";
+import { ArrowUpIcon, FileTextIcon, PlusIcon, XIcon } from "lucide-react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { ClipboardEvent, KeyboardEvent, ReactElement, ReactNode } from "react";
+import { cn } from "../../lib/utils.ts";
+import type {
+  Attachment as AttachmentItem,
+  Capabilities,
+  QueuedSubmission,
+  WhenBusy,
+} from "../../protocol/domain.ts";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "../components/attachment.tsx";
+import { Button } from "../components/button.tsx";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "../components/input-group.tsx";
+import { addFiles, filesFromClipboard } from "./attachments.ts";
+import type {
+  AttachmentRejection,
+  FileLike,
+  FileReaderBoundary,
+} from "./attachments.ts";
 
-export interface ComposerHandle { addFiles(files: readonly FileLike[]): Promise<void> }
+export interface ComposerSubmit {
+  readonly text: string;
+  readonly attachments: readonly AttachmentItem[];
+  readonly whenBusy: WhenBusy;
+}
+export interface ComposerHandle {
+  addFiles(files: readonly FileLike[]): Promise<void>;
+}
 
-const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
-const reasonOf = (s: Support | undefined): string | null => (s === undefined || s.supported ? null : s.reason);
-
-export function Composer(props: {
-  capabilities: Capabilities | null; busy: boolean; queued: readonly QueuedSubmission[];
-  reader: FileReaderBoundary;
-  onSubmit(input: { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy }): void;
-  onAbort(): void; onCancelQueued(clientSubmissionId: string): void;
-  ref?: Ref<ComposerHandle>;
-  settings?: ReactNode; label?: string; onEditQueued?(clientSubmissionId: string): void;
-}): React.JSX.Element {
-  const { capabilities: caps, busy, queued, reader } = props;
+export const Composer = forwardRef<
+  ComposerHandle,
+  {
+    capabilities: Capabilities | null;
+    busy: boolean;
+    queued: readonly QueuedSubmission[];
+    reader: FileReaderBoundary;
+    onSubmit(s: ComposerSubmit): void;
+    onAbort(): void;
+    onCancelQueued(clientSubmissionId: string): void;
+    settings?: ReactNode;
+  }
+>(function Composer(props, ref): ReactElement {
+  const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [rejected, setRejected] = useState<AttachmentRejection[]>([]);
-  const [drop, setDrop] = useState<"idle" | "over">("idle");
-  const current = useRef<Attachment[]>([]);
-  const fileInput = useRef<HTMLInputElement>(null);
-  current.current = attachments;
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
+  const [dropping, setDropping] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const add = async (files: readonly FileLike[]): Promise<void> => {
-    const result = await addFiles(files, current.current, caps, reader);
-    current.current = [...current.current, ...result.accepted];
-    setAttachments(current.current);
-    setRejected(result.rejected);
+  const canSend = capabilities !== null;
+  const hasContent = text.trim() !== "" || attachments.length > 0;
+  const canSubmit = canSend && hasContent;
+  const stateRef = useRef({ attachments, capabilities, reader });
+  useEffect(() => {
+    stateRef.current = { attachments, capabilities, reader };
+  });
+
+  const handleFiles = async (files: readonly FileLike[]): Promise<void> => {
+    if (files.length === 0) return;
+    const { attachments: cur, capabilities: cap, reader: r } = stateRef.current;
+    const res = await addFiles(files, cur, cap, r);
+    if (res.accepted.length > 0) {
+      setAttachments((prev) => [...prev, ...res.accepted]);
+    }
+    setRejections(res.rejected);
   };
-  useImperativeHandle(props.ref, () => ({ addFiles: add }));
+  useImperativeHandle(ref, () => ({ addFiles: handleFiles }));
 
-  const reasons = {
-    steer: reasonOf(caps?.steer), followUp: reasonOf(caps?.followUp), abort: reasonOf(caps?.abort), abortSubmission: reasonOf(caps?.abortSubmission),
-  };
-  const canSend = text.trim() !== "" || attachments.length > 0;
-
-  const submit = (whenBusy: WhenBusy) => {
-    if (caps === null || !canSend || reasons[whenBusy] !== null) return;
-    props.onSubmit({ text: text.trimEnd(), attachments, whenBusy });
+  const send = (): void => {
+    if (!canSubmit) return;
+    onSubmit({ text, attachments, whenBusy: "followUp" });
     setText("");
-    current.current = [];
     setAttachments([]);
-    setRejected([]);
+    setRejections([]);
   };
-  const enterTarget = (): WhenBusy | null => {
-    if (!busy) return "followUp";
-    return reasons.followUp === null ? "followUp" : reasons.steer === null ? "steer" : null;
-  };
-  const note = (reason: string | null) => (reason === null ? null : <small data-reason>{reason}</small>);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (e.nativeEvent.isComposing || e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    const target = busy && e.altKey ? "followUp" : busy ? (reasons.steer === null ? "steer" : enterTarget()) : enterTarget();
-    if (target !== null) submit(target);
+    send();
   };
-  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     const files = filesFromClipboard(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
-    void add(files);
-  };
-  const onDrag = (e: DragEvent<HTMLFormElement>) => {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    setDrop("over");
-  };
-  const onDrop = (e: DragEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDrop("idle");
-    void add(filesFromDrop(e.dataTransfer));
+    void handleFiles(files);
   };
 
   return (
-    <form aria-label="Composer" data-drop={drop} className="rounded-lg border bg-card data-[drop=over]:border-dashed data-[drop=over]:border-primary data-[drop=over]:bg-primary/5" onSubmit={(e) => { e.preventDefault(); const t = enterTarget(); if (t !== null) submit(t); }}
-      onDragEnter={onDrag} onDragOver={onDrag} onDragLeave={() => setDrop("idle")} onDrop={onDrop}>
-      {drop === "over" && <span data-part="drop-cue" className="block px-3 pt-1.5 font-mono text-xs text-primary">Drop to attach</span>}
-      {queued.length > 0 && (
-        <ul aria-label="Queued" data-part="queued-bar" className="flex flex-wrap gap-1.5 border-b px-3 py-2">
-          {queued.map((q) => (
-            <li key={q.clientSubmissionId} data-queued={q.clientSubmissionId} data-when-busy={q.whenBusy}
-              className="flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs">
-              <span data-part="queued-kind">{q.whenBusy === "steer" ? "steer queued" : "follow-up queued"}</span>
-              <span data-part="queued-text" className="truncate">{q.text}</span>
-              <button type="button" aria-label="Cancel queued message" disabled={reasons.abortSubmission !== null} title={reasons.abortSubmission ?? undefined}
-                onClick={() => props.onCancelQueued(q.clientSubmissionId)}>×</button>
+    <div data-part="composer" className="mx-3 mb-2.5 flex shrink-0 flex-col gap-2">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        aria-label="Attach files"
+        disabled={!canSend}
+        className="hidden"
+        onChange={(e) => {
+          const list = e.currentTarget.files;
+          if (list && list.length > 0) void handleFiles(Array.from(list));
+          e.currentTarget.value = "";
+        }}
+      />
+      {rejections.length === 0 ? null : (
+        <ul
+          role="alert"
+          data-part="rejections"
+          className="m-0 flex list-none flex-col gap-1 p-0"
+        >
+          {rejections.map((r, i) => (
+            <li
+              key={i}
+              data-rejection={r.reason}
+              className="rounded-lg border border-destructive/50 bg-destructive/10 px-2.5 py-1.5 font-mono text-xs text-destructive"
+            >
+              {r.name}: {r.message}
             </li>
           ))}
         </ul>
       )}
-      {attachments.length > 0 && (
-        <ul aria-label="Attachments" data-part="attachment-bar" className="flex flex-wrap gap-2 px-3 pt-2">
-          {attachments.map((a) => (
-            <li key={a.name} data-attachment={a.name} data-kind={a.kind}
-              className="flex items-center gap-1.5 rounded-md border px-2 text-xs">
-              {a.kind === "image" && <img data-part="attachment-thumb" alt={a.name} src={`data:${a.mimeType};base64,${a.dataBase64}`} className="h-6 w-8 rounded-sm object-cover" />}
-              <span data-part="attachment-name">{a.name}</span>
-              <button type="button" aria-label={`Remove ${a.name}`}
-                onClick={() => { current.current = current.current.filter((x) => x !== a); setAttachments(current.current); }}>×</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {rejected.length > 0 && (
-        <ul role="alert" aria-label="Rejected files" className="px-3 pt-1.5 text-xs text-status-blocked-bright">
-          {rejected.map((r, i) => <li data-part="rejected-file" key={`${r.name}:${i}`}>{r.name}: {r.message}</li>)}
-        </ul>
-      )}
-      <textarea aria-label="Message" value={text} disabled={caps === null} rows={2} className="w-full resize-none bg-transparent px-3 py-2 outline-none"
-        onChange={(e) => setText(e.currentTarget.value)} onKeyDown={onKeyDown} onPaste={onPaste} />
-      <input ref={fileInput} type="file" multiple hidden aria-label="Attach files" disabled={caps === null}
-        onChange={(e) => { const input = e.currentTarget; const files = Array.from(input.files ?? []); input.value = ""; void add(files); }} />
-      <div data-part="action-row" className="flex items-center gap-2 px-2 pb-2">
-        <button type="button" data-action="attach" aria-label="Choose files to attach" disabled={caps === null}
-          onClick={() => fileInput.current?.click()}><Paperclip aria-hidden="true" size={16} /></button>
-        {props.settings}
-        <span className="ml-auto flex items-center gap-2">
-          {busy ? (
-            <>
-              <div role="group" data-part="send-split" aria-label="Send while the agent is running" className="inline-flex">
-                <button type="button" data-when-busy="steer" disabled={reasons.steer !== null} title={reasons.steer ?? undefined} onClick={() => submit("steer")}>Steer<kbd>⏎</kbd></button>
-                <button type="button" data-when-busy="followUp" disabled={reasons.followUp !== null} title={reasons.followUp ?? undefined} onClick={() => submit("followUp")}>Follow-up<kbd>⌥⏎</kbd></button>
-              </div>
-              <button type="button" data-action="abort" disabled={reasons.abort !== null} title={reasons.abort ?? undefined} onClick={() => props.onAbort()}>Stop<kbd>⌃C</kbd></button>
-            </>
-          ) : (
-            <button type="submit" data-action="send" disabled={reasons.followUp !== null} title={reasons.followUp ?? undefined}>Send<kbd>⏎</kbd></button>
-          )}
-        </span>
-      </div>
-      {busy ? <>{note(reasons.steer)}{note(reasons.followUp)}{note(reasons.abort)}</> : note(reasons.followUp)}
-    </form>
+      <InputGroup
+        data-busy={props.busy ? "" : undefined}
+        data-drop={dropping ? "over" : "idle"}
+        onDragEnter={(e) => {
+          if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) setDropping(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+        }}
+        onDrop={() => setDropping(false)}
+        className={cn("rounded-3xl bg-card", props.busy && "prompt-border-pulse")}
+      >
+        {(queued.length > 0 || attachments.length > 0 || dropping) && (
+          <InputGroupAddon
+            align="block-start"
+            className="flex-col items-stretch gap-2 px-3 pt-3 pb-0"
+          >
+            {dropping ? (
+              <span data-part="drop-cue" className="font-mono text-xs text-muted-foreground">
+                Drop to attach
+              </span>
+            ) : null}
+            {queued.length === 0 ? null : (
+              <ul
+                aria-label="Queued submissions"
+                data-part="queue"
+                className="m-0 flex list-none flex-wrap gap-1.5 p-0"
+              >
+                {queued.map((q) => (
+                  <li
+                    key={q.clientSubmissionId}
+                    data-queued-chip={q.clientSubmissionId}
+                    className="inline-flex max-w-[360px] items-center gap-1.5 rounded-md border bg-background px-2 py-0.5 text-xs text-foreground"
+                  >
+                    <span className="font-mono text-muted-foreground">
+                      queued
+                    </span>
+                    <span data-part="text" className="truncate">
+                      {q.text}
+                    </span>
+                    {capabilities?.abortSubmission?.supported ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Cancel queued: ${q.text}`}
+                        data-action="cancel-queued"
+                        onClick={() => onCancelQueued(q.clientSubmissionId)}
+                      >
+                        ×
+                      </Button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {attachments.length === 0 ? null : (
+              <AttachmentGroup
+                aria-label="Staged attachments"
+                data-part="attachments"
+              >
+                {attachments.map((a, i) => (
+                  <Attachment key={i} size="sm" data-attachment={a.kind}>
+                    <AttachmentMedia
+                      data-part="thumb"
+                      variant={a.kind === "image" ? "image" : "icon"}
+                    >
+                      {a.kind === "image" ? (
+                        <img
+                          alt=""
+                          src={`data:${a.mimeType};base64,${a.dataBase64}`}
+                        />
+                      ) : (
+                        <FileTextIcon />
+                      )}
+                    </AttachmentMedia>
+                    <AttachmentContent>
+                      <AttachmentTitle data-part="name" className="font-mono">
+                        {a.name}
+                      </AttachmentTitle>
+                    </AttachmentContent>
+                    <AttachmentActions>
+                      <AttachmentAction
+                        aria-label={`Remove ${a.name}`}
+                        data-action="remove-attachment"
+                        onClick={() =>
+                          setAttachments((cur) =>
+                            cur.filter((_, k) => k !== i),
+                          )
+                        }
+                      >
+                        <XIcon />
+                      </AttachmentAction>
+                    </AttachmentActions>
+                  </Attachment>
+                ))}
+              </AttachmentGroup>
+            )}
+          </InputGroupAddon>
+        )}
+        <InputGroupTextarea
+          aria-label="Message"
+          disabled={!canSend}
+          rows={1}
+          placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+          className="min-h-10 px-4 py-3 text-sm leading-relaxed"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+        />
+        <InputGroupAddon
+          align="block-end"
+          className="justify-between px-3 pb-2.5 pt-0"
+        >
+          <div className="flex items-center gap-1.5">
+            <InputGroupButton
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              className="rounded-full"
+              aria-label="Attach files"
+              disabled={!canSend}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <PlusIcon />
+            </InputGroupButton>
+          </div>
+          <div data-part="actions" className="flex items-center gap-1.5">
+            {props.settings}
+            <InputGroupButton
+              type="button"
+              variant="default"
+              size="icon-sm"
+              data-action="send"
+              aria-label="Send"
+              disabled={!canSubmit}
+              className="rounded-full"
+              onClick={send}
+            >
+              <ArrowUpIcon />
+              <span className="sr-only">Send</span>
+            </InputGroupButton>
+          </div>
+        </InputGroupAddon>
+      </InputGroup>
+    </div>
   );
-}
+});

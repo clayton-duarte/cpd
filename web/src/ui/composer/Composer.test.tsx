@@ -52,37 +52,45 @@ function dragEvent(type: string, files: unknown[]): Event {
 it("enter submits text and clears the input", () => {
   const { m, submits } = setup();
   const t = textarea(m.container);
-  typeText(t, "hello  ");
+  typeText(t, "hello");
   press(t, "Enter");
   expect(submits).toEqual([{ text: "hello", attachments: [], whenBusy: "followUp" }]);
   expect(textarea(m.container).value).toBe("");
   m.unmount();
 });
 
-it("while busy the composer offers steer and follow-up", () => {
-  const { m, submits } = setup({ busy: true });
-  expect(m.container.querySelector('button[data-action="send"]')).toBeNull();
-  const steer = m.container.querySelector('button[data-when-busy="steer"]')!;
-  expect(m.container.querySelector('button[data-when-busy="followUp"]')).not.toBeNull();
-  typeText(textarea(m.container), "go");
-  click(steer);
-  expect(submits).toEqual([{ text: "go", attachments: [], whenBusy: "steer" }]);
+it("shift enter does not submit and enter is ignored while composing", () => {
+  const { m, submits } = setup();
+  const t = textarea(m.container);
+  typeText(t, "hello");
+  act(() => { t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true })); });
+  act(() => { t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })); });
+  expect(submits).toEqual([]);
   m.unmount();
 });
 
-it("abort button calls onAbort while busy", () => {
+it("while busy the send button still submits a follow-up", () => {
+  const { m, submits } = setup({ busy: true });
+  expect(m.container.querySelector("button[data-when-busy]")).toBeNull();
+  typeText(textarea(m.container), "go");
+  click(m.container.querySelector('button[data-action="send"]')!);
+  expect(submits).toEqual([{ text: "go", attachments: [], whenBusy: "followUp" }]);
+  m.unmount();
+});
+
+it("there is no stop control while busy and onAbort is never called", () => {
   const { m, onAbort } = setup({ busy: true });
-  click(m.container.querySelector('button[data-action="abort"]')!);
-  expect(onAbort).toHaveBeenCalledTimes(1);
+  expect(m.container.querySelector('button[data-action="abort"]')).toBeNull();
+  expect(onAbort).not.toHaveBeenCalled();
   m.unmount();
 });
 
 it("queued submissions are listed with a cancel control", () => {
-  const queued: QueuedSubmission[] = [{ clientSubmissionId: "c1", text: "later", whenBusy: "followUp" }];
+  const queued: QueuedSubmission[] = [{ clientSubmissionId: "c1", submissionId: 1, text: "later", whenBusy: "followUp" }];
   const { m, onCancelQueued } = setup({ busy: true, queued });
-  const li = m.container.querySelector('ul[aria-label="Queued"] li[data-queued="c1"]')!;
+  const li = m.container.querySelector('ul[aria-label="Queued submissions"] li[data-queued-chip="c1"]')!;
   expect(li.textContent).toContain("later");
-  click(li.querySelector('button[aria-label="Cancel queued message"]')!);
+  click(li.querySelector('button[data-action="cancel-queued"]')!);
   expect(onCancelQueued).toHaveBeenCalledWith("c1");
   m.unmount();
 });
@@ -93,42 +101,43 @@ it("file picker adds attachment chips", async () => {
   Object.defineProperty(input, "files", { value: [png], configurable: true });
   act(() => { input.dispatchEvent(new Event("change", { bubbles: true })); });
   await flush();
-  const chip = m.container.querySelector('ul[aria-label="Attachments"] li[data-attachment="a.png"]')!;
-  expect(chip.getAttribute("data-kind")).toBe("image");
+  const chip = m.container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')!;
+  expect(chip.textContent).toContain("a.png");
+  click(chip.querySelector('button[data-action="remove-attachment"]')!);
+  expect(m.container.querySelector('[data-attachment="image"]')).toBeNull();
   m.unmount();
 });
 
-it("dragging files over the composer shows a drop state and dropping adds attachments", async () => {
+it("the attach button opens the hidden file picker", () => {
   const { m } = setup();
-  const form = m.container.querySelector<HTMLFormElement>('form[aria-label="Composer"]')!;
-  expect(form.dataset.drop).toBe("idle");
-  act(() => { form.dispatchEvent(dragEvent("dragenter", [])); });
-  expect(form.dataset.drop).toBe("over");
-  const drop = dragEvent("drop", [png]);
-  act(() => { form.dispatchEvent(drop); });
-  await flush();
-  expect(drop.defaultPrevented).toBe(true);
-  expect(form.dataset.drop).toBe("idle");
-  expect(m.container.querySelector('li[data-attachment="a.png"]')).not.toBeNull();
+  const input = m.container.querySelector<HTMLInputElement>('input[type="file"][aria-label="Attach files"]')!;
+  const open = vi.spyOn(input, "click").mockImplementation(() => {});
+  click(m.container.querySelector('button[aria-label="Attach files"]')!);
+  expect(open).toHaveBeenCalledTimes(1);
   m.unmount();
 });
 
-it("unsupported capabilities are disabled with their reason", () => {
-  const caps: Capabilities = { ...base, steer: { supported: false, reason: "no steer" }, abort: { supported: false, reason: "no abort" } };
-  const { m, submits, onAbort } = setup({ capabilities: caps, busy: true });
-  const steer = m.container.querySelector<HTMLButtonElement>('button[data-when-busy="steer"]')!;
-  const abort = m.container.querySelector<HTMLButtonElement>('button[data-action="abort"]')!;
-  expect(steer.disabled).toBe(true);
-  expect(steer.title).toBe("no steer");
-  expect(abort.disabled).toBe(true);
-  expect(abort.title).toBe("no abort");
-  const reasons = Array.from(m.container.querySelectorAll("small[data-reason]")).map((s) => s.textContent);
-  expect(reasons).toEqual(expect.arrayContaining(["no steer", "no abort"]));
-  typeText(textarea(m.container), "x");
-  click(steer);
-  click(abort);
+it("dragging files over the composer shows a drop state and the drop cue, and a drop adds nothing itself", async () => {
+  const { m } = setup();
+  const group = m.container.querySelector<HTMLElement>('[data-slot="input-group"]')!;
+  expect(group.dataset.drop).toBe("idle");
+  act(() => { group.dispatchEvent(dragEvent("dragenter", [])); });
+  expect(group.dataset.drop).toBe("over");
+  expect(m.container.querySelector('span[data-part="drop-cue"]')?.textContent).toBe("Drop to attach");
+  act(() => { group.dispatchEvent(dragEvent("drop", [png])); });
+  await flush();
+  expect(group.dataset.drop).toBe("idle");
+  expect(m.container.querySelector('[data-part="drop-cue"]')).toBeNull();
+  expect(m.container.querySelector("[data-attachment]"), "the chat dropzone adds dropped files, once").toBeNull();
+  m.unmount();
+});
+
+it("without capabilities the textarea, attach button and send button are disabled", () => {
+  const { m, submits } = setup({ capabilities: null });
+  expect(textarea(m.container).disabled).toBe(true);
+  expect(m.container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLButtonElement>('button[data-action="send"]')!.disabled).toBe(true);
+  expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
   expect(submits).toEqual([]);
-  expect(onAbort).not.toHaveBeenCalled();
-  expect(m.container.querySelector<HTMLButtonElement>('button[data-when-busy="followUp"]')!.disabled).toBe(false);
   m.unmount();
 });

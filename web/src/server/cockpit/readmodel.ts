@@ -1,5 +1,6 @@
+import * as os from "node:os";
 import type {
-  AttemptView, CockpitAction, ContextNode, ContextTreeModel, InboxModel, InboxRow, InboxRowAction, JobView, PlanCounts, PlanNode,
+  AttemptView, CockpitAction, ContextNode, ContextTreeModel, CurationRecord, InboxModel, InboxRow, InboxRowAction, JobView, PlanCounts, PlanNode,
   PlanViewModel, SessionNode, Urgency, WorkflowView,
 } from "../../protocol/cockpit.ts";
 import { WebError, type SessionRole, type SessionState } from "../../protocol/domain.ts";
@@ -199,12 +200,17 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
   }
   const plans = [...input.plans].sort((a, b) => Number(a.archived_at !== null) - Number(b.archived_at !== null) || (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   for (const p of plans) {
-    ctx(p.context).plans.set(p.id, {
-      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null },
+    const c = ctx(p.context);
+    if (c.node.createdAt === undefined || p.created_at > c.node.createdAt) {
+      c.node = { ...c.node, createdAt: p.created_at };
+    }
+    c.plans.set(p.id, {
+      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null, createdAt: p.created_at },
       sessions: [],
     });
   }
-  const live = input.sessions.filter((s) => s.role !== "worker" && s.archived_at === null);
+  const nonWorkers = input.sessions.filter((s) => s.role !== "worker");
+  const live = nonWorkers.filter((s) => s.archived_at === null);
   const newest = (xs: RawSession[]): RawSession | undefined => xs[xs.length - 1]; // no created_at: the later entry is the newer
   const managers = new Map<string, RawSession>();
   for (const s of live) {
@@ -215,7 +221,7 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
   const planKey = (s: RawSession) => `${s.context}\u0000${s.plan}`;
   const leads = new Map<string, RawSession>();
   for (const p of plans) {
-    const mine = live.filter((s) => s.context === p.context && s.plan === p.id && s.plan_lead);
+    const mine = nonWorkers.filter((s) => s.context === p.context && s.plan === p.id && s.plan_lead);
     const named = p.lead_session === null ? undefined : mine.find((s) => s.id === p.lead_session);
     const lead = named ?? newest(mine);
     if (lead !== undefined) leads.set(planKey(lead), lead);
@@ -224,10 +230,11 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
     if (s.plan === null || !s.plan_lead || leads.has(planKey(s))) continue;
     leads.set(planKey(s), newest(live.filter((o) => o.context === s.context && o.plan === s.plan && o.plan_lead))!);
   }
-  for (const s of live) {
+  for (const s of nonWorkers) {
     const c = ctx(s.context);
     if (s.plan === null) {
       if (managers.get(s.context) === s) c.sessions.unshift(sessionNode(s, input.inbox));
+      else if (s.role === "manager" && s.archived_at !== null) c.sessions.push(sessionNode(s, input.inbox));
       else if (s.role === "lead") c.sessions.push(sessionNode(s, input.inbox));
       continue;
     }
@@ -242,6 +249,7 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
     } else if (!s.plan_lead && s.role === "lead") p.sessions.push(sessionNode(s, input.inbox));
   }
   return {
+    hostname: os.hostname().replace(/\.local$/i, "") || "host",
     contexts: [...ctxs.values()].map((c) => ({ ...c.node, sessions: c.sessions, plans: [...c.plans.values()].map((p) => ({ ...p.node, sessions: p.sessions })) })),
     cursor: input.cursor,
   };
@@ -323,14 +331,65 @@ function rowActions(i: RawInboxItem): InboxRowAction[] {
   return acts;
 }
 const PLAN_LEAD_ROW_KINDS: readonly string[] = ["plan-review", "drafts-parked", "pr-ready", "pr-closed"];
-export function buildInbox(parsed: ParsedInbox, sessions: readonly RawSession[] = []): InboxModel {
+export function buildInbox(
+  parsed: ParsedInbox,
+  sessions: readonly RawSession[] = [],
+  extra?: {
+    plans?: readonly RawPlan[];
+    curationByContext?: ReadonlyMap<string, readonly CurationRecord[]>;
+  },
+): InboxModel {
+  const plans = extra?.plans ?? [];
   const leadOf = (plan: StrOrNull): StrOrNull => (plan === null ? null : sessions.find((s) => s.plan_lead && s.plan === plan)?.id ?? null);
-  const rows: InboxRow[] = parsed.rows.map((i) => ({
-    id: i.id ?? -1, kind: i.kind, ...(i.subject !== undefined ? { subject: i.subject } : {}), label: i.label, urgency: i.urgency, contextId: i.context, planId: i.plan, jobKey: i.job,
-    sessionId: PLAN_LEAD_ROW_KINDS.includes(i.kind) ? leadOf(i.plan) ?? i.session : i.session, workflow: i.workflow, url: i.url, openedAt: i.opened_at, ageSeconds: i.age_seconds,
-    actions: rowActions(i),
-  }));
+  // the chat a row opens: its own session, else the Plan's Lead, else (question, curate-retire) the Context's live Manager
+  const resolveSessionId = (i: RawInboxItem): string | null => {
+    if (PLAN_LEAD_ROW_KINDS.includes(i.kind)) { const lead = leadOf(i.plan); if (lead !== null) return lead; }
+    if (i.session !== null) return i.session;
+    if (i.plan !== null) {
+      const plan = plans.find((p) => p.id === i.plan);
+      if (plan?.lead_session != null) return plan.lead_session;
+      const lead = sessions.find((s) => s.plan === i.plan && s.plan_lead && s.archived_at === null);
+      if (lead !== undefined) return lead.id;
+    }
+    if (i.context !== null && (i.kind === "question" || i.kind === "curate-retire")) {
+      const mgr = sessions.find((s) => s.context === i.context && s.role === "manager" && s.plan === null && s.archived_at === null);
+      if (mgr !== undefined) return mgr.id;
+    }
+    return null;
+  };
+  const rows: InboxRow[] = parsed.rows.map((i) => {
+    const curation =
+      i.kind === "curate-retire" && i.context !== null
+        ? extra?.curationByContext?.get(i.context)
+        : undefined;
+    return {
+      id: i.id ?? -1, kind: i.kind, ...(i.subject !== undefined ? { subject: i.subject } : {}),
+      label: i.label, urgency: i.urgency, contextId: i.context, planId: i.plan, jobKey: i.job,
+      sessionId: resolveSessionId(i), workflow: i.workflow, url: i.url, openedAt: i.opened_at, ageSeconds: i.age_seconds,
+      actions: rowActions(i),
+      ...(curation !== undefined ? { curation } : {}),
+    };
+  });
   return { openCount: rows.length, engineRunning: parsed.engineRunning, hidden: parsed.hidden, rows, cursor: parsed.cursor };
+}
+
+function parseCuration(reply: Reply): CurationRecord[] {
+  const retire = reply["retire"];
+  if (!Array.isArray(retire)) return [];
+  const out: CurationRecord[] = [];
+  for (const entry of retire) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const o = entry as Obj;
+    const id = o["record"];
+    const text = o["text"];
+    const reason = o["reason"];
+    const target = o["target"];
+    if (typeof id === "string" && typeof text === "string") {
+      const detail = [reason, target].filter((x) => typeof x === "string" && x !== "").join(" ");
+      out.push({ id, text, detail });
+    }
+  }
+  return out;
 }
 
 export function createReadModel(cpd: Cpd): ReadModel {
@@ -341,20 +400,47 @@ export function createReadModel(cpd: Cpd): ReadModel {
     const wantPlan = panes.has("plan") && planId !== null;
     const [ctxR, planR, sessR, inboxR, showR] = await Promise.all([
       wantTree ? cpd.json(["context", "list"]) : undefined,
-      wantTree ? cpd.json(["plan", "list"]) : undefined,
+      wantInbox ? cpd.json(["plan", "list"]) : undefined,
       wantSessions ? cpd.json(["session", "list"]) : undefined,
       wantInbox ? cpd.json(["inbox", "list"]) : undefined,
       wantPlan ? cpd.json(["plan", "show", "--plan", planId]).catch(() => null) : undefined,
     ]);
     const out: { tree?: ContextTreeModel; plan?: PlanViewModel | null; inbox?: InboxModel } = {};
     const inbox = inboxR === undefined ? undefined : parseInboxList(inboxR);
-    if (ctxR !== undefined && planR !== undefined && sessR !== undefined && inbox !== undefined) {
+    const parsedPlans = planR === undefined ? undefined : parsePlanList(planR);
+    const parsedSessions = sessR === undefined ? undefined : parseSessionList(sessR);
+    if (ctxR !== undefined && parsedPlans !== undefined && parsedSessions !== undefined && inbox !== undefined) {
       out.tree = buildTree({
-        contexts: parseContextList(ctxR), plans: parsePlanList(planR), sessions: parseSessionList(sessR), inbox: inbox.rows,
-        cursor: Math.min(cursorOf(ctxR, "context list"), cursorOf(planR, "plan list"), cursorOf(sessR, "session list"), inbox.cursor),
+        contexts: parseContextList(ctxR), plans: parsedPlans, sessions: parsedSessions, inbox: inbox.rows,
+        cursor: Math.min(cursorOf(ctxR, "context list"), cursorOf(planR!, "plan list"), cursorOf(sessR!, "session list"), inbox.cursor),
       });
     }
-    if (panes.has("inbox") && inbox !== undefined) out.inbox = buildInbox(inbox, sessR === undefined ? [] : parseSessionList(sessR));
+    if (panes.has("inbox") && inbox !== undefined) {
+      const curateContexts = [
+        ...new Set(
+          inbox.rows
+            .filter((r) => r.kind === "curate-retire" && r.context !== null)
+            .map((r) => r.context as string),
+        ),
+      ];
+      const curationByContext = new Map<string, readonly CurationRecord[]>();
+      if (curateContexts.length > 0) {
+        await Promise.all(
+          curateContexts.map(async (ctxId) => {
+            try {
+              const r = await cpd.json(["context", "curation", `--context=${ctxId}`, "--limit=10"]);
+              curationByContext.set(ctxId, parseCuration(r));
+            } catch {
+              // ignore curation fetch failure so inbox still loads
+            }
+          }),
+        );
+      }
+      out.inbox = buildInbox(inbox, parsedSessions ?? [], {
+        ...(parsedPlans !== undefined ? { plans: parsedPlans } : {}),
+        curationByContext,
+      });
+    }
     if (panes.has("plan")) if (showR === undefined) out.plan = null;
     else if (showR !== null) out.plan = buildPlanView(parsePlanShow(showR));
     return out;

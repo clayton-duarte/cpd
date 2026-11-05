@@ -58,14 +58,16 @@ Plugin order is `react()`, `tailwindcss()`, `cpdWebPlugin()`; `server: { port: 5
 
 1. `@import "tailwindcss";` (first line, nothing before it)
 2. `@import "tw-animate-css";`
-3. `@import "../lib/typeset.css";` (2g: the shadcn typeset file, hand-copied, `web/src/lib/typeset.css`)
-4. `@custom-variant dark (&:is(.dark *));`
-5. `@theme inline { ... }` (2b: tokens)
-6. `:root, .dark { ... }` (2b: raw values)
-7. `@layer base { ... }` (base rules below)
-8. `@utility glyph...` blocks and `@keyframes dango-spin` and the reduced-motion media query (2c)
-9. the `.typeset-chat` rule set (2g)
-10. the structural rules that stay plain CSS (table below)
+3. `@import "../lib/shadcn-tailwind.css";` (2h: the shadcn utilities: keyframes, custom variants, `no-scrollbar`, `scroll-fade*`, `shimmer*`; pro-d55)
+4. `@import "../lib/typeset.css";` (2g: the shadcn typeset file, hand-copied, `web/src/lib/typeset.css`)
+5. `@custom-variant dark (&:is(.dark *));`
+6. `@theme inline { ... }` (2b: tokens)
+7. `:root, .dark { ... }` (2b: raw values)
+8. `@layer base { ... }` (base rules below)
+9. `@utility glyph...` blocks and `@keyframes dango-spin` and the reduced-motion media query (2c)
+10. the `.typeset-chat` rule set (2g)
+11. `@keyframes prompt-border-pulse` and `.prompt-border-pulse` (2h; pro-d58)
+12. the structural rules that stay plain CSS (table below)
 
 `@import "shadcn/tailwind.css"` is **not** used: the `shadcn` package is not a dependency. The cockpit is dark only: the Dango values are set on `:root` and on `.dark`, so components render the same with or without `<html class="dark">`. No light theme.
 
@@ -98,8 +100,10 @@ Cursor is `#ecaec7` (`--sakura-bright`) and selection is `#5a504a` (`--line`) (r
 | `[data-column] { grid-row:2; overflow:auto; min-width:0; display:flex; flex-direction:column }` | **kept** except `grid-row` and `overflow`: `height: 100%; overflow: hidden; min-width: 0; display: flex; flex-direction: column` (the split panels scroll, not the column; the column fills its Panel) | `[data-column="center"] { min-height: 0 }` kept (test 3) |
 | `[aria-label="Plan pane"] { max-height:30%; overflow-y:auto; flex:none }` | **replaced** | the resizable plan Panel (3c). Its scrolling is `[data-part="plan-panel"] { overflow-y: auto; min-height: 0 }`. The `max-height` is replaced by the Panel `maxSize="80%"`. Test 3 changes: the `declsMatching(/plan/i)` check keeps `overflow-y: auto` and drops the `max-height` assertion (owned by `ui-impl-shell`). |
 | `[data-column] > main { flex:1; min-height:0; overflow:auto }` | **removed** | `main[aria-label="Chat"]` is inside the chat Panel and fills it with `h-full min-h-0` utilities |
-| `[data-chat-dropzone] {...}`, `[data-part="transcript"] {...}`, `[role="log"] {...}`, `[data-action="jump-to-bottom"] {...}` | **kept verbatim** | pinned by test 2 and the transcript virtualization contract |
-| `[data-diff="add"] { background:#e6ffed }`, `[data-diff="remove"] { background:#ffeef0 }` | **replaced** | light-mode hex on a dark UI; replaced by tone utilities in `DESIGN-chat.md` (`bg-status-done/[0.11]`, `bg-status-blocked/10`). The `data-diff` attributes are KEPT. |
+| `[data-chat-dropzone] {...}`, `[data-part="transcript"] {...}` | **kept verbatim** | pinned by test 2 and the transcript virtualization contract |
+| `[role="log"] {...}`, `[data-action="jump-to-bottom"] {...}` | **removed** (pro-d55) | the transcript is a shadcn `MessageScroller` (DESIGN-chat 2.8): its viewport and its `MessageScrollerButton` (`data-action="jump-to-bottom"`) position and style themselves |
+| `[data-shell] aside[aria-label="Context tree column"] { overflow: hidden }` | **added** (pro-d50) | the tree column never scrolls itself; the Sidebar's `SidebarContent` scrolls its sections |
+| `[data-diff="add"] { background:#e6ffed }`, `[data-diff="remove"] { background:#ffeef0 }` | **removed** | light-mode hex on a dark UI. The `data-diff` attributes are KEPT on `CodeBlockLine`; the tone utilities are in `DESIGN-chat.md` 3.6 (`bg-status-done/[0.11]`, `bg-status-blocked/10`). |
 | `[data-side-by-side] { display:grid; grid-template-columns:1fr 1fr; gap:.5rem }` | **replaced (defect fix)** | Known defect: `AskCard` emits `data-layout="side-by-side"` (CONTRACT 1500), but the rule styles `[data-side-by-side]`, which matches nothing, so the two-column layout never applied. The selector becomes `[data-layout="side-by-side"]`; the final layout is in `DESIGN-compose.md`. |
 | `button:disabled, textarea:disabled, select:disabled { opacity:.5; cursor:not-allowed }` | **kept** | |
 | `[data-shell] > header { grid-row:1; grid-column:1 / -1 }`, `[data-shell] > footer { grid-row:3; grid-column:1 / -1 }` | **kept** | |
@@ -463,8 +467,20 @@ Written by hand (A2) from `https://ui.shadcn.com/r/styles/radix-rhea/<name>.json
 | `sidebar.tsx` | `Sidebar`, `SidebarContent`, `SidebarGroup`, `SidebarGroupAction`, `SidebarGroupContent`, `SidebarGroupLabel`, `SidebarMenu`, `SidebarMenuAction`, `SidebarMenuBadge`, `SidebarMenuButton`, `SidebarMenuItem`, `SidebarMenuSub`, `SidebarMenuSubButton`, `SidebarMenuSubItem` | styled wrappers only, no state and no context: no `SidebarProvider`, no `useSidebar`, no cookie or storage. `Sidebar` `collapsible`: `offcanvas`, `icon`, `none` (the Context Tree uses `none`). Uses `radix-ui` `Slot` (`asChild`) and `class-variance-authority`, both already in `web/package.json`. `data-slot` and `data-sidebar` on each part. The Context Tree (3d) is the only consumer. | shadcn/ui `sidebar`, hand-written as above |
 | `message-scroller.tsx` | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton`, `useMessageScroller`, `useMessageScrollerScrollable`, `useMessageScrollerVisibility` | built on `@shadcn/react/message-scroller` (namespace `Provider`, `Root`, `Viewport`, `Content`, `Item`, `Button`). Props that matter: provider `autoScroll`, `defaultScrollPosition: "start" \| "end" \| "last-anchor"`, `scrollEdgeThreshold`; viewport `preserveScrollOnPrepend`; item `messageId`, `scrollAnchor`; button `direction: "start" \| "end"`. The file is provided for `DESIGN-chat.md`; the Phase 2 `Transcript` windowing and sticky auto-scroll (`data-row-key`, `data-at-bottom`) are **not** replaced by it. | registry `message-scroller` (uses `./button.tsx`, `ArrowDownIcon`) |
 | `questionnaire.tsx` | `Questionnaire`, `QuestionnaireActions`, `QuestionnaireChoice`, `QuestionnaireChoiceDescription`, `QuestionnaireChoices`, `QuestionnaireDescription`, `QuestionnaireError`, `QuestionnaireInput`, `QuestionnaireItem`, `QuestionnaireNext`, `QuestionnairePrevious`, `QuestionnaireProgress`, `QuestionnaireSkip`, `QuestionnaireSubmit`, `QuestionnaireTitle` | built on `@shadcn/react/questionnaire`; `shortcuts: "letters" \| "numbers"`; item `multiple`. | registry `questionnaire` (uses `./button.tsx`, `CheckIcon`) |
+| `alert.tsx` | `Alert`, `AlertTitle`, `AlertDescription` | `variant`: `default`, `destructive` (cva); `data-slot` `alert`. Used by the cockpit error toast in `App.tsx` (DESIGN-panes 4.8). | shadcn/ui `alert`, hand-written (pro-d55) |
+| `breadcrumb.tsx` | `Breadcrumb`, `BreadcrumbList`, `BreadcrumbItem`, `BreadcrumbLink` (`render` prop), `BreadcrumbPage`, `BreadcrumbSeparator`, `BreadcrumbEllipsis` | `nav` root, `ol` list, `li` item; `BreadcrumbLink` renders through `render`; `BreadcrumbPage` is the current crumb (`aria-current="page"`). Used by the Header (DESIGN-panes 4.1). | shadcn/ui `breadcrumb`, hand-written (pro-d60) |
+| `code-block.tsx` | `CodeBlock`, `CodeBlockHeader`, `CodeBlockTitle`, `CodeBlockActions`, `CodeBlockCopyButton`, `CodeBlockContent`, `CodeBlockLine`, `CodeBlockFooter` | `CodeBlockLine` carries `data-diff` and a `variant`; imports the `Button` part. Used for tool output and edit diffs (DESIGN-chat 3.6). | shadcn/ui `code-block`, hand-written (pro-d55) |
+| `dropdown-menu.tsx` | `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioGroup`, `DropdownMenuRadioItem`, `DropdownMenuLabel`, `DropdownMenuSeparator`, `DropdownMenuShortcut`, `DropdownMenuGroup`, `DropdownMenuPortal`, `DropdownMenuSub`, `DropdownMenuSubTrigger`, `DropdownMenuSubContent` | over the `DropdownMenu` primitive of `radix-ui` (already a dependency). Used by the TierSelector's model and Tier menus (DESIGN-compose 2). | shadcn/ui `dropdown-menu`, hand-written (pro-d55) |
+| `empty.tsx` | `Empty`, `EmptyHeader`, `EmptyMedia` (`variant="icon"`), `EmptyTitle`, `EmptyDescription`, `EmptyContent` | plain `div`/`p` parts. The transcript's empty state (DESIGN-chat 2.2). | shadcn/ui `empty`, hand-written (pro-d55) |
+| `hover-card.tsx` | `HoverCard`, `HoverCardTrigger`, `HoverCardContent` | over the `HoverCard` primitive of `radix-ui`. The Footer context card (DESIGN-compose 3). | shadcn/ui `hover-card`, hand-written (pro-d56) |
+| `input-group.tsx` | `InputGroup`, `InputGroupAddon` (`align` `block-start` \| `block-end` \| `inline-start` \| `inline-end`), `InputGroupButton`, `InputGroupText`, `InputGroupInput`, `InputGroupTextarea` | the frame of the composer (DESIGN-compose 1). `InputGroupButton` wraps the `Button` part; `InputGroupInput`/`InputGroupTextarea` wrap `Input`/`Textarea`. | shadcn/ui `input-group`, hand-written (pro-d54) |
+| `message.tsx` | `MessageGroup`, `Message` (`align` `start` \| `end`), `MessageAvatar`, `MessageContent`, `MessageHeader`, `MessageFooter` | plain `div` parts with `data-slot` and `data-align`. A transcript turn is a `Message` (DESIGN-chat 2.3, 2.4). | shadcn/ui `message`, hand-written (pro-d56) |
+| `progress.tsx` | `Progress` | over the `Progress` primitive of `radix-ui`; `value` 0 to 100. The Footer context bar (DESIGN-compose 3). | shadcn/ui `progress`, hand-written (pro-d56) |
+| `select.tsx` | `Select`, `SelectTrigger`, `SelectContent`, `SelectItem`, `SelectValue`, `SelectGroup`, `SelectLabel`, `SelectSeparator`, `SelectScrollUpButton`, `SelectScrollDownButton` | over the `Select` primitive of `radix-ui`. Written and exported; no cockpit or chat part imports it yet (the TierSelector uses `dropdown-menu`). | shadcn/ui `select`, hand-written (pro-d55) |
+| `spinner.tsx` | `Spinner` | a lucide `Loader2Icon` with `animate-spin`; the running marks of the Trace rows, tool groups and the Plan review's pending decision (DESIGN-chat 2.4.2, 3.4; DESIGN-compose 5). The Inbox async action uses `LoaderCircleIcon` directly (DESIGN-panes 4.8). | shadcn/ui `spinner`, hand-written (pro-d53) |
+| `tooltip.tsx` | `TooltipProvider`, `Tooltip`, `TooltipTrigger`, `TooltipContent` | over the `Tooltip` primitive of `radix-ui`. The message Copy action (DESIGN-chat 2.3). | shadcn/ui `tooltip`, hand-written (pro-d56) |
 
-`@shadcn/react` has only two subpath exports, `@shadcn/react/message-scroller` and `@shadcn/react/questionnaire`; `import … from "@shadcn/react"` fails. `message.tsx` and `code-block.tsx` are not written. Parts use only Tailwind utilities and the tokens of 2b; their registry class strings are kept except where a token name does not exist here (none known; unverified until the parts are compiled).
+`@shadcn/react` has only two subpath exports, `@shadcn/react/message-scroller` and `@shadcn/react/questionnaire`; `import … from "@shadcn/react"` fails. The twelve parts above (`alert`, `breadcrumb`, `code-block`, `dropdown-menu`, `empty`, `hover-card`, `input-group`, `message`, `progress`, `select`, `spinner`, `tooltip`) are new files in `web/src/ui/components/`, written by the same method (A2). `message.tsx` and `code-block.tsx` are written here; the earlier text that they were not is superseded. Parts use only Tailwind utilities and the tokens of 2b; their registry class strings are kept except where a token name does not exist here (none known; unverified until the parts are compiled).
 
 ### 2g. Typeset
 
@@ -493,6 +509,29 @@ The chat preset, in `app.css`, **unlayered** (it must beat the layered upstream 
 Applied by `Markdown.tsx` (`web/src/ui/chat/Markdown.tsx`): the root element of every rendered Markdown block is `<div className="typeset typeset-chat">`. `typeset-chat` is not applied anywhere else; the user bubble and the shell use plain utilities. **Resolution:** list indent 20px and 2px list gap and the `#92d1ca` 12px inline code are the board's rendered values (the handoff colour rule would forbid the mizu code colour; the board wins).
 
 ---
+### 2h. Shadcn utilities and the prompt border pulse (pro-d55, pro-d58)
+
+**`web/src/lib/shadcn-tailwind.css`** is one file, imported by `app.css` right after `tw-animate-css` (2a item 3). It is not a package and adds no dependency. Its content, which the tests may rely on by name:
+
+- `@theme inline` keyframes `accordion-down` and `accordion-up` (height from `--radix-accordion-content-height`).
+- Custom variants: `data-open` (`[data-state="open"]` or `[data-open]` not `"false"`), `data-closed`, `data-checked`, `data-unchecked`, `data-selected` (`[data-selected="true"]`), `data-disabled`, `data-active`, `data-horizontal` (`[data-orientation="horizontal"]`), `data-vertical`.
+- Utilities: `no-scrollbar`; `scroll-fade`, `scroll-fade-y`, `scroll-fade-x`, `scroll-fade-t|b|l|r|s|e` and their `-*` size forms, `scroll-fade-none`; `shimmer` with `shimmer-once`, `shimmer-reverse`, `shimmer-none`, `shimmer-color-*`, `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`. A reduced-motion rule turns `shimmer` off.
+- `@property` declarations for `--scroll-fade-*`, `--shimmer-*`.
+
+The transcript's streaming marker text `Working…` uses `shimmer` (DESIGN-chat 2.4).
+
+**`prompt-border-pulse`** is defined in `app.css` (unlayered, after the typeset rules):
+
+```css
+@keyframes prompt-border-pulse {
+  0%, 100% { border-color: var(--border); box-shadow: 0 0 0 0 transparent; }
+  50%      { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 28%, transparent); }
+}
+.prompt-border-pulse { animation: prompt-border-pulse 1.8s ease-in-out infinite; }
+```
+
+The class is added to the composer's `InputGroup` (DESIGN-compose 1.2) **only while** the prompt is busy: `busy` is `view.busy || view.pending.some(p => p.state === "sending")` (DESIGN-compose 0). The static check `view.ref.state === "working"` is dropped (pro-d58). The rule has no reduced-motion variant in the preview (unverified whether one is needed).
+
 ## 3. Cockpit shell
 
 Files: `web/src/ui/cockpit/Header.tsx`, `StatusBar.tsx`, `ContextTree.tsx`, `Shell.tsx`, `web/src/ui/App.tsx`. All imports relative. Tests: `shell.dango.test.tsx`, `tree.dango.test.tsx` (new) and the updated Phase 2 tests (`App.test.tsx`, `AppMemo.test.tsx`, `Frame.test.tsx`, `Shell.test.tsx`, `ContextTree.test.tsx`, `app.css.test.ts`).
@@ -505,7 +544,9 @@ File `web/src/ui/cockpit/Header.tsx`.
 
 ```ts
 export interface HeaderProps {
-  /** Context and Plan of the Plan pane (from `cockpit.plan`: contextId, planId). null/absent: no breadcrumb. */
+  /** The breadcrumb crumbs, built by `App` (DESIGN-panes 4.1). When passed, `location` is ignored. */
+  readonly crumbs?: readonly BreadcrumbCrumb[];
+  /** Fallback when `crumbs` is absent: Context and Plan of the Plan pane (from `cockpit.plan`). null/absent: no breadcrumb. */
   readonly location?: { readonly context: string; readonly plan: string | null } | null;
   /** `inbox.engineRunning`; null before the first snapshot. Absent is treated as null. */
   readonly engine?: boolean | null;
@@ -524,10 +565,14 @@ div[data-part="header-bar"]                                  flex h-full items-c
 ├─ a[data-part="home"][href="#"][aria-label="cpd home"]      flex items-center no-underline
 │   ├─ span[data-emblem].sr-only      text "C-P-D"            KEPT: the hook and the exact text (Frame.test 1)
 │   └─ span[data-part="phi"][aria-hidden="true"]  text "φ"   font-display font-bold text-[28px] leading-none text-fg-strong
-├─ nav[aria-label="Location"][data-part="breadcrumb"]        font-mono text-[12px] text-muted-foreground flex items-center gap-1.5   (only when location !== null)
-│   ├─ span[data-part="breadcrumb-context"]  {location.context}      text-muted-foreground
-│   ├─ span[aria-hidden="true"]  "/"                                  text-line     (only when location.plan !== null)
-│   └─ span[data-part="breadcrumb-plan"]     {location.plan}          text-fg-strong (only when location.plan !== null)
+├─ nav[aria-label="Location"][data-part="breadcrumb"]        shadcn Breadcrumb (2f); font-mono text-xs; only when there is at least one crumb (DESIGN-panes 4.1)
+│   └─ ol  BreadcrumbList; one li per crumb, a BreadcrumbSeparator "/" between items
+│       ├─ li > span[data-part="breadcrumb-host"]     {host}     text-muted-foreground      (a button when the crumb has onClick)
+│       ├─ li > span[data-part="breadcrumb-group"]    standing | contexts | archive   text-muted-foreground
+│       ├─ li > span[data-part="breadcrumb-context"]  {Manager crumb}    a button when it has onClick
+│       ├─ li > span[data-part="breadcrumb-plan"]     {Lead crumb}       a button when it has onClick
+│       └─ li > span[data-part="breadcrumb-worker"]   {Worker crumb}     a button when it has onClick
+    The last crumb is the current page: `BreadcrumbPage` (`aria-current="page"`, `font-medium text-fg-strong`).
 ├─ span.flex-1
 ├─ button[data-part="search"][type="button"]                 only when onOpenSearch is passed
 │     flex items-center gap-2.5 w-[420px] max-w-[40vw] h-7 px-2.5 rounded-[7px] border border-input bg-card text-muted-foreground text-[12.5px]
@@ -544,7 +589,7 @@ div[data-part="header-bar"]                                  flex h-full items-c
 - The search button has no `aria-label`; its accessible name is its text `Jump to context, plan, job, PR…`. Click and `⌘K` / `Ctrl+K` (a `keydown` listener on `document` while the Header is mounted, `metaKey || ctrlKey` and `key === "k"`, `preventDefault()`) both call `onOpenSearch`; the listener is registered only when `onOpenSearch` is passed.
 - Engine copy is exactly `engine` + `running` | `not running` | `unknown`; `data-state` is `running` when `engine === true`, `stopped` when `false`, `unknown` otherwise. The board's `connected · pi + durable` is replaced: the data is `InboxModel.engineRunning` only. `not running` is the Phase 2 inbox phrase (`Engine is not running`).
 - **Resolution:** the φ colour is `#f3ead9` (`text-fg-strong`), as the board renders it; COMPONENTS §9 says Shiro (`#aba3af`) and is overruled. **Resolution:** Phase 2 pins `[data-emblem]` text `C-P-D`; the φ is drawn by a separate aria-hidden span so that text stays exact.
-- Not wired: command palette (`onOpenSearch` is not passed by `App`, so no search button), breadcrumb as a link, the engine pill's `pi + durable` detail.
+- Not wired: command palette (`onOpenSearch` is not passed by `App`, so no search button), the engine pill's `pi + durable` detail. The breadcrumb crumbs are built and clickable (DESIGN-panes 4.1).
 
 ### 3b. Status Bar (30px)
 
@@ -594,7 +639,7 @@ div[data-part="status-bar"]                                flex h-full w-full it
 
 **Buttons, behaviour** (pro-d40):
 
-- **Reset layout** resets the resizable panel sizes to the TUI defaults and nothing else: tree 20%, centre 58%, inbox 22% of the columns; plan 40% and chat 60% of the centre (3c). No confirmation, no respawn, no reload, no change to the selection or to the costs flag. A collapsed panel is resized to its default, so it opens. The TUI reset only resizes panes (`tui/src/cockpit.rs`, `reset_layout`). The panel handles are local to `Shell` (3c); how the bar reaches them is the implementation's choice (a ref or a context inside `Shell`). The behaviour is fixed here.
+- **Reset layout** resets the resizable panel sizes to the column defaults of pro-d50 and nothing else: tree 20%, centre 50%, inbox 30% of the columns; plan 40% and chat 60% of the centre (3c). The values were 20 / 58 / 22 under the TUI defaults until pro-d50, which is newer and governs (the Lead's decision). `cockpit/layout.ts` changes to match. No confirmation, no respawn, no reload, no change to the selection or to the costs flag. A collapsed panel is resized to its default, so it opens. The TUI reset only resizes panes (`tui/src/cockpit.rs`, `reset_layout`). The panel handles are local to `Shell` (3c); how the bar reaches them is the implementation's choice (a ref or a context inside `Shell`). The behaviour is fixed here.
 - **Legend** opens the Legend dialog (below).
 - **Logs** opens the Logs dialog (below).
 - **Costs** flips the cost display of the Context and Plan rows (3d). It opens no popup. The flag is React state of `App`, off at every load, and is never stored (not in `sessionStorage`, unlike the selection). `aria-pressed` shows it.
@@ -701,9 +746,9 @@ div[data-shell]                                                   grid, one colu
 ├─ header[aria-label="Cockpit header"]     bg-background           (row 1)
 ├─ ResizablePanelGroup id="cpd-columns" data-part="columns-group" orientation="horizontal"   min-h-0 flex-1   (row 2; renders a div)
 │   ├─ ResizablePanel id="tree" data-part="tree-panel"            defaultSize 20% · minSize 12% · maxSize 40% · collapsible · collapsedSize 0%
-│   │   └─ aside[aria-label="Context tree column"]   h-full overflow-y-auto      {tree}   (Sidebar, 3d)
+│   │   └─ aside[aria-label="Context tree column"]   h-full overflow-hidden      {tree}   (Sidebar, 3d)
 │   ├─ ResizableHandle id="split-left" data-part="split-left" withHandle aria-label="Resize context tree and center"
-│   ├─ ResizablePanel id="center" data-part="center-panel"        defaultSize 58% · minSize 30%   (not collapsible)
+│   ├─ ResizablePanel id="center" data-part="center-panel"        defaultSize 50% · minSize 30%   (not collapsible)
 │   │   └─ div[data-column="center"][data-part="center-frame"][data-plan-state="open|collapsed|zoomed"]   relative flex h-full min-h-0 flex-col
 │   │       ├─ ResizablePanelGroup id="cpd-center" data-part="center-group" orientation="vertical"   h-full min-h-0 flex-1   (renders a div)
 │   │       │   ├─ ResizablePanel id="plan" data-part="plan-panel" panelRef={planRef}   defaultSize 40% · minSize 20% · maxSize 80% · collapsible · collapsedSize 44px
@@ -715,7 +760,7 @@ div[data-shell]                                                   grid, one colu
 │   │           ├─ button[type="button"][data-action="plan-collapse"]   26x26
 │   │           └─ button[type="button"][data-action="plan-zoom"][aria-pressed]   26x26
 │   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
-│   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 22% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
+│   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 30% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
 │       └─ aside[aria-label="Inbox column"]   h-full overflow-y-auto      {inbox}   (DESIGN-panes 2)
 └─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (row 3)
 ```
@@ -728,10 +773,10 @@ div[data-shell]                                                   grid, one colu
 |---|---|
 | `ResizablePanelGroup` outer (`cpd-columns`) | `orientation="horizontal"`, `id="cpd-columns"`, no `defaultLayout`, no storage (sizes are not persisted) |
 | tree `ResizablePanel` | `id="tree"`, `defaultSize="20%"`, `minSize="12%"`, `maxSize="40%"`, `collapsible`, `collapsedSize="0%"` |
-| `ResizableHandle` left | `id="split-left"`, `withHandle`, `aria-label="Resize context tree and center"`, `data-part="split-left"` |
-| centre `ResizablePanel` | `id="center"`, `defaultSize="58%"`, `minSize="30%"`, not collapsible |
-| `ResizableHandle` right | `id="split-right"`, `withHandle`, `aria-label="Resize center and inbox"`, `data-part="split-right"` |
-| inbox `ResizablePanel` | `id="inbox"`, `defaultSize="22%"`, `minSize="14%"`, `maxSize="45%"`, `collapsible`, `collapsedSize="0%"` |
+| `ResizableHandle` left | `id="split-left"`, `withHandle`, `aria-label="Resize context tree and center"`, `data-part="split-left"`, `onDoubleClick` → `treeRef.current?.resize("20%")` |
+| centre `ResizablePanel` | `id="center"`, `defaultSize="50%"`, `minSize="30%"`, not collapsible |
+| `ResizableHandle` right | `id="split-right"`, `withHandle`, `aria-label="Resize center and inbox"`, `data-part="split-right"`, `onDoubleClick` → `inboxRef.current?.resize("30%")` |
+| inbox `ResizablePanel` | `id="inbox"`, `panelRef={inboxRef}`, `defaultSize="30%"`, `minSize="14%"`, `maxSize="45%"`, `collapsible`, `collapsedSize="0%"` |
 | `ResizablePanelGroup` inner (`cpd-center`) | `orientation="vertical"`, `id="cpd-center"`, no `defaultLayout`, no storage |
 | plan `ResizablePanel` | `id="plan"`, `panelRef={planRef}`, `defaultSize="40%"`, `minSize="20%"`, `maxSize="80%"`, `collapsible`, `collapsedSize="44px"` (the title row stays visible), `onResize={sync}` |
 | chat `ResizablePanel` | `id="chat"`, `panelRef={chatRef}`, `defaultSize="60%"`, `minSize="20%"`, `collapsible`, `collapsedSize="0%"`, `onResize={sync}` |
@@ -739,7 +784,7 @@ div[data-shell]                                                   grid, one colu
 
 `planRef`, `chatRef` come from `usePanelRef()`. `sync()` recomputes `mode` from `planRef.current?.isCollapsed()` and `chatRef.current?.isCollapsed()`: both false → `open`; plan collapsed → `collapsed`; chat collapsed → `zoomed`. Both collapsed cannot happen (the sizes sum to 100%).
 
-Handle semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation` and `aria-value*` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the handle exists with `role="separator"` and its `aria-label`, and is focusable. Double-click on a handle resets the panels to their default sizes (library default).
+Handle semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation` and `aria-value*` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the handle exists with `role="separator"` and its `aria-label`, and is focusable. The two outer handles override the library's double-click (see the table above); the inner handle keeps the library default (unverified).
 
 **Plan controls.** Buttons: both `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icons lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`, `MaximizeIcon`, `MinimizeIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
 
@@ -755,13 +800,15 @@ Handle semantics come from the library, not written by cpd: `role="separator"`, 
 - Dragging an inner handle below the plan `minSize` collapses the plan (library behaviour for a `collapsible` panel), above it expands it again; the same for the chat. Both use the same `sync()`.
 - jsdom has no layout: a test mocks `react-resizable-panels` (external dependency) and asserts the props tables above and that each button calls `collapse()` / `expand()` on the right ref; it does not assert pixel sizes.
 
-**Columns.** The tree panel starts at 20% of the row width (12% to 40%), the centre at 58% (min 30%), the Inbox at 22% (14% to 45%). The tree and inbox panels collapse when dragged below their minimum (library behaviour, `collapsedSize="0%"`). The handles resize; sizes are not persisted. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently (`overflow-y: auto` on both asides and on the plan panel; the transcript `[role="log"]` scrolls itself).
+**Columns (pro-d50).** The defaults are the Context tree at 20% of the row width (12% to 40%), the centre at 50% (min 30%), the Inbox at 30% (14% to 45%). The tree and inbox panels collapse when dragged below their minimum (library behaviour, `collapsedSize="0%"`). The handles resize; sizes are not persisted.
 
-Not built: persisted panel sizes, `Reset layout` (Status Bar), narrow-screen drawers, the board's `Resize` double-click custom behaviour.
+**Double-click resets (pro-d50).** A double-click on `split-left` resets the tree panel to 20% (`treeRef.current?.resize("20%")`); a double-click on `split-right` resets the Inbox panel to 30% (`inboxRef.current?.resize("30%")`). Neither resets the centre. The inner `split` handle has no override here (library default; unverified). Tests mock `react-resizable-panels` and assert the call, not pixels. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently (`overflow-y: auto` on both asides and on the plan panel; the transcript `[role="log"]` scrolls itself).
+
+Built: the double-click resets above, and `Reset layout` (3g, values from pro-d50). Not built: persisted panel sizes, narrow-screen drawers.
 
 ### 3d. Context Tree (sidebar, 20% panel)
 
-File `web/src/ui/cockpit/ContextTree.tsx`. The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props **KEPT**, unchanged:
+File `web/src/ui/cockpit/ContextTree.tsx`. pro-d48..pro-d61 name no change to the tree: the Sidebar below and its menus (3g) stand as written, and the approved preview's tree rework is not part of this contract (merge rule: main wins where no decision names the behaviour). The tree's only pro-d50 effect is its aside's `overflow-hidden` (3c). The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props **KEPT**, unchanged:
 
 ```ts
 export function ContextTree(props: {
@@ -874,7 +921,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 - Chat slot when no session is selected: `<p data-empty>Select a session</p>` (KEPT copy and hook), restyled `grid h-full place-items-center text-muted-foreground`.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
 - `cockpit.status` is the status snapshot the server sends (3b, Data sources). The Status Bar's buttons, dialogs and the reset of 3c are wired inside the bar and `Shell`; `App` passes the snapshot and the costs flag only. `costsOn` is `App` state (`useState(false)`), never stored (3b).
-- Not built in `App`: `onOpenSearch`, `onNewContext`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is absent for a Manager-only selection.
+- Not built in `App`: `onOpenSearch`, `onNewContext`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is built from the tree and the selection (DESIGN-panes 4.1), so a Manager-only selection has crumbs too.
 
 ### 3f. Phase 2 tests this section changes (owner `ui-impl-shell`)
 
@@ -994,3 +1041,26 @@ An archived fork Session has no Delete.
 - **Error isolation.** In `loadPanes`, a failing `plan show` does not drop the tree or inbox of the same batch: the Plan becomes `null` and the other panes apply. When the Plan is the only pane asked for, its error is thrown. A failure while building the Plan view is handled the same way.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
+
+## 4. Amendments pro-d48..pro-d61: where each decision is contracted
+
+Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
+
+| Decision | Contract | Where |
+|---|---|---|
+| pro-d48 fonts | Roboto and Roboto Mono bundled; `--font-sans`, `--font-mono`, `--font-display`, `--font-heading` | 2b (already on main) |
+| pro-d49 tier filter | seven-item ToggleGroup, right-aligned, selection rules | DESIGN-panes 2.4 |
+| pro-d50 columns and gap | `gap-8` title to filters; popover collapse; defaults 20 / 50 / 30; double-click resets; Reset layout | 3c, 3g, DESIGN-panes 2.4, 4.2 |
+| pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions columns | DESIGN-panes 2.5 |
+| pro-d52 full-height columns | media and actions are full-height columns | DESIGN-panes 2.5 |
+| pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | DESIGN-panes 2.6, 2.7, 4.8; CONTRACT 11.2 |
+| pro-d54 composer | PromptInput layout: header, body and textarea, footer with tools | DESIGN-compose 1 |
+| pro-d55 shadcn parts | transcript, messages, reasoning, tools, folds, telemetry, composer, model selector and questionnaire use vanilla shadcn parts; `shadcn-tailwind.css` | 2h, DESIGN-chat 2, 3, DESIGN-compose 2, 4 |
+| pro-d56 messages and dialogs | shadcn `Message` with muted `Bubble` and Copy `Tooltip`; AskCard Questionnaire; PlanReviewCard Confirmation Item; Footer context HoverCard and Progress; edit tool blocks closed | DESIGN-chat 2.3, 2.4, 3.2; DESIGN-compose 3, 4, 5 |
+| pro-d57 turns and composer | 85% turns; no Thinking or Running loaders; no telemetry row; no header toggles; Send only, follow-up; auto-scroll at 160 px; tool paths truncated; sent time | DESIGN-chat 0.2, 1, 2.2, 2.3, 2.8.1, 3.2; DESIGN-compose 1.4, 3 |
+| pro-d58 border pulse | `prompt-border-pulse` on the InputGroup while busy or a send is pending | 2h; DESIGN-compose 1.5 |
+| pro-d59 no stamp | no session-key stamp on assistant messages | DESIGN-chat 2.4 |
+| pro-d60 header and ChatHeader | ChatHeader title only; Header `Breadcrumb` crumbs; `ask_user_question` interactive for pi | 3a; DESIGN-panes 4.1; DESIGN-chat 1; CONTRACT 11.4 |
+| pro-d61 chat items | Chain of Thought grouping; image thumbnails on optimistic and echoed user messages | DESIGN-chat 2.3.1, 2.4.2, 2.7; CONTRACT 11.3 |
+
+**Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.

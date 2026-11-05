@@ -3,7 +3,6 @@ import type { DragEvent, ReactElement } from "react";
 import type { Connection } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
-import { Footer } from "./chat/Footer.tsx";
 import { Transcript } from "./chat/Transcript.tsx";
 import { buildPrompt, filesFromDrop } from "./composer/attachments.ts";
 import type { FileReaderBoundary } from "./composer/attachments.ts";
@@ -16,8 +15,6 @@ import { PlanReviewCard } from "./dialogs/PlanReviewCard.tsx";
 function useChatToggles(): {
   thinking: "folded" | "expanded";
   tools: "grouped" | "expanded";
-  toggleThinking: () => void;
-  toggleTools: () => void;
 } {
   const [thinking, setThinking] = useState<"folded" | "expanded">("folded");
   const [tools, setTools] = useState<"grouped" | "expanded">("grouped");
@@ -33,12 +30,7 @@ function useChatToggles(): {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  return {
-    thinking,
-    tools,
-    toggleThinking: () => setThinking((v) => (v === "folded" ? "expanded" : "folded")),
-    toggleTools: () => setTools((v) => (v === "grouped" ? "expanded" : "grouped")),
-  };
+  return { thinking, tools };
 }
 
 const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes("Files");
@@ -49,7 +41,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
-  const isBusy = view.busy || view.ref?.state === "working" || view.pending.some((p) => p.state === "sending");
+  const isBusy = view.busy || view.pending.some((p) => p.state === "sending");
   return (
     <div
       data-chat-dropzone
@@ -64,11 +56,6 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         title={view.title}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
-        busy={isBusy}
-        thinking={toggles.thinking}
-        onToggleThinking={toggles.toggleThinking}
-        tools={toggles.tools}
-        onToggleTools={toggles.toggleTools}
       />
       <Transcript
         items={view.transcript.items}
@@ -80,28 +67,28 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         thinking={toggles.thinking}
         tools={toggles.tools}
-        busy={isBusy}
       />
       {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (
         <PlanReviewCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       )}
-      <TierSelector
-        capabilities={view.capabilities}
-        footer={view.footer}
-        models={view.models}
-        busy={view.busy}
-        onConfigure={(c) => connection.configure(c)}
-        onRequestModels={() => connection.listModels()}
-      />
-      <Footer footer={view.footer} />
       <Composer
         ref={composer}
         capabilities={view.capabilities}
         busy={isBusy}
         queued={view.queued}
         reader={reader}
+        settings={
+          <TierSelector
+            capabilities={view.capabilities}
+            footer={view.footer}
+            models={view.models}
+            busy={view.busy}
+            onConfigure={(c) => connection.configure(c)}
+            onRequestModels={() => connection.listModels()}
+          />
+        }
         onSubmit={({ text, attachments, whenBusy }) => {
           const { text: prompt, images } = buildPrompt(text, attachments);
           connection.submit({ text: prompt, images, whenBusy });

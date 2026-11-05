@@ -19,7 +19,7 @@ function render(rows: InboxRow[]) {
   const m = mount(<Inbox inbox={model(rows)} onAction={onAction} onSelectSession={onSelectSession} />);
   return { ...m, onAction, onSelectSession };
 }
-const items = (c: Element) => Array.from(c.querySelectorAll("a[data-kind]"));
+const items = (c: Element) => Array.from(c.querySelectorAll("[data-kind][data-id]"));
 function click(el: Element | null | undefined): void {
   if (el === null || el === undefined) throw new Error("element not found");
   act(() => {
@@ -114,28 +114,26 @@ it("a label with a newline shows its second line as the item description", () =>
   m.unmount();
 });
 
-it("a linked row is an anchor that opens its url in a new tab", () => {
+it("a linked row is a button item whose title and icon are anchors to its url", () => {
   const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", url: "https://example.test/run/1" })]);
   const el = items(m.container)[0];
-  expect(el?.tagName).toBe("A");
-  expect(el?.getAttribute("href")).toBe("https://example.test/run/1");
-  expect(el?.getAttribute("target")).toBe("_blank");
-  expect(el?.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(el?.tagName).toBe("DIV");
+  expect(el?.getAttribute("role")).toBe("button");
+  for (const a of [el?.querySelector('[data-slot="item-title"] a'), el?.querySelector('a[data-part="item-link"]')]) {
+    expect(a?.getAttribute("href")).toBe("https://example.test/run/1");
+    expect(a?.getAttribute("target")).toBe("_blank");
+    expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
+  }
   expect(el?.querySelector('[data-slot="item-actions"] svg.lucide-external-link')).not.toBeNull();
   m.unmount();
 });
 
-it("an unlinked row is a placeholder anchor whose click is prevented", () => {
+it("an unlinked row is a button item with a chevron and no anchor", () => {
   const m = render([row(1, "dialog", "Need an answer", { sessionId: "s1" })]);
   const el = items(m.container)[0];
-  expect(el?.tagName).toBe("A");
-  expect(el?.getAttribute("href")).toBe("#");
-  expect(el?.getAttribute("target")).toBeNull();
-  const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
-  act(() => {
-    el?.dispatchEvent(ev);
-  });
-  expect(ev.defaultPrevented).toBe(true);
+  expect(el?.getAttribute("role")).toBe("button");
+  expect(el?.getAttribute("tabindex")).toBe("0");
+  expect(el?.querySelector("a")).toBeNull();
   expect(el?.querySelector('[data-slot="item-actions"] svg.lucide-chevron-right')).not.toBeNull();
   m.unmount();
 });
@@ -168,10 +166,11 @@ it("the item title is coloured by urgency", () => {
   m.unmount();
 });
 
-it("an inbox row has no inline action buttons and no key footer", () => {
+it("an inbox row has one bottom action button and no key footer", () => {
   const dismiss = { kind: "inbox.dismiss", itemId: 1 } as const;
-  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", actions: [{ label: "Dismiss", action: dismiss }] })]);
-  expect(m.container.querySelector("a button")).toBeNull();
+  const m = render([row(1, "dialog", "Need an answer", { urgency: "red", sessionId: "s1", actions: [{ label: "Dismiss", action: dismiss }] })]);
+  const buttons = m.container.querySelectorAll('[data-slot="item-actions"] button[data-part="item-action"]');
+  expect(Array.from(buttons).map((b) => b.textContent)).toEqual(["Dismiss"]);
   expect(m.container.querySelector('[data-part="actions"]')).toBeNull();
   expect(m.container.querySelector('[data-part="bar"]')).toBeNull();
   expect(m.container.querySelector('[data-part="footer"]')).toBeNull();
@@ -197,12 +196,15 @@ it("left click on a PR row selects the Plan Lead session", () => {
   m.unmount();
 });
 
-it("left click on a review-requested row copies its url", () => {
+it("left click on a review-requested row copies its url and opens it", () => {
   const writeText = vi.fn(async () => undefined);
+  const open = vi.fn();
   vi.stubGlobal("navigator", { clipboard: { writeText } });
+  vi.stubGlobal("open", open);
   const m = render([row(1, "review-requested", "Review PR 9", { urgency: "red", url: "https://example.test/pr/9" })]);
   click(items(m.container)[0]);
   expect(writeText).toHaveBeenCalledExactlyOnceWith("https://example.test/pr/9");
+  expect(open).toHaveBeenCalledExactlyOnceWith("https://example.test/pr/9", "_blank", "noopener,noreferrer");
   expect(m.onSelectSession).not.toHaveBeenCalled();
   m.unmount();
 });
@@ -271,7 +273,7 @@ const mixed = () => [
   row(4, "unread", "w1", { urgency: "white" }),
 ];
 const btn = (c: Element, name: string) => c.querySelector<HTMLButtonElement>(`[data-slot="toggle-group-item"][data-tier-filter="${name}"]`);
-const countOf = (b: Element | null) => b?.querySelector('[data-part="filter-count"]')?.textContent;
+const countOf = (b: Element | null) => b?.querySelectorAll("span")[1]?.textContent;
 const shown = (c: Element) => items(c).map((el) => el.getAttribute("data-id"));
 const on = (c: Element, name: string) => btn(c, name)?.getAttribute("data-state") === "on";
 const pressed = (c: Element, name: string) => btn(c, name)?.getAttribute("aria-pressed");
@@ -286,7 +288,7 @@ it("the filter bar has an all button and the six tier buttons with a count each"
   expect(names).toEqual(["all", ...TIER_NAMES]);
   for (const n of names) expect(countOf(btn(m.container, n ?? ""))).toMatch(/^\d+$/);
   expect(btn(m.container, "blocker")?.textContent).toBe("blocker2");
-  expect(btn(m.container, "blocker")?.querySelector('[data-part="filter-count"]')?.className).toContain("font-mono");
+  expect(btn(m.container, "blocker")?.querySelectorAll("span")[1]?.className).toContain("font-mono");
   for (const n of ["all", ...TIER_NAMES]) {
     expect(on(m.container, n)).toBe(true);
     expect(pressed(m.container, n)).toBe("true");
@@ -357,12 +359,12 @@ it("selecting every tier returns to all", () => {
   m.unmount();
 });
 
-it("a selected tier with no rows shows the filter-empty message", () => {
+it("a selected tier with no rows shows the up-to-date message", () => {
   const m = render(mixed());
   click(btn(m.container, "notice"));
   expect(on(m.container, "notice")).toBe(true);
   expect(items(m.container)).toHaveLength(0);
-  expect(m.container.querySelector("[data-empty]")?.textContent).toBe("no items in this filter");
+  expect(m.container.querySelector("[data-empty]")?.textContent).toBe("up to date, drink some water");
   m.unmount();
 });
 
@@ -504,7 +506,8 @@ it("the item actions column stretches with the link icon on top and the primary 
   const actions = items(m.container)[0]?.querySelector('[data-slot="item-actions"]');
   expect(actions?.className).toContain("flex-col");
   expect(actions?.className).toContain("self-stretch");
-  expect(actions?.firstElementChild?.matches("svg.lucide-external-link")).toBe(true);
+  expect(actions?.firstElementChild?.matches('a[data-part="item-link"]')).toBe(true);
+  expect(actions?.firstElementChild?.querySelector("svg.lucide-external-link")).not.toBeNull();
   expect(actions?.lastElementChild?.matches('button[data-part="item-action"]')).toBe(true);
   m.unmount();
 });
@@ -519,16 +522,16 @@ it("a row with a primary action shows an outline small button that runs it witho
   act(() => {
     button?.dispatchEvent(ev);
   });
-  expect(ev.defaultPrevented).toBe(true);
   expect(m.onAction).toHaveBeenCalledExactlyOnceWith(mergeAction.action);
   expect(m.onSelectSession).not.toHaveBeenCalled();
   m.unmount();
 });
 
-it("a row without a primary action shows no button", () => {
+it("a row without a primary action shows only the Dismiss button (pro-d53)", () => {
   const snooze = { label: "Snooze 15m", action: { kind: "inbox.snooze", itemId: 1, duration: "15m" } } as const;
   const m = render([row(1, "dialog", "Need an answer", { sessionId: "s1", actions: [snooze] })]);
-  expect(items(m.container)[0]?.querySelector("button")).toBeNull();
+  const buttons = items(m.container)[0]?.querySelectorAll("button") ?? [];
+  expect(Array.from(buttons).map((b) => b.textContent)).toEqual(["Dismiss"]);
   m.unmount();
 });
 

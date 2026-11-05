@@ -10,10 +10,10 @@ export interface LayoutPanels {
   readonly plan: PanelApi;
 }
 
-/** Reset the panel sizes to the TUI defaults: tree 20, center 58, inbox 22, plan 40. */
+/** Reset the panel sizes to the TUI defaults: tree 20, center 50, inbox 30, plan 40. */
 export function resetLayout(panels: LayoutPanels): void {
   panels.tree.resize("20%");
-  panels.center.resize("58%");
-  panels.inbox.resize("22%");
+  panels.center.resize("50%");
+  panels.inbox.resize("30%");
   panels.plan.resize("40%");
 }

@@ -23,7 +23,7 @@ function setup(over: { busy?: boolean; queued?: QueuedSubmission[]; settings?: R
   const onAbort = vi.fn();
   const m = mount(
     <Composer capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
-      settings={over.settings} label="chat-research"
+      settings={over.settings}
       onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={() => {}} />,
   );
   return { m, submits, onAbort };
@@ -42,111 +42,81 @@ function click(el: Element) {
   act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
 }
 
-it("composer card shows the queued follow up chip bar", () => {
+it("composer card shows the queued chips in the prompt header", () => {
   const queued: QueuedSubmission[] = [
-    { clientSubmissionId: "c1", text: "first", whenBusy: "followUp" },
-    { clientSubmissionId: "c2", text: "second", whenBusy: "steer" },
+    { clientSubmissionId: "c1", submissionId: 1, text: "first", whenBusy: "followUp" },
+    { clientSubmissionId: "c2", submissionId: 2, text: "second", whenBusy: "followUp" },
   ];
   const { m } = setup({ queued });
-  const bar = m.container.querySelector('ul[data-part="queued-bar"]');
+  const header = m.container.querySelector('[data-slot="input-group-addon"][data-align="block-start"]');
+  const bar = header?.querySelector('ul[data-part="queue"]');
   expect(bar).not.toBeNull();
-  const chips = bar!.querySelectorAll("li[data-queued]");
+  const chips = bar!.querySelectorAll("li[data-queued-chip]");
   expect(chips.length).toBe(2);
-  expect(chips[0]!.getAttribute("data-when-busy")).toBe("followUp");
-  expect(chips[0]!.querySelector('[data-part="queued-kind"]')?.textContent).toBe("follow-up queued");
-  expect(chips[0]!.querySelector('[data-part="queued-text"]')?.textContent).toBe("first");
-  expect(chips[1]!.querySelector('[data-part="queued-kind"]')?.textContent).toBe("steer queued");
+  expect(chips[0]!.textContent).toContain("queued");
+  expect(chips[0]!.querySelector('[data-part="text"]')?.textContent).toBe("first");
+  expect(chips[1]!.querySelector('[data-part="text"]')?.textContent).toBe("second");
   m.unmount();
   const empty = setup();
-  expect(empty.m.container.querySelector('[data-part="queued-bar"]')).toBeNull();
+  expect(empty.m.container.querySelector('[data-part="queue"]')).toBeNull();
+  expect(empty.m.container.querySelector('[data-align="block-start"]')).toBeNull();
   empty.m.unmount();
 });
 
-it("composer renders the attach button and the tier pill", () => {
+it("composer renders the attach button and the tier selector in the footer", () => {
   const settings = <TierSelector capabilities={caps} footer={null} models={null} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />;
   const { m } = setup({ settings });
-  const attach = m.container.querySelector<HTMLButtonElement>('button[data-action="attach"]');
-  expect(attach?.getAttribute("aria-label")).toBe("Choose files to attach");
-  const row = m.container.querySelector('[data-part="action-row"]');
-  expect(row?.contains(attach)).toBe(true);
-  expect(row?.querySelector('button[data-part="tier-pill"]')).not.toBeNull();
+  const footer = m.container.querySelector('[data-slot="input-group-addon"][data-align="block-end"]');
+  const attach = footer?.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]');
+  expect(attach).not.toBeNull();
+  expect(footer?.querySelector('[data-part="tier-selector"]')).not.toBeNull();
+  expect(footer?.querySelector('[data-part="actions"] button[data-action="send"]')).not.toBeNull();
   m.unmount();
 });
 
-it("composer renders Steer and Follow-up as a split button group", () => {
-  const { m } = setup({ busy: true });
-  const group = m.container.querySelector('div[role="group"][data-part="send-split"]');
-  expect(group?.getAttribute("aria-label")).toBe("Send while the agent is running");
-  const buttons = group!.querySelectorAll("button");
-  expect(buttons.length).toBe(2);
-  expect(buttons[0]!.getAttribute("data-when-busy")).toBe("steer");
-  expect(buttons[0]!.textContent).toBe("Steer⏎");
-  expect(buttons[1]!.getAttribute("data-when-busy")).toBe("followUp");
-  expect(buttons[1]!.textContent).toBe("Follow-up⌥⏎");
-  m.unmount();
-});
-
-it("composer shows Stop only while the agent is running", () => {
-  const idle = setup();
-  expect(idle.m.container.querySelector('button[data-action="abort"]')).toBeNull();
-  expect(idle.m.container.querySelector('button[data-action="send"]')).not.toBeNull();
-  idle.m.unmount();
+it("composer renders no Steer, Follow-up or Stop while the agent is running", () => {
   const { m, onAbort } = setup({ busy: true });
-  const stop = m.container.querySelector<HTMLButtonElement>('button[data-action="abort"]');
-  expect(stop?.textContent).toBe("Stop⌃C");
-  click(stop!);
-  expect(onAbort).toHaveBeenCalledTimes(1);
+  expect(m.container.querySelector('[data-part="send-split"], button[data-when-busy], button[data-action="abort"]')).toBeNull();
+  expect(onAbort).not.toHaveBeenCalled();
   m.unmount();
 });
 
-it("composer sends Steer on Enter and Follow-up on Alt Enter", () => {
+it("composer sends a follow-up on Enter, busy or not, and ignores Alt Enter as a mode", () => {
   const { m, submits } = setup({ busy: true });
   const t = textarea(m.container);
   typeText(t, "go");
   press(t, "Enter");
-  expect(submits).toEqual([{ text: "go", attachments: [], whenBusy: "steer" }]);
+  expect(submits).toEqual([{ text: "go", attachments: [], whenBusy: "followUp" }]);
   typeText(t, "later");
   press(t, "Enter", { altKey: true });
   expect(submits[1]).toEqual({ text: "later", attachments: [], whenBusy: "followUp" });
   m.unmount();
 });
 
-it("tier selector pill shows tier model and thinking", () => {
+it("tier selector shows the tier, model and thinking level on three menu triggers", () => {
   const footer: FooterStats = {
     model: { state: "known", value: "vertex/claude-sonnet-5-5" }, tier: { state: "known", value: "S1" }, thinking: { state: "known", value: "high" },
     contextPercent: { state: "unknown", reason: "x" }, cost: { state: "unknown", reason: "x" }, branch: { state: "unknown", reason: "x" },
   };
   const models: ModelChoice[] = [{ model: "vertex/claude-sonnet-5-5", name: "Sonnet", thinkingLevels: ["low", "high"], contextWindow: 1000 }];
   const m = mount(<TierSelector capabilities={caps} footer={footer} models={models} busy={false} onConfigure={() => {}} onRequestModels={() => {}} />);
-  const pill = m.container.querySelector('button[data-part="tier-pill"]');
-  expect(pill?.getAttribute("aria-haspopup")).toBe("true");
-  expect(pill?.getAttribute("aria-expanded")).toBe("false");
-  expect(pill?.querySelector('[data-part="pill-tier"]')?.textContent).toBe("S1");
-  expect(pill?.querySelector('[data-part="pill-model"]')?.textContent).toBe("claude-sonnet-5-5");
-  expect(pill?.querySelector('[data-part="pill-thinking"]')?.textContent).toBe("high");
-  expect(pill?.querySelector("svg")).not.toBeNull();
+  const root = m.container.querySelector('[data-part="tier-selector"]')!;
+  expect(root.querySelector('button[aria-label="Tier"]')?.textContent).toBe("S1");
+  expect(root.querySelector('button[aria-label="Model"]')?.textContent).toBe("Sonnet");
+  expect(root.querySelector('button[aria-label="Thinking level"]')?.textContent).toBe("high");
+  expect(root.querySelector('button[data-part="tier-pill"]')).toBeNull();
   m.unmount();
 });
 
-it("footer shows telemetry and a context percent bar", () => {
+it("footer shows only the context card with its percent and window", () => {
   const footer: FooterStats = {
     model: { state: "known", value: "a/m" }, tier: { state: "known", value: "S1" }, thinking: { state: "known", value: "high" },
     contextPercent: { state: "known", value: 8.8 }, cost: { state: "known", value: 0.698 }, branch: { state: "known", value: "main" },
   };
-  const m = mount(
-    <Footer footer={footer} cwd="~/src/cpd" sessionKey="cpd:chat" contextWindow={1_000_000}
-      tokens={{ input: 1_200_000, output: 84_000, cacheRead: 11_800_000, cacheWrite: 412_000 }} cacheHitPercent={99.1} />,
-  );
+  const m = mount(<Footer footer={footer} contextWindow={1_000_000} />);
   const f = m.container.querySelector('footer[aria-label="Session footer"]')!;
   expect(f.getAttribute("data-part")).toBe("telemetry");
-  expect(f.querySelector('[data-part="cwd"]')?.textContent).toBe("~/src/cpd");
-  expect(f.querySelector('[data-part="session-key"]')?.textContent).toBe("cpd:chat");
-  expect(f.querySelector('[data-part="tokens"]')?.textContent).toBe("↑1.2M ↓84k R11.8M W412k");
-  expect(f.querySelector('[data-part="cache"]')?.textContent).toBe("CH 99.1%");
-  expect(f.querySelector('[data-stat="cost"]')?.textContent).toContain("$0.698");
-  const bar = f.querySelector('[role="progressbar"][data-part="context-bar"]');
-  expect(bar?.getAttribute("aria-label")).toBe("Context used");
-  expect(bar?.getAttribute("aria-valuenow")).toBe("8.8");
-  expect(f.querySelector('[data-stat="context"]')?.textContent).toContain("8.8% / 1.0M");
+  expect(f.querySelector('[data-stat="context"]')?.textContent).toBe("8.8% context");
+  expect(f.querySelector('[data-part="cwd"], [data-part="tokens"], [data-stat="cost"], [data-stat="model"]')).toBeNull();
   m.unmount();
 });

@@ -4,13 +4,13 @@ import { expect, it } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { ChatHeader } from "./ChatHeader.tsx";
 
-it("shows the session key and title", () => {
-  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix the bug" />);
-  expect(m.container.querySelector("header h1[data-part='key']")?.textContent).toBe("lead-1");
-  expect(m.container.querySelector("header [data-part='title']")?.textContent).toBe("Fix the bug");
+it("shows only the title", () => {
+  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix the bug" role="lead" runner="pi" />);
+  expect(m.container.querySelector("header h1")?.textContent).toBe("Fix the bug");
+  expect(m.container.querySelector("header")?.textContent).toBe("Fix the bug");
   m.unmount();
   const m2 = mount(<ChatHeader sessionKey="lead-1" title={null} />);
-  expect(m2.container.querySelector("[data-part='title']")).toBeNull();
+  expect(m2.container.querySelector("header h1")?.textContent).toBe("lead-1");
   m2.unmount();
 });
 

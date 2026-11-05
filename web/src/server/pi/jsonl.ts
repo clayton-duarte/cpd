@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { FOLD_TITLE_MAX, WebError } from "../../protocol/domain.ts";
 import type {
   AssistantBlock,
@@ -134,6 +135,38 @@ function parseQuestions(raw: unknown): Question[] | null {
   return out;
 }
 
+const ATTACHED_IMAGE_RE = /\[Attached image:\s*([^\]]+)\]/g;
+const MIME_BY_EXT: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
+function extractInlineAttachments(rawText: string): { text: string; attachments: TranscriptAttachment[] } {
+  const attachments: TranscriptAttachment[] = [];
+  for (const m of rawText.matchAll(ATTACHED_IMAGE_RE)) {
+    const filePath = m[1]?.trim() ?? "";
+    if (filePath === "") continue;
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = MIME_BY_EXT[ext] ?? "image/png";
+    let dataBase64: string | undefined;
+    try {
+      dataBase64 = readFileSync(filePath).toString("base64");
+    } catch {
+      // ignore missing file in tests or cleaned temp dir
+    }
+    attachments.push({
+      kind: "image",
+      mimeType,
+      ...(dataBase64 === undefined ? {} : { dataBase64 }),
+    });
+  }
+  const cleaned = rawText.replace(/\n*\[Attached image:\s*[^\]]+\]/g, "").trim();
+  return { text: cleaned, attachments };
+}
+
 export function createNormalizer(): PiNormalizer {
   const facts: JsonlFacts = {};
   const tools = new Map<string, ToolItem>();
@@ -148,7 +181,13 @@ export function createNormalizer(): PiNormalizer {
     const need = (cond: boolean, what: string): void => {
       if (!cond) throw malformed(at, `${entry.type} line: ${what}`);
     };
-    const at_ = str(entry.timestamp);
+    const rawTs = entry.timestamp ?? (isObj(entry.message) ? entry.message.timestamp : undefined);
+    const at_ =
+      typeof rawTs === "string" && rawTs !== ""
+        ? rawTs
+        : typeof rawTs === "number" && Number.isFinite(rawTs)
+          ? new Date(rawTs).toISOString()
+          : undefined;
     const id = str(entry.id);
     const stamp = at_ === undefined ? {} : { at: at_ };
     const setFact = (key: "model" | "thinking" | "name", value: string): void => {
@@ -180,10 +219,11 @@ export function createNormalizer(): PiNormalizer {
         need(id !== undefined, "message needs an id");
         if (m.role === "user") {
           facts.lastRole = "user";
-          const attachments: TranscriptAttachment[] = blocksOf(m.content)
+          const blockAttachments: TranscriptAttachment[] = blocksOf(m.content)
             .filter((b) => b.type === "image")
             .map((b) => ({ kind: "image", mimeType: str(b.mimeType) ?? "", ...(str(b.data) === undefined ? {} : { dataBase64: b.data as string }) }));
-          r.added.push({ kind: "user", id: `u:${id}`, ...stamp, text: textOf(m.content), attachments });
+          const inline = extractInlineAttachments(textOf(m.content));
+          r.added.push({ kind: "user", id: `u:${id}`, ...stamp, text: inline.text, attachments: [...blockAttachments, ...inline.attachments] });
         } else if (m.role === "assistant") {
           need(Array.isArray(m.content), "assistant content must be an array");
           facts.lastRole = "assistant";
@@ -211,7 +251,7 @@ export function createNormalizer(): PiNormalizer {
               const questions = parseQuestions(args.questions);
               if (questions !== null) {
                 pendingAsk.add(callId);
-                r.dialogsOpened.push({ id: `call:${callId}`, method: "ask_user_question", questions, interactive: false });
+                r.dialogsOpened.push({ id: `call:${callId}`, method: "ask_user_question", questions, interactive: true });
               }
             }
           }
@@ -249,7 +289,8 @@ export function createNormalizer(): PiNormalizer {
           if (details.kind === "session-message" && (data.from === null || data.unblocks === "User message from the web chat") && typeof data.text === "string" && data.text !== "") {
             facts.lastRole = "user";
             const when = str(details.at);
-            r.added.push({ kind: "user", id: `u:${id}`, ...(when === undefined ? stamp : { at: when }), text: data.text, attachments: [] });
+            const inline = extractInlineAttachments(data.text);
+            r.added.push({ kind: "user", id: `u:${id}`, ...(when === undefined ? stamp : { at: when }), text: inline.text, attachments: inline.attachments });
             break;
           }
         }

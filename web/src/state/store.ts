@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type {
-  Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError,
+  Capabilities, Dialog, FooterStats, ModelChoice, QueuedSubmission, SessionRef, WhenBusy, WireError, WireImage,
 } from "../protocol/domain.ts";
 import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
@@ -16,8 +16,10 @@ export interface PendingSubmission {
   readonly clientSubmissionId: string;
   readonly text: string;
   readonly imageCount: number;
+  readonly images?: readonly WireImage[];
   readonly whenBusy: WhenBusy;
   readonly state: "sending" | "sent" | "failed";
+  readonly at?: string;
   readonly error?: WireError;
 }
 export interface SessionView {
@@ -56,6 +58,8 @@ export interface AppState {
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null;
   readonly lastError: WireError | null;
+  readonly pendingActionIds: readonly string[];
+  readonly completedActionIds: readonly string[];
 }
 
 export type StoreAction =
@@ -65,6 +69,8 @@ export type StoreAction =
   | { type: "selectPlan"; planId: string | null }
   | { type: "submitPending"; submission: Omit<PendingSubmission, "state"> }
   | { type: "dismissPending"; clientSubmissionId: string }
+  | { type: "actionStart"; actionId: string }
+  | { type: "dismissError" }
   | { type: "serverBatch"; messages: ServerMessage[] };
 
 export const initialState: AppState = {
@@ -74,20 +80,31 @@ export const initialState: AppState = {
   selectedSessionId: null,
   session: null,
   lastError: null,
+  pendingActionIds: [],
+  completedActionIds: [],
 };
 const emptySession = (id: string): SessionView => ({
   id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
   busy: false, queued: [], pending: [], dialog: null, models: null, error: null,
 });
 
-/** Removes the oldest matching "sent" row per new user item (id not in `before`). */
+function normalizeUserText(text: string): string {
+  return text
+    .replace(/^Message from [^\n:]+:\s*/, "")
+    .replace(/(?:\n+\[Attached image: [^\]]+\])+\s*$/, "")
+    .trim();
+}
+
+/** Removes the oldest matching "sending" or "sent" row per new user item (id not in `before`). */
 function echoed(pending: readonly PendingSubmission[], before: TranscriptState, incoming: readonly TranscriptItem[]): readonly PendingSubmission[] {
   let rows = pending;
   const known = new Set(before.items.map((i) => i.id));
   for (const item of incoming) {
     if (item.kind !== "user" || known.has(item.id)) continue;
-    const text = item.text.trim();
-    const at = rows.findIndex((p) => p.state === "sent" && p.text.trim() === text);
+    const norm = normalizeUserText(item.text);
+    const at = rows.findIndex(
+      (p) => (p.state === "sent" || p.state === "sending") && normalizeUserText(p.text) === norm,
+    );
     if (at >= 0) rows = rows.filter((_, k) => k !== at);
   }
   return rows;
@@ -133,12 +150,26 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
       return set({ dialog: message.dialog });
     case "session.dialogResolved":
       return session.dialog !== null && session.dialog.id === message.dialogId ? set({ dialog: null }) : state;
-    case "session.submitAck":
+    case "session.submitAck": {
+      if (message.queued) {
+        return set({
+          pending: session.pending.filter((p) => p.clientSubmissionId !== message.clientSubmissionId),
+        });
+      }
+      const sub = session.pending.find((p) => p.clientSubmissionId === message.clientSubmissionId);
+      const alreadyInTranscript =
+        sub !== undefined &&
+        session.transcript.items.some(
+          (i) => i.kind === "user" && normalizeUserText(i.text) === normalizeUserText(sub.text),
+        );
       return set({
-        pending: message.queued
+        pending: alreadyInTranscript
           ? session.pending.filter((p) => p.clientSubmissionId !== message.clientSubmissionId)
-          : session.pending.map((p) => (p.clientSubmissionId === message.clientSubmissionId ? { ...p, state: "sent" as const } : p)),
+          : session.pending.map((p) =>
+              p.clientSubmissionId === message.clientSubmissionId ? { ...p, state: "sent" as const } : p,
+            ),
       });
+    }
     case "session.error": {
       const id = message.clientSubmissionId;
       if (id === undefined) return set({ error: message.error });
@@ -166,8 +197,23 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
       return { ...state, cockpit: { ...state.cockpit, [message.pane]: message.data } };
     case "cockpit.error":
       return { ...state, cockpit: { ...state.cockpit, error: message.error } };
-    case "action.result":
-      return message.ok ? state : { ...state, lastError: message.error };
+    case "action.result": {
+      const pendingActionIds = state.pendingActionIds.filter((id) => id !== message.actionId);
+      if (message.ok) {
+        return {
+          ...state,
+          pendingActionIds,
+          completedActionIds: state.completedActionIds.includes(message.actionId)
+            ? state.completedActionIds
+            : [...state.completedActionIds, message.actionId],
+        };
+      }
+      return {
+        ...state,
+        pendingActionIds,
+        lastError: message.error,
+      };
+    }
     default: {
       if (message.sessionId === null) {
         return message.type === "session.error" ? { ...state, lastError: message.error } : state;
@@ -201,7 +247,13 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       if (state.session === null) return state;
       return {
         ...state,
-        session: { ...state.session, pending: [...state.session.pending, { ...action.submission, state: "sending" }] },
+        session: {
+          ...state.session,
+          pending: [
+            ...state.session.pending,
+            { ...action.submission, state: "sending" },
+          ],
+        },
       };
     case "serverBatch": {
       let next = state;
@@ -213,6 +265,19 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       return {
         ...state,
         session: { ...state.session, pending: state.session.pending.filter((p) => p.clientSubmissionId !== action.clientSubmissionId) },
+      };
+    case "actionStart":
+      return {
+        ...state,
+        pendingActionIds: state.pendingActionIds.includes(action.actionId)
+          ? state.pendingActionIds
+          : [...state.pendingActionIds, action.actionId],
+      };
+    case "dismissError":
+      return {
+        ...state,
+        lastError: null,
+        cockpit: { ...state.cockpit, error: null },
       };
   }
 }

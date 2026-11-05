@@ -18,31 +18,29 @@ const done: TranscriptItem = { kind: "assistant", id: "a1", streaming: false, bl
 const streaming: TranscriptItem = { kind: "assistant", id: "a2", streaming: true, blocks: [{ type: "text", text: "partial" }] };
 const running: ToolItem = { kind: "tool", id: "tool:t1", callId: "t1", name: "bash", args: {}, status: "running" };
 
-it("Transcript shows a working cue when busy and nothing streams", () => {
-  const m = mount(<Transcript {...base} busy items={[user, done]} />);
-  const cues = m.container.querySelectorAll(CUE);
-  expect(cues.length).toBe(1);
-  expect(cues[0]?.textContent).toBe("Thinking…");
-  const log = m.container.querySelector('[role="log"]');
-  expect(log?.lastElementChild).toBe(cues[0]);
+it("Transcript shows no Thinking cue when busy and nothing streams", () => {
+  const m = mount(<Transcript {...base} items={[user, done]} />);
+  expect(m.container.querySelector(CUE)).toBeNull();
+  expect(m.container.textContent).not.toContain("Thinking…");
   m.unmount();
 });
 
-it("Transcript names the running tool in the working cue", () => {
-  const m = mount(<Transcript {...base} busy items={[user, running]} />);
-  expect(m.container.querySelector(CUE)?.textContent).toBe("Using bash…");
+it("Transcript names no running tool in a working cue", () => {
+  const m = mount(<Transcript {...base} items={[user, running]} />);
+  expect(m.container.querySelector(CUE)).toBeNull();
+  expect(m.container.textContent).not.toContain("Using bash…");
   m.unmount();
 });
 
 it("Transcript shows no working cue when busy is false", () => {
-  const m = mount(<Transcript {...base} busy={false} items={[user, done]} />);
+  const m = mount(<Transcript {...base} items={[user, done]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
   m.unmount();
 });
 
 it("Transcript shows exactly one indicator when the last assistant item streams", () => {
-  const m = mount(<Transcript {...base} busy items={[user, streaming]} />);
-  expect(m.container.querySelectorAll('[role="status"]').length).toBe(1);
+  const m = mount(<Transcript {...base} items={[user, streaming]} />);
+  expect(m.container.querySelectorAll('[data-part="working"]').length).toBe(1);
   expect(m.container.querySelector(CUE)).toBeNull();
   expect(m.container.querySelector('[role="status"][data-part="working"]')?.textContent).toBe("Working…");
   m.unmount();
@@ -117,17 +115,21 @@ function open(state: "idle" | "working") {
   return { transport, container: view.container };
 }
 
-it("ChatPane shows the working cue when the session state is working", () => {
+const PULSE = '[data-slot="input-group"].prompt-border-pulse';
+
+it("ChatPane shows no working cue and no pulse for a static working state alone", () => {
   const { container } = open("working");
-  expect(container.querySelector(`main[aria-label="Chat"] ${CUE}`)?.textContent).toBe("Thinking…");
+  expect(container.querySelector(CUE)).toBeNull();
+  expect(container.querySelector(PULSE), "pro-d58: only view.busy or a pending send pulses the prompt").toBeNull();
 });
 
 it("ChatPane shows no working cue when the session is idle", () => {
   const { container } = open("idle");
   expect(container.querySelector(CUE)).toBeNull();
+  expect(container.querySelector(PULSE)).toBeNull();
 });
 
-it("ChatPane shows the working cue while a submission is sending", () => {
+it("ChatPane pulses the prompt border while a submission is sending", () => {
   const { container } = open("idle");
   const ta = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
   act(() => {
@@ -136,5 +138,6 @@ it("ChatPane shows the working cue while a submission is sending", () => {
   });
   act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
   expect(container.querySelector('li[data-pending="sending"]')).not.toBeNull();
-  expect(container.querySelector(CUE)?.textContent).toBe("Thinking…");
+  expect(container.querySelector(CUE)).toBeNull();
+  expect(container.querySelector(PULSE)).not.toBeNull();
 });
