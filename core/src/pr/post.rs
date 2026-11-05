@@ -31,11 +31,28 @@ pub struct PostArgs {
     plan: PlanArg,
 }
 
-/// Stub (not wired): whether a failed send is KNOWN not to have sent the message, so its `pr_posts` row is dropped; an
-/// unknown outcome (`slack_unparseable`, `store_failed` after the send) keeps the row.
-#[allow(dead_code)]
-pub(super) fn known_not_sent(_error: &CpdError) -> bool {
-    unimplemented!("the split of known-not-sent from unknown send outcomes")
+/// Whether a failed send is KNOWN not to have sent the message, so its `pr_posts` row is dropped; any other outcome
+/// (`slack_unparseable`, `slack_helper_failed`, a timeout) is unknown and keeps the row.
+fn known_not_sent(error: &CpdError) -> bool {
+    matches!(
+        error.code(),
+        ErrorCode::SlackAuth
+            | ErrorCode::SlackNotConfigured
+            | ErrorCode::SlackFailed
+            | ErrorCode::SlackRefused
+            | ErrorCode::SpawnFailed
+    )
+}
+
+/// Drops the pending row of a send known not to have happened.
+fn drop_pending(env: &mut Env, id: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
+    env.store.write("pr post", |tx| {
+        tx.execute(
+            "DELETE FROM pr_posts WHERE plan = ?1 AND workflow = ?2",
+            [id.as_str(), key.as_str()],
+        )?;
+        Ok(())
+    })
 }
 
 /// Test constructor of the arguments: Workflow `key` of Plan `plan`.
@@ -173,68 +190,79 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let argv: Vec<String> = std::iter::once(call.program.clone())
         .chain(call.args.iter().cloned())
         .collect();
-    let out = match env.ports.runner.run(&call) {
-        Ok(out) => out,
-        Err(Failed::Io(e)) => {
-            return Err(CpdError::new(
-                ErrorCode::SpawnFailed,
-                format!("Cannot run {}: {e}.", argv.join(" ")),
-            )
-            .with("argv", json!(argv)));
-        }
-        Err(Failed::Timeout(e)) => return Err(e),
-    };
-    let sent = slack::answer(&out, &argv)?;
-    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
-    let record = PostRecord {
-        channel: text("channel"),
-        ts: text("ts"),
-        link: text("link"),
+    // (i) the row is written BEFORE the send: an unknown outcome keeps it, so a second post sends nothing.
+    let mut record = PostRecord {
+        channel: channel.clone(),
+        ts: "pending".to_owned(),
+        link: "pending".to_owned(),
         posted_at: timestamp(env.ports.clock.utc()),
         reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
         reacted_at: None,
         auto_merge: "pending".to_owned(),
         auto_merge_at: None,
     };
+    let new = env.store.write("pr post", |tx| {
+        posts::insert(tx, id.as_str(), key.as_str(), &record)
+    })?;
+    if !new {
+        let done = env
+            .store
+            .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
+        return Err(match done {
+            Some(done) => already_posted(&key, &done),
+            None => CpdError::bad_row(format!(
+                "Workflow {key} has no post after its insert was refused"
+            )),
+        });
+    }
+    let sent = match env.ports.runner.run(&call) {
+        Ok(out) => slack::answer(&out, &argv),
+        Err(Failed::Io(e)) => Err(CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot run {}: {e}.", argv.join(" ")),
+        )
+        .with("argv", json!(argv))),
+        Err(Failed::Timeout(e)) => Err(e),
+    };
+    let sent = match sent {
+        Ok(sent) => sent,
+        Err(e) => {
+            if known_not_sent(&e) {
+                drop_pending(&mut env, &id, &key)?;
+            }
+            return Err(e);
+        }
+    };
+    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
+    record.channel = text("channel");
+    record.ts = text("ts");
+    record.link = text("link");
     // (j)
     let stored = env.store.write("pr post", |tx| {
-        let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
-        if new {
-            super::jira_sync::queue(
-                tx,
-                id.as_str(),
-                key.as_str(),
-                super::jira_sync::Target::InReview,
-            )?;
-        }
-        Ok(new)
+        let rows = tx.execute(
+            "UPDATE pr_posts SET channel = ?3, ts = ?4, link = ?5 WHERE plan = ?1 AND workflow = ?2",
+            rusqlite::params![id.as_str(), key.as_str(), record.channel, record.ts, record.link],
+        )?;
+        super::jira_sync::queue(
+            tx,
+            id.as_str(),
+            key.as_str(),
+            super::jira_sync::Target::InReview,
+        )?;
+        Ok(rows)
     });
-    match stored {
-        Ok(true) => {}
-        Ok(false) => {
-            let done = env
-                .store
-                .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
-            return Err(match done {
-                Some(done) => already_posted(&key, &done),
-                None => CpdError::bad_row(format!(
-                    "Workflow {key} has no post after its insert was refused"
-                )),
-            });
-        }
-        Err(e) => {
-            return Err(CpdError::new(
-                ErrorCode::StoreFailed,
-                format!(
-                    "The message WAS posted ({}) but recording it failed: {}",
-                    record.link,
-                    e.message()
-                ),
-            )
-            .with("link", record.link.as_str())
-            .with("channel", record.channel.as_str())
-            .with("ts", record.ts.as_str()));
-        }
+    if let Err(e) = stored {
+        return Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!(
+                "The message WAS posted ({}) but recording it failed: {}",
+                record.link,
+                e.message()
+            ),
+        )
+        .with("link", record.link.as_str())
+        .with("channel", record.channel.as_str())
+        .with("ts", record.ts.as_str()));
     }
     let merge = request_auto_merge(&mut env, &id, &key, &read)?;
     Ok(Output::success(json!({
