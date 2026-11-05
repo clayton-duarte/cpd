@@ -16,7 +16,7 @@ const T2: &str = "2026-01-01T06:00:00.000Z";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const POST: &str = "[pr.post]\nenabled = true\n";
 
-use Urgency::{White, Red, Cyan, Yellow};
+use Urgency::{Cyan, Red, White, Yellow};
 
 pub(super) struct Fx {
     _dir: tempfile::TempDir,
@@ -163,7 +163,7 @@ fn bot_comment() -> String {
 }
 
 #[test]
-fn an_authored_draft_pr_is_a_white_draft_row() {
+fn an_authored_draft_pr_is_a_cyan_draft_row() {
     let mut f = fixture();
     f.workflow(3, "draft = 1, merge_state = 'draft'");
     let c = f.row(3);
@@ -176,7 +176,7 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
 }
 
 #[test]
-fn an_authored_stacked_pr_is_a_white_stacked_row() {
+fn an_authored_stacked_pr_is_a_cyan_stacked_row() {
     let mut f = fixture();
     f.workflow(
         1,
@@ -217,7 +217,7 @@ fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested(
 type JobKindStatus<'a> = (&'a str, &'a str);
 
 #[test]
-fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_live() {
+fn an_owned_broken_pr_is_white_while_its_lead_works_or_an_update_or_work_job_is_live() {
     let broken = [
         (
             "mergeable = 'conflicting', merge_state = 'dirty'",
@@ -274,7 +274,7 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
 }
 
 #[test]
-fn a_pr_with_pending_checks_is_a_cyan_checks_running_row() {
+fn a_pr_with_pending_checks_is_a_white_checks_running_row() {
     let mut f = fixture();
     f.workflow(1, "checks = 'pending'");
     f.workflow(2, "checks = 'none'");
@@ -379,7 +379,7 @@ fn ready_to_merge_for_a_post_owner_needs_a_post_or_an_approval() {
 }
 
 #[test]
-fn a_posted_pr_that_is_not_ready_to_merge_is_a_cyan_in_review_row() {
+fn a_posted_pr_that_is_not_ready_to_merge_is_a_white_in_review_row() {
     let mut f = fixture();
     f.policy(POST);
     f.workflow(1, "merge_state = 'blocked', checks = 'passed'");
@@ -389,7 +389,7 @@ fn a_posted_pr_that_is_not_ready_to_merge_is_a_cyan_in_review_row() {
 }
 
 #[test]
-fn an_authored_pr_that_matches_no_other_state_is_a_cyan_waiting_row() {
+fn an_authored_pr_that_matches_no_other_state_is_a_white_waiting_row() {
     let mut f = fixture();
     for (n, state) in [(1, "blocked"), (2, "behind"), (3, "unknown")] {
         f.workflow(n, &format!("checks = 'passed', merge_state = '{state}'"));
