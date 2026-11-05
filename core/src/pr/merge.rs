@@ -167,6 +167,10 @@ fn refuse_unless_required_passed(
     .with("failed", failed))
 }
 
+/// Stub: stores the `merge_state` a refused merge read (not called yet).
+#[allow(dead_code, clippy::missing_const_for_fn)]
+fn store_refused_state() {}
+
 const STORE_BUSY_MS: u64 = 5000;
 
 /// The merge of `repo#number`, in one transaction: its `pull_requests` row (when stored and not merged yet) `merged` at

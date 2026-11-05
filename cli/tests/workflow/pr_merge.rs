@@ -874,3 +874,20 @@ fn a_failing_rest_merge_fallback_is_gh_failed_with_the_gh_api_call() {
         "nothing is stored merged"
     );
 }
+
+#[test]
+fn a_not_clean_refusal_stores_the_merge_state_it_read() {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
+    gh(&fx, &view("OPEN", "BLOCKED"), 0);
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "merge_not_clean", 3);
+    assert_eq!(
+        error["details"],
+        json!({"repo": "acme/api", "number": 7, "state": "OPEN", "merge_state": "BLOCKED"})
+    );
+    assert_eq!(
+        env.query::<String>("SELECT merge_state FROM pull_requests WHERE number = 7"),
+        "blocked"
+    );
+}

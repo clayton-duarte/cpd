@@ -29,6 +29,8 @@ mod overdue_tests;
 #[cfg(test)]
 mod pr_tests;
 #[cfg(test)]
+mod pr_updating_tests;
+#[cfg(test)]
 mod reopen_tests;
 #[cfg(test)]
 mod rows_review_tests;
