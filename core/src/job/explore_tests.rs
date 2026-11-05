@@ -405,22 +405,96 @@ fn explore_add_refuses_draft() {
     }
 }
 
+/// The Plan's `(phase, done_at)`.
+fn plan_state(f: &mut Fixture) -> (String, Option<String>) {
+    f.env
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT phase, done_at FROM plans WHERE id = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+/// The `plan-phase` Events as `(from, to)`.
+fn plan_phases(f: &mut Fixture) -> Vec<(String, String)> {
+    f.env
+        .store
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT json_extract(data, '$.from'), json_extract(data, '$.to') FROM events WHERE kind = 'plan-phase' ORDER BY rowid",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .unwrap()
+}
+
 #[test]
-fn explore_add_is_refused_in_a_done_plan() {
+fn explore_add_in_a_done_plan_reopens_it_to_dispatch() {
+    for (key, kind, tier, file) in [
+        ("s1", "scout", "H2", "s.json"),
+        ("r1", "research", "S2", "r.json"),
+    ] {
+        let mut f = fixture("done");
+        let spec = f.explore_spec(file);
+        let out = fields(f.add(key, kind, tier, &spec, None, false, &[]));
+        assert_eq!(out["job"]["status"], "queued", "{kind}");
+        assert_eq!(out["job"]["appended"], true, "{kind}");
+        assert_eq!(f.column(key, "status").as_deref(), Some("queued"), "{kind}");
+        assert!(f.column(key, "fingerprint").is_some(), "{kind}");
+        assert_eq!(
+            plan_state(&mut f),
+            ("dispatch".to_owned(), None),
+            "{kind}: reopened, done_at cleared"
+        );
+        assert_eq!(
+            plan_phases(&mut f),
+            vec![("done".to_owned(), "dispatch".to_owned())],
+            "{kind}"
+        );
+        assert_eq!(f.events("job-added"), 1, "{kind}");
+    }
+}
+
+#[test]
+fn explore_add_refused_in_a_done_plan_leaves_it_done() {
+    let mut f = fixture("done");
+    let before = plan_state(&mut f);
+    assert_eq!(before.0, "done");
+    let spec = f.explore_spec("s.json");
+    refused(
+        f.add("s1", "scout", "S2", &spec, None, false, &[]),
+        ErrorCode::TierNotAllowed,
+    );
+    refused(
+        f.add("s2", "scout", "H2", &spec, None, true, &[]),
+        ErrorCode::ExploreNoDraft,
+    );
+    assert_eq!(plan_state(&mut f), before, "still done, done_at unchanged");
+    assert!(plan_phases(&mut f).is_empty());
+    assert_eq!(f.jobs(), 0);
+    // The refusals above are of the arguments, not of the phase: the same Plan accepts a valid add.
+    fields(f.add("s3", "scout", "H2", &spec, None, false, &[]));
+    assert_eq!(plan_state(&mut f).0, "dispatch");
+}
+
+#[test]
+fn explore_add_rerun_in_a_reopened_plan_adds_no_second_plan_phase() {
     let mut f = fixture("done");
     let spec = f.explore_spec("s.json");
-    let e = refused(
-        f.add("s1", "scout", "H2", &spec, None, false, &[]),
-        ErrorCode::IllegalPhase,
+    let first = fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+    assert_ne!(first["already"], true);
+    let second = fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+    assert_eq!(second["already"], true);
+    assert_eq!(
+        plan_phases(&mut f),
+        vec![("done".to_owned(), "dispatch".to_owned())]
     );
-    assert_eq!(e.exit().code(), 3);
-    assert!(
-        e.message().to_lowercase().contains("explore"),
-        "a message of its own that names explore Jobs: {}",
-        e.message()
-    );
-    assert_eq!(f.jobs(), 0);
-    assert_eq!(f.events("job-added"), 0);
+    assert_eq!(f.jobs(), 1);
 }
 
 /// `tier_not_allowed` (exit 2) whose details name the kind and its range.
