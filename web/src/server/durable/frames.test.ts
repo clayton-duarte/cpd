@@ -387,15 +387,15 @@ describe("durable frames v2 dialect", () => {
     return dialogFromRequest(req as Extract<HostFrame, { type: "ui_request" }>, []);
   };
 
-  for (const purpose of ["secret_approve", "host_approve"]) {
-    it(`select ui_request ${purpose} maps to an approval ask dialog`, () => {
-      const dialog = approvalDialog(purpose) as { questions?: { question: string; options: { label: string }[] }[] };
-      expect(dialog).toMatchObject({ id: "a1", method: "ask_user_question", interactive: true });
-      expect(dialog.questions).toHaveLength(1);
-      expect(dialog.questions?.[0]?.question).toContain("Allow it?");
-      expect(dialog.questions?.[0]?.options.map((o) => o.label)).toEqual(["Allow once", "Deny"]);
-    });
-  }
+  const expectApproval = (purpose: string): void => {
+    const dialog = approvalDialog(purpose) as { questions?: { question: string; options: { label: string }[] }[] };
+    expect(dialog).toMatchObject({ id: "a1", method: "ask_user_question", interactive: true });
+    expect(dialog.questions).toHaveLength(1);
+    expect(dialog.questions?.[0]?.question).toContain("Allow it?");
+    expect(dialog.questions?.[0]?.options.map((o) => o.label)).toEqual(["Allow once", "Deny"]);
+  };
+  it("select ui_request secret_approve maps to an approval ask dialog", () => expectApproval("secret_approve"));
+  it("select ui_request host_approve maps to an approval ask dialog", () => expectApproval("host_approve"));
 
   it("select ui_request with unknown purpose stays unsupported", () => {
     expect(approvalDialog("something_else")).toMatchObject({ kind: "unsupported", id: "a1", method: "select", purpose: "something_else" });
