@@ -45,7 +45,12 @@ fn dump(store: &mut Store) -> String {
                 // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: likewise not touched.
                 Ok(rows
                     .into_iter()
-                    .filter(|n| n != "archived" && !n.starts_with("reviewed_"))
+                    .filter(|n| {
+                        n != "archived"
+                            && !n.starts_with("reviewed_")
+                            && !n.starts_with("host_")
+                            && !n.starts_with("host_")
+                    })
                     .collect())
             })
             .unwrap();

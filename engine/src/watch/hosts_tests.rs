@@ -535,7 +535,7 @@ fn restarts_older_than_the_window_do_not_count_after_an_engine_restart() {
     hosts::run(&mut fx.engine);
     die_and_tick(&mut fx, &spawn);
     die_and_tick(&mut fx, &spawn);
-    let stored: i64 = fx.query("SELECT host_restart_count FROM sessions WHERE id = 'lead1'");
+    let stored: i64 = fx.query("SELECT host_restarts FROM sessions WHERE id = 'lead1'");
     assert_eq!(stored, 2, "the count is stored in the database");
 
     clock.advance(Duration::from_secs(11 * 60));
@@ -546,7 +546,7 @@ fn restarts_older_than_the_window_do_not_count_after_an_engine_restart() {
         4,
         "the old restarts left the window"
     );
-    let stored: i64 = fx.query("SELECT host_restart_count FROM sessions WHERE id = 'lead1'");
+    let stored: i64 = fx.query("SELECT host_restarts FROM sessions WHERE id = 'lead1'");
     assert_eq!(stored, 1, "a fresh window holds one restart");
     die_and_tick(&mut fx, &spawn);
     die_and_tick(&mut fx, &spawn);

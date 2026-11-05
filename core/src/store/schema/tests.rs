@@ -3351,6 +3351,15 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
                 row.as_object_mut().unwrap().remove("runner"),
                 Some(Value::from("pi"))
             );
+            // `host-restarts` (a later migration) adds these two columns.
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("host_restarts"),
+                Some(Value::from(0))
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("host_window_start"),
+                Some(Value::Null)
+            );
             row
         })
         .collect();
@@ -3481,6 +3490,15 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
             assert_eq!(
                 row.as_object_mut().unwrap().remove("runner"),
                 Some(Value::from("pi"))
+            );
+            // `host-restarts` (a later migration) adds these two columns.
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("host_restarts"),
+                Some(Value::from(0))
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("host_window_start"),
+                Some(Value::Null)
             );
             row
         })

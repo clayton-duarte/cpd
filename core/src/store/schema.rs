@@ -186,7 +186,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "edacb5a395018cb239fa552d222e2e3a004129da1a6a8062fe3fe41ebfdec03d";
+pub const SCHEMA_HASH: &str = "e0c627256129867ef5bd2f72afde10d866722dc8fa02e697c40ed9f9e777c7b5";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -1119,7 +1119,7 @@ mod workflow_reopen_tests;
 #[cfg(test)]
 mod working_pr_tests;
 
-/// The migration for the persisted host crash-restart bound (pro-d430 D3): `sessions.host_restart_count` and
+/// The migration for the persisted host crash-restart bound (pro-d430 D3): `sessions.host_restarts` and
 /// `sessions.host_window_start`, on a store created by the previous schema.
 #[cfg(test)]
 mod host_bound_tests {
@@ -1131,18 +1131,18 @@ mod host_bound_tests {
         let earlier: Vec<Named> = NAMED
             .iter()
             .copied()
-            .take_while(|n| !n.name.ends_with("-host-bound"))
+            .take_while(|n| !n.name.ends_with("-host-restarts"))
             .collect();
         assert!(
             earlier.len() < NAMED.len(),
-            "the migration `host-bound` exists"
+            "the migration `host-restarts` exists"
         );
         let mut old = crate::store::tests::open_named(&home, &earlier).unwrap();
         old.write("fixture", |tx| {
             tx.execute_batch(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c1', 'C', 't', 'm1');
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('l1', 'lead', 'c1', 'p1', 'p1', '/r', 'O2', 'stopped', 't', 't');",
+                   VALUES ('l1', 'manager', 'c1', NULL, 'm', '/r', 'O2', 'stopped', 't', 't');",
             )?;
             Ok(())
         })
@@ -1153,7 +1153,7 @@ mod host_bound_tests {
         let row: (i64, Option<String>) = store
             .read(|c| {
                 Ok(c.query_row(
-                    "SELECT host_restart_count, host_window_start FROM sessions WHERE id = 'l1'",
+                    "SELECT host_restarts, host_window_start FROM sessions WHERE id = 'l1'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?)
