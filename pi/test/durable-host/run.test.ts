@@ -398,8 +398,8 @@ test("a tier switch while a turn runs is answered host_busy", { timeout: 20_000 
     await r.until(() => r.submitted.length >= 1);
     hooks.onLine(line(400, "session-retiered"));
     const failed = await r.until(() => r.calls.find((c) => c[0] === "session" && c[1] === "switch-failed"));
-    assert.deepEqual(failed, ["session", "switch-failed", "--code", "host_busy", "--message", failed[6], "--session", CONFIG.session]);
-    assert.ok(typeof failed[6] === "string" && failed[6].length > 0, "switch-failed carries a message");
+    assert.deepEqual(failed, ["session", "switch-failed", "--code", "host_busy", "--message", failed[5], "--session", CONFIG.session]);
+    assert.ok(typeof failed[5] === "string" && failed[5].length > 0, "switch-failed carries a message");
     assert.ok(!r.order.includes("configure"), "a busy host configures nothing");
     assert.ok(!r.calls.some((c) => c[1] === "switched"), "a busy host does not report switched");
   });
