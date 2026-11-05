@@ -84,7 +84,6 @@ export interface CurationRecord {
 export interface InboxRow {
   readonly id: number;
   readonly kind: string; // seen: pr-ready, dialog, unread, curate-retire; documented: plan-review, loop-guard, drafts-parked, pr-closed, review-requested, deploy, engine-down (scout-cockpit §1.3)
-  readonly subject?: string;
   readonly label: string; // may contain "\n"
   readonly urgency: Urgency;
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;

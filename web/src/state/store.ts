@@ -251,11 +251,7 @@ export function reduce(state: AppState, action: StoreAction): AppState {
           ...state.session,
           pending: [
             ...state.session.pending,
-            {
-              ...action.submission,
-              at: action.submission.at ?? new Date().toISOString(),
-              state: "sending",
-            },
+            { ...action.submission, state: "sending" },
           ],
         },
       };

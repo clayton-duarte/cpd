@@ -1,9 +1,5 @@
-<<<<<<< ours
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-=======
 import { CircleAlertIcon, XIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
->>>>>>> theirs
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { ContextNode, PlanNode, SessionNode } from "../protocol/cockpit.ts";
 import type { Scheduler, Transport } from "../protocol/runtime.ts";
@@ -57,8 +53,9 @@ export function App(props: AppProps): ReactElement {
   const completedActionIds = useStore(store, (s) => s.completedActionIds);
   const onSelectSession = useCallback((id: string) => connection.selectSession(id), [connection]);
   const onSelectPlan = useCallback((id: string) => connection.selectPlan(id), [connection]);
-<<<<<<< ours
-  const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => { connection.action(a); }, [connection]);
+  const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => connection.action(a), [connection]);
+  const onDismissError = useCallback(() => store.dispatch({ type: "dismissError" }), [store]);
+  const activeError = lastError ?? cockpit.error;
   const panelsRef = useRef<LayoutPanels | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -87,11 +84,6 @@ export function App(props: AppProps): ReactElement {
     setSaving(false);
     if (saved.ok) setSettingsOpen(false);
   }, [saving, saved]);
-=======
-  const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => connection.action(a), [connection]);
-  const onDismissError = useCallback(() => store.dispatch({ type: "dismissError" }), [store]);
-  const activeError = lastError ?? cockpit.error;
->>>>>>> theirs
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
   const selectedPlanId = cockpit.selectedPlanId;
   const restored = useRef(false);
@@ -109,6 +101,25 @@ export function App(props: AppProps): ReactElement {
     saveSelection(window.sessionStorage, { planId: selectedPlanId, sessionKey: selectedSessionId });
   }, [live, selectedPlanId, selectedSessionId]);
 
+  // pro-d63: an unread Inbox item of the chat being viewed is read: hide it at once and dismiss it once per id
+  const activeSessionId = session?.id ?? null;
+  const dismissedUnread = useRef<Set<number>>(new Set());
+  const inboxRows = cockpit.inbox?.rows;
+  useEffect(() => {
+    if (activeSessionId === null || inboxRows === undefined) return;
+    for (const r of inboxRows) {
+      if (r.kind !== "unread" || r.sessionId !== activeSessionId || r.id < 0 || dismissedUnread.current.has(r.id)) continue;
+      dismissedUnread.current.add(r.id);
+      onAction({ kind: "inbox.dismiss", itemId: r.id });
+    }
+  }, [activeSessionId, inboxRows, onAction]);
+  const inboxModel = useMemo(() => {
+    const inbox = cockpit.inbox;
+    if (inbox === null || activeSessionId === null) return inbox;
+    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === activeSessionId || dismissedUnread.current.has(r.id))));
+    return rows.length === inbox.rows.length ? inbox : { ...inbox, rows, openCount: rows.length };
+  }, [cockpit.inbox, activeSessionId]);
+
   const crumbs = useMemo((): readonly BreadcrumbCrumb[] => {
     const tree = cockpit.tree;
     if (tree === null) {
@@ -122,7 +133,7 @@ export function App(props: AppProps): ReactElement {
     const hostManagerId =
       hostContext?.sessions.find((s) => s.ref.role === "manager" && !s.archived)?.ref.id ??
       hostContext?.sessions[0]?.ref.id;
-    const activeSessionId = session?.sessionId ?? selectedSessionId;
+    const activeSessionId = session?.id ?? selectedSessionId;
     let activeContext: ContextNode | undefined;
     let activePlan: PlanNode | undefined;
     let activeSession: SessionNode | undefined;
@@ -212,7 +223,7 @@ export function App(props: AppProps): ReactElement {
       }
     }
     return out;
-  }, [cockpit.tree, cockpit.plan, session?.sessionId, selectedSessionId, onSelectSession, onSelectPlan]);
+  }, [cockpit.tree, cockpit.plan, session?.id, selectedSessionId, onSelectSession, onSelectPlan]);
 
   return (
     <>
@@ -266,11 +277,8 @@ export function App(props: AppProps): ReactElement {
           selectedPlanId={cockpit.selectedPlanId}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}
-<<<<<<< ours
           costsOn={costsOn}
           costs={costs}
-=======
->>>>>>> theirs
           onAction={onAction}
         />
       }
@@ -284,7 +292,7 @@ export function App(props: AppProps): ReactElement {
       }
       inbox={
         !live ? null : <MemoInbox
-          inbox={cockpit.inbox}
+          inbox={inboxModel}
           onAction={onAction}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}

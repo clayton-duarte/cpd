@@ -13,10 +13,6 @@ import {
 import { glyphClass } from "../dango-status.ts";
 import type { Glyph } from "../dango-status.ts";
 
-<<<<<<< ours
-/** One breadcrumb crumb (DESIGN-panes 4.1). Stub: `Header` does not render crumbs yet. */
-=======
->>>>>>> theirs
 export interface BreadcrumbCrumb {
   readonly part: "host" | "group" | "manager" | "lead" | "worker";
   readonly label: string;

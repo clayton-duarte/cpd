@@ -18,7 +18,7 @@ export interface RawSession {
   archived_at: StrOrNull; file: StrOrNull; tier: StrOrNull; title: StrOrNull; cwd: StrOrNull; key: StrOrNull; name: StrOrNull;
 }
 export interface RawInboxItem {
-  id: number | null; kind: string; subject?: string; label: string; urgency: Urgency; opened_at: string; age_seconds: number;
+  id: number | null; kind: string; label: string; urgency: Urgency; opened_at: string; age_seconds: number;
   context: StrOrNull; plan: StrOrNull; job: StrOrNull; session: StrOrNull; url: StrOrNull;
   snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull; workflow: StrOrNull; subject?: string;
 }

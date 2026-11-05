@@ -1,14 +1,8 @@
 import { ChevronDownIcon, ChevronUpIcon, MaximizeIcon, MinimizeIcon } from "lucide-react";
-<<<<<<< ours
 import { useCallback, useEffect, useState } from "react";
 import type { MutableRefObject, ReactElement, ReactNode } from "react";
 import { Button } from "../components/button.tsx";
 import type { LayoutPanels } from "./layout.ts";
-=======
-import { useCallback, useState } from "react";
-import type { ReactElement, ReactNode } from "react";
-import { Button } from "../components/button.tsx";
->>>>>>> theirs
 import {
   ResizableHandle,
   ResizablePanel,
@@ -26,15 +20,9 @@ export function Shell(props: {
   inbox: ReactNode;
   header?: ReactNode;
   status?: ReactNode;
-<<<<<<< ours
   /** Filled with the resizable panels, for `resetLayout`. */
   panelsRef?: MutableRefObject<LayoutPanels | null>;
 }): ReactElement {
-=======
-}): ReactElement {
-  const treeRef = usePanelRef();
-  const inboxRef = usePanelRef();
->>>>>>> theirs
   const planRef = usePanelRef();
   const treeRef = usePanelRef();
   const centerRef = usePanelRef();
@@ -70,24 +58,15 @@ export function Shell(props: {
       >
         <ResizablePanel
           id="tree"
-<<<<<<< ours
           panelRef={treeRef}
           data-part="tree-panel"
-=======
-          data-part="tree-panel"
-          panelRef={treeRef}
->>>>>>> theirs
           defaultSize="20%"
           minSize="12%"
           maxSize="40%"
           collapsible
           collapsedSize="0%"
         >
-<<<<<<< ours
-          <aside aria-label="Context tree column" className="h-full overflow-y-auto">
-=======
           <aside aria-label="Context tree column" className="h-full overflow-hidden">
->>>>>>> theirs
             {props.tree}
           </aside>
         </ResizablePanel>
@@ -98,11 +77,7 @@ export function Shell(props: {
           data-part="split-left"
           onDoubleClick={() => treeRef.current?.resize("20%")}
         />
-<<<<<<< ours
-        <ResizablePanel id="center" panelRef={centerRef} data-part="center-panel" defaultSize="50%" minSize="30%">
-=======
         <ResizablePanel id="center" data-part="center-panel" defaultSize="50%" minSize="30%">
->>>>>>> theirs
           <div
             data-column="center"
             data-part="center-frame"
@@ -199,13 +174,8 @@ export function Shell(props: {
         />
         <ResizablePanel
           id="inbox"
-<<<<<<< ours
           panelRef={inboxRef}
           data-part="inbox-panel"
-=======
-          data-part="inbox-panel"
-          panelRef={inboxRef}
->>>>>>> theirs
           defaultSize="30%"
           minSize="14%"
           maxSize="45%"
