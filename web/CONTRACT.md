@@ -61,7 +61,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
 | ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `Inbox.tsx`, `Shell.tsx`, `Header.tsx`, `StatusBar.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx`, `Header.test.tsx`, `StatusBar.test.tsx` |
 | ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx`, and Phase 2: `rows.ts` (10.4), `virtual.ts` (10.4), `Markdown.tsx` (10.6) | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx`, `rows.test.ts`, `virtual.test.ts`, `Markdown.test.tsx` |
-| ui-composer | `web/src/ui/composer/attachments.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx`, `TierSelector.test.tsx` |
+| ui-composer | `web/src/ui/composer/attachments.ts`, `drafts.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx` (also the draft tests of 6.9), `TierSelector.test.tsx` |
 | ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx` |
 | app | `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`, `web/src/ui/app.css` | `web/src/ui/App.test.tsx` |
 | ui-chat (Phase 2) | see the ui-chat row | the Phase 2 pure modules `rows.ts`, `virtual.ts` and the `splitMarkdown` function are tested without a DOM |
@@ -1387,7 +1387,7 @@ export function Header(): JSX.Element; // pro-d18; no props (Phase 1 is the plai
 export function StatusBar(props: { runner: Runner | null; state: string | null; version: Stat<string> | null }): JSX.Element; // pro-d18; Runner, Stat from `protocol/domain.ts`
 ```
 
-**ContextTree DOM.** `<nav aria-label="Context tree">`; `tree === null` -> text `Loading contexts…`. A `<ul role="tree">` of Contexts: `<li role="treeitem" data-context="<id>">` with the Context title; its Plans as nested `<li role="treeitem" data-plan="<id>">` containing `<button data-select="plan">` (label `plan.title`, plus counts text `merged 13 · running 1`: only non-zero counts, order draft, queued, running, merged, failed, cancelled); its sessions (Context sessions, then each Plan's sessions) as `<button data-session="<sessionId>">` with text `ref.key` and, when set, ` — <title>`, preceded by the state dot `<span role="img" data-dot="<state>" data-attention="<urgency|none>" aria-label="<state>[, needs you (<urgency>)]">`. The selected session button and the selected plan button carry `aria-current="true"`. Archived Contexts and archived Plans are placed inside a closed `<details data-archived><summary>Archived (n)</summary>…</details>`. Clicking a session button calls `onSelectSession(id)`; clicking a plan button calls `onSelectPlan(id)`.
+**ContextTree DOM.** `<nav aria-label="Context tree">`; `tree === null` -> text `Loading contexts…`. A `<ul role="tree">` of Contexts: `<li role="treeitem" data-context="<id>">` with the Context title; its Plans as nested `<li role="treeitem" data-plan="<id>">` containing `<button data-select="plan">` (label `plan.title`, plus counts text `merged 13 · running 1`: only non-zero counts, order draft, queued, running, merged, failed, cancelled); its sessions (Context sessions, then each Plan's sessions) as `<button data-session="<sessionId>">` with text `ref.key` and, when set, ` — <title>`, preceded by the state dot `<span role="img" data-dot="<state>" data-attention="<urgency|none>" aria-label="<state>[, needs you (<urgency>)]">`. The selected session button and the selected plan button carry `aria-current="true"`. Archived Contexts and archived Plans are placed inside a closed `<details data-archived><summary>Archived (n)</summary>…</details>`. Clicking a session button calls `onSelectSession(id)`; clicking a plan button calls `onSelectPlan(id)`. The session row menu's `Archive` item calls `clearDraft(<session id>)` (6.9) before dispatching `session.archive`; Plan and Context archive do not touch drafts.
 
 **PlanView DOM.** `plan === null` -> `<p data-empty>No plan selected</p>` (empty state). Otherwise `<section aria-label="Plan <id>">`: `<h2>` title, phase, review status (`Review r1: approved`) when `review !== null`, `Escalations: n` when `openEscalations > 0`. Each Workflow `<section data-workflow="<key>" aria-label="Workflow <key>">` with key, status, repo and base, `#<number> <state>` as a link (`<a href=url>`) when `pr !== null`, and a `<button data-action="post-pr">Post PR</button>` when `pr !== null` that calls `onAction({kind:"pr.post", planId, workflow: key})`; inside, `<ul>` of its Jobs (by `jobKeys` order, looked up in `jobs`): `<li data-job="<key>" data-status="<status>">` with key, title, status, tier, and `needs: a, b` only when `needs` is non-empty (job needs); attempts as `#<number> <status>` text. Jobs with `workflow === null` go in `<section aria-label="Explore jobs">`.
 
@@ -1464,13 +1464,23 @@ export function buildPrompt(text: string, attachments: readonly Attachment[]): {
 
 `buildPrompt(text, attachments)`: `text` = the user text, then for each text attachment in order a blank line and `<file name="<name>">\n<content>\n</file>` (the wrapper pi itself uses for file input, scout-pi §1 line 7; `"` in the name becomes `&quot;`); text files are inlined into the prompt. `images` = the image attachments as `WireImage` in order. With no text attachments `text` is returned unchanged.
 
+#### `drafts.ts`
+
+```ts
+export function loadDraft(sessionId: string): string; // stored text; "" when none or storage unavailable
+export function saveDraft(sessionId: string, text: string): void; // stores; an empty text removes the key
+export function clearDraft(sessionId: string): void; // removes the key
+```
+
+The draft is the composer text of one session, kept in the browser's localStorage under the key `cpd-ui:draft:<sessionId>` (`sessionId` = `SessionView.id` = `ref.id`). Only the text is stored, never attachments. An empty text removes the key, so there is at most one draft per session. Storage errors (unavailable or throwing localStorage) are swallowed: `loadDraft` returns `""`, and the Composer keeps in-memory behaviour, as in `cockpit/persisted.ts`.
+
 #### `Composer.tsx`
 
 ```ts
 export interface ComposerHandle { addFiles(files: readonly FileLike[]): Promise<void> } // the chat slot forwards dropped files here
 export function Composer(props: {
   capabilities: Capabilities | null; busy: boolean; queued: readonly QueuedSubmission[];
-  reader: FileReaderBoundary;
+  reader: FileReaderBoundary; sessionId: string;
   onSubmit(input: { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy }): void;
   onAbort(): void; onCancelQueued(clientSubmissionId: string): void;
   ref?: Ref<ComposerHandle>; // React 19 ref prop
@@ -1480,6 +1490,7 @@ export function Composer(props: {
 DOM and behaviour:
 
 - Structure and keys: DESIGN-compose 1.2 and 1.4. `textarea[aria-label="Message"]`: Enter submits `{text, attachments, whenBusy: "followUp"}` and clears; Shift+Enter is a newline; IME composition is ignored.
+- **Draft.** The textarea starts with `loadDraft(sessionId)`. Every text change calls `saveDraft(sessionId, text)` in the change handler (not in an effect). A send (Enter or the Send button) calls `clearDraft(sessionId)`. When `sessionId` changes, the textarea shows `loadDraft(<new sessionId>)` (the previous session's draft stays stored, unchanged), and `attachments` and `rejections` reset to empty.
 - **Send**: `button[data-action="send"][aria-label="Send"]`, disabled when there is nothing to send or `capabilities` is `null`; a click submits `whenBusy: "followUp"`.
 - **Busy**: the Stop button, `button[data-action="abort"][aria-label="Stop"]`, is shown while busy when `capabilities.abort.supported` (pro-d402, which supersedes the Stop removal of pro-d57; DESIGN-compose 1.2); its click calls `onAbort` (`connection.abort`). It is absent when not busy and for pi sessions (abort unsupported, 8). The prompt border pulses (`prompt-border-pulse`, DESIGN.md 2h) while busy or a send is pending. Send submits a follow-up. There is no Steer or Follow-up button (pro-d57).
 - **Unsupported capabilities**: the attach button and the file picker follow `capabilities`. There is no steer control to disable (pro-d57).
@@ -1542,7 +1553,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
 Wiring:
 
 - `ContextTree`: `onSelectSession` -> `connection.selectSession(id)`, `onSelectPlan` -> `connection.selectPlan(id)`; `PlanView.onAction`, `Inbox.onAction` -> `connection.action(action)`; `Inbox.onSelectSession` -> `connection.selectSession`.
-- Chat slot (`selectedSessionId !== null`): `ChatPane` composes `ChatHeader` (`ref.key`, `title`), `Transcript` (`onLoadEarlier` -> `connection.loadEarlier()`), the active dialog card (`AskCard`/`PlanReviewCard` with `readOnly = !dialog.interactive`, `onRespond` -> `connection.respond(dialog.id, response)`), `TierSelector` (`onConfigure` -> `connection.configure`, `onRequestModels` -> `connection.listModels`), `Footer`, `Composer` (`onSubmit({text, attachments, whenBusy})` -> `const {text: prompt, images} = buildPrompt(text, attachments); connection.submit({text: prompt, images, whenBusy})`; `onAbort` -> `connection.abort`; `onCancelQueued` -> `connection.abortSubmission`). No session selected: `<p data-empty>Select a session</p>`.
+- Chat slot (`selectedSessionId !== null`): `ChatPane` composes `ChatHeader` (`ref.key`, `title`), `Transcript` (`onLoadEarlier` -> `connection.loadEarlier()`), the active dialog card (`AskCard`/`PlanReviewCard` with `readOnly = !dialog.interactive`, `onRespond` -> `connection.respond(dialog.id, response)`), `TierSelector` (`onConfigure` -> `connection.configure`, `onRequestModels` -> `connection.listModels`), `Footer`, `Composer` (`sessionId={view.id}`; `onSubmit({text, attachments, whenBusy})` -> `const {text: prompt, images} = buildPrompt(text, attachments); connection.submit({text: prompt, images, whenBusy})`; `onAbort` -> `connection.abort`; `onCancelQueued` -> `connection.abortSubmission`). No session selected: `<p data-empty>Select a session</p>`.
 - **Drop zone**: the chat slot wrapper `<div data-chat-dropzone>` handles `dragover`/`drop` with files (same `Files` rule as the Composer) and forwards `filesFromDrop(dataTransfer)` to the Composer's `ComposerHandle.addFiles` (the drop works onto the composer and onto the chat slot).
 - **Header and status bar (pro-d18).** `Shell` gets `header={<Header />}` and `status={<StatusBar runner={r} state={s} version={CPD_VERSION} />}`. `r` and `s` are `ref.runner` and `ref.state` of the `SessionNode` whose `ref.id === selectedSessionId`, found by walking `cockpit.tree` (each Context's `sessions`, then each of its `plans[].sessions`); both are `null` when the tree is `null`, no session is selected, or the session is not in the tree. The tree is the one source: `session.ref` is set at attach only and is not refreshed by cockpit patches. `CPD_VERSION` is a module constant of type `Stat<string>`, `{state:"unknown", reason:"cockpit snapshot carries no cpd version (Phase 1, O19)"}`: the snapshot has no version field (1.4, unverified source O19). The ChatPane keeps `ChatHeader` at the top of the chat zone (no change).
 
