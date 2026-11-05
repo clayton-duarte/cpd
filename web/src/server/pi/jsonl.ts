@@ -61,6 +61,8 @@ export interface PushResult {
 export interface PiNormalizer {
   push(text: string, at: LinePosition): PushResult;
   readonly facts: JsonlFacts;
+  /** `message.timestamp` of every assistant line pushed so far, in order. */
+  readonly turns: readonly number[];
 }
 
 const FOLD_KINDS: readonly string[] = ["cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills", "cpd"];
@@ -100,6 +102,10 @@ function foldTitle(kind: FoldKind, body: string, details: Obj): string {
 
 const isFold = (entry: JsonlEntry): boolean =>
   entry.type === "custom_message" && FOLD_KINDS.includes(String(entry.customType)) && entry.display !== false;
+
+/** `message.timestamp` of an assistant message; undefined for any other message. */
+const turnOf = (m: Obj): number | undefined =>
+  m.role === "assistant" && typeof m.timestamp === "number" && Number.isFinite(m.timestamp) ? m.timestamp : undefined;
 
 const blocksOf = (content: unknown): Obj[] => (Array.isArray(content) ? content.filter(isObj) : []);
 const hasChatBlocks = (content: unknown): boolean =>
@@ -170,6 +176,7 @@ function extractInlineAttachments(rawText: string): { text: string; attachments:
 export function createNormalizer(): PiNormalizer {
   const facts: JsonlFacts = {};
   const tools = new Map<string, ToolItem>();
+  const turns: number[] = [];
   const pendingAsk = new Set<string>();
   const pendingReviews = new Set<string>();
   let planTitle: string | undefined;
@@ -227,6 +234,8 @@ export function createNormalizer(): PiNormalizer {
         } else if (m.role === "assistant") {
           need(Array.isArray(m.content), "assistant content must be an array");
           facts.lastRole = "assistant";
+          const turn = turnOf(m);
+          if (turn !== undefined) turns.push(turn);
           const stop = str(m.stopReason);
           if (stop === undefined) delete facts.lastStopReason;
           else facts.lastStopReason = stop;
@@ -343,7 +352,7 @@ export function createNormalizer(): PiNormalizer {
     return r;
   }
 
-  return { push, facts };
+  return { push, facts, turns };
 }
 
 /** Applies a push result to an ordered item list and the open dialog map (updates replace by id). */
@@ -370,7 +379,13 @@ export function normalizeText(text: string): { items: TranscriptItem[]; facts: J
   return { items, facts: n.facts, openDialogs: [...open.values()] };
 }
 
-/** The `message.timestamp` of a raw assistant JSONL line; undefined for any other line. Stub: not implemented. */
-export function assistantTimestamp(_rawLine: string): number | undefined {
-  throw new Error("not implemented");
+/** The `message.timestamp` of a raw assistant JSONL line; undefined for any other line. */
+export function assistantTimestamp(rawLine: string): number | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(rawLine);
+  } catch {
+    return undefined;
+  }
+  return isObj(value) && value.type === "message" && isObj(value.message) ? turnOf(value.message) : undefined;
 }

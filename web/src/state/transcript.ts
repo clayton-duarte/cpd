@@ -83,7 +83,9 @@ export function applyDelta(
   return { ...state, items };
 }
 
-/** Drops the items with these ids; unknown ids leave the state unchanged (same reference). Stub: not implemented. */
-export function removeItems(_state: TranscriptState, _ids: readonly string[]): TranscriptState {
-  throw new Error("not implemented");
+/** Drops the items with these ids; unknown ids leave the state unchanged (same reference). */
+export function removeItems(state: TranscriptState, ids: readonly string[]): TranscriptState {
+  const drop = new Set(ids);
+  if (!state.items.some((i) => drop.has(i.id))) return state;
+  return { ...state, items: state.items.filter((i) => !drop.has(i.id)) };
 }
