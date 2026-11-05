@@ -965,6 +965,7 @@ Service behaviours:
 8. `stop()` kills the follow process, disposes every timer and subscription; nothing fires afterwards. `selectPlan` stores the id and loads only the plan pane.
 9. `runAction(action)` delegates to `runAction(cpd, action)` of `actions.ts`; errors propagate as `WebError`.
 10. `refresh(panes)` (rules 3 and 5) always returns a promise that resolves only after the in-flight loop has drained every queued pane, so a call made while another refresh runs waits for that loop. `runAction` awaits that refresh before it resolves, so `action.result` is never sent while `snap.tree` is stale (for plan.new the tree already holds the new Plan and Lead session).
+11. Monotonic pane cursors (pro-d426): each pane update, whether from a coalesced `loadPanes` burst (rule 3) or from the `runAction` refresh (rule 10), is applied to the snapshot only when it is not older than the snapshot's pane: `tree` when `u.tree.cursor >= snap.tree.cursor` (or `snap.tree` is null); `inbox` when `u.inbox.cursor >= snap.inbox.cursor` (or `snap.inbox` is null); `plan` when `u.plan` is null, or `snap.plan` is null, or the planId differs (a different Plan is a new selection, not a stale one), or `u.plan.cursor >= snap.plan.cursor`. A null plan always applies. A stale update is dropped without emitting a `{kind:"pane"}` update.
 
 #### `actions.ts`
 
