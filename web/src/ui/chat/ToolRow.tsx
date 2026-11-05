@@ -1,14 +1,67 @@
-import { Fragment, memo, useState } from "react";
+import {
+  CircleXIcon,
+  FilePenIcon,
+  FileTextIcon,
+  SearchIcon,
+  TerminalIcon,
+  WrenchIcon,
+} from "lucide-react";
+import { memo, useState } from "react";
 import type { JSX } from "react";
 import { TOOL_PREVIEW_LINES } from "../../protocol/domain.ts";
-import { glyphClass } from "../dango-status.ts";
+import type {
+  OrphanResultItem,
+  ToolItem,
+  ToolResult,
+} from "../../protocol/domain.ts";
+import { Button } from "../components/button.tsx";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockFooter,
+  CodeBlockLine,
+} from "../components/code-block.tsx";
+import { Spinner } from "../components/spinner.tsx";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "../components/trace.tsx";
 import type { Glyph, Tone } from "../dango-status.ts";
-import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } from "../components/trace.tsx";
-import type { OrphanResultItem, ToolItem, ToolResult } from "../../protocol/domain.ts";
 
-const DETAIL_KEYS = ["command", "query", "queries", "q", "url", "urls", "path", "file_path", "paths", "pattern", "prompt", "question", "claim", "name", "id", "tool"];
+const DETAIL_KEYS = [
+  "command",
+  "query",
+  "queries",
+  "q",
+  "url",
+  "urls",
+  "path",
+  "file_path",
+  "paths",
+  "pattern",
+  "prompt",
+  "question",
+  "claim",
+  "name",
+  "id",
+  "tool",
+];
 
-const tidy = (s: string): string => s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/ +/g, " ").trim();
+const cut = (s: string, n: number): string =>
+  s.length > n ? `${s.slice(0, n)}…` : s;
+const tidy = (s: string): string =>
+  s
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
 const asText = (v: unknown): string => {
   if (Array.isArray(v)) return v.map(asText).join(", ");
   if (typeof v === "string") return v;
@@ -16,58 +69,78 @@ const asText = (v: unknown): string => {
 };
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-function detailOf(name: string, args: Readonly<Record<string, unknown>>): string {
+function detailOf(
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+): string {
   switch (name) {
     case "read":
     case "write":
     case "edit":
     case "ls":
-      return str(args["path"]);
+      return cut(str(args["path"]), 100);
     case "bash":
     case "powershell":
-      return str(args["command"]).split("\n")[0] ?? "";
+      return cut(str(args["command"]).split("\n")[0] ?? "", 100);
     case "grep":
-      return `/${str(args["pattern"])}/ in ${str(args["path"])}`;
+      return cut(`/${str(args["pattern"])}/ in ${str(args["path"])}`, 100);
     case "find":
-      return `${str(args["pattern"])} in ${str(args["path"])}`;
+      return cut(`${str(args["pattern"])} in ${str(args["path"])}`, 100);
   }
   const key = DETAIL_KEYS.find((k) => k in args);
   const first = Object.values(args)[0];
   const v = key !== undefined ? args[key] : first;
   if (v === undefined) return "";
-  return tidy(asText(v));
+  return cut(tidy(asText(v)), 160);
 }
 
-const splitLines = (text: string): string[] => (text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+const splitLines = (text: string): string[] =>
+  text === "" ? [] : text.replace(/\n$/, "").split("\n");
 
 export function duration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 const diffKind = (l: string): "add" | "remove" | "context" =>
-  l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "remove" : "context";
+  l.startsWith("+") && !l.startsWith("+++")
+    ? "add"
+    : l.startsWith("-") && !l.startsWith("---")
+      ? "remove"
+      : "context";
 
-export const toolName = (tool: ToolItem): string => (tool.name.startsWith("mcp__") ? tool.name.slice(5) : tool.name);
-export const toolDetail = (tool: ToolItem): string => detailOf(tool.name, tool.args);
+export const toolName = (tool: ToolItem): string =>
+  tool.name.startsWith("mcp__") ? tool.name.slice(5) : tool.name;
+export const toolDetail = (tool: ToolItem): string =>
+  detailOf(tool.name, tool.args);
 
-export const statusTone = (s: ToolItem["status"] | "failed" | "running" | "done"): Tone & Glyph => (s === "running" ? "active" : s === "failed" ? "blocked" : "done");
+export const statusTone = (
+  s: ToolItem["status"] | "failed" | "running" | "done",
+): Tone & Glyph =>
+  s === "running" ? "active" : s === "failed" ? "blocked" : "done";
 
 function diffCounts(diff: string): { added: number; removed: number } {
   const kinds = diff.split("\n").map(diffKind);
-  return { added: kinds.filter((k) => k === "add").length, removed: kinds.filter((k) => k === "remove").length };
+  return {
+    added: kinds.filter((k) => k === "add").length,
+    removed: kinds.filter((k) => k === "remove").length,
+  };
 }
 
 function statusOf(tool: ToolItem): string {
   if (tool.status === "running") return "Running";
   if (tool.status === "failed") {
-    const reason = splitLines(tool.result?.text ?? "").map((l) => l.trim()).find((l) => l !== "");
+    const reason = splitLines(tool.result?.text ?? "")
+      .map((l) => l.trim())
+      .find((l) => l !== "");
     return reason === undefined ? "Failed" : `Failed: ${reason}`;
   }
   let s = "Done";
   const ms = tool.result?.durationMs;
   if (typeof ms === "number") s += ` in ${duration(ms)}`;
   if (tool.name === "edit") {
-    const kinds = (tool.diff === undefined ? [] : tool.diff.split("\n")).map(diffKind);
+    const kinds = (tool.diff === undefined ? [] : tool.diff.split("\n")).map(
+      diffKind,
+    );
     s += ` (+${kinds.filter((k) => k === "add").length} -${kinds.filter((k) => k === "remove").length})`;
   } else {
     const n = splitLines(tool.result?.text ?? "").length;
@@ -76,105 +149,225 @@ function statusOf(tool: ToolItem): string {
   return s;
 }
 
-/** Keep every changed line, one context line either side, and hunk headers. */
-function trimDiff(lines: readonly string[]): string[] {
-  const keep = lines.map((l, i) => {
-    if (diffKind(l) !== "context" || l.startsWith("@@")) return true;
-    return [lines[i - 1], lines[i + 1]].some((n) => n !== undefined && diffKind(n) !== "context");
-  });
-  return lines.filter((_, i) => keep[i]);
+export function ToolIcon(props: {
+  name: string;
+  status: ToolItem["status"] | "done";
+}): JSX.Element {
+  if (props.status === "running") {
+    return <Spinner />;
+  }
+  if (props.status === "failed") {
+    return <CircleXIcon className="text-destructive" />;
+  }
+  switch (props.name) {
+    case "bash":
+    case "powershell":
+      return <TerminalIcon />;
+    case "read":
+    case "ls":
+      return <FileTextIcon />;
+    case "edit":
+    case "write":
+      return <FilePenIcon />;
+    case "grep":
+    case "find":
+      return <SearchIcon />;
+    default:
+      return <WrenchIcon />;
+  }
 }
 
-function Body(props: { lines: readonly string[]; render: (line: string, i: number) => JSX.Element; wrap: (children: JSX.Element[]) => JSX.Element }): JSX.Element {
+function Output(props: {
+  result: ToolResult | undefined;
+  diff?: string;
+  failed?: boolean;
+}): JSX.Element | null {
   const [all, setAll] = useState(false);
-  const shown = all ? props.lines : props.lines.slice(0, TOOL_PREVIEW_LINES);
-  const rest = props.lines.length - shown.length;
+
+  if (props.diff !== undefined) {
+    const lines = props.diff.split("\n");
+    const shown = all ? lines : lines.slice(0, TOOL_PREVIEW_LINES);
+    const rest = lines.length - shown.length;
+    return (
+      <CodeBlock size="sm" data-part="diff">
+        <CodeBlockActions>
+          <CodeBlockCopyButton value={props.diff} />
+        </CodeBlockActions>
+        <CodeBlockContent className="max-h-64">
+          {shown.map((l, i) => {
+            const kind = diffKind(l);
+            const variant =
+              kind === "add"
+                ? "added"
+                : kind === "remove"
+                  ? "removed"
+                  : "default";
+            return (
+              <CodeBlockLine key={i} data-diff={kind} variant={variant}>
+                {kind === "context" ? l : l.slice(1)}
+              </CodeBlockLine>
+            );
+          })}
+        </CodeBlockContent>
+        {rest > 0 ? (
+          <CodeBlockFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              data-action="expand-output"
+              className="font-mono"
+              onClick={() => setAll(true)}
+            >
+              Show {rest} more lines
+            </Button>
+          </CodeBlockFooter>
+        ) : null}
+      </CodeBlock>
+    );
+  }
+
+  if (props.result === undefined) return null;
+  return <PlainOutput text={props.result.text} failed={props.failed} />;
+}
+
+function PlainOutput(props: { text: string; failed?: boolean }): JSX.Element {
+  const [all, setAll] = useState(false);
+  const lines = splitLines(props.text);
+  const shown = all ? lines : lines.slice(0, TOOL_PREVIEW_LINES);
+  const rest = lines.length - shown.length;
+  const shownText = shown.join("\n");
   return (
-    <>
-      {props.wrap(shown.map(props.render))}
+    <CodeBlock size="sm" variant={props.failed ? "destructive" : "default"}>
+      <CodeBlockActions>
+        <CodeBlockCopyButton value={props.text} />
+      </CodeBlockActions>
+      <CodeBlockContent wrap className="max-h-64" data-part="output">
+        {shownText}
+      </CodeBlockContent>
       {rest > 0 ? (
-        <button type="button" data-action="expand-output" className="py-0.5 font-mono text-meta text-fg-strong" onClick={() => setAll(true)}>
-          Show {rest} more lines
-        </button>
+        <CodeBlockFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            data-action="expand-output"
+            className="font-mono"
+            onClick={() => setAll(true)}
+          >
+            Show {rest} more lines
+          </Button>
+        </CodeBlockFooter>
       ) : null}
-    </>
+    </CodeBlock>
   );
 }
 
-function Output(props: { result: ToolResult | undefined; diff?: string }): JSX.Element | null {
-  if (props.diff !== undefined) {
+export const ToolRow = memo(function ToolRow(props: {
+  tool: ToolItem;
+  nested?: boolean;
+}): JSX.Element {
+  const { tool } = props;
+  const [open, setOpen] = useState(false);
+  const tone = statusTone(tool.status);
+  const delta =
+    tool.name === "edit" && tool.diff !== undefined
+      ? diffCounts(tool.diff)
+      : null;
+  const traceStatus =
+    tool.status === "running"
+      ? "running"
+      : tool.status === "failed"
+        ? "error"
+        : undefined;
+  const hasOutput =
+    (tool.name === "edit" &&
+      tool.diff !== undefined &&
+      tool.diff.trim() !== "") ||
+    (tool.result !== undefined && tool.result.text.trim() !== "");
+
+  const line = (
+    <TraceLine status={traceStatus} className="font-mono text-xs">
+      <TraceIcon data-part="glyph" data-tone={tone} data-glyph={tone}>
+        <ToolIcon name={tool.name} status={tool.status} />
+      </TraceIcon>
+      <span data-part="name" className="shrink-0 text-muted-foreground">
+        {toolName(tool)}
+      </span>
+      <TraceTitle data-part="detail" className="text-foreground">
+        {toolDetail(tool)}
+      </TraceTitle>
+      {delta === null ? null : (
+        <TraceDescription data-part="delta" className="font-mono">
+          <span data-part="added" className="text-status-done">
+            {`+${delta.added}`}
+          </span>{" "}
+          <span data-part="removed" className="text-status-blocked">
+            {`\u2212${delta.removed}`}
+          </span>
+        </TraceDescription>
+      )}
+      <TraceDescription data-part="status" className="font-mono">
+        {statusOf(tool)}
+      </TraceDescription>
+    </TraceLine>
+  );
+
+  if (!hasOutput) {
     return (
-      <Body
-        lines={trimDiff(props.diff.split("\n"))}
-        render={(l, i) => {
-          const kind = diffKind(l);
-          const cls = kind === "add" ? "bg-status-done/[0.11]" : kind === "remove" ? "bg-status-blocked/10" : "text-muted-foreground";
-          return (
-            <div key={i} data-diff={kind} className={`block px-2.5 break-words whitespace-pre-wrap text-foreground ${cls}`}>
-              {kind === "context" ? null : (
-                <span data-part="sign" className={kind === "add" ? "text-status-done" : "text-status-blocked"}>
-                  {l.slice(0, 1)}
-                </span>
-              )}
-              {kind === "context" ? l : l.slice(1)}
-            </div>
-          );
-        }}
-        wrap={(c) => (
-          <div data-part="diff" className="rounded-md bg-card font-mono text-[11.5px] leading-[1.55]">
-            {c}
-          </div>
-        )}
-      />
+      <div
+        data-kind="tool"
+        data-tool={tool.name}
+        data-status={tool.status}
+      >
+        {line}
+      </div>
     );
   }
-  if (props.result === undefined) return null;
-  return <PlainOutput text={props.result.text} />;
-}
 
-function PlainOutput(props: { text: string }): JSX.Element {
-  const lines = splitLines(props.text);
-  return <Body lines={lines} render={(l) => <span data-part="output-row">{l}</span>} wrap={(c) => <pre data-part="output" className="rounded-md bg-card px-2.5 py-1.5 font-mono text-[11.5px] leading-[1.5] break-words whitespace-pre-wrap text-muted-foreground">{c.map((e, i) => <Fragment key={i}>{i > 0 ? "\n" : ""}{e}</Fragment>)}</pre>} />;
-}
-
-export const ToolRow = memo(function ToolRow(props: { tool: ToolItem; defaultOpen?: boolean }): JSX.Element {
-  const { tool } = props;
-  const [open, setOpen] = useState(props.defaultOpen === true);
-  const tone = statusTone(tool.status);
-  const isDiff = tool.name === "edit" && tool.diff !== undefined;
-  const delta = isDiff ? diffCounts(tool.diff ?? "") : null;
   return (
-    <Trace data-kind="tool" data-tool={tool.name} data-status={tool.status} data-state={open ? "open" : "closed"}>
-      <TraceCollapsible open={open} onOpenChange={setOpen}>
-        <TraceCollapsibleTrigger className="w-full">
-          <span data-part="summary" className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2.5 text-[12px]">
-            <span data-part="glyph" aria-hidden="true" data-tone={tone} data-glyph={tone} className={glyphClass[tone]} />
-            <span data-part="name" className="font-mono text-muted-foreground">{toolName(tool)}</span>
-            <span data-part="detail" className="min-w-0 font-mono break-words whitespace-normal text-foreground">{toolDetail(tool)}</span>
-            {delta === null ? null : (
-              <span data-part="delta" className="font-mono">
-                <span data-part="added" className="text-status-done">{`+${delta.added}`}</span>{" "}
-                <span data-part="removed" className="text-status-blocked">{`\u2212${delta.removed}`}</span>
-              </span>
-            )}
-            <span data-part="status" className="font-mono text-meta text-fg-dim">{statusOf(tool)}</span>
-          </span>
-        </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent forceMount className="mt-1 mb-0 ml-1 border-l-0 pl-0">
-          <div data-part="rail" className="flex flex-col gap-1 border-l pl-4">
-            {isDiff ? (open ? <Output result={tool.result} diff={tool.diff ?? ""} /> : null) : <Output result={tool.result} />}
-          </div>
-        </TraceCollapsibleContent>
-      </TraceCollapsible>
-    </Trace>
+    <TraceCollapsible
+      data-kind="tool"
+      data-tool={tool.name}
+      data-status={tool.status}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+      <TraceCollapsibleContent>
+        <Output
+          result={tool.result}
+          failed={tool.status === "failed"}
+          {...(tool.name === "edit" && tool.diff !== undefined
+            ? { diff: tool.diff }
+            : {})}
+        />
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
   );
 });
 
-export const OrphanRow = memo(function OrphanRow(props: { item: OrphanResultItem }): JSX.Element {
+export const OrphanRow = memo(function OrphanRow(props: {
+  item: OrphanResultItem;
+}): JSX.Element {
+  const [open, setOpen] = useState(true);
   return (
-    <article data-kind="orphan-result">
-      <p>Result of {props.item.name} (call not loaded)</p>
-      <PlainOutput text={props.item.result.text} />
-    </article>
+    <Trace data-kind="orphan-result">
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger>
+          <TraceLine className="font-mono text-xs">
+            <TraceIcon>
+              <WrenchIcon />
+            </TraceIcon>
+            <TraceTitle>
+              Result of {props.item.name} (call not loaded)
+            </TraceTitle>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent>
+          <PlainOutput text={props.item.result.text} />
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 });

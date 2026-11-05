@@ -19,27 +19,27 @@ const streaming: TranscriptItem = { kind: "assistant", id: "a2", streaming: true
 const running: ToolItem = { kind: "tool", id: "tool:t1", callId: "t1", name: "bash", args: {}, status: "running" };
 
 it("Transcript shows no Thinking cue when busy and nothing streams", () => {
-  const m = mount(<Transcript {...base} busy items={[user, done]} />);
+  const m = mount(<Transcript {...base} items={[user, done]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
   expect(m.container.textContent).not.toContain("Thinking…");
   m.unmount();
 });
 
 it("Transcript names no running tool in a working cue", () => {
-  const m = mount(<Transcript {...base} busy items={[user, running]} />);
+  const m = mount(<Transcript {...base} items={[user, running]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
   expect(m.container.textContent).not.toContain("Using bash…");
   m.unmount();
 });
 
 it("Transcript shows no working cue when busy is false", () => {
-  const m = mount(<Transcript {...base} busy={false} items={[user, done]} />);
+  const m = mount(<Transcript {...base} items={[user, done]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
   m.unmount();
 });
 
 it("Transcript shows exactly one indicator when the last assistant item streams", () => {
-  const m = mount(<Transcript {...base} busy items={[user, streaming]} />);
+  const m = mount(<Transcript {...base} items={[user, streaming]} />);
   expect(m.container.querySelectorAll('[data-part="working"]').length).toBe(1);
   expect(m.container.querySelector(CUE)).toBeNull();
   expect(m.container.querySelector('[role="status"][data-part="working"]')?.textContent).toBe("Working…");
