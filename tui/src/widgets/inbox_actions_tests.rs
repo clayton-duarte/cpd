@@ -110,6 +110,8 @@ fn a_refused_click_action_leaves_the_inbox_row_as_it_was() {
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     };
     cpd_core::inbox::model::reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z")
         .unwrap();

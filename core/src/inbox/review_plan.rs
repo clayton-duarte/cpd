@@ -109,6 +109,72 @@ Read `{home}/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and 
     }
 }
 
+/// The open (phase `grounding`, unarchived) `codereview` Plans that have a `pr_subject`, with the pull request it names
+/// (`owner/repo`, number). A subject that does not parse is skipped.
+pub(crate) fn open_plan_refs(
+    store: &mut crate::store::Store,
+) -> Result<Vec<(crate::ids::PlanId, String, u64)>, crate::error::CpdError> {
+    let rows: Vec<(String, String)> = store.read(|c| {
+        let mut st = c.prepare(
+            "SELECT id, pr_subject FROM plans WHERE context = 'codereview' AND phase = 'grounding'
+               AND archived_at IS NULL AND deleted_at IS NULL AND pr_subject IS NOT NULL ORDER BY id",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, subject)| {
+            let (repo, number) = subject.strip_prefix("pr:")?.rsplit_once('#')?;
+            Some((
+                crate::ids::PlanId::parse(&id).ok()?,
+                repo.to_owned(),
+                number.parse().ok()?,
+            ))
+        })
+        .collect())
+}
+
+/// Whether the pull request is over for the viewer: closed, merged, or the viewer's latest review is APPROVED.
+fn is_over(pr: &super::team::GhPr, me: &str) -> bool {
+    pr.state != super::team::GhState::Open
+        || pr
+            .reviews
+            .iter()
+            .rev()
+            .find(|r| r.author == me)
+            .is_some_and(|r| r.state == "APPROVED")
+}
+
+/// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that
+/// `lookup` reports CLOSED or MERGED, or APPROVED by the viewer (`lookup.me`) in their latest review (pro-d416, A3), the
+/// way `review submit` finishes one: phase `done`, `locked_at`, `done_at` and one quiet `plan-done` Event. A Plan without
+/// `pr_subject` is never finished. Returns the finished Plan ids.
+pub(crate) fn finish_closed(
+    store: &mut crate::store::Store,
+    lookup: &super::team::Lookup,
+) -> Result<Vec<crate::ids::PlanId>, crate::error::CpdError> {
+    let over: Vec<crate::ids::PlanId> = open_plan_refs(store)?
+        .into_iter()
+        .filter(|(_, repo, number)| {
+            lookup
+                .workflows
+                .get(&(repo.clone(), *number))
+                .and_then(Option::as_ref)
+                .is_some_and(|pr| is_over(pr, &lookup.me))
+        })
+        .map(|(id, _, _)| id)
+        .collect();
+    if over.is_empty() {
+        return Ok(over);
+    }
+    store.write("review plan close", |tx| {
+        over.iter()
+            .try_for_each(|id| crate::pr::review::finish_plan(tx, id))
+    })?;
+    Ok(over)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

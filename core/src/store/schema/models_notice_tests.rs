@@ -75,7 +75,10 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 fn items(store: &mut Store) -> Vec<Value> {
     store
         .read(|c: &Connection| {
-            let columns = table_columns(c, "inbox_items")?;
+            let columns: Vec<_> = table_columns(c, "inbox_items")?
+                .into_iter()
+                .filter(|(n, _)| n != "head_oid" && n != "reviewed_oid") // `codereview-followup` (a later migration)
+                .collect();
             let pairs: Vec<String> = columns
                 .iter()
                 .map(|(name, _)| format!("'{name}', {name}"))
@@ -101,6 +104,7 @@ fn columns(store: &mut Store) -> Vec<String> {
             Ok(table_columns(c, "inbox_items")?
                 .into_iter()
                 .map(|(name, _)| name)
+                .filter(|n| n != "head_oid" && n != "reviewed_oid") // `codereview-followup` (a later migration)
                 .collect())
         })
         .unwrap()

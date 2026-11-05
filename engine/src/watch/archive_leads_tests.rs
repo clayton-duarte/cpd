@@ -220,3 +220,22 @@ fn a_codereview_lead_asleep_past_the_threshold_archives_its_done_plan() {
     assert!(plan_archived_at(&mut fx, "rev").is_some());
     assert!(session_archived_at(&mut fx, "rev-lead").is_some());
 }
+
+/// pro-d416 (A2): E14 archives only done Plans; a grounding codereview Plan awaiting changes, its Lead asleep long ago, stays.
+#[test]
+fn archive_leaves_open_changes_requested_plan_unarchived() {
+    let mut fx = fx(None);
+    fx.fixture("INSERT OR IGNORE INTO contexts (id, title, owner, created_at, created_on) VALUES ('codereview', 'Code review', 'acme', 't', 'm1');");
+    let asleep = ago_seconds(2 * 24 * 3600);
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, asleep_at)
+           VALUES ('rev-lead', 'lead', 'codereview', 'rev', 'Lead rev', '/', 'O3', 'stopped', '{asleep}', 't', '{asleep}');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, changes_requested_at)
+           VALUES ('rev', 'codereview', 'rev', 'grounding', 'rev-lead', 't', '{asleep}');"
+    ));
+    for _ in 0..4 {
+        tick(&mut fx);
+    }
+    assert_eq!(plan_archived_at(&mut fx, "rev"), None);
+    assert_eq!(session_archived_at(&mut fx, "rev-lead"), None);
+}

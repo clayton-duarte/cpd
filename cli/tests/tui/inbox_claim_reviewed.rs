@@ -64,6 +64,8 @@ fn claimable() -> (Fixture, i64) {
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     });
     reconcile(&mut fx.store, &all, T5).unwrap();
     let id = fx.store_count(&format!(
