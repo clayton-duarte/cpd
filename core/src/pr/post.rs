@@ -55,6 +55,18 @@ fn drop_pending(env: &mut Env, id: &PlanId, key: &WorkflowKey) -> Result<(), Cpd
     })
 }
 
+/// Looks the message up in Slack after an unknown send outcome: the found message's ts, or `None`. Stub, not wired; the
+/// smallest lookup is a `slack-lookup.ts` helper call reading the channel's history since the send time for the PR url.
+#[allow(dead_code, clippy::unused_async)]
+fn lookup_message(
+    _env: &mut Env,
+    _channel: &str,
+    _since: &str,
+    _url: &str,
+) -> Result<Option<String>, CpdError> {
+    unimplemented!("lookup_message")
+}
+
 /// Test constructor of the arguments: Workflow `key` of Plan `plan`.
 #[cfg(test)]
 pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
