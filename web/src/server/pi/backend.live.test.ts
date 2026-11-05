@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionRef, TranscriptItem } from "../../protocol/domain.ts";
 import type { Disposable, GitBoundary } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
+import { FakeScheduler } from "../../testing/scheduler.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import { createPiBackend } from "./backend.ts";
 import type { LiveSource } from "./live.ts";
@@ -90,6 +91,7 @@ async function setup(initial: string[], withLive = true) {
     cpdHome: "/home",
     attachmentsDir: "/att",
     now: () => 1000,
+    scheduler: new FakeScheduler(),
     ...(withLive ? { live: source } : {}),
   });
   const handle = await backend.attach({ ref, file: FILE, tierOptions: ["S3"] }, (m) => out.push(m));
