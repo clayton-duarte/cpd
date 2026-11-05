@@ -602,7 +602,7 @@ The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep
 Effects, in this order (all or nothing):
 1. **Check** every object of the cascade. If any blocks, nothing is written and nothing is closed.
 2. **tmux:** close every live Lead pane exactly as `session close` does (§10.9): `kill-pane`, `state = stopped`, `tmux_pane = NULL`, with its `session-state` and `session-moved` Events. pi stops; the session files stay.
-3. **Rows**, one transaction that re-checks the rule first (`archive_blocked` if something became live meanwhile): `archived_at` = now on the Context, on each of its Plans and on each Session of the cascade, that is not archived yet. One **Event** per object changed: `context-archived` `{archived: true}`, `plan-archived`, `session-archived`.
+3. **Rows**, one transaction that re-checks the rule first (`archive_blocked` if something became live meanwhile): `archived_at` = now on the Context, on each of its Plans and on each Session of the cascade, that is not archived yet. One **Event** per object changed: `context-archived` `{archived: true}`, `plan-archived`, `session-archived`. A durable Session of the cascade (its Manager included) has its host stopped within one engine tick of this step (contract §6.19).
 
 ```json
 {"ok": true, "archived": [{"kind": "context", "id": "building-cpd"}, {"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": ["%41"]}
@@ -1542,7 +1542,7 @@ Since the migration `review-superseded` and its enforcement rule, a Plan that is
 Effects, in this order (all or nothing):
 1. **Check** every object of the cascade; nothing is written if any blocks.
 2. **tmux:** close every live Lead pane as `session close` does (§10.9).
-3. **Rows**, one transaction that re-checks the rule: `archived_at` = now on the Plan and each of its Sessions not archived yet. One **Event** per object: `plan-archived` `{archived: true}`, `session-archived`.
+3. **Rows**, one transaction that re-checks the rule: `archived_at` = now on the Plan and each of its Sessions not archived yet. One **Event** per object: `plan-archived` `{archived: true}`, `session-archived`. A durable Session of the Plan has its host stopped within one engine tick of this step (contract §6.19).
 
 ```json
 {"ok": true, "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": ["%41"]}
@@ -3330,7 +3330,7 @@ The engine archives on its own (E12 Worker archive, E14 Plan archive after sleep
 
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
-2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty, and its host is stopped (SIGTERM, then SIGKILL after `timeouts.pi_stop_seconds`, contract §6.19); step 3 writes `archived_at` as for any Session.
+2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty, and its host is stopped (SIGTERM, then SIGKILL after `timeouts.pi_stop_seconds`, contract §6.19); step 3 writes `archived_at` as for any Session. The host stops within one engine tick of step 3 whichever path archived the Session (contract §6.19, the sweep).
 3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now, `sessions.asleep_at` = null (hs-d515); **Event** `session-archived` `{archived: true}`.
 
 ```json
@@ -3418,10 +3418,10 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to a different Session in the last 60 minutes (no broadcasts, hs-d507); `details: {session, at}` | `broadcast` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to this Session in the last 60 minutes (no duplicates, hs-d507); `details: {at}` | `duplicate` | 3 |
 
-**A `durable` target** (`runner` `durable`, contract §3.6): the Event is appended as for any Session; the command starts no pane, wakes no pane and raises no error for the missing pane (so `no_cockpit` does not apply); the host's follower delivers it (contract §6.13, P1.4), `started` is false and `pane` null. A `stopped` Lead or Manager with `runner` `pi` is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1) and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting and nothing is started.
+**A `durable` target** (`runner` `durable`, contract §3.6): the Event is appended as for any Session; the command starts no pane and no host, and raises no error for the missing pane (so `no_cockpit` does not apply); the host's follower delivers it (contract §6.13, P1.4), `started` is false and `pane` null. An asleep durable target, or one labelled `host crash loop`, is woken by the same write (Effects): the engine's hosts step starts its host at the next tick (contract §6.19). A `stopped` Lead or Manager with `runner` `pi` is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1) and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting and nothing is started.
 
 Effects:
-- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
+- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). For a `durable` target that is asleep (`asleep_at` set) or labelled `host crash loop`, the same transaction clears `asleep_at` and that label, as `session open` does for a durable Session (§10.4; contract §6.19).
   - **Its `text`** (what `cpd events list` shows) is `Message from <who>: <preview>`, `<preview>` the start of the message's text and `<who>` the sender: `<name> (<uuid>)` when the sender's row has a name (`sessions.name`, the agent key for a Manager, a Lead that is not a fork and a Worker), `<uuid>` alone when the row has no name, and `the User` when `from` is null. With `--unblocks <reason>` it is `Message from <who> (unblocks: <reason>): <preview>`. The text does not name the target: the Event is addressed to it (`session` = the target).
 - **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux, and none for a `durable` target.
 - **Citation marking** (best-effort, after the transaction; §3.5, the Session rule of §3.3): the text is scanned (`RecordId::scan`, contract §2.1), and each record id it cites that the sender Session read in the sender's Context (`sessions.context`; a sender with none logs nothing) gets `used` = 1. The User (`from` null) logs nothing. A failed marking never fails the command or changes its output or exit status.
