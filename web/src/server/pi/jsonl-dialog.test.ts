@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { normalizeText } from "./jsonl.ts";
+import { createNormalizer, normalizeText } from "./jsonl.ts";
 
 it("an open cpd_plan_review dialog is interactive", () => {
   const text = JSON.stringify({ type: "custom", id: "r7", customType: "cpd-plan-review", data: { review: "7", status: "pending" } });
