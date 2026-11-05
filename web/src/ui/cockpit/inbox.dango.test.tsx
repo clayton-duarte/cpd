@@ -5,13 +5,13 @@ import { mount } from "../../testing/render.tsx";
 import { Inbox } from "./Inbox.tsx";
 
 const base = { contextId: "c1", planId: "p1", jobKey: null, url: null, workflow: null, openedAt: "2026-01-01T00:00:00Z", ageSeconds: 5 };
-const glyphs: Readonly<Record<Urgency, string>> = {
-  red: "\u{F0362}",
-  yellow: "\u{F069A}",
-  magenta: "\u{F173A}",
-  blue: "\u{F0368}",
-  cyan: "\u{F06F1}",
-  white: "\u{F0366}",
+const palette: Readonly<Record<Urgency, [string, string]>> = {
+  red: ["text-status-blocked", "lucide-circle-alert"],
+  yellow: ["text-status-landing", "lucide-circle-dot"],
+  magenta: ["text-status-decision", "lucide-circle-question-mark"],
+  blue: ["text-status-focus", "lucide-eye"],
+  cyan: ["text-status-active", "lucide-bell"],
+  white: ["text-muted-foreground", "lucide-message-square"],
 };
 
 function render(rows: InboxRow[]) {
@@ -19,11 +19,15 @@ function render(rows: InboxRow[]) {
   return mount(<Inbox inbox={inbox} onAction={vi.fn()} onSelectSession={vi.fn()} />);
 }
 
-it("inbox urgency glyphs follow the TUI palette", () => {
-  const urgencies = Object.keys(glyphs) as Urgency[];
-  // kind "k" has no glyph of its own: the urgency picks it
+it("inbox urgency icons follow the status palette", () => {
+  const urgencies = Object.keys(palette) as Urgency[];
   const m = render(urgencies.map((u, i) => ({ ...base, id: i + 1, kind: "k", label: `Row ${u}`, urgency: u, sessionId: `s${i}`, actions: [] })));
-  const lis = Array.from(m.container.querySelectorAll("li[data-kind]"));
-  expect(lis.map((li) => li.textContent?.startsWith(glyphs[li.getAttribute("data-urgency") as Urgency]))).toEqual(urgencies.map(() => true));
+  const rows = Array.from(m.container.querySelectorAll("a[data-kind]"));
+  expect(rows).toHaveLength(urgencies.length);
+  for (const el of rows) {
+    const [text, icon] = palette[el.getAttribute("data-urgency") as Urgency];
+    expect(el.querySelector('[data-slot="item-title"]')?.className.split(" ")).toContain(text);
+    expect(el.querySelector('[data-slot="item-media"] svg')?.getAttribute("class")?.split(" ")).toContain(icon);
+  }
   m.unmount();
 });

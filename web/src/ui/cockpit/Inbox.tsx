@@ -1,12 +1,27 @@
-import { ListFilterIcon } from "lucide-react";
+import {
+  BellIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleDotIcon,
+  CircleHelpIcon,
+  ExternalLinkIcon,
+  EyeIcon,
+  GitPullRequestArrowIcon,
+  GitPullRequestIcon,
+  ListFilterIcon,
+  MessageSquareIcon,
+  RocketIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import type { CockpitAction, InboxModel, InboxRow, SnoozeDuration, Urgency } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../components/context-menu.tsx";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "../components/item.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/popover.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
-import { LINK_CUE, age, glyphOf, linkKinds, sessionKinds, urgencyText } from "./inbox/format.ts";
+import { age, linkKinds, sessionKinds, urgencyText } from "./inbox/format.ts";
 
 const SNOOZES: readonly [string, SnoozeDuration][] = [
   ["Snooze 15 min", "15m"],
@@ -117,48 +132,57 @@ function Menu(props: { row: InboxRow } & Handlers): ReactElement {
   );
 }
 
-function Item(props: { row: InboxRow } & Handlers): ReactElement {
+function RowIcon(props: { kind: string; urgency: Urgency }): ReactElement {
+  const { kind, urgency } = props;
+  const cls = cn("size-4 shrink-0", urgencyText[urgency]);
+  if (kind === "deploy") return <RocketIcon className={cls} />;
+  if (kind === "pr-ready" || kind === "pr-closed") return <GitPullRequestIcon className={cls} />;
+  if (kind === "review-requested") return <GitPullRequestArrowIcon className={cls} />;
+  if (kind === "curate-retire") return <SparklesIcon className={cls} />;
+  if (urgency === "red") return <CircleAlertIcon className={cls} />;
+  if (urgency === "yellow") return <CircleDotIcon className={cls} />;
+  if (urgency === "magenta") return <CircleHelpIcon className={cls} />;
+  if (urgency === "blue") return <EyeIcon className={cls} />;
+  if (urgency === "cyan") return <BellIcon className={cls} />;
+  return <MessageSquareIcon className={cls} />;
+}
+
+function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
   const { row } = props;
   const [first = "", ...rest] = row.label.split("\n");
   const second = rest.join(" ").trim();
   const linked = row.url !== null && linkKinds.includes(row.kind);
-  const li = (
-    <li
-      data-kind={row.kind}
-      data-urgency={row.urgency}
-      data-id={row.id}
-      onClick={() => jump(row, props)}
-      className="row-item flex cursor-default flex-col rounded-[7px] px-2 py-1 hover:bg-row-hover"
-    >
-      <div data-part="line1" className="flex w-full items-baseline gap-2 font-mono text-key">
-        <span aria-hidden="true" data-part="glyph" className={cn("shrink-0", urgencyText[row.urgency])}>
-          {glyphOf(row.kind, row.urgency)}
-        </span>
-        {linked ? (
-          <span className="min-w-0 flex-1 truncate text-fg-strong">
-            <a href={row.url ?? undefined} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="underline">
-              {first}
-            </a>
-            {LINK_CUE}
+  const item = (
+    <Item variant="outline" size="sm" asChild data-kind={row.kind} data-urgency={row.urgency} data-id={row.id}>
+      <a
+        href={linked ? (row.url ?? "#") : "#"}
+        target={linked ? "_blank" : undefined}
+        rel={linked ? "noopener noreferrer" : undefined}
+        onClick={(e) => {
+          if (!linked) e.preventDefault();
+          jump(row, props);
+        }}
+      >
+        <ItemMedia>
+          <RowIcon kind={row.kind} urgency={row.urgency} />
+        </ItemMedia>
+        <ItemContent>
+          <ItemTitle className={urgencyText[row.urgency]}>{first}</ItemTitle>
+          {second === "" ? null : <ItemDescription>{second}</ItemDescription>}
+        </ItemContent>
+        <ItemActions>
+          <span data-part="age" className="font-mono text-xs text-muted-foreground">
+            {age(row.ageSeconds)}
           </span>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-fg-strong">{first}</span>
-        )}
-        <span data-part="age" className="shrink-0 text-meta text-muted-foreground">
-          {age(row.ageSeconds)}
-        </span>
-      </div>
-      {second === "" ? null : (
-        <div data-part="line2" className="truncate pl-5 text-[12px] text-muted-foreground">
-          <span>{second}</span>
-        </div>
-      )}
-    </li>
+          {linked ? <ExternalLinkIcon className="size-4 text-muted-foreground" /> : <ChevronRightIcon className="size-4 text-muted-foreground" />}
+        </ItemActions>
+      </a>
+    </Item>
   );
-  if (row.kind === "engine-down") return li;
+  if (row.kind === "engine-down") return item;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{li}</ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
       <Menu {...props} />
     </ContextMenu>
   );
@@ -317,11 +341,11 @@ export function Inbox(props: {
           {rows.length === 0 ? "up to date, drink some water" : "no items in this filter"}
         </p>
       ) : (
-        <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-0.5 overflow-y-auto p-0 px-2">
+        <ItemGroup className="min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5">
           {shown.map((row) => (
-            <Item key={row.id} row={row} onAction={onAction} onSelectSession={onSelectSession} />
+            <InboxItemRow key={row.id} row={row} onAction={onAction} onSelectSession={onSelectSession} />
           ))}
-        </ul>
+        </ItemGroup>
       )}
     </aside>
   );

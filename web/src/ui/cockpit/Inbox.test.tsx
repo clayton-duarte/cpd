@@ -6,9 +6,6 @@ import { mount } from "../../testing/render.tsx";
 import { Inbox } from "./Inbox.tsx";
 
 const base = { contextId: "c1", planId: "p1", jobKey: null, url: null, workflow: null, openedAt: "2026-01-01T00:00:00Z", ageSeconds: 300 };
-const RED = "\u{F0362}";
-const YELLOW = "\u{F069A}";
-const LINK_CUE = "\u{F11AD}";
 
 function row(id: number, kind: string, label: string, over: Partial<InboxRow> = {}): InboxRow {
   return { ...base, id, kind, label, urgency: "white", sessionId: null, actions: [], ...over };
@@ -22,7 +19,7 @@ function render(rows: InboxRow[]) {
   const m = mount(<Inbox inbox={model(rows)} onAction={onAction} onSelectSession={onSelectSession} />);
   return { ...m, onAction, onSelectSession };
 }
-const items = (c: Element) => Array.from(c.querySelectorAll("li[data-kind]"));
+const items = (c: Element) => Array.from(c.querySelectorAll("a[data-kind]"));
 function click(el: Element | null | undefined): void {
   if (el === null || el === undefined) throw new Error("element not found");
   act(() => {
@@ -81,7 +78,7 @@ it("inbox rows are flat in model order with no tier groups or counts", () => {
     row(2, "dialog", "red row", { urgency: "red" }),
     row(3, "deploy", "yellow row", { urgency: "yellow" }),
   ]);
-  expect(items(m.container).map((li) => li.getAttribute("data-id"))).toEqual(["1", "2", "3"]);
+  expect(items(m.container).map((el) => el.getAttribute("data-id"))).toEqual(["1", "2", "3"]);
   expect(m.container.querySelector('section[data-part="group"]')).toBeNull();
   expect(m.container.querySelector('[data-part="group-label"]')).toBeNull();
   expect(m.container.querySelector('[data-part="count"]')).toBeNull();
@@ -90,48 +87,96 @@ it("inbox rows are flat in model order with no tier groups or counts", () => {
   m.unmount();
 });
 
-it("an inbox row shows the urgency glyph the label and the age on one line", () => {
+it("inbox rows render as outline small shadcn items inside an item group", () => {
+  const m = render([row(1, "dialog", "a", { sessionId: "s1" })]);
+  const el = items(m.container)[0];
+  expect(el?.getAttribute("data-variant")).toBe("outline");
+  expect(el?.getAttribute("data-size")).toBe("sm");
+  expect(el?.parentElement?.getAttribute("data-slot")).toBe("item-group");
+  m.unmount();
+});
+
+it("an inbox row shows an urgency icon the label and the age", () => {
   const m = render([row(1, "dialog", "Need an answer", { urgency: "red", sessionId: "s1", ageSeconds: 300 })]);
   const first = items(m.container)[0];
-  const text = first?.textContent ?? "";
-  expect(text).toContain(RED);
-  expect(text).toContain("Need an answer");
-  expect(text).toContain("5m");
-  expect(text.indexOf(RED)).toBeLessThan(text.indexOf("Need an answer"));
-  expect(text.indexOf("Need an answer")).toBeLessThan(text.indexOf("5m"));
+  expect(first?.querySelector('[data-slot="item-media"] svg')).not.toBeNull();
+  expect(first?.querySelector('[data-slot="item-title"]')?.textContent).toBe("Need an answer");
+  expect(first?.querySelector('[data-slot="item-actions"]')?.textContent).toContain("5m");
   expect(first?.textContent).not.toContain("dialog");
   m.unmount();
 });
 
-it("a label with a newline shows its second line muted on a second row", () => {
-  const m = render([row(1, "dialog", "First line\nsecond line", { sessionId: "s1" })]);
+it("a label with a newline shows its second line as the item description", () => {
+  const m = render([row(1, "dialog", "First line\nsecond  line\nthird", { sessionId: "s1" })]);
   const first = items(m.container)[0];
-  const second = Array.from(first?.querySelectorAll("*") ?? []).find((e) => e.children.length === 0 && e.textContent === "second line");
-  expect(second, "second line element").toBeDefined();
-  expect(second?.closest("[class*='muted']"), "muted").not.toBeNull();
-  expect(first?.textContent?.indexOf("First line")).toBeLessThan(first?.textContent?.indexOf("second line") ?? -1);
-  const firstLine = Array.from(first?.querySelectorAll("*") ?? []).find((e) => e.children.length === 0 && e.textContent === "First line");
-  expect(firstLine?.contains(second ?? null)).toBe(false);
-  expect(firstLine?.parentElement?.contains(second ?? null), "second line is not on the first line's row").toBe(false);
+  expect(first?.querySelector('[data-slot="item-title"]')?.textContent).toBe("First line");
+  expect(first?.querySelector('[data-slot="item-description"]')?.textContent).toBe("second  line third");
+  m.unmount();
+});
+
+it("a linked row is an anchor that opens its url in a new tab", () => {
+  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", url: "https://example.test/run/1" })]);
+  const el = items(m.container)[0];
+  expect(el?.tagName).toBe("A");
+  expect(el?.getAttribute("href")).toBe("https://example.test/run/1");
+  expect(el?.getAttribute("target")).toBe("_blank");
+  expect(el?.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(el?.querySelector('[data-slot="item-actions"] svg.lucide-external-link')).not.toBeNull();
+  m.unmount();
+});
+
+it("an unlinked row is a placeholder anchor whose click is prevented", () => {
+  const m = render([row(1, "dialog", "Need an answer", { sessionId: "s1" })]);
+  const el = items(m.container)[0];
+  expect(el?.tagName).toBe("A");
+  expect(el?.getAttribute("href")).toBe("#");
+  expect(el?.getAttribute("target")).toBeNull();
+  const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+  act(() => {
+    el?.dispatchEvent(ev);
+  });
+  expect(ev.defaultPrevented).toBe(true);
+  expect(el?.querySelector('[data-slot="item-actions"] svg.lucide-chevron-right')).not.toBeNull();
+  m.unmount();
+});
+
+it("each kind and urgency picks its lucide icon", () => {
+  const cases: Array<[string, InboxRow["urgency"], string]> = [
+    ["deploy", "yellow", "lucide-rocket"],
+    ["pr-ready", "yellow", "lucide-git-pull-request"],
+    ["pr-closed", "white", "lucide-git-pull-request"],
+    ["review-requested", "red", "lucide-git-pull-request-arrow"],
+    ["curate-retire", "blue", "lucide-sparkles"],
+    ["k", "red", "lucide-circle-alert"],
+    ["k", "yellow", "lucide-circle-dot"],
+    ["k", "magenta", "lucide-circle-question-mark"],
+    ["k", "blue", "lucide-eye"],
+    ["k", "cyan", "lucide-bell"],
+    ["k", "white", "lucide-message-square"],
+  ];
+  const m = render(cases.map(([kind, urgency], i) => row(i + 1, kind, `r${i}`, { urgency })));
+  const got = items(m.container).map((el) => el.querySelector('[data-slot="item-media"] svg')?.getAttribute("class") ?? "");
+  cases.forEach(([, , cls], i) => expect(got[i]?.split(" ")).toContain(cls));
+  m.unmount();
+});
+
+it("the item title is coloured by urgency", () => {
+  const m = render([row(1, "dialog", "a", { urgency: "red" }), row(2, "dialog", "b", { urgency: "white" })]);
+  const titles = items(m.container).map((el) => el.querySelector('[data-slot="item-title"]')?.className ?? "");
+  expect(titles[0]).toContain("text-status-blocked");
+  expect(titles[1]).toContain("text-muted-foreground");
   m.unmount();
 });
 
 it("an inbox row has no inline action buttons and no key footer", () => {
   const approve = { kind: "inbox.approve", itemId: 1 } as const;
   const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", actions: [{ label: "Approve", action: approve }] })]);
-  expect(m.container.querySelector("li button")).toBeNull();
+  expect(m.container.querySelector("a button")).toBeNull();
   expect(m.container.querySelector('[data-part="actions"]')).toBeNull();
   expect(m.container.querySelector('[data-part="bar"]')).toBeNull();
   expect(m.container.querySelector('[data-part="footer"]')).toBeNull();
   expect(m.container.textContent).not.toContain("J/K");
   expect(m.container.textContent).not.toContain("Engine is not running");
-  m.unmount();
-});
-
-it("a link row shows a link cue after its label", () => {
-  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", url: "https://example.test/run/1" })]);
-  const text = items(m.container)[0]?.textContent ?? "";
-  expect(text).toContain(`Deploy ready${LINK_CUE}`);
   m.unmount();
 });
 
@@ -227,7 +272,7 @@ const mixed = () => [
 ];
 const btn = (c: Element, name: string) => c.querySelector<HTMLButtonElement>(`[data-slot="toggle-group-item"][data-tier-filter="${name}"]`);
 const countOf = (b: Element | null) => b?.querySelector('[data-part="filter-count"]')?.textContent;
-const shown = (c: Element) => items(c).map((li) => li.getAttribute("data-id"));
+const shown = (c: Element) => items(c).map((el) => el.getAttribute("data-id"));
 const on = (c: Element, name: string) => btn(c, name)?.getAttribute("data-state") === "on";
 const pressed = (c: Element, name: string) => btn(c, name)?.getAttribute("aria-pressed");
 const TIER_NAMES = ["blocker", "delivery", "decision", "support", "notice", "unread"];

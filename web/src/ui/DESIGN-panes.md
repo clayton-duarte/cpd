@@ -278,24 +278,26 @@ aside[aria-label="Inbox"]
 
 ### 2c. Row
 
-`li[data-kind="{row.kind}"][data-urgency="{row.urgency}"][data-id="{row.id}"]`. `data-kind` and `data-urgency` are KEPT. `data-id` is new. There is no `data-tier` and no `data-focused` (no tiers, no focus model). className: `flex gap-2.5 rounded-[7px] p-2` + `hover:bg-row-hover` (1.2 item 9). The row has no keyboard handler (2e).
+A row is a shadcn `Item` (`components/item.tsx`, base/item link pattern) in an `ItemGroup`; icons are lucide.
 
 ```
-li[data-kind][data-urgency][data-id]
-├─ span[aria-hidden="true"][data-part="glyph"]   className={glyphClass[inboxDisplay(urgency).glyph]} (2a)     mt-1.5
-└─ div[data-part="body"]   flex min-w-0 flex-1 flex-col gap-[3px]
-    ├─ div[data-part="line1"]   flex w-full items-baseline gap-2
-    │   ├─ (link kind with a url, see below) a[href="{row.url}"][data-part="link"]
-    │   │     ├─ strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong underline truncate
-    │   │     └─ span[aria-hidden="true"]  link cue (lucide ExternalLinkIcon, size 12)   text-muted-foreground
-    │   ├─ (otherwise) strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate
-    │   └─ span[data-part="age"]  {age}   font-mono text-meta text-muted-foreground shrink-0
-    └─ span[data-part="subtitle"]   only when the label has a non-empty second line   text-muted-foreground text-[12px] truncate
-          text: the label after its first line break (`rest`), aligned under the label (indented past the glyph column)
+ItemGroup  min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5
+└─ Item[variant=outline][size=sm] asChild → a[data-kind][data-urgency][data-id]
+   │   href = row.url, target=_blank, rel="noopener noreferrer" for a link kind with a url; else href="#" with preventDefault
+   ├─ ItemMedia → RowIcon (lucide, size-4, urgency text colour)
+   │     deploy Rocket; pr-ready/pr-closed GitPullRequest; review-requested GitPullRequestArrow; curate-retire Sparkles;
+   │     else by urgency: red CircleAlert, yellow CircleDot, magenta CircleHelp, blue Eye, cyan Bell, white MessageSquare
+   ├─ ItemContent
+   │   ├─ ItemTitle  first label line, urgency text colour
+   │   └─ ItemDescription  rest of the label joined by a space, only when non-empty
+   └─ ItemActions
+       ├─ span[data-part="age"]  font-mono text-xs text-muted-foreground
+       └─ ExternalLinkIcon (linked) or ChevronRightIcon, size-4 text-muted-foreground
 ```
 
-- `first` = `row.label.split("\n")[0] ?? ""`; `rest` = the label after its first line break, shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
-- **Link kinds.** `row.url !== null` and `row.kind` is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy` (TUI `is_link`, `inbox.rs:492-494`): the label is the link. Clicking the label opens `row.url` (native anchor; TUI `mod.rs:591-601`). The link cue is the only extra mark. Other rows have no link.
+- Every row but `engine-down` is wrapped in the context menu (`ContextMenuTrigger asChild`).
+- `first` = `row.label.split("\n")[0] ?? ""`; the description is shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
+- **Link kinds** (`plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`; TUI `is_link`, `inbox.rs:492-494`) with a url: the row anchor opens `row.url` in a new tab, and the kind's left click below still runs.
 - **Age** `{age}` from `row.ageSeconds` (DESIGN 2c Phase 2 rule, unchanged): `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`. The TUI shows `42s`, `5m`, `2d` (`inbox.rs:673-676`); its hour form is **unverified** (`read/age.rs` was not read), so the web keeps `h`.
 - Row 1 is cut with an ellipsis before the age (`truncate`); row 2 is cut with an ellipsis as well. Nothing else is cut.
 
