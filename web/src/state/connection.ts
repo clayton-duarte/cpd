@@ -274,6 +274,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     },
     action(action) {
       const actionId = newId();
+      if (action.kind === "pr.merge") store.dispatch({ type: "actionOptimistic", actionId, action });
       send({ type: "cockpit.action", actionId, action });
       return actionId;
     },

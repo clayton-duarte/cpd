@@ -27,4 +27,11 @@ describe("logs", () => {
     ]));
     expect(out.map((e) => e.tone)).toEqual(["normal", "error", "lead-error", "lead-error", "lead-error", "error"]);
   });
+  it("logs returns gh_rate_limited and gh_failed error events with the error tone", async () => {
+    const out = await readLogs(deps([
+      line({ id: 1, kind: "error", data: { source: "watch", code: "gh_rate_limited" } }),
+      line({ id: 2, kind: "error", data: { source: "watch", code: "gh_failed" } }),
+    ]));
+    expect(out.map((e) => [e.id, e.kind, e.tone])).toEqual([[1, "error", "error"], [2, "error", "error"]]);
+  });
 });

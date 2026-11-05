@@ -56,6 +56,8 @@ export interface AppState {
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null;
   readonly lastError: WireError | null;
+  /** Optimistic inbox edits by actionId: the inbox before and after, for rollback. */
+  readonly optimistic: Readonly<Record<string, { readonly before: InboxModel; readonly after: InboxModel }>>;
 }
 
 export type StoreAction =
@@ -75,6 +77,7 @@ export const initialState: AppState = {
   selectedSessionId: null,
   session: null,
   lastError: null,
+  optimistic: {},
 };
 const emptySession = (id: string): SessionView => ({
   id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
@@ -167,8 +170,16 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
       return { ...state, cockpit: { ...state.cockpit, [message.pane]: message.data } };
     case "cockpit.error":
       return { ...state, cockpit: { ...state.cockpit, error: message.error } };
-    case "action.result":
-      return message.ok ? state : { ...state, lastError: message.error };
+    case "action.result": {
+      const record = state.optimistic[message.actionId];
+      const { [message.actionId]: _settled, ...optimistic } = state.optimistic;
+      const settled = { ...state, optimistic };
+      if (message.ok) return record === undefined ? state : settled;
+      const rolledBack = record !== undefined && state.cockpit.inbox === record.after
+        ? { ...settled, cockpit: { ...settled.cockpit, inbox: record.before } }
+        : settled;
+      return { ...rolledBack, lastError: message.error };
+    }
     default: {
       if (message.sessionId === null) {
         return message.type === "session.error" ? { ...state, lastError: message.error } : state;
@@ -210,7 +221,19 @@ export function reduce(state: AppState, action: StoreAction): AppState {
       return next;
     }
     case "actionOptimistic":
-      return state; // stub: not implemented
+    {
+      const inbox = state.cockpit.inbox;
+      if (action.action.kind !== "pr.merge" || inbox === null) return state;
+      const subject = `pr:${action.action.pull}`;
+      const rows = inbox.rows.filter((r) => !(r.kind === "pr-ready" && r.subject === subject));
+      if (rows.length === inbox.rows.length) return state;
+      const after = { ...inbox, rows };
+      return {
+        ...state,
+        cockpit: { ...state.cockpit, inbox: after },
+        optimistic: { ...state.optimistic, [action.actionId]: { before: inbox, after } },
+      };
+    }
     case "dismissPending":
       if (state.session === null) return state;
       return {
