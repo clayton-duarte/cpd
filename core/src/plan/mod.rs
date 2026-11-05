@@ -19,6 +19,7 @@ pub(crate) mod delete;
 pub mod display;
 #[cfg(test)]
 mod display_tier_tests;
+pub(crate) mod done;
 #[cfg(test)]
 mod done_tests;
 #[cfg(test)]
