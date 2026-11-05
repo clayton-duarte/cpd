@@ -168,13 +168,17 @@ fn workflow_add_leaves_a_merged_legacy_lead_branch_alone() {
         fx.pay.display()
     ));
 
-    // `web` is stacked on an unmerged PR, `base`, so that it waits: after the lock a PR that starts at once is refused its stub
-    // drafts (`draft_parked`).
+    // `web` is stacked on an unmerged PR, `base`, so that it waits: after the lock a waiting PR needs `--jobs` (`draft_parked`
+    // otherwise).
     fx.env.sql(&format!(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'cpd/pay-1/base', '/w/base', cpd_txn(), 't', 't');",
         fx.pay.display()
     ));
+    let jobs = fx.env.root().join("jobs.json");
+    let plain = json!({"tier": "S2", "spec": {"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]}});
+    fs::write(&jobs, json!({"config": plain}).to_string()).unwrap();
+    fx.install_catalog();
     let out = fx
         .cpd(&[
             "workflow",
@@ -189,6 +193,8 @@ fn workflow_add_leaves_a_merged_legacy_lead_branch_alone() {
             "--no-needs",
             "--base",
             "pay-1/base",
+            "--jobs",
+            jobs.to_str().unwrap(),
             "--plan",
             "pay-1",
         ])
