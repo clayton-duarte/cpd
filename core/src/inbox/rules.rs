@@ -436,10 +436,12 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
 /// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
-/// Session's, as is) when there is one: Row 2.
+/// Session's, as is) when there is one: Row 2. A reply turn already dismissed in a closed `unread` item never reopens
+/// (pro-d425): a reload or a non-reply turn returns the session to `idle` on the same reply Event, and only a newer reply turn opens a fresh item.
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!(
-        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)"
+        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0) \
+         AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.kind = 'unread' AND i.session = s.id AND i.closed_at IS NOT NULL AND i.dismissed_at IS NOT NULL AND COALESCE(i.event, 0) >= {LATEST_IDLE})"
     );
     Ok(seats(conn, LATEST_IDLE, &filter)?
         .into_iter()
