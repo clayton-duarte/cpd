@@ -29,6 +29,9 @@ import type { SessionEmit, SessionHandle, SessionBackend } from "../hub/connecti
 import type { HostClient, HostFrame } from "./client.ts";
 
 
+const ATTACH_RETRY_MS = 250;
+const ATTACH_RETRY_WINDOW_MS = 15_000;
+const isApproval = (d: Dialog): boolean => d.method === "ask_user_question" && d.questions.length === 1 && d.questions[0]?.header === "Approval";
 const FIRST_SNAPSHOT_MS = 5000; // same bound as the hello handshake (LIMITS.helloMs)
 const known = <T>(value: T): Stat<T> => ({ state: "known", value });
 const unknown = <T>(reason: string): Stat<T> => ({ state: "unknown", reason });
@@ -60,12 +63,40 @@ export function createDurableBackend(deps: {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
   return {
-    async attach(session, emit) {
+    async attach(session, emit, signal?: AbortSignal) {
       if (session.socketPath === undefined) {
         throw new WebError("host_unreachable", `durable session ${session.ref.id} has no socket path`, { reason: "no_socket_path" });
       }
       const sessionId = session.ref.id;
-      const client = await deps.connect(session.socketPath);
+      const socketPath = session.socketPath;
+      const aborted = (): WebError => new WebError("host_unreachable", "attach aborted", { reason: "aborted" });
+      const t0 = deps.scheduler.now();
+      let client: HostClient;
+      for (;;) {
+        if (signal?.aborted) throw aborted();
+        try {
+          client = await deps.connect(socketPath);
+          if (signal?.aborted) {
+            client.close();
+            throw aborted();
+          }
+          break;
+        } catch (e) {
+          if (!(e instanceof WebError) || e.code !== "host_unreachable" || e.details?.reason === "aborted") throw e;
+          if (deps.scheduler.now() - t0 >= ATTACH_RETRY_WINDOW_MS) throw e;
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = (): void => {
+              timer.dispose();
+              reject(aborted());
+            };
+            const timer = deps.scheduler.after(ATTACH_RETRY_MS, () => {
+              signal?.removeEventListener("abort", onAbort);
+              resolve();
+            });
+            signal?.addEventListener("abort", onAbort, { once: true });
+          });
+        }
+      }
       const capabilities = capabilitiesOf(session.tierOptions);
       const dialect = createDialect(client.welcome.protocol === 1 ? 1 : 2); // assertSupportedHost left only 1 and 2
       const subscriptions: Disposable[] = [];
@@ -474,6 +505,11 @@ export function createDurableBackend(deps: {
             dialogs.delete(dialogId);
             send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
             return;
+          }
+          if (pending.dialog.method === "ask_user_question" && isApproval(pending.dialog)) {
+            // fail closed: a cancelled approval is a denial
+            const answer = response.outcome === "answered" && response.method === "ask_user_question" ? response.result.answers[0]?.answer : undefined;
+            return client.respond(dialogId, { value: answer === "Allow once" ? "Allow once" : "Deny" });
           }
           if (response.outcome === "cancelled") return client.respond(dialogId, { cancelled: true });
           if (response.method === "ask_user_question") {

@@ -1,8 +1,8 @@
 # Dango v3 + shadcn/ui: design contract (composer, tier selector, footer, AskCard, PlanReviewCard)
 
-Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`, amended by the approved preview (pro-d54 to pro-d58, pro-d60, pro-d61). Companion of `web/src/ui/DESIGN.md` (**read it first**: hook conventions 1.1, styling rules 1.2, tokens 2b, shadcn parts 2f, utilities and the prompt border 2h). Everything defined there is reused by reference and not restated. Tests are written from this file alone by one Worker, the implementation by another.
+Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`, amended by the approved preview (pro-d54 to pro-d58, pro-d60, pro-d61, pro-d402). Companion of `web/src/ui/DESIGN.md` (**read it first**: hook conventions 1.1, styling rules 1.2, tokens 2b, shadcn parts 2f, utilities and the prompt border 2h). Everything defined there is reused by reference and not restated. Tests are written from this file alone by one Worker, the implementation by another.
 
-**What changed (pro-d54 to pro-d58).** The composer is an AI Elements `PromptInput` layout (header, body with the textarea, footer with tools). Its only send path is **Send**, which submits a follow-up; the Steer, Follow-up and Stop buttons are removed (pro-d57). The prompt border pulses while the session is busy (pro-d58). The session telemetry row of the Footer is removed; the Footer keeps only the context HoverCard (pro-d56, pro-d57). The Tier, Model and Effort selects are shadcn dropdown menus. The AskCard is a multi-step Questionnaire. The PlanReviewCard is a Confirmation Item.
+**What changed (pro-d54 to pro-d58).** The composer is an AI Elements `PromptInput` layout (header, body with the textarea, footer with tools). Its only send path is **Send**, which submits a follow-up; the Steer and Follow-up buttons are removed (pro-d57). The Stop button, which pro-d57 also removed, is reinstated by **pro-d402** (2026-11-05 EST), which supersedes that removal: it is shown while the session is busy and abort is supported (1.2). The prompt border pulses while the session is busy (pro-d58). The session telemetry row of the Footer is removed; the Footer keeps only the context HoverCard (pro-d56, pro-d57). The Tier, Model and Effort selects are shadcn dropdown menus. The AskCard is a multi-step Questionnaire. The PlanReviewCard is a Confirmation Item.
 
 ---
 
@@ -24,7 +24,7 @@ What ChatPane passes (source field → prop):
 | `AskCard.onRespond`, `PlanReviewCard.onRespond` | `(r) => connection.respond(dialog.id, r)` | `connection` |
 | `ChatHeader`, `Transcript` | DESIGN-chat 1 and 2 | |
 
-`Composer.onAbort` is still declared (`connection.abort`) but the composer renders no Stop button (1.6). `label`, `onEditQueued`, `Footer.cwd`, `Footer.sessionKey`, `Footer.tokens`, `Footer.cacheHitPercent` and the Footer's `contextWindow` are not passed: no control or row reads them.
+`Composer.onAbort` is passed as `connection.abort` and is called by the Stop button (1.2). `label`, `onEditQueued`, `Footer.cwd`, `Footer.sessionKey`, `Footer.tokens`, `Footer.cacheHitPercent` and the Footer's `contextWindow` are not passed: no control or row reads them.
 
 ---
 
@@ -40,7 +40,7 @@ export function Composer(props: {
   capabilities: Capabilities | null; busy: boolean; queued: readonly QueuedSubmission[];
   reader: FileReaderBoundary;
   onSubmit(input: { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy }): void;
-  onAbort(): void;                       // KEPT in the type; no control calls it (1.6)
+  onAbort(): void;                       // called by the Stop button (1.2)
   onCancelQueued(clientSubmissionId: string): void;
   ref?: Ref<ComposerHandle>;
   settings?: ReactNode;                  // the TierSelector (2), in the footer
@@ -80,6 +80,8 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
         │   └─ InputGroupButton[type="button"][variant="outline"][size="icon-sm"][class="rounded-full"][aria-label="Attach files"]  PlusIcon   (opens the hidden picker)
         └─ div[data-part="actions"].flex.items-center.gap-1.5    tools, right
             ├─ {settings}        the TierSelector (2)
+            ├─ InputGroupButton[type="button"][size="icon-sm"][data-action="abort"][aria-label="Stop"][class="rounded-full"]   stop icon   (Stop, 1.2)
+            │     rendered only when busy and capabilities.abort.supported; enabled; click calls onAbort()
             └─ InputGroupButton[type="button"][variant="default"][size="icon-sm"][data-action="send"][aria-label="Send"][class="rounded-full"]   ArrowUpIcon
                   disabled when !canSubmit; text "Send" in sr-only
 ```
@@ -87,6 +89,7 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 - **Drop cue (kept from the Phase 2 composer; the approved preview lacks it).** While files are dragged over the Composer, `data-drop="over"` is set on the `InputGroup` and a `span[data-part="drop-cue"]` reads `Drop to attach` (`font-mono text-meta text-primary`, at the top of the InputGroup, before the body). `onDragLeave` and the drop reset it. The **adding** of dropped files happens once, in the chat dropzone's `onDrop` (0); the Composer's drop handler does not add files.
 - **Resolution:** the Phase 2 `form[aria-label="Composer"]` and its `data-part="send-split"` group are gone (the form is not a `form`; the Send button is not a submit button, and Enter is handled by the textarea, 1.4).
 - **Resolution:** the Phase 2 `button[data-action="attach"]` with `aria-label="Choose files to attach"` is the `Attach files` button above.
+- **Stop (pro-d402).** The Stop button is `button[data-action="abort"][aria-label="Stop"]` in `div[data-part="actions"]`, next to Send. It is rendered only when the `busy` prop is true and `capabilities.abort.supported` is true; its click calls `onAbort()`. It is absent when not busy and when abort is unsupported (for example a pi session, CONTRACT.md 8). `busy` and an empty composer do not disable it.
 
 ### 1.3 Textarea
 
@@ -106,6 +109,7 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 | `Enter` while `e.nativeEvent.isComposing` | ignored (IME) |
 | paste with files | `preventDefault()`, add the files (`filesFromClipboard`) |
 | click **Send** | `send()` (the button is disabled while `!canSubmit`) |
+| click **Stop** (shown only while busy with abort supported, 1.2) | `onAbort()` |
 
 - **Send is never disabled by `busy`.** It is disabled only when there is nothing to send, or when `capabilities` is `null`. Busy does not change what Send does: it submits a follow-up (`whenBusy: "followUp"`). **Resolution:** pro-d57 says "Send always enabled"; the approved preview disables Send for an empty composer, and this contract keeps that.
 - There is no Alt+Enter, no Ctrl+C abort and no busy-dependent Enter. The Phase 2 `Steer` on busy Enter is removed (pro-d57).
@@ -115,7 +119,7 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 | State | Rendering |
 |---|---|
 | idle | footer: attach, settings, Send (disabled when empty) |
-| busy (`view.busy` or a send pending) | the same footer; the `InputGroup` carries `prompt-border-pulse` (DESIGN.md 2h); no Stop and no Steer or Follow-up control exists |
+| busy (`view.busy` or a send pending) | the same footer, plus the Stop button when `capabilities.abort.supported` (1.2); the `InputGroup` carries `prompt-border-pulse` (DESIGN.md 2h); no Steer or Follow-up control exists |
 | `capabilities === null` | textarea, attach button and file picker `disabled`; Send `disabled`; the placeholder is the same string |
 | queued present | queue chips in the header (1.2) |
 | attachments staged | attachment chips in the header |
@@ -125,7 +129,8 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 
 ### 1.6 Not wired and removed
 
-- **Removed (pro-d57):** the Steer, Follow-up and Stop buttons, the `Steer` / `Follow-up` / `Stop` copy, the `⏎`, `⌥⏎` and `⌃C` hints, `data-when-busy` on any control, the `send-split` group, the busy-only action row, and the `small[data-reason]` reason lines under the actions.
+- **Removed (pro-d57):** the Steer and Follow-up buttons, the `Steer` / `Follow-up` copy, the `⏎`, `⌥⏎` and `⌃C` hints, `data-when-busy` on any control, the `send-split` group, the busy-only action row, and the `small[data-reason]` reason lines under the actions.
+- **Stop (removed by pro-d57, reinstated by pro-d402, 2026-11-05 EST):** pro-d402 supersedes the pro-d57 removal of the Stop button; it is shown as in 1.2.
 - `Edit` on a queued chip: no backend action exists; no control.
 - The board's "Thinking" and "Tools" toggles and the `Lead · durable` / `pi + durable` runner label are not part of the Composer.
 - `label` in the placeholder: removed with the Steer copy.
