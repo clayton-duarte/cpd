@@ -4856,7 +4856,7 @@ export function createPlanReview(port: PlanReviewPort): {
 
 - **`open(review, via, summary?)`** (4.4 rule 6, review.ts's flow):
   - the reviews of the Plan are folded from the entries with `reviewsFromEntries` (imported, pure), the latest review `r<k>` first (`highestReview`, imported).
-  - a `plan-review` Event with status `pending` opens the dialog. The summary is the `summary-<review>.md` file of `$CPD_HOME/run/<plan>/` read through `readText`; the `cpd_plan_review` tool call passes the summary directly (review.ts's `paths.summary`).
+  - a `plan-review` Event with status `pending` opens the dialog. The summary is the `summary-<review>.md` file of `$CPD_HOME/run/<plan>/` read through `readText`; the `cpd_plan_review` tool call passes the summary directly (review.ts's `paths.summary`). **An empty summary is refused** (G10): when the summary text, the file's or the tool's, is empty or only whitespace, `open` throws `CpdError('summary_empty')` before any entry is written, and no dialog opens; the review stays `pending`, and the refusal is one host error (Delivery 6, `what` `plan review <review>`). The mirrored pi rule is `pi/lib/review.ts:63` (`summary_empty`), as docs/commands.md §15.5 step 3 states it.
   - the summary is written to the conversation as one entry of kind `cpd-plan-summary` with `data: { plan, review, display: true }` and the markdown as the model content.
   - one `cpd-plan-review` entry `{ plan, review, surface: 'chat', status: 'pending' }` is written.
   - then the dialog: `select('Approve the plan review', ['Approve', 'Change'])` with `purpose: 'plan_review'` and **no timeout** (per pi); a `Change` value opens `editor('What should change?', prefill?)` (pi passes no prefill).
