@@ -27,10 +27,39 @@ export type HostModels = Pick<ModelRuntime, "getAvailable"> & {
   classify(model: unknown, context: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
 };
 
-/** The `Deps` of the host process. STUB (hostfix-tests-a1): builds the old Deps, without `classify`. */
+/** The question guard's classifier: the probability the text asks the user, or undefined when the classifier is unreachable (lib/question-guard.ts). */
+async function classifyText(models: HostModels, text: string): Promise<number | undefined> {
+  try {
+    const model = models.getModelOfType("classifier", "llama.cpp", "kev-4b");
+    const res = (await models.classify(
+      model,
+      {
+        state: { message: text.slice(-2000) },
+        questions: {
+          asking_user: {
+            type: "bool",
+            instructions: "Does this assistant message ask the human user a question or ask for a decision/confirmation before proceeding?",
+            criteria: {
+              true: "The assistant is asking the user a question, offering choices, or waiting for user confirmation/input.",
+              false: "The assistant is only reporting status, summarizing completed work, or rhetorical/quoted question marks.",
+            },
+          },
+        },
+      },
+      { signal: AbortSignal.timeout(1500) },
+    )) as { stopReason?: string; answers?: { asking_user?: { type?: string; probability?: unknown } } };
+    const a = res.answers?.asking_user;
+    return res.stopReason === "stop" && a?.type === "bool" && typeof a.probability === "number" ? a.probability : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `Deps` of the host process. */
 export function hostDeps(config: Config, models: HostModels): Deps {
   const real = models as unknown as ModelRuntime;
   return {
+    classify: (text) => classifyText(models, text),
     cpd: (args) => callCpd(exec as never, [...args], { timeoutMs: 30_000 }),
     resolveModel: (pattern) => {
       const r = resolveCliModel({ cliModel: pattern, modelRuntime: real });

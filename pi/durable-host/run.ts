@@ -371,11 +371,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const reload = createReload(reloadPort);
     // §6.18 retier: apply the `session-retiered` agent change at idle, in one commit, and report back to the engine.
     const retier = createRetier({
-      // STUB (hostfix-tests-a1): never idle, so every switch is refused with the old code; the host_busy answer and the idle apply are not implemented.
-      idle: () => false,
+      idle: () => pending === 0 && wanted().state === "idle",
       configure: (change) => conversation.configure(change as AgentChange),
       report: async (kind, detail) => {
-        await deps.cpd(kind === "switched" ? ["session", "switched", "--session", config.session] : ["session", "switch-failed", "--code", "model_unavailable", "--message", detail ?? "not idle", "--session", config.session]);
+        await deps.cpd(kind === "switched" ? ["session", "switched", "--session", config.session] : ["session", "switch-failed", "--code", "host_busy", "--message", detail ?? "not idle", "--session", config.session]);
       },
     });
     // The cached `AgentState` of contract §6.17: read back after each `configure`; absent until the first one (a `host_state` carrying no agent).
