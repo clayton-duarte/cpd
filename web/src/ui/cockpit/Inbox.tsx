@@ -290,6 +290,16 @@ function Menu(props: { row: InboxRow } & Handlers): ReactElement {
       </ContextMenuItem>,
     );
   }
+  if (url !== null && row.kind === "dialog") {
+    own.push(
+      <ContextMenuItem key="open-link" onSelect={() => openExternalUrl(url)}>
+        Open Link
+      </ContextMenuItem>,
+      <ContextMenuItem key="link" onSelect={() => copy(url)}>
+        Copy Link
+      </ContextMenuItem>,
+    );
+  }
   return (
     <ContextMenuContent>
       {own}
