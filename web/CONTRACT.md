@@ -400,6 +400,34 @@ export interface WireError { readonly code: ErrorCode; readonly message: string;
 export const toWireError: (e: unknown) => WireError; // WebError -> as is; anything else -> {code:"internal", message}
 ```
 
+### 3.10 Completion (Lead badge)
+
+Decisions pro-d422 and pro-d424; assumptions A2 to A8 of the Lead completion badge. Lead sessions only (`SessionRef.role === "lead"`).
+
+```ts
+export type CompletionLabel = "safe_to_archive" | "unanswered_ask" | "open_work" | "unrecorded_decision" | "unescalated_issue";
+export type CompletionTone = "done" | "decision" | "blocked"; // the existing Badge Tone members (DESIGN.md): success=done, warn=decision, danger=blocked (pro-d424). No new Tone, no new CSS.
+export interface Completion {
+  readonly label: CompletionLabel;
+  readonly text: string; // full display text: `<label text> · <score>%`
+  readonly score: number; // integer 0..100
+  readonly tone: CompletionTone;
+}
+```
+
+**Label table.** Shown as `<label text> · <score>%`. The tone rule and the score rule are per label. `p` is the classifier's `probabilities`, `c` its `confidence`; both are optional.
+
+| label | label text | tone | score |
+|---|---|---|---|
+| `safe_to_archive` | `Safe to archive` | `done` when `score >= 80`, else `decision` | chosen: `round((p.safe_to_archive ?? c ?? 1) * 100)` |
+| `unanswered_ask` | `Unanswered ask` | `decision` | any other chosen label: `round((p.safe_to_archive ?? (1 - (c ?? 0.5))) * 100)` |
+| `open_work` | `Open work` | `decision` when `score >= 40`, else `blocked` | as above |
+| `unrecorded_decision` | `Unrecorded decision` | `decision` | as above |
+| `unescalated_issue` | `Unescalated bug` | `decision` | as above |
+
+- The score is clamped to 0..100 and is always the archive-safety score, whichever label is chosen.
+- kev-4b alone decides the label. There is no client-side override.
+
 ## 4. `web/src/protocol/wire.ts`: the browser/server wire
 
 Carried as Vite custom events (A1): the browser calls `import.meta.hot.send("cpd:c2s", message)` and listens with `import.meta.hot.on("cpd:s2c", handler)`; the server listens with `server.ws.on("cpd:c2s", (data, client) => ...)` and answers with `client.send("cpd:s2c", message)` (`vite/dist/node/index.d.ts:1833-1866`, `NormalizedHotChannelClient.send(event, payload)` `:1394-1403`, vite 8.3.5). Payloads are JSON-serialisable; every message is an object with a string `type`.
@@ -464,6 +492,7 @@ export type ServerMessage =
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
+  | { type: "session.completion"; sessionId: string; completion: Completion | null } // Lead only, computed asynchronously, may never arrive (3.10)
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId: the attempted id of a session.attach error (e.g. session_not_found); null: not tied to a session (invalid_message)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
@@ -478,6 +507,10 @@ Message semantics (server behaviour):
 - `session.submitAck` answers each `session.submit` that the backend accepted: `queued: true` when the host queued it behind a running turn, else false. A rejected submit answers `session.error` with `clientSubmissionId` set.
 - `session.status.busy` is true while a turn runs. `queued` lists accepted-but-not-started submissions (durable only; always `[]` for pi).
 - A `session.dialog` with `interactive: false` is read-only (no current producer; pi and durable dialogs are interactive, 11.4).
+- **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. It is computed asynchronously: it is never part of attach, may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
+- A session is classified only when it has at least one transcript item (A5).
+- `completion: Completion` sets the badge. `completion: null` clears it. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label sends `completion: null`. No error is shown and there is no config switch (A4).
+- Cache and in-flight (A7): the key is `${sessionId}|${lastTranscriptItemId}|${planCursor}`, where `planCursor` is `PlanViewModel.cursor` from `cpd plan show`. In-flight computations are shared per key. A null result is not cached. A result is never sent to a closed connection or to a detached session.
 - `action.result ok:true` carries `output` (section 5.4); `ok:false` carries the `cpd_failed` / `unknown_action` error.
 
 ### 4.3 Validation (parsed once at each edge)
@@ -775,6 +808,7 @@ export interface SessionView {
   readonly busy: boolean; readonly queued: readonly QueuedSubmission[];
   readonly pending: readonly PendingSubmission[];
   readonly dialog: Dialog | null; // the active dialog
+  readonly completion: Completion | null; // Lead completion badge (3.10); default null; set by session.completion
   readonly models: readonly ModelChoice[] | null;
   readonly error: WireError | null; // last session.error without a clientSubmissionId
 }
@@ -812,6 +846,7 @@ Reducer behaviours (every ServerMessage is `{type:"server"}`):
 - `session.submitAck` (not queued) marks the pending submission with that `clientSubmissionId` `state:"sent"`, or removes it when its echo is already in the transcript; a queued ack removes it (11.2). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` (and, when `sessionId` is null, `lastError`).
 - `submitPending` adds a `sending` submission (with `at` and `images`, 11.2); `dismissPending` removes one.
 - `session.dialog` sets `dialog`; `session.dialogResolved` clears `dialog` only when its `dialogId` equals the active dialog's id; `session.models` sets `models`.
+- `session.completion` sets `completion` (`null` clears it). `completion` is `null` in the empty state of `selectSession` and until the first `session.completion`.
 - `action.result ok:false` sets `lastError` and removes the id from `pendingActionIds`; `ok:true` removes it from `pendingActionIds` and adds it to `completedActionIds` (11.2). The panes refresh through events.
 - `connection` sets `connection` and `retryAttempt`.
 

@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { connect } from "node:net";
-import { promises as fsp, watch as fsWatch } from "node:fs";
+import { existsSync, promises as fsp, realpathSync, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
 import type { Runner } from "../protocol/domain.ts";
 import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
@@ -12,12 +12,14 @@ import { createCpd, type CpdExec, type FollowBoundary } from "./cockpit/cli.ts";
 import { createCockpitService, type CockpitService, type Extras } from "./cockpit/events.ts";
 import { readCosts, type CostFile } from "./cockpit/cost.ts";
 import { readLogs } from "./cockpit/logs.ts";
-import { createReadModel } from "./cockpit/readmodel.ts";
+import { buildPlanView, createReadModel, parsePlanShow } from "./cockpit/readmodel.ts";
 import { readSettings, saveSettings } from "./cockpit/settings.ts";
 import { createCockpitStream, type StreamChild } from "./cockpit/stream.ts";
 import { readStatus } from "./cockpit/status.ts";
 import { connectHost, type SocketFactory } from "./durable/client.ts";
 import { createDurableBackend } from "./durable/backend.ts";
+import { createCompletionClassifier, type CompletionClassifier } from "./completion-classify.ts";
+import { createCompletionService } from "./completion-service.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
 import { createRegistry, type Registry } from "./hub/registry.ts";
 import { createPiBackend } from "./pi/backend.ts";
@@ -64,6 +66,8 @@ export interface PluginBoundaries {
   git: GitBoundary;
   scheduler: Scheduler;
   cpdHome: string;
+  /** Classifies a Lead session's completion; absent, no badge is computed. */
+  classify?: CompletionClassifier;
   /** Runs `tmux <args>`; rejects on a non-zero exit. */
   tmux(args: readonly string[]): Promise<string>;
   /** Reads a whole text file with its stat; null when it does not exist. */
@@ -131,7 +135,16 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
       }),
     ),
   };
-  return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send }) };
+  const completion = b.classify === undefined ? undefined : createCompletionService({
+    classifier: b.classify,
+    planOf: async (ref) => {
+      const node = (cockpit.snapshot().tree?.contexts ?? []).flatMap((c) => c.plans.flatMap((p) => p.sessions)).find((n) => n.ref.id === ref.id);
+      const planId = node?.planId ?? null;
+      if (planId === null) return null;
+      return buildPlanView(parsePlanShow(await cpd.json(["plan", "show", "--plan", planId])));
+    },
+  });
+  return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send, ...(completion === undefined ? {} : { completion }) }) };
 }
 
 // ---- real boundaries: untested glue, the only place that touches the outside world ----
@@ -169,9 +182,24 @@ export interface ChildBoundary {
   };
 }
 
+/** `<dir of the cpd binary>/../share/cpd/pi/lib/classify.ts` (core/src/config/file.rs pi_adapter_dir), null when absent. */
+function completionScript(env: NodeJS.ProcessEnv, cpdBin: string): string | null {
+  try {
+    const bin = cpdBin.includes("/") ? cpdBin : (env["PATH"] ?? "").split(":").filter((d) => d !== "").map((d) => join(d, cpdBin)).find((p) => existsSync(p));
+    if (bin === undefined) return null;
+    const script = join(dirname(realpathSync(bin)), "..", "share", "cpd", "pi", "lib", "classify.ts");
+    return existsSync(script) ? script : null;
+  } catch {
+    return null;
+  }
+}
+
 export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { execFile, spawn: spawn as ChildBoundary["spawn"] }): PluginBoundaries {
   const cpdBin = env["CPD_BIN"] ?? "cpd";
+  const scheduler: Scheduler = { now: () => Date.now(), after: (ms, run) => { const t = setTimeout(run, ms); return disposable(() => clearTimeout(t)); } };
+  const script = completionScript(env, cpdBin);
   return {
+    classify: createCompletionClassifier({ child, scheduler, script, agentDir: env["PI_CODING_AGENT_DIR"] ?? join(homedir(), ".pi", "agent"), env: cpdChildEnv(env) }),
     cpdExec: {
       run: (args) =>
         new Promise((resolve) => {
@@ -304,7 +332,7 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
         throw e;
       }
     },
-    scheduler: { now: () => Date.now(), after: (ms, run) => { const t = setTimeout(run, ms); return disposable(() => clearTimeout(t)); } },
+    scheduler,
     cpdHome: env["CPD_HOME"] ?? `${homedir()}/.cpd`,
   };
 }

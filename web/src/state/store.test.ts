@@ -115,6 +115,30 @@ describe("store", () => {
     expect(s2.session?.title).toBe("Second");
   });
 
+  const completion = { label: "safe_to_archive", text: "Safe to archive · 93%", score: 93, tone: "done" } as const;
+
+  it("session.completion sets the completion of the attached session", () => {
+    const s1 = run(selected(), attached());
+    const s2 = run(s1, server({ type: "session.completion", sessionId: "s1", completion }));
+    expect(s2.session?.completion).toEqual(completion);
+    const s3 = run(s2, server({ type: "session.completion", sessionId: "s1", completion: null }));
+    expect(s3.session?.completion).toBeNull();
+  });
+
+  it("session.completion for another session is ignored", () => {
+    const s1 = run(selected(), attached(), server({ type: "session.completion", sessionId: "s1", completion }));
+    const other = { ...completion, label: "open_work", text: "Open work · 40%", score: 40, tone: "decision" } as const;
+    const s2 = run(s1, server({ type: "session.completion", sessionId: "other", completion: other }));
+    expect(s2.session?.completion).toEqual(completion);
+  });
+
+  it("a new session starts with completion null", () => {
+    expect(selected().session?.completion).toBeNull();
+    const s1 = run(selected(), attached(), server({ type: "session.completion", sessionId: "s1", completion }));
+    expect(s1.session?.completion).toEqual(completion);
+    expect(run(s1, { type: "selectSession", sessionId: "s2" }).session?.completion).toBeNull();
+  });
+
   const ack = (id: string, queued: boolean): StoreAction =>
     server({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: id, queued });
   const userItem = (id: string, text: string) => ({ kind: "user" as const, id, text, attachments: [] });

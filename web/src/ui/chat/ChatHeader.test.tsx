@@ -3,6 +3,7 @@ import { act } from "react";
 import { expect, it } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { ChatHeader } from "./ChatHeader.tsx";
+import { toneClasses } from "../dango-status.ts";
 
 it("shows only the title", () => {
   const m = mount(<ChatHeader sessionKey="lead-1" title="Fix the bug" role="lead" runner="pi" />);
@@ -30,4 +31,32 @@ it("restores the document title on unmount", () => {
   expect(document.title).toBe("lead-1 · T");
   m.unmount();
   expect(document.title).toBe("original");
+});
+
+const completion = { label: "safe_to_archive", text: "Safe to archive · 93%", score: 93, tone: "done" } as const;
+
+it("lead completion badge renders before the title", () => {
+  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={completion} />);
+  const heading = m.container.querySelector('div[data-part="heading"]');
+  const title = heading?.querySelector('h1[data-part="title"]');
+  const badge = m.container.querySelector('[data-part="completion-badge"]');
+  expect(badge).not.toBeNull();
+  expect(title?.previousElementSibling).toBe(badge);
+  m.unmount();
+  const mgr = mount(<ChatHeader sessionKey="m-1" title="Fix" role="manager" completion={completion} />);
+  expect(mgr.container.querySelector('[data-part="completion-badge"]')).toBeNull();
+  mgr.unmount();
+  const none = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={null} />);
+  expect(none.container.querySelector('[data-part="completion-badge"]')).toBeNull();
+  expect(none.container.querySelector("header")?.textContent).toBe("Fix");
+  none.unmount();
+});
+
+it("completion badge shows the text tone and slot", () => {
+  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={completion} />);
+  const badge = m.container.querySelector('[data-part="completion-badge"]') as HTMLElement | null;
+  expect(badge?.dataset["slot"]).toBe("badge");
+  expect(badge?.textContent).toBe("Safe to archive · 93%");
+  expect(badge?.className).toContain(toneClasses.done.text);
+  m.unmount();
 });

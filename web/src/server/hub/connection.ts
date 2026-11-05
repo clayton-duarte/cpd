@@ -1,9 +1,10 @@
-import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
+import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type SessionRef, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
 import { parseClientMessage } from "../../protocol/wire.ts";
 import type { ActionOutput, CockpitAction, LogRow, SettingsChanges, SettingsModel } from "../../protocol/cockpit.ts";
 import type { ClientMessage, ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { CockpitSnapshot, CockpitUpdate } from "../cockpit/events.ts";
+import type { CompletionTracker } from "../completion-service.ts";
 import type { Registry, ResolvedSession } from "./registry.ts";
 
 export interface CockpitService {
@@ -35,6 +36,7 @@ export interface HubDeps {
   registry: Registry;
   backends: Readonly<Record<Runner, SessionBackend>>;
   send: (message: ServerMessage) => void;
+  completion?: { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker };
 }
 export interface HubConnection { handle(raw: unknown): Promise<void>; close(): Promise<void> }
 
@@ -48,7 +50,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   let closed = false;
   let subscription: Disposable | null = null;
   let generation = 0;
-  let attached: { sessionId: string; handle: SessionHandle } | null = null;
+  let attached: { sessionId: string; handle: SessionHandle; tracker: CompletionTracker | null } | null = null;
 
   const send = (m: ServerMessage): void => {
     if (!closed) deps.send(m);
@@ -60,6 +62,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
     generation += 1; // in-flight attaches and old emits are now stale
     const old = attached;
     attached = null;
+    old?.tracker?.dispose();
     if (old !== null) await old.handle.dispose();
   };
 
@@ -79,17 +82,26 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   const attach = async (sessionId: string): Promise<void> => {
     await detach();
     const mine = generation;
+    let tracker: CompletionTracker | null = null;
     try {
       const resolved = deps.registry.resolve(sessionId);
+      tracker = deps.completion?.track(resolved.ref, (m) => {
+        if (generation === mine && !closed) send(m);
+      }) ?? null;
+      const tracked = tracker;
       const handle = await deps.backends[resolved.ref.runner].attach(resolved, (m) => {
-        if (generation === mine) send(m);
+        if (generation !== mine) return;
+        tracked?.observe(m);
+        send(m);
       });
       if (generation !== mine || closed) {
+        tracker?.dispose();
         await handle.dispose();
         return;
       }
-      attached = { sessionId, handle };
+      attached = { sessionId, handle, tracker };
     } catch (e) {
+      tracker?.dispose();
       if (generation === mine) sessionError(sessionId, e);
     }
   };

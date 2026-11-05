@@ -11,6 +11,15 @@ export const FOLD_TITLE_MAX = 160; // fold title cut, as pi/lib/render.ts oneLin
 export const TOOL_PREVIEW_LINES = 10; // compact-tools previewLines default (scout-pi §4)
 
 export type Runner = "pi" | "durable"; // `runner` of `cpd session list` (scout-cockpit §4)
+export type CompletionLabel = "safe_to_archive" | "unanswered_ask" | "open_work" | "unrecorded_decision" | "unescalated_issue";
+export type CompletionTone = "done" | "decision" | "blocked";
+export interface Completion {
+  readonly label: CompletionLabel;
+  readonly text: string;
+  readonly score: number;
+  readonly tone: CompletionTone;
+}
+
 export type SessionRole = "manager" | "lead" | "worker";
 export type SessionState = "working" | "waiting" | "blocked" | "idle" | "stopped"; // scout-cockpit §1.1 `state`
 
