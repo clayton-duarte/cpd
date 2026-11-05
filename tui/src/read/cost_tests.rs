@@ -654,7 +654,7 @@ fn durable_store_stamp_includes_the_wal() {
     let grown = durable_store_stamp(&store);
     let touched = fs::OpenOptions::new().write(true).open(&wal).unwrap();
     touched
-        .set_modified(SystemTime::now() + Duration::from_secs(3600))
+        .set_modified(UNIX_EPOCH + Duration::from_secs(4_000_000_000))
         .unwrap();
     assert_ne!(durable_store_stamp(&store), grown);
 }
