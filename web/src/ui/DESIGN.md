@@ -1044,6 +1044,25 @@ An archived fork Session has no Delete.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
 
+### 3h. Archived selection and the disabled Composer (pro-d406)
+
+Status: contract for the web Job that implements it. No reducer or `App` code does it yet.
+
+**Navigation out of an archived selection (A1).** The web compares the `cockpit.tree` it holds with the next one (a `cockpit.snapshot`, or a `cockpit.patch` of pane `tree`). It navigates when the selected session, the selected Plan or the selected Context goes from live (`archived` false) to archived (`archived` true). That covers an archive the User clicked, `/q` or `/quit` (CONTRACT 6.6) and engine E14 alike. It does **not** navigate when the User dispatches an archive: an archive can be refused (`archive_blocked`), and the User must then stay where they are. Where the selection goes:
+
+- **Context archived** (the selected row belongs to it): the next live non-Standing Context in the 3d order, after the archived one's place and wrapping. Select its Manager; if it has no live Manager, its first live Plan Lead. Else the `cpd` Manager. Else the `host` Manager.
+- **Plan or session archived, its Context still live:** the next live Plan Lead of the same Context (its live Plans in the 3d order, after the archived one's place, wrapping to the first), selecting that Plan and its Lead. Else that Context's live Manager (`planId` null).
+- A Context archive takes the first rule when both apply (a Plan Lead archived with its Context).
+- No target: the selection clears (`selectedSessionId` null) and the chat slot shows `Select a session` (3e).
+
+**Archived rows the User opens (A2).** An archived row opened on purpose from the Archive section (3d) keeps the selection. Only a live-to-archived transition navigates. A selection that is already archived when the client first sees it (a fresh load, a restore from `sessionStorage`) does not navigate either; the disabled Composer below covers it.
+
+**Composer disabled on an archived selection.** When the selected session, the selected Plan or the active Context (the Context the breadcrumb shows, 3e) is archived, the Composer's textarea, attach button and Send button are `disabled`, and the textarea placeholder reads exactly:
+
+    Session is archived - unarchive to send messages
+
+It replaces the Composer placeholder of DESIGN-compose.md while the condition holds. Unarchive (the archived row menu, 3g) clears it.
+
 ## 4. Amendments pro-d48..pro-d65: where each decision is contracted
 
 Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
