@@ -65,15 +65,16 @@ export interface ChatHeaderProps {
   readonly title: string | null;               // KEPT
   readonly role?: SessionRole;                 // KEPT in the type; not rendered
   readonly runner?: Runner;                    // KEPT in the type; not rendered
+  readonly completion?: Completion | null;     // NEW (1.4): the Lead completion badge; CONTRACT 3.10
 }
 export function ChatHeader(props: ChatHeaderProps): JSX.Element;
 ```
 
-`ChatPane` passes `sessionKey`, `title` and, as before, `role` and `runner` only when `view.ref` is non-null (`{...(view.ref === null ? {} : { role, runner })}`). No `busy`, no toggle props. The Phase 2 props `thinking`, `onToggleThinking`, `tools`, `onToggleTools`, `busy` are removed from the type.
+`ChatPane` passes `sessionKey`, `title` and, as before, `role` and `runner` only when `view.ref` is non-null (`{...(view.ref === null ? {} : { role, runner })}`), and `completion={view.completion}` (`SessionView.completion`, CONTRACT 6.2). The Lead rule is applied by `ChatHeader` (1.4), not by `ChatPane`. No `busy`, no toggle props. The Phase 2 props `thinking`, `onToggleThinking`, `tools`, `onToggleTools`, `busy` are removed from the type.
 
 ### 1.2 Behaviour
 
-- The title is `title ?? sessionKey`. The title is the only text of the header.
+- The title is `title ?? sessionKey`. The title is the only text of the header, except the completion badge of 1.4 when it is shown.
 - `document.title` (KEPT, unchanged): `sessionKey` when `title === null`, else `` `${sessionKey} · ${title}` ``; restored on unmount; effect deps `[sessionKey, title]`.
 - No breadcrumb, no key sub-line, no run status, no buttons.
 
@@ -82,6 +83,7 @@ export function ChatHeader(props: ChatHeaderProps): JSX.Element;
 ```
 header   flex flex-wrap items-center gap-3 border-b px-4 py-2
 └─ div[data-part="heading"]   min-w-0 flex-1
+    ├─ Badge[data-part="completion-badge"]   only for role "lead" with a non-null completion (1.4); absent otherwise
     └─ h1[data-part="title"]   m-0 truncate text-title font-semibold text-fg-strong      text = title ?? sessionKey
 ```
 
@@ -89,6 +91,16 @@ header   flex flex-wrap items-center gap-3 border-b px-4 py-2
 - **Resolution:** the Phase 2 `h1[data-part="key"]` sub-line, `span[data-part="run-status"]` and the Thinking/Tools `div[data-part="toggles"]` are removed; their KEPT hooks are retired (4).
 
 ---
+
+### 1.4 Completion badge (pro-d422, pro-d424; CONTRACT 3.10)
+
+- **Rule.** The badge is shown only when `role === "lead"` and `completion` is non-null. Every other session (manager, worker, or a null `completion`) shows the unchanged title-only header.
+- **Element.** `<Badge data-part="completion-badge" tone={completion.tone} title={`kev-4b verdict: ${labelText}, archive-safety ${completion.score}%`}>{completion.text}</Badge>`, where `Badge` is the part of `components/badge.tsx` (DESIGN.md 2f; `tone` gives `outline` plus the tone classes). The tone is `completion.tone` (`done`, `decision` or `blocked`). No new Tone and no new CSS (pro-d424).
+- **Text.** `completion.text` verbatim, `<label> · <score>%`. `labelText` is the label text of CONTRACT 3.10 for `completion.label` (for example `Safe to archive`, `Unescalated bug`).
+- **Tooltip.** The native `title` attribute, not the Tooltip part. Example: `kev-4b verdict: Safe to archive, archive-safety 92%`.
+- **Placement.** The first child of `div[data-part="heading"]`, before `h1[data-part="title"]`. Placement is DOM order only; the heading keeps its classes.
+- **Not interactive.** No button, no click action, no `data-action`.
+- **Absence.** A null `completion` renders nothing; it is not an error. The badge never blocks the header, the title, attach or submission.
 
 ## 2. Transcript (`web/src/ui/chat/Transcript.tsx`)
 
