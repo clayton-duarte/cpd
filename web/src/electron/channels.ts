@@ -11,6 +11,8 @@ export const CHANNELS = {
   wasm: "ghostty:wasm",
   webC2s: "cpd:c2s",
   webS2c: "cpd:s2c",
+  healthOk: "health:ok",
+  healthCrash: "health:crash",
 } as const;
 
 export const UPDATE_BOOTSTRAP_CHANNEL = "update:bootstrap";

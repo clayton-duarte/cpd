@@ -2,6 +2,8 @@ import { toCpdError } from "../lib/cpd.ts";
 import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT } from "../lib/reminder.ts";
 import { closedPrLines, contextUpdate, countsOf, type ErrorEvent, leadUpdate, parseErrorEvents, parsePending, parsePlanEvents, parsePrOpened, parseRecordEvents, parseRecords, parseTaken, PLAN_KINDS, summaryLine } from "../lib/updates.ts";
 import type { Message } from "../lib/pi.ts";
+import { NUDGE } from "../lib/question-guard.ts";
+import { isObject } from "../lib/cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 /** Contract §6.13 "Delivery (P1.4)", steps 3 to 6: what the host stores before an input that starts a turn, the turn-end reminder and the host errors. Effects go through `TurnPort`. */
 
@@ -25,9 +27,9 @@ export type TurnPort = {
 
 /** What lives for one run of the host: the "once" memories of §6.13. */
 
-export type TurnState = { firstDone: boolean; firstFailed: boolean; firstEvent: number; contextFailed: boolean; lastError: string | undefined; reminded: boolean };
+export type TurnState = { firstDone: boolean; firstFailed: boolean; startupFailed: boolean; firstEvent: number; contextFailed: boolean; lastError: string | undefined; reminded: boolean; questioned: boolean };
 
-export const newTurnState = (): TurnState => ({ firstDone: false, firstFailed: false, firstEvent: 0, contextFailed: false, lastError: undefined, reminded: false });
+export const newTurnState = (): TurnState => ({ firstDone: false, firstFailed: false, startupFailed: false, firstEvent: 0, contextFailed: false, lastError: undefined, reminded: false, questioned: false });
 
 /** A host error: `what` and `code` are the memory's key. */
 export type HostError = { what: string; code: string; message: string; details?: Record<string, unknown> };
@@ -55,13 +57,14 @@ export async function prepareTurn(port: TurnPort, state: TurnState): Promise<voi
     await reportHostError({ what, code: err.code, message: err.message, ...(err.details === undefined ? {} : { details: err.details as Record<string, unknown> }) }, port, state);
   };
   let stored: readonly StoredEntry[] = [];
+  let startupRetry = false;
   try {
     stored = await port.entries();
   } catch (e) {
     port.log(`entries: ${toCpdError(e).message}`);
   }
   // The first message goes first and alone: while it is pending, or stored by this very call, the context update waits for the next turn (the first message's event is the cursor then).
-  if (seat.byUser && !state.firstDone) {
+  if ((seat.byUser || state.startupFailed) && !state.firstDone) {
     if (stored.some((e) => e.kind === "cpd-first-message" && e.data?.delivered_to === seat.id)) state.firstDone = true;
     else {
       try {
@@ -71,12 +74,18 @@ export async function prepareTurn(port: TurnPort, state: TurnState): Promise<voi
         await port.submit(toWrite({ customType: "cpd-first-message", content: out.text, display: false, details: { event, delivered_to: seat.id } }, `first-message:${seat.id}`));
         state.firstDone = true;
         state.firstFailed = false;
+        state.startupFailed = false;
         state.firstEvent = Math.max(state.firstEvent, event);
       } catch (e) {
         await fail("firstFailed", "first message", e);
+        // A by-user Session waits for its first message; a by_user=0 retry that fails again lets the context update go on.
+        if (!seat.byUser) startupRetry = true;
       }
-      state.reminded = false;
-      return;
+      if (!startupRetry) {
+        state.reminded = false;
+        state.questioned = false;
+        return;
+      }
     }
   }
   try {
@@ -91,6 +100,7 @@ export async function prepareTurn(port: TurnPort, state: TurnState): Promise<voi
     await fail("contextFailed", "context updates", e);
   }
   state.reminded = false;
+  state.questioned = false;
 }
 
 /** The context update of contract §6.13 step 4 (the reads of pi/lib/turns.ts); the board posts are taken last, so a failed read loses none. */
@@ -143,6 +153,35 @@ export async function reminderFor(messages: unknown, port: TurnPort, state: Turn
   }
   state.reminded = true;
   return REMINDER_TEXT;
+}
+
+/**
+ * G19 (commands.md §15.26): at a turn's end, the nudge text to continue with when the final text asks the User a question in plain text, or undefined.
+ * `classify` answers the probability that the text asks the User (undefined: unreachable). Once per turn; off when `experimental.turn_question_guard` is false.
+ */
+export async function questionGuardFor(messages: unknown, port: TurnPort, state: TurnState, classify: (text: string) => Promise<number | undefined>): Promise<string | undefined> {
+  const { seat } = port;
+  if (state.questioned) return undefined;
+  const last: unknown = Array.isArray(messages) ? messages.findLast((m) => isObject(m) && m.role === "assistant") : undefined;
+  if (!isObject(last) || last.stopReason !== "stop") return undefined;
+  const text = lastAssistantText([last]);
+  if (text === undefined || !text.includes("?")) return undefined;
+  try {
+    const config = (await port.cpd(["config"])).config;
+    const experimental = isObject(config) ? config.experimental : undefined;
+    if (isObject(experimental) && experimental.turn_question_guard === false) return undefined;
+    if (seat.role === "lead" && seat.plan !== null) {
+      const counts = (await port.cpd(["plan", "show", "--plan", seat.plan])).counts;
+      if (!(isObject(counts) && counts.running === 0 && counts.queued === 0)) return undefined;
+    }
+    const p = await classify(text.slice(-2000));
+    if (p === undefined || p < 0.85) return undefined;
+  } catch (e) {
+    port.log(`question guard: ${toCpdError(e).message}`);
+    return undefined;
+  }
+  state.questioned = true;
+  return NUDGE;
 }
 
 /** A Lead's error is one `cpd session report`; a Manager's one silent `cpd-error` write; once per (`what`, `code`) in a row. */

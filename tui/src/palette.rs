@@ -467,11 +467,11 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
 }
 
 /// The glyph of an Inbox item of `kind` and `urgency` (hs-d569 CD5): its tier's glyph, except the two curation kinds, which
-/// draw their own, in the cyan colour.
+/// draw their own, in the white colour.
 pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'static> {
     use cpd_core::inbox::model::Kind as Item;
     match kind {
-        Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
+        Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::NotStarted)),
         Item::Deploy => Span::styled(ITEM_DEPLOY, fg_clickable(Meaning::Review)),
         Item::PrReady => {
             let meaning = match urgency {
@@ -629,6 +629,9 @@ pub const CHECKS_LEGEND: [(&str, Checks); 4] = [
 
 #[cfg(test)]
 mod colours;
+
+#[cfg(test)]
+mod tier_tests;
 
 #[cfg(test)]
 mod tests {

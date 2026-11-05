@@ -125,3 +125,10 @@ test("closeSuperseded closes the reason and records the entry", async () => {
   const settled = written.find((e) => e.kind === "cpd-plan-review");
   assert.equal(settled?.data.status, "superseded");
 });
+test("a plan review with an empty summary is refused", async () => {
+  const { written, port } = makePort();
+  port.readText = async () => "  \n";
+  const pr = createPlanReview(port);
+  await assert.rejects(pr.open("r1", "event"));
+  assert.equal(written.length, 0, "nothing is written for a refused review");
+});

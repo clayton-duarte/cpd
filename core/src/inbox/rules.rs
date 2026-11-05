@@ -413,7 +413,7 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 Some(title) => format!("{} replied\n{title}", seat.who),
                 None => format!("{} replied", seat.who),
             };
-            seat_condition(seat, Kind::Unread, Urgency::White, label)
+            seat_condition(seat, Kind::Unread, Urgency::Cyan, label)
         })
         .collect())
 }
@@ -441,7 +441,7 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
             let context = id("context id", &raw, ContextId::parse)?;
             out.push(Condition {
                 kind,
-                urgency: Urgency::Cyan,
+                urgency: Urgency::White,
                 subject: format!("{name}:{context}"),
                 label: format!("{context}: {n} {noun}"),
                 url: None,
@@ -751,7 +751,7 @@ fn models_changed(
         }
         out.push(Condition {
             kind: Kind::ModelsChanged,
-            urgency: Urgency::Cyan,
+            urgency: Urgency::White,
             subject: models::subject(&file.provider, &changes.at),
             label: models::label(&file.provider, new.len(), gone.len()),
             url: None,
@@ -1075,7 +1075,7 @@ mod tests {
         let c = one(f.of(Kind::Unread));
         assert_eq!(
             (c.urgency, c.subject.as_str(), c.label.as_str()),
-            (Urgency::White, "session:l-pay", "pay replied\nPay")
+            (Urgency::Cyan, "session:l-pay", "pay replied\nPay")
         );
         assert_eq!(c.event, Some(idle), "the idle Event");
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));

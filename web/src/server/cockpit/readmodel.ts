@@ -392,6 +392,24 @@ function parseCuration(reply: Reply): CurationRecord[] {
   return out;
 }
 
+type Curation = ReadonlyMap<string, readonly CurationRecord[]>;
+function mapTree(raw: { context: Reply; plan: Reply; session: Reply }, plans: RawPlan[], sessions: RawSession[], inbox: ParsedInbox): ContextTreeModel {
+  return buildTree({
+    contexts: parseContextList(raw.context), plans, sessions, inbox: inbox.rows,
+    cursor: Math.min(cursorOf(raw.context, "context list"), cursorOf(raw.plan, "plan list"), cursorOf(raw.session, "session list"), inbox.cursor),
+  });
+}
+function mapInbox(inbox: ParsedInbox, sessions: RawSession[], plans: RawPlan[] | undefined, curationByContext: Curation): InboxModel {
+  return buildInbox(inbox, sessions, { ...(plans !== undefined ? { plans } : {}), curationByContext });
+}
+/** Pure mapping of the four raw cpd pane replies (a snapshot's panes) to the tree and inbox panes; the one source of this mapping. */
+export function mapPanes(raw: { context: Reply; plan: Reply; session: Reply; inbox: Reply }, curationByContext: Curation = new Map()): { tree: ContextTreeModel; inbox: InboxModel } {
+  const inbox = parseInboxList(raw.inbox);
+  const plans = parsePlanList(raw.plan);
+  const sessions = parseSessionList(raw.session);
+  return { tree: mapTree(raw, plans, sessions, inbox), inbox: mapInbox(inbox, sessions, plans, curationByContext) };
+}
+
 export function createReadModel(cpd: Cpd): ReadModel {
   async function loadPanes(panes: PaneSet, planId: string | null): Promise<PaneUpdate> {
     const wantTree = panes.has("tree");
@@ -410,10 +428,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
     const parsedPlans = planR === undefined ? undefined : parsePlanList(planR);
     const parsedSessions = sessR === undefined ? undefined : parseSessionList(sessR);
     if (ctxR !== undefined && parsedPlans !== undefined && parsedSessions !== undefined && inbox !== undefined) {
-      out.tree = buildTree({
-        contexts: parseContextList(ctxR), plans: parsedPlans, sessions: parsedSessions, inbox: inbox.rows,
-        cursor: Math.min(cursorOf(ctxR, "context list"), cursorOf(planR!, "plan list"), cursorOf(sessR!, "session list"), inbox.cursor),
-      });
+      out.tree = mapTree({ context: ctxR, plan: planR!, session: sessR! }, parsedPlans, parsedSessions, inbox);
     }
     if (panes.has("inbox") && inbox !== undefined) {
       const curateContexts = [
@@ -436,10 +451,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
           }),
         );
       }
-      out.inbox = buildInbox(inbox, parsedSessions ?? [], {
-        ...(parsedPlans !== undefined ? { plans: parsedPlans } : {}),
-        curationByContext,
-      });
+      out.inbox = mapInbox(inbox, parsedSessions ?? [], parsedPlans, curationByContext);
     }
     if (panes.has("plan")) if (showR === undefined) out.plan = null;
     else if (showR !== null) out.plan = buildPlanView(parsePlanShow(showR));

@@ -1,5 +1,5 @@
 //! Engine step E8, the `models-changed` Inbox items (contract §2.2 "Inbox item" and "The models-changed rule", §3.7 E8;
-//! commands.md §21.4; pro-d13, pro-d16, pro-n12): E8 reads each `run/models-<provider>.json` that E15 wrote and opens one cyan
+//! commands.md §21.4; pro-d13, pro-d16, pro-n12): E8 reads each `run/models-<provider>.json` that E15 wrote and opens one white
 //! item per provider whose `changes.at` is within the last 7 days and whose announced part is not empty. The engine runs
 //! in-process on the `ManualClock` ([`Fx::watch_ticks`]); no helper runs (`Fx::engine_config` writes a fresh cache file, so E15
 //! is not due), except in the one test about E15's error.
@@ -164,7 +164,7 @@ impl Models {
 }
 
 #[test]
-fn a_change_within_7_days_opens_one_cyan_item_per_provider_with_no_context_and_the_subject_and_label_of_the_rule()
+fn a_change_within_7_days_opens_one_white_item_per_provider_with_no_context_and_the_subject_and_label_of_the_rule()
  {
     let fx = fx();
     let bifrost = fx.change(
@@ -199,7 +199,7 @@ fn a_change_within_7_days_opens_one_cyan_item_per_provider_with_no_context_and_t
         "a zero part is omitted"
     );
     for item in [&b, &c] {
-        assert_eq!(item["urgency"], "cyan", "{item}");
+        assert_eq!(item["urgency"], "white", "{item}");
         for null in ["context", "plan", "job", "session", "record"] {
             assert!(item[null].is_null(), "{null} must be null: {item}");
         }

@@ -37,4 +37,6 @@ mod rows_tests;
 #[cfg(test)]
 mod runner_tests;
 #[cfg(test)]
+mod tier_tests;
+#[cfg(test)]
 mod unread_rows_tests;

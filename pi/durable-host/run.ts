@@ -1,3 +1,4 @@
+import { compactionPolicy, type CompactionSettings } from "./compaction.ts";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -17,7 +18,7 @@ import { createRetier } from "./retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
-import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
+import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession, type Run } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
@@ -34,7 +35,7 @@ import { hostExtension } from "./extension.ts";
 import { registerHostTools } from "./tools.ts";
 import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
-import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
+import { newTurnState, prepareTurn, questionGuardFor, reminderFor, reportHostError, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
 export type { ViewCall, ViewStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
@@ -61,6 +62,9 @@ export type LoopRuntime = {
   tripped: boolean;
 };
 
+/** The per-turn counters and the `info.role` the lib's `toolCallGuard` reads (contract §6.16 "The per-turn bounds"). */
+type TurnRuntime = LoopRuntime & { info: { role: "lead" | "manager" }; readStreak: number; totalCalls: number; turnRefusals: number };
+
 /**
  * The lib's window rule (`registerLoopGuard`, loop-guard.ts), pure: folds the self-started turn at `now` into `r.turnStarts`
  * and returns whether the window holds more than `r.info.loopGuardTurns`.
@@ -85,7 +89,7 @@ export type Deps = {
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
-  open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  open(o: { file: string; cwd: string; model: Model; extension: Extension; settings?: { compaction: CompactionSettings } }): Promise<Conversation>;
   /** pi/lib/reload.ts's `validatePackage` over the adapter package directory: the refusal reason, or `undefined`. */
   validatePackage(dir: string): Promise<string | undefined>;
   follow?(hooks: FollowerHooks): { start(): void; stop(): void };
@@ -95,6 +99,8 @@ export type Deps = {
   newEpoch(): string;
   onTerminate(handler: () => void): void;
   homeDir(): string;
+  /** The turn-end question classifier: the probability the text asks the User, or undefined when unreachable. Absent: the question guard never fires. */
+  classify?(text: string): Promise<number | undefined>;
   now(): Date;
   log(line: string): void;
 };
@@ -172,11 +178,14 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const plan = session.plan ?? "";
     // §6.16 the loop guard: the runtime the lib's `holdTrip`/`clearTrip`/`trippedIn` read. `facts` satisfies the lib (the
     // blocked state is reported from `wanted()` by `loop.tripped`), and `loopHost` carries the effects the lib calls back into.
-    const loop: LoopRuntime & { facts: { open(key: string, label: string, kind: string): void; close(key: string): void } } = {
+    const loop: TurnRuntime & { facts: { open(key: string, label: string, kind: string): void; close(key: string): void } } = {
       role: session.role as "lead" | "manager",
-      info: { loopGuardTurns: session.loopGuardTurns },
+      info: { role: session.role as "lead" | "manager", loopGuardTurns: session.loopGuardTurns },
       turnStarts: [],
       tripped: false,
+      readStreak: 0,
+      totalCalls: 0,
+      turnRefusals: 0,
       facts: { open: () => {}, close: () => {} },
     };
     // §6.16 held deliveries: while the breaker is tripped an input that would start a turn is queued here, not submitted.
@@ -194,6 +203,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     // The adapter the lib calls: the pi entry (a silent conversation write) and the refresh.
     const loopHost = {
+      run: loop,
+      options: { now: () => deps.now().getTime() },
       pi: { appendEntry: (type: string, data: unknown) => void conversation.write({ type: "write", entry: { kind: type, data: data as Record<string, unknown>, model: [] } }).catch((e) => failed("writing a loop-guard entry", e)) },
       refresh: () => report(),
     } as unknown as Host;
@@ -229,7 +240,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // The build the start and a reload share: re-reads the prompt sources and the role skill, and rebuilds the extension modules.
     const build = async (): Promise<Extension> => {
       const policy = policySection(await deps.cpd(["policy", "show"]));
-      const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir(), visible: [] }, session.role as "lead" | "manager");
+      const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir(), visible: [], loop: loopHost }, session.role as "lead" | "manager");
       const sections = [...(base.sections ?? [])];
       if (skill !== undefined && skillDir !== undefined) sections.push(section("cpd-skills", () => skillsSection(skill, skillDir)));
       const codemode = createCodemodeExtension({ sandbox, namespaces: codemodeNamespaces(codemodeServers) });
@@ -238,14 +249,26 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         ...base,
         sections: [...sections, ...(codemode.sections ?? [])],
         hooks: [...(base.hooks ?? []), hook(GenerationTask, { onYield: async (answer) => {
-          const text = await reminderFor([answer], port, turn);
+          const text = (await reminderFor([answer], port, turn)) ?? (await questionGuardFor([answer], port, turn, async (t) => deps.classify?.(t)));
           return text === undefined ? undefined : { continue: text };
         } })],
         tools: [...(hostTools.tools ?? []), ...(codemode.tools ?? [])],
       };
     };
+    let liveModel: { provider: string; modelId: string } | undefined = model;
     const extension = await build();
-    const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
+    // §6.18: the live compaction getter; the window cache fills at each `configure` (the one place the host reads `deps.models()`).
+    const windows = new Map<string, number>();
+    const settings = {
+      get compaction() {
+        return compactionPolicy({
+          settings: () => ({}),
+          agent: () => liveModel,
+          windowOf: (provider, modelId) => windows.get(`${provider}/${modelId}`),
+        });
+      },
+    };
+    const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension, settings });
     current = await conversation.watch();
     conversation.closed.then(
       (reason) => {
@@ -267,7 +290,21 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     let prepared: Promise<void> = Promise.resolve();
     let preparing = 0;
     // §3.6 allows `stopped -> idle`, never `stopped -> working`.
-    if ((shown.session as { state?: unknown }).state === "stopped") reporter.want({ state: "idle" });
+    const rowState = (shown.session as { state?: unknown }).state;
+    if (rowState === "stopped") reporter.want({ state: "idle" });
+    // A row left `working` by a kill reports the live run (pi-durable resumes the interrupted run on open): working while one continues, idle when none.
+    const hasRun = (view: unknown): boolean => {
+      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
+      return live?.run !== undefined && live.run !== null;
+    };
+    let resumed = false;
+    if (rowState === "working") {
+      if (hasRun(current.value)) {
+        // The row already says working: no report, only the memory that the run ends in idle.
+        resumed = true;
+        hostState = "working";
+      } else setImmediate(() => (over ? undefined : reporter.want({ state: "idle" })));
+    }
 
     // The plan-review flow (§6.15): its summary and feedback files live in `$CPD_HOME/run/<plan>/` (review.rs `summary_review_md`).
     const readPlanFile = async (file: string): Promise<string> => {
@@ -357,9 +394,9 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     const submit = async (input: Input): Promise<Submission> => {
       // §6.16 the loop gate: every input that reaches the conversation — a client `submit` or a follower Event — is a
-      // submission the host makes, so it counts here, at the one gate. The User's own `session-message` (`inputOf` sets
-      // `reply: true` for it) does not count: it empties the window and clears a trip, as the adapter's `messageType === "user"` does.
-      const selfUser = input.reply === true && input.entry.kind === "cpd-event" && input.entry.data.kind === "session-message";
+      // submission the host makes, so it counts here, at the one gate. A cpd-chat User prompt (`reply: true`)
+      // that finds the breaker tripped does not count: it empties the window and clears the trip, as the adapter's `messageType === "user"` does; a sender-less session-message does not.
+      const selfUser = loop.tripped && input.reply === true && input.entry.kind === "cpd-chat";
       if (selfUser) {
         if (clearTrip(loopHost, loop as unknown as Run)) report();
       } else if (!loop.tripped) {
@@ -379,6 +416,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         heldLoop.push(input);
         return { id: -1, status: async () => "held", wait: async () => "unanswered" };
       }
+      if (starts) resetTurn(loop as unknown as Run);
       if (input.reply) reply = true;
       pending++;
       changed("working");
@@ -393,6 +431,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         void submission.wait().then(
           () => {
             if (--pending === 0) {
+              resetTurn(loop as unknown as Run);
               changed("idle");
               reply = false;
             }
@@ -417,22 +456,33 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // reads the Lead's first message and runs it as the first turn's input, counted by the cursor. A Session whose
     // conversation already holds its `cpd-first-message` entry (a restart) submits nothing and reads nothing.
     if (!session.byUser && !storedEntries.some((e) => { const entry = e as StoredEntry; return entry.kind === "cpd-first-message" && entry.data?.delivered_to === config.session; })) {
+      let out: Record<string, unknown> | undefined;
       try {
-        const out = await deps.cpd(["session", "first-message", "--session", config.session]);
+        out = await deps.cpd(["session", "first-message", "--session", config.session]);
         if (typeof out.text !== "string" || !Number.isSafeInteger(out.event)) throw new Error("cpd session first-message: the output lacks text or event");
+      } catch (e) {
+        // The next turn-starting input retries the read (prepareTurn); the failure is reported once.
+        turn.startupFailed = true;
+        failed("the first message at startup", e);
+        const err = toCpdError(e);
+        await reportHostError({ what: "first message", code: err.code, message: err.message }, port, turn);
+        out = undefined;
+      }
+      try {
+        if (out === undefined) throw undefined;
         const event = out.event as number;
         // The submit below is turn-starting: mark the first message done and its Event the cursor, so prepareTurn does
         // not ALSO store it as a silent write and the context update counts it (turn.ts).
         turn.firstDone = true;
         turn.firstEvent = Math.max(turn.firstEvent, event);
         await submit({
-          content: out.text,
+          content: (out.text as string),
           requestId: `first-message:${config.session}`,
           whenBusy: "followUp",
           entry: { kind: "cpd-first-message", data: { event, delivered_to: config.session } },
         });
       } catch (e) {
-        failed("the first message at startup", e);
+        if (e !== undefined) failed("the first message at startup", e);
       }
     }
 
@@ -471,6 +521,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         // The current agent is read back before the first configure, so a change that names only a thinking level validates against it.
         if (agentState === undefined) agentState = agentOf(await conversation.agent());
         const list = await deps.models();
+        for (const m of list) windows.set(`${m.provider}/${m.model_id}`, m.context_window);
         let ref: { provider: string; modelId: string } | undefined;
         if (change.model !== undefined) {
           const i = change.model.indexOf("/");
@@ -488,6 +539,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         }
         await conversation.configure({ ...(ref === undefined ? {} : { model: ref }), ...(change.thinkingLevel === undefined ? {} : { thinkingLevel: change.thinkingLevel }) } as never);
         agentState = agentOf(await conversation.agent());
+        liveModel = agentState.model === undefined ? undefined : { provider: agentState.model.provider, modelId: agentState.model.model_id };
         return { agent: agentState };
       },
       models: async () => deps.models(),
@@ -549,10 +601,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       clientId: () => (from = `c${++nextClient}`),
     });
     server = srv;
-    const hasRun = (view: unknown): boolean => {
-      const live = (view as { docs?: Record<string, { run?: unknown } | undefined> } | undefined)?.docs?.["pi.live"];
-      return live?.run !== undefined && live.run !== null;
-    };
     let lastView: unknown = first.value;
     const attachStream = (s: ViewStream): void => {
       s.start(async (call: ViewCall) => {
@@ -564,6 +612,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         srv.frame(ring.append([...call.ops]));
         const runEnd = hasRun(lastView) && !hasRun(call.value);
         lastView = call.value;
+        if (resumed && runEnd) {
+          resumed = false;
+          if (pending === 0) changed("idle");
+        }
         if (ring.shouldRebase(runEnd)) srv.frame(ring.rebase(call.value));
       });
       // pi-durable 1.5.0 (chord watch.d.ts): `stop()` idempotently stops future callbacks and settles `closed` with `{ kind: 'stopped' }`; any other kind is the watch ending on its own.

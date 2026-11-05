@@ -646,6 +646,14 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         })?,
         _ => false,
     };
+    let mut title = args.title.to_string();
+    if policy.workflow.jira_required
+        && adopt.is_none()
+        && let Some(jira) = &args.jira
+    {
+        title = super::jira_title::conform(&title, jira.as_str())
+            .ok_or_else(|| crate::pr::open::jira_title_invalid(&plan, &args.key))?;
+    }
     let wanted = Wanted {
         base: match base {
             BaseArg::Branch(Some(branch)) if lead_branch_of_workflow => BaseWanted::Branch(branch),
@@ -657,7 +665,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         }),
         repo: repo.display().to_string(),
         name,
-        title: args.title.to_string(),
+        title,
         jira: args.jira.map(|j| j.to_string()),
         shape: args.shape,
         key: args.key,
@@ -769,7 +777,7 @@ pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<Repo
 }
 
 /// [`key_repo`] with the repo's resolved policy and the path of its policy file.
-fn key_repo_policy(
+pub(super) fn key_repo_policy(
     env: &mut Env,
     plan: &PlanId,
     repo: &Path,

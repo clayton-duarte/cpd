@@ -54,7 +54,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 |---|---|---|
 | protocol | `web/src/protocol/domain.ts`, `wire.ts` (also `parseClientMessage`, 10.9), `cockpit.ts` (also `parseCockpitAction`, 10.9), `runtime.ts` (also `GitBoundary`, 10.9) | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
 | state | `web/src/state/transcript.ts`, `store.ts`, `connection.ts` | `transcript.test.ts`, `store.test.ts`, `connection.test.ts` |
-| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts` | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts` |
+| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12) | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12) |
 | durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `ops.ts` (Phase 2, 10.8), `backend.ts` | `client.test.ts`, `frames.test.ts`, `ops.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
@@ -373,7 +373,7 @@ export type ErrorCode =
   | "host_disconnected" // the socket closed or `bye` arrived while attached
   | "host_error" // the host answered `error`; details {hostCode, ...} carries the host ErrorCode (scout-durable §3)
   | "session_not_found" // id not in the cockpit snapshot / not attached
-  | "session_file_missing" // a pi session row without `file`
+  | "session_file_missing" // a pi session whose transcript file did not appear after a submit (6.5 polling)
   | "session_file_unreadable" // stat/read of the pi file failed
   | "malformed_line" // a pi JSONL line is not valid JSON or has no `type`; details {line?, offset}
   | "cpd_failed" // a cpd command exited non-zero; details {cpdCode, exitCode, message}
@@ -916,7 +916,7 @@ export interface CpdEvent { readonly id: number; readonly kind: string; readonly
 export function parseEventLine(line: string): CpdEvent; // `cpd_malformed_json` on bad JSON or a missing id/kind
 export function panesFor(event: CpdEvent, selectedPlan: { id: string; contextId: string } | null): ReadonlySet<CockpitPane>;
 
-export const COALESCE_MS = 250; // Phase 1 choice
+export const COALESCE_MS = 250; // Phase 1 choice; superseded by 12.4: 16
 export const SAFETY_REFRESH_MS = 30_000; // Phase 1 choice (pull-request rows change with no Event, scout-cockpit §2)
 export const FOLLOW_RESTART_BASE_MS = 1_000; // doubles per consecutive restart, cap 30_000 (Phase 1 choice)
 
@@ -944,8 +944,8 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
 
 Service behaviours:
 
-1. `start()` runs `readModel.loadAll(null)`, stores the snapshot, then starts `follow.start(followArgs(cursor))` exactly once, where `cursor` = `tree.cursor`. A failure of `loadAll` rejects `start()` with its `WebError` and starts no follow. A second `start()` is a no-op.
-2. Each follow line goes through `parseEventLine`; the service remembers `lastCursor = max(lastCursor, event.id)`; a malformed line emits `{kind:"error"}` and is skipped.
+1. `start()` runs `readModel.loadAll(null)`, stores the snapshot, then starts `follow.start(followArgs(cursor))` exactly once, where `cursor` = `tree.cursor`. A failure of `loadAll` rejects `start()` with its `WebError` and starts no follow. A second `start()` is a no-op. **Amended by 12.6:** the follow child runs while the cockpit stream is not ready, and is stopped by its first `hello`.
+2. Each follow line goes through `parseEventLine`; the service remembers `lastCursor = max(lastCursor, event.id)`; a malformed line emits `{kind:"error"}` and is skipped. **Amended by 12.5 and 12.8:** while the stream is ready, its `event` frames are the source of these lines.
 3. An event whose `panesFor` is non-empty adds those panes to a pending set; if no coalescing timer is pending one is scheduled `COALESCE_MS` later (`scheduler.after`). When it fires, `readModel.loadPanes(pending, selectedPlanId)` runs ONCE for the whole burst and one `{kind:"pane"}` update per pane is emitted. A burst of N events inside the window therefore triggers one refresh (never one CLI spawn per event or per render).
 4. An event kind in no list triggers no `loadPanes`.
 5. A failed refresh emits one `{kind:"error", error}` and keeps the previous snapshot; the pending set is cleared.
@@ -1280,16 +1280,16 @@ Behaviours: each change notification triggers at most one read in flight (change
 #### `backend.ts`: `SessionBackend` for pi sessions
 
 ```ts
-export function createPiBackend(deps: { cpd: Cpd; fs: FileBoundary; watch: WatchBoundary; git: GitBoundary; windowSize?: number }): SessionBackend;
+export function createPiBackend(deps: { cpd: Cpd; fs: FileBoundary; watch: WatchBoundary; git: GitBoundary; cpdHome: string; attachmentsDir: string; now(): number; scheduler: Scheduler; windowSize?: number }): SessionBackend;
 ```
 
 Behaviours:
 
-- `attach(session)`: `session.file` missing -> `session_file_missing`. `readTail(file)`, then `cpd session show <id>` (`deps.cpd.json(["session","show",id])`, fields `session.model`, `session.thinking`, `session.tier`; a failure does not fail the attach: those stats are `unknown` with the error message as reason). Emits, in order: `session.attached` (capabilities below, `title = ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}`, `session.footer`, `session.status`, `session.dialog` for each open reconstructed dialog. Then `watchSession` starts from `endOffset` with the tail's normalizer.
+- `attach(session)`: `session.file` missing (pro-d397, pro-d400: a by-user pi session writes its transcript only with its first reply) -> emits `session.attached` (full capabilities, `title = ref.title`), `session.window {mode:"tail", items: [], hasEarlier: false, cursor: null}` and `session.status` with `busy` false, and starts no watch. Otherwise `readTail(file)`, then `cpd session show <id>` (`deps.cpd.json(["session","show",id])`, fields `session.model`, `session.thinking`, `session.tier`; a failure does not fail the attach: those stats are `unknown` with the error message as reason). Emits, in order: `session.attached` (capabilities below, `title = ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}`, `session.footer`, `session.status`, `session.dialog` for each open reconstructed dialog. Then `watchSession` starts from `endOffset` with the tail's normalizer.
 - Live: `append` events emit `session.append` (`added`), `session.update` (`updated`), `session.dialog` / `session.dialogResolved` for `dialogsOpened` / `dialogsResolved` (outcome `"answered"`; plan review `superseded` or `lost` -> `"superseded"`), `session.footer` when `factsChanged`, `session.status` when `busy` changed. `reset` -> re-reads the tail, emits a fresh `session.window {mode:"tail"}` (truncation or replacement resets the window) and restarts the watcher.
 - `busy` (Phase 1 choice, a file-derived approximation): `facts.lastRole === "user" || "toolResult"`, or `lastRole === "assistant"` with `lastStopReason` of `toolUse`/`pending`; false otherwise. `queued` is always `[]`.
-- `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`.
-- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`.
+- `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`; on a session attached with no file it emits an empty `session.window {mode:"earlier", items: [], hasEarlier: false, cursor: null}`.
+- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
 - `configure {kind:"tier"}`: `cpd.json(sessionRetierArgs(id, tier))` (applies at the next idle, scout-pi §6), then re-reads `cpd session show` and emits `session.footer`. `{kind:"model"|"thinking"}` -> `unsupported_capability`.
 - `abort`, `abortSubmission`, `compact` and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason). `respond` answers the open dialog (11.4).
 - Footer: `model` = `facts.model` (a later `model_change` wins over `session show`) else `session show` `model`; `thinking` likewise; `tier` = `session show` `tier` else `ref.tier`; `cost` = unknown (`"pi session cost needs a full-file scan, which Phase 1 never does"`); `contextPercent` = unknown (`"the model's context window is not available for pi sessions"`); `branch` = `git.branch(ref.cwd)` (the git branch of the session cwd; `ref.cwd` missing -> unknown `"the session row has no cwd"`; `null` -> unknown `"not a git repository"`).
@@ -1309,7 +1309,7 @@ export function socketPathOf(cpdHome: string, sessionId: string): string; // `${
 `resolve` walks `snapshot().tree` (`ContextNode.sessions` and every `PlanNode.sessions`) for `ref.id === sessionId`:
 
 - not found, or `tree === null` -> `WebError("session_not_found", ..., {sessionId})` (no refresh is attempted);
-- `runner "pi"` with no `ref.file` -> `session_file_missing`; otherwise `{ref, file: ref.file, tierOptions}`;
+- `runner "pi"` with no `ref.file` -> `{ref, tierOptions}` (no `file`, no error; pro-d397); otherwise `{ref, file: ref.file, tierOptions}`;
 - `runner "durable"` -> `{ref, socketPath: socketPathOf(cpdHome, id), tierOptions}`; a path longer than `SOCKET_PATH_MAX` bytes -> `host_unreachable` with `details {reason:"socket_path_too_long"}` (the host would refuse it, `config.ts:31-32`);
 - `tierOptions` per 6.1.
 
@@ -1333,7 +1333,7 @@ Behaviours:
 - `cockpit.subscribe`: sends `cockpit.snapshot` from `cockpit.snapshot()` (when any pane is still `null` -> `send({type:"cockpit.error", error: internal "cockpit not ready"})` instead), then subscribes once to `cockpit.subscribe(...)`: later `pane` updates are sent as `cockpit.patch` and `error` updates as `cockpit.error` (subscribe then invalidation updates). A second subscribe re-sends the snapshot and does not add a second subscription.
 - `cockpit.selectPlan` -> `await cockpit.selectPlan(planId)` (the plan pane arrives through the subscription as a patch); a failure -> `cockpit.error`.
 - `cockpit.action` -> `await cockpit.runAction(action)`; success -> `action.result {ok:true, output}`, a `WebError` -> `action.result {ok:false, error}`.
-- `session.attach {sessionId}`: detaches the previous session first (dispose its handle), then `registry.resolve` (a `WebError` -> `session.error {sessionId, error}`; e.g. `session_not_found`, `session_file_missing`), then `backends[resolved.ref.runner].attach(resolved, emit)`, selecting the backend by session runner. `emit` forwards a message only while this attach is still current and the connection open (a generation counter): messages of a detached session never leak. An `attach` that rejects -> `session.error`; an attach that resolves after a newer attach/detach/close disposes its handle and emits nothing.
+- `session.attach {sessionId}`: detaches the previous session first (dispose its handle), then `registry.resolve` (a `WebError` -> `session.error {sessionId, error}`; e.g. `session_not_found`), then `backends[resolved.ref.runner].attach(resolved, emit)`, selecting the backend by session runner. `emit` forwards a message only while this attach is still current and the connection open (a generation counter): messages of a detached session never leak. An `attach` that rejects -> `session.error`; an attach that resolves after a newer attach/detach/close disposes its handle and emits nothing.
 - `session.detach`: disposes the handle (once), forgets the session. Idempotent.
 - `session.loadEarlier|submit|abort|abortSubmission|compact|configure|listModels` and `dialog.respond`: when `sessionId` is not the attached one -> `session.error {sessionId, error: not_attached}`; otherwise the matching `SessionHandle` method (session messages route to the attached backend). `submit` passes `{clientSubmissionId, text, images, whenBusy}`. A rejection becomes `session.error {sessionId, clientSubmissionId?, error: toWireError(e)}` (`clientSubmissionId` for `submit` only): backend errors become session error messages.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
@@ -1553,7 +1553,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `host_disconnected` | `client.ts`, `durable backend` | socket closed or `bye` while attached; pending requests rejected | `{bye?: reason}` |
 | `host_error` | `client.ts` | the host answered `error` (e.g. `refused` for configure while busy, `bad_args`, `busy`, `unsupported`) | `{hostCode, details?}` |
 | `session_not_found` | `registry.ts` | id absent from the cockpit snapshot | `{sessionId}` |
-| `session_file_missing` | `registry.ts`, `pi backend` | pi session row without `file` | `{sessionId}` |
+| `session_file_missing` | `pi backend` | pi session whose transcript file did not appear within the 20 polls after a submit (6.5) | `{sessionId}` |
 | `session_file_unreadable` | `window.ts`, `watch.ts` | `stat`/`read` failed | `{path, cause}` |
 | `malformed_line` | `jsonl.ts` | invalid JSON, non-object, bad `type`, wrong field types, `compaction` without `summary` | `{line?, offset}` |
 | `cpd_failed` | `cli.ts` | non-zero exit or spawn failure | `{cpdCode, exitCode?, details?}` (`cpdCode` from the cpd JSON error, `no_json`, or `spawn_failed`) |
@@ -1624,8 +1624,9 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O23 | The window past five entries: its 50 and 100 bounds, the splice of its oldest entries and the `before` it sets, and a `view` frame after the first (a rebase) from a live host | 6.4 frames and backend | `pi-durable/dist/harness/view.d.ts` (read); `live-check.md` (five entries) |
 | O24 | `pi.usage` keeps the cost of turns that a compaction removed (cumulative per model): the live run showed the growth of a model's record over two runs; a compaction was not run | 6.4 facts | `live-check.md` |
 | O25 | Whether `busy` (`docs['pi.live'].run`) matches `host_state.state` while a dialog is held and the run waits on a `ui_request` | 6.4 backend (status) | not run |
+| O26 | Live output of `cpd cockpit serve` (not run): the frame shapes and the stdin EOF exit 0 are read from `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main`; the stdin EOF exit (12.1), the frame shapes (12.8) and the unverified limits (12.10) rest on them | 12.1, 12.8, 12.10 | commands.md §11a (read, not run) |
 
-Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O25 inline or is this section.
+Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O26 inline or is this section.
 
 ## 10. Phase 2 (pro-d20)
 
@@ -1818,3 +1819,87 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 - `Footer` (`web/src/ui/chat/Footer.tsx`) renders only the context card (`{footer, contextWindow?}`, DESIGN-compose 3). The session telemetry row (cwd, session key, tokens, cache, model, tier, thinking, cost, branch) is removed from the chat (pro-d57). Its data stays in `SessionView.footer` for the composer's tier selector (DESIGN-compose 2).
 
 ---
+
+## 12. Cockpit stream: `cpd cockpit serve` (Plan `cpd-realtime-engine`)
+
+Normative. Plan `cpd-realtime-engine` (its Job `webcockpit-docs`) decides the five points below. Where a statement of 6.3 is marked "Amended by 12.x" or "superseded by 12.x", section 12 wins and the older statement is void.
+
+Sources: `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main` (commit `665c0c159`). The frames, the requests and the exit behaviour are read there and are not run here (unverified, O26). The seams are in `$CPD_HOME/run/cpd-realtime-engine/explore/scout-7.md` (cited as scout-7).
+
+Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7): **PA1** one long-lived NDJSON process, stdin EOF exits 0; **PA2** snapshot panes equal the list commands' JSON, and snapshots are full; **PA4** the other per-request spawns stay (every `actions.ts` command, and each spawn of 6.3 that 12.6 does not replace); **PA5** the web server uses the stream while it is up and the spawn refresh while it is down or not yet ready, and the child restarts with backoff.
+
+### 12.1 Decision 1: the child (`web/src/server/cockpit/stream.ts`)
+
+- `stream.ts` owns exactly one long-lived child, `cpd cockpit serve` (no arguments; `cockpitServeArgs()` = `["cockpit","serve"]`). `stream.ts` spawns nothing. The spawn is `CockpitStreamBoundary.start(): StreamProcess` in `cli.ts`, the only module that runs `cpd` (2.1). `plugin.ts` builds the real boundary and tests fake it (A6). `StreamProcess` has the shape of `FollowProcess` (6.3) plus `write(line)` and `closeStdin()`.
+- stdin is a pipe that stays open for the child's whole life. Requests are written to it as lines.
+- stdout is split into lines as `events follow` is (`FollowProcess.onLine`, 6.3). stderr is logs only; its tail is kept for an exit message (12.9).
+- `stop()` closes stdin, then kills the child (SIGTERM). Either alone ends it: stdin EOF exits 0 (PA1). A parent that dies closes its end of stdin, so the child never outlives its parent.
+- `stream.ts` reports typed frames and the ready state. It reads no pane and builds no model; the mapping is in 12.8 and lives in `events.ts`.
+
+### 12.2 Ready state
+
+- The stream is **ready** from the child's `hello` until that child exits. Before `hello`, and between an exit and the next child's `hello`, it is not ready. Readiness belongs to one child: a new child is not ready until its own `hello`.
+
+### 12.3 Decision 2: snapshot panes and `plan_show`
+
+- The service takes the panes of a `snapshot` frame as the cockpit's panes. It keeps the parsed rows of the last applied snapshot: `contexts`, `plans`, `sessions`, `inbox`, and `cursor` (the minimum of the four `events_cursor`). The rows are parsed by the read model's own functions (`parseContextList`, `parsePlanList`, `parseSessionList`, `parseInboxList`, 6.3) and the tree and inbox are built by its own builders (`buildTree`, `buildInbox`). `events.ts` holds no copy of a parser or a builder.
+- The plan view is not a snapshot pane (the `plan` pane of a snapshot is `cpd plan list`). It is read by a `plan_show` request when a Plan is selected, answered by a `plan_show` frame, then `parsePlanShow` and `buildPlanView` as in 6.3.
+- A request carries a string id that the service chooses, unique within its child, and the plan id it asks for. A reply for a Plan that is no longer selected is dropped.
+
+### 12.4 Decision 3: coalescing
+
+- `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
+- A `snapshot` frame stores its rows at once. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
+
+### 12.5 Decision 4: the `session-state` patch
+
+- An `event` frame of kind `session-state` with a non-null `session` changes the stored row of that session: its `state` becomes `data.to`. `data.to` must be one of the five states of 3.2; otherwise it is an error (12.8) and nothing changes.
+- A session not among the stored rows is not patched. A Worker is not in the tree (scout-7 §4), and a session registered in the same batch is not stored yet.
+- The tree is rebuilt by `buildTree` over the stored rows. The dot is therefore computed by the read model's own dot rule (5.1), with `attention` taken from the stored inbox rows. The tree pane is emitted in the same tick, with no coalescing wait. Target: under 5 ms (unverified, not measured).
+- The next `snapshot` replaces the stored rows and so reconciles the patch.
+- Only `session-state` patches the panes. Every other kind waits for the snapshot that follows its batch (5.5: a batch's `event` frames come before its snapshot).
+
+### 12.6 Decision 5: fallback and readiness
+
+- While the stream is not ready, the service runs 6.3 unchanged: the `events follow` child from `followArgs(lastCursor)`, the coalesced refresh of 12.4 through `loadPanes` (spawn), and the plan pane through `loadPanes`.
+- The follow child runs while the stream is not ready. `start()` starts it as 6.3 says. The first `hello` stops it. A child's exit starts it again from `lastCursor`. `lastCursor` is the highest Event id seen from either source, so Events committed while the stream was down come back through `events follow --since`, and the next snapshot carries the state.
+- `start()` still runs `loadAll` by spawn first (6.3 rule 1), then starts the stream.
+- A `plan_show` request made while the stream is not ready, or in flight when the child exits, resolves `down` at once. The service then loads the plan by spawn.
+
+### 12.7 Restart backoff
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `STREAM_RESTART_BASE_MS` | 500 ms | the first restart waits this long |
+| `STREAM_RESTART_CAP_MS` | 10 000 ms | no restart waits longer |
+
+- The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
+- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off.
+- The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
+- Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
+
+### 12.8 Frame-to-pane mapping
+
+Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line that is not one JSON object, has no string `t`, or has fields its `t` does not take, is `cpd_malformed_json` (7).
+
+| Frame (`t`) | Accepted shape | Effect on the cockpit |
+|---|---|---|
+| `hello` | `protocol` = 1 | Ready (12.2); the follow child stops (12.6). Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 12.7 applies, while the spawn path serves the panes. |
+| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (12.3). On success, store the rows, reset n when this is the child's first (12.7), and schedule the emit (12.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. |
+| `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 12.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
+| `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
+| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. |
+| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (12.9). |
+| anything else | none | `cpd_malformed_json`: one error update, the line skipped, the child kept (as commands.md §11a: a malformed line keeps the process serving). |
+
+### 12.9 Failure rules
+
+- A child that exits while the stream is running is not ready. Its pending requests resolve `down` (12.6), the follow child starts (12.6), and a restart follows after the wait of 12.7. An exit caused by `stop()` is not a failure and emits nothing.
+- An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
+- A failed write to stdin means the child is gone: it is killed and handled as an exit.
+- A malformed frame never restarts the child (12.8).
+
+### 12.10 Tests and limits
+
+- Tests run without a real process, socket, timer or `cpd` (A6). `web/src/server/cockpit/stream.test.ts` (new; fake `StreamProcess`, fake Scheduler): ready only after `hello`; the backoff sequence of 12.7 and its reset at the first snapshot; `stop()` closes stdin, kills the child, cancels the wait and emits nothing afterwards; a request is answered, rejected, or resolved `down` when not ready and when the child exits. `web/src/server/cockpit/events.test.ts` (changed): the 16 ms coalescing of snapshot panes and of the spawn burst; the panes of a snapshot equal the spawn path's panes for the same replies; a `session-state` patch emits the tree in the same tick and the next snapshot replaces it; the follow child runs only while the stream is not ready.
+- Limits, stated plainly: the live output of `cpd cockpit serve` is unverified (O26); the 5 ms target is unmeasured; `seq` is informational, because one pipe keeps frames in order; no `hello` timeout is defined, so a child that never says `hello` stays not ready, with the spawn path serving the panes and no restart (unverified, O26).

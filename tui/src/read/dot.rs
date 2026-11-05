@@ -275,10 +275,10 @@ mod tests {
     fn a_session_shows_its_dialog_and_unread_items_only() {
         let a = id("s-a");
         let items = [
-            item(Kind::Unread, Urgency::White, Some("s-a"), Some("pp")),
+            item(Kind::Unread, Urgency::Cyan, Some("s-a"), Some("pp")),
             item(Kind::Dialog, Urgency::Magenta, Some("s-b"), Some("pp")),
         ];
-        assert_eq!(urgency(&items, &a, None), Some(Urgency::White));
+        assert_eq!(urgency(&items, &a, None), Some(Urgency::Cyan));
         assert_eq!(
             urgency(&items, &id("s-b"), Some(&plan("pp"))),
             Some(Urgency::Magenta)
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn the_most_urgent_item_wins() {
         let items = [
-            item(Kind::Unread, Urgency::White, Some("s-a"), None),
+            item(Kind::Unread, Urgency::Cyan, Some("s-a"), None),
             item(Kind::Dialog, Urgency::Red, Some("s-a"), None),
             item(Kind::Dialog, Urgency::Magenta, Some("s-a"), None),
         ];
@@ -384,7 +384,7 @@ mod tests {
         );
         assert!(Dot::Cyan.needs_you());
         assert!(Dot::Magenta > Dot::Cyan && Dot::Cyan > Dot::White);
-        let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
+        let unread = item(Kind::Unread, Urgency::Cyan, Some("s-lead"), None);
         let dialog = item(Kind::Dialog, Urgency::Magenta, Some("s-lead"), None);
         let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
         assert_eq!(
