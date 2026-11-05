@@ -22,6 +22,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
+11a. [`cockpit serve`](#11a-cockpit-serve)
 12. [`watch`](#12-watch)
 13. [`tui`](#13-tui)
 14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
@@ -58,11 +59,12 @@ A command is **internal** when cpd runs it by itself and neither an agent nor th
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Five kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Six kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
-| `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd events follow` | one Event per line (§5.4) | a streaming command (§1.2) |
+| `cpd cockpit serve` (§11a) | one frame per line, NDJSON, on stdout (§5.5) | a streaming command (§1.2); it reads requests on stdin |
 | `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
@@ -289,6 +291,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
 | `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
+| `cpd cockpit serve` (§11a) | none | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -3836,6 +3839,94 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 ```
 
 Idempotent: read-only; the same `--since` replays the same lines.
+
+## 11a. `cockpit serve`
+
+The WebUI backend's state and event stream (Plan `cpd-realtime-engine`; its invariants are contract §5.5). One process replaces the backend's spawns: the four list commands and `plan show` that it ran on every refresh, and the `events follow` child whose lines triggered them. A committed change reaches the stream without a spawn.
+
+```
+cpd cockpit serve
+```
+
+No flags and no arguments; any argument is `usage` (exit 2). Callers: none. The WebUI backend (`web/src/server/`) starts it once and keeps it; it is not a command an agent or the User types, and not a cockpit action (§2). It reads requests on stdin and writes frames on stdout, one JSON object per line, each with a string field `t`. stderr carries logs only. It binds no socket and no port.
+
+**Lifecycle.** It opens the store as `cpd events follow` does (§11.2: it waits out a migration in progress). It then writes `hello`, writes snapshot 1 and sets its cursor to the highest Event id, so no Event before the start is replayed: the first snapshot carries the state. It serves until stdin reaches end of file, then exits 0. The parent's death closes stdin, so the process never outlives its parent.
+
+### Frames out
+
+| `t` | When | Frame |
+|---|---|---|
+| `hello` | first, once | `{"t":"hello","protocol":1}` |
+| `snapshot` | after `hello`; after every batch of committed changes; on `refresh` | `{"t":"snapshot","seq":<n>,"panes":{"context":V,"plan":V,"session":V,"inbox":V}}` |
+| `event` | each newly committed Event, before the snapshot that follows it | `{"t":"event","event":E}` |
+| `plan_show` | the answer to a `plan_show` request | `{"t":"plan_show","id":"<request id>","value":V}` |
+| `error` | a malformed line, an unknown `t`, a failed request, or the store error that ends the process (below) | `{"t":"error","id":"<request id or null>","error":{"code":"<code>","message":"<text>"}}` |
+
+- **The panes** `context`, `plan`, `session` and `inbox` are V = the JSON value that `cpd context list`, `cpd plan list`, `cpd session list` and `cpd inbox list` print (same function, same fields, `ok` included). A failure value of one of them is that pane's value, not an `error` frame. Each snapshot is full: no diffs.
+- **`seq`** counts this process's snapshots from 1; a new process starts at 1 again.
+- **`E`** is exactly the object one line of `cpd events follow` prints (§11.2), for every Event: the command takes no selection flags.
+- **`value`** of `plan_show` is V = exactly what `cpd plan show --plan <id>` prints.
+
+Each frame is one line, written and flushed when it is produced, in the order it is produced.
+
+### Frames in
+
+| `t` | Shape | Answer |
+|---|---|---|
+| `plan_show` | `{"t":"plan_show","id":"<request id>","plan":"<plan id>"}` | a `plan_show` frame with the same `id`; or, when `cpd plan show --plan <id>` would print a failure value, an `error` frame with the same `id` and that value's code and message |
+| `refresh` | `{"t":"refresh"}` | one snapshot at once, with the next `seq`, and no `event` frame |
+
+`id` is a string the caller chooses; it is echoed unchanged. A request's fields are exactly those of its `t`: any other field is an error.
+
+### Batches and latency
+
+- Changes are found by polling `PRAGMA data_version` every `POLL_MS` = 10 ms. (`cpd events follow` polls at `events.poll_ms`, 200 ms by default, §11.2.)
+- A change starts a batch. Every change seen within `COALESCE_MS` = 16 ms of the batch's first change joins it. The batch goes out as one `event` frame per Event with an id above the last one sent, in id order, then one snapshot.
+- Commit to frame: at most `POLL_MS` + `COALESCE_MS` plus the time to read the four panes (unmeasured).
+
+### Errors
+
+| Trigger | `error.code` | `id` |
+|---|---|---|
+| a line that is not one JSON object, or whose `t` is missing or not a string | `usage` | the request's `id` when the object has a string one, else `null` |
+| an unknown `t`, or a field its `t` does not take | `usage` | the request's `id` when it has a string one, else `null` |
+| `plan_show` whose `id` or `plan` is missing or not a string | `usage` | `null` |
+| `plan_show` for which `cpd plan show --plan <id>` would print a failure value (`plan_not_found`, exit 4; `invalid_plan_id`, exit 2; a store code) | that value's code | the request's `id` |
+
+These keep the process serving. A **store error** that ends `cpd events follow` (§11.2: `store_too_new`, `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) ends this command too, the same way. Its last line is `{"t":"error","id":null,"error":{"code":"<code>","message":"<text>"}}` and it exits with that code's exit. A store that cannot be opened at the start ends it before `hello`, with the same last line.
+
+| Exit | When | Codes |
+|---|---|---|
+| `0` | stdin reached end of file, or stdout closed (EPIPE) | |
+| `1` | a store or config failure; a failed write to stdout other than EPIPE | `config_invalid`, `store_failed`, `migration_changed`, `migration_order`, `internal` |
+| `2` | an argument was given | `usage` |
+| `5` | the store was busy or a lock timed out | `store_busy`, `lock_timeout` |
+
+Other store codes exit with the exit that §1.2 gives them. A malformed or failed request does not change the exit: it is an `error` frame, and the process goes on.
+
+**Effects:** none. It writes no row, no Event, no file under `$CPD_HOME` and takes no lock. Idempotent in the sense that a restart starts again at `seq` 1 and replays no Event.
+
+### Example session
+
+`in` is stdin, `out` is stdout; `…` stands for the full value.
+
+```
+out {"t":"hello","protocol":1}
+out {"t":"snapshot","seq":1,"panes":{"context":{"ok": true, …},"plan":{"ok": true, …},"session":{"ok": true, …},"inbox":{"ok": true, …}}}
+in  {"t":"plan_show","id":"r1","plan":"cpd-realtime-engine"}
+out {"t":"plan_show","id":"r1","value":{"ok": true, …}}
+    (another process commits Event 48215)
+out {"t":"event","event":{"id": 48215, "at": "2026-10-14T21:41:02.114Z", "kind": "escalation", "context": "building-cpd", "plan": "cpd2", "job": "contract-commands", "attempt": "contract-commands-a1", "session": null, "text": "Worker contract-commands-a1 asks: … Answer: cpd answer contract-commands-a1-q1 \"<answer>\"", "data": {"escalation": "contract-commands-a1-q1", "question": "…"}}}
+out {"t":"snapshot","seq":2,"panes":{"context":{"ok": true, …},"plan":{"ok": true, …},"session":{"ok": true, …},"inbox":{"ok": true, …}}}
+in  {"t":"refresh"}
+out {"t":"snapshot","seq":3,"panes":{"context":{"ok": true, …},"plan":{"ok": true, …},"session":{"ok": true, …},"inbox":{"ok": true, …}}}
+in  not json
+out {"t":"error","id":null,"error":{"code":"usage","message":"…"}}
+in  {"t":"plan_show","id":"r2","plan":"no-such-plan"}
+out {"t":"error","id":"r2","error":{"code":"plan_not_found","message":"…"}}
+    (the parent closes stdin)
+    exit 0
+```
 
 ## 12. `watch`
 

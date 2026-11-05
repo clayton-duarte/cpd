@@ -44,7 +44,7 @@ Every command prints exactly one JSON value on stdout, always, except the comman
 - Success: `{"ok": true, …}`, with the command's fields at the top level.
 - Failure: `{"ok": false, "error": {"code": "<snake_case>", "message": "<one sentence>", "details": {…}}}`.
 - Progress and debug text goes to stderr only.
-- **The one streaming command** is `cpd events follow`: it prints one complete JSON value per line, each line an Event (§5.4), as the approved outline specifies. If it fails, its last line is a failure value as above.
+- **The streaming commands** are `cpd events follow` (§5.4), which prints one complete JSON value per line, each line an Event, as the approved outline specifies, and `cpd cockpit serve` (§5.5), which prints one frame per line, each with a string `t`. If `cpd events follow` fails, its last line is a failure value as above; `cpd cockpit serve` ends with an `error` frame instead (§5.5).
 - **Commands that own their terminal** print no JSON value on success: `cpd session run` and `cpd tui view` (internal) run pi or draw a ratatui view in their pane, and `cpd tui --attach` and bare `cpd` (no arguments; commands.md §13.3) replace themselves with `tmux attach` (the outline's "builds and attaches the cockpit"). If one fails before taking the terminal, it prints the failure value and exits with its code. `cpd tui` without `--attach` prints one JSON value like every command. `cpd resource run` (commands.md §29) also owns its terminal: once it holds the resource it replaces itself with the user's command (`exec`), so its output and exit status are the command's and it prints no JSON value; if it refuses before it execs (`resource_busy`, `resource_undeclared`, `usage`), it prints the failure value and exits with its code.
 
 Exit codes (kept from cpd 1 §2):
@@ -3224,6 +3224,26 @@ The adapter renders `event.text` unchanged and reads neither `summary` nor `arte
 - **Store errors end it** (hs-d140): on any store error (`store_too_new` after an upgrade included, which now comes from the verdict of §4.5 and means a breaking migration this binary does not know, and `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) it prints the failure value (§1.2) as its last line and exits with that code's exit; it never stays alive on a database it cannot read. The pi adapter restarts a follower that ends (§5.3), so the restart meets the new binary or reports the error again.
 - **Re-exec on a new install** (hs-d140; hs-d55): between polls it checks its own executable path with the `(device, inode, mtime)` check of `core/src/host/exe.rs`, as `session run` and `attempt run` do (§3.4, §6.7); when it changed, it re-execs itself with the same argv except `--since`, which is the id of the last Event it printed (when it has printed none: the cursor it started from, its `--since`, or the highest id at its start), so no follower outlives an install and none loses or repeats an Event. The check runs in every mode.
 - `cpd events list` takes the same selection and prints one JSON value `{ok, events: [...], next: <id>}`, at most `--limit` (default 500) Events.
+
+### 5.5 `cpd cockpit serve`
+
+The cockpit's state and event stream for the WebUI backend (Plan `cpd-realtime-engine`; the command, its frames and its exit codes are commands.md §11a). The backend used to spawn four or five `cpd` commands for every refresh and to see a change up to 200 ms late; this command replaces them with one process. Its PROTOCOL is 1. These are its invariants:
+
+- **One process, NDJSON, no socket** (A1). It is one long-lived process: one JSON object per line on stdout, each with a string field `t`, and one request per line on stdin. It binds no socket and no port. stderr carries logs only.
+- **Stdin EOF exits 0.** When stdin reaches end of file the process writes nothing more and exits 0. The parent's death closes stdin, so the process is never orphaned. Closed stdout (EPIPE) also exits 0, as §5.4 says of `events follow`.
+- **Hello first.** Once the store opens, the first frame is `{"t":"hello","protocol":1}`, then snapshot 1. A store that cannot be opened ends the process before hello.
+- **Panes are the list commands.** The panes of a snapshot are the JSON values that `cpd context list`, `cpd plan list`, `cpd session list` and `cpd inbox list` print: the same function, the same fields, `ok` included, byte-identical to the CLI's JSON (A2). A list command's failure value is a pane value, not an `error` frame. Snapshots are full, never diffs.
+- **Plan show is a request.** The value of `cpd plan show --plan <id>` answers a `plan_show` request with the request's `id`. A failed request is an `error` frame with that `id` and the code the command would print.
+- **Events before the snapshot.** Each newly committed Event is one `event` frame, whose `event` is exactly the object one line of `cpd events follow` prints (§5.2, §5.4), for every Event (the command takes no selection). The frames of a batch come in id order, every `event` frame before the snapshot that follows them. No past Event is replayed at start: the cursor starts at the highest id, and the first snapshot carries the state.
+- **A snapshot per batch.** A snapshot follows hello, follows every batch of committed changes, and answers `refresh` at once. `seq` counts this process's snapshots from 1.
+- **Polling and coalescing.** Changes are detected by polling `PRAGMA data_version` every `POLL_MS` = 10 ms. A change starts a batch; every change seen within `COALESCE_MS` = 16 ms of the batch's first change is merged into that batch and its one snapshot. Both are named constants of the code, not configuration: `events.poll_ms` (§8.2) does not apply to this command.
+- **Read-only.** The command writes no row, no Event and no file under `$CPD_HOME`, and takes no lock.
+- **Failures keep it serving, except the store.** A malformed line, an unknown `t`, a request with a field its `t` does not take, or a failed request gets one `error` frame, and the process keeps serving. A store error that ends `cpd events follow` (§5.4) ends this command the same way: its last line is an `error` frame with `id` null and the code, and it exits with that code's exit (§1.2).
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `POLL_MS` | 10 ms | the interval of the `data_version` poll |
+| `COALESCE_MS` | 16 ms | the window in which changes merge into one snapshot |
 
 ## 6. The tmux host
 
