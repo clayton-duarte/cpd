@@ -974,30 +974,8 @@ pub(super) fn merge(
         NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref())
             .plan(id.clone()),
     )?;
-    // The last Workflow to merge ends the Plan (§3.1).
-    let unmerged: i64 = tx.query_row(
-        "SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
-        [id.as_str()],
-        |r| r.get(0),
-    )?;
-    if unmerged > 0 {
-        return Ok(false);
-    }
-    crate::plan::close_reviews(tx, id, &crate::plan::Closing::Done)?;
-    let moved = tx.execute(
-        "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-          WHERE id = ?1 AND phase = 'deploy'",
-        [id.as_str()],
-    )?;
-    if moved == 0 {
-        return Err(cas_lost(id, key));
-    }
-    let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
-    let text = format!(
-        "Every Workflow of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}"
-    );
-    append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
-    Ok(true)
+    // The last Workflow to merge ends the Plan, unless a Job is non-final (§3.1).
+    crate::plan::done::settle_done(tx, id, pull.merged_at.as_deref().map(|at| (key, at)))
 }
 
 /// The unstack of the Workflows with no pull request yet that were stacked on the Workflow `key` of `plan`, which this transaction
@@ -1039,27 +1017,6 @@ fn plan_workflows(env: &mut Env, plan: &PlanWorkflows) -> Result<Vec<Value>, Cpd
             })
             .collect()
     })
-}
-
-/// `[{key, number, url, merged_at}]` of every Workflow that is not `cancelled`, in key
-/// order: `merged_at` is the moment the Workflow was seen merged, and for `just`, the
-/// one this poll merged, the time `gh` reports when it does.
-fn merged_prs(
-    tx: &WriteTxn<'_>,
-    id: &PlanId,
-    just: &WorkflowKey,
-    reported: Option<&str>,
-) -> Result<Vec<serde_json::Value>, CpdError> {
-    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
-    let rows = stmt
-        .query_map([id.as_str()], |r| {
-            let key: String = r.get(0)?;
-            let merged_at: String = r.get(3)?;
-            let merged_at = if key == just.as_str() { reported.map_or(merged_at, str::to_owned) } else { merged_at };
-            Ok(json!({"key": key, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?, "merged_at": merged_at}))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
 }
 
 fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {

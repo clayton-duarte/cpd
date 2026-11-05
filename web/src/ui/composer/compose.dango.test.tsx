@@ -74,9 +74,10 @@ it("composer renders the attach button and the tier selector in the footer", () 
   m.unmount();
 });
 
-it("composer renders no Steer, Follow-up or Stop while the agent is running", () => {
+it("composer renders Stop but no Steer or Follow-up while the agent is running", () => {
   const { m, onAbort } = setup({ busy: true });
-  expect(m.container.querySelector('[data-part="send-split"], button[data-when-busy], button[data-action="abort"]')).toBeNull();
+  expect(m.container.querySelector('[data-part="send-split"], button[data-when-busy]')).toBeNull();
+  expect(m.container.querySelector('[data-part="actions"] button[data-action="abort"]')).not.toBeNull();
   expect(onAbort).not.toHaveBeenCalled();
   m.unmount();
 });

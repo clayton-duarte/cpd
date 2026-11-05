@@ -37,26 +37,33 @@ export const FoldRow = memo(function FoldRow(props: {
     <Trace data-kind="fold" data-fold={item.foldKind}>
       <TraceCollapsible open={open} onOpenChange={setOpen}>
         <TraceCollapsibleTrigger data-part="marker">
-          <TraceLine className="text-xs">
-            <TraceIcon
-              data-part="phi"
-              className="font-display font-bold text-status-decision"
-            >
-              φ
+          <TraceLine className="text-sm font-sans">
+            <TraceIcon>
+              <span
+                data-part="phi"
+                className="font-display font-bold text-[18px] leading-none -translate-y-[1.5px] select-none text-status-decision"
+              >
+                {"\u03c6"}
+              </span>
             </TraceIcon>
             <span
               data-part="source"
-              className="shrink-0 font-mono text-muted-foreground"
+              className="shrink-0 text-sm font-sans text-muted-foreground"
             >
               {item.foldKind}
             </span>
-            <TraceTitle data-part="marker-text" className="text-foreground">
+            <TraceTitle data-part="marker-text" className="font-mono text-xs text-muted-foreground/70">
               {item.title}
             </TraceTitle>
             {time === null ? null : (
-              <TraceDescription data-part="time" className="font-mono">
-                {time}
-              </TraceDescription>
+              <>
+                <span aria-hidden="true" className="shrink-0 text-muted-foreground/70">
+                  {"\u00b7"}
+                </span>
+                <TraceDescription data-part="time" className="font-mono">
+                  {time}
+                </TraceDescription>
+              </>
             )}
           </TraceLine>
         </TraceCollapsibleTrigger>

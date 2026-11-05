@@ -17,7 +17,6 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, FollowArgs, Scope};
 use crate::output::Output;
-use crate::ports::Ports;
 
 /// The interval of the `data_version` poll (contract §5.5).
 pub const POLL_MS: u64 = 10;
@@ -138,21 +137,36 @@ struct InboxCli {
     command: crate::inbox::cmd::Command,
 }
 
-/// The four panes: what the list commands print (same functions), read through `$CPD_HOME` on `env`'s ports.
-fn panes(ports: &Ports) -> Value {
-    Ports::scope(ports, || {
-        json!({
-            "context": printed(crate::context::run(ContextCli::parse_from(["cpd", "list"]).command)),
-            "plan": printed(crate::plan::run(PlanCli::parse_from(["cpd", "list"]).command)),
-            "session": printed(crate::session::run(SessionCli::parse_from(["cpd", "list"]).command)),
-            "inbox": printed(crate::inbox::cmd::run(InboxCli::parse_from(["cpd", "list"]).command)),
-        })
+/// The four panes: what the list commands print (same functions), read through `env`.
+fn panes(env: &mut Env) -> Value {
+    let crate::context::Command::List(_) = ContextCli::parse_from(["cpd", "list"]).command else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::plan::Command::List(plan) = PlanCli::parse_from(["cpd", "list"]).command else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::session::Command::List(session) = SessionCli::parse_from(["cpd", "list"]).command
+    else {
+        unreachable!("`list` parses to List")
+    };
+    let crate::inbox::cmd::Command::List(inbox) = InboxCli::parse_from(["cpd", "list"]).command
+    else {
+        unreachable!("`list` parses to List")
+    };
+    json!({
+        "context": printed(crate::context::list::list_in(env)),
+        "plan": printed(crate::plan::list::list_in(env, plan)),
+        "session": printed(crate::session::row::list_in(env, session)),
+        "inbox": printed(crate::inbox::cmd::list_in(env, inbox)),
     })
 }
 
-fn plan_show(ports: &Ports, id: String, plan: &str) -> Frame {
-    let command = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
-        Ok(cli) => cli.command,
+fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
+    let args = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
+        Ok(PlanCli {
+            command: crate::plan::Command::Show(args),
+        }) => args,
+        Ok(_) => unreachable!("`show` parses to Show"),
         Err(e) => {
             return Frame::Error {
                 id: Some(id),
@@ -161,7 +175,7 @@ fn plan_show(ports: &Ports, id: String, plan: &str) -> Frame {
             };
         }
     };
-    match Ports::scope(ports, || crate::plan::run(command)) {
+    match crate::plan::show::show_in(env, args) {
         Ok(out) => Frame::PlanShow {
             id,
             value: printed(Ok(out)),
@@ -176,7 +190,7 @@ enum Request {
     Answer(Frame),
 }
 
-fn request(ports: &Ports, line: &str) -> Request {
+fn request(env: &mut Env, line: &str) -> Request {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(line) else {
         return Request::Answer(Frame::usage(None, "A request is one JSON object per line."));
     };
@@ -198,7 +212,7 @@ fn request(ports: &Ports, line: &str) -> Request {
         return Request::Refresh;
     }
     match (id, obj.get("plan").and_then(Value::as_str)) {
-        (Some(id), Some(plan)) => Request::Answer(plan_show(ports, id, plan)),
+        (Some(id), Some(plan)) => Request::Answer(plan_show(env, id, plan)),
         _ => Request::Answer(Frame::usage(
             None,
             "`plan_show` needs a string `id` and a string `plan`.",
@@ -273,7 +287,6 @@ fn serve_frames(
 ) -> Result<(), CpdError> {
     let mut cursor = env.store.read(events::highest_id)?;
     let mut seq = 0u64;
-    let ports = env.ports.clone();
     macro_rules! emit {
         ($frame:expr) => {
             if !send(out, &$frame)? {
@@ -286,7 +299,7 @@ fn serve_frames(
             seq += 1;
             emit!(Frame::Snapshot {
                 seq,
-                panes: panes(&ports)
+                panes: panes(env)
             });
         }};
     }
@@ -296,7 +309,7 @@ fn serve_frames(
     let mut batch: Option<u64> = None;
     for item in input {
         match item {
-            Input::Line(line) => match request(&ports, &line) {
+            Input::Line(line) => match request(env, &line) {
                 Request::Refresh => snapshot!(),
                 Request::Answer(frame) => emit!(frame),
             },

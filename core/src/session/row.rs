@@ -441,7 +441,11 @@ pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
 
 /// `session list` (commands.md §10.1).
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
+    list_in(&mut Env::open()?, args)
+}
+
+/// `session list` read through the open `env`.
+pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError> {
     let mut filter = vec!["1".to_owned()];
     let mut params = Vec::new();
     if !args.archived {

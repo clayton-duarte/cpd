@@ -25,6 +25,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | pro-d18 | (User, 2026-11-03 EST, chose in this Plan: add header and status bar slots, minimal.) The cockpit is a 5-zone frame: full-width Top Header, left full-height Context tree, centre-top Plan view, centre-bottom Chat (Chat Title on its top border, composer and chat footer at its bottom), right full-height Attention Inbox, full-width Bottom Status Bar. Phase 1 adds ONLY a Top Header with the plain text `C-P-D` (no emblem art) and a Bottom Status Bar showing the selected session's runner and state and `cpd` version (or an explicit `unknown`); the Chat Title is the `ChatHeader` already built, placed at the top of the chat zone. Pill styling, emblem art, host stats, workers summary and balloons are not Phase 1 (pro-d16: Figma in Phase 3, visuals in Phase 4). No new data source and no `wire.ts` field. |
 | pro-d365 | cpd consumes pi-durable as state (the `ConversationView` of host protocol 2, `view` and `ops` frames); no event-synthesis shim is built on top of it. |
 | pro-d377 | (User, 2026-11-03 EST.) The web durable backend speaks host protocol 2 (view and ops, pi-durable 1.5.0) with full parity with today: live text, tool rows, busy, queue, folds, footer, paging by the host `history` command, dialogs. `web/package.json` declares `@earendil-works/chord` 1.5.0 exactly; this lifts the freeze of pro-d17 and A7 for that one line and its lockfile change, and every other freeze stays. |
+| pro-d402 | (Lead, 2026-11-05 EST, decided work.) Supersedes the Stop-button removal of pro-d57 (`web/src/ui/DESIGN-compose.md`): the Composer shows a Stop button while busy when `capabilities.abort.supported` (6.9). The durable `secret_approve` and `host_approve` selects map onto `ask_user_question` (3.8); `compactionFailure` renders as a fold (6.4 live tail, L6); a durable attach retries `host_unreachable` for 15000 ms (6.4 backend). |
 
 ### 1.3 Accepted assumptions
 
@@ -184,7 +185,7 @@ export interface FoldItem {
 //  cpd-plan-decision: `Plan review <details.review> approved` when details.approved === true, else `... rejected`
 //  cpd-skills:        the first line of body cut to FOLD_TITLE_MAX
 // `details` is `details` of a pi `custom_message` line, or `data` of a durable entry of that kind.
-// Fold kind "cpd" (10.1): title rules and defaultOpen false are in 10.1; the cpd fold is the only kind with `defaultOpen` false by construction.
+// Fold kind "cpd" (10.1): title rules and defaultOpen false are in 10.1; the cpd fold is the only kind with `defaultOpen` false by construction, except the compaction-failure fold of 6.4 live tail, L6 (`defaultOpen` true).
 // Dropped (no item): customType `cpd-first-message`, `cpd-reminder`, `cpd-error`, any message with display === false, and every other customType except `cpd` (superseded by 10.1: "and every other customType" no longer includes `cpd`, section 1.4).
 
 export interface CompactionItem {
@@ -357,8 +358,11 @@ Mapping of a durable `ui_request` onto a `Dialog` (frames.ts):
 |---|---|
 | `method: "questionnaire"` (purpose `ask_user_question`) | `{method:"ask_user_question", questions}` from `questions: UiQuestion[]` |
 | `method: "select"`, `purpose: "plan_review"`, options `["Approve","Change"]` | `{method:"cpd_plan_review", title, summary}`; `title` = `args.title` of the latest `cpd_plan_review` tool item of the cached transcript, else `"Plan review"`; `summary` = `body` of the latest `cpd-plan-summary` fold of the cached transcript, else `""`. Pairing is by transcript order because `tool_call_id` is never sent (scout-durable §7.6). |
+| `method: "select"`, `purpose: "secret_approve"` or `"host_approve"`, options `["Allow once","Deny"]` | `{method:"ask_user_question", id, interactive: true, questions}` with one question: `header` `Approval`, `question` = the payload `title`, options `Allow once` and `Deny` (`description` `""`); the answer is mapped as below |
 | `editor` after a `Change` answer | consumed (above) |
-| any other `method`/`purpose` (`confirm`, `input`, other `select`) | `protocol_error` `unsupported dialog <method>/<purpose>`; the backend answers it with `ui_response {cancelled: true}` so the host is not stuck |
+| any other `method`/`purpose` (`confirm`, `input`, a `select` other than the three above, or an approval select with other options) | `protocol_error` `unsupported dialog <method>/<purpose>`; the backend answers it with `ui_response {cancelled: true}` so the host is not stuck |
+
+**Approval answers (`secret_approve`, `host_approve`).** The answer arrives as `DialogResponse` `ask_user_question` `answered`, and the backend reads `result.answers[0]`. It sends `ui_response {id, value: "Allow once"}` only when that answer is an option (`kind: "option"`) with `answer` `"Allow once"`. Every other outcome sends `ui_response {id, value: "Deny"}`: `Deny`, a custom answer, an unanswered question, and `cancelled`. Fail closed. The backend keeps the purpose of each held approval request, so `respond` sends this `{value}` for it and not the `{answer}` of other questionnaires.
 
 ### 3.9 Attachments and errors
 
@@ -1124,7 +1128,8 @@ export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }
   - A `done` slot with an `entry` completes the item with that `pi.tool-result` entry (rule T), when that entry is cached.
   - A `done` slot without an `entry` makes the item `failed` with `result {text: "", isError: true}`, `update`.
   - `unoffered` is not special-cased. A slot is `update`d when its status changed since the last value.
-- Other live documents (`nestedTools`, `compactions`, `compactionFailure`, `runFailure`, `retry`, `deferred`) are not mapped to items: no item kind exists for them.
+- **L6 compaction failure.** `docs['pi.live'].compactionFailure`, when present, is a `FoldItem` at the end of the live tail: `id` `cf:<taskId>`, `foldKind` `"cpd"` (an existing fold kind; no new kind), `title` `Compaction failed (<trigger>)`, `body` = `error`, `defaultOpen` true. `taskId`, `trigger` and `error` must be strings (pi-durable 1.5.0 `live.d.ts:69-75`; the values of `CompactionReason` are not read, **unverified**); any other shape is `protocol_error`. It is recomputed from each value, so it leaves the tail when a later value has no `compactionFailure` (a compaction that produces a summary removes it, `live.d.ts:161-164`).
+- Other live documents (`nestedTools`, `compactions`, `runFailure`, `retry`, `deferred`) are not mapped to items: no item kind exists for them.
 
 **Tool results (T).** A `pi.tool-result` entry pairs with the item of the same `callId` (`model[0].toolCallId`) wherever it is: in the cache or in the live tail. The item takes `result {text, isError, durationMs?}` and `status` `done` (isError false) or `failed` (isError true), and `diff` for `name === "edit"` (below). Pairing works in either order: a call normalised after its result takes the result at normalisation. A result whose call is in no cached item or live item is an `OrphanResultItem` (`orphan:<callId>`); when its call is normalised later, the orphan is removed from the cache and the call takes the result (the browser's adoption, 4.4, does the same for the window).
 
@@ -1165,6 +1170,8 @@ A `protocol_error` from any of these ends the attachment (`backend.ts`, Failure)
 // SessionBackend, SessionHandle, SessionEmit, ResolvedSession and GitBoundary are the shared interfaces of 6.1 (runtime.ts)
 export function createDurableBackend(deps: { connect: (socketPath: string) => Promise<HostClient>; cpd: Cpd; git: GitBoundary; scheduler: Scheduler; windowSize?: number }): SessionBackend;
 ```
+
+**Attach retry.** `attach` calls `deps.connect(socketPath)` once per attempt, so every attempt opens a fresh socket. A fresh Lead has no host socket until `cpd watch` spawns the host on its next tick, so `connect` rejects `host_unreachable` for a while. Only a `host_unreachable` rejection of `deps.connect` is retried; a missing socket path is refused before any connect and is not retried. The first attempt runs at once and the backend records `t0 = scheduler.now()` before it. After a failed attempt at time `t`: if `t - t0 < 15000` ms, the next attempt runs `deps.scheduler.after(250, …)` later; otherwise `attach` rejects with that last `host_unreachable` error and makes no further attempt. Any other rejection of `deps.connect` rejects `attach` at once. The retry stops when the optional `attach` `AbortSignal` aborts: the pending timer is cancelled, no connect follows, and `attach` rejects `host_unreachable` `{reason: "aborted"}`. **Open:** 6.1 gives a pending `attach` no handle, so how a detach that arrives during the window reaches that timer is not defined here (**unverified**: no code exists yet).
 
 **Frame order.** Every host frame of an attachment (`view`, `ops`, `host_state`, `ui_request`, `ui_resolved`) and every `loadEarlier` call is processed one at a time, in arrival order, by one serial queue. A job that needs a `history` call (a gap fill, a loadEarlier page) waits for that call; the jobs arriving meanwhile queue behind it. Nothing is emitted out of order.
 
@@ -1396,7 +1403,7 @@ export function StatusBar(props: { runner: Runner | null; state: string | null; 
 
 ### 6.8 ui-chat `web/src/ui/chat/`
 
-> **Superseded by 10.4, 10.5 and 10.6:** the `Transcript` signature (new props `tailEpoch`, `sizes`; `PendingSubmission` imported from `state/store.ts`), the Transcript DOM (virtual space and window, `data-row-key`, the `Jump to bottom` button, `data-at-bottom`), tool grouping (a `tools` row of `groupRows` replaces the `tool-group` `<details>` wrapper), and the text rendering of assistant blocks, `FoldRow` and `CompactionRow` (through `Markdown`, 10.6). The `FoldRow` text "`cpd-context`, `cpd-plan-decision`, `cpd-skills` are closed by default" also holds for fold kind `cpd` (closed).
+> **Superseded by 10.4, 10.5 and 10.6:** the `Transcript` signature (new props `tailEpoch`, `sizes`; `PendingSubmission` imported from `state/store.ts`), the Transcript DOM (virtual space and window, `data-row-key`, the `Jump to bottom` button, `data-at-bottom`), tool grouping (a `tools` row of `groupRows` replaces the `tool-group` `<details>` wrapper), and the text rendering of assistant blocks, `FoldRow` and `CompactionRow` (through `Markdown`, 10.6). The `FoldRow` text "`cpd-context`, `cpd-plan-decision`, `cpd-skills` are closed by default" also holds for fold kind `cpd` (closed), except the compaction-failure fold of 6.4 live tail, L6 (open).
 
 ```ts
 export function Transcript(props: { items: readonly TranscriptItem[]; hasEarlier: boolean; queued: readonly QueuedSubmission[]; pending: readonly PendingSubmission[]; onLoadEarlier(): void }): JSX.Element;
@@ -1474,7 +1481,7 @@ DOM and behaviour:
 
 - Structure and keys: DESIGN-compose 1.2 and 1.4. `textarea[aria-label="Message"]`: Enter submits `{text, attachments, whenBusy: "followUp"}` and clears; Shift+Enter is a newline; IME composition is ignored.
 - **Send**: `button[data-action="send"][aria-label="Send"]`, disabled when there is nothing to send or `capabilities` is `null`; a click submits `whenBusy: "followUp"`.
-- **Busy**: no extra control (pro-d57). The prompt border pulses (`prompt-border-pulse`, DESIGN.md 2h) while busy or a send is pending. Send submits a follow-up. There is no Steer, Follow-up or Stop button.
+- **Busy**: the Stop button, `button[data-action="abort"][aria-label="Stop"]`, is shown while busy when `capabilities.abort.supported` (pro-d402, which supersedes the Stop removal of pro-d57; DESIGN-compose 1.2); its click calls `onAbort` (`connection.abort`). It is absent when not busy and for pi sessions (abort unsupported, 8). The prompt border pulses (`prompt-border-pulse`, DESIGN.md 2h) while busy or a send is pending. Send submits a follow-up. There is no Steer or Follow-up button (pro-d57).
 - **Unsupported capabilities**: the attach button and the file picker follow `capabilities`. There is no steer control to disable (pro-d57).
 - **Queued submissions**: header chips `ul[aria-label="Queued submissions"]` with `li[data-queued-chip]`, and `button[data-action="cancel-queued"]` when `abortSubmission` is supported.
 - **File picker**: the footer's `Attach files` button opens a hidden `input[type="file" multiple]`; its `change` calls `addFiles`.
@@ -1558,7 +1565,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 |---|---|---|---|
 | `protocol_error` | `parseServerMessage`, `parseHostFrame`, `frames.ts`, `transcript.applyDelta` | a frame, line, event or server message does not match its schema; unsupported dialog method; out-of-range delta | `{field?, line?}` |
 | `unsupported_host_version` | `client.ts connectHost`, `frames.assertSupportedHost` | `welcome.pi_durable !== "1.5.0"` or `welcome.protocol !== 2` (A3); an `error protocol_mismatch` answering the hello | `{piDurable, protocol}`, or `{host, client}` for the mismatch |
-| `host_unreachable` | `client.ts`, `registry.ts`, `durable backend` | socket cannot be opened, no `welcome` in 5000 ms, no socket path, path > 107 bytes | `{path?, reason?}` |
+| `host_unreachable` | `client.ts`, `registry.ts`, `durable backend` | socket cannot be opened, no `welcome` in 5000 ms, no socket path, path > 107 bytes; a durable attach retries a connect rejection for 15000 ms before it fails (6.4 backend) | `{path?, reason?}` |
 | `host_disconnected` | `client.ts`, `durable backend` | socket closed or `bye` while attached; pending requests rejected | `{bye?: reason}` |
 | `host_error` | `client.ts` | the host answered `error` (e.g. `refused` for configure while busy, `bad_args`, `busy`, `unsupported`) | `{hostCode, details?}` |
 | `session_not_found` | `registry.ts` | id absent from the cockpit snapshot | `{sessionId}` |

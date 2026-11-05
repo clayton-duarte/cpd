@@ -78,10 +78,28 @@ it("while busy the send button still submits a follow-up", () => {
   m.unmount();
 });
 
-it("there is no stop control while busy and onAbort is never called", () => {
+const stop = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('[data-part="actions"] button[data-action="abort"]');
+
+it("Composer renders an enabled Stop button that calls onAbort while busy and abort is supported", () => {
   const { m, onAbort } = setup({ busy: true });
-  expect(m.container.querySelector('button[data-action="abort"]')).toBeNull();
-  expect(onAbort).not.toHaveBeenCalled();
+  const b = stop(m.container);
+  expect(b).not.toBeNull();
+  expect(b!.disabled).toBe(false);
+  expect(b!.getAttribute("aria-label")).toBe("Stop");
+  click(b!);
+  expect(onAbort).toHaveBeenCalledTimes(1);
+  m.unmount();
+});
+
+it("Composer renders no Stop button when not busy", () => {
+  const { m } = setup({ busy: false });
+  expect(stop(m.container)).toBeNull();
+  m.unmount();
+});
+
+it("Composer renders no Stop button when abort is unsupported", () => {
+  const { m } = setup({ busy: true, capabilities: { ...base, abort: { supported: false, reason: "unsupported" } } });
+  expect(stop(m.container)).toBeNull();
   m.unmount();
 });
 

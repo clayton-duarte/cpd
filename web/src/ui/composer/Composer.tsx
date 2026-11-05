@@ -1,4 +1,4 @@
-import { ArrowUpIcon, FileTextIcon, PlusIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, FileTextIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent, ReactElement, ReactNode } from "react";
 import { cn } from "../../lib/utils.ts";
@@ -264,6 +264,20 @@ export const Composer = forwardRef<
           </div>
           <div data-part="actions" className="flex items-center gap-1.5">
             {props.settings}
+            {props.busy && capabilities?.abort.supported ? (
+              <InputGroupButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                data-action="abort"
+                aria-label="Stop"
+                className="rounded-full text-destructive"
+                onClick={props.onAbort}
+              >
+                <SquareIcon />
+                <span className="sr-only">Stop</span>
+              </InputGroupButton>
+            ) : null}
             <InputGroupButton
               type="button"
               variant="default"

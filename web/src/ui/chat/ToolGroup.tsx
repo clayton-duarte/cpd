@@ -63,7 +63,7 @@ export const ToolGroup = memo(function ToolGroup(
     >
       <TraceCollapsible open={isOpen} onOpenChange={setOpen}>
         <TraceCollapsibleTrigger data-part="group-header">
-          <TraceLine status={traceStatus} className="text-xs">
+          <TraceLine status={traceStatus} className="text-sm font-sans">
             <TraceIcon data-part="glyph" data-tone={tone} data-glyph={tone}>
               {agg === "running" ? (
                 <Spinner />
@@ -75,15 +75,15 @@ export const ToolGroup = memo(function ToolGroup(
             </TraceIcon>
             <span
               data-part="name"
-              className="shrink-0 font-mono text-fg-strong"
+              className="shrink-0 text-sm font-sans text-fg-strong"
             >
               {first === undefined ? "" : toolName(first)}
             </span>
-            <TraceTitle data-part="summary" className="text-foreground">
+            <TraceTitle data-part="summary" className="font-mono text-xs text-muted-foreground/70">
               {`${first === undefined ? "" : toolDetail(first)} + ${n} more ${n === 1 ? "step" : "steps"}`}
             </TraceTitle>
             <ToolTickStrip statuses={tools.map((t) => t.status)} />
-            <TraceDescription data-part="totals" className="font-mono">
+            <TraceDescription data-part="totals" className="font-mono text-xs text-muted-foreground/70">
               {totals}
             </TraceDescription>
             <span data-part="group-count" className="sr-only">
