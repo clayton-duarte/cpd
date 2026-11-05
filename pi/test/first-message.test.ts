@@ -79,9 +79,9 @@ test("a by-user Session starts its first turn for a session-message", async (t) 
   assert.ok(sm, "the session-message is sent");
   assert.deepEqual(sm.options, { triggerTurn: true, deliverAs: "steer" });
 
-  f.emit(ev(102, "job-merged", { data: { turn: true } }));
+  f.emit(ev(103, "job-merged", { data: { turn: true } }));
   await f.drain();
-  const other = f.pi.sent.find((s) => (s.message.details as any)?.id === 102);
+  const other = f.pi.sent.find((s) => (s.message.details as any)?.id === 103);
   assert.ok(other, "the job-merged message is sent");
   assert.equal(other.options.deliverAs, "nextTurn");
   assert.ok(!other.options.triggerTurn, "every other Event stays queued");
