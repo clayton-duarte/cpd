@@ -31,7 +31,11 @@ fn raw(home: &CpdHome) -> Connection {
 const LATER: &[(&str, &str)] = &[
     (
         "plans",
-        "ALTER TABLE plans DROP COLUMN reviewed_repo; ALTER TABLE plans DROP COLUMN reviewed_number; ALTER TABLE plans DROP COLUMN reviewed_title",
+        "ALTER TABLE plans DROP COLUMN reviewed_repo; ALTER TABLE plans DROP COLUMN reviewed_number; ALTER TABLE plans DROP COLUMN reviewed_title; ALTER TABLE plans DROP COLUMN pr_subject; ALTER TABLE plans DROP COLUMN changes_requested_at",
+    ),
+    (
+        "inbox_items",
+        "ALTER TABLE inbox_items DROP COLUMN head_oid; ALTER TABLE inbox_items DROP COLUMN reviewed_oid",
     ),
     (
         "pull_requests",
