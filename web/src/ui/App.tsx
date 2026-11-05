@@ -10,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import type { CrashReport } from "../electron/health.ts";
-import { loadSelection, saveSelection } from "./state/selection.ts";
+import { activeLeadPlanId as leadPlanIdOf, loadSelection, saveSelection, visiblePlan as visiblePlanOf } from "./state/selection.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { ContextTree } from "./cockpit/ContextTree.tsx";
 import { Header } from "./cockpit/Header.tsx";
@@ -100,12 +100,18 @@ export function App(props: AppProps): ReactElement {
     connection.selectSession(saved.sessionKey);
   }, [live, connection]);
   useEffect(() => {
-    if (!live || !restored.current || selectedPlanId === null || selectedSessionId === null) return;
+    if (!live || !restored.current || selectedSessionId === null) return;
     saveSelection(window.sessionStorage, { planId: selectedPlanId, sessionKey: selectedSessionId });
   }, [live, selectedPlanId, selectedSessionId]);
 
   // pro-d63: an unread Inbox item of the chat being viewed is read: hide it at once and dismiss it once per id
   const activeSessionId = session?.id ?? null;
+  const activeLeadPlanId = useMemo(() => leadPlanIdOf(cockpit.tree, activeSessionId), [cockpit.tree, activeSessionId]);
+  useEffect(() => {
+    if (!live || !restored.current || activeSessionId === null) return;
+    if (selectedPlanId !== activeLeadPlanId) connection.selectPlan(activeLeadPlanId);
+  }, [live, activeSessionId, activeLeadPlanId, selectedPlanId, connection]);
+  const visiblePlan = useMemo(() => visiblePlanOf(activeLeadPlanId, cockpit.plan), [activeLeadPlanId, cockpit.plan]);
   const dismissedUnread = useRef<Set<number>>(new Set());
   const inboxRows = cockpit.inbox?.rows;
   useEffect(() => {
@@ -277,7 +283,7 @@ export function App(props: AppProps): ReactElement {
         !live ? null : <ErrorBoundary name="ContextTree" {...crash}><MemoTree
           tree={cockpit.tree}
           selectedSessionId={selectedSessionId}
-          selectedPlanId={cockpit.selectedPlanId}
+          selectedPlanId={activeLeadPlanId}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}
           costsOn={costsOn}
@@ -285,7 +291,7 @@ export function App(props: AppProps): ReactElement {
           onAction={onAction}
         /></ErrorBoundary>
       }
-      plan={!live ? null : <ErrorBoundary name="PlanView" {...crash}><MemoPlan plan={cockpit.plan} onAction={onAction} /></ErrorBoundary>}
+      plan={!live ? null : <ErrorBoundary name="PlanView" {...crash}><MemoPlan plan={visiblePlan} onAction={onAction} /></ErrorBoundary>}
       chat={
         session === null ? (
           <p data-empty className="grid h-full place-items-center text-muted-foreground">Select a session</p>

@@ -74,8 +74,13 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
 
 /// `plan show` (§4.3).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
+    args.plan.require()?;
+    show_in(&mut Env::open()?, args)
+}
+
+/// `plan show` read through the open `env`.
+pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
-    let mut env = Env::open()?;
     let (plan, mut workflows, jobs, mut attempts, escalations, review, cursor) =
         env.store.read(|conn| snapshot(conn, &id))?;
     let mut tamper = env.store.tamper()?;

@@ -171,3 +171,55 @@ fn session_show_and_list_carry_the_runner() {
         assert_eq!(shown["session"]["runner"], Value::from(runner), "{shown}");
     }
 }
+
+fn row(w: &mut World, sql: &str) -> (Option<String>, Option<String>) {
+    w.store
+        .read(|c| Ok(c.query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .unwrap()
+}
+
+const LOOK: &str = "SELECT asleep_at, state_label FROM sessions WHERE id = 'dlead'";
+
+fn fixture(w: &mut World, sql: &str) {
+    w.store
+        .write("fixture", |tx| Ok(tx.execute_batch(sql)?))
+        .unwrap();
+}
+
+#[test]
+fn send_wakes_an_asleep_durable_session() {
+    let mut w = world();
+    fixture(
+        &mut w,
+        "UPDATE sessions SET asleep_at = 't' WHERE id = 'dlead';",
+    );
+    cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
+    assert_eq!(messages(&mut w, "dlead"), 1);
+    assert_eq!(row(&mut w, LOOK).0, None, "asleep_at is cleared");
+}
+
+#[test]
+fn send_clears_the_host_crash_loop_label_of_a_durable_session() {
+    let mut w = world();
+    fixture(
+        &mut w,
+        "UPDATE sessions SET asleep_at = 't', state_label = 'host crash loop' WHERE id = 'dlead';",
+    );
+    cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
+    assert_eq!(
+        row(&mut w, LOOK),
+        (None, None),
+        "label and asleep_at cleared"
+    );
+}
+
+#[test]
+fn send_to_a_live_durable_session_leaves_its_state_label_alone() {
+    let mut w = world();
+    fixture(
+        &mut w,
+        "UPDATE sessions SET state = 'waiting', state_label = 'reviewing' WHERE id = 'dlead';",
+    );
+    cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
+    assert_eq!(row(&mut w, LOOK), (None, Some("reviewing".to_owned())));
+}

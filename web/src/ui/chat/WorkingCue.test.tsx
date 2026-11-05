@@ -18,10 +18,10 @@ const done: TranscriptItem = { kind: "assistant", id: "a1", streaming: false, bl
 const streaming: TranscriptItem = { kind: "assistant", id: "a2", streaming: true, blocks: [{ type: "text", text: "partial" }] };
 const running: ToolItem = { kind: "tool", id: "tool:t1", callId: "t1", name: "bash", args: {}, status: "running" };
 
-it("Transcript shows no Thinking cue when busy and nothing streams", () => {
-  const m = mount(<Transcript {...base} items={[user, done]} />);
+it("Transcript shows the live Thinking… step, not a working cue, when busy and nothing streams", () => {
+  const m = mount(<Transcript {...base} busy items={[user, done]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
-  expect(m.container.textContent).not.toContain("Thinking…");
+  expect(m.container.querySelector('[data-part="live-thinking"]')?.textContent).toContain("Thinking…");
   m.unmount();
 });
 
@@ -33,8 +33,9 @@ it("Transcript names no running tool in a working cue", () => {
 });
 
 it("Transcript shows no working cue when busy is false", () => {
-  const m = mount(<Transcript {...base} items={[user, done]} />);
+  const m = mount(<Transcript {...base} busy={false} items={[user, done]} />);
   expect(m.container.querySelector(CUE)).toBeNull();
+  expect(m.container.querySelector('[data-part="live-thinking"]')).toBeNull();
   m.unmount();
 });
 

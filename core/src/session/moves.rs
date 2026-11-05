@@ -389,18 +389,23 @@ fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
     home.run_dir().join("host").join(format!("{session}.sock"))
 }
 
+/// Wakes a durable Session in the caller's transaction: clears `asleep_at` and the `host crash loop` label (only that
+/// label). Shared by `session open` and `session send`.
+pub(super) fn wake_durable(tx: &WriteTxn<'_>, id: &SessionId) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label)
+          WHERE id = ?2 AND (asleep_at IS NOT NULL OR state_label = ?1)",
+        rusqlite::params![HOST_CRASH_LABEL, id.as_str()],
+    )?;
+    Ok(())
+}
+
 /// `session open` of a durable Session (contract §6.19): resume it (clear `asleep_at` and the `host crash loop`
 /// label) and wait for its host's socket through the port. No pane, and never the chat slot.
 fn open_durable(env: &mut Env, lead: &Row) -> Result<Output, CpdError> {
     let id = lead.id.clone();
-    env.store.write("session open", |tx| {
-        tx.execute(
-            "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label)
-              WHERE id = ?2 AND (asleep_at IS NOT NULL OR state_label = ?1)",
-            rusqlite::params![HOST_CRASH_LABEL, id.as_str()],
-        )?;
-        Ok(())
-    })?;
+    env.store
+        .write("session open", |tx| wake_durable(tx, &id))?;
     let path = socket_path(&env.home, &id);
     wait_for_socket(&path, &id)?;
     Ok(Output::success(json!({"session": id, "pane": Value::Null})))
