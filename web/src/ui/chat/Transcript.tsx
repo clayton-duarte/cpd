@@ -1,40 +1,275 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { JSX, ReactNode } from "react";
-import type { QueuedSubmission, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
+import {
+  BrainIcon,
+  CheckIcon,
+  CopyIcon,
+  FileTextIcon,
+  ImageIcon,
+  MessageSquareIcon,
+} from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { JSX } from "react";
+import type {
+  QueuedSubmission,
+  ToolItem,
+  TranscriptAttachment,
+  TranscriptItem,
+} from "../../protocol/domain.ts";
 import type { PendingSubmission } from "../../state/store.ts";
+import {
+  Attachment,
+  AttachmentContent,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "../components/attachment.tsx";
+import { Bubble, BubbleContent } from "../components/bubble.tsx";
+import { Button } from "../components/button.tsx";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "../components/empty.tsx";
+import { Marker, MarkerContent, MarkerIcon } from "../components/marker.tsx";
+import {
+  Message,
+  MessageContent,
+  MessageFooter,
+} from "../components/message.tsx";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerScrollable,
+} from "../components/message-scroller.tsx";
+import { Spinner } from "../components/spinner.tsx";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "../components/trace.tsx";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../components/tooltip.tsx";
+import { glyphClass } from "../dango-status.ts";
+import { CompactionRow, FoldRow, formatClock } from "./Folds.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { groupRows } from "./rows.ts";
 import type { Row } from "./rows.ts";
-import { DEFAULT_VIEWPORT_PX, browserSizes, findAnchor, isNearBottom, layoutRows, scrollTopForAnchor, visibleRange } from "./virtual.ts";
-import type { Layout, SizeObserver } from "./virtual.ts";
-import { Markdown } from "./Markdown.tsx";
-import { CompactionRow, FoldRow, formatClock } from "./Folds.tsx";
-import { FileTextIcon, ImageIcon } from "lucide-react";
-import { Button } from "../components/button.tsx";
-import { Bubble, BubbleContent } from "../components/bubble.tsx";
-import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } from "../components/trace.tsx";
-import { glyphClass } from "../dango-status.ts";
 import { ToolGroup } from "./ToolGroup.tsx";
 import { OrphanRow, ToolRow } from "./ToolRow.tsx";
+import type { SizeObserver } from "./virtual.ts";
 
-function ThinkingPill(props: { text: string; time: string | null; defaultOpen: boolean }): JSX.Element {
-  const [open, setOpen] = useState(props.defaultOpen);
+const SCROLL_EDGE_THRESHOLD = 160;
+
+function ReasoningBlock(props: {
+  text: string;
+  time: string | null;
+  defaultOpen: boolean;
+  running: boolean;
+}): JSX.Element {
+  const [open, setOpen] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    setOpen(undefined);
+  }, [props.defaultOpen]);
+
+  const hasText = props.text.trim().length > 0;
+  const isOpen = open ?? (props.running || props.defaultOpen);
+
+  const line = (
+    <TraceLine status={props.running ? "running" : undefined}>
+      <TraceIcon>{props.running ? <Spinner /> : <BrainIcon />}</TraceIcon>
+      <TraceTitle data-part="label">
+        {props.running ? "Thinking" : "Thought"}
+      </TraceTitle>
+      {props.time === null ? null : (
+        <TraceDescription data-part="meta" className="font-mono text-xs">
+          {props.time}
+        </TraceDescription>
+      )}
+    </TraceLine>
+  );
+
+  if (!hasText) {
+    return <Trace data-kind="thinking">{line}</Trace>;
+  }
+
   return (
-    <Trace data-kind="thinking" data-state={open ? "open" : "closed"} className="self-start">
-      <TraceCollapsible open={open} onOpenChange={setOpen}>
-        <TraceCollapsibleTrigger className="px-1 text-[12px]">
-          <span data-part="caret" aria-hidden="true" className="sr-only" />
-          <span data-part="label">Thinking</span>
-          {props.time === null ? null : <span data-part="meta" className="font-mono text-fg-dim">{props.time}</span>}
-        </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent className="mt-1 mb-0 ml-1 border-l-0 pl-0">
-          <div data-part="rail" className="border-l pl-3">
-            <div data-part="thinking-body" className="text-body whitespace-pre-wrap text-muted-foreground">
-              {props.text}
-            </div>
-          </div>
+    <Trace data-kind="thinking">
+      <TraceCollapsible open={isOpen} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+        <TraceCollapsibleContent
+          data-part="thinking-body"
+          className="whitespace-pre-wrap"
+        >
+          <Markdown text={props.text} />
         </TraceCollapsibleContent>
       </TraceCollapsible>
     </Trace>
+  );
+}
+
+function ChainOfThoughtRow(props: {
+  row: Extract<Row, { kind: "chain" }>;
+  thinking: "folded" | "expanded";
+  tools: "grouped" | "expanded";
+}): JSX.Element {
+  const { row, thinking, tools } = props;
+  const defaultOpen = thinking === "expanded" || tools === "expanded";
+  const [open, setOpen] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    setOpen(undefined);
+  }, [defaultOpen]);
+
+  const isOpen = open ?? defaultOpen;
+  const clock = formatClock(row.at);
+  const parts: string[] = [
+    `${row.stepCount} ${row.stepCount === 1 ? "step" : "steps"}`,
+  ];
+  if (row.failedCount > 0) parts.push(`${row.failedCount} failed`);
+  if (clock !== null) parts.push(clock);
+
+  return (
+    <Trace data-kind="chain-of-thought">
+      <TraceCollapsible open={isOpen} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger>
+          <TraceLine
+            status={
+              row.running
+                ? "running"
+                : row.failedCount > 0
+                  ? "error"
+                  : undefined
+            }
+          >
+            <TraceIcon>{row.running ? <Spinner /> : <BrainIcon />}</TraceIcon>
+            <TraceTitle data-part="label">Chain of Thought</TraceTitle>
+            <TraceDescription data-part="meta" className="font-mono text-xs">
+              {parts.join(" · ")}
+            </TraceDescription>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent
+          data-part="chain-body"
+          className="flex flex-col gap-2"
+        >
+          {row.steps.map((step) => {
+            if (step.kind === "thinking") {
+              return (
+                <ReasoningBlock
+                  key={step.key}
+                  text={step.text}
+                  time={formatClock(step.at)}
+                  defaultOpen={thinking === "expanded"}
+                  running={step.running}
+                />
+              );
+            }
+            if (step.kind === "tool") {
+              return (
+                <Trace key={step.key} data-part="tool-rail">
+                  <ToolRow tool={step.tool} />
+                </Trace>
+              );
+            }
+            return (
+              <ToolGroup key={step.key} tools={step.tools} mode={tools} />
+            );
+          })}
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
+  );
+}
+
+function UserAttachments(props: {
+  attachments: readonly TranscriptAttachment[];
+}): JSX.Element | null {
+  if (props.attachments.length === 0) return null;
+  return (
+    <AttachmentGroup data-part="attachments" className="justify-end">
+      {props.attachments.map((a, i) =>
+        a.kind === "image" && a.dataBase64 !== undefined ? (
+          <div
+            key={i}
+            data-attachment="image"
+            className="overflow-hidden rounded-xl border bg-card shadow-xs"
+          >
+            <img
+              alt="Attached screenshot"
+              data-part="thumb"
+              src={`data:${a.mimeType};base64,${a.dataBase64}`}
+              className="block max-h-32 w-auto max-w-52 object-cover"
+            />
+          </div>
+        ) : (
+          <Attachment key={i} size="sm" data-attachment={a.kind}>
+            <AttachmentMedia data-part="thumb" variant="icon">
+              {a.kind === "image" ? <ImageIcon /> : <FileTextIcon />}
+            </AttachmentMedia>
+            <AttachmentContent>
+              <AttachmentTitle data-part="name" className="font-mono">
+                {a.kind === "image" ? a.mimeType : a.name}
+              </AttachmentTitle>
+            </AttachmentContent>
+          </Attachment>
+        ),
+      )}
+    </AttachmentGroup>
+  );
+}
+
+function CopyTurnButton(props: { value: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = () => {
+    setCopied(true);
+    try {
+      void navigator.clipboard?.writeText(props.value);
+    } catch {
+      // ignore
+    }
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            data-action="copy-turn"
+            aria-label={copied ? "Copied" : "Copy message"}
+            onClick={onCopy}
+            className="size-5 text-muted-foreground hover:text-foreground"
+          >
+            {copied ? (
+              <CheckIcon className="size-3" />
+            ) : (
+              <CopyIcon className="size-3" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {copied ? "Copied" : "Copy"}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -43,72 +278,91 @@ const Item = memo(function Item(props: {
   sessionKey: string | undefined;
   thinking: "folded" | "expanded";
 }): JSX.Element {
-  const { item, sessionKey, thinking } = props;
+  const { item, thinking } = props;
   switch (item.kind) {
     case "user": {
       const clock = formatClock(item.at);
       return (
-        <article data-kind="user" className="flex flex-col items-end gap-1">
-          <div data-part="bubble" className="flex max-w-[78%] flex-col gap-2 rounded-[10px] border border-input bg-surface-raised px-3 py-[9px]">
-            <div data-part="text" style={{ whiteSpace: "pre-wrap" }} className="m-0 text-body text-fg-strong">{item.text}</div>
-            {item.attachments.length === 0 ? null : (
-              <div data-part="attachments" className="flex flex-wrap gap-2">
-                {item.attachments.map((a, i) => (
-                  <span key={i} data-attachment={a.kind} className="flex items-center gap-2 rounded-md border border-input py-1 pr-2 pl-1">
-                    <span data-part="thumb" aria-hidden="true" className="grid h-6 w-[34px] place-items-center rounded-[3px] bg-edge text-muted-foreground">
-                      {a.kind === "image" && a.dataBase64 !== undefined ? (
-                        <img alt="" src={`data:${a.mimeType};base64,${a.dataBase64}`} className="h-6 w-[34px] rounded-[3px] object-cover" />
-                      ) : a.kind === "image" ? (
-                        <ImageIcon size={14} />
-                      ) : (
-                        <FileTextIcon size={14} />
-                      )}
-                    </span>
-                    <span data-part="name" className="font-mono text-[11.5px] text-fg-strong">
-                      {a.kind === "image" ? a.mimeType : a.name}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <span data-part="meta" className="font-mono text-meta text-muted-foreground">
-            {clock === null ? "you" : `you · ${clock}`}
-          </span>
-        </article>
+        <Message align="end" data-kind="user">
+          <MessageContent>
+            <UserAttachments attachments={item.attachments} />
+            <Bubble
+              align="end"
+              variant="muted"
+              data-part="bubble"
+              className="max-w-full min-w-0 overflow-hidden"
+            >
+              <BubbleContent
+                data-part="text"
+                className="min-w-0 overflow-hidden break-words whitespace-pre-wrap"
+              >
+                {item.text}
+              </BubbleContent>
+            </Bubble>
+            <MessageFooter data-part="meta" className="gap-1.5">
+              <span>{clock === null ? "You" : `You · ${clock}`}</span>
+              {item.text !== "" ? <CopyTurnButton value={item.text} /> : null}
+            </MessageFooter>
+          </MessageContent>
+        </Message>
       );
     }
     case "assistant": {
       const clock = formatClock(item.at);
       let lastText = -1;
+      const textParts: string[] = [];
       item.blocks.forEach((b, i) => {
-        if (b.type === "text") lastText = i;
+        if (b.type === "text") {
+          lastText = i;
+          textParts.push(b.text);
+        }
       });
+      const fullText = textParts.join("\n\n");
       return (
-        <article data-kind="assistant" className="flex flex-col gap-1.5">
-          {item.blocks.map((b, i) =>
-            b.type === "text" ? (
-              <Bubble key={i} variant="ghost" align="start">
-                <BubbleContent className="flex flex-col gap-1.5">
-                  <Markdown text={b.text} />
-                  {i === lastText && sessionKey !== undefined ? (
-                    <span data-part="stamp" className="self-end font-mono text-meta text-muted-foreground">
-                      {clock === null ? sessionKey : `${sessionKey} · ${clock}`}
-                    </span>
-                  ) : null}
-                </BubbleContent>
-              </Bubble>
-            ) : (
-              <ThinkingPill key={`${i}:${thinking}`} text={b.text} time={clock} defaultOpen={thinking === "expanded"} />
-            ),
-          )}
-          {item.streaming ? (
-            <span role="status" data-part="working" className="flex h-[26px] items-center gap-2.5 px-2 text-[12px] text-mizu-bright">
-              <span aria-hidden="true" className={glyphClass.active} />
-              Working…
-            </span>
-          ) : null}
-        </article>
+        <Message data-kind="assistant">
+          <MessageContent>
+            {item.blocks.map((b, i) =>
+              b.type === "text" ? (
+                <Bubble
+                  key={i}
+                  variant="muted"
+                  className="max-w-full min-w-0 overflow-hidden"
+                >
+                  <BubbleContent
+                    data-part="card"
+                    className="w-full min-w-0 overflow-hidden break-words"
+                  >
+                    <Markdown text={b.text} />
+                  </BubbleContent>
+                </Bubble>
+              ) : (
+                <ReasoningBlock
+                  key={i}
+                  text={b.text}
+                  time={clock}
+                  defaultOpen={thinking === "expanded"}
+                  running={
+                    item.streaming === true && i === item.blocks.length - 1
+                  }
+                />
+              ),
+            )}
+            {item.streaming ? (
+              <Marker role="status" data-part="working">
+                <MarkerIcon>
+                  <Spinner />
+                </MarkerIcon>
+                <MarkerContent className="shimmer">Working…</MarkerContent>
+              </Marker>
+            ) : null}
+            {lastText >= 0 ? (
+              <MessageFooter className="gap-2">
+                {clock !== null ? <span>{clock}</span> : null}
+                {fullText !== "" ? <CopyTurnButton value={fullText} /> : null}
+              </MessageFooter>
+            ) : null}
+          </MessageContent>
+        </Message>
       );
     }
     case "orphanResult":
@@ -120,230 +374,275 @@ const Item = memo(function Item(props: {
   }
 });
 
-function RowBody(props: { row: Row; sessionKey: string | undefined; thinking: "folded" | "expanded"; tools: "grouped" | "expanded" }): JSX.Element {
+function RowBody(props: {
+  row: Row;
+  sessionKey: string | undefined;
+  thinking: "folded" | "expanded";
+  tools: "grouped" | "expanded";
+}): JSX.Element {
   const { row } = props;
-  const body =
-    row.kind === "item" ? (
-      row.item.kind === "tool" ? (
-        <ToolRow key={props.tools} tool={row.item} defaultOpen={props.tools === "expanded"} />
-      ) : (
-        <Item item={row.item} sessionKey={props.sessionKey} thinking={props.thinking} />
-      )
-    ) : (
-      <ToolGroup key={props.tools} tools={row.tools} mode={props.tools} />
+  if (row.kind === "chain") {
+    return (
+      <ChainOfThoughtRow
+        row={row}
+        thinking={props.thinking}
+        tools={props.tools}
+      />
     );
-  return (
-    <div data-part="row-body" className="py-[3px]">
-      {body}
-    </div>
-  );
+  }
+  if (row.kind === "item") {
+    if (row.item.kind === "tool") {
+      return (
+        <Trace data-part="tool-rail">
+          <ToolRow tool={row.item} />
+        </Trace>
+      );
+    }
+    return (
+      <Item
+        item={row.item}
+        sessionKey={props.sessionKey}
+        thinking={props.thinking}
+      />
+    );
+  }
+  return <ToolGroup tools={row.tools} mode={props.tools} />;
 }
 
-function MeasuredRow(props: { rowKey: string; sizes: SizeObserver; onHeight(key: string, height: number): void; children: ReactNode }): JSX.Element {
-  const { rowKey, sizes } = props;
-  const ref = useRef<HTMLDivElement>(null);
-  const cb = useRef(props.onHeight);
-  cb.current = props.onHeight;
+function TranscriptAutoScroll(props: {
+  tailEpoch: number;
+  items: readonly TranscriptItem[];
+  queuedCount: number;
+  pendingCount: number;
+}): null {
+  const { scrollToEnd } = useMessageScroller();
+  const scrollable = useMessageScrollerScrollable();
+  const epochRef = useRef(props.tailEpoch);
+  const pinnedRef = useRef(true);
+
   useEffect(() => {
-    const el = ref.current;
-    if (el === null) return undefined;
-    const d = sizes.observe(el, (h) => cb.current(rowKey, h));
-    return () => d.dispose();
-  }, [rowKey, sizes]);
-  return (
-    <div ref={ref} data-row-key={rowKey}>
-      {props.children}
-    </div>
-  );
+    pinnedRef.current = !scrollable.end;
+  }, [scrollable.end]);
+
+  useEffect(() => {
+    if (epochRef.current !== props.tailEpoch) {
+      epochRef.current = props.tailEpoch;
+      pinnedRef.current = true;
+      scrollToEnd({ behavior: "auto" });
+      return;
+    }
+    if (pinnedRef.current) {
+      scrollToEnd({ behavior: "smooth" });
+    }
+  }, [
+    props.tailEpoch,
+    props.items,
+    props.queuedCount,
+    props.pendingCount,
+    scrollToEnd,
+  ]);
+
+  return null;
 }
 
-export function Transcript(props: {
+export interface TranscriptProps {
   items: readonly TranscriptItem[];
   hasEarlier: boolean;
-  queued: readonly QueuedSubmission[];
-  pending: readonly PendingSubmission[];
+  loadingEarlier?: boolean;
   onLoadEarlier(): void;
   tailEpoch: number;
-  sizes?: SizeObserver;
+  queued: readonly QueuedSubmission[];
+  pending: readonly PendingSubmission[];
+  observer?: SizeObserver;
   sessionKey?: string;
   thinking?: "folded" | "expanded";
   tools?: "grouped" | "expanded";
-  busy?: boolean;
-}): JSX.Element {
-  const defaultSizes = useMemo(() => browserSizes(), []);
-  const sizes = props.sizes ?? defaultSizes;
+}
+
+export function Transcript(props: TranscriptProps): JSX.Element {
   const rows = useMemo(() => groupRows(props.items), [props.items]);
-  const keys = useMemo(() => rows.map((r) => r.key), [rows]);
-  const heights = useRef(new Map<string, number>());
-  const [, setVersion] = useState(0);
-  const [viewport, setViewport] = useState(DEFAULT_VIEWPORT_PX);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [pinned, setPinned] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
-  const spaceRef = useRef<HTMLDivElement>(null);
-
-  const layout = layoutRows(keys, heights.current);
-  const layoutRef = useRef<Layout>(layout);
-  layoutRef.current = layout;
-  const pinnedRef = useRef(pinned);
-  pinnedRef.current = pinned;
-  const topRef = useRef(0); // scrollTop relative to virtual-space
-  const lastScrollTop = useRef(0);
-  const busy = props.busy === true;
-  const last = props.items[props.items.length - 1];
-  const showCue = busy && !(last?.kind === "assistant" && last.streaming === true);
-  const cueText = last?.kind === "tool" && last.status === "running" ? `Using ${last.name}…` : "Thinking…";
-  const prev = useRef({ layout, tailEpoch: props.tailEpoch, pending: props.pending.length, pinned: false, busy: props.busy === true, cue: showCue });
-
-  // the log is position: relative (app.css), so offsetTop is relative to its scrolling content
-  const spaceTop = (): number => spaceRef.current?.offsetTop ?? 0;
-
-  const effectiveTop = pinned ? Math.max(0, layout.total - viewport) : scrollTop;
-  const { start, end } = visibleRange(layout, effectiveTop, viewport);
-
-  const onHeight = useRef((key: string, h: number): void => {
-    const lay = layoutRef.current;
-    const i = lay.keys.indexOf(key);
-    if (i < 0) return;
-    const old = lay.offsets[i + 1]! - lay.offsets[i]!;
-    if (Math.abs(h - old) < 1) return;
-    const log = logRef.current;
-    if (!pinnedRef.current && log !== null && lay.offsets[i + 1]! <= topRef.current) {
-      const top = topRef.current + (h - old);
-      topRef.current = top;
-      log.scrollTop += h - old;
-      setScrollTop(top);
-    }
-    heights.current.set(key, h);
-    setVersion((v) => v + 1);
-  }).current;
-
-  useEffect(() => {
-    const log = logRef.current;
-    if (log === null) return undefined;
-    const d = sizes.observe(log, (h) => setViewport(h > 0 ? h : DEFAULT_VIEWPORT_PX));
-    return () => d.dispose();
-  }, [sizes]);
-
-  useLayoutEffect(() => {
-    const log = logRef.current;
-    const p = prev.current;
-    const epochSame = p.tailEpoch === props.tailEpoch;
-    const firstChanged = p.layout.keys[0] !== keys[0];
-    let repin = !epochSame || props.pending.length > p.pending;
-    if (!repin && !pinned && log !== null && firstChanged && epochSame && p.layout.keys.length > 0 && keys.includes(p.layout.keys[0]!)) {
-      const anchor = findAnchor(p.layout, topRef.current);
-      const top = anchor === null ? null : scrollTopForAnchor(layout, anchor);
-      if (top !== null) {
-        log.scrollTop = spaceTop() + top;
-        topRef.current = top;
-        setScrollTop(top);
-      }
-    }
-    const grew = layout.total !== p.layout.total || !epochSame || props.pending.length > p.pending || (busy && !p.busy) || showCue !== p.cue;
-    const justPinned = pinned && !p.pinned;
-    prev.current = { layout, tailEpoch: props.tailEpoch, pending: props.pending.length, pinned, busy, cue: showCue };
-    if (repin && !pinned) setPinned(true);
-    if (pinned && log !== null && (grew || justPinned)) {
-      log.scrollTop = log.scrollHeight;
-      lastScrollTop.current = log.scrollTop;
-    }
-  });
-
-  const jump = (): void => {
-    setPinned(true);
-  };
+  const empty =
+    rows.length === 0 && props.queued.length === 0 && props.pending.length === 0;
 
   return (
-    <div data-part="transcript">
-      <div
-        ref={logRef}
-        role="log"
-        aria-label="Transcript"
-        data-at-bottom={pinned ? "true" : "false"}
-        onScroll={(e) => {
-          const log = e.currentTarget;
-          topRef.current = log.scrollTop - spaceTop();
-          setScrollTop(topRef.current);
-          if (log.scrollTop < lastScrollTop.current - 1) setPinned(false);
-          else setPinned(isNearBottom({ scrollTop: log.scrollTop, clientHeight: log.clientHeight, scrollHeight: log.scrollHeight }));
-          lastScrollTop.current = log.scrollTop;
-        }}
+    <MessageScrollerProvider
+      scrollEdgeThreshold={SCROLL_EDGE_THRESHOLD}
+      defaultScrollPosition="end"
+    >
+      <TranscriptAutoScroll
+        tailEpoch={props.tailEpoch}
+        items={props.items}
+        queuedCount={props.queued.length}
+        pendingCount={props.pending.length}
+      />
+      <MessageScroller
+        data-part="transcript"
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        {props.hasEarlier ? (
-          <button
-            type="button"
-            data-action="load-earlier"
-            className="mx-auto my-2 block rounded-[10px] border border-border px-2.5 py-0.5 font-mono text-meta text-muted-foreground hover:bg-row-hover"
-            onClick={props.onLoadEarlier}
-          >
-            Load earlier
-          </button>
-        ) : null}
-        <div ref={spaceRef} data-part="virtual-space" style={{ height: `${layout.total}px`, position: "relative" }}>
-          <div data-part="virtual-window" className="px-4" style={{ transform: `translateY(${layout.offsets[start] ?? 0}px)` }}>
-            {rows.slice(start, end).map((row) => (
-              <MeasuredRow key={row.key} rowKey={row.key} sizes={sizes} onHeight={onHeight}>
-                <RowBody row={row} sessionKey={props.sessionKey} thinking={props.thinking ?? "folded"} tools={props.tools ?? "grouped"} />
-              </MeasuredRow>
-            ))}
-          </div>
-        </div>
-        {showCue ? (
-          <div role="status" data-part="working-cue" className="flex h-[26px] items-center gap-2.5 px-6 text-[12px] text-mizu-bright">
-            <span aria-hidden="true" className={glyphClass.active} />
-            {cueText}
-          </div>
-        ) : null}
-        {props.queued.length === 0 && props.pending.length === 0 ? null : (
-          <ul aria-label="Queued messages" className="m-0 flex list-none flex-col gap-0 p-0 px-4 pb-2.5">
-            {props.queued.map((q) => (
-              <li key={q.clientSubmissionId} data-queued={q.clientSubmissionId} className="flex flex-col items-end gap-1 py-[3px]">
-                <div data-part="bubble" className="max-w-[78%] rounded-[10px] border border-dashed border-line bg-surface-raised px-3 py-[9px]">
-                  <div data-part="text" className="whitespace-pre-wrap text-body text-fg-strong">{q.text}</div>
-                </div>
-                <span data-part="queued-status" className="font-mono text-meta text-muted-foreground">queued</span>
-              </li>
-            ))}
-            {props.pending.map((p) => (
-              <li key={p.clientSubmissionId} data-pending={p.state} className="flex flex-col items-end gap-1 py-[3px]">
-                <div
-                  data-part="bubble"
-                  className={
-                    p.state === "failed"
-                      ? "max-w-[78%] rounded-[10px] border border-status-blocked bg-status-blocked/10 px-3 py-[9px]"
-                      : "max-w-[78%] rounded-[10px] border border-input bg-surface-raised px-3 py-[9px] opacity-70"
-                  }
-                >
-                  <div data-part="text" className="whitespace-pre-wrap text-body text-fg-strong">{p.text}</div>
-                </div>
-                {p.state === "failed" ? (
-                  <span data-part="pending-status" data-state="failed" role="alert" className="flex items-center gap-1.5 font-mono text-meta text-status-blocked">
-                    <span aria-hidden="true" className={glyphClass.blocked} />
-                    {`failed: ${p.error?.message ?? "unknown error"}`}
-                  </span>
-                ) : (
-                  <span data-part="pending-status" data-state={p.state} className="font-mono text-meta text-muted-foreground">
-                    {p.state === "sending" ? "sending…" : "sent"}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      {pinned ? null : (
-        <Button
-          variant="outline"
-          size="sm"
-          type="button"
-          data-action="jump-to-bottom"
-          className="rounded-full border-input bg-popover px-3 text-[12px] text-fg-strong"
-          onClick={jump}
+        <MessageScrollerViewport
+          aria-label="Conversation transcript"
+          data-part="viewport"
+          className="flex-1 overflow-x-hidden px-4 py-4"
         >
-          Jump to bottom
-        </Button>
-      )}
-    </div>
+          <MessageScrollerContent className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3">
+            {props.hasEarlier ? (
+              <div className="flex justify-center py-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-action="load-earlier"
+                  disabled={props.loadingEarlier}
+                  onClick={() => props.onLoadEarlier()}
+                >
+                  {props.loadingEarlier ? "Loading…" : "Load earlier"}
+                </Button>
+              </div>
+            ) : null}
+            {empty ? (
+              <Empty
+                data-empty
+                className="my-12 border-none py-12 text-muted-foreground"
+              >
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <MessageSquareIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No messages yet</EmptyTitle>
+                  <EmptyDescription>
+                    Send a message below to start the conversation.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
+            {rows.map((row) => {
+              const isUser = row.kind === "item" && row.item.kind === "user";
+              return (
+                <MessageScrollerItem
+                  key={row.key}
+                  data-row={row.key}
+                  className="flex w-full min-w-0 flex-col"
+                >
+                  <div
+                    className={
+                      isUser
+                        ? "ml-auto w-full max-w-[85%] min-w-0 overflow-hidden"
+                        : "mr-auto w-full max-w-[85%] min-w-0 overflow-hidden"
+                    }
+                  >
+                    <RowBody
+                      row={row}
+                      sessionKey={props.sessionKey}
+                      thinking={props.thinking ?? "folded"}
+                      tools={props.tools ?? "grouped"}
+                    />
+                  </div>
+                </MessageScrollerItem>
+              );
+            })}
+            {props.queued.length === 0 && props.pending.length === 0 ? null : (
+              <ul
+                aria-label="Queued messages"
+                className="m-0 ml-auto flex w-full max-w-[85%] list-none flex-col gap-2 p-0"
+              >
+                {props.queued.map((q) => (
+                  <li
+                    key={q.clientSubmissionId}
+                    data-queued={q.clientSubmissionId}
+                  >
+                    <Message align="end">
+                      <MessageContent>
+                        <Bubble
+                          align="end"
+                          variant="outline"
+                          data-part="bubble"
+                          className="max-w-full"
+                        >
+                          <BubbleContent
+                            data-part="text"
+                            className="border-dashed whitespace-pre-wrap"
+                          >
+                            {q.text}
+                          </BubbleContent>
+                        </Bubble>
+                        <MessageFooter
+                          data-part="queued-status"
+                          className="font-mono"
+                        >
+                          queued
+                        </MessageFooter>
+                      </MessageContent>
+                    </Message>
+                  </li>
+                ))}
+                {props.pending.map((p) => {
+                  const clock = formatClock(p.at);
+                  const pendingAttachments: TranscriptAttachment[] = (
+                    p.images ?? []
+                  ).map((im) => ({
+                    kind: "image",
+                    mimeType: im.mimeType,
+                    dataBase64: im.dataBase64,
+                  }));
+                  return (
+                    <li key={p.clientSubmissionId} data-pending={p.state}>
+                      <Message align="end">
+                        <MessageContent>
+                          <UserAttachments attachments={pendingAttachments} />
+                          <Bubble
+                            align="end"
+                            variant={
+                              p.state === "failed" ? "destructive" : "muted"
+                            }
+                            data-part="bubble"
+                            className="max-w-full min-w-0 overflow-hidden"
+                          >
+                            <BubbleContent
+                              data-part="text"
+                              className="min-w-0 overflow-hidden break-words whitespace-pre-wrap"
+                            >
+                              {p.text}
+                            </BubbleContent>
+                          </Bubble>
+                          <MessageFooter className="gap-1.5">
+                            {p.state === "failed" ? (
+                              <span
+                                data-part="pending-status"
+                                data-state="failed"
+                                role="alert"
+                                className="flex items-center gap-1.5 font-mono text-destructive"
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={glyphClass.blocked}
+                                />
+                                {`failed: ${p.error?.message ?? "unknown error"}`}
+                              </span>
+                            ) : (
+                              <>
+                                <span
+                                  data-part="pending-status"
+                                  data-state={p.state}
+                                >
+                                  {clock === null ? "You" : `You · ${clock}`}
+                                </span>
+                                {p.text !== "" ? (
+                                  <CopyTurnButton value={p.text} />
+                                ) : null}
+                              </>
+                            )}
+                          </MessageFooter>
+                        </MessageContent>
+                      </Message>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton data-action="jump-to-bottom" />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }

@@ -55,8 +55,22 @@ function type(el: HTMLInputElement, text: string) {
   });
 }
 
+const shown = (c: HTMLElement, slot: string): HTMLElement | null => {
+  const el = c.querySelector<HTMLElement>(`[data-slot="${slot}"]`);
+  return el === null || el.hasAttribute("hidden") ? null : el;
+};
+const activeStep = (c: HTMLElement) => c.querySelector("fieldset[data-active]")?.getAttribute("data-question");
+
+/** The Questionnaire shows one step at a time: Next (answered) or Skip (not) reaches the last step, where Submit shows. */
 function submit(c: HTMLElement) {
-  const b = c.querySelector<HTMLButtonElement>('button[type="submit"]');
+  for (let i = 0; i < 4 && shown(c, "questionnaire-submit") === null; i++) {
+    const before = activeStep(c);
+    click(shown(c, "questionnaire-next") as HTMLElement);
+    if (activeStep(c) === before) click(shown(c, "questionnaire-skip") as HTMLElement);
+  }
+  const skip = shown(c, "questionnaire-skip"); // an unanswered last step is skipped before it submits
+  if (skip && shown(c, "questionnaire-submit")?.getAttribute("data-status") === "unanswered") click(skip);
+  const b = shown(c, "questionnaire-submit");
   if (!b) throw new Error("no submit");
   click(b);
 }

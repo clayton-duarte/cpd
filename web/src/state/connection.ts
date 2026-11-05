@@ -241,7 +241,7 @@ export function createConnection(options: ConnectionOptions): Connection {
       const clientSubmissionId = newId();
       store.dispatch({
         type: "submitPending",
-        submission: { clientSubmissionId, text: input.text, imageCount: input.images.length, whenBusy: input.whenBusy },
+        submission: { clientSubmissionId, text: input.text, imageCount: input.images.length, images: input.images, whenBusy: input.whenBusy, at: new Date().toISOString() },
       });
       try {
         send({
@@ -274,6 +274,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     },
     action(action) {
       const actionId = newId();
+      store.dispatch({ type: "actionStart", actionId });
       if (action.kind === "pr.merge") store.dispatch({ type: "actionOptimistic", actionId, action });
       send({ type: "cockpit.action", actionId, action });
       return actionId;

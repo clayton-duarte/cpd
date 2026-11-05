@@ -1,10 +1,25 @@
 import { SearchIcon } from "lucide-react";
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import type { ReactElement } from "react";
+import { cn } from "../../lib/utils.ts";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+} from "../components/breadcrumb.tsx";
 import { glyphClass } from "../dango-status.ts";
 import type { Glyph } from "../dango-status.ts";
 
+export interface BreadcrumbCrumb {
+  readonly part: "host" | "group" | "manager" | "lead" | "worker";
+  readonly label: string;
+  readonly onClick?: () => void;
+}
+
 export interface HeaderProps {
+  readonly crumbs?: readonly BreadcrumbCrumb[];
   readonly location?: { readonly context: string; readonly plan: string | null } | null;
   readonly engine?: boolean | null;
   readonly onOpenSearch?: () => void;
@@ -17,7 +32,7 @@ const ENGINE: Record<"running" | "stopped" | "unknown", { glyph: Glyph; text: st
 };
 
 export function Header(props: HeaderProps): ReactElement {
-  const { location = null, engine = null, onOpenSearch } = props;
+  const { crumbs, location = null, engine = null, onOpenSearch } = props;
   useEffect(() => {
     if (onOpenSearch === undefined) return;
     const onKey = (e: KeyboardEvent) => {
@@ -31,22 +46,65 @@ export function Header(props: HeaderProps): ReactElement {
   }, [onOpenSearch]);
   const state = engine === true ? "running" : engine === false ? "stopped" : "unknown";
   const e = ENGINE[state];
+
+  const items: readonly BreadcrumbCrumb[] =
+    crumbs ??
+    (location === null
+      ? []
+      : [
+          { part: "manager", label: location.context },
+          ...(location.plan === null ? [] : [{ part: "lead" as const, label: location.plan }]),
+        ]);
+
   return (
     <div data-part="header-bar" className="flex h-full items-center gap-4 border-b border-border px-[14px]">
       <a data-part="home" href="#" aria-label="cpd home" className="flex items-center no-underline">
         <span data-emblem className="sr-only">C-P-D</span>
         <span data-part="phi" aria-hidden="true" className="font-display text-[28px] font-bold leading-none text-fg-strong">φ</span>
       </a>
-      {location === null ? null : (
-        <nav aria-label="Location" data-part="breadcrumb" className="flex items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
-          <span data-part="breadcrumb-context" className="text-muted-foreground">{location.context}</span>
-          {location.plan === null ? null : (
-            <>
-              <span aria-hidden="true" className="text-line">/</span>
-              <span data-part="breadcrumb-plan" className="text-fg-strong">{location.plan}</span>
-            </>
-          )}
-        </nav>
+      {items.length === 0 ? null : (
+        <Breadcrumb aria-label="Location" data-part="breadcrumb" className="font-mono text-xs">
+          <BreadcrumbList>
+            {items.map((crumb, i) => {
+              const isLast = i === items.length - 1;
+              const partName =
+                crumb.part === "manager"
+                  ? "breadcrumb-context"
+                  : crumb.part === "lead"
+                    ? "breadcrumb-plan"
+                    : `breadcrumb-${crumb.part}`;
+              return (
+                <Fragment key={`${crumb.part}:${crumb.label}`}>
+                  <BreadcrumbItem>
+                    {i > 0 ? <span data-slot="breadcrumb-separator" aria-hidden="true" className="text-muted-foreground">/</span> : null}
+                    {crumb.onClick !== undefined ? (
+                      <BreadcrumbLink
+                        render={<button type="button" />}
+                        data-part={partName}
+                        aria-current={isLast ? "page" : undefined}
+                        onClick={crumb.onClick}
+                        className={cn(
+                          "cursor-pointer font-mono text-xs",
+                          isLast ? "font-medium text-fg-strong" : "text-muted-foreground",
+                        )}
+                      >
+                        {crumb.label}
+                      </BreadcrumbLink>
+                    ) : isLast ? (
+                      <BreadcrumbPage data-part={partName} className="font-mono text-xs text-fg-strong">
+                        {crumb.label}
+                      </BreadcrumbPage>
+                    ) : (
+                      <span data-part={partName} className="font-mono text-xs text-muted-foreground">
+                        {crumb.label}
+                      </span>
+                    )}
+                  </BreadcrumbItem>
+                </Fragment>
+              );
+            })}
+          </BreadcrumbList>
+        </Breadcrumb>
       )}
       <span className="flex-1" />
       {onOpenSearch === undefined ? null : (

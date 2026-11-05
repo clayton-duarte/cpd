@@ -23,3 +23,9 @@ it("a session-message sent by the web chat is a user message even when from is a
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({ kind: "user", text: "hello from the web" });
 });
+
+it("an [Attached image: <path>] marker in a user message becomes an image attachment and leaves the text", () => {
+  const text = line({ type: "message", id: "u1", message: { role: "user", content: "look\n\n[Attached image: /nonexistent/att/shot.png]" } });
+  const { items } = normalizeText(text);
+  expect(items[0]).toMatchObject({ kind: "user", text: "look", attachments: [{ kind: "image", mimeType: "image/png" }] });
+});

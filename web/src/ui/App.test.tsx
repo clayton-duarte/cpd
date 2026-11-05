@@ -151,7 +151,7 @@ describe("App", () => {
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { files: [file], types: ["Files"] } });
     await act(async () => { zone.dispatchEvent(drop); });
-    expect(container.querySelector('[data-attachment="pic.png"]')).not.toBeNull();
+    expect(container.querySelector('[data-attachment="image"]')).not.toBeNull();
     typeAndEnter(container, "see image");
     expect(transport.sent).toContainEqual({
       type: "session.submit", sessionId: "s1", clientSubmissionId: "c1", text: "see image",

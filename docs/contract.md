@@ -144,6 +144,7 @@ $CPD_HOME/
     models-<provider>.json        the model ids a provider offered at its last good list, `{version, provider, polled_at, pi_version, source, ids, known?, changes?}` (§3.7 E15, commands.md §14.5); one file per provider the model-discovery helper listed; derived, not in the store, written whole by `.tmp` and rename; a failed or empty run leaves the last good copy; `<provider>` is the provider's name as pi gives it, which is a file-name-safe token (`^[A-Za-z0-9._-]+$`; the helper refuses another name as `models_unparseable`)
     classifier-unreachable.json   the marker of a classifier outage already announced by one `error` Event (§3.7a): present from that Event until the next successful `choose()` removes it; written with `write_atomic`
     tmux-restart.pid              the pid of the detached tmux restart the engine started, one line; removed when the engine reaps it (an engine that dies first leaves it, its pid perhaps reused); what finds that process, which is in no process group of the engine's
+    pi/<session>.sock             the pi live-stream socket of a tmux pi Session: NDJSON frames, listening from session_start to session_shutdown (§6.21)
     <plan>/plan.md                the last `plan render`
     <plan>/summary.md             the Plan summary of the last `plan render` (commands.md §4.5, hs-d502)
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
@@ -5340,6 +5341,81 @@ Then the client runs; a host that does not accept within the 30 s deadline ends 
   7. The archive stops it: the Lead of the flow test is its Plan's own Lead, so `cpd session archive` is refused `archive_blocked` (§10.10) and the archive is the Plan cascade — the engine's E14 (`engine/src/watch/archive_leads.rs`), which archives the Plan's Lead through the `plan archive` cascade and stops the host through `stop_hosts` → `hosts::stop` (`archive_leads.rs:42,55-67`). **This supersedes §6.19's sentence that the archive command stops the host through `core::host::host::stop`: the merged implementation of P1.10 (fd121feaa) put the stop in the engine's hooks (`sleep.rs:100`, `archive_leads.rs:67`), the module `core/src/host/host.rs` was never built, and the archive commands themselves write no stop.** Assertions: the host is stopped (SIGTERM through the fake `Spawn`), the Session reads archived, and `hosts::run` launches nothing further.
 
   Assertions read `spawn.launches()`, the store rows (`fx.query`, `fx.count`) and the fake transcript (the lines the tail printed). No real tmux, node, pi-durable, socket or model.
+
+### 6.21 The pi live-stream socket
+
+**Why.** The WebUI tails a Session's committed `.jsonl`, and pi writes that file only when a message ends, so a client that tails it sees no tokens. The pi live-stream socket gives a client the tokens, the thinking, the tool calls and their progress while they happen, of **one tmux pi Session**. It is a read-only stream: the committed `.jsonl` stays the record, and every frame below is a live view that matches it by the keys of "Match keys". The socket is not an Event (§5), not a command and not a protocol of the durable host.
+
+**Who serves it.** The pi adapter (`pi/`, §5.3), inside the pi process, and only for a pi Session that runs in a tmux pane. **The durable runner has its own socket** (§6.14, `run/host/<id>.sock`) and is not affected by this section: a durable Session never gets a `run/pi/` socket from this protocol, and the durable host's socket keeps its own protocol (§6.14, protocol 2). The two protocols share no number: the `protocol` of the `hello` below is this socket's own version (1), not §6.14's and not the Events protocol of §5.2.
+
+**Socket path.** `${CPD_HOME}/run/pi/${CPD_SESSION}.sock`. The directory `${CPD_HOME}/run/pi/` has mode 0700 and is created if missing. One socket per Session, named by `CPD_SESSION` (§6.6).
+
+**Lifecycle** (assumption A3: the socket lives from `session_start` to `session_shutdown`, not per agent turn).
+- **Listen at `session_start`.** Before it listens, the server unlinks a stale file at the path (a socket a process that died left behind). `session_start` fires at `startup`, `reload`, `new`, `resume` and `fork` (scout-5, `pi` 1.3.0 types), so a reload or a session switch listens again.
+- **Remove at `session_shutdown`**, which fires at `quit`, `reload`, `new`, `resume` and `fork`, and **again at process exit**. A pi that dies without running its exit handlers (`kill -9`, a crash) leaves the file behind; the next listen unlinks it.
+- **A failed listen** is reported once on stderr, and the Session runs without the socket. Nothing else changes.
+- **Nothing is written before `session_start` or after `session_shutdown`.**
+
+**Framing.** NDJSON: one JSON object per line (`\n`-terminated), each with a string field `t`, the frame's type. The server writes every frame to every connected client, in the order pi's events occur. A new connection gets `hello`, then `inflight`, before any later frame.
+
+**Frames.** `M` is pi's message object for the event (an `AgentMessage`, pi 1.3.0 types).
+
+| Frame | Fields | Written when |
+|---|---|---|
+| `hello` | `t` = `"hello"`, `protocol` = `1` (number), `session` = `CPD_SESSION` | first on every connection |
+| `inflight` | `t` = `"inflight"`, `message` = the partial assistant `M` being streamed, or `null`; `tools` = the running tools, each `{toolCallId, toolName, args, partialResult}`, or `[]` | right after `hello`, so a client that connects mid-turn catches up. `message` is `null` and `tools` is `[]` when idle. A tool with no update yet has `partialResult` `null` |
+| `agent_start` | `t` = `"agent_start"` | pi's `agent_start` |
+| `agent_end` | `t` = `"agent_end"` | pi's `agent_end` |
+| `message_start` | `t` = `"message_start"`, `message` = `M` | pi's `message_start`, for every role |
+| `message_end` | `t` = `"message_end"`, `message` = `M` | pi's `message_end`, for every role |
+| `delta` | `t` = `"delta"`, `kind` = `"thinking"` \| `"text"` \| `"toolcall"`, `phase` = `"start"` \| `"delta"` \| `"end"`, `index` = `contentIndex`, `delta` = the text (**only** when `phase` is `"delta"`), `toolCall` = pi's `ToolCall` (**only** when `kind` is `"toolcall"` and `phase` is `"end"`) | from pi's `message_update`, one frame per `assistantMessageEvent` of kind `thinking_*`, `text_*` or `toolcall_*` (`*_start` → `phase` `start`; `*_delta` → `delta`; `*_end` → `end`) |
+| `tool_start` | `t` = `"tool_start"`, `toolCallId`, `toolName`, `args` | pi's `tool_execution_start` |
+| `tool_update` | `t` = `"tool_update"`, `toolCallId`, `partialResult` | pi's `tool_execution_update` |
+| `tool_end` | `t` = `"tool_end"`, `toolCallId`, `result`, `isError` | pi's `tool_execution_end` |
+
+Rules of the table:
+- **No `message` on `message_update`.** pi repeats the whole partial message on every delta, and the bytes grow roughly quadratically with the length of the reply (scout-5; derived from the code, not measured). A `delta` frame carries only the change. The whole partial message is sent only in `message_start` and in `inflight`; a client builds the rest of the text from the `delta` frames it receives.
+- **`assistantMessageEvent` types `start`, `done` and `error` write no `delta` frame.** Their message ends in `message_end` (`done` and `error` end pi's message stream).
+- **The server never reads from a client.** Anything a client sends is ignored, and the server writes nothing in answer to it.
+
+**Match keys.** The frames carry no JSONL entry id: pi gives extensions none on a streamed event (the only typed link is `turn_end.messageEntryId`, which this protocol does not use; scout-5, scout-6). A client matches a frame to the committed transcript of the same Session by:
+- **An assistant message:** `role` = `"assistant"` **and** `message.timestamp` (Unix milliseconds) equal, within the Session's `.jsonl`. The entry-level `timestamp` (ISO) is not a key: it never equals `message.timestamp` on an assistant line (scout-6). A message ended by pi's `message_end` has the same object as the line pi commits (pi's own docs; **inferred**, not verified at runtime: a `message_end` handler may replace the message, scout-6).
+- **A tool call and its result:** `toolCallId`. It is the `id` of the assistant's `toolCall` content, the `toolCallId` of the `tool_*` frames, and `message.toolCallId` of the committed `toolResult` line.
+- `responseId` is not a key: it is absent on error and aborted assistant lines (scout-6).
+
+**Safety.**
+- **A socket error, a failed listen or a throwing client never affects the pi Session.** The server catches what its own writes throw, drops that client, and goes on. A pi turn never waits for a client.
+- **A client whose pending write buffer exceeds 1 MiB** (bytes queued for it and not yet written to the socket) **is disconnected.** The other clients and the Session are not affected.
+- **Same-user access only.** The directory is 0700; the server reads no client input.
+
+**Example stream.** A turn with one text block, one tool call and the reply to its result. The `M` objects are abbreviated to the fields shown (a real one carries pi's full object); the values are invented. A client connects while the Session is idle, then reads the turn:
+
+```
+{"t":"hello","protocol":1,"session":"pi-7f3a"}
+{"t":"inflight","message":null,"tools":[]}
+{"t":"agent_start"}
+{"t":"message_start","message":{"role":"assistant","content":[],"timestamp":1783334400123}}
+{"t":"delta","kind":"text","phase":"start","index":0}
+{"t":"delta","kind":"text","phase":"delta","index":0,"delta":"Checking the README."}
+{"t":"delta","kind":"text","phase":"end","index":0}
+{"t":"delta","kind":"toolcall","phase":"start","index":1}
+{"t":"delta","kind":"toolcall","phase":"delta","index":1,"delta":"{\"path\":\"README.md\"}"}
+{"t":"delta","kind":"toolcall","phase":"end","index":1,"toolCall":{"type":"toolCall","id":"toolu_01","name":"read","arguments":{"path":"README.md"}}}
+{"t":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Checking the README."},{"type":"toolCall","id":"toolu_01","name":"read","arguments":{"path":"README.md"}}],"timestamp":1783334400123,"stopReason":"toolUse"}}
+{"t":"tool_start","toolCallId":"toolu_01","toolName":"read","args":{"path":"README.md"}}
+{"t":"tool_update","toolCallId":"toolu_01","partialResult":{"content":[{"type":"text","text":"# cpd"}]}}
+{"t":"tool_end","toolCallId":"toolu_01","result":{"content":[{"type":"text","text":"# cpd\n..."}]},"isError":false}
+{"t":"message_start","message":{"role":"toolResult","toolCallId":"toolu_01","toolName":"read","content":[{"type":"text","text":"# cpd\n..."}],"isError":false,"timestamp":1783334401456}}
+{"t":"message_end","message":{"role":"toolResult","toolCallId":"toolu_01","toolName":"read","content":[{"type":"text","text":"# cpd\n..."}],"isError":false,"timestamp":1783334401456}}
+{"t":"message_start","message":{"role":"assistant","content":[],"timestamp":1783334401500}}
+{"t":"delta","kind":"text","phase":"start","index":0}
+{"t":"delta","kind":"text","phase":"delta","index":0,"delta":"The README starts with the title."}
+{"t":"delta","kind":"text","phase":"end","index":0}
+{"t":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The README starts with the title."}],"timestamp":1783334401500,"stopReason":"stop"}}
+{"t":"agent_end"}
+```
+
+Matching this stream to the `.jsonl`: the first assistant line has `timestamp` 1783334400123 and the second 1783334401500; the `toolResult` line has `toolCallId` `toolu_01`. A client that connects during the reply gets the partial in `inflight` (`message` with the text so far, `tools` with `toolu_01` once it runs) and then the rest of the `delta` frames.
 
 ## 7. git and the Gate
 

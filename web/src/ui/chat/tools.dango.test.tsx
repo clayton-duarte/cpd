@@ -24,33 +24,39 @@ const click = (el: Element): void => {
   act(() => (el as HTMLElement).click());
 };
 
-it("thinking expands on click", () => {
+const stateOf = (el: Element): string | null =>
+  (el.matches('[data-slot="trace-collapsible"]') ? el : el.querySelector('[data-slot="trace-collapsible"]'))?.getAttribute("data-state") ?? el.getAttribute("data-state");
+/** A run of thoughts and tools is one collapsed chain: open it to reach its steps. */
+const openChain = (c: HTMLElement): void => {
+  const chain = c.querySelector('[data-kind="chain-of-thought"]') as HTMLElement;
+  if (stateOf(chain) !== "open") click(chain.querySelector('[data-slot="trace-collapsible-trigger"]') as Element);
+};
+
+it("thinking expands on click inside the chain of thought", () => {
   const item: TranscriptItem = { kind: "assistant", id: "a1", streaming: false, blocks: [{ type: "thinking", text: "pondering deeply" }] };
   const m = mount(<Transcript {...base} items={[item]} />);
+  openChain(m.container);
   const d = m.container.querySelector('[data-kind="thinking"]') as HTMLElement;
-  expect(d.getAttribute("data-state")).toBe("closed");
-  expect(d.querySelector('[data-part="caret"]')?.getAttribute("aria-hidden")).toBe("true");
+  expect(stateOf(d)).toBe("closed");
   click(d.querySelector('[data-slot="trace-collapsible-trigger"]') as Element);
-  expect(d.getAttribute("data-state")).toBe("open");
+  expect(stateOf(d)).toBe("open");
   expect(d.querySelector('[data-part="thinking-body"]')?.textContent).toBe("pondering deeply");
   m.unmount();
 });
 
-it("tool row renders a left rail and status glyph", () => {
-  const cases: ReadonlyArray<[ToolStatus, string, string]> = [
-    ["running", "glyph-active", "active"],
-    ["done", "glyph-done", "done"],
-    ["failed", "glyph-blocked", "blocked"],
+it("tool row renders a trace line with a status glyph", () => {
+  const cases: ReadonlyArray<[ToolStatus, string]> = [
+    ["running", "active"],
+    ["done", "done"],
+    ["failed", "blocked"],
   ];
-  for (const [status, cls, tone] of cases) {
+  for (const [status, tone] of cases) {
     const m = mount(<Transcript {...base} items={[tool("t1", status)]} />);
+    openChain(m.container);
     const row = m.container.querySelector('[data-kind="tool"]') as HTMLElement;
-    if (row.getAttribute("data-state") !== "open") click(row.querySelector('[data-slot="trace-collapsible-trigger"]') as Element);
-    expect(row.querySelectorAll('[data-part="rail"]').length).toBe(1);
-    const glyph = row.querySelector('[data-part="summary"] [data-part="glyph"]');
-    expect(glyph?.getAttribute("aria-hidden")).toBe("true");
-    expect(glyph?.classList.contains(cls)).toBe(true);
+    const glyph = row.querySelector('[data-slot="trace-line"] [data-part="glyph"]');
     expect(glyph?.getAttribute("data-tone")).toBe(tone);
+    expect(row.getAttribute("data-status")).toBe(status);
     m.unmount();
   }
 });
@@ -69,29 +75,30 @@ it("tool group renders a tick strip with one tick per call", () => {
   ok.unmount();
 });
 
-it("bash tool output renders inline", () => {
+it("bash tool output renders in a code block", () => {
   const bash = tool("b1", "done", { name: "bash", args: { command: "ls -la /tmp" }, result: { text: "total 8\nfile-a", isError: false } });
   const m = mount(<Transcript {...base} items={[bash]} />);
-  const row = m.container.querySelector('[data-kind="tool"][data-tool="bash"]');
-  expect(row).not.toBeNull();
-  expect(row?.querySelector('[data-part="summary"] [data-part="detail"]')?.textContent).toBe("ls -la /tmp");
-  const out = row?.querySelector('pre[data-part="output"]');
-  expect(out?.textContent).toBe("total 8\nfile-a");
+  openChain(m.container);
+  const row = m.container.querySelector('[data-kind="tool"][data-tool="bash"]') as HTMLElement;
+  expect(row.querySelector('[data-slot="trace-line"] [data-part="detail"]')?.textContent).toBe("ls -la /tmp");
+  click(row.querySelector('[data-slot="trace-collapsible-trigger"]') as Element);
+  expect(row.querySelector('[data-slot="code-block-content"][data-part="output"]')?.textContent).toBe("total 8\nfile-a");
   m.unmount();
 });
 
 it("edit tool renders colored diff lines", () => {
   const edit = tool("e1", "done", { name: "edit", args: { path: "/a.ts" }, diff: "@@ -1 +1 @@\n-old\n+new" });
   const m = mount(<Transcript {...base} items={[edit]} />);
+  openChain(m.container);
   click(m.container.querySelector('[data-tool="edit"] [data-slot="trace-collapsible-trigger"]') as Element);
-  const diff = m.container.querySelector('[data-tool="edit"] [data-part="diff"]');
+  const diff = m.container.querySelector('[data-tool="edit"] [data-slot="code-block"][data-part="diff"]');
   expect(diff).not.toBeNull();
   const add = diff?.querySelector('[data-diff="add"]');
   const rem = diff?.querySelector('[data-diff="remove"]');
-  expect(add?.textContent).toBe("+new");
-  expect(add?.querySelector('[data-part="sign"]')?.textContent).toBe("+");
-  expect(rem?.textContent).toBe("-old");
-  expect(rem?.querySelector('[data-part="sign"]')?.textContent).toBe("-");
+  expect(add?.textContent).toBe("new");
+  expect(add?.getAttribute("data-variant")).toBe("added");
+  expect(rem?.textContent).toBe("old");
+  expect(rem?.getAttribute("data-variant")).toBe("removed");
   expect(diff?.querySelector('[data-diff="context"]')?.textContent).toBe("@@ -1 +1 @@");
   expect(m.container.querySelector('[data-part="delta"] [data-part="added"]')?.textContent).toBe("+1");
   m.unmount();
@@ -103,13 +110,13 @@ it("tool group collapses and expands", () => {
   const d = m.container.querySelector('[data-kind="tool-group"]') as HTMLElement;
   expect(d.getAttribute("data-tool-count")).toBe("3");
   expect(d.getAttribute("data-status")).toBe("failed");
-  expect(d.getAttribute("data-state")).toBe("closed");
+  expect(stateOf(d)).toBe("closed");
   const header = d.querySelector('[data-part="group-header"]') as HTMLElement;
   expect(header.querySelector('[data-part="group-count"]')?.textContent).toBe("3 tool calls");
-  expect(d.querySelectorAll('[data-part="group-rows"] [data-kind="tool"]').length).toBe(3);
   click(header);
-  expect(d.getAttribute("data-state")).toBe("open");
+  expect(stateOf(d)).toBe("open");
+  expect(d.querySelectorAll('[data-kind="tool"]').length).toBe(3);
   click(header);
-  expect(d.getAttribute("data-state")).toBe("closed");
+  expect(stateOf(d)).toBe("closed");
   m.unmount();
 });

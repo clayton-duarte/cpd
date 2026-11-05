@@ -22,7 +22,7 @@ function render(rows: InboxRow[]) {
 it("inbox urgency icons follow the status palette", () => {
   const urgencies = Object.keys(palette) as Urgency[];
   const m = render(urgencies.map((u, i) => ({ ...base, id: i + 1, kind: "k", label: `Row ${u}`, urgency: u, sessionId: `s${i}`, actions: [] })));
-  const rows = Array.from(m.container.querySelectorAll("a[data-kind]"));
+  const rows = Array.from(m.container.querySelectorAll("[data-kind][data-id]"));
   expect(rows).toHaveLength(urgencies.length);
   for (const el of rows) {
     const [text, icon] = palette[el.getAttribute("data-urgency") as Urgency];

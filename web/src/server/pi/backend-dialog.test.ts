@@ -86,6 +86,14 @@ const REVIEW_TEXT = `${reviewLine("7")}\n`;
 const decide = (n: string, flag: string[]) => ["plan", "decide", n, ...flag, "--plan", "plan"];
 
 describe("pi backend plan review dialogs", () => {
+  it("a cancelled ask_user_question answer resolves cancelled and goes to the ask answer file", async () => {
+    const s = await setup({ text: REVIEW_TEXT });
+    await s.handle.respond("call:q1", { method: "ask_user_question", outcome: "cancelled" });
+    expect(s.out).toContainEqual({ type: "session.dialogResolved", sessionId: "s1", dialogId: "call:q1", outcome: "cancelled" });
+    const write = s.fs.writes.find((w) => w.path === "/home/cpd/run/ask/s1.json");
+    expect(JSON.parse(new TextDecoder().decode(write?.bytes))).toEqual({ dialogId: "call:q1", result: { answers: [], cancelled: true } });
+  });
+
   it("the pi backend declares interactive dialogs", async () => {
     const s = await setup({ text: REVIEW_TEXT });
     expect(s.handle.capabilities.dialogs).toEqual({ mode: "interactive" });
@@ -116,8 +124,6 @@ describe("pi backend plan review dialogs", () => {
     const s = await setup({ text: REVIEW_TEXT });
     const err = await rejects(s.handle.respond("review:99", { method: "cpd_plan_review", outcome: "approve" }));
     expect(err.code).toBe("invalid_message");
-    const ask = await rejects(s.handle.respond("call:q1", { method: "ask_user_question", outcome: "cancelled" }));
-    expect(ask.code).toBe("unsupported_capability");
     await s.handle.respond("review:7", { method: "cpd_plan_review", outcome: "cancelled" });
     expect(s.cpd.calls.some((c) => c[1] === "decide")).toBe(false);
   });

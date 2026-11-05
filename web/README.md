@@ -23,7 +23,7 @@ Other scripts: `pnpm --filter cpd-web-client run typecheck`, `pnpm --filter cpd-
 - **Which session-messages are user bubbles.** A session-message whose `details.data.unblocks` is `User message from the web chat` is a user bubble, even when `data.from` is a session id. Any other session-message with a sender is a `Message from <id>` fold.
 - **Images in pi sessions are accepted.** The server writes each image to `<tmpdir>/cpd-webui-attachments/<sessionId>-<ms timestamp>-<index>.<png|jpg|gif|webp>` and appends a line `[Attached image: <path>]` per image, after a blank line, to the text sent by `cpd session send`. The pi agent's read tool reads local image paths.
 - **Plan reviews of pi sessions are answerable.** A pending `cpd_plan_review` is answered from the WebUI. Approve runs `cpd plan decide <review> --approve --plan <plan>`. Reject runs `cpd plan decide <review> --reject --plan <plan>`. Change writes the feedback to `<CPD_HOME>/run/<plan>/feedback-<review>.md` and runs `cpd plan decide <review> --reject --feedback-file <that path> --plan <plan>`. The card closes when pi records the review's new status.
-- **Asks of pi sessions are read-only.** A pending `ask_user_question` of a pi session cannot be answered from the WebUI: cpd has no command that settles a held ask. Answer it in the pi TUI.
+- **Asks of pi sessions are answerable.** A pending `ask_user_question` of a pi session is answered from the WebUI. The answer is written to `<cpdHome>/run/ask/<sessionId>.json`, which the pi extension `pi/ask-user-question` reads. If the extension has not read it after 350 ms, the server sends `Escape` to the session's tmux pane and, for an answer, posts it with `cpd session send` (CONTRACT 11.4).
 
 ## Layout (`web/src/`)
 

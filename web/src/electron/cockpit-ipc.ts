@@ -5,6 +5,7 @@ export interface WebContentsLike {
   send(channel: string, payload: unknown): void;
   isDestroyed(): boolean;
   once(event: "destroyed", listener: () => void): unknown;
+  removeListener?(event: "destroyed", listener: () => void): unknown;
 }
 
 export interface IpcMainOnLike {
@@ -20,22 +21,23 @@ export interface WebuiIpcDeps {
 }
 
 export function registerWebuiIpc(deps: WebuiIpcDeps): { dispose(): Promise<void> } {
-  const hubs = new Map<WebContentsLike, ReturnType<WebuiIpcDeps["newConnection"]>>();
+  const hubs = new Map<WebContentsLike, { hub: ReturnType<WebuiIpcDeps["newConnection"]>; onDestroyed: () => void }>();
   const listener = (event: { sender: WebContentsLike }, payload: unknown): void => {
     const sender = event.sender;
-    let hub = hubs.get(sender);
-    if (hub === undefined) {
+    let entry = hubs.get(sender);
+    if (entry === undefined) {
       const created = deps.newConnection((m) => {
         if (!sender.isDestroyed()) sender.send(CHANNELS.webS2c, m);
       });
-      hub = created;
-      hubs.set(sender, created);
-      sender.once("destroyed", () => {
+      const onDestroyed = (): void => {
         hubs.delete(sender);
         void created.close();
-      });
+      };
+      entry = { hub: created, onDestroyed };
+      hubs.set(sender, entry);
+      sender.once("destroyed", onDestroyed);
     }
-    const target = hub;
+    const target = entry.hub;
     void deps.started.then(() => target.handle(payload)).catch(deps.onError);
   };
   deps.ipc.on(CHANNELS.webC2s, listener);
@@ -46,9 +48,12 @@ export function registerWebuiIpc(deps: WebuiIpcDeps): { dispose(): Promise<void>
         disposed = true;
         deps.ipc.removeListener(CHANNELS.webC2s, listener);
       }
-      const live = [...hubs.values()];
+      const live = [...hubs.entries()];
       hubs.clear();
-      await Promise.all(live.map((h) => h.close()));
+      for (const [sender, { onDestroyed }] of live) {
+        sender.removeListener?.("destroyed", onDestroyed);
+      }
+      await Promise.all(live.map(([, { hub }]) => hub.close()));
     },
   };
 }

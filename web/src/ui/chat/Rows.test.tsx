@@ -43,7 +43,7 @@ it("an update to one assistant item does not re-render the markdown of other ite
   expect(calls).toEqual(["beta text longer"]);
 });
 
-it("a tools row does not re-render when an unrelated item changes", () => {
+it("a chain row does not re-render when an unrelated item changes", () => {
   let reads = 0;
   const args = new Proxy({ path: "/x" }, { get(t, k, r) { reads++; return Reflect.get(t, k, r); } });
   const mk = (n: number): ToolItem => ({ kind: "tool", id: `tool:${n}`, callId: String(n), name: "read", args, status: "running" });
@@ -51,13 +51,14 @@ it("a tools row does not re-render when an unrelated item changes", () => {
   const t2 = mk(2);
   const a1 = asst("a1", "alpha");
   const { container, render } = setup([a1, t1, t2]);
-  const row = container.querySelector('[data-row-key^="group:"]');
+  act(() => container.querySelector<HTMLElement>('[data-row^="chain:"] [data-slot="trace-collapsible-trigger"]')!.click());
+  const row = container.querySelector('[data-row^="chain:"]');
   expect(row).not.toBeNull();
   const firstChild = row!.firstElementChild;
   expect(reads).toBeGreaterThan(0);
   reads = 0;
   render([asst("a1", "alpha changed"), t1, t2]);
   expect(reads).toBe(0);
-  expect(container.querySelector('[data-row-key^="group:"]')).toBe(row);
+  expect(container.querySelector('[data-row^="chain:"]')).toBe(row);
   expect(row!.firstElementChild).toBe(firstChild);
 });

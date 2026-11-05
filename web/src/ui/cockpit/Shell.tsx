@@ -66,7 +66,7 @@ export function Shell(props: {
           collapsible
           collapsedSize="0%"
         >
-          <aside aria-label="Context tree column" className="h-full overflow-y-auto">
+          <aside aria-label="Context tree column" className="h-full overflow-hidden">
             {props.tree}
           </aside>
         </ResizablePanel>
