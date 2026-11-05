@@ -1,6 +1,7 @@
 import type { Host } from "../lib/host.ts";
 import { toolCallGuard } from "../lib/loop-guard.ts";
 import { blockingReason, reasonText as noblockReason, BOUND_SECONDS } from "../lib/noblock.ts";
+import { leadExploreGuard } from "../lib/explore.ts";
 import { tooLong, unseen } from "../lib/askguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReason } from "../lib/mainguard.ts";
@@ -32,6 +33,8 @@ export function hostVerdict(
     const refused = toolCallGuard(where.loop, { toolName: call.name, input: call.arguments, parentToolCallId: call.parent === undefined ? undefined : call.parent.callId });
     if (refused !== undefined) return { block: refused };
   }
+  const explored = leadExploreGuard(role, { CPD_HOME: `${where.home}/.cpd` }, call);
+  if (explored !== undefined) return explored;
   if (call.name === "edit" || call.name === "write") {
     const written = primaryCheckoutWrite(call.name, call.arguments, where.cwd, where.home);
     return written === undefined ? undefined : { block: mainReason(written) };

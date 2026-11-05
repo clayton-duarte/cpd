@@ -1,4 +1,4 @@
-import type { CompactionSettings } from "./compaction.ts";
+import { compactionPolicy, type CompactionSettings } from "./compaction.ts";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -35,7 +35,7 @@ import { hostExtension } from "./extension.ts";
 import { registerHostTools } from "./tools.ts";
 import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
-import { newTurnState, prepareTurn, reminderFor, reportHostError, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
+import { newTurnState, prepareTurn, questionGuardFor, reminderFor, reportHostError, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
 export type { ViewCall, ViewStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
@@ -99,6 +99,8 @@ export type Deps = {
   newEpoch(): string;
   onTerminate(handler: () => void): void;
   homeDir(): string;
+  /** The turn-end question classifier: the probability the text asks the User, or undefined when unreachable. Absent: the question guard never fires. */
+  classify?(text: string): Promise<number | undefined>;
   now(): Date;
   log(line: string): void;
 };
@@ -247,14 +249,26 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         ...base,
         sections: [...sections, ...(codemode.sections ?? [])],
         hooks: [...(base.hooks ?? []), hook(GenerationTask, { onYield: async (answer) => {
-          const text = await reminderFor([answer], port, turn);
+          const text = (await reminderFor([answer], port, turn)) ?? (await questionGuardFor([answer], port, turn, async (t) => deps.classify?.(t)));
           return text === undefined ? undefined : { continue: text };
         } })],
         tools: [...(hostTools.tools ?? []), ...(codemode.tools ?? [])],
       };
     };
+    let liveModel: { provider: string; modelId: string } | undefined = model;
     const extension = await build();
-    const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
+    // §6.18: the live compaction getter; the window cache fills at each `configure` (the one place the host reads `deps.models()`).
+    const windows = new Map<string, number>();
+    const settings = {
+      get compaction() {
+        return compactionPolicy({
+          settings: () => ({}),
+          agent: () => liveModel,
+          windowOf: (provider, modelId) => windows.get(`${provider}/${modelId}`),
+        });
+      },
+    };
+    const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension, settings });
     current = await conversation.watch();
     conversation.closed.then(
       (reason) => {
@@ -507,6 +521,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         // The current agent is read back before the first configure, so a change that names only a thinking level validates against it.
         if (agentState === undefined) agentState = agentOf(await conversation.agent());
         const list = await deps.models();
+        for (const m of list) windows.set(`${m.provider}/${m.model_id}`, m.context_window);
         let ref: { provider: string; modelId: string } | undefined;
         if (change.model !== undefined) {
           const i = change.model.indexOf("/");
@@ -524,6 +539,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         }
         await conversation.configure({ ...(ref === undefined ? {} : { model: ref }), ...(change.thinkingLevel === undefined ? {} : { thinkingLevel: change.thinkingLevel }) } as never);
         agentState = agentOf(await conversation.agent());
+        liveModel = agentState.model === undefined ? undefined : { provider: agentState.model.provider, modelId: agentState.model.model_id };
         return { agent: agentState };
       },
       models: async () => deps.models(),
