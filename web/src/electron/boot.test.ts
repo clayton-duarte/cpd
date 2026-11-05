@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { boot, type BootDeps, type BootWindow } from './boot';
 
-function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void> } = {}) {
+function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void>; loadDevUrl?: BootDeps['loadDevUrl'] } = {}) {
   const log: string[] = [];
   const handlers: Record<string, () => void> = {};
   const titles: unknown[] = [];
@@ -26,7 +26,7 @@ function setup(opts: { env?: Record<string, string>; state?: string; destroyed?:
     startServices: () => void log.push('startServices'),
     registerIpc: () => void log.push('registerIpc'),
     registerWebuiIpc: () => void log.push('registerWebuiIpc'),
-    loadDevUrl: async (_w, url) => void log.push(`loadDevUrl:${url}`),
+    loadDevUrl: opts.loadDevUrl ?? (async (_w, url) => void log.push(`loadDevUrl:${url}`)),
     loadFile: async (_w, p) => void log.push(`loadFile:${p}`),
     env: opts.env ?? {},
     reloadServer: opts.reloadServer ?? (async () => void log.push('reloadServer')),
@@ -67,6 +67,30 @@ describe('boot', () => {
     await boot(s.deps);
     expect(s.log).toContain('loadDevUrl:http://localhost:5173/electron.html');
     expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
+  });
+  it('boot loads the built renderer when the dev URL fails to load', async () => {
+    const url = 'http://localhost:5173/electron.html';
+    const s = setup({ env: { CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(boot(s.deps)).resolves.toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
+  });
+  it('boot logs the dev URL failure before loading the built renderer', async () => {
+    const url = 'http://localhost:5173/electron.html';
+    const s = setup({ env: { CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a) => void s.log.push(`error:${a.map(String).join(' ')}`));
+    try {
+      await boot(s.deps).catch(() => undefined);
+    } finally {
+      spy.mockRestore();
+    }
+    const at = s.log.findIndex((l) => l.startsWith('error:') && l.includes(url));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(s.log.findIndex((l) => l.startsWith('loadFile:')));
   });
   it('boot registers a SIGUSR1 reload that skips a destroyed webContents', async () => {
     const s = setup();
