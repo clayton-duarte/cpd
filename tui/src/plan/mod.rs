@@ -271,10 +271,9 @@ fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>
             " no Lead session in the centre",
             palette::muted_text(),
         )),
-        Some(c) if c.plan.workflows.is_empty() && c.plan.reviewed_pr.is_none() => parts.push(Span::styled(
-            "no Workflow yet: cpd workflow add",
-            palette::muted_text(),
-        )),
+        Some(c) if c.plan.workflows.is_empty() && c.plan.reviewed_pr.is_none() => parts.push(
+            Span::styled("no Workflow yet: cpd workflow add", palette::muted_text()),
+        ),
         Some(c) if c.plan.jobs.is_empty() => {
             parts.push(Span::styled("no Plan yet", palette::muted_text()))
         }

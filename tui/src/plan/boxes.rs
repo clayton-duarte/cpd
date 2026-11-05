@@ -572,7 +572,10 @@ pub fn review_box(reviewed: &ReviewedPr, width: u16) -> Boxes {
         palette::read_only_text(),
     ));
     let body = Text::from(vec![
-        Line::from(Span::styled(reviewed.repo.clone(), palette::read_only_text())),
+        Line::from(Span::styled(
+            reviewed.repo.clone(),
+            palette::read_only_text(),
+        )),
         Line::from(reviewed.title.clone()),
     ]);
     BoxWidget::new(Walls::Full, palette::muted_text(), body)
@@ -607,7 +610,11 @@ pub fn review_box(reviewed: &ReviewedPr, width: u16) -> Boxes {
         ));
     }
     let link = Link::new(&reviewed.url).text(Line::from(text));
-    links.draw(link, Rect::new(inner.x, inner.y + 2, inner.width, 1), &mut buf);
+    links.draw(
+        link,
+        Rect::new(inner.x, inner.y + 2, inner.width, 1),
+        &mut buf,
+    );
     Boxes {
         chart: Chart {
             buf,

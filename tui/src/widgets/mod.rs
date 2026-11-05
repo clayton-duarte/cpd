@@ -527,8 +527,11 @@ fn show<B: Backend>(
                         Outcome::Pick(entry) => {
                             let InboxMenu { item, .. } =
                                 inbox_menu.take().expect("the menu was open");
-                            let (opener, now) =
-                                (Arc::clone(opener), clock::timestamp(ports.clock.utc()));
+                            let (opener, now, runner) = (
+                                Arc::clone(opener),
+                                clock::timestamp(ports.clock.utc()),
+                                ports.runner.clone(),
+                            );
                             match entry {
                                 InboxEntry::Merging => {}
                                 entry => background.submit(move || match entry {
@@ -549,6 +552,18 @@ fn show<B: Backend>(
                                     InboxEntry::Post => opener.post(&item),
                                     InboxEntry::RePost => opener.repost(&item),
                                     InboxEntry::GoToLead => opener.jump(&item, &now),
+                                    InboxEntry::OpenLink => {
+                                        if let Some(url) = item.url.as_deref()
+                                            && let Err(e) = crate::link::open_url(&*runner, url)
+                                        {
+                                            dialog::report(
+                                                &opener.tmux,
+                                                &opener.log,
+                                                "Open Link",
+                                                &e,
+                                            );
+                                        }
+                                    }
                                     InboxEntry::CopyLink => opener.copy_link(&item),
                                     InboxEntry::Merging => {}
                                 }),
