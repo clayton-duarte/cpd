@@ -373,7 +373,7 @@ export type ErrorCode =
   | "host_disconnected" // the socket closed or `bye` arrived while attached
   | "host_error" // the host answered `error`; details {hostCode, ...} carries the host ErrorCode (scout-durable §3)
   | "session_not_found" // id not in the cockpit snapshot / not attached
-  | "session_file_missing" // a pi session row without `file`
+  | "session_file_missing" // a pi session whose transcript file did not appear after a submit (6.5 polling)
   | "session_file_unreadable" // stat/read of the pi file failed
   | "malformed_line" // a pi JSONL line is not valid JSON or has no `type`; details {line?, offset}
   | "cpd_failed" // a cpd command exited non-zero; details {cpdCode, exitCode, message}
@@ -1280,16 +1280,16 @@ Behaviours: each change notification triggers at most one read in flight (change
 #### `backend.ts`: `SessionBackend` for pi sessions
 
 ```ts
-export function createPiBackend(deps: { cpd: Cpd; fs: FileBoundary; watch: WatchBoundary; git: GitBoundary; windowSize?: number }): SessionBackend;
+export function createPiBackend(deps: { cpd: Cpd; fs: FileBoundary; watch: WatchBoundary; git: GitBoundary; cpdHome: string; attachmentsDir: string; now(): number; scheduler: Scheduler; windowSize?: number }): SessionBackend;
 ```
 
 Behaviours:
 
-- `attach(session)`: `session.file` missing -> `session_file_missing`. `readTail(file)`, then `cpd session show <id>` (`deps.cpd.json(["session","show",id])`, fields `session.model`, `session.thinking`, `session.tier`; a failure does not fail the attach: those stats are `unknown` with the error message as reason). Emits, in order: `session.attached` (capabilities below, `title = ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}`, `session.footer`, `session.status`, `session.dialog` for each open reconstructed dialog. Then `watchSession` starts from `endOffset` with the tail's normalizer.
+- `attach(session)`: `session.file` missing (pro-d397, pro-d400: a by-user pi session writes its transcript only with its first reply) -> emits `session.attached` (full capabilities, `title = ref.title`), `session.window {mode:"tail", items: [], hasEarlier: false, cursor: null}` and `session.status` with `busy` false, and starts no watch. Otherwise `readTail(file)`, then `cpd session show <id>` (`deps.cpd.json(["session","show",id])`, fields `session.model`, `session.thinking`, `session.tier`; a failure does not fail the attach: those stats are `unknown` with the error message as reason). Emits, in order: `session.attached` (capabilities below, `title = ref.title`, `meta {ref, footer}`), `session.window {mode:"tail"}`, `session.footer`, `session.status`, `session.dialog` for each open reconstructed dialog. Then `watchSession` starts from `endOffset` with the tail's normalizer.
 - Live: `append` events emit `session.append` (`added`), `session.update` (`updated`), `session.dialog` / `session.dialogResolved` for `dialogsOpened` / `dialogsResolved` (outcome `"answered"`; plan review `superseded` or `lost` -> `"superseded"`), `session.footer` when `factsChanged`, `session.status` when `busy` changed. `reset` -> re-reads the tail, emits a fresh `session.window {mode:"tail"}` (truncation or replacement resets the window) and restarts the watcher.
 - `busy` (Phase 1 choice, a file-derived approximation): `facts.lastRole === "user" || "toolResult"`, or `lastRole === "assistant"` with `lastStopReason` of `toolUse`/`pending`; false otherwise. `queued` is always `[]`.
-- `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`.
-- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`.
+- `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`; on a session attached with no file it emits an empty `session.window {mode:"earlier", items: [], hasEarlier: false, cursor: null}`.
+- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
 - `configure {kind:"tier"}`: `cpd.json(sessionRetierArgs(id, tier))` (applies at the next idle, scout-pi §6), then re-reads `cpd session show` and emits `session.footer`. `{kind:"model"|"thinking"}` -> `unsupported_capability`.
 - `abort`, `abortSubmission`, `compact` and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason). `respond` answers the open dialog (11.4).
 - Footer: `model` = `facts.model` (a later `model_change` wins over `session show`) else `session show` `model`; `thinking` likewise; `tier` = `session show` `tier` else `ref.tier`; `cost` = unknown (`"pi session cost needs a full-file scan, which Phase 1 never does"`); `contextPercent` = unknown (`"the model's context window is not available for pi sessions"`); `branch` = `git.branch(ref.cwd)` (the git branch of the session cwd; `ref.cwd` missing -> unknown `"the session row has no cwd"`; `null` -> unknown `"not a git repository"`).
@@ -1309,7 +1309,7 @@ export function socketPathOf(cpdHome: string, sessionId: string): string; // `${
 `resolve` walks `snapshot().tree` (`ContextNode.sessions` and every `PlanNode.sessions`) for `ref.id === sessionId`:
 
 - not found, or `tree === null` -> `WebError("session_not_found", ..., {sessionId})` (no refresh is attempted);
-- `runner "pi"` with no `ref.file` -> `session_file_missing`; otherwise `{ref, file: ref.file, tierOptions}`;
+- `runner "pi"` with no `ref.file` -> `{ref, tierOptions}` (no `file`, no error; pro-d397); otherwise `{ref, file: ref.file, tierOptions}`;
 - `runner "durable"` -> `{ref, socketPath: socketPathOf(cpdHome, id), tierOptions}`; a path longer than `SOCKET_PATH_MAX` bytes -> `host_unreachable` with `details {reason:"socket_path_too_long"}` (the host would refuse it, `config.ts:31-32`);
 - `tierOptions` per 6.1.
 
@@ -1333,7 +1333,7 @@ Behaviours:
 - `cockpit.subscribe`: sends `cockpit.snapshot` from `cockpit.snapshot()` (when any pane is still `null` -> `send({type:"cockpit.error", error: internal "cockpit not ready"})` instead), then subscribes once to `cockpit.subscribe(...)`: later `pane` updates are sent as `cockpit.patch` and `error` updates as `cockpit.error` (subscribe then invalidation updates). A second subscribe re-sends the snapshot and does not add a second subscription.
 - `cockpit.selectPlan` -> `await cockpit.selectPlan(planId)` (the plan pane arrives through the subscription as a patch); a failure -> `cockpit.error`.
 - `cockpit.action` -> `await cockpit.runAction(action)`; success -> `action.result {ok:true, output}`, a `WebError` -> `action.result {ok:false, error}`.
-- `session.attach {sessionId}`: detaches the previous session first (dispose its handle), then `registry.resolve` (a `WebError` -> `session.error {sessionId, error}`; e.g. `session_not_found`, `session_file_missing`), then `backends[resolved.ref.runner].attach(resolved, emit)`, selecting the backend by session runner. `emit` forwards a message only while this attach is still current and the connection open (a generation counter): messages of a detached session never leak. An `attach` that rejects -> `session.error`; an attach that resolves after a newer attach/detach/close disposes its handle and emits nothing.
+- `session.attach {sessionId}`: detaches the previous session first (dispose its handle), then `registry.resolve` (a `WebError` -> `session.error {sessionId, error}`; e.g. `session_not_found`), then `backends[resolved.ref.runner].attach(resolved, emit)`, selecting the backend by session runner. `emit` forwards a message only while this attach is still current and the connection open (a generation counter): messages of a detached session never leak. An `attach` that rejects -> `session.error`; an attach that resolves after a newer attach/detach/close disposes its handle and emits nothing.
 - `session.detach`: disposes the handle (once), forgets the session. Idempotent.
 - `session.loadEarlier|submit|abort|abortSubmission|compact|configure|listModels` and `dialog.respond`: when `sessionId` is not the attached one -> `session.error {sessionId, error: not_attached}`; otherwise the matching `SessionHandle` method (session messages route to the attached backend). `submit` passes `{clientSubmissionId, text, images, whenBusy}`. A rejection becomes `session.error {sessionId, clientSubmissionId?, error: toWireError(e)}` (`clientSubmissionId` for `submit` only): backend errors become session error messages.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
@@ -1553,7 +1553,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `host_disconnected` | `client.ts`, `durable backend` | socket closed or `bye` while attached; pending requests rejected | `{bye?: reason}` |
 | `host_error` | `client.ts` | the host answered `error` (e.g. `refused` for configure while busy, `bad_args`, `busy`, `unsupported`) | `{hostCode, details?}` |
 | `session_not_found` | `registry.ts` | id absent from the cockpit snapshot | `{sessionId}` |
-| `session_file_missing` | `registry.ts`, `pi backend` | pi session row without `file` | `{sessionId}` |
+| `session_file_missing` | `pi backend` | pi session whose transcript file did not appear within the 20 polls after a submit (6.5) | `{sessionId}` |
 | `session_file_unreadable` | `window.ts`, `watch.ts` | `stat`/`read` failed | `{path, cause}` |
 | `malformed_line` | `jsonl.ts` | invalid JSON, non-object, bad `type`, wrong field types, `compaction` without `summary` | `{line?, offset}` |
 | `cpd_failed` | `cli.ts` | non-zero exit or spawn failure | `{cpdCode, exitCode?, details?}` (`cpdCode` from the cpd JSON error, `no_json`, or `spawn_failed`) |
