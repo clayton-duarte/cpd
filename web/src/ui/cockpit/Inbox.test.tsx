@@ -38,8 +38,41 @@ function rightClick(el: Element | null | undefined): void {
 const menuItems = () => Array.from(document.body.querySelectorAll('[role="menuitem"]'));
 const menuLabels = () => menuItems().map((i) => i.textContent);
 
+const widths = { available: 0, required: 0 };
+const observers: Array<() => void> = [];
+function stubLayout(available: number, required: number): void {
+  widths.available = available;
+  widths.required = required;
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute("data-part") === "inbox-header" ? widths.available : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute("aria-hidden") === "true" && this.className.includes("invisible") ? widths.required : 0;
+    },
+  });
+  observers.length = 0;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(cb: () => void) {
+        observers.push(cb);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+  delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
 });
 
 it("inbox rows are flat in model order with no tier groups or counts", () => {
@@ -317,5 +350,82 @@ it("the Inbox title shows no count", () => {
   const header = m.container.querySelector('[data-part="inbox-header"]');
   expect(header?.querySelector("h2")?.textContent).toBe("Inbox");
   expect(Array.from(header?.children ?? []).map((e) => e.tagName)).toEqual(["H2", "DIV"]);
+  m.unmount();
+});
+
+const trigger = (c: Element) => c.querySelector<HTMLElement>('[data-part="inbox-filters-trigger"]');
+const sampleRows = () => [row(1, "blocked", "a", { urgency: "red" }), row(2, "x", "b", { urgency: "yellow" }), row(3, "x", "c", { urgency: "yellow" })];
+
+it("the header keeps a 2rem gap between the title and the filters", () => {
+  const m = render([]);
+  expect(m.container.querySelector('[data-part="inbox-header"]')?.className).toContain("gap-8");
+  m.unmount();
+});
+
+it("wide enough: the filters render inline as a horizontal toggle group and no popover trigger", () => {
+  stubLayout(500, 300);
+  const m = render(sampleRows());
+  expect(trigger(m.container)).toBeNull();
+  const group = m.container.querySelector('[data-part="inbox-filters"]');
+  expect(group?.getAttribute("data-orientation")).toBe("horizontal");
+  m.unmount();
+});
+
+it("narrow: the filters collapse into a popover trigger showing the label and the shown count", () => {
+  stubLayout(200, 300);
+  const m = render(sampleRows());
+  const t = trigger(m.container);
+  expect(t?.textContent).toBe("all3");
+  expect(m.container.querySelector('[data-part="inbox-filters"]')).toBeNull();
+  m.unmount();
+});
+
+it("narrow: opening the popover shows a vertical toggle group with all seven filters stacked", () => {
+  stubLayout(200, 300);
+  const m = render(sampleRows());
+  click(trigger(m.container));
+  const group = document.body.querySelector('[data-part="inbox-filters"]');
+  expect(group?.getAttribute("data-orientation")).toBe("vertical");
+  const names = Array.from(group?.querySelectorAll("[data-tier-filter]") ?? []).map((b) => b.getAttribute("data-tier-filter"));
+  expect(names).toEqual(["all", "blocker", "delivery", "decision", "support", "notice", "unread"]);
+  m.unmount();
+});
+
+it("narrow: choosing a tier in the popover filters the rows like the inline group", () => {
+  stubLayout(200, 300);
+  const m = render(sampleRows());
+  click(trigger(m.container));
+  click(document.body.querySelector('[data-tier-filter="delivery"]'));
+  expect(items(m.container)).toHaveLength(2);
+  expect(trigger(m.container)?.textContent).toBe("1 tier2");
+  m.unmount();
+});
+
+it("the collapse follows the measured widths when the observer fires", () => {
+  stubLayout(500, 300);
+  const m = render(sampleRows());
+  expect(trigger(m.container)).toBeNull();
+  widths.available = 200;
+  act(() => {
+    for (const cb of observers) cb();
+  });
+  expect(trigger(m.container)).not.toBeNull();
+  widths.available = 500;
+  act(() => {
+    for (const cb of observers) cb();
+  });
+  expect(trigger(m.container)).toBeNull();
+  m.unmount();
+});
+
+it("the measuring clone is hidden from assistive tech and holds no filter hooks", () => {
+  stubLayout(500, 300);
+  const m = render(sampleRows());
+  const clone = m.container.querySelector('[aria-hidden="true"].invisible');
+  expect(clone).not.toBeNull();
+  expect(clone?.querySelector("button, [data-tier-filter], [data-part]")).toBeNull();
+  expect(clone?.textContent).toContain("Inbox");
+  expect(clone?.textContent).toContain("unread0");
+  expect(m.container.querySelectorAll('[data-tier-filter="blocker"]')).toHaveLength(1);
   m.unmount();
 });

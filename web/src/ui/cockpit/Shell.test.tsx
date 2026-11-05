@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
+import { act } from "react";
 import { expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { Shell } from "./Shell.tsx";
 
 // The resizable wrappers are recorded: each part renders a div that exposes its props as data attributes.
+const { resize } = vi.hoisted(() => ({ resize: vi.fn() }));
+
 vi.mock("../components/resizable.tsx", async () => {
   const { createElement } = await import("react");
   const part = (kind: string) => (props: Record<string, unknown>) => {
@@ -16,7 +19,7 @@ vi.mock("../components/resizable.tsx", async () => {
     ResizablePanelGroup: part("group"),
     ResizablePanel: part("panel"),
     ResizableHandle: part("handle"),
-    usePanelRef: () => ({ current: null }),
+    usePanelRef: () => ({ current: { resize } }),
   };
 });
 
@@ -92,9 +95,31 @@ it("the shell panel sizes follow the decided defaults and limits", () => {
     return ["defaultSize", "minSize", "maxSize", "data-collapsible", "collapsedSize"].map((a) => e?.getAttribute(a));
   };
   expect(sizes("tree")).toEqual(["20%", "12%", "40%", "true", "0%"]);
-  expect(sizes("center")).toEqual(["58%", "30%", null, null, null]);
-  expect(sizes("inbox")).toEqual(["22%", "14%", "45%", "true", "0%"]);
+  expect(sizes("center")).toEqual(["50%", "30%", null, null, null]);
+  expect(sizes("inbox")).toEqual(["30%", "14%", "45%", "true", "0%"]);
   expect(sizes("plan")).toEqual(["40%", "20%", "80%", "true", "44px"]);
   expect(sizes("chat")).toEqual(["60%", "20%", null, "true", "0%"]);
+  m.unmount();
+});
+
+it("double click on the left handle resets the tree to 20%", () => {
+  resize.mockClear();
+  const m = mount(<Shell {...slots} />);
+  const handle = m.container.querySelector("#split-left");
+  act(() => {
+    handle?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  expect(resize).toHaveBeenCalledExactlyOnceWith("20%");
+  m.unmount();
+});
+
+it("double click on the right handle resets the inbox to 30%", () => {
+  resize.mockClear();
+  const m = mount(<Shell {...slots} />);
+  const handle = m.container.querySelector("#split-right");
+  act(() => {
+    handle?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  expect(resize).toHaveBeenCalledExactlyOnceWith("30%");
   m.unmount();
 });
