@@ -949,13 +949,9 @@ fn cancel_cancels_a_draft_dependent() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
+    // In phase plan every Job is a draft: `dd` needs the draft `q` (after the lock a draft may not wait on `q`).
     job_add(&fx, "pl", "q", "S2", &[]).ok();
-    lock(&fx.env, "pl");
-    // A stub draft appended after the lock, needing the queued Job `q` (a complete one would be a parked draft).
-    let run = fx.cpd(&[
-        "job", "add", "dd", "--title", "T", "--needs", "q", "--draft", "--plan", "pl",
-    ]);
-    run.ok();
+    job_add(&fx, "pl", "dd", "S2", &["q"]).ok();
     assert_eq!(job_row(&fx.env, "pl", "dd", "status"), "draft");
 
     let out = job(&fx, &["cancel", "q", "--reason", "Not needed."], "pl").ok();
@@ -2038,146 +2034,130 @@ fn a_queued_job_may_not_need_a_draft() {
         ),
         (txns, evs, rows)
     );
+}
 
-    // A stub draft may need both the queued `a` and the draft `d`: only its incompleteness keeps it legal.
+// ---------- every draft takes a Tier and a Spec, and never waits after the lock (pro-d404) ----------
+
+/// An incomplete template stub `key` of `plan` (no Tier, no Spec, `tier` as given) needing `needs`.
+/// `job add --draft` always takes a Tier and a Spec, so the only stubs left are a template's: written as a fixture.
+fn stub_row(fx: &Fx, plan_id: &str, key: &str, needs: &[&str], tier: Option<&str>) {
+    let tier = tier.map_or("NULL".to_owned(), |t| format!("'{t}'"));
+    let mut sql = format!(
+        "INSERT INTO jobs (plan, workflow, key, title, tier, status, appended, kind, created_txn, created_at)
+         VALUES ('{plan_id}', 'repo', '{key}', 'Title of {key}', {tier}, 'draft',
+                 (SELECT locked_at IS NOT NULL FROM plans WHERE id = '{plan_id}'), 'work', cpd_txn(), 't');"
+    );
+    for need in needs {
+        sql += &format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('{plan_id}', '{key}', '{need}');"
+        );
+    }
+    fixture(&fx.env, &sql);
+}
+
+/// `job add k --draft` with `args` after `job add k --title T --draft --plan pl`, refused `usage` and writing nothing.
+fn draft_add_refused_usage(fx: &Fx, extra: &[&str]) {
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    let mut args = vec!["job", "add", "k", "--title", "T", "--draft", "--plan", "pl"];
+    args.extend(extra);
+    refused(&fx.cpd(&args), "usage", 2);
     assert_eq!(
-        stub_add(&fx, "pl", "q", &["--needs", "a,d"]).ok()["job"]["status"],
-        "draft"
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows),
+        "nothing is written: {args:?}"
     );
 }
 
-// ---------- stub drafts (hs-d241, R1; commands.md §5.1, §5.2) ----------
-
-/// `job add <key> --draft --title <t>` with `extra` flags (`--tier`, `--spec`), in Plan `plan_id`.
-fn stub_add(fx: &Fx, plan_id: &str, key: &str, extra: &[&str]) -> Run {
-    let title = format!("Title of {key}");
-    let mut args = vec![
-        "job", "add", key, "--draft", "--title", &title, "--plan", plan_id,
-    ];
-    args.extend(extra);
-    fx.cpd(&args)
-}
-
 #[test]
-fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
+fn job_add_draft_without_tier_is_refused_usage() {
     for phase in ["plan", "dispatch"] {
         let fx = Fx::new();
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
-        // `a` is queued after the lock; a stub is legal on its own, whether or not it waits (hs-d822).
-        job_add(&fx, "pl", "a", "S2", &[]).ok();
-
-        let out = stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
-        let appended = phase != "plan";
-        assert_eq!(
-            out["job"],
-            json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false}),
-            "{phase}"
-        );
-        for column in [
-            "tier",
-            "goal",
-            "context",
-            "touches",
-            "acceptance",
-            "out_of_scope",
-            "fingerprint",
-        ] {
-            assert_eq!(
-                job_row(&fx.env, "pl", "k", column),
-                Value::Null,
-                "{phase}: {column}"
-            );
-        }
-        assert_eq!(
-            (
-                job_row(&fx.env, "pl", "k", "title"),
-                job_row(&fx.env, "pl", "k", "status")
-            ),
-            (json!("Title of k"), json!("draft"))
-        );
-        assert_eq!(
-            events(&fx, "job-added").last().unwrap()["data"],
-            json!({"workflow": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false})
-        );
-
-        // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
         let spec = spec_file(&fx.env);
-        let out = stub_add(&fx, "pl", "t", &["--tier", "S3", "--needs", "a"]).ok();
-        assert_eq!(
-            (&out["job"]["tier"], &out["job"]["needs"]),
-            (&json!("S3"), &json!(["a"])),
-            "{phase}"
-        );
-        assert_eq!(
-            (
-                job_row(&fx.env, "pl", "t", "tier"),
-                job_row(&fx.env, "pl", "t", "goal")
-            ),
-            (json!("S3"), Value::Null)
-        );
-        stub_add(&fx, "pl", "s", &["--spec", &spec, "--needs", "a"]).ok();
-        assert_eq!(
-            (
-                job_row(&fx.env, "pl", "s", "tier"),
-                job_row(&fx.env, "pl", "s", "goal")
-            ),
-            (Value::Null, json!("Do it."))
-        );
-        assert_eq!(job_row(&fx.env, "pl", "s", "touches"), "[\"src/a.rs\"]");
-
-        // An identical rerun is `already` and writes nothing; the same key with other fields is a clash.
-        let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(
-            stub_add(&fx, "pl", "k", &["--needs", "a"]).ok()["already"],
-            true
-        );
-        assert_eq!(
-            (count(&fx.env, "txns"), count(&fx.env, "events")),
-            (txns, evs)
-        );
-        refused(
-            &stub_add(&fx, "pl", "k", &["--tier", "S2", "--needs", "a"]),
-            "job_key_exists",
-            3,
-        );
-
-        // The stub is shown as it is, and can be cancelled.
-        let shown = job(&fx, &["show", "k"], "pl").ok();
-        assert_eq!(
-            (
-                &shown["job"]["tier"],
-                &shown["job"]["goal"],
-                &shown["job"]["touches"]
-            ),
-            (&Value::Null, &Value::Null, &Value::Null),
-            "{phase}"
-        );
-        let listed = job(&fx, &["list"], "pl").ok();
-        let stub = listed["jobs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|j| j["key"] == "k")
-            .unwrap()
-            .clone();
-        assert_eq!(
-            (&stub["tier"], &stub["status"]),
-            (&Value::Null, &json!("draft"))
-        );
-        let out = job(&fx, &["cancel", "k", "--reason", "Not needed."], "pl").ok();
-        assert_eq!(
-            (&out["status"], &out["cancel_requested"]),
-            (&json!("cancelled"), &json!(false))
-        );
-        assert_eq!(
-            (
-                job_row(&fx.env, "pl", "k", "status"),
-                job_row(&fx.env, "pl", "k", "tier")
-            ),
-            (json!("cancelled"), Value::Null)
-        );
+        draft_add_refused_usage(&fx, &["--spec", &spec]);
+        assert_eq!(count(&fx.env, "jobs"), 0, "{phase}");
     }
+}
+
+#[test]
+fn job_add_draft_without_spec_is_refused_usage() {
+    for phase in ["plan", "dispatch"] {
+        let fx = Fx::new();
+        setup(&fx.env);
+        plan(&fx.env, "pl", phase);
+        draft_add_refused_usage(&fx, &["--tier", "S2"]);
+        assert_eq!(count(&fx.env, "jobs"), 0, "{phase}");
+    }
+}
+
+#[test]
+fn job_add_draft_needing_an_unfinished_job_is_refused_draft_parked() {
+    let fx = Fx::new();
+    setup(&fx.env);
+    plan(&fx.env, "pl", "dispatch");
+    job_add(&fx, "pl", "a", "S2", &[]).ok();
+    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    refused(
+        &job_add_draft(&fx, "pl", "d", &["a"], &[]),
+        "draft_parked",
+        3,
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows),
+        "nothing is written"
+    );
+}
+
+#[test]
+fn job_add_draft_in_a_waiting_workflow_is_refused_draft_parked() {
+    let fx = Fx::new();
+    setup(&fx.env);
+    plan(&fx.env, "pl", "dispatch");
+    // PR `web` waits for PR `repo`, which has not merged.
+    fixture(
+        &fx.env,
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'web', 'repo');",
+    );
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    refused(
+        &job_add_draft(&fx, "pl", "d", &[], &["--workflow", "web"]),
+        "draft_parked",
+        3,
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows),
+        "nothing is written"
+    );
 }
 
 #[test]
@@ -2209,11 +2189,7 @@ fn add_without_draft_still_needs_the_tier_and_the_spec() {
             "pl",
         ],
     ] {
-        let e = refused(&fx.cpd(&args), "usage", 2);
-        assert!(
-            e["message"].as_str().unwrap().contains("--draft"),
-            "{args:?}: {e}"
-        );
+        refused(&fx.cpd(&args), "usage", 2);
     }
     assert_eq!(
         (
@@ -2253,9 +2229,8 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         let spec = spec_file(&fx.env);
-        // `a` is queued after the lock; a stub that needs it is legal (hs-d822).
         job_add(&fx, "pl", "a", "S2", &[]).ok();
-        stub_add(&fx, "pl", "k", &[]).ok();
+        stub_row(&fx, "pl", "k", &[], None);
 
         let out = job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
         assert_eq!(
@@ -2303,7 +2278,7 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         );
 
         // The Tier alone, then the Spec alone, complete a stub in two edits.
-        stub_add(&fx, "pl", "two", &[]).ok();
+        stub_row(&fx, "pl", "two", &[], None);
         assert_eq!(
             job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"],
             json!(["tier"]),
@@ -2329,8 +2304,8 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
             (json!("S3"), json!("Do it."))
         );
 
-        // A title edit leaves a waiting stub a stub: a stub that needs a queued Job is legal on its own.
-        stub_add(&fx, "pl", "three", &["--needs", "a"]).ok();
+        // A title edit leaves a stub a stub.
+        stub_row(&fx, "pl", "three", &[], None);
         assert_eq!(
             job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"],
             json!(["title"])
@@ -3106,10 +3081,6 @@ fn add_refuses_a_tier_outside_the_worker_range_and_names_the_range() {
     );
     for tier in OUTSIDE {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
-    }
-    // A stub draft's Tier is checked too.
-    for tier in OUTSIDE {
-        not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!(
         (
@@ -4298,11 +4269,8 @@ fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
     plan(&fx.env, "pl", "plan");
     let root = primary(&fx.env, fx.env.root().join("repos/primary"));
 
-    // A stub draft needs only a title.
-    fx.cpd(&[
-        "job", "add", "stub", "--title", "Stub", "--draft", "--plan", "pl",
-    ])
-    .ok();
+    // A template stub has only a title.
+    stub_row(&fx, "pl", "stub", &[], None);
     assert_eq!(job_row(&fx.env, "pl", "stub", "goal"), Value::Null);
 
     // A draft whose stored Spec names the root (a fixture row) can still be edited with `--title` and cancelled.

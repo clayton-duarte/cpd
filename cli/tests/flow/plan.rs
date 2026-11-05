@@ -64,6 +64,29 @@ fn add_draft(env: &TestEnv, plan: &str, key: &str, needs: &[&str], appended: boo
         .unwrap();
 }
 
+/// An incomplete template stub `key` of `plan` (title `Planned <key>`, no Spec, `tier` as given) needing `needs`.
+/// `job add --draft` always takes a Tier and a Spec (pro-d404), so the only stubs left are a template's: written here.
+fn stub_row(env: &TestEnv, plan: &str, key: &str, needs: &[&str], tier: Option<&str>) {
+    let tier = tier.map_or("NULL".to_owned(), |t| format!("'{t}'"));
+    store(env)
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, status, appended, created_txn, created_at)
+                     VALUES ('{plan}', (SELECT key FROM workflows WHERE plan = '{plan}'), '{key}', 'Planned {key}', {tier}, 'draft',
+                             (SELECT locked_at IS NOT NULL FROM plans WHERE id = '{plan}'), {id}, 't');",
+                    id = tx.id()
+                ),
+            )?;
+            for need in needs {
+                exec(tx, &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn edit_goal(env: &TestEnv, plan: &str, key: &str, goal: &str) {
     store(env)
         .write("fixture", |tx| {
@@ -227,16 +250,6 @@ mod inproc {
             .ok();
         fx.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"])
             .ok();
-    }
-
-    /// `job add <key> --draft --title <t>` in Plan `pay`, a stub, with `extra` flags.
-    pub fn stub(fx: &Fx, key: &str, extra: &[&str]) -> Value {
-        let title = format!("Planned {key}");
-        let mut args = vec![
-            "job", "add", key, "--draft", "--title", &title, "--plan", "pay",
-        ];
-        args.extend(extra);
-        fx.cpd(&args).ok()
     }
 
     /// The argv (after `cpd`) of every `cpd watch --ensure` run so far.
@@ -2317,18 +2330,15 @@ fn a_draft_open_job_is_no_job_under_review() {
 /// hs-n677: a stub no longer escapes review completeness by waiting: `plan review` refuses `draft_incomplete` for it
 /// exactly as for any stub, and once completed and no longer waiting the review covers it and an approval queues it.
 #[test]
-fn a_waiting_stub_refuses_a_review_request_like_any_stub() {
+fn an_incomplete_stub_after_the_lock_refuses_a_review_request() {
     let fx = Fx::with_ports();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
-    // A stub with no Tier and no Spec, waiting on the queued Job `a`: legal on its own, but not under review.
-    let out = inproc::stub(&fx, "waiting-stub", &["--needs", "a"]);
-    assert_eq!(
-        (&out["job"]["status"], &out["job"]["tier"]),
-        (&json!("draft"), &Value::Null)
-    );
+    // A stub with no Tier and no Spec and no Dependency: it cannot wait after the lock (pro-d404), and is not under review.
+    stub_row(&fx.env, "pay", "waiting-stub", &[], None);
+    assert_eq!(job_status(&fx.env, "waiting-stub"), "draft");
 
     // The waiting stub refuses the review `draft_incomplete`, exactly as a stub that waits for nothing would.
     fx.outline_for_review("pay");
@@ -2343,14 +2353,13 @@ fn a_waiting_stub_refuses_a_review_request_like_any_stub() {
         "{e}"
     );
 
-    // Drop the need that makes it wait and complete it: the review covers it and an approval queues it.
+    // Complete it: the review covers it and an approval queues it.
     seed_tiers(&fx.env);
     let spec = spec_file(&fx.env, "waiting");
     fx.cpd(&[
         "job",
         "edit",
         "waiting-stub",
-        "--no-needs",
         "--tier",
         "S2",
         "--spec",
@@ -3470,19 +3479,19 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
-    // A follow-up batch is registered at once: two stubs and a complete draft, all waiting on the queued Job `a`,
-    // and a stub that is dropped again.
-    let out = inproc::stub(&fx, "next-1", &["--needs", "a"]);
+    // A follow-up batch is registered at once: two stubs and a complete draft, none waiting on a queued Job,
+    // and a stub that is dropped again. `next-2` needs the draft `next-1`: allowed for review.
+    stub_row(&fx.env, "pay", "next-1", &[], None);
     assert_eq!(
         (
-            &out["job"]["status"],
-            &out["job"]["tier"],
-            &out["job"]["appended"]
+            job_status(&fx.env, "next-1"),
+            fx.env
+                .query::<i64>("SELECT appended FROM jobs WHERE plan = 'pay' AND key = 'next-1'")
         ),
-        (&json!("draft"), &Value::Null, &json!(true))
+        ("draft".to_owned(), 1)
     );
-    inproc::stub(&fx, "next-2", &["--needs", "next-1"]);
-    inproc::stub(&fx, "dropped", &["--needs", "a"]);
+    stub_row(&fx.env, "pay", "next-2", &["next-1"], None);
+    stub_row(&fx.env, "pay", "dropped", &[], None);
     fx.cpd(&[
         "job",
         "cancel",
@@ -3493,7 +3502,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
         "pay",
     ])
     .ok();
-    add_draft(&fx.env, "pay", "done-1", &["a"], true);
+    add_draft(&fx.env, "pay", "done-1", &[], true);
     let shown = inproc::show(&fx, "pay");
     let listed = shown["jobs"]
         .as_array()
@@ -3545,16 +3554,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     seed_tiers(&fx.env);
     let spec = spec_file(&fx.env, "batch");
     fx.cpd(&[
-        "job",
-        "edit",
-        "next-1",
-        "--no-needs",
-        "--tier",
-        "S2",
-        "--spec",
-        &spec,
-        "--plan",
-        "pay",
+        "job", "edit", "next-1", "--tier", "S2", "--spec", &spec, "--plan", "pay",
     ])
     .ok();
     fx.cpd(&[
@@ -3593,8 +3593,8 @@ fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
     let repo = inproc::locking(&fx);
     seed_tiers(&fx.env);
     inproc::approved(&fx, &repo);
-    inproc::stub(&fx, "later", &[]);
-    inproc::stub(&fx, "also", &["--tier", "S2"]);
+    stub_row(&fx.env, "pay", "later", &[], None);
+    stub_row(&fx.env, "pay", "also", &[], Some("S2"));
     let lock = || fx.cpd(&["plan", "lock", "--plan", "pay"]);
 
     // The approved review no longer covers the Jobs; the lock names the stubs before it names the review.
@@ -3647,23 +3647,13 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     seed_tiers(&fx.env);
     inproc::new_plan(&fx, "pay", &repo);
     fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    inproc::stub(&fx, "bare", &[]);
-    inproc::stub(&fx, "tiered", &["--tier", "S3"]);
+    stub_row(&fx.env, "pay", "bare", &[], None);
+    stub_row(&fx.env, "pay", "tiered", &[], Some("S3"));
     add_job(&fx.env, "pay", "full", &[]);
     // Another Plan's stub in the same repo does not break the overlap check.
     inproc::new_plan(&fx, "oth", &repo);
     fx.cpd(&["plan", "phase", "plan", "--plan", "oth"]).ok();
-    fx.cpd(&[
-        "job",
-        "add",
-        "elsewhere",
-        "--draft",
-        "--title",
-        "Elsewhere",
-        "--plan",
-        "oth",
-    ])
-    .ok();
+    stub_row(&fx.env, "oth", "elsewhere", &[], None);
 
     let out = fx.cpd(&["plan", "render", "--plan", "pay"]).ok();
     assert_eq!(
