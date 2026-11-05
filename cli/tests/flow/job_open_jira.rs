@@ -8,7 +8,9 @@ use super::driver_desc_gate::{CLEAR_JIRA, refused_open_merge};
 use super::driver_open::{Live, open_live, open_pr_live};
 
 const NO_JIRA: &str = "UPDATE workflows SET jira = NULL WHERE key = 'repo';";
-const WITH_JIRA: &str = "UPDATE workflows SET jira = 'ABC-1' WHERE key = 'repo';";
+const WITH_JIRA: &str = "UPDATE workflows SET jira = 'ABC-1', title = 'feat: ABC-1/Charge the card at checkout' WHERE key = 'repo';";
+const BAD_TITLE: &str =
+    "UPDATE workflows SET title = 'Charge the card at checkout' WHERE key = 'repo'";
 
 /// `open_live` whose owner `acme` requires a ticket (`required`) or says nothing of it.
 fn live_requiring(required: bool) -> Live {
@@ -66,6 +68,13 @@ fn an_open_jobs_merge_with_no_jira_ticket_fails_gate_error_and_is_not_merged() {
     let live = live_requiring(true);
     live.fixture(WITH_JIRA);
     refused_open_merge(&live, CLEAR_JIRA, "jira_required");
+}
+
+#[test]
+fn open_merge_refuses_a_title_without_the_jira_key() {
+    let live = live_requiring(true);
+    live.fixture(WITH_JIRA);
+    refused_open_merge(&live, BAD_TITLE, "jira_title_invalid");
 }
 
 /// Guard: a policy that leaves the key false never needs a ticket.
