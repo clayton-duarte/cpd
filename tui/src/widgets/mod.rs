@@ -29,6 +29,8 @@ pub(crate) mod inbox;
 #[cfg(test)]
 mod inbox_actions_tests;
 #[cfg(test)]
+mod inbox_dialog_link_tests;
+#[cfg(test)]
 mod inbox_flat_tests;
 #[cfg(test)]
 mod inbox_loop_guard_tests;
@@ -557,8 +559,11 @@ fn show<B: Backend>(
                         Outcome::Pick(entry) => {
                             let InboxMenu { item, .. } =
                                 inbox_menu.take().expect("the menu was open");
-                            let (opener, now) =
-                                (Arc::clone(opener), clock::timestamp(ports.clock.utc()));
+                            let (opener, now, runner) = (
+                                Arc::clone(opener),
+                                clock::timestamp(ports.clock.utc()),
+                                ports.runner.clone(),
+                            );
                             let pull = inbox::Pull::from_subject(&item.subject)
                                 .map(|p| p.to_string())
                                 .filter(|_| matches!(entry, InboxEntry::Post | InboxEntry::Merge));
@@ -598,6 +603,22 @@ fn show<B: Backend>(
                                             opener.jump(&item, &now);
                                             true
                                         }
+                                        InboxEntry::OpenLink => match item.url.as_deref() {
+                                            Some(url) => match crate::link::open_url(&*runner, url)
+                                            {
+                                                Ok(()) => true,
+                                                Err(e) => {
+                                                    dialog::report(
+                                                        &opener.tmux,
+                                                        &opener.log,
+                                                        "Open Link",
+                                                        &e,
+                                                    );
+                                                    false
+                                                }
+                                            },
+                                            None => true,
+                                        },
                                         InboxEntry::CopyLink => {
                                             opener.copy_link(&item);
                                             true

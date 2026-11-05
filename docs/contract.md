@@ -288,6 +288,7 @@ One deliverable over one or more Workflows (R34), optionally a Jira task. This i
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
 | `archived_at` | time? | null, or when the Plan was archived (migration 3, §4.5); see "Archived" below |
 | `outline` | text? (JSON) | null until the Lead sets it with `plan outline` (commands.md §4.13; hs-d502): the canonical JSON (keys sorted, no whitespace) of the Plan's outline `{assumptions, decided, decisions, done_when, goal, out_of_scope, risks}`, the source of what a Plan review's summary says (commands.md §4.5, §4.6). Replaced whole, never edited in part. It is in the plan fingerprint when set (§2.3). Added by migration `plan-outline` (§4.5), so a Plan made before it has null |
+| `reviewed_pr` | json? | the GitHub pull request a review Plan reviews (Plan `codereview-pr-links`, decision pro-d412): null, or `{repo, number, url, title, state}`. **Stored** in three nullable columns of `plans` (§4.4; migration `plan-reviewed-pr`, §4.5): `reviewed_repo` (GitHub's `owner/name`), `reviewed_number`, `reviewed_title`. They are all null or all set. No CHECK can span the three columns without a rebuild, so the one writer (`inbox claim`, commands.md §21.7, which writes them in one statement in its transaction) keeps them whole, and a reader that finds a partial set fails loud. **Shape:** `repo` = `reviewed_repo`; `number` = `reviewed_number`; `title` = `reviewed_title`, the title GitHub gave when the claim read the pull request; `url` = `https://github.com/<repo>/pull/<number>`, built by one helper, `Brief::url` in `core/src/inbox/review_plan.rs`, which every reader of the url reuses; `state` = `open`, `merged` or `closed` from the `pull_requests` row of `(repo, number)` (§2.2 "Pull request"), read live at read time and never stored, and **null when no such row exists** (no row, no state). **Null rules:** `reviewed_pr` is null for every Plan whose columns are null: every Plan that is not a codereview Plan (`plans.context = 'codereview'` is the predicate, `pro-d412` A2), and every legacy codereview Plan, which has no backfill and so shows no link and no box. The name is `reviewed_pr` because `review` is the latest Plan review (`plan show`, `PlanViewModel`). Read by `plan show` and `plan list` (commands.md §4.3, §4.2) and so by the cockpit's Plan pane (§5.5) |
 
 #### Workflow
 
@@ -699,7 +700,7 @@ One thing that needs the User: the **single source of "needs you"** (hs-d165), s
 | `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
 | `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
 | `label` | text | the short text of the table below |
-| `url` | text? | a page that shows it: for `plan-review`, always null (Removed (hs-d738)). For `pr-*` and `review-requested`, the pull request's page; for `review-requested`, `https://github.com/<owner>/<repo>/pull/<n>` built from the item's pull request; for `deploy`, the run's page, the `url` of its entry in `run/deploy-runs.json` |
+| `url` | text? | a page that shows it: for `plan-review`, always null (Removed (hs-d738)). For `pr-*` and `review-requested`, the pull request's page; for `review-requested`, `https://github.com/<owner>/<repo>/pull/<n>` built from the item's pull request; for `deploy`, the run's page, the `url` of its entry in `run/deploy-runs.json`; for `dialog`, the reviewed pull request's page (`https://github.com/<owner>/<repo>/pull/<n>`, from the Plan's `reviewed_pr`, §2.2 Plan) when the Session's Plan has one, else null (`docs/architecture/attention-inbox.md`, "The reviewed PR of a review Plan") |
 | `opened_at` | time | when the condition began; for `deploy`, the run's `created_at` (so the Inbox's age counts from when the run began waiting, not from when cpd saw it); for every other kind, when E8 opened the item |
 | `closed_at` | time? | null while open |
 | `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
@@ -878,6 +879,30 @@ The command surface of Workflows; `commands.md` specifies each command in full.
 | `plan outline --file <outline.json>` | every phase | sets the Plan's outline (§2.2 Plan `outline`), replacing it whole; its `done_when` keys are Workflows of the Plan that are not `cancelled`; it is in the plan fingerprint (§2.3) (`commands.md` §4.13, hs-d502) |
 
 **The plan view** (`PlanView`, the cockpit's centre top; A15): one box per Workflow that is not `cancelled`, showing its key, its repo's directory name, its base, and its pull request's number and state (or its status before it is open), with the chart of its Jobs and their Dependencies inside. The boxes are laid out left to right in the order of the needs graph and the base Workflows of the Plan (a Workflow to the right of every Workflow it needs or is stacked on) and linked by lines for the needs and, dashed, for a base Workflow (plain box-drawing, no arrowhead; hs-d638). All references are within the Plan; a stacked Workflow shows `on <key>` (hs-d522). A Plan of one Workflow shows one box.
+
+**The Review PR box** (decision pro-d412, assumption A5). A Plan with a `reviewed_pr` (§2.2) and no Workflow row draws one bordered box at the top of the canvas, where the first row of Workflow boxes would be (below the explore Jobs box when there is one), at the chart margin's column 1. It is a `BoxWidget<Full>` (the box widget of commands.md §13.2 "Workflow boxes"), **W** columns wide, W being the Plan view's width less the two columns of `CHART_MARGIN`, and five rows high. Its top border carries the title ` Review <name> `, `<name>` the part of `reviewed_repo` after `/`, after the corner and one `─`; the rest of the top border is `─`, and the bottom border is plain. Inside the walls and one column of padding on each side, the inner width is W − 4 columns, and the body has three rows: `<owner>/<name>` (`reviewed_repo`); the PR title (`reviewed_title`), cut to the inner width by `cells::truncate` (a final `…` when it does not fit); and the link row `#<number> <state> 󱆭`, with `<state>` omitted when `state` is null. A left click anywhere in the box opens `url` in the default browser. The link row is drawn as a `Link` (commands.md §13.2 "Links"): its text `#<number> <state>` underlined, then the cue `󱆭`. The box never reads `no Workflow yet`: that message (commands.md §13.2) is not drawn for a Plan with a `reviewed_pr`, and a Plan with neither a Workflow nor a `reviewed_pr` keeps it.
+
+Exact rows at W = 40, the chart margin not shown (`󱆭` is U+F11AD, one cell). The state word takes the colour of the Workflow box title's state word (commands.md §13.2). State `open`, the pull request has a `pull_requests` row:
+
+```
+╭─ Review cpd ─────────────────────────╮
+│ clayton-duarte/cpd                   │
+│ Show reviewed PR links for coderevi… │
+│ #912 open 󱆭                          │
+╰──────────────────────────────────────╯
+```
+
+State `null`, no `pull_requests` row for `(repo, number)`, the same box for another Plan:
+
+```
+╭─ Review web ─────────────────────────╮
+│ clayton-duarte/web                   │
+│ Fix the flaky tick test              │
+│ #7 󱆭                                 │
+╰──────────────────────────────────────╯
+```
+
+The web card of the same Plan is `web/src/ui/DESIGN-panes.md` §1i.
 
 ### 2.7 Plan lint rules
 
@@ -1740,6 +1765,9 @@ CREATE TABLE plans (
   archived_at   TEXT,                          -- migration 3 (archive)
   outline       TEXT CHECK (outline IS NULL OR (json_valid(outline) AND json_type(outline) = 'object')),  -- migration `plan-outline` (additive): the canonical JSON of the Plan's outline (§2.2); null until `plan outline`
   deleted_at    TEXT,                          -- migration `delete-tombstone` (hs-d527; an ADD COLUMN, so last): null, or the time the Plan was deleted; the row is then a tombstone, never deleted (§2.2 "Deleted"); set once (`plans_deleted_once`)
+  reviewed_repo    TEXT CHECK (reviewed_repo IS NULL OR reviewed_repo LIKE '_%/_%'),  -- migration `plan-reviewed-pr` (additive, pro-d412): the reviewed pull request's GitHub `owner/name`; the three reviewed_* columns are all null or all set (§2.2 Plan `reviewed_pr`)
+  reviewed_number  INTEGER CHECK (reviewed_number IS NULL OR reviewed_number >= 1),  -- migration `plan-reviewed-pr`: the reviewed pull request's number
+  reviewed_title   TEXT,                         -- migration `plan-reviewed-pr`: the pull request's title as the claim's live check read it
   CHECK ((phase IN ('grounding', 'plan')) = (locked_at IS NULL)),
   CHECK ((phase = 'done') = (done_at IS NOT NULL))
 ) STRICT;
@@ -2721,6 +2749,7 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
   1. `jobs_new` with the §4.4 definition, whose `tier` check is the one of §4.4 (`substr(tier, 1, 1) IN ('O', 'S', 'H', 'G')`, and the second character `0`–`4` or `X`: effort 5 is gone); every row copied with all columns and every `seq` kept, the old table dropped, the new one renamed, and every index and trigger of `jobs` recreated exactly as §4.4 has them. The copy writes no `history` row. A stored Tier with effort 5 fails the new CHECK and so the migration (no Worker, Lead or Manager could have one: every role refused effort 5).
   2. `tier_catalog` is rebuilt **empty** with the §4.4 definition (`letter IN ('O', 'S', 'H', 'G')`): it is a cache, and the next `cpd tiers` recomputes its rows, as `tier-catalog-source` did (above).
   The reconcile (K4) keeps the history triggers of both tables. `PRAGMA foreign_key_check` is empty afterwards. The pinned `SCHEMA_HASH` changes (`scripts/repin.sh`, §4.3). Tests: every `jobs` row and `seq` survives; `tier_catalog` is empty; the CHECK accepts `GX` and `G4` and refuses `G9`. `sessions.tier`, `attempts.tier` and `jobs.retry_tier` are not rebuilt here: `20261103T0700-tier-rows-v2` (§4.5) fixes them.
+- **`<YYYYMMDDTHHMM>-plan-reviewed-pr`** (decision pro-d412, carrying codereview pro-d7; Plan `codereview-pr-links`, assumption A1; made with `scripts/new-migration.sh plan-reviewed-pr additive`), a named migration declared `additive`, of three statements and no rebuild: `ALTER TABLE plans ADD COLUMN reviewed_repo TEXT CHECK (reviewed_repo IS NULL OR reviewed_repo LIKE '_%/_%')`, `ALTER TABLE plans ADD COLUMN reviewed_number INTEGER CHECK (reviewed_number IS NULL OR reviewed_number >= 1)` and `ALTER TABLE plans ADD COLUMN reviewed_title TEXT` (§4.4). All three are nullable (A1: a nullable `ADD COLUMN`). Every existing Plan gets null in all three: nothing is back-filled, so a legacy codereview Plan shows no reviewed PR (§2.2 Plan `reviewed_pr`). The three are written together only by `inbox claim` (commands.md §21.7), in its transaction. No `UPDATE` or `DELETE` touches an existing row. The reconcile (K4) regenerates `plans`' history triggers from the new columns. The plan fingerprint (§2.3) does not include them. `PROTOCOL` is not raised: no Event kind is added and no Event `data` changes. `SCHEMA_HASH` is re-pinned (§4.3). The tests: a store before the migration keeps every `plans` row, each with the three columns null; a Plan with all three set is accepted; the schema hash after the migration matches that of a fresh store.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store

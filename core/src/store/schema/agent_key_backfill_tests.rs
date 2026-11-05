@@ -206,45 +206,49 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(9).map(|n| n.name),
+        NAMED.iter().rev().nth(10).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans` and `pr-archived` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `pr-archived` and `plan-reviewed-pr` come after it"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(8).map(|n| n.name),
+        NAMED.iter().rev().nth(9).map(|n| n.name),
         Some("20261103T1100-workflow-reopen")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(7).map(|n| n.name),
+        NAMED.iter().rev().nth(8).map(|n| n.name),
         Some("20261103T1200-context-reads")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(6).map(|n| n.name),
+        NAMED.iter().rev().nth(7).map(|n| n.name),
         Some("20261103T2150-context-supersedes-list")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(5).map(|n| n.name),
+        NAMED.iter().rev().nth(6).map(|n| n.name),
         Some("20261103T2200-drop-question-answer")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(4).map(|n| n.name),
+        NAMED.iter().rev().nth(5).map(|n| n.name),
         Some("20261104T1445-bump-last-posted-at")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(3).map(|n| n.name),
+        NAMED.iter().rev().nth(4).map(|n| n.name),
         Some("20261104T1555-record-topics")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(2).map(|n| n.name),
+        NAMED.iter().rev().nth(3).map(|n| n.name),
         Some("20261104T1600-workflow-base-retarget")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(1).map(|n| n.name),
+        NAMED.iter().rev().nth(2).map(|n| n.name),
         Some("20261104T1601-finish-legacy-review-plans")
     );
     assert_eq!(
-        NAMED.iter().next_back().map(|n| n.name),
+        NAMED.iter().rev().nth(1).map(|n| n.name),
         Some("20261105T1521-pr-archived")
+    );
+    assert_eq!(
+        NAMED.iter().next_back().map(|n| n.name),
+        Some("20261105T1600-plan-reviewed-pr")
     );
 }
 
@@ -325,9 +329,12 @@ fn agent_key_backfill_changes_only_the_name_column() {
     let (cols, old_rows) = table(&mut old, &sql);
     let tables = ["contexts", "plans", "workflows", "jobs", "attempts"];
     let mut old_other = Vec::new();
+    // The old columns only: `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`.
+    let mut old_sql = Vec::new();
     for t in tables {
         let sql = select_all(&mut old, t, "rowid");
         old_other.push(table(&mut old, &sql));
+        old_sql.push(sql);
     }
     drop(old);
     let mut store = migrated_in(&home);
@@ -346,8 +353,7 @@ fn agent_key_backfill_changes_only_the_name_column() {
         renamed += usize::from(o[name] != n[name]);
     }
     assert_eq!(renamed, new_rows.len() - 3, "every row but the forks");
-    for (t, before) in tables.iter().zip(old_other) {
-        let sql = select_all(&mut store, t, "rowid");
-        assert_eq!(table(&mut store, &sql), before, "{t} is untouched");
+    for ((t, before), sql) in tables.iter().zip(old_other).zip(&old_sql) {
+        assert_eq!(table(&mut store, sql), before, "{t} is untouched");
     }
 }

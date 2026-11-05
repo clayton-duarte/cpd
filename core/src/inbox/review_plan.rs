@@ -66,6 +66,11 @@ pub fn title(slug: &str, number: u64, pr_title: &str) -> String {
     full.chars().take(MAX_TITLE).collect()
 }
 
+/// The page of pull request `number` of `repo` (`<owner>/<name>`): the one place the url is built.
+pub fn pr_url(repo: &str, number: u64) -> String {
+    format!("https://github.com/{repo}/pull/{number}")
+}
+
 /// What the brief names.
 pub struct Brief<'a> {
     /// `<owner>/<repo>` of the item's subject.
@@ -81,7 +86,7 @@ pub struct Brief<'a> {
 impl Brief<'_> {
     /// The pull request's url, derived from the repo and the number.
     pub fn url(&self) -> String {
-        format!("https://github.com/{}/pull/{}", self.repo, self.number)
+        pr_url(self.repo, self.number)
     }
 
     /// The brief of commands.md §21.7, exact.
@@ -98,7 +103,8 @@ Read `{home}/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and 
 1. Turn 1: run `~/cpd-codereview/cpd-code-review/prefetch.sh \"{url}\" \"/tmp/$CPD_PLAN\"`.
 2. Never run `cpd context show --context codereview`; never message any Manager or Lead (`cpd session send` / `cpd board post`).
 3. Use `{home}/projects/{repo_name}` (`git show`/`git grep`) and `H2` `scout` Jobs (`cpd job add --kind scout --tier H2`) if wide/cross-repo/multi-branch exploration is needed.
-4. After the User answers the `Verdict` `ask_user_question`, run 1 bash call (`cpd review submit ... --slack {channel}/{ts_raw} && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message."
+4. After the User answers the `Verdict` `ask_user_question`, run 1 bash call (`cpd review submit ... --slack {channel}/{ts_raw} && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message.
+5. Begin the `Verdict` `ask_user_question` with the full PR URL `{url}`: the question's first words are `{url}`."
         )
     }
 }
@@ -178,7 +184,12 @@ mod tests {
         ));
         assert!(text.contains("3. Use `/h/projects/pay` (`git show`"));
         assert!(text.ends_with(
-            "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message."
+            "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop: after that call your turn is complete, so emit no post-submit report or message.
+5. Begin the `Verdict` `ask_user_question` with the full PR URL `https://github.com/acme/pay/pull/812`: the question's first words are `https://github.com/acme/pay/pull/812`."
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "review_plan_tests.rs"]
+mod review_plan_tests;

@@ -83,6 +83,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
     let id = args.plan.require()?.clone();
     let (plan, mut workflows, jobs, mut attempts, escalations, review, cursor) =
         env.store.read(|conn| snapshot(conn, &id))?;
+    let reviewed_pr = env.store.read(|conn| super::row::reviewed_pr(conn, &id))?;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for workflow in &mut workflows {
@@ -102,8 +103,10 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
             v
         })
         .collect();
+    let mut plan = plan.to_json();
+    plan["reviewed_pr"] = reviewed_pr;
     Ok(Output::success(json!({
-        "plan": plan.to_json(),
+        "plan": plan,
         "workflows": workflows,
         "jobs": job_values,
         "escalations": escalations,

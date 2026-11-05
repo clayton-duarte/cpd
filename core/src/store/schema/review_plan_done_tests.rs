@@ -34,7 +34,11 @@ fn dump(store: &mut Store) -> String {
                 let rows = stmt
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
+                // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: not what this migration touches.
+                Ok(rows
+                    .into_iter()
+                    .filter(|n| !n.starts_with("reviewed_"))
+                    .collect())
             })
             .unwrap();
         let pairs: Vec<String> = names.iter().map(|n| format!("'{n}', {n}")).collect();

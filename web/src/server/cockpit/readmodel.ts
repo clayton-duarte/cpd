@@ -22,7 +22,8 @@ export interface RawInboxItem {
   context: StrOrNull; plan: StrOrNull; job: StrOrNull; session: StrOrNull; url: StrOrNull;
   snoozed_until: StrOrNull; dismissed_at: StrOrNull; claimed_at: StrOrNull; workflow: StrOrNull; subject?: string;
 }
-export interface RawPlanShow { plan: { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; lead_session: StrOrNull }; counts: PlanCounts; jobs: Obj[]; workflows: Obj[]; review: Obj | null; escalations: unknown[]; cursor: number }
+export interface ReviewedPrRaw { repo: string; number: number; url: string; title: string; state: StrOrNull }
+export interface RawPlanShow { plan: { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; lead_session: StrOrNull }; counts: PlanCounts; jobs: Obj[]; workflows: Obj[]; review: Obj | null; escalations: unknown[]; cursor: number; reviewed_pr: ReviewedPrRaw | null }
 export interface ParsedInbox {
   rows: RawInboxItem[];
   engineRunning: boolean;
@@ -134,6 +135,11 @@ export function parseInboxList(reply: Reply): ParsedInbox {
     cursor: cursorOf(reply, c),
   };
 }
+function reviewedPrOf(v: unknown, c: string): ReviewedPrRaw | null {
+  if (v === null || v === undefined) return null;
+  const o = obj(v, c, "reviewed_pr");
+  return { repo: str(o, "repo", c), number: num(o, "number", c), url: str(o, "url", c), title: str(o, "title", c), state: strN(o, "state", c) };
+}
 export function parsePlanShow(reply: Reply): RawPlanShow {
   const c = "plan show";
   const p = obj(reply["plan"], c, "plan");
@@ -146,6 +152,7 @@ export function parsePlanShow(reply: Reply): RawPlanShow {
     review: review === null ? null : obj(review, c, "review"),
     escalations: arr(reply, "escalations", c),
     cursor: cursorOf(reply, c),
+    reviewed_pr: reviewedPrOf(reply["reviewed_pr"], c),
   };
 }
 
@@ -293,7 +300,7 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
   return {
     planId: raw.plan.id, contextId: raw.plan.context, title: raw.plan.title, phase: raw.plan.phase, counts: raw.counts,
     review: r === null ? null : { id: str(r, "id", c), status: str(r, "status", c), current: bool(r, "current", c) },
-    openEscalations: raw.escalations.length, workflows, jobs, cursor: raw.cursor,
+    openEscalations: raw.escalations.length, workflows, jobs, cursor: raw.cursor, reviewedPr: raw.reviewed_pr,
   };
 }
 

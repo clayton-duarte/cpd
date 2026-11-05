@@ -311,6 +311,8 @@ struct Seat {
     state_label: String,
     /// Its Plan's title, else its own: `COALESCE(plans.title, sessions.title)`; `None` when both are NULL. Only `unread` reads it.
     title: Option<String>,
+    /// The url of the pull request its Plan reviews, when it stores one. Only a `dialog` carries it.
+    reviewed_url: Option<String>,
     event: Option<i64>,
 }
 
@@ -321,7 +323,8 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
         "SELECT s.id, s.context, s.plan, p.phase,
                 EXISTS (SELECT 1 FROM plans q WHERE q.lead_session = s.id),
                 s.role = 'manager',
-                {event}, COALESCE(s.state_label, ''), COALESCE(p.title, s.title)
+                {event}, COALESCE(s.state_label, ''), COALESCE(p.title, s.title),
+                p.reviewed_repo, p.reviewed_number
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role <> 'worker' AND s.archived_at IS NULL AND p.deleted_at IS NULL AND {filter}
           ORDER BY s.created_at, s.id"
@@ -352,6 +355,15 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
             event: row.get(6)?,
             state_label: row.get(7)?,
             title: row.get(8)?,
+            reviewed_url: match (
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+            ) {
+                (Some(repo), Some(number)) => {
+                    Some(super::review_plan::pr_url(&repo, number as u64))
+                }
+                _ => None,
+            },
         });
     }
     Ok(seats)
@@ -363,7 +375,11 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
         urgency,
         subject: format!("session:{}", seat.session),
         label,
-        url: None,
+        url: if kind == Kind::Dialog {
+            seat.reviewed_url
+        } else {
+            None
+        },
         context: Some(seat.context),
         plan: seat.plan,
         job: None,

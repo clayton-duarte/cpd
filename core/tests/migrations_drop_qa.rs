@@ -30,6 +30,10 @@ fn raw(home: &CpdHome) -> Connection {
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
     (
+        "plans",
+        "ALTER TABLE plans DROP COLUMN reviewed_repo; ALTER TABLE plans DROP COLUMN reviewed_number; ALTER TABLE plans DROP COLUMN reviewed_title",
+    ),
+    (
         "pull_requests",
         "ALTER TABLE pull_requests DROP COLUMN archived",
     ),
@@ -71,7 +75,15 @@ fn rewind(conn: &Connection) {
             .collect();
         for trigger in triggers {
             // Hand-written and owned by the migrations (§4.5 K4), they name none of the added columns: reconcile does not recreate them.
-            if trigger == "pull_requests_hist_del" || trigger == "pull_requests_owned" {
+            // The hand-written `plans` triggers likewise: none names a `reviewed_*` column (`plan-reviewed-pr`).
+            if matches!(
+                trigger.as_str(),
+                "pull_requests_hist_del"
+                    | "pull_requests_owned"
+                    | "plans_phase"
+                    | "plans_deleted_once"
+                    | "plans_done_no_pending_review"
+            ) {
                 continue;
             }
             conn.execute_batch(&format!("DROP TRIGGER {trigger}"))

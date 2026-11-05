@@ -212,6 +212,23 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
   );
 }
 
+function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): ReactElement {
+  const { pr } = props;
+  return (
+    <section aria-label="Review PR" data-part="review-pr" className="rounded-[9px] border border-border bg-card px-3 py-2">
+      <h3 className="font-mono text-key font-semibold text-fg-strong">Review PR</h3>
+      <p data-part="review-pr-repo" className="font-mono text-[11.5px] text-muted-foreground">{pr.repo}</p>
+      <p data-part="review-pr-title" className="text-foreground">{pr.title}</p>
+      <p data-part="pr" className="font-mono text-[11.5px]">
+        <a href={pr.url} target="_blank" rel="noopener noreferrer" className="text-status-focus-bright underline-offset-2 hover:underline">
+          {`#${pr.number}${pr.state === null ? "" : ` ${pr.state}`}`}
+        </a>
+        <span aria-hidden="true"> 󱆭</span>
+      </p>
+    </section>
+  );
+}
+
 export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void;
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
 }): ReactElement {
@@ -242,7 +259,8 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
       {plan.workflows.map((wf) => (
         <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} />
       ))}
-      {plan.workflows.length === 0 && explore.length === 0 ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
+      {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
+      {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
     </section>
   );
 }

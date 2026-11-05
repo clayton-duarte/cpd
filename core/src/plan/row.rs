@@ -129,14 +129,44 @@ impl PlanRow {
         })
     }
 
-    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them.
+    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them. `reviewed_pr` is null here: it needs a
+    /// read of the store, so `plan show` sets it with [`reviewed_pr`].
     pub fn to_json(&self) -> Value {
         json!({
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
             "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
-            "archived_at": self.archived_at, "outline": self.outline.as_ref().map(Outline::to_value),
+            "archived_at": self.archived_at, "outline": self.outline.as_ref().map(Outline::to_value), "reviewed_pr": Value::Null,
         })
     }
+}
+
+/// The pull request a review Plan reviews (contract §2.2 Plan `reviewed_pr`): null, or `{repo, number, url, title, state}`,
+/// the `state` read from the `pull_requests` row of `(repo, number)` now, null when there is none.
+pub fn reviewed_pr(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
+    type Stored = (Option<String>, Option<i64>, Option<String>);
+    let (repo, number, title): Stored = conn.query_row(
+        "SELECT reviewed_repo, reviewed_number, reviewed_title FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let (repo, number, title) = match (repo, number, title) {
+        (None, None, None) => return Ok(Value::Null),
+        (Some(repo), Some(number), Some(title)) => (repo, number, title),
+        _ => {
+            return Err(CpdError::bad_row(format!(
+                "Plan {plan} has a partial reviewed pull request"
+            )));
+        }
+    };
+    let state: Option<String> = conn
+        .query_row(
+            "SELECT state FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let url = crate::inbox::review_plan::pr_url(&repo, number.unsigned_abs());
+    Ok(json!({"repo": repo, "number": number, "url": url, "title": title, "state": state}))
 }
 
 /// Every Plan matching `filter` (SQL after `WHERE`), oldest first; a deleted Plan is no Plan (contract §2.2 "Deleted").
@@ -199,7 +229,7 @@ mod tests {
         assert_eq!(
             plan.to_json(),
             json!({"id": "pay", "context": "ctx", "title": "Pay", "jira": "PAY-1", "phase": "grounding", "lead_session": "lead1",
-                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null})
+                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null, "reviewed_pr": null})
         );
         let all = store
             .read(|conn| query(conn, "context = ?1", &[&"ctx"]))
