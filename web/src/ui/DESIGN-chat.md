@@ -1,16 +1,16 @@
 # Dango v3 chat transcript: design contract (ChatHeader, transcript rows, folds, tools)
 
-Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`. This file is the contract for the chat surface: `ChatHeader`, the user bubble, the assistant text (a Bubble with no card) with typeset Markdown, the cpd Marker rows, the compaction divider, the Thinking row, Tool rows and Tool Groups, the pending, failed and queued rows. Tests are written from this file alone, the implementation from the tests and this file.
+Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`. This file is the contract for the chat surface: `ChatHeader`, the user bubble, the assistant text (a Bubble with no card) with typeset Markdown, the cpd Marker rows, the compaction divider, the Chain of Thought row (pro-d61), Tool rows and Tool Groups, the pending, failed and queued rows, and the user message with its image thumbnails. The chat is the approved preview's (pro-d55 to pro-d61). Tests are written from this file alone, the implementation from the tests and this file.
 
-It builds on `web/src/ui/DESIGN.md` (called **DESIGN.md**). Reused by reference, never restated: the hook names (DESIGN.md 1.1), the styling rules (1.2: Tailwind utilities, tokens not hex, `cn`, `data-tone`/`data-glyph` from `dango-status.ts`), the tokens (2b), the glyph classes (2c, `glyph-active`, `glyph-done`, `glyph-blocked`, ...), `glyphClass` / `toneClasses` (2d), the `Button` part (2f) and the typeset preset `typeset typeset-chat` (2g). Decisions: pro-d16, pro-d18, pro-d19, pro-d21, pro-n11, pro-n12, pro-n14, pro-n15; assumptions A1 to A6.
+It builds on `web/src/ui/DESIGN.md` (called **DESIGN.md**). Reused by reference, never restated: the hook names (DESIGN.md 1.1), the styling rules (1.2: Tailwind utilities, tokens not hex, `cn`, `data-tone`/`data-glyph` from `dango-status.ts`), the tokens (2b), the glyph classes (2c, `glyph-active`, `glyph-done`, `glyph-blocked`, ...), `glyphClass` / `toneClasses` (2d), the `Button` part (2f) and the typeset preset `typeset typeset-chat` (2g). Decisions: pro-d16, pro-d18, pro-d19, pro-d21, pro-n11, pro-n12, pro-n14, pro-n15, and pro-d55 to pro-d61 (amended in section 6); assumptions A1 to A6.
 
 Sources read: the boards' chat zone (`Main.dc.html` lines 257 to 402, via `sc-main-board.md` section 3b), COMPONENTS.md rows for the title bar, user message, Thinking, tool groups, `ToolTickStrip`, φ notices and compaction, and the Phase 2 code (`web/src/ui/chat/*`, `web/src/ui/ChatPane.tsx`, `web/src/state/store.ts`, `web/src/protocol/domain.ts`) with the Phase 2 test inventory (`sc-web-chat.md` section 7).
 
 **Contradiction rule** (as DESIGN.md): the board's rendered value wins over the handoff text; Phase 2 behaviour (data, ARIA, hooks, tests) wins over the board unless this file says otherwise. Each resolution is one line marked **Resolution**.
 
-**File boundary (pro-n15) and no backend change (A6).** Implementation touches only `web/src/ui/**` and `web/src/lib/**`. Nothing in `web/src/protocol/**`, `web/src/state/**`, `web/src/server/**`. `web/src/ui/chat/virtual.ts` and `rows.ts` are unchanged in behaviour. A design element whose data the protocol or the store does not carry renders only when an optional prop is passed, or is omitted, never faked; each is listed under **Not wired** (section 5).
+**File boundary (pro-n15) and no backend change (A6), as written for Phase 2.** For pro-d48 to pro-d61 the boundary is widened by the protocol and store changes listed in CONTRACT section 11 (pending `at`, `images` on pending rows, the echoed image bytes); no other `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**` change is a chat contract. `web/src/ui/chat/virtual.ts` and `rows.ts` are unchanged in behaviour. A design element whose data the protocol or the store does not carry renders only when an optional prop is passed, or is omitted, never faked; each is listed under **Not wired** (section 5).
 
-**Shadcn parts (Context, chat decision).** The chat blocks use four shadcn parts only, from `web/src/ui/components/` (2f): `Bubble` (the user message, the assistant text, queued and pending rows), `Trace` (the Thinking row, tool rows, tool groups, the working cues), `Marker` (cpd folds, compaction) and `Collapsible` (the root of every collapsible block). `Button` (`../components/button.tsx`) stays for the header toggles and the two transcript buttons (`Load earlier`, `Jump to bottom`). **Resolution:** the Phase 2 native `details`/`summary` blocks are replaced by these parts; the Phase 2 hooks they carried are kept on the part's root (section 4). The `Attachment` and `MessageScroller` parts are not used.
+**Shadcn parts (pro-d55).** The chat is built from shadcn parts in `web/src/ui/components/` (2f): `MessageScroller` family (the transcript), `Message` and `Bubble` (every message), `Trace` and `TraceCollapsible` (the Chain of Thought, the tool rows, the tool groups, the thinking blocks), `Marker` (cpd folds, compaction, the working marker), `CodeBlock` (tool output, edit diffs, fenced code), `Attachment` (non-image attachments), `Tooltip` (the Copy action), `Empty`, `Spinner` and `Button` (`Load earlier`, the header-less controls). **Resolution:** the Phase 2 native `details`/`summary` blocks are replaced by these parts; the Phase 2 hooks they carried are kept on the part's root (section 4).
 
 ---
 
@@ -43,231 +43,184 @@ export interface ChatToggles {
 export function useChatToggles(): ChatToggles;
 ```
 
-- State is local React state (`useState`), not persisted, not in the store. Owner: `ChatPane` (one call per mount), which passes it down (2.1, 1.1).
+- State is local React state (`useState`), not persisted, not in the store. Owner: `ChatPane` (one call per mount), which passes it down (2.1). The Chain of Thought and Tool Group defaults follow it (2.4.2, 3.4).
 - The hook registers one `keydown` listener on `document` for its lifetime (added on mount, removed on unmount, no dependency churn: it uses functional `setState`). A key event toggles when `event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && !event.isComposing` and `event.key.toLowerCase()` is `"t"` (thinking) or `"o"` (tools); it then calls `event.preventDefault()`. Focus inside the composer textarea does not matter (the hints are global in the board).
-- Unverified: a browser may reserve `Ctrl+T` / `Ctrl+O` on some platforms (Windows, Linux) and not deliver the event; the two header buttons are the always-available path. On macOS (`⌃` = Control) both reach the page.
+- The toggles have **no buttons** (pro-d57: the header Thinking and Tools buttons are removed). The shortcuts are the only control; `Ctrl+T` and `Ctrl+O` are unverified on platforms that reserve them. On macOS (`⌃` = Control) both reach the page.
 
-### 0.3 Vertical rhythm (the virtualization-safe gap)
+### 0.3 Vertical rhythm (superseded, pro-d55)
 
-The board spaces rows 6px apart (`gap: 6px`). A margin on a row root would collapse through the measured `data-row-key` wrapper and be lost from its measured height. **Rule:** vertical space between rows is **padding inside the measured wrapper**, never margin, never `gap` on a parent that is outside it. `RowBody` (2.9) wraps every row body in `div[data-part="row-body"]` with `py-[3px]` (3 + 3 = the board's 6px). Horizontal padding `px-4` (16px, the board's) is on `div[data-part="virtual-window"]`, not on the measured wrapper.
+The Phase 2 rule (vertical space as padding inside a measured wrapper, for the window) no longer applies: the transcript is a shadcn `MessageScroller` that lays rows out in normal flow with `gap-3` on its content (2.9). Nothing in the chat is measured by row.
 
 ---
 
 ## 1. ChatHeader (`web/src/ui/chat/ChatHeader.tsx`)
 
+pro-d60: the ChatHeader shows only the title. The breadcrumb lives in the cockpit Header (DESIGN-panes 4.1); the Thinking and Tools toggle buttons and the run status are removed (pro-d57).
+
 ### 1.1 Props
 
 ```ts
-import type { Runner, SessionRole } from "../../protocol/domain.ts";
-import type { ThinkingMode, ToolsMode } from "./useChatToggles.ts";
-
 export interface ChatHeaderProps {
-  readonly sessionKey: string;                     // KEPT. `view.ref?.key ?? view.id`
-  readonly title: string | null;                   // KEPT. `view.title`
-  /** `view.ref.role`. Absent: no role in the subtitle. */
-  readonly role?: SessionRole;
-  /** `view.ref.runner`. Absent: no runner in the subtitle. */
-  readonly runner?: Runner;
-  /** The computed `busy` of 2.4.3 (`ChatPane` passes it, not `view.busy` alone). true: the live status shows. Absent or false: it does not. */
-  readonly busy?: boolean;
-  /** Thinking toggle. Rendered only when `onToggleThinking` is passed; `thinking` then defaults to "folded". */
-  readonly thinking?: ThinkingMode;
-  readonly onToggleThinking?: () => void;
-  /** Tools toggle. Rendered only when `onToggleTools` is passed; `tools` then defaults to "grouped". */
-  readonly tools?: ToolsMode;
-  readonly onToggleTools?: () => void;
+  readonly sessionKey: string;                 // KEPT: `view.ref?.key ?? view.id`
+  readonly title: string | null;               // KEPT
+  readonly role?: SessionRole;                 // KEPT in the type; not rendered
+  readonly runner?: Runner;                    // KEPT in the type; not rendered
 }
 export function ChatHeader(props: ChatHeaderProps): JSX.Element;
 ```
 
-`<ChatHeader sessionKey="k" title={null} />` (the Phase 2 call) renders without a toggle and without a status.
-
-Source of each element: key `SessionView.ref.key` (fallback `SessionView.id`); title `SessionView.title`; role and runner `SessionView.ref` (`SessionRef.role`, `SessionRef.runner`); running status: the computed `busy` of 2.4.3. `ChatPane` passes `role={view.ref?.role}`, `runner={view.ref?.runner}`, `busy={busy}` (the computed value) and the four toggle props from `useChatToggles()`; with `exactOptionalPropertyTypes` an absent `ref` spreads nothing (`{...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}`).
+`ChatPane` passes `sessionKey`, `title` and, as before, `role` and `runner` only when `view.ref` is non-null (`{...(view.ref === null ? {} : { role, runner })}`). No `busy`, no toggle props. The Phase 2 props `thinking`, `onToggleThinking`, `tools`, `onToggleTools`, `busy` are removed from the type.
 
 ### 1.2 Behaviour
 
-`document.title` effect: **KEPT** exactly (`sessionKey` when `title === null`, else `` `${sessionKey} · ${title}` ``; restored on unmount; deps `[sessionKey, title]`).
+- The title is `title ?? sessionKey`. The title is the only text of the header.
+- `document.title` (KEPT, unchanged): `sessionKey` when `title === null`, else `` `${sessionKey} · ${title}` ``; restored on unmount; effect deps `[sessionKey, title]`.
+- No breadcrumb, no key sub-line, no run status, no buttons.
 
 ### 1.3 DOM
 
 ```
-header                                                    KEPT element. flex flex-wrap items-center gap-3 px-4 pt-1 pb-2
-├─ div[data-part="heading"]                               flex-1 min-w-[260px]
-│   ├─ span[data-part="title"]                            KEPT hook, only when title !== null.   block text-title font-semibold text-fg-strong      (15px, weight 600, #f3ead9, line-height 1.3)
-│   └─ div[data-part="subtitle"]                          flex items-center gap-2 mt-[3px] text-[11.5px]
-│       ├─ h1[data-part="key"]                            KEPT hook, text = sessionKey.   m-0 font-mono text-[11.5px] font-normal text-ramune-bright   (#a1c6ef)
-│       ├─ span[aria-hidden="true"]  "·"                  text-fg-dim        (only when role or runner is passed)
-│       ├─ span[data-part="role"]    {role}               text-fg-dim capitalize     (only when role passed; DOM text is the raw value "lead")
-│       ├─ span[aria-hidden="true"]  "·"                  text-fg-dim        (only when both role and runner are passed)
-│       ├─ span[data-part="runner"]  {runner}             text-fg-dim        (only when runner passed)
-│       └─ span[data-part="run-status"][data-state="running"]   (only when busy === true)
-│             flex items-center gap-1.5 text-mizu-bright   (#92d1ca)
-│           ├─ span[aria-hidden="true"]  className={glyphClass.active}  (data-tone="active" data-glyph="active")
-│           └─ span  "Running…"                           (U+2026)
-└─ div[data-part="toggles"][role="group"][aria-label="Transcript display"]    flex gap-1.5 text-[11.5px]    (only when onToggleThinking or onToggleTools is passed)
-    ├─ <Button variant="outline" type="button" data-action="toggle-thinking" aria-pressed aria-keyshortcuts="Control+T">   (only when onToggleThinking)
-    │     className "h-[26px] gap-1.5 rounded-md border-input px-2 text-[11.5px] text-fg-strong"
-    │   ├─ span  "Thinking: folded" | "Thinking: expanded"
-    │   └─ kbd.font-mono  "⌃T"      text-meta text-muted-foreground
-    └─ <Button … type="button" data-action="toggle-tools" aria-pressed aria-keyshortcuts="Control+O">   (only when onToggleTools)
-          └─ span "Tools: grouped" | "Tools: expanded"   +  kbd.font-mono "⌃O"
+header   flex flex-wrap items-center gap-3 border-b px-4 py-2
+└─ div[data-part="heading"]   min-w-0 flex-1
+    └─ h1[data-part="title"]   m-0 truncate text-title font-semibold text-fg-strong      text = title ?? sessionKey
 ```
 
-Measurements and colours are the board's: h1/title 15px semibold `#f3ead9`; subtitle 11.5px, `margin-top: 3px`, `gap: 8px`; key `#a1c6ef`; role and runner `#87808c` (`text-fg-dim`, the header sits on `bg-background`, where `fg-dim` is allowed); live status `#92d1ca`; toggle button height 26px, padding `0 8px`, border `1px #35313b` (`border-input`), radius 6px, label `#f3ead9`, kbd `#aba3af`.
-
-**Resolution:** the board puts the 15px title in the `h1` and the key in the sub-line; Phase 2 pins `h1[data-part="key"]` (text = the key) and `[data-part="title"]` (`ChatHeader.test` 1). The key therefore stays the `h1` (moved into the sub-line, styled as the sub-line key) and the 15px title is the `span[data-part="title"]` above it. With `title === null` there is no title line and the `h1` is the only text. **Resolution:** the board's `Running command…` names a command the store does not carry; the copy is `Running…` (no command), shown while `busy`.
-
-### 1.4 Toggles: what each does, `aria-pressed`, the label rule
-
-| Button | State hook | `aria-pressed` | Label (exact) | Effect |
-|---|---|---|---|---|
-| Thinking | `thinking: ThinkingMode` | `"true"` when `thinking === "expanded"`, else `"false"` | `Thinking: folded` / `Thinking: expanded` | sets the **default open state of every Thinking row** in the transcript (folded = closed, expanded = open), 2.4.2 |
-| Tools | `tools: ToolsMode` | `"true"` when `tools === "expanded"`, else `"false"` | `Tools: grouped` / `Tools: expanded` | sets the **default open state of every Tool Group and every tool row** (grouped = closed, expanded = open: `Tools: expanded` expands the rows, and their output shows its 10-row preview), 3.2 and 3.4 |
-
-- Click and `⌃T` / `⌃O` call `onToggleThinking` / `onToggleTools`. Enter and Space activate the native button.
-- **Label rule (resolves the board's caveat 1, `Tools: grouped` beside an expanded group):** the label names the **global default**, never the live state of one group. A person opening one group or one Thinking pill by hand changes only that element (a local override); the label stays. A toggle press re-applies the new default to **all** elements and discards every local override (the elements remount, `key` = the mode, 2.4 and 3.4). The board's drawn example (label `grouped`, one group open) is therefore a legal state: a group opened by hand.
-- `aria-pressed` and the changing label say the same thing twice; this is accepted (the board's labels are copy, the attribute is for assistive tech).
+- `h1[data-part="title"]` is the only heading. Its text is the title, or the session key when there is no title (the `h1` is not a separate key line any more).
+- **Resolution:** the Phase 2 `h1[data-part="key"]` sub-line, `span[data-part="run-status"]` and the Thinking/Tools `div[data-part="toggles"]` are removed; their KEPT hooks are retired (4).
 
 ---
 
-## 2. Transcript rows (`web/src/ui/chat/Transcript.tsx`)
+## 2. Transcript (`web/src/ui/chat/Transcript.tsx`)
+
+pro-d55 (vanilla shadcn parts), pro-d56 (messages), pro-d57 (85% turns, no noisy loaders, auto-scroll, tool paths, sent time), pro-d59 (no stamp on assistant messages), pro-d61 (Chain of Thought, image thumbnails).
 
 ### 2.1 Props
 
 ```ts
-export function Transcript(props: {
-  items: readonly TranscriptItem[];        // KEPT
-  hasEarlier: boolean;                     // KEPT
-  queued: readonly QueuedSubmission[];     // KEPT
-  pending: readonly PendingSubmission[];   // KEPT
-  onLoadEarlier(): void;                   // KEPT
-  tailEpoch: number;                       // KEPT
-  sizes?: SizeObserver;                    // KEPT
-  /** The assistant text stamp `<key> · <time>`. Absent: the text shows no stamp. `ChatPane` passes `view.ref?.key ?? view.id`. */
-  sessionKey?: string;
-  /** The computed `busy` of 2.4.3. Absent or false: no working cue. Default false. */
-  busy?: boolean;
-  /** Default "folded". */
-  thinking?: ThinkingMode;
-  /** Default "grouped". */
-  tools?: ToolsMode;
-}): JSX.Element;
+export interface TranscriptProps {
+  items: readonly TranscriptItem[];         // KEPT
+  hasEarlier: boolean;                      // KEPT
+  loadingEarlier: boolean;                  // KEPT
+  onLoadEarlier(): void;                    // KEPT
+  tailEpoch: number;                        // KEPT (drives the auto-scroll reset, 2.8.1)
+  queued: readonly QueuedSubmission[];      // KEPT
+  pending: readonly PendingSubmission[];    // KEPT
+  observer?: SizeObserver;                  // KEPT in the type; not used (2.9)
+  sessionKey?: string;                      // KEPT
+  thinking?: "folded" | "expanded";         // KEPT; the default open state of Thinking blocks (2.4.2). Default "folded".
+  tools?: "grouped" | "expanded";           // KEPT; the default open state of Tool Groups and Chains. Default "grouped".
+}
 ```
 
-`ChatPane` calls `useChatToggles()` once and passes `thinking`/`tools` to both `ChatHeader` and `Transcript`. The `Item`, `ToolGroup` and `ToolRow` components stay `memo`; `thinking`, `tools` and `sessionKey` are plain props of them (strings), so a streaming delta that changes one item does not re-render the other rows (`Rows.test` stays green).
+`ChatPane` calls `useChatToggles()` (0.2) and passes `thinking` and `tools`. The toggles have no buttons: they are the keyboard shortcuts `Ctrl+T` and `Ctrl+O` only (0.2).
 
 ### 2.2 DOM outline (whole transcript)
 
-Everything not named here is **KEPT** from Phase 2 (`sc-web-chat.md` 3.7):
-
 ```
-div[data-part="transcript"]                                  KEPT (app.css)
-├─ div[role="log"][aria-label="Transcript"][data-at-bottom]  KEPT (app.css)
-│   ├─ button[type="button"][data-action="load-earlier"]  "Load earlier"      only if hasEarlier.  mx-auto my-2 block rounded-[10px] border border-border px-2.5 py-0.5 font-mono text-meta text-muted-foreground hover:bg-row-hover
-│   ├─ div[data-part="virtual-space"]                         KEPT, inline style height + position: relative (unchanged)
-│   │   └─ div[data-part="virtual-window"]                    KEPT, inline style translateY (unchanged); NEW className "px-4"
-│   │       └─ div[data-row-key]                              KEPT, MeasuredRow, no className, no style, the only measured element
-│   │           └─ div[data-part="row-body"]                  NEW, py-[3px]; the one wrapper of every row (RowBody)
-│   │               └─ <row>   article[data-kind="user"] | article[data-kind="assistant"] | TraceCollapsible[data-kind="fold"] | TraceCollapsible[data-kind="compaction"] | TraceCollapsible[data-kind="tool-group"] | TraceCollapsible[data-kind="tool"] | article[data-kind="orphan-result"]
-│   ├─ ul[aria-label="Queued messages"]                       KEPT, inside the log, after virtual-space; NEW className "flex flex-col gap-0 px-4 pb-2.5 list-none m-0 p-0"
-│   │   ├─ li[data-queued]                                    2.6
-│   │   └─ li[data-pending]                                   2.7
-│   └─ div[role="status"][data-part="working-cue"]            NEW, last child of the log, only while busy (2.4.3)
-└─ button[type="button"][data-action="jump-to-bottom"] "Jump to bottom"     KEPT; only when not pinned; sibling after the log.
-      <Button variant="outline" size="sm"> className "rounded-full border-input bg-popover px-3 text-[12px] text-fg-strong"; position is app.css (absolute, bottom 0, centred), no position utility on it
+MessageScrollerProvider  threshold 160 px, scrollToEndOnMount            (2.8.1)
+├─ TranscriptAutoScroll  renders nothing                                  (2.8.1)
+└─ MessageScroller[data-part="transcript"]   flex min-h-0 flex-1 flex-col overflow-hidden
+    ├─ MessageScrollerViewport[aria-label="Conversation transcript"][data-part="viewport"]   flex-1 overflow-x-hidden px-4 py-4
+    │   └─ MessageScrollerContent   mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3
+    │       ├─ div.flex.justify-center.py-1  (only if hasEarlier)
+    │       │   └─ Button[type=button][variant=outline][size=sm][data-action="load-earlier"]  "Load earlier"  ("Loading…" while loadingEarlier; disabled)
+    │       ├─ Empty[data-empty]  (only when there are no rows, no queued and no pending)  my-12 border-none py-12 text-muted-foreground
+    │       │   ├─ EmptyHeader › EmptyMedia[variant="icon"] › MessageSquareIcon
+    │       │   ├─ EmptyTitle        "No messages yet"
+    │       │   └─ EmptyDescription  "Send a message below to start the conversation."
+    │       ├─ MessageScrollerItem[data-row={row.key}] ×rows, in `groupRows` order   flex w-full min-w-0 flex-col
+    │       │   └─ div   user row: ml-auto w-full max-w-[85%]; other rows: mr-auto w-full max-w-[85%]; min-w-0 overflow-hidden
+    │       │       └─ RowBody (2.3 to 2.5, 3.x)
+    │       └─ ul[aria-label="Queued messages"]  (only when queued or pending is non-empty)   m-0 ml-auto flex w-full max-w-[85%] flex-col gap-2 p-0
+    │           ├─ li[data-queued={clientSubmissionId}] ×queued      (2.6)
+    │           └─ li[data-pending={state}] ×pending                (2.7)
+    └─ MessageScrollerButton[data-action="jump-to-bottom"]   shadcn secondary icon-sm, direction end (2.8)
 ```
 
-A **lone** tool row (a `Row` of `kind: "item"` whose item is a tool) has no wrapper; its rail is its own (3.3).
+- **Width (pro-d57):** every row is at most 85% of the 4xl column: the user's rows right (`ml-auto`), the assistant's and the chain's rows left (`mr-auto`). The user's bubble is muted (2.3), so the right edge matches it.
+- The `data-row` attribute holds the row key (`groupRows`, `rows.ts`, unchanged): the user item's id, the assistant text item's id, `group:<first tool id>` for a Tool Group, `chain:<first step key>` for a Chain of Thought, and the item id otherwise.
 
 ### 2.3 User message
 
-Component: `Item`, case `user` (in `Transcript.tsx`). The user message is a `Bubble` (2f) with the `muted` variant: a fill, no border.
+Component: `Item`, case `user`. A `Message[align="end"][data-kind="user"]` (shadcn `Message`, `components/message.tsx`) holding a `MessageContent`:
 
 ```
-article[data-kind="user"]                                   KEPT.  flex flex-col items-end gap-1
-├─ Bubble[variant="muted"][align="end"]                      shadcn Bubble (2f); its own max width (80%) replaces the Phase 2 78%
-│   └─ BubbleContent[data-part="bubble"]                     no border; text-body text-fg-strong; px-3 py-[9px]
-│       ├─ div[data-part="text"][style="white-space: pre-wrap"]  KEPT inline style (the Phase 2 exception), text = item.text.   m-0 text-body text-fg-strong      (13px IBM Plex, #f3ead9)
-│       └─ div[data-part="attachments"]  flex flex-wrap gap-2    only when item.attachments.length > 0
-│           └─ span[data-attachment="image"|"text"]               KEPT hook, one per attachment, in order.   flex items-center gap-2 rounded-md border border-input py-1 pr-2 pl-1
-│               ├─ span[data-part="thumb"][aria-hidden="true"]    grid h-6 w-[34px] place-items-center rounded-[3px] bg-edge text-muted-foreground      (34x24, #3a3640)
-│               │     image with dataBase64: <img alt="" src={`data:${mimeType};base64,${dataBase64}`} className="h-6 w-[34px] rounded-[3px] object-cover" />
-│               │     otherwise: lucide ImageIcon (image) or FileTextIcon (text), size 14, stroke muted-foreground (#aba3af)
-│               └─ span[data-part="name"]                         font-mono text-[11.5px] text-fg-strong      text = a.kind === "image" ? a.mimeType : a.name   (KEPT text)
-└─ span[data-part="meta"]                                    font-mono text-meta text-muted-foreground      (11px, #aba3af)
-      text: `you · ${formatClock(item.at)}` when formatClock(item.at) !== null, else `you`
+Message[data-kind="user"][data-align="end"]
+└─ MessageContent
+    ├─ div[data-part="attachments"]   AttachmentGroup justify-end      (only when item.attachments.length > 0; 2.3.1)
+    ├─ Bubble[align="end"][variant="muted"][data-part="bubble"]   max-w-full min-w-0 overflow-hidden
+    │   └─ BubbleContent[data-part="text"]   min-w-0 overflow-hidden break-words whitespace-pre-wrap      text = item.text
+    └─ MessageFooter[data-part="meta"]   gap-1.5
+        ├─ span   "You · {HH:MM}" when formatClock(item.at) !== null, else "You"       (pro-d57: the sent time)
+        └─ CopyTurnButton   (only when item.text !== "")                              (2.3.2)
 ```
 
-- `[data-attachment]` is the same element as before (Phase 2 test 1: `[data-attachment="image"]` text is `image/png`); its text is now the `name` span only, and the thumb has no text, so `textContent` is unchanged.
-- The user message is right-aligned by `items-end` on the article (not by `float` or `margin-left: auto` on a measured box).
-- **Resolution:** the board's chip shows a file name and a size (`ci-run-8812.png`, `184 KB`); an image attachment carries only `mimeType` (and optional `dataBase64`), so the chip shows the mime type and no size (Not wired).
-- **Assumption:** the user message takes `muted` because the Context allows no bordered card per text block and the Bubble parts offer no fill-free user variant that keeps the right-hand alignment; flagged for the Lead.
+- The bubble is the shadcn `Bubble` with `variant="muted"` (a fill, no border), as on the assistant side (2.4). The Phase 2 `div[data-part="text"]` inline style is replaced by the class list above.
+- **Resolution:** the Phase 2 meta `span[data-part="meta"]` text `you · HH:MM` (lower case) becomes `You · HH:MM`, and the Copy action is added beside it.
 
-### 2.4 Assistant text, Thinking, working marker
+**2.3.1 Attachments and image thumbnails (pro-d61).** `UserAttachments` renders each attachment in order:
 
-Component: `Item`, case `assistant`. The article's children keep the order of `item.blocks`: each `thinking` block is a Thinking row (2.4.2), each `text` block is a text Bubble. There is no card and no border around any text block.
+- an `image` attachment with `dataBase64`: `div[data-attachment="image"]` (`overflow-hidden rounded-xl border bg-card shadow-xs`) holding `img[alt="Attached screenshot"][data-part="thumb"]` (`block max-h-32 w-auto max-w-52 object-cover`, `src` = `data:<mimeType>;base64,<dataBase64>`);
+- any other attachment (an image without bytes, or a text file): `Attachment[size="sm"][data-attachment="<kind>"]` with `AttachmentMedia[data-part="thumb"][variant="icon"]` (`ImageIcon` for an image, `FileTextIcon` otherwise) and `AttachmentTitle[data-part="name"]` (`font-mono`), the text being the `mimeType` for an image and the file name otherwise.
+
+The same component renders the **optimistic** user message (a pending submission's `images`, 2.7) and the **echoed** one (the transcript item's `attachments`, with `dataBase64` from the normaliser, CONTRACT 6.5). A pending or echoed image therefore shows its thumbnail before and after the echo.
+
+**2.3.2 Copy action.** `CopyTurnButton`: `TooltipProvider` > `Tooltip` > `TooltipTrigger asChild` > `Button[type="button"][variant="ghost"][size="icon-xs"][data-action="copy-turn"]` (`size-5 text-muted-foreground`), `aria-label` `Copy message` (`Copied` for 1500 ms after a click); the icon is `CopyIcon` (`CheckIcon` while copied); `TooltipContent side="bottom"` text `Copy` (`Copied` while copied). A click writes the text to the clipboard and sets the copied state.
+
+### 2.4 Assistant text
+
+Component: `Item`, case `assistant`. The row holds only the text blocks of the item (`groupRows` splits the thinking blocks into a chain, 2.4.2). Each text block is a muted `Bubble`:
 
 ```
-article[data-kind="assistant"]                              KEPT.  flex flex-col gap-1.5
-├─ (per thinking block, in order)  <ThinkingRow key={thinking} text={b.text} time={formatClock(item.at)} defaultOpen={thinking === "expanded"} />
-├─ (per text block, in order)  Bubble[variant="ghost"][align="start"][data-part="card"]    shadcn Bubble (2f); no fill, no border, no padding; the Phase 2 hook name `card` is KEPT (DESIGN.md 1.1) and names no card here
-│   └─ BubbleContent
-│       ├─ <Markdown text={b.text} />                       root element is div.typeset.typeset-chat (2.4.1)
-│       └─ span[data-part="stamp"]  (ONLY in the LAST text block of the article, and only when `sessionKey` is passed)
-│             self-end font-mono text-meta text-muted-foreground      (11px, #aba3af, bottom-right)
-│             text: `${sessionKey} · ${formatClock(item.at)}` when the clock is non-null, else `${sessionKey}`
-└─ TraceLine[status="running"][role="status"][data-part="working"]   KEPT hook and role; only while item.streaming; always the LAST child of the article.
-      (shadcn Trace, 2f)
-    ├─ TraceIcon: span[aria-hidden="true"]  className={glyphClass.active}    (data-tone="active" data-glyph="active")
-    └─ TraceTitle  "Working…"                                    (U+2026; the span's textContent is exactly "Working…")
+Message[data-kind="assistant"][data-align="start"]
+└─ MessageContent
+    ├─ Bubble[variant="muted"]   max-w-full min-w-0 overflow-hidden        (one per text block, in order)
+    │   └─ BubbleContent[data-part="card"]   w-full min-w-0 overflow-hidden break-words
+    │         <Markdown text={b.text} />   (2.4.1)
+    ├─ Marker[role="status"][data-part="working"]   (only while item.streaming; always after the bubbles)
+    │   ├─ MarkerIcon › Spinner
+    │   └─ MarkerContent.shimmer  "Working…" (U+2026)
+    └─ MessageFooter.gap-2   (only when there is a text block)
+        ├─ span   formatClock(item.at), when non-null
+        └─ CopyTurnButton value = the text blocks joined by a blank line (2.3.2), only when non-empty
 ```
 
-An assistant item with only thinking blocks has no text bubble and no stamp. A `streaming` item whose last block is a thinking block still shows the working marker.
+- **Pro-d59:** there is **no** `MessageHeader` and no session-key stamp on assistant messages. The Phase 2 `span[data-part="stamp"]` is removed.
+- The `Working…` marker is the only streaming cue left in the transcript. It is a `Marker`, its text uses `shimmer` (DESIGN.md 2h). The `Thinking…` / `Using <tool>…` working cue of Phase 2 (2.4.3) is **removed** (pro-d57 "remove noisy Thinking/Running loaders").
+- An item with only thinking blocks shows no bubble, no footer and no marker; its thinking is inside a Chain of Thought row (2.4.2).
 
 #### 2.4.1 `Markdown.tsx` (`web/src/ui/chat/Markdown.tsx`)
 
-`splitMarkdown` and `Segment` are unchanged; `react-markdown` plus `remark-gfm` only. `Markdown` now returns `null` for no segments (KEPT) and otherwise `<div className="typeset typeset-chat">{segments}</div>` instead of a fragment (DESIGN.md 2g). `Markdown.test` 1 to 5 are unaffected (they test `splitMarkdown` and the segment memo, not a wrapper). Inline code colour `#92d1ca` 12px, list indent 20px, list gap 2px and block gap 6px come from the preset (DESIGN.md 2g), not from this file.
+`splitMarkdown` and `Segment` are unchanged; `react-markdown` plus `remark-gfm` only. `Markdown` returns `null` for no segments (KEPT) and otherwise `<div className="typeset typeset-chat">` (DESIGN.md 2g). Preview change (pro-d55): a fenced code block is a shadcn `CodeBlock` (`size="sm"`, `not-prose`, `my-2`) with a `CodeBlockHeader` (the language as `CodeBlockTitle`, `font-mono`) and a `CodeBlockCopyButton` on the raw text, and a `CodeBlockContent` with `lineNumbers`. `Markdown.test` 1 to 5 test `splitMarkdown` and the segment memo and are unaffected by the block part.
 
-#### 2.4.2 Thinking row (`web/src/ui/chat/Transcript.tsx`, not exported; used by `Item` only)
+#### 2.4.2 Chain of Thought (pro-d61): thinking and tool steps
 
-```ts
-function ThinkingRow(props: { text: string; time: string | null; defaultOpen: boolean }): JSX.Element;
-```
-
-The row is a shadcn `TraceCollapsible` (2f). State: the part's own (`open` from `defaultOpen`). The parent passes `key={thinking}` so a toggle press remounts the row and re-applies the default (1.4).
+`groupRows` (`web/src/ui/chat/rows.ts`) turns each **run of consecutive Thought and Tool items** into one row of kind `chain`: a `Thought` is one thinking block of an assistant item, a `Tool` is one tool item. Text, user messages, folds, compaction and orphan results end a run. Within the run, two or more consecutive tools form a `tools` step (a Tool Group, 3.4) and a single tool is a `tool` step. `ChainOfThoughtRow` renders the row:
 
 ```
-TraceCollapsible[data-kind="thinking"][data-state="open"|"closed"]     KEPT hook; closed in "folded".   div
-├─ TraceCollapsibleTrigger                                             the row's one line; no pill, no border
-│   ├─ TraceIcon  "▸" (closed) / "▾" (open)  aria-hidden              font-mono text-[10px]
-│   ├─ TraceTitle  "Thinking"                                         text-muted-foreground
-│   └─ TraceDescription  {time}                                       font-mono text-fg-dim   (only when time !== null)
-└─ TraceCollapsibleContent                                             the one left rail (the part's border-l)
-     └─ div[data-part="thinking-body"]  {text}                         whitespace-pre-wrap; text-body text-muted-foreground; no clipping
+Trace[data-kind="chain-of-thought"]
+└─ TraceCollapsible[open = open ?? (thinking === "expanded" || tools === "expanded")]   collapsed by default
+    ├─ TraceCollapsibleTrigger
+    │   └─ TraceLine[status = running ? "running" : failedCount > 0 ? "error" : none]
+    │       ├─ TraceIcon   Spinner while running, else BrainIcon
+    │       ├─ TraceTitle[data-part="label"]   "Chain of Thought"
+    │       └─ TraceDescription[data-part="meta"]   font-mono text-xs   parts joined by " · ":
+    │             "{N} step" or "{N} steps"   (N = thoughts + tools; a tool inside a Tool Group counts once)
+    │             "{k} failed"   (only when k = failed tools > 0)
+    │             "{HH:MM}"   (formatClock of the row's `at`: the last thought's time; only when non-null)
+    └─ TraceCollapsibleContent[data-part="chain-body"]   flex flex-col gap-2
+        └─ the steps, in order:
+            ├─ thinking → ReasoningBlock (below)
+            ├─ tool     → Trace[data-part="tool-rail"] › ToolRow (3.2)
+            └─ tools    → ToolGroup (3.4)
 ```
 
-- The body is the raw `b.text` (not Markdown), as in Phase 2. The rail is the part's own left border (`trace.tsx`), so the row adds no second rail.
-- **Resolution:** the board's meta is `41s · 13:58` (a duration and a time); the protocol carries no thinking duration, so the meta is the clock only (Not wired: duration).
-- Keyboard: the trigger is a native `button`; Enter and Space toggle. `⌃T` toggles all.
-- `Phase 2 change:` the summary was a bordered `summary` pill (`details`); it is now a Trace line (no border, no pill, no fixed height). `Transcript.test` 2 is updated (2.10).
-
-### 2.4.3 Working cue (`busy`, `Transcript`)
-
-**Computed busy.** `ChatPane` computes `busy = view.busy || view.ref?.state === "working" || view.pending.some((p) => p.state === "sending")` and passes this one value to `ChatHeader` (1.1), `Transcript` (2.1) and `Composer` (`DESIGN-compose.md` section 0). It replaces `view.busy` in those three places. `TierSelector` keeps `view.busy` (`DESIGN-compose.md` section 0).
-
-**Props.** `busy?: boolean` on `Transcript`, default `false`.
-
-**Rule.** When `busy` is true and the last item of `items` is not an assistant item with `streaming === true`, the log renders a working cue as its last child, after the Queued messages list (2.2). When the last item is a streaming assistant item, the 2.4 marker shows instead and no cue renders.
-
-```
-TraceLine[status="running"][role="status"][data-part="working-cue"]     NEW; shadcn Trace (2f); no fixed height
-├─ TraceIcon: span[aria-hidden="true"]  className={glyphClass.active}     (data-tone="active" data-glyph="active")
-└─ TraceTitle: text `Using ${tool.name}…` when the last item is a tool item with status "running"; else "Thinking…"
-```
-
-- The text uses U+2026. The tool name is `ToolItem.name`, the raw name the protocol carries.
-- The cue is not a row: it has no `data-row-key`, is not in `groupRows`, is not virtualised and is not measured by `MeasuredRow`. It sits in normal flow after the rows, like the Queued list.
-- **Resolution:** the board's cue names a command and an elapsed time; the protocol carries neither, so the cue is `Using <tool name>…` or `Thinking…` (Not wired: elapsed time).
+- **Reasoning block** (`ReasoningBlock`): `Trace[data-kind="thinking"]`. Its line: `TraceIcon` (`Spinner` while running, else `BrainIcon`), `TraceTitle[data-part="label"]` `Thinking` while running, else `Thought`, and `TraceDescription[data-part="meta"]` with the thought's clock (`formatClock(at)`, when non-null). A thought with text is a `TraceCollapsible` whose content is `div[data-part="thinking-body"]` (`whitespace-pre-wrap`, the Markdown of the text); a thought with no text is the line alone. Its open state: `open ?? (running || defaultOpen)`, `defaultOpen = thinking === "expanded"`.
+- **Default**: the Chain is collapsed by default (`thinking` and `tools` both at their defaults). The Chain's `data-state` is `open` or `closed`. A Chain with a running step opens only through its own state (the `running` flag shows the spinner, not the open state).
+- **Re-apply:** a change of `thinking` or `tools` clears the local open state, so the new default applies (the Phase 2 re-apply rule, KEPT).
+- **Keys:** the Chain's row key is `chain:<key of its first step>` (`rows.ts`, unchanged in behaviour).
+- `failedCount` counts failed tools; the trigger's status is `error` when any tool failed, `running` when any step is running.
+- **Retired:** the Phase 2 `details`-based Thinking row and its `[data-part="caret"]`. A Thinking block that is not in a Chain (none is produced by `groupRows`) does not exist.
 
 ### 2.5 Compaction divider
 
@@ -288,92 +241,80 @@ Label (exact): `tokensBefore === undefined` → `Context compacted`; else `` `Co
 
 ### 2.6 Queued submissions
 
-`li[data-queued={clientSubmissionId}]` **KEPT**, in `ul[aria-label="Queued messages"]` (KEPT). The same shape as 2.7; a queued message is a `muted` Bubble at 70% opacity, with no border:
+Component: the `ul[aria-label="Queued messages"]` (2.2), one `li[data-queued="<clientSubmissionId>"]` per entry of `queued` (the messages sent while the agent was busy, awaiting their turn).
 
 ```
-li[data-queued]                                             flex flex-col items-end gap-1 py-[3px]
-├─ Bubble[variant="muted"][align="end"]  opacity-70
-│   └─ BubbleContent[data-part="bubble"]
-│       └─ div[data-part="text"]  {q.text}                  whitespace-pre-wrap text-body text-fg-strong
-└─ span[data-part="queued-status"]  "queued"                font-mono text-meta text-muted-foreground
+li[data-queued]
+└─ Message[align="end"]
+    └─ MessageContent
+        ├─ Bubble[align="end"][variant="outline"][data-part="bubble"]   max-w-full
+        │   └─ BubbleContent[data-part="text"]   border-dashed whitespace-pre-wrap     text = q.text
+        └─ MessageFooter[data-part="queued-status"]   font-mono     "queued"
 ```
 
-### 2.7 Pending and failed user rows, and the `sent` defect
+- The queued bubble is the outline variant with a dashed border. It is not muted, so it reads as not yet sent.
+- A queued submission has no time and no copy action.
+- The Phase 2 cancel `×` (`data-action="cancel-queued"`) is not in the transcript: it stays in the Composer's header chips (DESIGN-compose 1.2, `capabilities.abortSubmission`).
 
-Source: `PendingSubmission.state` is `"sending" | "sent" | "failed"` (`web/src/state/store.ts`); `error?: WireError` with `message`.
+### 2.7 Pending and failed user rows
 
-**Known defect (Phase 2):** the row text is `` `${p.text} ` `` + `p.state === "sending" ? "sending…" : "failed: " + (p.error?.message ?? "unknown error")`, so a row in state `sent` (server acked, the echo of the user item not yet arrived; `session.submitAck` sets it, `echoed()` or a tail window removes it) is shown as `failed: unknown error`. **Fix:** the state is rendered exhaustively; only `failed` shows failure text.
-
-Exact DOM for each state (the `li` is a child of `ul[aria-label="Queued messages"]`, `key = clientSubmissionId`, hook `data-pending` KEPT). Every pending bubble is a `muted` Bubble with no border; a failed one takes the blocked fill, not a border:
+Component: `li[data-pending="<state>"]` for each entry of `pending` (`sending`, `sent` or `failed`), in the same list after the queued rows.
 
 ```
-li[data-pending="sending"]            flex flex-col items-end gap-1 py-[3px]
-├─ Bubble[variant="muted"][align="end"]  opacity-70
-│   └─ BubbleContent[data-part="bubble"]  └─ div[data-part="text"]  {p.text}     whitespace-pre-wrap text-body text-fg-strong
-└─ span[data-part="pending-status"][data-state="sending"]  "sending…"     font-mono text-meta text-muted-foreground      (U+2026)
-
-li[data-pending="sent"]               (identical shape to "sending")
-├─ Bubble[variant="muted"][align="end"]  opacity-70
-│   └─ BubbleContent[data-part="bubble"]  └─ div[data-part="text"]  {p.text}
-└─ span[data-part="pending-status"][data-state="sent"]  "sent"            font-mono text-meta text-muted-foreground
-      NO role="alert", NO glyph, NO text containing "failed" or "unknown error"
-
-li[data-pending="failed"]
-├─ Bubble[variant="destructive"][align="end"]                      shadcn Bubble (2f): bg-destructive/10, text-destructive
-│   └─ BubbleContent[data-part="bubble"]  └─ div[data-part="text"]  {p.text}
-└─ span[data-part="pending-status"][data-state="failed"][role="alert"]    flex items-center gap-1.5 font-mono text-meta text-status-blocked
-    ├─ span[aria-hidden="true"]  className={glyphClass.blocked}           (data-tone="blocked" data-glyph="blocked")
-    └─ text node  `failed: ${p.error?.message ?? "unknown error"}`
+li[data-pending][data-state=sending|sent|failed]
+└─ Message[align="end"]
+    └─ MessageContent
+        ├─ UserAttachments   (the pending `images`, as `dataBase64`; 2.3.1)
+        ├─ Bubble[align="end"][variant = state === "failed" ? "destructive" : "muted"][data-part="bubble"]
+        │   └─ BubbleContent[data-part="text"]   min-w-0 overflow-hidden break-words whitespace-pre-wrap     text = p.text
+        └─ MessageFooter   gap-1.5
+            ├─ (state sending or sent)  span[data-part="pending-status"][data-state]   "You · {HH:MM}" or "You"
+            │     + CopyTurnButton (when p.text !== "")
+            └─ (state failed)  span[data-part="pending-status"][data-state="failed"][role="alert"]
+                    flex items-center gap-1.5 font-mono text-destructive
+                    ├─ span[aria-hidden="true"]  glyphClass.blocked
+                    └─ text: `failed: ${p.error?.message ?? "unknown error"}`
 ```
 
-**Resolution:** the failed bubble uses the `destructive` Bubble variant (a 10% fill of the blocked colour and its text colour), which replaces the Phase 2 red border and `bg-status-blocked/10`.
+- **Resolution (pro-d57 and the Phase 2 defect):** the Phase 2 texts `sending…` and `sent` are removed; a sending or sent row shows the sent time (`You · HH:MM`), which is the status the User needs. Only the `failed` state shows failure text, so a `sent` row never reads `failed` (the Phase 2 defect, fixed in the same way).
+- A pending row's time is `p.at` (the store stamps it when the submission is dispatched, CONTRACT 6.2).
+- **Matching:** the echoed user item replaces the pending row. The store matches on the normalised text (`normalizeUserText` drops the `Message from …:` prefix and the `[Attached image: …]` lines; CONTRACT 6.2), so a pending row and its echo are one message.
 
-Test-facing facts: `sent` `textContent` is `` `${p.text}sent` `` (bubble text, then the status); it contains neither `failed` nor `unknown error`; the status has `data-state="sent"`; there is no `[role="alert"]` in the row. For `sending` the `li` text contains `sending…` and for `failed` with `error.message = "boom"` it contains `failed: boom` (Phase 2 test 6, still green); `failed` with no `error` contains `failed: unknown error`. Pending rows are **not** virtualised (they sit after `virtual-space`, as in Phase 2) and are not in `groupRows`. A new pending row still re-pins the viewport (Phase 2 behaviour, test 15).
+### 2.8 Load earlier, Jump to bottom and pinning
 
-### 2.8 Load earlier and Jump to bottom
+**Load earlier.** `Button[type="button"][variant="outline"][size="sm"][data-action="load-earlier"]` in a `div.flex.justify-center.py-1` at the top of the content (only when `hasEarlier`). Text `Load earlier`; `Loading…` while `loadingEarlier` (the button is disabled then). A click calls `onLoadEarlier`.
 
-Both KEPT hooks and copy (`Load earlier`, `Jump to bottom`); classes in 2.2. **Resolution:** the board's `▲ 3,912 earlier messages` needs a count the window does not carry; the Phase 2 copy `Load earlier` stays.
+**Jump to bottom.** `MessageScrollerButton[data-action="jump-to-bottom"]`, a shadcn `Button` (`variant="secondary"`, `size="icon-sm"`, `direction="end"`) that the scroller shows while the viewport is not at the end. A click scrolls to the end. Its accessible name is the part's default (unverified).
 
-### 2.8.1 Pinning to the bottom
+**2.8.1 Pinning and auto-scroll (pro-d57).** The edge threshold is **160 px** (`SCROLL_EDGE_THRESHOLD = 160`, passed to `MessageScrollerProvider threshold`). The viewport counts as at the end when it is within 160 px of the bottom.
 
-The log is pinned to the bottom only while the user has not scrolled up. State: `pinned` (initially true) and `lastScrollTop` (a ref: the `scrollTop` of the previous scroll event).
+`TranscriptAutoScroll` (renders nothing) keeps `pinned`:
 
-**Scroll event (`onScroll`).**
-1. If `lastScrollTop - scrollTop > 1` (the `scrollTop` is more than 1px lower than the previous event's, that is, the user scrolled up), `pinned = false` at once, even inside the near-bottom distance.
-2. Otherwise `pinned = isNearBottom(...)` (`virtual.ts`, 48px).
-3. `lastScrollTop = scrollTop`, on every event.
+- `pinned` follows the scroller's `end` flag (`pinned = !scrollable.end`, updated when `end` changes).
+- when `tailEpoch` changes (a new tail window of the session), `pinned = true` and the viewport scrolls to the end at once (`behavior: "auto"`);
+- when `items`, `queued` or `pending` change and `pinned` is true, the viewport scrolls to the end smoothly (`behavior: "smooth"`);
+- when `pinned` is false (the User scrolled up), new rows do not move the viewport. The jump button shows.
+- On mount the viewport scrolls to the end (`scrollToEndOnMount`).
 
-**Bottom write (layout effect, after each commit).** `log.scrollTop = log.scrollHeight` is written only when `pinned` is true AND at least one of these holds since the previous commit:
-- the layout total height changed;
-- `tailEpoch` changed;
-- `pending` grew;
-- `busy` turned on (false to true);
-- `pinned` turned on (the transcript just became pinned, for example by the Jump to bottom button).
+### 2.9 Rendering (pro-d55): no windowing
 
-An ordinary re-render, with none of these, never writes `scrollTop`. The bottom write's own scroll event moves `scrollTop` down, so step 1 does not unpin. **Evidence:** `sc-scroll.md`: the write on every commit while pinned undid a user's scroll-up; this rule replaces that write.
+The transcript renders every row: there is no virtual window, no `div[data-row-key]` measured wrapper, no `row-body` padding wrapper and no `[role="log"]`. Rows are `MessageScrollerItem`s (`data-row` = the row key), which the scroller's content lays out in normal flow with `gap-3` between rows (the Phase 2 `py-[3px]` padding rule of 0.3 and the 2.9 Phase 2 contract are superseded).
 
-### 2.9 Virtualization contract (what every new wrapper keeps)
-
-1. `MeasuredRow` and `div[data-row-key={row.key}]` are unchanged: no `className`, no `style`, no `data-index`, the same ref and `ResizeObserver` wiring. The measured element is that div (its border box).
-2. Every row body is in **normal flow**: no `position: absolute` or `fixed`, no CSS `height`/`min-height`/`max-height`, no `transform` on a row element. (The window's `translateY` and the space's `height` + `position: relative` are Phase 2 inline styles, unchanged.) No block of a row sets `overflow-hidden`; the Trace part's own animation overflow is the part's.
-3. Row keys come from `groupRows` unchanged (`item.id`, `group:<first tool id>`); `rows.ts` and `virtual.ts` are not edited.
-4. The new wrapper `div[data-part="row-body"]` is the **only** child of `div[data-row-key]` and is rendered for every row, so `[data-row-key]`'s `firstElementChild` is stable across re-renders (`Rows.test` 2). Vertical spacing is its padding (0.3), never a margin.
-5. A row changes height only by content (a Collapsible opening, a Show-more click, a Markdown stream); the observer reports it, as in Phase 2. Toggling Thinking or Tools changes heights and goes through the same `onHeight` compensation.
-6. The `data-at-bottom`, `jump-to-bottom` and prepend-anchor logic are not touched; the pin and bottom-write rule is 2.8.1.
+- `virtual.ts` stays in the repository (its tests are unchanged) but `Transcript` does not use it except for the `SizeObserver` type of the `observer` prop, which is declared and not read (2.1).
+- Row heights change by content (a Collapsible opening, a Show-more click, a Markdown stream). The scroller follows them through the pinning rule (2.8.1).
 
 ### 2.10 Phase 2 tests this section changes
 
-| Test | Change |
+| Test (file) | Change |
 |---|---|
-| `Transcript.test` 1 | none: `article[data-kind="user"]` text still contains `hello  there` (the `[style white-space: pre-wrap]` div is `[data-part="text"]`), `[data-attachment="image"]` text `image/png`, `article[data-kind="assistant"] strong` text `bold answer` |
-| `Transcript.test` 2 | **updated:** `[data-kind="thinking"][data-state="closed"]`; the trigger text is `Thinking` (no time when `at` is absent); `[data-part="thinking-body"]` text contains `pondering` |
-| `Transcript.test` 3 | none (one `[role="status"][data-part="working"]`, text `Working…`, last child of the first assistant article) |
-| `Transcript.test` 4, 7 to 17 | none |
-| `Transcript.test` 5 | **updated:** `[data-kind="compaction"][data-state="closed"]`; `[data-part="label"]` text is `Context compacted · from 1.2k tokens` for `tokensBefore: 1234`; the summary Markdown text is in the content |
-| `Transcript.test` 6, 18 | none (`li[data-queued]`, `li[data-pending="sending"]` contains `sending…`, `li[data-pending="failed"]` contains `failed: boom`, list inside the log after `virtual-space`) |
-| `Transcript.test` 8 | none (`[data-row-key]` keys; the `u1` row contains `article[data-kind="user"]`) |
-| `Folds.test` 1 to 3, `ToolRow.test` 1 to 5 | **updated** as in 3.1 to 3.4: `data-state` for `open`; every tool closed by default, `edit` included; the group's and the nested rows' state follow `mode` |
-| new | `sent` row (2.7); `sent` row never contains `failed`; failed row has `[role="alert"]` and the `destructive` Bubble; `Item` stamp text; user `meta` text; `thinking="expanded"` renders the row with `data-state="open"` |
+| `Transcript.test` 1 | the user row is `div[data-kind="user"]` (was `article`); an image attachment with bytes is `img[data-part="thumb"]` (`alt` `Attached screenshot`); one without bytes is an `Attachment` whose name is its mime type |
+| `Transcript.test` 2 | `[data-kind="thinking"]` now lives in `[data-kind="chain-of-thought"]`, closed by default; the trigger text is `Chain of Thought`; the thought's own trigger text is `Thought` (or `Thinking` while running); `[data-part="thinking-body"]` text contains `pondering` after the Chain is opened |
+| `Transcript.test` 3 | `[role="status"][data-part="working"]` text `Working…`, last child of the assistant row, only while streaming |
+| `Transcript.test` 4, 11 | `button[data-action="jump-to-bottom"]` is the `MessageScrollerButton` (no text); `Load earlier` unchanged |
+| `Transcript.test` 6, 18 | `li[data-pending]` text is the time (`You · HH:MM`), never `sending…` or `sent`; `failed: boom` only for `failed` with `role="alert"` |
+| new | the 85% wrapper class on user and assistant rows; the assistant row has no `[data-part="stamp"]`; the Chain's `chain-body` is absent while closed; `thinking="expanded"` opens the Chain; the Queued `li` has no copy action |
+| new | the auto-scroll rules of 2.8.1 with the scroller mocked (external), including the 160 px threshold argument |
+| `ToolRow.test` 5 | the Tool Group is `[data-kind="tool-group"]` (3.4), `group-count` `3 tool calls` |
 
 ---
 
@@ -414,87 +355,80 @@ Examples (from the board): `cpd-plan-decision` · `Plan review r1 approved` · `
 ```ts
 export const ToolRow: MemoExoticComponent<(props: {
   tool: ToolItem;
-  /** The Tools toggle (1.4). Sets the row's default open state: "grouped" = closed, "expanded" = open. Every tool row takes it, grouped or not. */
-  mode: ToolsMode;
+  nested?: boolean;            // true inside a Tool Group (3.4); the row's look does not change
 }) => JSX.Element>;
-export function toolName(tool: ToolItem): string;      // NEW export: name without a leading "mcp__"
-export function toolDetail(tool: ToolItem): string;    // NEW export: detailOf(tool.name, tool.args)
+export function toolName(tool: ToolItem): string;      // KEPT export: the name without a leading "mcp__"
+export function toolDetail(tool: ToolItem): string;    // KEPT export: detailOf(tool.name, tool.args), truncated (below)
+export function duration(ms: number): string;          // KEPT (ToolRow.tsx): ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 export const OrphanRow: MemoExoticComponent<(props: { item: OrphanResultItem }) => JSX.Element>;   // KEPT
 ```
 
-`detailOf`, `statusOf`, `splitLines`, `diffKind`, `Body`, `Output`, `PlainOutput`, `TOOL_PREVIEW_LINES` (10) and the `mcp__` prefix rule are **KEPT** in copy (`Running`, `Failed: <reason>`, `Done in 1.5s (3 lines)`, `Done (+1 -1)`, `Show N more lines`); `formatDuration` moves to `format.ts`. The Phase 2 first-line rule for a multi-line bash command and the 160-character cut of a tool detail are **removed** (no truncation, no character cut): `toolDetail` is the whole target in every state, and its lines are kept. The failure reason is not cut either.
+**Open state (pro-d56, "edit tool blocks collapsed by default").** Every tool row starts **closed**, whatever the `tools` mode: `edit` included, and rows inside an expanded Tool Group too. The row's open state is local (`useState(false)`). The `tools` mode opens the Tool Group, not its rows.
 
-Glyph by status (the status is `ToolItem.status`): `running` → `glyphClass.active` / tone `active`; `done` → `glyphClass.done` / tone `done`; `failed` → `glyphClass.blocked` / tone `blocked` (the board's `g-err` is the triangle `glyph-blocked`).
+**Detail text (pro-d57, "truncate long tool paths").** `toolDetail` is the target of the call, cut by its tool:
+
+| Tool | Detail | Cut |
+|---|---|---|
+| `read`, `write`, `edit`, `ls` | `args.path` | 100 characters |
+| `bash`, `powershell` | the first line of `args.command` | 100 |
+| `grep` | `/<pattern>/ in <path>` | 100 |
+| `find` | `<pattern> in <path>` | 100 |
+| any other | the first present key of `DETAIL_KEYS` (`command`, `query`, `queries`, `q`, `url`, `urls`, `path`, `file_path`, `paths`, `pattern`, `prompt`, `question`, `claim`, `name`, `id`, `tool`), else the first argument; arrays join with `, `, objects are JSON; control characters become spaces and runs of spaces collapse | 160 |
+
+`cut(s, n)` is `s` when it is at most `n` characters long, else the first `n` characters and `…` (U+2026). The Phase 2 "no cut" rule of this section is superseded by this table. The failure reason is still not cut.
+
+**Structure.** The row is a `TraceCollapsible` when it has output, else a plain `div`; both carry the hooks below.
 
 ```
-TraceCollapsible[data-kind="tool"][data-tool={tool.name}][data-status={tool.status}][data-state="open"|"closed"]    KEPT hooks; open from `mode` (3.4 rule)     div
-├─ TraceCollapsibleTrigger[data-part="summary"]
-│   └─ TraceLine[status]         status "running" for a running tool, "error" for a failed one, none for done (shadcn Trace)
-│       ├─ TraceIcon: span[data-part="glyph"][aria-hidden="true"][data-tone][data-glyph]   className={glyphClass[g]}
-│       ├─ TraceTitle: span[data-part="name"]  {toolName(tool)}     KEPT. text-muted-foreground      (verb, #aba3af)
-│       └─ TraceDescription
-│            ├─ span[data-part="detail"]  {toolDetail(tool)}       KEPT. font-mono text-foreground; the whole target, wrapped      (#d8d2cc)
-│            ├─ span[data-part="delta"]  (edit with tool.diff only)  font-mono
-│            │   ├─ span[data-part="added"]    `+${A}`               text-status-done       (#8da96e)
-│            │   └─ span[data-part="removed"]  `−${R}`  (U+2212)     text-status-blocked    (#e17f6e)    A and R as in statusOf
-│            └─ span[data-part="status"]  {statusOf(tool)}          KEPT. font-mono text-meta text-fg-dim      (11px, #87808c)
-└─ TraceCollapsibleContent                                          the tool's one rail
-     └─ output (3.6)  or nothing when result is undefined
+TraceCollapsible[data-kind="tool"][data-tool={tool.name}][data-status={tool.status}][data-state="open"|"closed"]    KEPT hooks       div
+├─ TraceCollapsibleTrigger
+│   └─ TraceLine[className="font-mono text-xs"][status]    status "running" for a running tool, "error" for a failed one, none otherwise
+│       ├─ TraceIcon: span[data-part="glyph"][aria-hidden="true"][data-tone][data-glyph]   ToolIcon (the glyph by tool name and status)
+│       ├─ span[data-part="name"]  {toolName(tool)}    shrink-0 text-muted-foreground
+│       ├─ TraceTitle[data-part="detail"]  {toolDetail(tool)}   text-foreground
+│       ├─ TraceDescription[data-part="delta"]  (edit with a diff only)
+│       │   ├─ span[data-part="added"]    `+${A}`               text-status-done
+│       │   └─ span[data-part="removed"]  `−${R}` (U+2212)      text-status-blocked
+│       └─ TraceDescription[data-part="status"]  {statusOf(tool)}   font-mono
+└─ TraceCollapsibleContent   (only when the row has output, 3.6)
 ```
 
-- **Resolution:** the board's row shows glyph, verb, target, time; the Phase 2 text `Done in 1.5s (3 lines)` is in the same slot as the time and is kept for its tests.
-- `edit` no longer starts open (Context: edits collapsed by default). Every tool row starts closed when the Tools mode is `grouped`.
-- `OrphanRow` DOM keeps `article[data-kind="orphan-result"]` > `p` (text `Result of {name} (call not loaded)`, `text-[12px] text-muted-foreground`) and the `pre[data-part="output"]` of 3.6.
+- A row with **no output** (no `result`, or an `edit` with no diff) is `div[data-kind="tool"]` with the same line and no trigger.
+- **Resolution:** the Phase 2 `div[data-part="tool-rail"]` is retired. The row's rail is its own `Trace` (3.3).
 
 ### 3.3 Lone tool row
 
-`RowBody` renders a `Row` of `kind: "item"` with a tool item as `<ToolRow tool={item} mode={mode} />`. There is no wrapper: the Phase 2 `div[data-part="tool-rail"]` is removed, and the row's one rail is its own (3.2).
+A `Row` of `kind: "item"` whose item is a tool renders `Trace[data-part="tool-rail"]` (the shadcn `Trace` root, which draws the rail) around `ToolRow`. A tool step inside a Chain (2.4.2) is wrapped the same way. There is no other wrapper.
 
-### 3.4 Tool Group (`web/src/ui/chat/ToolGroup.tsx`, new)
+### 3.4 Tool Group (`web/src/ui/chat/ToolGroup.tsx`)
 
-Grouping **already exists**: `groupRows` (`web/src/ui/chat/rows.ts`) turns a run of two or more consecutive `kind === "tool"` items into `{ kind: "tools", key: "group:<first tool id>", tools }`; a lone tool is an `item` row. `state/transcript.ts` produces the items and does no grouping. **Reuse it unchanged**; `Transcript` does not group at render time and `rows.ts` is not edited. The old inline `ToolsRow` in `Transcript.tsx` is replaced by `ToolGroup`.
+A run of two or more consecutive tools (`groupRows` in `rows.ts`, unchanged) is one `ToolGroup` row, key `group:<first tool id>`. A lone tool is a 3.3 row. Inside a Chain of Thought (2.4.2) a run of two or more tools is a `ToolGroup` step.
 
 ```ts
-import type { ToolItem } from "../../protocol/domain.ts";
-import type { ToolsMode } from "./useChatToggles.ts";
-
-export interface ToolGroupProps {
-  /** Two or more consecutive tool items, from a `Row` of kind "tools". */
-  readonly tools: readonly ToolItem[];
-  /** The Tools toggle: "grouped" = closed, "expanded" = open. Also the default of every tool row inside. */
-  readonly mode: ToolsMode;
-}
-export const ToolGroup: MemoExoticComponent<(props: ToolGroupProps) => JSX.Element>;
+export type ToolsMode = "grouped" | "expanded";
+export const ToolGroup: MemoExoticComponent<(props: { tools: readonly ToolItem[]; mode: ToolsMode }) => JSX.Element>;
 ```
 
-`memo` comparator: same `mode` and same length and element-wise identical `tools` (`sameTools` extended with `a.mode === b.mode`). `RowBody` renders `<ToolGroup key={mode} tools={row.tools} mode={mode} />` so a toggle press remounts every group and every tool row and discards local overrides (1.4).
-
-State: `const [open, setOpen] = useState(props.mode === "expanded")`, passed to the part as `open={open} onOpenChange={setOpen}`.
-
-Derived (pure, in the component file): `failed = tools.filter(t => t.status === "failed").length`; `running = tools.some(t => t.status === "running")`; `total = sum of result.durationMs over tools that have one` (`hasTime` = at least one has it); aggregate status `agg = failed > 0 ? "failed" : running ? "running" : "done"` (**failed wins over running**).
+**Derived values.** `failed` = count of failed tools; `running` = some tool is running; `agg` = `failed > 0 ? "failed" : running ? "running" : "done"` (failed wins over running); `timed` = the tools with a `result.durationMs`; `total` = their sum.
 
 ```
-TraceCollapsible[data-kind="tool-group"][data-tool-count={tools.length}][data-status={agg}][data-state="open"|"closed"]   KEPT hook; NEW data-tool-count, data-status.   div; no rail, no indent
-├─ TraceCollapsibleTrigger[data-part="group-header"]
-│   └─ TraceLine[status]      "error" when agg is failed, "running" when running, none when done
-│       ├─ span[data-part="caret"][aria-hidden="true"]  "▸" closed / "▾" open      font-mono text-[10px] text-muted-foreground
-│       ├─ TraceIcon: span[data-part="glyph"][aria-hidden="true"][data-tone][data-glyph]   agg "failed" → blocked, "running" → active, "done" → done
-│       ├─ TraceTitle: span[data-part="name"]  {toolName(tools[0])}      text-fg-strong      (#f3ead9)
-│       └─ TraceDescription
-│            ├─ span[data-part="summary"]  text below          text-foreground; wraps      (#d8d2cc)
-│            ├─ <ToolTickStrip statuses={tools.map(t => t.status)} />     (3.5)
-│            └─ span[data-part="totals"]  text below           font-mono text-meta text-muted-foreground      (11px, #aba3af)
-│       └─ span[data-part="group-count"].sr-only  `${tools.length} tool calls`
-└─ TraceCollapsibleContent
-     └─ div[data-part="group-rows"]    flex flex-col gap-0.5      (no rail: each row has its own)
-         └─ <ToolRow key={t.id} tool={t} mode={mode} />  per tool
+Trace[data-kind="tool-group"][data-tool-count={n}][data-status={agg}]
+└─ TraceCollapsible[open = open ?? (running || mode === "expanded")]   reset when `mode` changes
+    ├─ TraceCollapsibleTrigger[data-part="group-header"]
+    │   └─ TraceLine[className="text-xs"][status = agg "running" → "running", "failed" → "error", else none]
+    │       ├─ TraceIcon[data-part="glyph"][data-tone][data-glyph]   running → Spinner · failed → CircleXIcon (text-destructive) · done → CircleCheckIcon
+    │       ├─ span[data-part="name"]  {toolName(first)}   shrink-0 font-mono text-fg-strong
+    │       ├─ TraceTitle[data-part="summary"]  `${toolDetail(first)} + ${n} more step(s)`   n = tools.length − 1 ("step" for 1, "steps" otherwise)
+    │       ├─ ToolTickStrip(statuses)   (3.5)
+    │       ├─ TraceDescription[data-part="totals"]  font-mono   text below
+    │       └─ span.sr-only[data-part="group-count"]  `${tools.length} tool calls`
+    └─ TraceCollapsibleContent
+        └─ Trace[data-part="group-rows"] › ToolRow[nested] ×tools
 ```
 
-- `[data-part="summary"]` text: `` `${toolDetail(tools[0])} + ${n} more ${n === 1 ? "step" : "steps"}` `` with `n = tools.length - 1` (board: `stream.test.ts + 11 more steps`; the detail is the full target, not its basename). It wraps; it is not cut.
-- `[data-part="totals"]` text: `running` (when `running`) else `done`; then ` in ${formatDuration(total)}` when `hasTime` and not `running`; then ` · ${failed} failed` when `failed > 0`. Examples: `done in 6.2s · 1 failed`, `done`, `running · 1 failed`. **Resolution:** the board shows `6.21s` (two decimals); the single `formatDuration` of Phase 2 gives one decimal (`6.2s`) and is kept.
-- Closed (`tools="grouped"`): only the header shows, so a failed call is visible as a red tick, the `failed` count and the blocked glyph. **Resolution:** COMPONENTS says failed calls "break out of the fold"; that is not done (the toggle is a single global rule, Not wired).
-- Keyboard: the trigger is a native `button`. Tab order: the header, then each opened row's trigger and its expand control.
-- `Phase 2 change:` the group was `details[open]` with `summary` text `N tool calls`, open by default. Now it follows `mode` (closed by default), and `N tool calls` is the `sr-only` `[data-part="group-count"]`. `ToolRow.test` 5 is updated: with `mode` `grouped` the group is closed; with `mode="expanded"` it is open and every nested row is open; the three nested `[data-kind="tool"]` exist in the DOM either way; `[data-part="group-count"]` text is `3 tool calls`; a single item renders no `tool-group`.
+- `totals` text: `running` when `running`, else `done`; then ` in ${duration(total)}` when some tool is timed and nothing is running; then ` · ${failed} failed` when `failed > 0`. Examples: `done in 6.2s · 1 failed`, `done`, `running · 1 failed`.
+- **Resolution:** the Phase 2 group was a `details` with a `summary` `N tool calls`. It is now a `Trace` with the summary above, and `N tool calls` is the `sr-only` `[data-part="group-count"]`. The group's open state follows `mode` and a running group opens by itself. Its rows are closed (3.2).
+- Phase 2 `[data-part="caret"]` and `[data-part="glyph"]` placement changed to the Trace parts above; the `group-header` is the trigger.
 
 ### 3.5 `ToolTickStrip` (`web/src/ui/chat/ToolTickStrip.tsx`, new)
 
@@ -516,62 +450,49 @@ span[data-part="tick-strip"][role="img"][aria-label={label}]       flex gap-0.5 
 
 ### 3.6 Output blocks: `bash` output and `edit` diffs
 
-Both are the `Output` of `ToolRow`, inside its `TraceCollapsibleContent` (after the trigger). Hooks **KEPT**: `pre[data-part="output"]`, `[data-diff="add"|"remove"|"context"]`, `button[data-action="expand-output"]`; 10-line preview, `Show N more lines`, the expand-once behaviour.
+Output is a shadcn `CodeBlock` (`size="sm"`, `components/code-block.tsx`, pro-d55), shown inside the row's closed `TraceCollapsibleContent` (3.2). The first `TOOL_PREVIEW_LINES` (10) lines show, then `Show N more lines`.
 
-```
-(plain output, every tool except edit-with-diff)
-pre[data-part="output"]           mb-0.5 font-mono text-[11.5px] leading-[1.5] whitespace-pre-wrap text-muted-foreground     (no fill, no border, no indent; 11.5px / 1.5, #aba3af)
-└─ span × shown lines (leading "\n" text on lines after the first: unchanged)
+**Plain output** (a result with text): `CodeBlock[size="sm"][variant="destructive"]` when the tool failed, else `[variant="default"]`; `CodeBlockActions` > `CodeBlockCopyButton` (the full text); `CodeBlockContent[wrap][data-part="output"]` `max-h-64` with the shown lines; `CodeBlockFooter` > `Button[type="button"][variant="ghost"][size="xs"][data-action="expand-output"]` `font-mono` text `Show {rest} more lines` (only when rest > 0; a click shows all lines).
 
-(edit with tool.diff)
-div[data-part="diff"]             mb-0.5 font-mono text-[11.5px] leading-[1.55]      (no fill, no border, no indent, no overflow-hidden)
-└─ div[data-diff={kind}] × shown lines         block whitespace-pre-wrap text-foreground + kind class
-      add      bg-status-done/[0.11]      (rgba(141,169,110,.11))
-      remove   bg-status-blocked/10       (rgba(225,127,110,.10))
-      context  text-muted-foreground      (hunk headers such as "@@ -1 +1 @@" and unchanged lines)
+**Edit diff** (an `edit` with `tool.diff`): `CodeBlock[size="sm"][data-part="diff"]` > `CodeBlockActions` > `CodeBlockCopyButton` (the diff); `CodeBlockContent` `max-h-64`; one `CodeBlockLine[data-diff="add"|"remove"|"context"][variant="added"|"removed"|"default"]` per shown line (an add or remove line shows without its `+` or `-`). The same `Show N more lines` footer applies.
 
-button[type="button"][data-action="expand-output"]  "Show {rest} more lines"      py-0.5 font-mono text-meta text-fg-strong      (after the block; #f3ead9, 11px)
-```
-
-- **Preview: 10 rows.** A row is one line of the tool's output as the protocol gives it (a logical line); the preview shows the first 10 and the button shows the rest. A wrapped line is not counted as two rows. **Assumption:** the Context's "10 rows" is read as 10 logical lines, the Phase 2 count.
-- **Diffs** keep every hunk and every line. Their lines wrap (`whitespace-pre-wrap`) and are not clipped.
-- **Edits** are closed by default (3.2); when opened they show the same 10-line preview with the expand control.
-- For `add` and `remove` lines the first character is wrapped: `<span data-part="sign" className="text-status-done">+</span>` (add) or `<span data-part="sign" className="text-status-blocked">-</span>` (remove) followed by the rest of the line, so `textContent` of the `[data-diff]` element is the unchanged diff line (`+new`, `-old`; Phase 2 test 4 pins it). Lines starting `+++` or `---` are `context` (KEPT `diffKind`) and have no sign span. **Resolution:** the board's removed marker is `−` (U+2212); the line text must stay `-old`, so the ASCII hyphen is coloured instead.
-- The light-mode `app.css` rules for `[data-diff="add"]` and `[data-diff="remove"]` are removed (DESIGN.md 2a); the colours above replace them.
-- A failed `bash` is closed by default like every tool row; its output shows when the row is opened, in the same `pre`.
+- **Resolution:** the Phase 2 `pre[data-part="output"]` for bash and `div[data-part="diff"]` with `data-diff` rows are replaced by the parts above; `data-part="output"` and `data-part="diff"` and `data-diff` are KEPT on those parts.
+- The Phase 2 `[data-diff="add"]` and `[data-diff="remove"]` page CSS is removed (DESIGN.md 2a table); the tone comes from the `CodeBlockLine` variant.
+- `Done in 1.5s (3 lines)` and `Done (+1 -1)` are the status line of 3.2 (`statusOf`), unchanged.
 
 ---
 
-## 4. KEPT Phase 2 hooks and the test that pins each
+## 4. KEPT hooks and the test that pins each (as amended)
+
+Hooks that the approved preview keeps, with their owner. A hook marked **retired** is no longer in the DOM and its tests are updated in 2.10 and 3.x.
 
 | Hook (KEPT) | Where | Pinned by |
 |---|---|---|
-| `header h1[data-part="key"]` text = key; `[data-part="title"]` only when `title !== null`; `document.title` rules and restore | ChatHeader | `ChatHeader.test` 1, 2, 3 |
-| `[data-part="transcript"] > [role="log"][aria-label="Transcript"]`, `data-at-bottom` | Transcript | `Transcript.test` 1, 9, 10, 11, 12, 13 |
-| `div[data-row-key]` (keys `u1`, `a1`, `group:tool:t1`, `c1`, `tool:t3`), one per mounted row, at most 60 for 1000 items | Transcript | `Transcript.test` 7, 8; `Rows.test` 2 |
-| `button[data-action="load-earlier"]` text `Load earlier`; `button[data-action="jump-to-bottom"]` text `Jump to bottom` (parent `[data-part="transcript"]`) | Transcript | `Transcript.test` 4, 11 |
-| `article[data-kind="user"]` (text, whitespace kept), `[data-attachment="image"]` text `image/png` | user message | `Transcript.test` 1 |
-| `article[data-kind="assistant"]`, Markdown `strong` | assistant text | `Transcript.test` 1; `Rows.test` 1 |
-| `[data-kind="thinking"]`, closed by default (`data-state`) | Thinking row | `Transcript.test` 2 (updated, 2.10) |
-| `[role="status"][data-part="working"]` text `Working…`, last child of the assistant article | working marker | `Transcript.test` 3 |
-| `[data-kind="compaction"]`, closed by default (`data-state`) | compaction | `Transcript.test` 5 (updated) |
-| `ul[aria-label="Queued messages"]` inside the log after `virtual-space`; `li[data-queued]`; `li[data-pending]` with `sending…` and `failed: boom` | queued and pending | `Transcript.test` 6, 18 |
-| `[data-kind="fold"][data-fold]`, `data-state="open"` only for `cpd-plan-summary` | Marker row | `Folds.test` 1, 2, 3 (updated, 3.1) |
-| `[data-kind="tool"][data-tool][data-status]`, `data-state="closed"` for every tool by default (edit included); `[data-part="name"]`, `[data-part="detail"]`, `[data-part="status"]` texts | ToolRow | `ToolRow.test` 1, 2 (updated, 3.2) |
-| `pre[data-part="output"]` 10 lines; `button[data-action="expand-output"]` `Show N more lines` | output | `ToolRow.test` 3 |
-| `[data-diff="add"\|"remove"\|"context"]` texts and the status `Done in 1.5s (+1 -1)` | diff | `ToolRow.test` 4 |
-| `[data-kind="tool-group"]`, one per run of two or more tools, none for a single item | Tool Group | `ToolRow.test` 5 (updated, 3.4); `Rows.test` 2 (`[data-row-key^="group:"]`) |
-| `groupRows` keys, `rows.ts` unchanged | grouping | `rows.test` 1, 2, 3 |
-| `virtual.ts` unchanged | virtualization | `virtual.test` 1 to 7 |
-| `article[data-kind="orphan-result"]`, text `Result of … (call not loaded)` | OrphanRow | no Phase 2 test pins it (hook kept by this contract) |
-| `splitMarkdown` and the per-segment memo | Markdown | `Markdown.test` 1 to 5 |
-| `Footer` (`footer[aria-label="Session footer"]`, `[data-stat]`) | not changed here | `Footer.test` 1, 2 |
+| `h1[data-part="title"]`, text `title ?? sessionKey`; `document.title` rules and restore | ChatHeader (1) | `ChatHeader.test` (updated: no key sub-line) |
+| `[data-part="transcript"]`, `[aria-label="Conversation transcript"][data-part="viewport"]` | Transcript (2.2) | `Transcript.test` 1, 9, 10 |
+| `[data-row]` (the row key: `u1`, `a1`, `group:tool:t1`, `chain:…`, `c1`, `tool:t3`), one per row | Transcript (2.2, 2.9) | `Transcript.test` 7, 8 (updated: every row is mounted, no window); `Rows.test` 2 |
+| `button[data-action="load-earlier"]` text `Load earlier` | Transcript (2.8) | `Transcript.test` 4 |
+| `button[data-action="jump-to-bottom"]` (the `MessageScrollerButton`) | Transcript (2.8) | `Transcript.test` 11 (updated) |
+| `div[data-kind="user"]`, `[data-part="text"]` (whitespace kept), `[data-attachment="image"]` (2.3.1), `[data-part="meta"]` | user message (2.3) | `Transcript.test` 1 (updated) |
+| `[data-kind="assistant"]`, Markdown `strong` | assistant text (2.4) | `Transcript.test` 1; `Rows.test` 1 |
+| `[role="status"][data-part="working"]` text `Working…`, last child of the assistant row | working marker (2.4) | `Transcript.test` 3 |
+| `[data-kind="chain-of-thought"]`, closed by default (`data-state`); `[data-kind="thinking"]`; `[data-part="thinking-body"]` | Chain of Thought (2.4.2) | `Transcript.test` 2 (updated) |
+| `[data-kind="compaction"]`, closed by default | compaction (2.5) | `Transcript.test` 5 (updated) |
+| `ul[aria-label="Queued messages"]`; `li[data-queued]`; `li[data-pending]` (state) | queued and pending (2.6, 2.7) | `Transcript.test` 6, 18 (updated) |
+| `[data-kind="fold"][data-fold]`, `data-state="open"` only for `cpd-plan-summary` | Marker row (3.1) | `Folds.test` 1, 2, 3 |
+| `[data-kind="tool"][data-tool][data-status]`, `data-state="closed"` for every tool by default; `[data-part="name"]`, `[data-part="detail"]`, `[data-part="status"]` | ToolRow (3.2) | `ToolRow.test` 1, 2 (updated) |
+| `[data-part="output"]`, `button[data-action="expand-output"]` `Show N more lines` | output (3.6) | `ToolRow.test` 3 |
+| `[data-part="diff"]`, `[data-diff="add"\|"remove"\|"context"]`, status `Done (+1 -1)` | edit diff (3.6) | `ToolRow.test` 4 |
+| `[data-kind="tool-group"]`, `[data-part="group-header"]`, `[data-part="group-count"]`, one per run of two or more tools | Tool Group (3.4) | `ToolRow.test` 5 (updated); `Rows.test` 2 |
+| `groupRows` keys and grouping, `rows.ts` | grouping (2.4.2, 3.4) | `rows.test` 1, 2, 3 (updated: chain rows) |
+| `virtual.ts` | not used by the Transcript (2.9) | `virtual.test` 1 to 7 (unchanged) |
+| `article[data-kind="orphan-result"]` text `Result of … (call not loaded)` | OrphanRow | no Phase 2 test pins it |
+| `splitMarkdown` and the per-segment memo | Markdown (2.4.1) | `Markdown.test` 1 to 5 |
+| `footer[aria-label="Session footer"]` | **retired** from the chat; the context card is the Footer of DESIGN-compose 3 | `Footer.test` (updated, DESIGN-compose 3.4) |
 
-**Retired hooks** (no longer in the DOM): `details` and `summary` in chat blocks (every chat block root is a Collapsible `div`, and its trigger is a native `button`); `div[data-part="tool-rail"]`; the Thinking pill's `[data-part="caret"]` (the Trace icon replaces it). `summary[data-part="marker"]` is now `[data-part="marker"]` on the Trigger. Each test that pinned one is listed as updated in 2.10 and 3.x.
+**Retired hooks** (no longer in the DOM): `details` and `summary` in chat blocks; `div[data-part="tool-rail"]` as a plain `div` (it is now the shadcn `Trace` root, 3.3); the Thinking pill's `[data-part="caret"]`; `[role="log"][aria-label="Transcript"]`; `[data-at-bottom]` and `div[data-row-key]` (the scroller replaces the window); `span[data-part="stamp"]` (pro-d59); the header `div[data-part="toggles"]`, `[data-action="toggle-thinking"]` and `[data-action="toggle-tools"]`; `span[data-part="run-status"]`; `h1[data-part="key"]`.
 
-`web/src/types-unique.test.ts` is unaffected: no interface named there is redeclared (`ChatHeaderProps`, `ToolGroupProps`, `ChatToggles` are new names; `ThinkingRow` is not exported).
-
-**Tests to add** (new files, written from this document): `format.test.ts` (0.1), `useChatToggles.test.tsx` (initial values, both toggles, `Ctrl+T`/`Ctrl+O` with and without meta/alt/shift, listener removed on unmount), `ChatHeader.dango.test.tsx` (1.3 and 1.4), `ToolGroup.test.tsx` (3.4), `ToolTickStrip.test.tsx` (3.5), plus the additions listed in 2.10. All tests mock nothing but `react-markdown` where Phase 2 already does; none uses a real timer.
+**Tests to add** (new files, written from this document): `format.test.ts` (0.1), `useChatToggles.test.tsx` (initial values, both shortcuts with and without meta, alt and shift, listener removed on unmount), `rows.test.ts` (Chain of Thought grouping: a run of thoughts and tools is one chain; a text item ends the run; two tools form a group inside the chain; `chain:` keys), `ToolRow.test.tsx` (the path cut at 100 and the 160 cut; closed by default in both modes), `ChatHeader.test.tsx` (title only; no toggles; the `document.title` rules).
 
 ---
 
@@ -580,20 +501,29 @@ button[type="button"][data-action="expand-output"]  "Show {rest} more lines"    
 Data absent from `web/src/protocol/**` and the store; each element is omitted (or renders only from an optional prop), never faked.
 
 - Thinking duration (`41s · 13:58`): only the clock `HH:MM` of `item.at` is shown.
-- Tool Group time (`13:59`) and per-row time as a separate field: `ToolItem` has no timestamp; the duration is inside the Phase 2 status text.
+- Tool Group time (`13:59`) and per-row time as a separate field: `ToolItem` has no timestamp; the duration is inside the status text.
 - Attachment file name and size for images (`ci-run-8812.png`, `184 KB`): image attachments carry `mimeType` and optional `dataBase64`.
 - `▲ 3,912 earlier messages`: no total count (the copy is `Load earlier`).
 - `Running command…` and the running command line, `12s` elapsed: only `busy` and `streaming` exist.
 - Compaction after-size (`412k → 38k`) and the optional Checkpoint.
 - Failed tool calls breaking out of a collapsed group; per-group expand state memory across toggles.
 - Retry, Edit or dismiss of a failed pending row (`dismissPending` exists in the store but `Transcript` has no prop for it).
-- Image count on a pending row (`PendingSubmission.imageCount` is not drawn).
+- Image count on a pending row (`PendingSubmission.imageCount` is not drawn; the thumbnails are).
 - Persisted Thinking and Tools modes; per-session modes.
 - The TUI's diff trimming to one context line around each change and its `⋮` hunk gap marks: every diff line is shown (3.6).
-- The `Attachment` and `MessageScroller` parts (the chat uses `Bubble`, `Trace`, `Marker` and `Collapsible` only, see the shadcn note at the top).
-- A copy-to-clipboard button on the assistant text; hover timestamps; message reactions.
+- Hover timestamps; message reactions.
 
+---
 
-## Amendments pro-d48..pro-d61 (consolidate-docs, skeleton)
+## 6. Amendments pro-d48..pro-d61 (chat)
 
-TBD.
+| Decision | Contract | Section |
+|---|---|---|
+| pro-d55 | transcript, messages, reasoning, tools, folds and the composer use shadcn parts (`MessageScroller`, `Message`, `Bubble`, `Trace`, `CodeBlock`, `Marker`, `Spinner`, `Empty`, `Tooltip`) | 2.2, 2.3, 2.4, 2.4.1, 2.9, 3.2, 3.6 |
+| pro-d56 | user and assistant messages on shadcn `Message` with muted `Bubble`; `MessageFooter` with the Copy `Tooltip`; edit tool blocks collapsed | 2.3, 2.3.2, 2.4, 3.2 |
+| pro-d57 | turns at most 85% of the column; no Thinking or Running loaders; no session telemetry row; no header toggle buttons; transcript auto-scroll at 160 px; long tool paths truncated; sent time on user messages | 0.2, 1, 2.2, 2.3, 2.7, 2.8.1, 3.2 |
+| pro-d59 | no session-key stamp on assistant messages | 2.4 |
+| pro-d60 | ChatHeader shows only the title; `ask_user_question` interactive for pi (DESIGN-compose 4, CONTRACT 6.5) | 1 |
+| pro-d61 | consecutive thoughts and tools form one collapsed Chain of Thought row with a step count and a time; user and echoed messages show image thumbnails | 2.3.1, 2.4.2, 2.7 |
+
+---
