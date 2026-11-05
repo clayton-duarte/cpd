@@ -381,7 +381,7 @@ impl Fx {
             // E5 polls whatever the phase (§3.7): its search lists nothing, so it looks up a1's pull request.
             let (state, at) = if merged.load(Ordering::SeqCst) { ("MERGED", r#""2026-10-14T10:00:00Z""#) } else { ("OPEN", "null") };
             let node = format!(
-                r#"{{"repository":{{"nameWithOwner":"acme/a1"}},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":{at},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[]}}}}"#
+                r#"{{"repository":{{"nameWithOwner":"acme/a1","isArchived":false}},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":{at},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[]}}}}"#
             );
             Reply::ok(&format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#))
         });

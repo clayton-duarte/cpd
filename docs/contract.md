@@ -1746,6 +1746,7 @@ CREATE TABLE pull_requests (
   feedback        TEXT,                                           -- migration `pr-comments`: JSON array of the open feedback items (§2.2 "Feedback item"); NULL = never read, '[]' = read, none open
   base_ref        TEXT,                                           -- migration `pr-base` (pro-d118, A1-A5, section 4.5): the base branch from GitHub; used to determine if ready to merge (section 2.2 Pull request)
   default_branch  TEXT,                                           -- migration `pr-base`: the default branch from GitHub; used to determine if ready to merge
+  archived        INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),          -- migration `20261105T1521-pr-archived` (pro-d392): 1 when the repository is archived on GitHub
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))

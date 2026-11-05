@@ -3241,7 +3241,7 @@ fn in_pr(fx: &Ip) {
 }
 
 /// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
-const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
+const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
 
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 fn search_reply(remaining: u32, reset_at: &str) -> String {
@@ -4248,7 +4248,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
         repo = web.display()
     ));
     // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
-    let merged = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}"#;
+    let merged = r#"{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}"#;
     fx.route_fn("gh", move |call| {
         if is_search(call) {
             Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
