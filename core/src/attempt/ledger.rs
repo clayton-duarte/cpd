@@ -526,6 +526,7 @@ pub fn end_explore(
         .job(attempt.job.clone())
         .attempt(attempt.id.clone()),
     )?;
+    crate::plan::done::settle_done(tx, &attempt.plan)?;
     Ok(())
 }
 
@@ -800,6 +801,10 @@ pub fn end_opened(
     if matches!(end, End::Cancelled) {
         let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.unwrap_or_default();
         crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, &reason)?;
+    }
+    // A Job that reached a final state may be the last one holding its Plan in `deploy`.
+    if matches!(end, End::Merged { .. } | End::Cancelled) {
+        crate::plan::done::settle_done(tx, &attempt.plan)?;
     }
     Ok(())
 }

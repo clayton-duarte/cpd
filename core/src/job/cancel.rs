@@ -83,6 +83,7 @@ pub(super) fn cancel_in(
                 append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
                 // The dependents fail or are cancelled in the same transaction (contract §3.2 "Cancel", hs-d647).
                 let failed = fail_dependents(tx, &plan, &key, &reason)?;
+                crate::plan::done::settle_done(tx, &plan)?;
                 if let Some(workflow) = &job.workflow {
                     crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
