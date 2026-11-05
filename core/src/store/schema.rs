@@ -1118,3 +1118,47 @@ mod workflow_rename_tests;
 mod workflow_reopen_tests;
 #[cfg(test)]
 mod working_pr_tests;
+
+/// The migration for the persisted host crash-restart bound (pro-d430 D3): `sessions.host_restart_count` and
+/// `sessions.host_window_start`, on a store created by the previous schema.
+#[cfg(test)]
+mod host_bound_tests {
+    use super::*;
+
+    #[test]
+    fn host_bound_migration_adds_the_columns_with_zero_and_null_defaults() {
+        let (_dir, home) = crate::store::tests::tmp_home();
+        let earlier: Vec<Named> = NAMED
+            .iter()
+            .copied()
+            .take_while(|n| !n.name.ends_with("-host-bound"))
+            .collect();
+        assert!(
+            earlier.len() < NAMED.len(),
+            "the migration `host-bound` exists"
+        );
+        let mut old = crate::store::tests::open_named(&home, &earlier).unwrap();
+        old.write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c1', 'C', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('l1', 'lead', 'c1', 'p1', 'p1', '/r', 'O2', 'stopped', 't', 't');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        drop(old);
+        let mut store = crate::store::Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none());
+        let row: (i64, Option<String>) = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT host_restart_count, host_window_start FROM sessions WHERE id = 'l1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(row, (0, None));
+    }
+}
