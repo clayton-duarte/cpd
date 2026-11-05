@@ -334,3 +334,21 @@ fn an_archived_plan_has_none() {
     tick(&fx);
     assert_eq!(items(&fx), Vec::<Value>::new());
 }
+
+#[test]
+fn an_incomplete_draft_with_no_review_opens_the_drafts_parked_item() {
+    let fx = fx();
+    // A stub (no Tier, no Spec) that needs nothing and has no pending Plan review is parked (pro-d404).
+    fx.env.sql(
+        "INSERT INTO jobs (plan, workflow, key, title, kind, status, appended, created_txn, created_at)
+         VALUES ('pay', 'repo', 'stub1', 'Title of stub1', 'work', 'draft', 1, cpd_txn(), 't');",
+    );
+    wake(&fx, "stub1");
+    turn(&fx);
+    tick(&fx);
+
+    let [item] = &items(&fx)[..] else {
+        panic!("one drafts-parked item: {:?}", items(&fx))
+    };
+    assert_eq!(item["label"], "pay: 1 parked draft", "{item}");
+}

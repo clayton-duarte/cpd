@@ -1,6 +1,6 @@
 //! The door of `job add --draft` and `job edit` after the lock (contract §2.2 "A parked draft", commands.md §5.1, §5.2; hs-d822):
 //! a complete draft (Tier and Spec) that waits for a queued, running or failed Job, directly or through other drafts, or
-//! for another PR, is refused `draft_parked`; a stub (no Tier or no Spec) is legal on its own. Run by the command tree
+//! for another PR, is refused `draft_parked`, a stub as well; `job add` without Tier and Spec is `usage` (pro-d404). Run by the command tree
 //! (`Fx`); Plans and the states only the engine reaches are fixtures (`super::job`).
 
 use serde_json::json;
@@ -93,10 +93,14 @@ fn complete_draft_that_waits_is_refused() {
     for form in ["--needs", "cpd_plan_review", "--draft"] {
         assert!(message.contains(form), "the message names {form}: {e}");
     }
-    // A Tier alone, or a Spec alone, is still a stub, and a stub that waits for nothing is accepted.
-    stub(&fx, "stub", &[]).ok();
-    stub(&fx, "tier-only", &["--tier", "S2"]).ok();
-    stub(&fx, "spec-only", &["--spec", &spec]).ok();
+    // A Tier alone, or a Spec alone, or neither, is a `usage` refusal: no stub is ever added (pro-d404).
+    for (key, extra) in [
+        ("stub", vec![]),
+        ("tier-only", vec!["--tier", "S2"]),
+        ("spec-only", vec!["--spec", &spec]),
+    ] {
+        assert_eq!(stub(&fx, key, &extra).error()["code"], "usage", "{key}");
+    }
     // A complete draft that waits for nothing is accepted too.
     stub(&fx, "full", &["--tier", "S2", "--spec", &spec]).ok();
 }
@@ -189,47 +193,67 @@ fn edit_removing_a_waiting_need_is_accepted() {
 // ---------- accepted (guards that pass before the door too) ----------
 
 #[test]
-fn stub_needing_a_queued_running_or_failed_job_is_accepted() {
+fn stub_needing_a_queued_running_or_failed_job_is_refused() {
     let fx = locked();
-    let out = stub(&fx, "q", &["--needs", "a"]).ok();
-    assert_eq!(
-        (&out["job"]["status"], &out["job"]["needs"]),
-        (&json!("draft"), &json!(["a"])),
-        "queued need"
-    );
     job_add(&fx, "pl", "r", "S2", &[]).ok();
     engine(&fx.env, "pl", "r", "running");
-    stub(&fx, "on-running", &["--needs", "r"]).ok();
     job_add(&fx, "pl", "f", "S2", &[]).ok();
     engine(&fx.env, "pl", "f", "failed");
-    // `job add` and `job edit` refuse a new need on a failed Job (`needs_unavailable`), so the stub that needs it
-    // is a fixture (it was added while `f` was running); retrying `f` recovers it, so the stub waits: any edit is accepted.
-    incomplete_draft(&fx, "on-failed", "work");
+    // Stubs are fixtures (the door never writes one): each needs an unfinished Job, so any edit is refused.
+    for (key, need) in [("q", "a"), ("on-running", "r"), ("on-failed", "f")] {
+        incomplete_draft(&fx, key, "work");
+        fixture(
+            &fx.env,
+            &format!(
+                "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', '{key}', '{need}');"
+            ),
+        );
+        let before = writes(&fx);
+        let run = job(&fx, &["edit", key, "--title", "Other"], "pl");
+        refused(&run, "draft_parked", 3);
+        assert_eq!(writes(&fx), before, "{key}: nothing written");
+        assert_eq!(
+            job_row(&fx.env, "pl", key, "title"),
+            json!(format!("Title of {key}"))
+        );
+    }
+}
+
+#[test]
+fn stub_that_needs_a_waiting_stub_is_refused() {
+    let fx = locked();
+    incomplete_draft(&fx, "w", "work");
+    incomplete_draft(&fx, "k", "work");
     fixture(
         &fx.env,
-        "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', 'on-failed', 'f');",
+        "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', 'w', 'a'), ('pl', 'k', 'w');",
     );
-    job(&fx, &["edit", "on-failed", "--title", "Other"], "pl").ok();
+    let before = writes(&fx);
+    refused(
+        &job(&fx, &["edit", "k", "--title", "Other"], "pl"),
+        "draft_parked",
+        3,
+    );
+    assert_eq!(writes(&fx), before, "nothing written");
 }
 
 #[test]
-fn stub_that_needs_a_waiting_stub_is_accepted() {
-    let fx = locked();
-    stub(&fx, "w", &["--needs", "a"]).ok();
-    stub(&fx, "k", &["--needs", "w"]).ok();
-    assert_eq!(job_row(&fx.env, "pl", "k", "status"), "draft");
-}
-
-#[test]
-fn stub_in_a_pr_that_waits_for_another_pr_is_accepted() {
+fn stub_in_a_workflow_that_waits_for_another_workflow_is_refused() {
     let fx = locked();
     web_waits_for_repo(&fx);
-    let out = stub(&fx, "k", &["--workflow", "web"]).ok();
-    assert_eq!(
-        (&out["job"]["pr"], &out["job"]["status"]),
-        (&json!("web"), &json!("draft"))
+    fixture(
+        &fx.env,
+        "INSERT INTO jobs (plan, workflow, key, title, kind, status, appended, created_txn, created_at)
+         VALUES ('pl', 'web', 'k', 'Title of k', 'work', 'draft', 1, cpd_txn(), 't');",
     );
-    // A complete draft in the same waiting Workflow is refused: the Workflow's wait is a wait.
+    let before = writes(&fx);
+    refused(
+        &job(&fx, &["edit", "k", "--title", "Other"], "pl"),
+        "draft_parked",
+        3,
+    );
+    assert_eq!(writes(&fx), before, "nothing written");
+    // A complete draft in the same waiting Workflow is refused too.
     let spec = spec_file(&fx.env);
     refused(
         &stub(
@@ -264,11 +288,13 @@ fn edit_completing_a_stub_without_needs_is_accepted() {
 }
 
 #[test]
-fn in_phase_plan_a_stub_with_no_needs_is_accepted() {
+fn in_phase_plan_a_full_draft_with_no_needs_is_accepted_and_a_stub_is_usage() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    let out = stub(&fx, "k", &[]).ok();
+    assert_eq!(stub(&fx, "s", &[]).error()["code"], "usage");
+    let spec = spec_file(&fx.env);
+    let out = stub(&fx, "k", &["--tier", "S2", "--spec", &spec]).ok();
     assert_eq!(out["job"]["status"], "draft");
     job(&fx, &["edit", "k", "--title", "Other"], "pl").ok();
 }
@@ -277,8 +303,7 @@ fn in_phase_plan_a_stub_with_no_needs_is_accepted() {
 fn the_open_jobs_draft_never_makes_a_plan_refuse_anything() {
     let fx = locked();
     incomplete_draft(&fx, "open-repo", "open");
-    // The open Job's draft is exempt: with it there, a stub that waits, a queued Job and a full draft are added as ever.
-    stub(&fx, "k", &["--needs", "a"]).ok();
+    // The open Job's draft is exempt: with it there, a queued Job and a full draft are added as ever.
     job_add(&fx, "pl", "b", "S2", &["a"]).ok();
     let spec = spec_file(&fx.env);
     stub(&fx, "full", &["--tier", "S2", "--spec", &spec]).ok();

@@ -122,6 +122,33 @@ impl Crud {
         self.cpd(&all)
     }
 
+    /// `workflow add <key> --shape <shape> --jobs <file>` after the lock (pro-d404): the template's Jobs are queued with a Tier and a
+    /// Spec, never stub drafts. `extra` is `--needs`/`--base`.
+    fn add_queued(&self, key: &str, title: &str, shape: &str, extra: &[&str]) -> Run {
+        let spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]});
+        let file = self.env.root().join(format!("{key}-jobs.json"));
+        fs::write(
+            &file,
+            json!({ shape: {"tier": "S2", "spec": spec} }).to_string(),
+        )
+        .unwrap();
+        self.install_catalog();
+        let mut args = vec![
+            "add",
+            key,
+            "--repo",
+            self.pay.to_str().unwrap(),
+            "--title",
+            title,
+            "--shape",
+            shape,
+            "--jobs",
+            file.to_str().unwrap(),
+        ];
+        args.extend(extra);
+        self.add_with_stubs("pay-1", &args)
+    }
+
     /// `pr add <key> --repo <repo> --title "Change <key>" <extra…>`.
     fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
         let title = format!("Change {key}");
@@ -351,13 +378,16 @@ fn add_in_dispatch_appends_the_workflow() {
     let fx = crud("dispatch");
     // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
     fx.locked_pr("base", &fx.pay, "dispatch");
-    let out = fx.add("late", &fx.pay, &["--needs", "base"]).ok();
+    let out = fx
+        .add_queued("late", "Change late", "config", &["--needs", "base"])
+        .ok();
     assert_eq!(out["workflow"]["appended"], true);
     assert_eq!(out["workflow"]["status"], "waiting");
     assert_eq!(fx.events("workflow-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
     assert_eq!(
-        fx.add("late", &fx.pay, &["--needs", "base"]).ok()["workflow"]["appended"],
+        fx.add_queued("late", "Change late", "config", &["--needs", "base"])
+            .ok()["workflow"]["appended"],
         true
     );
 }
@@ -683,19 +713,8 @@ fn the_stubs_of_a_workflow_added_after_the_lock_are_appended_and_a_reopened_plan
         let fx = crud(phase);
         // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
         fx.locked_pr("base", &fx.pay, "dispatch");
-        let args = [
-            "add",
-            "late",
-            "--repo",
-            fx.pay.to_str().unwrap(),
-            "--title",
-            "Add retries",
-            "--shape",
-            "docs",
-            "--needs",
-            "base",
-        ];
-        fx.add_with_stubs("pay-1", &args).ok();
+        fx.add_queued("late", "Add retries", "docs", &["--needs", "base"])
+            .ok();
         assert_eq!(
             fx.stubs("late"),
             json!([
@@ -703,10 +722,10 @@ fn the_stubs_of_a_workflow_added_after_the_lock_are_appended_and_a_reopened_plan
                     "late-docs",
                     "docs",
                     "Docs: Add retries",
-                    "draft",
+                    "queued",
                     true,
-                    false,
-                    false,
+                    true,
+                    true,
                     []
                 ],
                 [
@@ -1185,12 +1204,30 @@ fn add_refusals_write_nothing() {
 }
 
 #[test]
+fn after_lock_a_waiting_workflow_without_jobs_is_refused_and_leaves_no_draft() {
+    let fx = crud("dispatch");
+    fx.locked_pr("base", &fx.pay, "dispatch");
+    let writes = fx.writes();
+    let run = fx.add("late", &fx.pay, &["--needs", "base"]);
+    let error = common::refused(&run, "draft_parked", 3);
+    assert_eq!(error["details"]["workflow"], "late");
+    assert_eq!(fx.writes(), writes);
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'late'"),
+        0
+    );
+}
+
+#[test]
 fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
     for phase in ["deploy", "done"] {
         let fx = crud(phase);
         // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
         fx.locked_pr("base", &fx.pay, "dispatch");
-        let out = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
+        let out = fx
+            .add_queued("fix", "Change fix", "config", &["--needs", "base"])
+            .ok();
         assert_eq!(
             (
                 out["workflow"]["appended"].clone(),
@@ -1224,7 +1261,9 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
 
         // A rerun is already and writes nothing.
         let writes = fx.writes();
-        let again = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
+        let again = fx
+            .add_queued("fix", "Change fix", "config", &["--needs", "base"])
+            .ok();
         assert_eq!(
             (
                 again["already"].clone(),

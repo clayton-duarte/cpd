@@ -106,6 +106,20 @@ export function createHubConnection(deps: HubDeps): HubConnection {
     }
   };
 
+  const isQuit = (text: string): boolean => text.trim() === "/q" || text.trim() === "/quit";
+  // /q and /quit archive the session through the cockpit action (pro-d406); nothing reaches the model
+  const quit = async (sessionId: string): Promise<void> => {
+    const role = deps.registry.resolve(sessionId).ref.role;
+    if (role === "manager") throw new WebError("internal", "Manager sessions are archived with their Context");
+    const plan = (deps.cockpit.snapshot().tree?.contexts ?? []).flatMap((c) => c.plans).find((p) => p.leadSessionId === sessionId);
+    try {
+      await deps.cockpit.runAction(plan === undefined ? { kind: "session.archive", sessionId } : { kind: "plan.archive", planId: plan.id });
+    } catch (e) {
+      if (e instanceof WebError && e.details?.["cpdCode"] === "archive_blocked") throw new WebError(e.code, `archive refused: ${e.message}`, e.details);
+      throw e;
+    }
+  };
+
   const dispatch = async (m: ClientMessage): Promise<void> => {
     switch (m.type) {
       case "cockpit.subscribe": return subscribe();
@@ -149,7 +163,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.detach": return detach();
       case "session.loadEarlier": return onSession(m.sessionId, undefined, (h) => h.loadEarlier(m.before));
       case "session.submit":
-        return onSession(m.sessionId, m.clientSubmissionId, (h) => h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, whenBusy: m.whenBusy }));
+        return onSession(m.sessionId, m.clientSubmissionId, (h) => isQuit(m.text) ? quit(m.sessionId) : h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, whenBusy: m.whenBusy }));
       case "session.abort": return onSession(m.sessionId, undefined, (h) => h.abort());
       case "session.abortSubmission": return onSession(m.sessionId, undefined, (h) => h.abortSubmission(m.clientSubmissionId));
       case "session.compact": return onSession(m.sessionId, undefined, (h) => h.compact(m.instructions));

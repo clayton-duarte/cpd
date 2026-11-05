@@ -88,30 +88,30 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
         "verify"
     );
 
-    // The draft form is a stub (no Tier, no Spec): a complete draft that waits for the queued `i` would be parked.
-    let out = fx
-        .cpd(&[
-            "job",
-            "add",
-            "v2",
-            "--title",
-            "Title of v2",
-            "--kind",
-            "verify",
-            "--needs",
-            "i",
-            "--draft",
-            "--workflow",
-            "api",
-            "--plan",
-            "pl",
-        ])
-        .ok();
-    assert_eq!(
-        (&out["job"]["kind"], &out["job"]["status"]),
-        (&json!("verify"), &json!("draft")),
-        "{out}"
-    );
+    // After the lock the stub form (no Tier, no Spec) is refused, and a complete draft that waits for the queued `i`
+    // is parked: nothing is written (pro-d404).
+    let before = writes(&fx);
+    let e = fx.cpd(&[
+        "job",
+        "add",
+        "v2",
+        "--title",
+        "Title of v2",
+        "--kind",
+        "verify",
+        "--needs",
+        "i",
+        "--draft",
+        "--workflow",
+        "api",
+        "--plan",
+        "pl",
+    ]);
+    refused(&e, "usage", 2);
+    assert_eq!(writes(&fx), before, "the stub wrote");
+    let e = verify(&fx, "v2", &["i"], "api", true);
+    refused(&e, "draft_parked", 3);
+    assert_eq!(writes(&fx), before, "the parked draft wrote");
 }
 
 #[test]

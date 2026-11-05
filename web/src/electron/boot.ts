@@ -32,6 +32,12 @@ export async function boot(deps: BootDeps): Promise<void> {
   const update = await deps.startAutoUpdate(win);
   if (update.bootstrap.state === 'ready') deps.startServices();
   const devUrl = deps.env['CPD_ELECTRON_DEV_URL'];
-  if (devUrl) await deps.loadDevUrl(win, devUrl);
-  else await deps.loadFile(win, 'renderer/electron.html');
+  if (devUrl) {
+    try {
+      await deps.loadDevUrl(win, devUrl);
+    } catch (error) {
+      console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
+      await deps.loadFile(win, 'renderer/electron.html');
+    }
+  } else await deps.loadFile(win, 'renderer/electron.html');
 }

@@ -38,10 +38,12 @@ A prototype is a quick way to preview a visual change in the live cockpit before
 sh scripts/preview-web.sh on [<worktree>] | off | status | reload [<worktree>]
 ```
 
-- **`on [<worktree>]`** creates the git worktree on branch `preview/web` from `origin/main` when it is missing. The default path is `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`. It links `node_modules` and `web/node_modules` from the repo when they are absent. It starts the Vite dev server, or respawns it when it is running, with `pnpm --dir <worktree> --filter cpd-web-client run dev --host` on port 5173, in the window `web` of the cockpit's work session, without the session identity variables. It builds Electron (`build:electron`) only when `CPD_PREVIEW_ELECTRON=1`. It sets the tmux option `@cpd_web_preview` to `<worktree name> <sha>` and writes `web-state` in `${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}`. It prints the command that points Electron at the server: `CPD_ELECTRON_DEV_URL=http://localhost:5173 pnpm --dir <worktree>/web run electron`. It also starts the watchdog that rolls back a crashing build (see [Crash safety](#crash-safety-pro-d64)). It never starts or kills Electron.
+- **`on [<worktree>]`** creates the git worktree on branch `preview/web` from `origin/main` when it is missing. The default path is `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`. It links `node_modules` and `web/node_modules` from the repo when they are absent. It starts the Vite dev server, or respawns it when it is running, with `pnpm --dir <worktree> --filter cpd-web-client run dev --host` on port 5173, in the window `web` of the cockpit's work session, without the session identity variables. It builds Electron (`build:electron`) only when `CPD_PREVIEW_ELECTRON=1`. It sets the tmux option `@cpd_web_preview` to `<worktree name> <sha>` and writes `web-state` in `${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}`. It prints the command that points Electron at the server: `CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html pnpm --dir <worktree>/web run electron`. The URL ends in `/electron.html`: bare `http://localhost:5173` is the browser UI (`index.html`), not the Electron renderer. UI/CSS edits hot-reload through Vite React Fast Refresh with no rebuild. Main, preload and server changes still need `preview-web.sh reload` (SIGUSR1). It also starts the watchdog that rolls back a crashing build (see [Crash safety](#crash-safety-pro-d64)), and that watchdog relaunches Electron with `CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html` set, so a relaunch loads the dev server too. It never starts or kills Electron.
 - **`off`** respawns the window `web` on the primary checkout, unsets the option `@cpd_web_preview`, removes `web-state` and stops the watchdog.
 - **`reload [<worktree>]`** typechecks and builds the worktree's Electron output, then sends SIGUSR1 to the running Electron main process. It exits 1 without building or signalling when the typecheck fails. Details are in [Crash safety](#crash-safety-pro-d64).
 - **`status`** prints the worktree and the sha, or `no web preview`.
+
+If loading the dev URL fails (for example the server is down), boot logs the error and loads the built renderer (`renderer/electron.html`) instead of exiting. The failed load is still recorded as a crash for its epoch (see [Crash safety](#crash-safety-pro-d64)).
 
 `preview-web.sh` itself never runs `git checkout`, `git reset` or `git clean`. The Electron sync does a scoped `git checkout HEAD -- <files>` in the preview worktree before it fast-forwards (see [Electron app](#electron-app)). The matching scripts in `web/package.json` are `preview:on`, `preview:off` and `preview:reload`.
 
@@ -68,6 +70,8 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
 ## Crash safety (pro-d64)
 
 A crashing WebUI build must not leave the preview dead. The main process records each load of the WebUI as a reload epoch in a health file. A supervisor, the watchdog, rolls the files back to the last build that proved healthy and reloads Electron. Renderer crashes, load failures and a dead process all count.
+
+With a dev URL (`CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html`), the watchdog's relaunch carries the same variable. A failed dev-URL load is recorded as a `did-fail-load` crash, and boot then loads `renderer/electron.html` from the built output, which starts a new epoch. The crash clears before `crashDebounceMs` when that load starts in time, so the watchdog does nothing.
 
 ### Health file and crash log
 

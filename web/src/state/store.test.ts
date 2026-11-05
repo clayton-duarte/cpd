@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ContextTreeModel, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
+import type { ContextNode, ContextTreeModel, PlanNode, SessionNode, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
 import type { Capabilities, Dialog, FooterStats, SessionRef, WireError } from "../protocol/domain.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { createStore, initialState, reduce, type AppState, type StoreAction } from "./store.ts";
@@ -209,5 +209,71 @@ describe("optimistic merge", () => {
     const fresh = { ...withRows, rows: [rows[1]!], openCount: 1 } as InboxModel;
     const refreshed = run(ok, server({ type: "cockpit.patch", pane: "inbox", data: fresh }));
     expect(refreshed.cockpit.inbox).toEqual(fresh);
+  });
+});
+
+describe("archive navigation", () => {
+  const counts = { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 };
+  const sess = (id: string, role: "manager" | "lead", contextId: string, planId: string | null, archived = false): SessionNode => ({
+    ref: { id, key: planId === null ? contextId : `${contextId}:${planId}`, runner: "pi", role, state: "idle", title: null },
+    contextId, planId, jobKey: null, archived, dot: { state: "idle", attention: null },
+  });
+  const planNode = (contextId: string, id: string, archived = false): PlanNode => ({
+    id, contextId, title: id, phase: "dispatch", archived, counts, leadSessionId: `lead-${id}`,
+    sessions: [sess(`lead-${id}`, "lead", contextId, id, archived)],
+  });
+  const ctx = (id: string, planIds: string[], archived = false, archivedPlans: string[] = []): ContextNode => ({
+    id, title: id, archived, records: 0, openQuestions: 0,
+    sessions: [sess(`mgr-${id}`, "manager", id, null, archived)],
+    plans: planIds.map((p) => planNode(id, p, archived || archivedPlans.includes(p))),
+  });
+  const model = (contexts: ContextNode[]): ContextTreeModel => ({ contexts, cursor: 1 });
+  const snap = (t: ContextTreeModel): StoreAction => server({ type: "cockpit.snapshot", tree: t, plan: null, inbox });
+  const patch = (t: ContextTreeModel): StoreAction => server({ type: "cockpit.patch", pane: "tree", data: t });
+  const at = (t: ContextTreeModel, sessionId: string, planId: string | null): AppState =>
+    run(initialState, snap(t), { type: "selectPlan", planId }, { type: "selectSession", sessionId });
+  const where = (s: AppState) => [s.selectedSessionId, s.cockpit.selectedPlanId];
+
+  it("tree update archiving the selected Lead selects the next live Plan Lead of the same Context", () => {
+    const live = model([ctx("cpd", []), ctx("a", ["p1", "p2"])]);
+    const after = model([ctx("cpd", []), ctx("a", ["p1", "p2"], false, ["p1"])]);
+    expect(where(run(at(live, "lead-p1", "p1"), patch(after)))).toEqual(["lead-p2", "p2"]);
+  });
+
+  it("tree update archiving the last live Plan selects the Context Manager with planId null", () => {
+    const live = model([ctx("cpd", []), ctx("a", ["p1"])]);
+    const after = model([ctx("cpd", []), ctx("a", ["p1"], false, ["p1"])]);
+    expect(where(run(at(live, "lead-p1", "p1"), patch(after)))).toEqual(["mgr-a", null]);
+  });
+
+  it("tree update archiving the selected Context selects the next live non-standing Context Manager", () => {
+    const live = model([ctx("cpd", []), ctx("a", []), ctx("b", [])]);
+    const after = model([ctx("cpd", []), ctx("a", [], true), ctx("b", [])]);
+    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-b", null]);
+  });
+
+  it("tree update archiving the last non-standing Context selects the cpd Manager", () => {
+    const live = model([ctx("cpd", []), ctx("host", []), ctx("a", [])]);
+    const after = model([ctx("cpd", []), ctx("host", []), ctx("a", [], true)]);
+    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-cpd", null]);
+  });
+
+  it("opening an archived row keeps the selection", () => {
+    const live = model([ctx("cpd", []), ctx("a", ["p1", "p2"])]);
+    const archived = model([ctx("cpd", []), ctx("a", ["p1", "p2"], false, ["p1"])]);
+    const moved = run(at(live, "lead-p1", "p1"), patch(archived));
+    expect(where(moved)).toEqual(["lead-p2", "p2"]); // the live-to-archived transition navigated
+    const opened = run(moved, { type: "selectPlan", planId: "p1" }, { type: "selectSession", sessionId: "lead-p1" });
+    const later = run(opened, patch({ ...archived, cursor: 2 }));
+    expect(where(later)).toEqual(["lead-p1", "p1"]);
+  });
+
+  it("tree update that leaves the selected session live keeps the selection", () => {
+    const live = model([ctx("cpd", []), ctx("a", ["p1", "p2"])]);
+    const other = model([ctx("cpd", []), ctx("a", ["p1", "p2"], false, ["p2"])]);
+    const kept = run(at(live, "lead-p1", "p1"), patch(other));
+    expect(where(kept)).toEqual(["lead-p1", "p1"]);
+    const archiveSelected = model([ctx("cpd", []), ctx("a", ["p1", "p2"], false, ["p1", "p2"])]);
+    expect(where(run(kept, patch(archiveSelected)))).toEqual(["mgr-a", null]); // only a transition of the selected one navigates
   });
 });

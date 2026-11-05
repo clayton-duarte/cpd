@@ -4352,6 +4352,14 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
            VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
         fx.repo.display()
     ));
+    let spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]});
+    let jobs = fx.env.root().join("fix-jobs.json");
+    fs::write(
+        &jobs,
+        json!({"config": {"tier": "S2", "spec": spec}}).to_string(),
+    )
+    .unwrap();
+    fx.install_catalog();
     fx.cpd(&[
         "workflow",
         "add",
@@ -4362,6 +4370,8 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
         "Change the PR",
         "--shape",
         "config",
+        "--jobs",
+        jobs.to_str().unwrap(),
         "--base",
         "pay/side",
         "--plan",
@@ -5771,7 +5781,22 @@ impl Added {
     }
 
     fn add_fix(&self, extra: &[&str]) -> Run {
-        self.add("fix", &self.repo, extra)
+        self.add_queued("fix", &self.repo, extra)
+    }
+
+    /// [`Added::add`] with `--jobs`: after the lock cpd queues the template's Jobs, never stub drafts (pro-d404).
+    fn add_queued(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
+        let spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]});
+        let file = self.fx.env.root().join(format!("{key}-jobs.json"));
+        fs::write(
+            &file,
+            json!({"config": {"tier": "S2", "spec": spec}}).to_string(),
+        )
+        .unwrap();
+        self.fx.install_catalog();
+        let mut args = vec!["--jobs", file.to_str().unwrap()];
+        args.extend(extra);
+        self.add(key, repo, &args)
     }
 
     /// An unmerged PR `side` in `repo`, as the lock leaves one (`dispatch`): a PR stacked on it (`--base pay/side`) waits for it, and
@@ -5812,7 +5837,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     {
         let b = added("done");
         b.side(&b.repo);
-        b.add("x", &b.repo, &["--no-needs", "--base", "pay/side"])
+        b.add_queued("x", &b.repo, &["--no-needs", "--base", "pay/side"])
             .ok();
         // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
         assert_eq!(
@@ -5838,7 +5863,7 @@ fn pr_add_on_a_plan_in_dispatch_with_no_needs_has_no_needs() {
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
     f.side(&other);
     let out = f
-        .add("fix", &other, &["--no-needs", "--base", "pay/side"])
+        .add_queued("fix", &other, &["--no-needs", "--base", "pay/side"])
         .ok();
     assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
