@@ -11,9 +11,13 @@ pub mod rules;
 pub mod team;
 
 #[cfg(test)]
+mod approve_refusal_tests;
+#[cfg(test)]
 mod approve_tests;
 #[cfg(test)]
 mod blue_tests;
+#[cfg(test)]
+mod claim_refusal_tests;
 #[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
@@ -22,6 +26,8 @@ mod closed_tests;
 mod deploy_tests;
 #[cfg(test)]
 mod dialog_tests;
+#[cfg(test)]
+mod dismiss_tests;
 #[cfg(test)]
 mod follow_tests;
 #[cfg(test)]
@@ -38,6 +44,8 @@ mod rows_review_tests;
 mod rows_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod snooze_refusal_tests;
 #[cfg(test)]
 mod tier_tests;
 #[cfg(test)]

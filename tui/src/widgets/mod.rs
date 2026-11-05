@@ -27,6 +27,8 @@ mod draw_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
 #[cfg(test)]
+mod inbox_actions_tests;
+#[cfg(test)]
 mod inbox_flat_tests;
 #[cfg(test)]
 mod inbox_loop_guard_tests;
