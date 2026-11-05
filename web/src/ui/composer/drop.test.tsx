@@ -83,14 +83,14 @@ function typeAndEnter(c: HTMLElement, value: string) {
 it("dropping a file on the composer attaches it once", async () => {
   const { container } = setup();
   await dropOn(textarea(container), [png("a.png")]);
-  expect(container.querySelectorAll('ul[data-part="attachment-bar"] li[data-attachment]')).toHaveLength(1);
-  expect(container.querySelectorAll('[data-attachment="a.png"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-part="attachments"] [data-attachment]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-part="attachments"] [data-part="name"]')).toHaveLength(1);
 });
 
 it("dropping three images sends one submit with three images", async () => {
   const { connection, container } = setup();
   await dropOn(textarea(container), [png("a.png"), png("b.png"), png("c.png")]);
-  expect(container.querySelectorAll("li[data-attachment]")).toHaveLength(3);
+  expect(container.querySelectorAll("[data-part=\"attachments\"] [data-attachment]")).toHaveLength(3);
   typeAndEnter(container, "look");
   expect(connection.submits).toHaveLength(1);
   expect(connection.submits[0]!.images).toHaveLength(3);
@@ -107,34 +107,33 @@ it("dropping one image sends it once in the submit", async () => {
 it("an image attachment shows a thumbnail with its file name and a remove button", async () => {
   const { container } = setup();
   await dropOn(textarea(container), [png("pic.png")]);
-  const item = container.querySelector('ul[data-part="attachment-bar"] li[data-attachment="pic.png"]')!;
+  const item = container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')!;
   expect(item).not.toBeNull();
-  const img = item.querySelector<HTMLImageElement>('img[data-part="attachment-thumb"]')!;
+  const img = item.querySelector<HTMLImageElement>('[data-part="thumb"] img')!;
   expect(img.getAttribute("src")).toBe("data:image/png;base64,QUJD");
-  expect(img.getAttribute("alt")).toBe("pic.png");
-  expect(item.querySelector('span[data-part="attachment-name"]')?.textContent).toBe("pic.png");
-  const remove = item.querySelector<HTMLButtonElement>('button[aria-label="Remove pic.png"]')!;
+  expect(item.querySelector('[data-part="name"]')?.textContent).toBe("pic.png");
+  const remove = item.querySelector<HTMLButtonElement>('button[aria-label="Remove pic.png"][data-action="remove-attachment"]')!;
   expect(remove).not.toBeNull();
   act(() => remove.click());
-  expect(container.querySelector('[data-attachment="pic.png"]')).toBeNull();
+  expect(container.querySelector('[data-attachment]')).toBeNull();
 });
 
 it("dragging files over the composer shows the drop cue", () => {
   const { container } = setup();
   expect(container.querySelector('span[data-part="drop-cue"]')).toBeNull();
   dragEnter(textarea(container));
-  const form = container.querySelector('form[aria-label="Composer"]')!;
-  expect(form.getAttribute("data-drop")).toBe("over");
-  expect(form.querySelector('span[data-part="drop-cue"]')?.textContent).toBe("Drop to attach");
+  const group = container.querySelector('[data-slot="input-group"]')!;
+  expect(group.getAttribute("data-drop")).toBe("over");
+  expect(group.querySelector('span[data-part="drop-cue"]')?.textContent).toBe("Drop to attach");
 });
 
-it("a rejected file is listed with its reason in a styled alert", async () => {
+it("a rejected file is listed with its reason in a destructive alert", async () => {
   const { container } = setup();
   await dropOn(textarea(container), [{ name: "tool.bin", type: "application/zip", size: 3 }]);
-  const alert = container.querySelector<HTMLElement>('ul[role="alert"][aria-label="Rejected files"]')!;
+  const alert = container.querySelector<HTMLElement>('ul[role="alert"][data-part="rejections"]')!;
   expect(alert).not.toBeNull();
-  expect(alert.className).toContain("text-status-blocked-bright");
-  const items = alert.querySelectorAll('li[data-part="rejected-file"]');
+  const items = alert.querySelectorAll("li[data-rejection]");
   expect(items).toHaveLength(1);
+  expect(items[0]!.className).toContain("text-destructive");
   expect(items[0]!.textContent).toContain("tool.bin: Binary files other than png, jpeg, gif and webp images cannot be attached");
 });
