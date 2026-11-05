@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { expect, it, vi } from "vitest";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Attachment, Capabilities, QueuedSubmission, WhenBusy } from "../../protocol/domain.ts";
 import { mount } from "../../testing/render.tsx";
 import { Composer } from "./Composer.tsx";
@@ -21,7 +22,7 @@ function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queue
   const onAbort = vi.fn();
   const onCancelQueued = vi.fn();
   const m = mount(
-    <Composer capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
+    <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
       reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
   );
   return { m, submits, onAbort, onCancelQueued };
@@ -162,7 +163,7 @@ it("without capabilities the textarea, attach button and send button are disable
 
 it("archived Composer is disabled with the archived placeholder", () => {
   const m = mount(
-    <Composer capabilities={base} archived busy={false} queued={[]} reader={reader}
+    <Composer sessionId="s1" capabilities={base} archived busy={false} queued={[]} reader={reader}
       onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
   );
   const t = textarea(m.container);
@@ -173,5 +174,77 @@ it("archived Composer is disabled with the archived placeholder", () => {
   expect(attach.disabled).toBe(true);
   expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
   expect(m.container.querySelector<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
+  m.unmount();
+});
+
+// ---- persisted draft ----
+const KEY = (id: string) => `cpd-ui:draft:${id}`;
+beforeEach(() => { window.localStorage.clear(); });
+afterEach(() => { vi.restoreAllMocks(); window.localStorage.clear(); });
+
+it("draft: typing saves the text and a remount restores it", () => {
+  const first = setup();
+  typeText(textarea(first.m.container), "hello");
+  expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
+  first.m.unmount();
+  const second = setup();
+  expect(textarea(second.m.container).value).toBe("hello");
+  second.m.unmount();
+});
+
+it("draft: switching session shows that session draft and keeps the other", () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const render = (id: string) => act(() => root.render(
+    <Composer sessionId={id} capabilities={base} busy={false} queued={[]} reader={reader}
+      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
+  ));
+  render("s1");
+  typeText(textarea(container), "alpha");
+  render("s2");
+  expect(textarea(container).value).toBe("");
+  typeText(textarea(container), "beta");
+  render("s1");
+  expect(textarea(container).value).toBe("alpha");
+  expect(window.localStorage.getItem(KEY("s1"))).toBe("alpha");
+  expect(window.localStorage.getItem(KEY("s2"))).toBe("beta");
+  act(() => root.unmount());
+  container.remove();
+});
+
+it("draft: sending clears the stored draft", () => {
+  const { m, submits } = setup();
+  const t = textarea(m.container);
+  typeText(t, "hello");
+  expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
+  press(t, "Enter");
+  expect(submits).toHaveLength(1);
+  expect(window.localStorage.getItem(KEY("s1"))).toBeNull();
+  expect(textarea(m.container).value).toBe("");
+  m.unmount();
+});
+
+it("draft: emptying the input removes the stored draft", () => {
+  const { m } = setup();
+  const t = textarea(m.container);
+  typeText(t, "hello");
+  expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
+  typeText(t, "");
+  expect(window.localStorage.getItem(KEY("s1"))).toBeNull();
+  m.unmount();
+});
+
+it("draft: unavailable storage does not break typing", () => {
+  const boom = () => { throw new Error("storage unavailable"); };
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(boom);
+  const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
+  const { m, submits } = setup();
+  const t = textarea(m.container);
+  typeText(t, "hello");
+  expect(textarea(m.container).value).toBe("hello");
+  expect(setItem).toHaveBeenCalled();
+  press(t, "Enter");
+  expect(submits).toEqual([{ text: "hello", attachments: [], whenBusy: "followUp" }]);
   m.unmount();
 });

@@ -8,6 +8,23 @@ function fakeCpd(reply: () => Promise<Record<string, unknown>> = async () => ({ 
   return { calls, cpd: { json: async (args) => { calls.push(args); return reply(); } } };
 }
 
+// strict fake: `plan show` answers workflows[]; `pr poll` (a GitHub GraphQL poll) is a failure
+function planShowCpd(): { cpd: Cpd; calls: (readonly string[])[] } {
+  const calls: (readonly string[])[] = [];
+  const workflows = [{ key: "w1", pull_request: { repo: "acme/api", number: 3 } }];
+  return {
+    calls,
+    cpd: {
+      json: async (args) => {
+        calls.push(args);
+        if (args[0] === "pr" && args[1] === "poll") throw new WebError("cpd_failed", "rate limited", { cpdCode: "rate_limited", exitCode: 1 });
+        if (args[0] === "plan" && args[1] === "show") return { ok: true, workflows };
+        return { ok: true };
+      },
+    },
+  };
+}
+
 describe("actions", () => {
   it("inbox snooze, dismiss and approve map to cpd inbox commands", async () => {
     const { cpd, calls } = fakeCpd();
@@ -37,11 +54,11 @@ describe("actions", () => {
     expect(calls).toEqual([["inbox", "snooze", "4", "tomorrow"]]);
   });
 
-  it("pr.merge without a pull resolves the stored pull through pr poll", async () => {
+  it("pr.merge without a pull resolves the stored pull through plan show", async () => {
     // `cpd pr merge <owner>/<repo>#<n>` (commands.md 9.10): the pull request comes from the Workflow's stored pull_request.
-    const { cpd, calls } = fakeCpd(async () => ({ ok: true, workflows: [{ key: "w1", pull_request: { repo: "acme/api", number: 3 } }], stored: true }));
+    const { cpd, calls } = planShowCpd();
     await runAction(cpd, { kind: "pr.merge", planId: "p1", workflow: "w1" });
-    expect(calls.at(-1)).toEqual(["pr", "merge", "acme/api#3"]);
+    expect(calls).toEqual([["plan", "show", "--plan", "p1"], ["pr", "merge", "acme/api#3"]]);
   });
 
   it("engine.start runs cpd watch ensure", async () => {
@@ -136,10 +153,10 @@ describe("tree menu actions", () => {
     expect(calls).toEqual([["pr", "merge", "acme/api#3"]]);
   });
 
-  it("pr.post with a pull and no workflow resolves the workflow through pr poll", async () => {
-    const { cpd, calls } = fakeCpd(async () => polled);
+  it("pr.post with a pull and no workflow resolves the workflow through plan show", async () => {
+    const { cpd, calls } = planShowCpd();
     await runAction(cpd, { kind: "pr.post", planId: "p1", pull: "acme/api#3" });
-    expect(calls).toEqual([["pr", "poll", "--plan", "p1"], ["pr", "post", "--workflow", "w1", "--plan", "p1"]]);
+    expect(calls).toEqual([["plan", "show", "--plan", "p1"], ["pr", "post", "--workflow", "w1", "--plan", "p1"]]);
   });
 
   it("pr.repost runs pr repost with the workflow and plan", async () => {
@@ -149,7 +166,23 @@ describe("tree menu actions", () => {
   });
 
   it("pr post without a matching workflow fails with cpd_malformed_json", async () => {
-    const { cpd } = fakeCpd(async () => polled);
+    const { cpd } = planShowCpd();
     await expect(runAction(cpd, { kind: "pr.post", planId: "p1", pull: "acme/api#9" })).rejects.toMatchObject({ code: "cpd_malformed_json" });
+  });
+
+  it("mergeArgs and prVerbArgs look up workflows[] with cpd plan show --plan <planId> and never call cpd pr poll", async () => {
+    const m = planShowCpd();
+    await runAction(m.cpd, { kind: "pr.merge", planId: "p7", workflow: "w1" });
+    const post = planShowCpd();
+    await runAction(post.cpd, { kind: "pr.post", planId: "p7", pull: "acme/api#3" });
+    const repost = planShowCpd();
+    await runAction(repost.cpd, { kind: "pr.repost", planId: "p7", pull: "acme/api#3" });
+    for (const { calls } of [m, post, repost]) {
+      expect(calls[0]).toEqual(["plan", "show", "--plan", "p7"]);
+      expect(calls.some((c) => c[0] === "pr" && c[1] === "poll")).toBe(false);
+    }
+    expect(m.calls.at(-1)).toEqual(["pr", "merge", "acme/api#3"]);
+    expect(post.calls.at(-1)).toEqual(["pr", "post", "--workflow", "w1", "--plan", "p7"]);
+    expect(repost.calls.at(-1)).toEqual(["pr", "repost", "--workflow", "w1", "--plan", "p7"]);
   });
 });

@@ -47,6 +47,16 @@ pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) 
         && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
 }
 
+/// The `items` the Inbox lists while the pull requests of `posting` are being posted or merged: the row of such a pull request is
+/// dropped.
+pub(crate) fn shown(items: &[Item], posting: &std::collections::BTreeSet<String>) -> Vec<Item> {
+    items
+        .iter()
+        .filter(|item| !merges(posting, item))
+        .cloned()
+        .collect()
+}
+
 /// What a row of the section is, by its offset from the section's first row (the blank one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {

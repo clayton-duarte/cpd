@@ -182,6 +182,12 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "cockpit.snapshot" || (message.type === "cockpit.patch" && message.pane === "tree")) {
+      const st = store.getState();
+      if (st.connection === "open" && st.selectedSessionId !== null && st.session?.attached !== true && st.session?.error?.code === "session_not_found") {
+        send({ type: "session.attach", sessionId: st.selectedSessionId });
+      }
+    }
     if (message.type === "action.result" && message.ok) selectCreated(message["output"]);
     if (message.type === "session.submitAck" && !message.queued && message.sessionId === store.getState().selectedSessionId) {
       const id = message.clientSubmissionId;
@@ -220,12 +226,13 @@ export function createConnection(options: ConnectionOptions): Connection {
     },
     selectSession(sessionId) {
       const before = store.getState().selectedSessionId;
-      if (before === sessionId) return;
+      if (before === sessionId && (sessionId === null || store.getState().session?.error?.code !== "session_not_found")) return;
       dropBuffer();
       dropEchoTimers();
+      if (before === sessionId) store.dispatch({ type: "selectSession", sessionId: null }); // reset so the same id re-attaches
       store.dispatch({ type: "selectSession", sessionId });
       if (store.getState().connection !== "open") return; // the attach is sent on open
-      if (before !== null) send({ type: "session.detach" });
+      if (before !== null && before !== sessionId) send({ type: "session.detach" });
       if (sessionId !== null) send({ type: "session.attach", sessionId });
     },
     selectPlan(planId) {

@@ -125,6 +125,8 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
     case "session.window":
       if (message.mode === "tail") {
         return set({
+          attached: true,
+          error: null,
           transcript: setTail(message.window, session.transcript),
           pending: session.pending.filter((p) => p.state !== "sent"),
         });

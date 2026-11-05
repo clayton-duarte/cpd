@@ -31,6 +31,17 @@ pub struct PostArgs {
     plan: PlanArg,
 }
 
+/// Test constructor of the arguments: Workflow `key` of Plan `plan`.
+#[cfg(test)]
+pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
+    PostArgs {
+        workflow: WorkflowArg {
+            workflow: Some(key),
+        },
+        plan: PlanArg { plan: Some(plan) },
+    }
+}
+
 fn record_json(post: &PostRecord) -> Value {
     json!({"channel": post.channel, "ts": post.ts, "link": post.link, "posted_at": post.posted_at,
            "reaction": post.reaction, "reacted_at": post.reacted_at})
@@ -155,29 +166,31 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let argv: Vec<String> = std::iter::once(call.program.clone())
         .chain(call.args.iter().cloned())
         .collect();
-    let out = match env.ports.runner.run(&call) {
-        Ok(out) => out,
-        Err(Failed::Io(e)) => {
-            return Err(CpdError::new(
-                ErrorCode::SpawnFailed,
-                format!("Cannot run {}: {e}.", argv.join(" ")),
-            )
-            .with("argv", json!(argv)));
-        }
-        Err(Failed::Timeout(e)) => return Err(e),
-    };
-    let sent = slack::answer(&out, &argv)?;
-    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
-    let record = PostRecord {
-        channel: text("channel"),
-        ts: text("ts"),
-        link: text("link"),
-        posted_at: timestamp(env.ports.clock.utc()),
+    // (i) the row is written only AFTER the send resolves; a post that failed never happened.
+    let since = timestamp(env.ports.clock.utc());
+    let mut record = PostRecord {
+        channel: channel.clone(),
+        ts: String::new(),
+        link: String::new(),
+        posted_at: since.clone(),
         reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
         reacted_at: None,
         auto_merge: "pending".to_owned(),
         auto_merge_at: None,
     };
+    let sent = match env.ports.runner.run(&call) {
+        Ok(out) => slack::answer(&out, &argv),
+        Err(Failed::Io(e)) => Err(CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot run {}: {e}.", argv.join(" ")),
+        )
+        .with("argv", json!(argv))),
+        Err(Failed::Timeout(e)) => Err(e),
+    }?;
+    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
+    record.channel = text("channel");
+    record.ts = text("ts");
+    record.link = text("link");
     // (j)
     let stored = env.store.write("pr post", |tx| {
         let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;

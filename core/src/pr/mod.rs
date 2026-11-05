@@ -34,6 +34,8 @@ mod poll_tests;
 #[cfg(test)]
 mod poll_threads_tests;
 #[cfg(test)]
+mod post_refusal_tests;
+#[cfg(test)]
 mod push_reset_tests;
 #[cfg(test)]
 mod query_tests;

@@ -44,6 +44,8 @@ mod legend_cost_tests;
 #[cfg(test)]
 mod needs_tests;
 #[cfg(test)]
+mod posting_tests;
+#[cfg(test)]
 mod window_tests;
 
 use cpd_core::host::runner::Runner;
@@ -236,6 +238,17 @@ pub fn show_with<B: Backend>(
     )
 }
 
+/// The pull requests (`<owner>/<repo>#<n>`) whose Post or Merge a pick started and whose command has not ended: their Inbox
+/// rows are hidden, client-side and in memory only.
+pub(crate) type Posting = BTreeSet<String>;
+
+/// The result handler of a Post or Merge job on `pull`: a failure takes its entry out of `posting` at once.
+pub(crate) fn posted(posting: &mut Posting, pull: &str, failed: bool) {
+    if failed {
+        posting.remove(pull);
+    }
+}
+
 /// The area the Dispatch column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
 /// each side.
 pub(crate) fn menu_pane(pane: Rect) -> Rect {
@@ -317,8 +330,8 @@ impl Opener {
 
     /// `Post`: `pr post --workflow <key> --plan <plan>`, `<key>` read now from the workflow row of the item's Plan that points at the item's
     /// pull request; no popup; it runs on a `Background` job, off the view's thread. A refusal, or no such row, is the failure dialog.
-    fn post(&self, item: &Item) {
-        self.pr_command(item, "post", "Post Pull Request");
+    fn post(&self, item: &Item) -> bool {
+        self.pr_command(item, "post", "Post Pull Request")
     }
 
     /// `RePost`: `pr repost --workflow <key> --plan <plan>`, found and run as [`Self::post`] does.
@@ -327,12 +340,12 @@ impl Opener {
     }
 
     /// `pr <verb> --workflow <key> --plan <plan>` for the item's pull request.
-    fn pr_command(&self, item: &Item, verb: &str, title: &str) {
+    fn pr_command(&self, item: &Item, verb: &str, title: &str) -> bool {
         let title: &str = title;
         let (Some(plan), Some(pull)) =
             (item.plan.as_ref(), inbox::Pull::from_subject(&item.subject))
         else {
-            return;
+            return false;
         };
         let key = Store::open(&self.home, self.busy_ms).and_then(|mut store| {
             store.read(|conn| {
@@ -351,13 +364,19 @@ impl Opener {
             })
         });
         match key {
-            Err(e) => dialog::report(&self.tmux, &self.log, title, &e),
-            Ok(None) => dialog::report_why(
-                &self.tmux,
-                &self.log,
-                title,
-                format!("No Workflow of Plan {plan} has the pull request {pull}."),
-            ),
+            Err(e) => {
+                dialog::report(&self.tmux, &self.log, title, &e);
+                false
+            }
+            Ok(None) => {
+                dialog::report_why(
+                    &self.tmux,
+                    &self.log,
+                    title,
+                    format!("No Workflow of Plan {plan} has the pull request {pull}."),
+                );
+                false
+            }
             Ok(Some(key)) => {
                 let argv = [verb, "--workflow", &key, "--plan", plan.as_str()];
                 let all = std::iter::once(PROGRAM)
@@ -367,7 +386,9 @@ impl Opener {
                     .collect();
                 if let Err(e) = (self.run_command)(all) {
                     dialog::report(&self.tmux, &self.log, title, &e);
+                    return false;
                 }
+                true
             }
         }
     }
@@ -414,7 +435,7 @@ fn show<B: Backend>(
     let mut reads = Reads::<Read>::on(&pump);
     // A pick or a click of the Inbox runs off this thread (tui-W7, pro-d350): the menu closes and the view redraws at
     // once; a failure opens its dialog from the job, and the job's end forces the Inbox read.
-    let mut background = Background::<()>::on(&pump);
+    let mut background = Background::<Option<(String, bool)>>::on(&pump);
     let poll = Duration::from_millis(u64::from(poll_ms));
     let (every, watch_failure) = match &watch {
         Ok(Some(_)) => (pump::SAFETY, None),
@@ -436,19 +457,30 @@ fn show<B: Backend>(
     let mut redraw = true;
     let mut drawn_frame = None::<usize>;
     let mut inbox_menu = None::<InboxMenu>;
+    // the pull requests whose Post or Merge was picked (rows hidden), and those of them whose command succeeded (dropped once a
+    // read shows their row no longer yellow or red)
+    let mut posting = Posting::new();
+    let mut settled = BTreeSet::<String>::new();
     let mut pane = Rect::default();
     // The Inbox section: whether it is unfolded and its offset, in items (memory only, kept by a refresh and clamped by the
     // drawing), and what the last draw showed of the clock's second (the items' ages).
     let mut inbox_scroll = 0usize;
     let mut drawn_second = wall_ms(ports) / 1000;
     loop {
-        while background.finished().is_some() {
+        while let Some(done) = background.finished() {
             redraw = true;
             schedule.force(); // the Inbox shows the result on the next read
+            if let Some((pull, ok)) = done {
+                posted(&mut posting, &pull, !ok);
+                if ok {
+                    settled.insert(pull);
+                }
+            }
         }
+        let visible = inbox::shown(&inbox, &posting);
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let (frame, second) = (frame_now(ports), wall_ms(ports) / 1000);
-        let wants = needs(&inbox, &merging, sampled_at);
+        let wants = needs(&visible, &merging, sampled_at);
         // the Inbox items' ages are redrawn every second, from `opened_at`
         if redraw
             || (wants.frame && Some(frame) != drawn_frame)
@@ -462,7 +494,7 @@ fn show<B: Backend>(
                 let unlinked: Vec<model::Item> = inbox_menu
                     .iter()
                     .flat_map(|_| {
-                        inbox
+                        visible
                             .iter()
                             .cloned()
                             .map(|i| model::Item { url: None, ..i })
@@ -471,7 +503,7 @@ fn show<B: Backend>(
                 let shown = if inbox_menu.is_some() {
                     &unlinked
                 } else {
-                    &inbox
+                    &visible
                 };
                 last = Some(draw(
                     f,
@@ -499,7 +531,7 @@ fn show<B: Backend>(
         let until = pump::wake(
             now,
             wall_ms,
-            &needs(&inbox, &merging, sampled_at),
+            &needs(&visible, &merging, sampled_at),
             schedule.deadline(now),
         );
         let signal = if pump.is_driven() {
@@ -532,40 +564,68 @@ fn show<B: Backend>(
                                 clock::timestamp(ports.clock.utc()),
                                 ports.runner.clone(),
                             );
+                            let pull = inbox::Pull::from_subject(&item.subject)
+                                .map(|p| p.to_string())
+                                .filter(|_| matches!(entry, InboxEntry::Post | InboxEntry::Merge));
+                            if let Some(pull) = &pull {
+                                posting.insert(pull.clone());
+                            }
                             match entry {
                                 InboxEntry::Merging => {}
-                                entry => background.submit(move || match entry {
-                                    InboxEntry::Choice(choice) => opener.choose(choice, item.id),
-                                    InboxEntry::Merge => {
-                                        if let Some(pull) = inbox::Pull::from_subject(&item.subject)
-                                            && let Err(e) =
-                                                crate::merge::start(&opener.tmux, &pull.to_string())
-                                        {
-                                            dialog::report(
-                                                &opener.tmux,
-                                                &opener.log,
-                                                "Merge Pull Request",
-                                                &e,
-                                            );
+                                entry => background.submit(move || {
+                                    let ok = match entry {
+                                        InboxEntry::Choice(choice) => {
+                                            opener.choose(choice, item.id);
+                                            true
                                         }
-                                    }
-                                    InboxEntry::Post => opener.post(&item),
-                                    InboxEntry::RePost => opener.repost(&item),
-                                    InboxEntry::GoToLead => opener.jump(&item, &now),
-                                    InboxEntry::OpenLink => {
-                                        if let Some(url) = item.url.as_deref()
-                                            && let Err(e) = crate::link::open_url(&*runner, url)
-                                        {
-                                            dialog::report(
+                                        InboxEntry::Merge => {
+                                            if let Err(e) = crate::merge::start(
                                                 &opener.tmux,
-                                                &opener.log,
-                                                "Open Link",
-                                                &e,
-                                            );
+                                                pull.as_deref().unwrap_or_default(),
+                                            ) {
+                                                dialog::report(
+                                                    &opener.tmux,
+                                                    &opener.log,
+                                                    "Merge Pull Request",
+                                                    &e,
+                                                );
+                                                false
+                                            } else {
+                                                true
+                                            }
                                         }
-                                    }
-                                    InboxEntry::CopyLink => opener.copy_link(&item),
-                                    InboxEntry::Merging => {}
+                                        InboxEntry::Post => opener.post(&item),
+                                        InboxEntry::RePost => {
+                                            opener.repost(&item);
+                                            true
+                                        }
+                                        InboxEntry::GoToLead => {
+                                            opener.jump(&item, &now);
+                                            true
+                                        }
+                                        InboxEntry::OpenLink => match item.url.as_deref() {
+                                            Some(url) => match crate::link::open_url(&*runner, url)
+                                            {
+                                                Ok(()) => true,
+                                                Err(e) => {
+                                                    dialog::report(
+                                                        &opener.tmux,
+                                                        &opener.log,
+                                                        "Open Link",
+                                                        &e,
+                                                    );
+                                                    false
+                                                }
+                                            },
+                                            None => true,
+                                        },
+                                        InboxEntry::CopyLink => {
+                                            opener.copy_link(&item);
+                                            true
+                                        }
+                                        InboxEntry::Merging => true,
+                                    };
+                                    pull.map(|pull| (pull, ok))
                                 }),
                             }
                         }
@@ -581,7 +641,7 @@ fn show<B: Backend>(
                             if let Some(InboxHit::Item(i)) =
                                 drawn.inbox_shape.hit(m.row - drawn.inbox.y)
                             {
-                                let item = &inbox[i];
+                                let item = &visible[i];
                                 if item.kind != model::Kind::EngineDown {
                                     let at = Position::new(m.column, m.row);
                                     let merging = inbox::merges(&merging, item);
@@ -600,9 +660,12 @@ fn show<B: Backend>(
                         {
                             match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
                                 Some(InboxHit::Item(i)) => {
-                                    let (opener, item) = (Arc::clone(opener), inbox[i].clone());
+                                    let (opener, item) = (Arc::clone(opener), visible[i].clone());
                                     let now = clock::timestamp(ports.clock.utc());
-                                    background.submit(move || opener.jump(&item, &now));
+                                    background.submit(move || {
+                                        opener.jump(&item, &now);
+                                        None
+                                    });
                                 }
                                 Some(InboxHit::Header) | None => {}
                             }
@@ -616,6 +679,7 @@ fn show<B: Backend>(
                                     if let Err(e) = crate::link::open_url(&*runner, &url) {
                                         dialog::report(&opener.tmux, &opener.log, "Open Link", &e);
                                     }
+                                    None
                                 });
                             }
                         }
@@ -649,6 +713,24 @@ fn show<B: Backend>(
                             (engine_running, snooze_end) = (running, end);
                             if items != inbox {
                                 inbox = items;
+                                redraw = true;
+                            }
+                            // a succeeded command's entry goes once its row reads neither yellow nor red
+                            let (gone, kept): (BTreeSet<String>, BTreeSet<String>) =
+                                std::mem::take(&mut settled).into_iter().partition(|pull| {
+                                    !inbox.iter().any(|i| {
+                                        i.kind == model::Kind::PrReady
+                                            && matches!(
+                                                i.urgency,
+                                                model::Urgency::Yellow | model::Urgency::Red
+                                            )
+                                            && inbox::Pull::from_subject(&i.subject)
+                                                .is_some_and(|p| p.to_string() == *pull)
+                                    })
+                                });
+                            settled = kept;
+                            for pull in gone {
+                                posting.remove(&pull);
                                 redraw = true;
                             }
                         }
