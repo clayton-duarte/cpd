@@ -120,8 +120,8 @@ pub fn blockers(
     Ok(found)
 }
 
-/// The archive rule for archiving (contract §2.2 "Archived"): [`blockers`] plus, per Plan, a Plan not `done`, a Workflow
-/// not `merged` or `cancelled` and a `failed` Job, and, per Session, an open undismissed Inbox item (a snoozed one too).
+/// The archive rule for archiving (contract §2.2 "Archived"): [`blockers`] plus, per Plan, a Workflow
+/// not `merged` or `cancelled` (or cancelled with an open pull request) and a `failed` Job. Plan phase and Inbox items never block.
 pub fn archive_blockers(
     conn: &Connection,
     sessions: &[SessionId],
@@ -129,21 +129,6 @@ pub fn archive_blockers(
 ) -> Result<Vec<Blocker>, CpdError> {
     let mut found = blockers(conn, sessions, plans)?;
     for plan in plans {
-        let phase: Option<String> = conn
-            .query_row(
-                "SELECT phase FROM plans WHERE id = ?1",
-                [plan.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(phase) = phase.filter(|p| p != "done") {
-            found.push(Blocker {
-                kind: "plan",
-                id: plan.to_string(),
-                plan: Some(plan.to_string()),
-                reason: format!("Plan {plan} is in phase {phase} (not done)."),
-            });
-        }
         let mut stmt = conn.prepare("SELECT key, status FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
         let rows = stmt
             .query_map([plan.as_str()], |r| {
@@ -154,6 +139,20 @@ pub fn archive_blockers(
             found.push(Blocker {
                 kind: "workflow",
                 reason: format!("Workflow {key} of Plan {plan} is {status}."),
+                id: key,
+                plan: Some(plan.to_string()),
+            });
+        }
+        let mut stmt = conn.prepare("SELECT w.key FROM workflows w JOIN pull_requests r ON r.id = w.pull_request WHERE w.plan = ?1 AND w.status = 'cancelled' AND r.state = 'open' ORDER BY w.key")?;
+        let rows = stmt
+            .query_map([plan.as_str()], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for key in rows {
+            found.push(Blocker {
+                kind: "workflow",
+                reason: format!(
+                    "Workflow {key} of Plan {plan} is cancelled with an open pull request."
+                ),
                 id: key,
                 plan: Some(plan.to_string()),
             });
@@ -169,28 +168,6 @@ pub fn archive_blockers(
                 reason: format!("Job {key} of Plan {plan} is failed."),
                 id: key,
                 plan: Some(plan.to_string()),
-            });
-        }
-    }
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.kind, s.name FROM inbox_items i JOIN sessions s ON s.id = i.session WHERE i.session = ?1 AND i.closed_at IS NULL AND i.dismissed_at IS NULL ORDER BY i.id",
-    )?;
-    for id in sessions {
-        let rows = stmt
-            .query_map([id.as_str()], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (item, kind, name) in rows {
-            found.push(Blocker {
-                kind: "inbox",
-                id: item.to_string(),
-                plan: None,
-                reason: format!("Session {name} has open Inbox item {item} ({kind})."),
             });
         }
     }
