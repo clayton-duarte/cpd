@@ -10,7 +10,7 @@ use crate::home::CpdHome;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Experimental {
     pub durable_workers: bool,
-    /// Stub: not yet parsed; true makes each new Lead's runner `durable`.
+    /// True makes each new Lead's runner `durable`.
     pub durable_leads: bool,
     pub write_curation: bool,
     pub failure_triage: bool,

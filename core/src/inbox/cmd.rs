@@ -644,7 +644,10 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
     let brief: Text = brief_text.parse()?;
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
-    let (lead_tier, lead_runner) = (env.config.lead_tier.to_string(), env.config.lead_runner);
+    let (lead_tier, lead_runner) = (
+        env.config.lead_tier.to_string(),
+        env.config.new_lead_runner(),
+    );
     let lead = SessionId::new_v4();
     let (item, plan) = env.store.write("inbox claim", |tx| {
         let item = open_item(tx, args.id)?;

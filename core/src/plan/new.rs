@@ -92,7 +92,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
-    let lead_runner = args.runner.unwrap_or(env.config.lead_runner);
+    let lead_runner = args.runner.unwrap_or(env.config.new_lead_runner());
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
