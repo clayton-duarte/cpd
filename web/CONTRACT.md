@@ -1817,3 +1817,7 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 - `Footer` (`web/src/ui/chat/Footer.tsx`) renders only the context card (`{footer, contextWindow?}`, DESIGN-compose 3). The session telemetry row (cwd, session key, tokens, cache, model, tier, thinking, cost, branch) is removed from the chat (pro-d57). Its data stays in `SessionView.footer` for the composer's tier selector (DESIGN-compose 2).
 
 ---
+
+## 12. Cockpit stream: `cpd cockpit serve` (Plan `cpd-realtime-engine`)
+
+Skeleton; the normative text follows in the next commit.
