@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(
             plan.to_json(),
             json!({"id": "pay", "context": "ctx", "title": "Pay", "jira": "PAY-1", "phase": "grounding", "lead_session": "lead1",
-                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null})
+                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null, "reviewed_pr": null})
         );
         let all = store
             .read(|conn| query(conn, "context = ?1", &[&"ctx"]))

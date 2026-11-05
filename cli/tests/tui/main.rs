@@ -7,6 +7,7 @@ mod common;
 mod bare;
 mod inbox;
 mod inbox_claim;
+mod inbox_claim_reviewed;
 mod inbox_rules;
 mod tui;
 mod tui_cause;
