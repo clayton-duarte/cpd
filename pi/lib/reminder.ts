@@ -99,4 +99,4 @@ export function unaddressedFailedJobs(show: Record<string, unknown>): { key: str
 
 /** The failed-Job reminder text. */
 export const failedJobReminderText = (keys: string[]): string =>
-  `cpd reminder: failed Job(s) ${keys.join(", ")} still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason "..." when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.`;
+  `cpd reminder: failed Job(s) ${keys.join(", ")} still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason "<why>" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.`;

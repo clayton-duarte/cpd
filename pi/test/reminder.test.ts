@@ -154,7 +154,7 @@ test("a Manager and a Worker get none, and read no Plan for it", async (t) => {
 
 const job = (key: string, status: string, attempts: unknown[] = [], over: Record<string, unknown> = {}) => ({ key, status, attempts, ...over });
 const failedShow = (...jobs: unknown[]) => planShow({ jobs });
-const FAILED = "cpd reminder: failed Job(s) a, b still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason \"...\" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.";
+const FAILED = "cpd reminder: failed Job(s) a, b still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason \"<why>\" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.";
 const failedSent = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-reminder");
 
 test("unaddressedFailedJobs lists every failed Job with its attempts count, in order", () => {
