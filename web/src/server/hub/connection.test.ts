@@ -68,6 +68,8 @@ const setup = () => {
     resolve: (id: string) => {
       if (id === "pi-1") return { ref: refOf(id, "pi"), file: "/f.jsonl", tierOptions: [] } as unknown as Resolved;
       if (id === "pi-2") return { ref: refOf(id, "pi"), file: "/g.jsonl", tierOptions: [] } as unknown as Resolved;
+      if (id === "lead-1") return { ref: { ...refOf(id, "pi"), role: "lead" }, file: "/l.jsonl", tierOptions: [] } as unknown as Resolved;
+      if (id === "mgr-1") return { ref: { ...refOf(id, "pi"), role: "manager" }, file: "/m.jsonl", tierOptions: [] } as unknown as Resolved;
       if (id === "dur-1") return { ref: refOf(id, "durable"), socketPath: "/s.sock", tierOptions: [] } as unknown as Resolved;
       throw new WebError("session_not_found", "no such session", { sessionId: id });
     },
@@ -234,5 +236,60 @@ describe("hub connection", () => {
       { type: "session.error", sessionId: "pi-1", error: { code: "internal", message: "kaput" } },
     ]);
     expect((t.sent[1] as { clientSubmissionId?: string }).clientSubmissionId).toBeUndefined();
+  });
+
+  describe("/q and /quit (decision pro-d406)", () => {
+    const planTree = () => {
+      const lead = { ref: { ...refOf("lead-1", "pi"), role: "lead" }, contextId: "c1", planId: "p1", jobKey: null, archived: false, dot: { state: "idle", attention: null } };
+      const plan = { id: "p1", contextId: "c1", title: "P", phase: "plan", archived: false, counts: {}, leadSessionId: "lead-1", sessions: [lead] };
+      return { contexts: [{ id: "c1", title: "C", archived: false, records: 0, openQuestions: 0, sessions: [], plans: [plan] }], cursor: 1 };
+    };
+    const attachTo = async (t: ReturnType<typeof setup>, sessionId: string) => {
+      t.setSnapshot({ tree: planTree(), plan: null, inbox: t.inbox } as never);
+      await t.hub.handle({ type: "session.attach", sessionId });
+      return t.pi.attaches[t.pi.attaches.length - 1]?.handle as FakeHandle;
+    };
+    const submit = (t: ReturnType<typeof setup>, sessionId: string, id: string, text: string) =>
+      t.hub.handle({ type: "session.submit", sessionId, clientSubmissionId: id, text, images: [], whenBusy: "followUp" });
+
+    it("/q and /quit on a Plan Lead archive the Plan and never submit to the model", async () => {
+      const t = setup();
+      const handle = await attachTo(t, "lead-1");
+      await submit(t, "lead-1", "c1", "/q");
+      await submit(t, "lead-1", "c2", " /quit ");
+      expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }, { kind: "plan.archive", planId: "p1" }]);
+      expect(handle.calls.filter(([n]) => n === "submit")).toEqual([]);
+      expect(t.sent.filter((m) => m.type === "session.error")).toEqual([]);
+    });
+
+    it("a refused archive of /q is reported and never submits to the model", async () => {
+      const t = setup();
+      const handle = await attachTo(t, "lead-1");
+      t.setActionResult(() => Promise.reject(new WebError("cpd_failed", "plan has a running Job", { cpdCode: "archive_blocked" })));
+      await submit(t, "lead-1", "c1", "/q");
+      expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }]);
+      expect(handle.calls.filter(([n]) => n === "submit")).toEqual([]);
+      expect(t.sent).toMatchObject([{ type: "session.error", sessionId: "lead-1", clientSubmissionId: "c1", error: { message: expect.stringContaining("plan has a running Job") } }]);
+    });
+
+    it("/quit on a Manager is refused and never submits to the model", async () => {
+      const t = setup();
+      const handle = await attachTo(t, "mgr-1");
+      await submit(t, "mgr-1", "c1", "/quit");
+      expect(t.actions).toEqual([]);
+      expect(handle.calls.filter(([n]) => n === "submit")).toEqual([]);
+      expect(t.sent).toMatchObject([{ type: "session.error", sessionId: "mgr-1", clientSubmissionId: "c1", error: { message: expect.stringMatching(/manager/i) } }]);
+    });
+
+    it("text that only starts with /q is submitted unchanged", async () => {
+      const t = setup();
+      const handle = await attachTo(t, "lead-1");
+      await submit(t, "lead-1", "c0", "/q"); // pins the intercept: /q itself is not submitted
+      expect(handle.calls).toEqual([]);
+      await submit(t, "lead-1", "c1", "/query");
+      await submit(t, "lead-1", "c2", "/q now");
+      expect(handle.calls.map(([n, i]) => [n, (i as { text: string }).text])).toEqual([["submit", "/query"], ["submit", "/q now"]]);
+      expect(t.actions.length).toBe(1);
+    });
   });
 });
