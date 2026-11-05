@@ -42,6 +42,7 @@ mod workflow_crud;
 mod workflow_describe;
 mod workflow_jira;
 mod workflow_jira_queue;
+mod workflow_jira_title;
 mod workflow_lead_branch;
 mod workflow_live_spec;
 mod workflow_local_needs;
