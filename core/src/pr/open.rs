@@ -586,7 +586,7 @@ pub fn record(
         return Ok(Some(Phase::Deploy));
     }
     // The last Workflow to merge ends the Plan, unless a Job is non-final (§3.1).
-    Ok(Some(if crate::plan::done::settle_done(tx, id)? {
+    Ok(Some(if crate::plan::done::settle_done(tx, id, None)? {
         Phase::Done
     } else {
         Phase::Deploy

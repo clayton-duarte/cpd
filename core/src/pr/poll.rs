@@ -975,7 +975,7 @@ pub(super) fn merge(
             .plan(id.clone()),
     )?;
     // The last Workflow to merge ends the Plan, unless a Job is non-final (§3.1).
-    crate::plan::done::settle_done(tx, id)
+    crate::plan::done::settle_done(tx, id, pull.merged_at.as_deref().map(|at| (key, at)))
 }
 
 /// The unstack of the Workflows with no pull request yet that were stacked on the Workflow `key` of `plan`, which this transaction

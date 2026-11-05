@@ -526,7 +526,7 @@ pub fn end_explore(
         .job(attempt.job.clone())
         .attempt(attempt.id.clone()),
     )?;
-    crate::plan::done::settle_done(tx, &attempt.plan)?;
+    crate::plan::done::settle_done(tx, &attempt.plan, None)?;
     Ok(())
 }
 
@@ -804,7 +804,7 @@ pub fn end_opened(
     }
     // A Job that reached a final state may be the last one holding its Plan in `deploy`.
     if matches!(end, End::Merged { .. } | End::Cancelled) {
-        crate::plan::done::settle_done(tx, &attempt.plan)?;
+        crate::plan::done::settle_done(tx, &attempt.plan, None)?;
     }
     Ok(())
 }

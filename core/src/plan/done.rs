@@ -7,15 +7,20 @@
 
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
-use crate::ids::PlanId;
+use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::open::merged_workflows;
 use crate::store::WriteTxn;
 
 /// In the caller's transaction: when the Plan is in `dispatch` or `deploy`, every non-cancelled Workflow is `merged` (one at least) and
 /// no Job is non-final, the Plan is `done` with `done_at`, one `plan-done` Event, and its pending plan reviews superseded. When the
 /// Workflows are merged but a Job is non-final, the Plan is (moved to) `deploy`, `done_at` NULL, no Event. Idempotent: a Plan already
-/// `done` is left alone. Whether the Plan became `done` in this call.
-pub(crate) fn settle_done(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<bool, CpdError> {
+/// `done` is left alone. `just` names the Workflow this call merged and the time `gh` reported for it: that time, not the
+/// transaction time, is its `merged_at` in the Event. Whether the Plan became `done` in this call.
+pub(crate) fn settle_done(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    just: Option<(&WorkflowKey, &str)>,
+) -> Result<bool, CpdError> {
     let (all_merged, blocked): (bool, bool) = tx.query_row(
         "SELECT
            NOT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))
@@ -47,9 +52,12 @@ pub(crate) fn settle_done(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<bool, CpdE
     let text = format!(
         "Every Workflow of Plan {plan} is merged: the Plan is done. See cpd plan show --plan {plan}"
     );
-    append(
-        tx,
-        NewEvent::plan_done(text, merged_workflows(tx, plan)?).plan(plan.clone()),
-    )?;
+    let mut workflows = merged_workflows(tx, plan)?;
+    if let Some((key, reported)) = just {
+        for w in workflows.iter_mut().filter(|w| w["key"] == key.as_str()) {
+            w["merged_at"] = reported.into();
+        }
+    }
+    append(tx, NewEvent::plan_done(text, workflows).plan(plan.clone()))?;
     Ok(true)
 }

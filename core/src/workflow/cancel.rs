@@ -252,7 +252,7 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<Option<Phase>, CpdError> {
     if plan_phase(tx, plan)? != Phase::Deploy {
         return Ok(None);
     }
-    Ok(crate::plan::done::settle_done(tx, plan)?.then_some(Phase::Done))
+    Ok(crate::plan::done::settle_done(tx, plan, None)?.then_some(Phase::Done))
 }
 
 fn decide(
