@@ -120,7 +120,7 @@ it("context tree archive section collapses", () => {
   expect(group?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   expect(m.container.querySelector("details, summary")).toBeNull();
   expect(m.container.querySelector('[data-context="c2"]')).toBeNull();
-  const toggle = group?.querySelector('[data-slot="sidebar-group-label"] button') ?? null;
+  const toggle = group?.querySelector('button[data-slot="sidebar-group-label"]') ?? null;
   expect(toggle?.getAttribute("aria-expanded")).toBe("false");
   act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(m.container.querySelector('[data-context="c2"]')).not.toBeNull();

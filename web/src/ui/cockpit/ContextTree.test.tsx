@@ -288,11 +288,11 @@ const layered: ContextTreeModel = {
 };
 const ids = (root: ParentNode | null) => Array.from(root?.querySelectorAll("[data-context]") ?? []).map((e) => e.getAttribute("data-context"));
 const header = (c: ParentNode, name: string): HTMLElement | null =>
-  Array.from(c.querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"] button')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
+  Array.from(c.querySelectorAll<HTMLElement>('button[data-slot="sidebar-group-label"]')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
 
 const section = (c: ParentNode, name: string): HTMLElement | null => c.querySelector<HTMLElement>(`[data-part="tree-section"][data-section="${name}"]`);
 
-it("every open section is flex-1 and a closed section is flex-none", () => {
+it("every open section is flex-1 and a closed section is shrink-0", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const c = m.container;
   for (const name of ["contexts", "standing"]) {
@@ -300,13 +300,13 @@ it("every open section is flex-1 and a closed section is flex-none", () => {
     expect(section(c, name)?.className).toContain("min-h-0");
     expect(section(c, name)?.getAttribute("data-state")).toBe("open");
   }
-  expect(section(c, "archive")?.className, "archive closed").toContain("flex-none");
+  expect(section(c, "archive")?.className, "archive closed").toContain("shrink-0");
   expect(section(c, "archive")?.className).not.toContain("flex-1");
   expect(section(c, "archive")?.getAttribute("data-state")).toBe("closed");
   click(header(c, "Archive"));
   expect(section(c, "archive")?.className, "archive open").toContain("flex-1");
   click(header(c, "Standing"));
-  expect(section(c, "standing")?.className, "standing closed").toContain("flex-none");
+  expect(section(c, "standing")?.className, "standing closed").toContain("shrink-0");
   m.unmount();
 });
 
@@ -317,15 +317,41 @@ it("no section has a max height of 50 percent", () => {
   m.unmount();
 });
 
-it("each section label is sticky at the top of its section", () => {
+it("each section label is outside the scroll area and only the section body scrolls", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
+  click(header(m.container, "Archive"));
   for (const name of ["contexts", "standing", "archive"]) {
     const sec = section(m.container, name);
     const label = sec?.querySelector('[data-slot="sidebar-group-label"]');
     expect(label, name).not.toBeNull();
-    for (const cls of ["sticky", "top-0", "z-10", "bg-background"]) expect(label?.className, `${name} ${cls}`).toContain(cls);
-    expect(label?.closest('[data-slot="scroll-area"]'), `${name} label in scroll area`).not.toBeNull();
+    expect(label?.closest('[data-slot="scroll-area"]'), `${name} label in scroll area`).toBeNull();
+    const areas = sec?.querySelectorAll('[data-slot="scroll-area"]') ?? [];
+    expect(areas, `${name} scroll areas`).toHaveLength(1);
+    expect(areas[0]?.closest('[data-slot="collapsible-content"]'), `${name} area in content`).not.toBeNull();
+    const group = label?.closest('[data-slot="sidebar-group"]');
+    expect(group, name).not.toBeNull();
+    expect(group?.contains(areas[0] ?? null), `${name} same group`).toBe(true);
   }
+  click(header(m.container, "Archive"));
+  expect(section(m.container, "archive")?.querySelectorAll('[data-slot="scroll-area"]')).toHaveLength(0);
+  m.unmount();
+});
+
+it("sections are direct flex children of the sidebar content separated by shrink-0 separators", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const content = m.container.querySelector('[data-slot="sidebar-content"]');
+  expect(content).not.toBeNull();
+  const sections = Array.from(m.container.querySelectorAll('[data-part="tree-section"]'));
+  expect(sections).toHaveLength(3);
+  for (const sec of sections) expect(sec.parentElement).toBe(content);
+  const seps = Array.from(m.container.querySelectorAll('[data-slot="separator"]'));
+  expect(seps).toHaveLength(2);
+  for (const sep of seps) {
+    expect(sep.parentElement).toBe(content);
+    expect(sep.className).toContain("shrink-0");
+  }
+  expect(section(m.container, "contexts")?.className).toContain("min-h-0 flex-1");
+  expect(section(m.container, "archive")?.className).toContain("shrink-0");
   m.unmount();
 });
 
@@ -575,7 +601,7 @@ it("a stopped or archived row shows a dim circle and never spins", () => {
   });
   const archived = (dot: Dot): Element => {
     const m = mount(<ContextTree {...props({ tree: dotTree({ dot, archived: true }) })} />);
-    const toggle = m.container.querySelector('[data-archived] [data-slot="sidebar-group-label"] button');
+    const toggle = m.container.querySelector('[data-archived] button[data-slot="sidebar-group-label"]');
     act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const el = ctxDot(m.container).cloneNode(true) as Element;
     m.unmount();

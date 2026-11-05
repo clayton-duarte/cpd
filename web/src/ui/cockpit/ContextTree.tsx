@@ -438,15 +438,15 @@ function TreeSection(props: {
       onOpenChange={props.onOpenChange}
       data-part="tree-section"
       data-section={props.section}
-      className={cn("group/collapsible flex flex-col", props.open ? "min-h-0 flex-1" : "flex-none")}
+      className={cn("group/collapsible flex flex-col overflow-hidden", props.open ? "min-h-0 flex-1" : "shrink-0")}
     >
-      <ScrollArea className={cn("py-1", props.open && "min-h-0 flex-1")}>
-        <SidebarGroup className="px-2 py-0" {...props.groupAttrs}>
-          <SidebarGroupLabel data-part={props.headerDataPart} className="sticky top-0 z-10 bg-background p-0">
+      <SidebarGroup className={cn("flex flex-col overflow-hidden px-0 py-1", props.open ? "min-h-0 flex-1" : "shrink-0")} {...props.groupAttrs}>
+        <div className="relative shrink-0 px-2">
+          <SidebarGroupLabel asChild data-part={props.headerDataPart}>
             <CollapsibleTrigger
               type="button"
               className={cn(
-                "flex h-full w-full items-center rounded-md px-2 text-left hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                "w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                 props.action !== undefined && "pr-7",
               )}
             >
@@ -455,11 +455,13 @@ function TreeSection(props: {
             </CollapsibleTrigger>
           </SidebarGroupLabel>
           {props.action}
-          <CollapsibleContent>
-            <SidebarGroupContent>{props.children}</SidebarGroupContent>
-          </CollapsibleContent>
-        </SidebarGroup>
-      </ScrollArea>
+        </div>
+        <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ScrollArea className="min-h-0 flex-1">
+            <SidebarGroupContent className="px-2">{props.children}</SidebarGroupContent>
+          </ScrollArea>
+        </CollapsibleContent>
+      </SidebarGroup>
     </Collapsible>
   );
 }
@@ -538,13 +540,13 @@ export function ContextTree(props: {
             <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
           )}
         </TreeSection>
-        {showStanding ? <Separator /> : null}
+        {showStanding ? <Separator className="shrink-0" /> : null}
         {showStanding ? (
           <TreeSection section="standing" label="Standing" open={standingOpen} onOpenChange={setStandingOpen} groupAttrs={{ "data-standing": true }}>
             <ContextList contexts={standing} allPlans={false} {...handlers} />
           </TreeSection>
         ) : null}
-        {archived.length > 0 ? <Separator /> : null}
+        {archived.length > 0 ? <Separator className="shrink-0" /> : null}
         {archived.length > 0 ? (
           <TreeSection section="archive" label="Archive" open={archivedOpen} onOpenChange={setArchivedOpen} groupAttrs={{ "data-archived": true }}>
             <ContextList contexts={archived} allPlans={true} {...handlers} />
