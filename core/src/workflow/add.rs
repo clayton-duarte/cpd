@@ -709,7 +709,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     let lead_branch = workflow_branch(&plan, &wanted.key);
                     let key = &wanted.key;
                     if matches!(phase, Phase::Deploy | Phase::Done) {
-                        reopen(tx, &plan, phase, key)?;
+                        reopen(tx, &plan, phase.as_str(), &format!("Workflow {key} was added"))?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
                     let stubs = insert_stubs(tx, &home, &plan, &wanted, appended, worker_tier)?;
@@ -1349,30 +1349,30 @@ pub(super) fn insert_needs(
 
 /// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
 /// `plan-phase` is appended (before `workflow-added`).
-fn reopen(
+pub(crate) fn reopen(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
-    from: Phase,
-    key: &WorkflowKey,
+    from: &str,
+    reason: &str,
 ) -> Result<(), CpdError> {
     let moved = tx.execute(
         "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2",
-        [plan.as_str(), from.as_str()],
+        [plan.as_str(), from],
     )?;
     if moved == 0 {
         return Err(CpdError::new(
             ErrorCode::CasLost,
             format!(
                 "Plan {plan} left phase {} meanwhile: rerun the command.",
-                from.as_str()
+                from
             ),
         )
         .with("plan", plan.as_str()));
     }
-    let text = format!("Plan {plan} is back in dispatch: Workflow {key} was added.");
+    let text = format!("Plan {plan} is back in dispatch: {reason}.");
     append(
         tx,
-        NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()),
+        NewEvent::plan_phase(text, from, "dispatch").plan(plan.clone()),
     )?;
     Ok(())
 }

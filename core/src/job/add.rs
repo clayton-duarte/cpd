@@ -125,6 +125,13 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
             match decide(tx, &home, &plan, &wanted)? {
                 Decision::Already(job) => Ok((job, true)),
                 Decision::Insert(job) => {
+                    if matches!(job.kind.as_str(), "scout" | "research") {
+                        let phase = plan_phase(tx, &plan)?;
+                        if phase == "done" {
+                            let reason = format!("explore Job {} was added", job.key);
+                            crate::workflow::add::reopen(tx, &plan, &phase, &reason)?;
+                        }
+                    }
                     insert(tx, &plan, &job)?;
                     let text = format!(
                         "Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}",
@@ -215,7 +222,7 @@ fn decide(
 ) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
     if jobs::is_explore(&wanted.kind) {
-        return decide_explore(conn, plan, wanted, &phase);
+        return decide_explore(conn, plan, wanted);
     }
     if phase == "grounding" || (phase == "done" && !wanted.draft) {
         return Err(CpdError::new(
@@ -338,21 +345,8 @@ fn decide(
     Ok(Decision::Insert(job))
 }
 
-/// An explore Job (R2-R5): of the Plan, no Workflow, queued at once with its fingerprint, in every phase but `done`.
-fn decide_explore(
-    conn: &Connection,
-    plan: &PlanId,
-    wanted: &Wanted,
-    phase: &str,
-) -> Result<Decision, CpdError> {
-    if phase == "done" {
-        return Err(CpdError::new(
-            ErrorCode::IllegalPhase,
-            format!("Plan {plan} is in phase done: explore Jobs ({}) are added in the phases grounding, plan, dispatch and deploy.", wanted.kind),
-        )
-        .with("plan", plan.as_str())
-        .with("phase", phase));
-    }
+/// An explore Job (R2-R5): of the Plan, no Workflow, queued at once with its fingerprint, in every phase; in `done` it reopens the Plan to `dispatch`.
+fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let all = jobs::load(conn, plan)?;
     if wanted.needs.iter().any(|n| n == wanted.key.as_str()) {
         return Err(CpdError::new(
