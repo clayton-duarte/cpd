@@ -102,6 +102,8 @@ fn every_blue_row_reads_cyan_and_nothing_else_changes_and_the_check_and_the_open
         .into_iter()
         .map(|mut r| {
             r["claimed_at"] = Value::Null; // the column `inbox-claim` adds
+            r["head_oid"] = Value::Null; // the columns `codereview-followup` adds
+            r["reviewed_oid"] = Value::Null;
             if r["urgency"] == "blue" {
                 r["urgency"] = Value::from("cyan");
             }
