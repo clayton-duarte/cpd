@@ -18,7 +18,10 @@ class FakeHost {
   respond = vi.fn(async (_id: string, _answer: object) => {});
   submit = vi.fn(async (_input: object) => ({ submissionId: 7, status: "queued" }));
   detach = vi.fn(async () => {});
-  constructor(private readonly initial: HostFrame[]) {}
+  initial: HostFrame[];
+  constructor(initial: HostFrame[]) {
+    this.initial = initial;
+  }
   deliver(frame: HostFrame): void {
     if (this.handlers.length === 0) this.pending.push(frame);
     for (const h of [...this.handlers]) h(frame);
