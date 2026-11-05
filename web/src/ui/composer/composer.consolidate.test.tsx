@@ -81,13 +81,13 @@ it("composer keeps send enabled and submits as follow-up", () => {
   m.unmount();
 });
 
-it("composer has no steer, follow-up or stop buttons", () => {
+it("composer has a stop button but no steer or follow-up buttons", () => {
   const { m } = setup({ busy: true });
   expect(m.container.querySelector("button[data-when-busy]")).toBeNull();
-  expect(m.container.querySelector('button[data-action="abort"]')).toBeNull();
+  expect(m.container.querySelector('[data-part="actions"] button[data-action="abort"]')).not.toBeNull();
   expect(m.container.querySelector('[data-part="send-split"]')).toBeNull();
   const labels = [...m.container.querySelectorAll("button")].map((b) => b.textContent ?? "");
-  expect(labels.some((t) => /^(Steer|Follow-up|Stop)/.test(t))).toBe(false);
+  expect(labels.some((t) => /^(Steer|Follow-up)/.test(t))).toBe(false);
   expect(m.container.querySelector('button[data-action="send"]'), "Send is the only send control").not.toBeNull();
   m.unmount();
 });
