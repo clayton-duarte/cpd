@@ -585,31 +585,12 @@ pub fn record(
     if !pulled.is_merged() {
         return Ok(Some(Phase::Deploy));
     }
-    // The last Workflow to merge ends the Plan (§3.1).
-    let unmerged: i64 = tx.query_row(
-        "SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
-        [id.as_str()],
-        |r| r.get(0),
-    )?;
-    if unmerged > 0 {
-        return Ok(Some(Phase::Deploy));
-    }
-    crate::plan::close_reviews(tx, id, &crate::plan::Closing::Done)?;
-    let moved = tx.execute(
-        "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
-        [id.as_str()],
-    )?;
-    if moved == 0 {
-        return Err(cas_lost(id, key));
-    }
-    let text = format!(
-        "Every Workflow of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}"
-    );
-    append(
-        tx,
-        NewEvent::plan_done(text, merged_workflows(tx, id)?).plan(id.clone()),
-    )?;
-    Ok(Some(Phase::Done))
+    // The last Workflow to merge ends the Plan, unless a Job is non-final (§3.1).
+    Ok(Some(if crate::plan::done::settle_done(tx, id, None)? {
+        Phase::Done
+    } else {
+        Phase::Deploy
+    }))
 }
 
 /// What an `open` or `update` Job's `attempt submit` once checked (contract §7.7, hs-d340). It has had no caller since commit 84c274f

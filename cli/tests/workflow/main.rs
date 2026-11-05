@@ -40,6 +40,7 @@ mod workflow_adopt_pub;
 mod workflow_adopt_rebase;
 mod workflow_crud;
 mod workflow_describe;
+mod workflow_done_guard;
 mod workflow_jira;
 mod workflow_jira_queue;
 mod workflow_jira_title;

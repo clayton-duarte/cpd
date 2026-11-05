@@ -19,6 +19,9 @@ pub(crate) mod delete;
 pub mod display;
 #[cfg(test)]
 mod display_tier_tests;
+pub(crate) mod done;
+#[cfg(test)]
+mod done_tests;
 #[cfg(test)]
 mod explore_render_tests;
 #[cfg(test)]
@@ -47,6 +50,8 @@ pub mod parked_wake;
 mod parked_wake_tests;
 mod phase;
 mod prs;
+#[cfg(test)]
+mod reeval_tests;
 mod rename;
 mod render;
 #[cfg(test)]
