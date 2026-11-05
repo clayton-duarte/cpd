@@ -7,11 +7,12 @@ import { Fixture, ID, planShow, stateCalls, ev, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
 const REVIEW_LABEL = "blocked:φ: plan review";
-const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, ...over } });
+const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, title: "T", ...over } });
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status } });
 const entries = (f: Fixture) => f.pi.entries.filter((e: any) => e.type === "custom" && e.customType === "cpd-plan-review").map((e: any) => e.data);
 const summaries = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-summary");
-const chat = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", ...over });
+const SUMMARY = "# Review\nsummary\n";
+const chat = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", summary: SUMMARY, title: "T", ...over });
 const decisions = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-decision");
 
 async function lead(f: Fixture, show: unknown = pending()) {
@@ -87,6 +88,32 @@ test("an unreadable summary file is an error", async (t) => {
   await waitFor("the error", () => adapterErrors(f).length === 1);
   assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: file_unreadable: /);
   assert.equal(summaries(f).length, 0);
+});
+
+test("the review entry carries the summary and title", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.emit(reviewEvent(101));
+  await f.drain();
+  assert.equal(entries(f)[0].summary, SUMMARY);
+  assert.equal(entries(f)[0].title, "T");
+});
+
+test("an empty summary file is refused and nothing is opened", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", pending());
+  f.summaryFile("p1", "r1", " \n\t\n");
+  f.load();
+  await f.pi.fire("session_start");
+  f.emit(reviewEvent(101));
+  await f.drain();
+  assert.equal(adapterErrors(f).length, 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /summary_empty/);
+  assert.equal(summaries(f).length, 0);
+  assert.deepEqual(entries(f), []);
+  assert.equal(f.pi.dialogs.length, 0);
 });
 
 async function opens(f: Fixture) {
@@ -432,7 +459,7 @@ test("a decision, failing or not, creates no temp directory", async (t) => {
 // ---- superseded (commands.md §15.3, §15.5 "Latest only") ----
 
 const supersededEvent = (id: number, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status: "superseded" } });
-const chatSeed = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", ...over });
+const chatSeed = (over: Record<string, unknown> = {}) => chat(over);
 
 test("an Event-only superseded closes the reason and the dialog, records the entry and tells nobody", async (t) => {
   const f = new Fixture();

@@ -5,14 +5,14 @@ import type { Dialog, DialogResponse } from "../../protocol/domain.ts";
 import { mount } from "../../testing/render.tsx";
 import { PlanReviewCard } from "./PlanReviewCard.tsx";
 
-function setup(readOnly = false) {
+function setup(readOnly = false, summary = "Three **bold** steps") {
   const responses: DialogResponse[] = [];
   const dialog: Extract<Dialog, { method: "cpd_plan_review" }> = {
     id: "review:r1",
     method: "cpd_plan_review",
     interactive: !readOnly,
     title: "Ship the widget",
-    summary: "Three **bold** steps",
+    summary,
   };
   const view = mount(<PlanReviewCard dialog={dialog} readOnly={readOnly} onRespond={(r) => responses.push(r)} />);
   return { ...view, responses };
@@ -78,3 +78,30 @@ function btn(c: HTMLElement, action: string): HTMLButtonElement {
     expect(responses).toEqual([]);
     unmount();
   });
+
+for (const summary of ["", "   "]) {
+  const tag = JSON.stringify(summary);
+  it("Approve is disabled and responds nothing without a summary", () => {
+    const { container, responses, unmount } = setup(false, summary);
+    expect(btn(container, "approve").disabled, tag).toBe(true);
+    act(() => btn(container, "approve").click());
+    expect(responses, tag).toEqual([]);
+    unmount();
+  });
+
+  it("Cmd+Enter does not approve without a summary", () => {
+    const { container, responses, unmount } = setup(false, summary);
+    const target = container.querySelector("h3") as HTMLElement;
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+    });
+    expect(responses, tag).toEqual([]);
+    unmount();
+  });
+
+  it("a blank summary shows the no-summary notice", () => {
+    const { container, unmount } = setup(false, summary);
+    expect(container.textContent, tag).toContain("No plan summary was rendered; approval is disabled.");
+    unmount();
+  });
+}
