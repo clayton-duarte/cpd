@@ -98,7 +98,7 @@ it("Composer renders no Stop button when not busy", () => {
 });
 
 it("Composer renders no Stop button when abort is unsupported", () => {
-  const { m } = setup({ busy: true, capabilities: { ...base, abort: { supported: false } } });
+  const { m } = setup({ busy: true, capabilities: { ...base, abort: { supported: false, reason: "unsupported" } } });
   expect(stop(m.container)).toBeNull();
   m.unmount();
 });
