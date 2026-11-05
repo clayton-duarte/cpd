@@ -30,7 +30,7 @@ export interface DurableTranscript {
   readonly items: TranscriptItem[];
   readonly facts: DurableFacts;
   readonly before?: number;
-  readonly openDialog?: Dialog | null;
+  readonly openDialog?: Dialog | undefined;
 }
 
 export const SUPPORTED_HOSTS: readonly { protocol: 1 | 2; piDurable: string }[] = [
@@ -325,7 +325,7 @@ function createViewDialect(): ViewDialect {
   let liveId: string | null = null;
   let liveCount = 0;
   let entryTokens: number | undefined;
-  let openDialog: Dialog | null = null;
+  let openDialog: Dialog | undefined;
 
   /** Parse every entry of the view that the cache has not seen (or sees changed); returns the ids first seen. */
   const ingest = (entries: readonly unknown[]): number[] => {
@@ -429,7 +429,7 @@ function createViewDialect(): ViewDialect {
       }
       openDialog = { id: `review:${latestReview}`, method: "cpd_plan_review", title, summary, interactive: true };
     } else {
-      openDialog = null;
+      openDialog = undefined;
     }
     return out;
   };
