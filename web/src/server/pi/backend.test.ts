@@ -208,18 +208,17 @@ describe("pi backend", () => {
       s.handle.abortSubmission("c1"),
       s.handle.compact(),
       s.handle.listModels(),
-      s.handle.respond("call:q1", { method: "ask_user_question", outcome: "cancelled" }),
     ];
     for (const p of calls) expect((await rejects(p)).code).toBe("unsupported_capability");
     expect(find(s.out, "session.attached").capabilities.abort.supported).toBe(false);
   });
 
-  it("dialogs are read-only reconstructions from tool calls", async () => {
+  it("ask_user_question dialogs are interactive reconstructions from tool calls", async () => {
     const s = await attached({ text: `${userLine(0)}\n${askCall}\n` });
     const dialogs = s.out.filter((m) => m.type === "session.dialog");
     expect(dialogs).toHaveLength(1);
     const d = (dialogs[0] as Extract<ServerMessage, { type: "session.dialog" }>).dialog;
-    expect(d).toMatchObject({ id: "call:q1", method: "ask_user_question", interactive: false });
+    expect(d).toMatchObject({ id: "call:q1", method: "ask_user_question", interactive: true });
     expect(d.method === "ask_user_question" && d.questions[0]?.question).toBe("Approve?");
     expect(types(s.out).indexOf("session.dialog")).toBeGreaterThan(types(s.out).indexOf("session.status"));
     const none = await attached();
