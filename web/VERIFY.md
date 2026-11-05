@@ -324,3 +324,7 @@ Specification: [`ELECTRON.md`](./ELECTRON.md), section "Auto-update and CLI boot
 | 6 | (d) CLI install waits for a running Attempt | [ ] | |
 | 7 | (d) CLI install after the Attempt ends | [ ] | |
 | 8 | (e) Dirty checkout skips | [ ] | |
+
+## Amendments pro-d48..pro-d61 (consolidate-docs, skeleton)
+
+TBD.

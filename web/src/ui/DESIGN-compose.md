@@ -658,3 +658,7 @@ Test changes: none to the Phase 2 file. New (`planreview.dango.test.tsx`): the `
 ## 6. Summary of hooks added (new, all in this file)
 
 Composer: `data-part` `queued-bar`, `queued-kind`, `queued-text`, `attachment-bar`, `action-row`, `send-split`, `reasons`; `data-action` `attach`, `edit-queued`; `data-when-busy` on `li[data-queued]`. TierSelector: `data-state` on the fieldset; `data-part` `tier-pill`, `pill-tier`, `pill-model`, `pill-thinking`, `tier-menu`, `menu-row`. Footer: `data-part` `telemetry`, `cwd`, `session-key`, `tokens`, `cache`, `context`, `context-bar`, `context-fill`, `model-line`. AskCard: `data-part` `title-bar`, `phi`, `title`, `count`, `tabs`, `tab`, `tab-mark`, `body`, `mode`, `option`, `badge`, `option-text`, `recommended`, `mark`, `custom`, `preview-pane`, `preview-header`, `preview-focus`, `footer`, `hints`, `note`; `data-tab`, `data-option`, `data-state`, `data-focused`, `data-action="skip"`; `data-layout` values `side-by-side` and `single`. PlanReviewCard: `data-part` `header`, `phi`, `subtitle`, `previous`, `body-row`, `outline-nav`, `body`, `outline`, `workflows`, `workflow`, `status-pill`, `dag`, `columns`, `overlaps`, `overlap`, `risks`, `oos`, `decision-bar`, `feedback`, `actions`, `stats`; `data-section`, `data-workflow`, `data-job`, `data-action="diff"`.
+
+## Amendments pro-d48..pro-d61 (consolidate-docs, skeleton)
+
+TBD.

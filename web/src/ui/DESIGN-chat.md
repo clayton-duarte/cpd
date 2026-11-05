@@ -593,3 +593,7 @@ Data absent from `web/src/protocol/**` and the store; each element is omitted (o
 - The `Attachment` and `MessageScroller` parts (the chat uses `Bubble`, `Trace`, `Marker` and `Collapsible` only, see the shadcn note at the top).
 - A copy-to-clipboard button on the assistant text; hover timestamps; message reactions.
 
+
+## Amendments pro-d48..pro-d61 (consolidate-docs, skeleton)
+
+TBD.

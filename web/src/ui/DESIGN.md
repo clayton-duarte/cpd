@@ -994,3 +994,7 @@ An archived fork Session has no Delete.
 - **Error isolation.** In `loadPanes`, a failing `plan show` does not drop the tree or inbox of the same batch: the Plan becomes `null` and the other panes apply. When the Plan is the only pane asked for, its error is thrown. A failure while building the Plan view is handled the same way.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
+
+## Amendments pro-d48..pro-d61 (consolidate-docs, skeleton)
+
+TBD.
