@@ -5341,6 +5341,10 @@ Then the client runs; a host that does not accept within the 30 s deadline ends 
 
   Assertions read `spawn.launches()`, the store rows (`fx.query`, `fx.count`) and the fake transcript (the lines the tail printed). No real tmux, node, pi-durable, socket or model.
 
+### 6.21 The pi live-stream socket
+
+The pi live-stream socket is documented here (skeleton; the protocol follows in this section).
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
