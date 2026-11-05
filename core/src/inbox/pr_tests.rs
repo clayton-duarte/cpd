@@ -217,7 +217,7 @@ fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested(
 type JobKindStatus<'a> = (&'a str, &'a str);
 
 #[test]
-fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_live() {
+fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_any_workflow_job_is_live() {
     let broken = [
         (
             "mergeable = 'conflicting', merge_state = 'dirty'",
@@ -236,20 +236,17 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
         ),
     ];
     // (Lead working, a Job of (kind, status), handled)
-    let cases: [(bool, Option<JobKindStatus>, bool); 10] = [
-        (true, None, true),
-        (false, Some(("update", "queued")), true),
-        (false, Some(("update", "running")), true),
-        (false, Some(("work", "running")), true),
-        (false, Some(("work", "queued")), true),
-        (false, Some(("update", "merged")), false),
-        (false, Some(("update", "failed")), false),
-        (false, Some(("update", "cancelled")), false),
-        (false, Some(("docs", "queued")), false),
-        (false, Some(("impl", "queued")), false),
-    ];
+    let mut cases: Vec<(bool, Option<JobKindStatus>, bool)> = vec![(true, None, true)];
+    for kind in ["docs", "test", "impl", "verify", "work", "open", "update"] {
+        for status in ["queued", "running"] {
+            cases.push((false, Some((kind, status)), true));
+        }
+        for status in ["merged", "failed", "cancelled"] {
+            cases.push((false, Some((kind, status)), false));
+        }
+    }
     for (set, red, cyan) in broken {
-        for (working, job, handled) in cases {
+        for &(working, job, handled) in &cases {
             let mut f = fixture();
             f.workflow(1, set);
             f.own("pay", 1);
@@ -270,6 +267,28 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
         let mut f = fixture();
         f.workflow(1, set);
         is(&mut f, 1, Red, red); // unowned
+    }
+}
+
+#[test]
+fn an_owned_broken_pr_is_cyan_while_its_lead_waits() {
+    let broken = [
+        (
+            "mergeable = 'conflicting', merge_state = 'dirty'",
+            "updating",
+        ),
+        ("checks = 'failed', merge_state = 'blocked'", "fixing"),
+        (
+            "review_decision = 'changes_requested', merge_state = 'blocked'",
+            "fixing",
+        ),
+    ];
+    for (set, cyan) in broken {
+        let mut f = fixture();
+        f.workflow(1, set);
+        f.own("pay", 1);
+        f.sql("UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'l-pay'");
+        is(&mut f, 1, Cyan, cyan);
     }
 }
 
