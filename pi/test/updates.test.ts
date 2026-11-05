@@ -554,7 +554,6 @@ test("the Manager's digest counts engine errors by code", async (t) => {
   assert.equal(m.details.event, 402);
 });
 
-const errEvent = (id: number, context: string | null, plan: string | null = null) => ({ id, kind: "error", context, plan, at: "2026-10-21T15:00:00Z", text: "t", data: { source: "watch", code: "gh_failed", message: "m", details: {} } });
 /** A Manager of `context`: its own read answers `own`, the unscoped read answers `unscoped`; returns the turn's message. */
 async function digestOf(context: string, own: Record<string, unknown>[], unscoped: Record<string, unknown>[]) {
   const f = new Fixture();
