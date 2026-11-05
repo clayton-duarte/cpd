@@ -24,6 +24,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "../components/input-group.tsx";
+import { clearDraft, loadDraft, saveDraft } from "./drafts.ts";
 import { addFiles, filesFromClipboard } from "./attachments.ts";
 import type {
   AttachmentRejection,
@@ -40,9 +41,7 @@ export interface ComposerHandle {
   addFiles(files: readonly FileLike[]): Promise<void>;
 }
 
-export const Composer = forwardRef<
-  ComposerHandle,
-  {
+interface ComposerProps {
     capabilities: Capabilities | null;
     busy: boolean;
     queued: readonly QueuedSubmission[];
@@ -53,10 +52,16 @@ export const Composer = forwardRef<
     sessionId: string;
     settings?: ReactNode;
     archived?: boolean;
-  }
->(function Composer(props, ref): ReactElement {
+}
+
+// Keyed by session so text and attachments never carry over to another session.
+export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref): ReactElement {
+  return <SessionComposer key={props.sessionId} {...props} ref={ref} />;
+});
+
+const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function SessionComposer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => loadDraft(props.sessionId));
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
@@ -85,6 +90,7 @@ export const Composer = forwardRef<
   const send = (): void => {
     if (!canSubmit) return;
     onSubmit({ text, attachments, whenBusy: "followUp" });
+    clearDraft(props.sessionId);
     setText("");
     setAttachments([]);
     setRejections([]);
@@ -242,7 +248,10 @@ export const Composer = forwardRef<
           placeholder={archived ? "Session is archived - unarchive to send messages" : "Ask anything… (Enter to send, Shift+Enter for newline)"}
           className="min-h-10 px-4 py-3 text-sm leading-relaxed"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            saveDraft(props.sessionId, e.target.value);
+          }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />

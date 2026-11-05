@@ -16,6 +16,7 @@ import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
 } from "../components/sidebar.tsx";
+import { clearDraft } from "../composer/drafts.ts";
 import { usePersistedBoolean } from "./persisted.ts";
 import { PERMANENT_IDS, STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
 
@@ -257,7 +258,7 @@ function ForkRow(props: { node: SessionNode; label: string } & Handlers): ReactE
     copyItem(id),
     // the selected Session may hold the chat slot, and the chat-slot Lead is never closed (commands.md 10.9)
     ...(current ? [] : [actItem(api, "Close", { kind: "session.close", sessionId: id })]),
-    actItem(api, "Archive", { kind: "session.archive", sessionId: id }),
+    { label: "Archive", run: () => { clearDraft(id); api.act({ kind: "session.archive", sessionId: id }); } },
   ];
   return (
     <SidebarMenuSubItem data-part="session-row">
