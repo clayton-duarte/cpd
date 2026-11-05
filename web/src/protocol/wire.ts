@@ -1,5 +1,5 @@
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
-import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
+import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
 import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
 
 
@@ -55,6 +55,7 @@ export type ServerMessage =
   | { type: "session.footer"; sessionId: string; footer: FooterStats }
   | { type: "session.title"; sessionId: string; title: string | null }
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
+  | { type: "session.completion"; sessionId: string; completion: Completion | null }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId null: not tied to a session (invalid_message, session_not_found of an attach)
@@ -154,6 +155,11 @@ function parseChanges(o: Obj): SettingsChanges {
     }
   }
   return { ...(Object.keys(tiers).length > 0 ? { tiers } : {}), ...(Object.keys(experimental).length > 0 ? { experimental } : {}) };
+}
+
+/** Parses an untrusted server message (stub: accepts nothing yet). */
+export function parseServerMessage(_raw: unknown): ServerMessage {
+  throw new WebError("protocol_error", "parseServerMessage is not implemented");
 }
 
 export function parseClientMessage(raw: unknown): ClientMessage {

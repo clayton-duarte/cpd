@@ -4,7 +4,7 @@ import type {
 } from "../protocol/domain.ts";
 import type { CockpitAction, ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsModel, StatusModel } from "../protocol/cockpit.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
-import type { TranscriptItem } from "../protocol/domain.ts";
+import type { Completion, TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
 import { archiveNavigation, sessionArchived } from "./archiveNav.ts";
 import {
@@ -37,6 +37,7 @@ export interface SessionView {
   readonly dialog: Dialog | null;
   readonly models: readonly ModelChoice[] | null;
   readonly error: WireError | null;
+  readonly completion: Completion | null;
   /** The session, its Plan or its Context is archived (derived from the tree). */
   readonly archived?: boolean;
 }
@@ -92,7 +93,7 @@ export const initialState: AppState = {
 };
 const emptySession = (id: string): SessionView => ({
   id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
-  busy: false, queued: [], pending: [], dialog: null, models: null, error: null,
+  busy: false, queued: [], pending: [], dialog: null, models: null, error: null, completion: null,
 });
 
 function normalizeUserText(text: string): string {

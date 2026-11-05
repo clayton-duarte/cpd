@@ -59,6 +59,7 @@ const REQUIRED: Readonly<Record<ServerMessage["type"], readonly (readonly [strin
   "session.footer": [SESSION, ["footer", "object"]],
   "session.title": [SESSION],
   "session.models": [SESSION, ["models", "array"]],
+  "session.completion": [SESSION, ["completion", "object"]],
   "session.dialog": [SESSION, ["dialog", "object"]],
   "session.dialogResolved": [SESSION, ["dialogId", "string"], ["outcome", "string"]],
   "session.error": [["error", "object"]],

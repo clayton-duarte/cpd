@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import type { JSX } from "react";
-import type { Runner, SessionRole } from "../../protocol/domain.ts";
+import type { Completion, Runner, SessionRole } from "../../protocol/domain.ts";
 
 export interface ChatHeaderProps {
   readonly sessionKey: string;
   readonly title: string | null;
   readonly role?: SessionRole;
   readonly runner?: Runner;
+  readonly completion?: Completion | null;
 }
 
 export function ChatHeader(props: ChatHeaderProps): JSX.Element {
