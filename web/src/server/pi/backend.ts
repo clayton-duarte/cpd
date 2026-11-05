@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import * as nodeFs from "node:fs/promises";
+import * as nodePath from "node:path";
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, PI_SEND_TEXT_MAX, WINDOW_SIZE, WebError, toWireError } from "../../protocol/domain.ts";
 import type {
   Capabilities,
@@ -142,8 +145,10 @@ export function createPiBackend(deps: {
     };
     const status = (): void => out({ type: "session.status", sessionId, busy, queued: [] });
     const openReviews = new Set<string>();
+    const openQuestions = new Set<string>();
     const dialog = (d: Dialog): void => {
       if (d.method === "cpd_plan_review") openReviews.add(d.id);
+      if (d.method === "ask_user_question") openQuestions.add(d.id);
       out({ type: "session.dialog", sessionId, dialog: d });
     };
 
@@ -169,7 +174,10 @@ export function createPiBackend(deps: {
       if (r.added.length > 0) out({ type: "session.append", sessionId, items: r.added });
       if (r.updated.length > 0) out({ type: "session.update", sessionId, items: r.updated });
       for (const d of r.dialogsOpened) dialog(d);
-      for (const id of r.dialogsResolved) openReviews.delete(id);
+      for (const id of r.dialogsResolved) {
+        openReviews.delete(id);
+        openQuestions.delete(id);
+      }
       for (const id of r.dialogsResolved) out({ type: "session.dialogResolved", sessionId, dialogId: id, outcome: "answered" });
       if (r.factsChanged) out({ type: "session.footer", sessionId, footer: footer() });
       const now = isBusy(tail.normalizer.facts);
@@ -235,7 +243,66 @@ export function createPiBackend(deps: {
       },
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
-        if (response.method === "ask_user_question") throw unsupported(REASON.dialogs);
+        if (response.method === "ask_user_question") {
+          openQuestions.delete(dialogId);
+          out({
+            type: "session.dialogResolved",
+            sessionId,
+            dialogId,
+            outcome: response.outcome === "answered" ? "answered" : "cancelled",
+          });
+          const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
+          const payload = {
+            dialogId,
+            result:
+              response.outcome === "answered"
+                ? response.result
+                : { answers: [], cancelled: true },
+          };
+          try {
+            await nodeFs.mkdir(nodePath.dirname(askPath), { recursive: true });
+          } catch {
+            // ignore
+          }
+          await deps.fs.write(
+            askPath,
+            new TextEncoder().encode(JSON.stringify(payload)),
+          );
+          void (async () => {
+            await new Promise((r) => setTimeout(r, 350));
+            try {
+              await nodeFs.stat(askPath);
+              await nodeFs.rm(askPath, { force: true });
+              const shown = await deps.cpd.json(["session", "show", sessionId]);
+              const pane =
+                typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
+                  ? ((shown["session"] as Record<string, unknown>)["tmux_pane"] as string)
+                  : null;
+              if (pane !== null) {
+                await new Promise<void>((resolve) => {
+                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], () => resolve());
+                });
+              }
+              if (response.outcome === "answered") {
+                const summary = response.result.answers
+                  .map((a) => {
+                    const val =
+                      a.kind === "multi"
+                        ? [...(a.selected ?? []), ...(a.answer ? [a.answer] : [])].join(", ")
+                        : a.answer;
+                    return `${a.question} => ${val}`;
+                  })
+                  .join("\n");
+                if (summary.trim() !== "") {
+                  await deps.cpd.json(sessionSendArgs(sessionId, summary));
+                }
+              }
+            } catch {
+              // askPath was already consumed by pi/ask-user-question
+            }
+          })();
+          return;
+        }
         if (response.outcome === "cancelled") return;
         if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
         const n = dialogId.slice("review:".length);

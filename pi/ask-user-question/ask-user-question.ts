@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import {
@@ -291,12 +294,42 @@ async function mountQuestionnaire(config: {
 	// with the host's custom() promise even when that promise never settles (the displaced
 	// slot, a stuck session) — the custom promise is abandoned; the guard is cleared first.
 	let boundTimer: ReturnType<typeof setTimeout> | undefined;
+	let externalTimer: ReturnType<typeof setInterval> | undefined;
+	const cpdSession = process.env.CPD_SESSION;
+	const answerFile = cpdSession
+		? join(process.env.CPD_HOME || join(homedir(), ".cpd"), "run", "ask", `${cpdSession}.json`)
+		: undefined;
+	if (answerFile) {
+		try {
+			rmSync(answerFile, { force: true });
+		} catch {
+			// ignore
+		}
+	}
 	const bound = new Promise<QuestionnaireResult>((resolve) => {
 		boundTimer = setTimeout(() => {
 			guardRef.current?.stop();
 			doneRef.current?.(STUCK_RESULT);
 			resolve(STUCK_RESULT);
 		}, MOUNT_BOUND_MS);
+		if (answerFile) {
+			externalTimer = setInterval(() => {
+				try {
+					if (!existsSync(answerFile)) return;
+					const raw = readFileSync(answerFile, "utf8");
+					rmSync(answerFile, { force: true });
+					const parsed = JSON.parse(raw) as { result?: QuestionnaireResult };
+					if (parsed?.result) {
+						guardRef.current?.stop();
+						doneRef.current?.(parsed.result);
+						resolve(parsed.result);
+					}
+				} catch {
+					// ignore transient read/parse errors
+				}
+			}, 120);
+			externalTimer.unref?.();
+		}
 	});
 	try {
 		return await Promise.race([
@@ -322,6 +355,14 @@ async function mountQuestionnaire(config: {
 		]);
 	} finally {
 		clearTimeout(boundTimer);
+		clearInterval(externalTimer);
+		if (answerFile) {
+			try {
+				rmSync(answerFile, { force: true });
+			} catch {
+				// ignore
+			}
+		}
 		guardRef.current?.stop();
 		removeOverlayInputListener?.();
 	}

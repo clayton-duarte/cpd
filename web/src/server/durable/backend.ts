@@ -192,6 +192,23 @@ export function createDurableBackend(deps: {
         send({ type: "session.dialog", sessionId, dialog: result });
       };
 
+      const syncTranscriptDialog = (): void => {
+        const openReview = dialect.transcript.openDialog ?? null;
+        const hasUiPlanReview = [...dialogs.values()].some(
+          (d) => !d.dialog.id.startsWith("review:") && d.dialog.method === "cpd_plan_review",
+        );
+        for (const [id] of dialogs) {
+          if (id.startsWith("review:") && (hasUiPlanReview || openReview?.id !== id)) {
+            dialogs.delete(id);
+            send({ type: "session.dialogResolved", sessionId, dialogId: id, outcome: "answered" });
+          }
+        }
+        if (openReview !== null && !hasUiPlanReview && !dialogs.has(openReview.id)) {
+          dialogs.set(openReview.id, { dialog: openReview });
+          send({ type: "session.dialog", sessionId, dialog: openReview });
+        }
+      };
+
       // snapshot/events (protocol 1) and view/ops (protocol 2) frames are applied one at a time, in order: a gap fill awaits the host between two of them.
       let frames: Promise<void> = Promise.resolve();
       const onStream = async (frame: Extract<HostFrame, { type: "snapshot" | "events" | "view" | "ops" }>): Promise<void> => {
@@ -222,6 +239,7 @@ export function createDurableBackend(deps: {
           const ids = new Set(out.queued.map((q) => q.id));
           queued = queued.filter((q) => q.submissionId !== undefined && ids.has(q.submissionId));
         }
+        syncTranscriptDialog();
         emitFooter(false);
         emitStatus(false);
       };
@@ -249,10 +267,16 @@ export function createDurableBackend(deps: {
             return;
           }
           case "ui_request":
-            onDialogRequest(frame);
+            frames = frames.then(() => {
+              if (!disposed) onDialogRequest(frame);
+            }).catch(onStreamError);
             return;
           case "ui_resolved":
-            if (dialogs.delete(frame.id)) send({ type: "session.dialogResolved", sessionId, dialogId: frame.id, outcome: frame.outcome });
+            frames = frames.then(() => {
+              if (!disposed && dialogs.delete(frame.id)) {
+                send({ type: "session.dialogResolved", sessionId, dialogId: frame.id, outcome: frame.outcome });
+              }
+            }).catch(onStreamError);
             return;
           default:
             return; // notice, status, pong, bye (the client's onClose reports bye), attached/result/error are never forwarded
@@ -329,6 +353,9 @@ export function createDurableBackend(deps: {
       emitStatus(true);
       ready = true;
       for (const frame of early.splice(0)) onLive(frame);
+      frames = frames.then(() => {
+        if (!disposed) syncTranscriptDialog();
+      }).catch(onStreamError);
 
       const guard = (): void => {
         if (gone !== null) throw gone;
@@ -427,6 +454,27 @@ export function createDurableBackend(deps: {
           const pending = dialogs.get(dialogId);
           if (pending === undefined) throw invalid(`no open dialog ${dialogId}`);
           if (pending.dialog.method !== response.method) throw invalid(`dialog ${dialogId} is ${pending.dialog.method}, not ${response.method}`);
+          if (dialogId.startsWith("review:")) {
+            if (response.outcome === "cancelled") {
+              dialogs.delete(dialogId);
+              send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "cancelled" });
+              return;
+            }
+            const review = dialogId.slice("review:".length);
+            const plan = session.ref.key.split(":")[1];
+            if (!review || !plan) throw invalid("no plan review in this session");
+            if (response.outcome === "approve") {
+              await deps.cpd.json(["plan", "decide", review, "--approve", "--plan", plan]);
+            } else if (response.outcome === "reject") {
+              await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+            } else if (response.outcome === "changes") {
+              await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+              await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
+            }
+            dialogs.delete(dialogId);
+            send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
+            return;
+          }
           if (response.outcome === "cancelled") return client.respond(dialogId, { cancelled: true });
           if (response.method === "ask_user_question") {
             if (response.outcome !== "answered") throw invalid("bad ask_user_question outcome");
@@ -450,6 +498,8 @@ export function createDurableBackend(deps: {
               const plan = session.ref.key.split(":")[1];
               if (review === undefined || plan === undefined) throw invalid("no plan review to reject in this session");
               await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+              dialogs.delete(dialogId);
+              send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
               return;
             }
           }
