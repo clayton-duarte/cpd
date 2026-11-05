@@ -28,6 +28,9 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::Failed;
 use cpd_core::host::runner::Runner;
+use cpd_core::ids::{PlanId, WorkflowKey};
+use cpd_core::pr::{jira_sync, posts};
+use cpd_core::pr::posts::PostRecord;
 use cpd_core::ports::Ports;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
@@ -68,7 +71,11 @@ pub(super) fn run(engine: &mut Engine) {
         };
         engine.team.running = None;
         engine.team.last_end = Some(engine.ports.clock.now());
-        match answer.and_then(|value| store(engine, &value)) {
+        match answer.and_then(|value| {
+            let cached = store(engine, &value)?;
+            confirm_own_posts(engine, &value)?;
+            Ok(cached)
+        }) {
             Ok(posts) => {
                 engine
                     .log
@@ -195,7 +202,103 @@ fn store(engine: &Engine, answer: &Value) -> Result<usize, Failure> {
     Ok(posts.len())
 }
 
-/// Confirms the User's own post of a pull request from the helper's `answer` (E11, decisions of 2026-11-05 EST): not built
-/// yet, and not called.
-#[allow(dead_code)]
-fn confirm_own_posts(_engine: &Engine, _answer: &Value) {}
+/// The workspace host of a permalink: that of the newest existing `pr_posts` link (a link `pr post` stored from the
+/// send answer), else `app.slack.com`. Smallest source that exists: the config and the channel read carry no workspace key.
+fn link_host(conn: &rusqlite::Connection) -> Result<String, CpdError> {
+    use rusqlite::OptionalExtension;
+    let link: Option<String> = conn
+        .query_row(
+            "SELECT link FROM pr_posts ORDER BY posted_at DESC, plan, workflow LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(link
+        .as_deref()
+        .and_then(|l| l.strip_prefix("https://"))
+        .and_then(|l| l.split('/').next())
+        .filter(|h| h.ends_with(".slack.com"))
+        .unwrap_or("app.slack.com")
+        .to_owned())
+}
+
+/// Confirms the User's own post of a pull request from the helper's `answer` (E11, decisions of 2026-11-05 EST): for each open
+/// Workflow with an open pull request, no `pr_posts` row and `pr.post` enabled, the earliest message of `inbox.slack_user_id`
+/// carrying that pull request is its post. The row and the `in_review` Jira row are written in one transaction, as `pr post`
+/// does. Returns how many posts it recorded.
+fn confirm_own_posts(engine: &mut Engine, answer: &Value) -> Result<usize, Failure> {
+    let me = engine.config.inbox.slack_user_id.clone();
+    let channel = engine.config.inbox.team_channel.clone();
+    let Some(posts) = answer["posts"].as_array() else {
+        return Ok(0);
+    };
+    if me.is_empty() {
+        return Ok(0);
+    }
+    let home = engine.home.clone();
+    let now = timestamp(engine.ports.clock.utc());
+    let fail = |e: CpdError| Failure::from(&e);
+    let open = engine
+        .store
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT w.plan, w.key, q.repo, q.number FROM workflows w JOIN pull_requests q ON q.id = w.pull_request
+                  WHERE w.status = 'open' AND q.state = 'open'
+                    AND NOT EXISTS (SELECT 1 FROM pr_posts p WHERE p.plan = w.plan AND p.workflow = w.key)
+                  ORDER BY w.plan, w.key",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .map_err(fail)?;
+    let mut recorded = 0;
+    for (plan, key, repo, number) in open {
+        let earliest = posts
+            .iter()
+            .filter(|p| {
+                p["author_id"].as_str() == Some(me.as_str())
+                    && p["repo"].as_str().is_some_and(|r| r.eq_ignore_ascii_case(&repo))
+                    && p["number"].as_i64() == Some(number)
+            })
+            .filter_map(|p| Some((p["ts"].as_f64()?, p["ts_raw"].as_str()?)))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((_, ts_raw)) = earliest else {
+            continue;
+        };
+        let (Ok(plan_id), Ok(workflow)) = (PlanId::parse(&plan), WorkflowKey::parse(&key)) else {
+            continue;
+        };
+        let enabled = engine
+            .store
+            .read(|conn| cpd_core::pr::policy_of_workflow(conn, &home, &plan_id, &workflow));
+        // A Workflow whose policy does not resolve is not confirmed; that is reported where the policy is used.
+        if !enabled.is_ok_and(|p| p.pr.post.enabled) {
+            continue;
+        }
+        let new = engine
+            .store
+            .write("engine E11", |tx| {
+                let host = link_host(tx)?;
+                let record = PostRecord {
+                    channel: channel.clone(),
+                    ts: ts_raw.to_owned(),
+                    link: format!("https://{host}/archives/{channel}/p{}", ts_raw.replace('.', "")),
+                    posted_at: now.clone(),
+                    reaction: None,
+                    reacted_at: None,
+                    auto_merge: String::new(),
+                    auto_merge_at: None,
+                };
+                let new = posts::insert(tx, &plan, &key, &record)?;
+                if new {
+                    jira_sync::queue(tx, &plan, &key, jira_sync::Target::InReview)?;
+                }
+                Ok(new)
+            })
+            .map_err(fail)?;
+        recorded += usize::from(new);
+    }
+    Ok(recorded)
+}
