@@ -151,6 +151,14 @@ export async function reminderFor(messages: unknown, port: TurnPort, state: Turn
   return REMINDER_TEXT;
 }
 
+/**
+ * G19 (commands.md §15.26): at a turn's end, the nudge text to continue with when the final text asks the User a question in plain text, or undefined.
+ * `classify` answers the probability that the text asks the User (undefined: unreachable). Stub: not implemented.
+ */
+export async function questionGuardFor(_messages: unknown, _port: TurnPort, _state: TurnState, _classify: (text: string) => Promise<number | undefined>): Promise<string | undefined> {
+  return undefined;
+}
+
 /** A Lead's error is one `cpd session report`; a Manager's one silent `cpd-error` write; once per (`what`, `code`) in a row. */
 export async function reportHostError(error: HostError, port: TurnPort, state: TurnState): Promise<void> {
   if (!reportsOnce(state, error.what, error.code)) return;

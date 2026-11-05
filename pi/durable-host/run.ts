@@ -1,3 +1,4 @@
+import type { CompactionSettings } from "./compaction.ts";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -88,7 +89,7 @@ export type Deps = {
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
-  open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  open(o: { file: string; cwd: string; model: Model; extension: Extension; settings?: { compaction: CompactionSettings } }): Promise<Conversation>;
   /** pi/lib/reload.ts's `validatePackage` over the adapter package directory: the refusal reason, or `undefined`. */
   validatePackage(dir: string): Promise<string | undefined>;
   follow?(hooks: FollowerHooks): { start(): void; stop(): void };

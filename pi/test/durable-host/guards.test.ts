@@ -7,6 +7,7 @@ import { tooLong, unseen, unseenReason } from "../../lib/askguard.ts";
 import { reasonText as hostReason } from "../../lib/hostapprove.ts";
 import { reasonText as mainReason } from "../../lib/mainguard.ts";
 import { reasonText as secretReason } from "../../lib/secretguard.ts";
+import { leadExploreGuard } from "../../lib/explore.ts";
 import { hostVerdict, type Where } from "../../durable-host/guards.ts";
 import type { Host } from "../../lib/host.ts";
 
@@ -130,4 +131,14 @@ test("a state write MCP mutation or codemode call resets the read streak", (t) =
     for (let i = 1; i <= 12; i++) assert.equal(read(where), undefined, `${w.name}: read ${i} after`);
     assert.deepEqual(read(where), { block: READ_STREAK_REASON }, `${w.name}: the streak counts again from 0`);
   }
+});
+
+test("hostVerdict refuses a Lead read of an explore artefact", (t) => {
+  const x = fixtures(t);
+  const artefact = join(x.tmp, ".cpd", "run", "p1", "explore", "f1.md");
+  const refusal = leadExploreGuard("lead", { CPD_HOME: join(x.tmp, ".cpd") }, { name: "read", arguments: { path: artefact } });
+  assert.ok(refusal !== undefined && "block" in refusal, "the lib refuses it");
+  assert.deepEqual(hostVerdict({ id: "c", name: "read", arguments: { path: artefact } }, x.where, "lead"), refusal);
+  assert.deepEqual(hostVerdict({ id: "c", name: "bash", arguments: { command: `cat ${artefact}`, timeout: 5 } }, x.where, "lead"), refusal);
+  assert.equal(hostVerdict({ id: "c", name: "read", arguments: { path: join(x.plain, "notes.md") } }, x.where, "lead"), undefined);
 });

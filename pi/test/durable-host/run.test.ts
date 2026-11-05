@@ -378,3 +378,11 @@ test("a session-message without a sender does not clear a tripped host", { timeo
     assert.equal(r.submitted.length, 2, "the sender-less message is held, not submitted");
   });
 });
+
+test("the host passes compactionPolicy to the harness settings", { timeout: 20_000 }, async () => {
+  const r = rig();
+  await r.up();
+  const compaction = r.opens[0]!.settings?.compaction;
+  assert.ok(compaction !== undefined, "open receives settings.compaction");
+  assert.equal(typeof compaction, "object");
+});
