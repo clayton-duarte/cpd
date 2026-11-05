@@ -4,7 +4,10 @@ import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
 import { noteQuestionTool, registerQuestionGuard } from "./question-guard.ts";
+import { mkdirSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
+import { createLiveStream } from "./live-stream.ts";
 import { homedir } from "node:os";
 import { exploreGuard, leadExploreGuard } from "./explore.ts";
 import { fileURLToPath } from "node:url";
@@ -43,6 +46,26 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReminderCheck(host);
   registerLoopGuard(host);
   registerQuestionGuard(host);
+
+  // The pi live-stream socket (contract §6.21): session_start to session_shutdown, and removed at process exit.
+  const env = host.env;
+  if (env.CPD_SESSION) {
+    const live = createLiveStream({
+      listen: (path, onConnection) => {
+        const server = createServer(onConnection);
+        server.on("error", (e) => process.stderr.write(`pi live-stream socket: ${e.message}\n`)); // reported, never thrown into pi
+        server.listen(path);
+        return { close: () => void server.close() };
+      },
+      mkdir: (path, mode) => void mkdirSync(path, { recursive: true, mode }),
+      unlink: (path) => rmSync(path, { force: true }),
+      home: env.CPD_HOME || join(homedir(), ".cpd"),
+      session: env.CPD_SESSION,
+      stderr: (text) => void process.stderr.write(text),
+    });
+    live.attach(pi);
+    process.once("exit", () => live.dispose());
+  }
 
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {
