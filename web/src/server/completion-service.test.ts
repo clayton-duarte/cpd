@@ -33,7 +33,11 @@ const setup = (opts: { ref?: SessionRef; results?: Array<Completion | null>; pla
   };
   const planOf = () => {
     planCalls += 1;
-    if (plans.length > 0) lastPlan = plans.shift() ?? null;
+    if (plans.length > 0) {
+      const next = plans.shift() ?? null;
+      if (next instanceof Error) return Promise.reject(next);
+      lastPlan = next;
+    }
     return lastPlan instanceof Error ? Promise.reject(lastPlan) : Promise.resolve(lastPlan);
   };
   const sent: SessionServerMessage[] = [];
