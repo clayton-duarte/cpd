@@ -194,3 +194,8 @@ fn store(engine: &Engine, answer: &Value) -> Result<usize, Failure> {
     fs::rename(&tmp, &path).map_err(|e| io("replace", e))?;
     Ok(posts.len())
 }
+
+/// Confirms the User's own post of a pull request from the helper's `answer` (E11, decisions of 2026-11-05 EST): not built
+/// yet, and not called.
+#[allow(dead_code)]
+fn confirm_own_posts(_engine: &Engine, _answer: &Value) {}
