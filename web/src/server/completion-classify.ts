@@ -1,5 +1,5 @@
-import type { Completion, CompletionLabel, SessionState } from "../protocol/domain.ts";
-import type { Scheduler } from "../protocol/runtime.ts";
+import type { Completion, CompletionLabel, CompletionTone, SessionState } from "../protocol/domain.ts";
+import type { Disposable as SchedulerHandle, Scheduler } from "../protocol/runtime.ts";
 import type { ChildBoundary } from "./plugin.ts";
 
 export const COMPLETION_QUESTION =
@@ -31,16 +31,79 @@ export interface CompletionPayload {
   transcript: { kind: string; text: string }[];
 }
 
-export function buildClassifierRequest(_p: CompletionPayload): { state: CompletionPayload; question: string; labels: { name: string; definition: string }[] } {
-  throw new Error("not implemented");
+export function buildClassifierRequest(p: CompletionPayload): { state: CompletionPayload; question: string; labels: { name: string; definition: string }[] } {
+  return { state: p, question: COMPLETION_QUESTION, labels: COMPLETION_LABELS.map((l) => ({ name: l.name, definition: l.definition })) };
 }
 
-export function mapAnswer(_answer: unknown): Completion | null {
-  return null;
+const LABEL_TEXT: Record<CompletionLabel, string> = {
+  safe_to_archive: "Safe to archive",
+  unanswered_ask: "Unanswered ask",
+  open_work: "Open work",
+  unrecorded_decision: "Unrecorded decision",
+  unescalated_issue: "Unescalated bug",
+};
+
+const isLabel = (v: unknown): v is CompletionLabel => typeof v === "string" && Object.hasOwn(LABEL_TEXT, v);
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+export function mapAnswer(answer: unknown): Completion | null {
+  if (typeof answer !== "object" || answer === null) return null;
+  const a = answer as Record<string, unknown>;
+  if (a["ok"] !== true || !isLabel(a["label"])) return null;
+  const label = a["label"];
+  const probs = typeof a["probabilities"] === "object" && a["probabilities"] !== null ? (a["probabilities"] as Record<string, unknown>) : {};
+  const p = num(probs["safe_to_archive"]);
+  const c = num(a["confidence"]);
+  const x = label === "safe_to_archive" ? (p ?? c ?? 1) : (p ?? 1 - (c ?? 0.5));
+  const score = Math.min(100, Math.max(0, Math.round(x * 100)));
+  const tone: CompletionTone =
+    label === "safe_to_archive" ? (score >= 80 ? "done" : "decision") : label === "open_work" ? (score >= 40 ? "decision" : "blocked") : "decision";
+  return { label, text: `${LABEL_TEXT[label]} · ${score}%`, score, tone };
 }
 
 export interface CompletionClassifier { classify(p: CompletionPayload): Promise<Completion | null> }
 
-export function createCompletionClassifier(_deps: { child: ChildBoundary; scheduler: Scheduler; script: string | null; agentDir: string; env: NodeJS.ProcessEnv }): CompletionClassifier {
-  return { classify: () => Promise.resolve(null) };
+const DEADLINE_MS = 30_000;
+
+export function createCompletionClassifier(deps: { child: ChildBoundary; scheduler: Scheduler; script: string | null; agentDir: string; env: NodeJS.ProcessEnv }): CompletionClassifier {
+  return {
+    classify: (p) =>
+      new Promise<Completion | null>((resolve) => {
+        const script = deps.script;
+        if (script === null) return resolve(null);
+        let timer: SchedulerHandle | undefined;
+        let done = false;
+        const finish = (v: Completion | null) => {
+          if (done) return;
+          done = true;
+          timer?.dispose();
+          resolve(v);
+        };
+        try {
+          const child = deps.child.spawn("node", [script], { stdio: ["pipe", "pipe", "pipe"], env: { ...deps.env, PI_CODING_AGENT_DIR: deps.agentDir } });
+          let out = "";
+          child.stdout.on("data", (c) => { out += c.toString(); });
+          child.stderr.on("data", () => undefined);
+          child.stdin?.on("error", () => finish(null));
+          child.on("close", (code) => {
+            if (code !== 0) return finish(null);
+            const last = out.split("\n").map((l) => l.trim()).filter((l) => l !== "").pop();
+            if (last === undefined) return finish(null);
+            try {
+              finish(mapAnswer(JSON.parse(last)));
+            } catch {
+              finish(null);
+            }
+          });
+          timer = deps.scheduler.after(DEADLINE_MS, () => {
+            try { child.kill(); } catch { /* already gone */ }
+            finish(null);
+          });
+          child.stdin?.write(JSON.stringify(buildClassifierRequest(p)));
+          child.stdin?.end();
+        } catch {
+          finish(null);
+        }
+      }),
+  };
 }
