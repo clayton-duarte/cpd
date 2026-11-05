@@ -59,7 +59,9 @@ fn pr_open_opens_the_pull_request_of_a_pr_with_a_jira_key_when_it_is_required() 
     let fx = fx_with("jira_required = true\n");
     fx.store()
         .write("fixture", |tx| {
-            Ok(tx.execute_batch("UPDATE workflows SET jira = 'ABC-1'")?)
+            Ok(tx.execute_batch(
+                "UPDATE workflows SET jira = 'ABC-1', title = 'feat: ABC-1/Charge the card at checkout'",
+            )?)
         })
         .unwrap();
 
@@ -88,6 +90,67 @@ fn pr_open_opens_a_pr_with_no_ticket_when_the_policy_has_no_key() {
 #[test]
 fn pr_open_opens_an_adopted_pr_with_no_ticket_when_required() {
     let fx = fx_with("jira_required = true\n");
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute_batch(
+                "DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature/x';
+                 CREATE TRIGGER workflows_head_ref_fixed BEFORE UPDATE OF head_ref ON workflows\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
+            )?)
+        })
+        .unwrap();
+    open(&fx).ok();
+    assert_eq!(open_jobs(&fx).len(), 1, "the open Job is queued");
+}
+
+/// Sets the Workflow's `jira` and `title`.
+fn set_jira_title(fx: &Poll, title: &str) {
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute("UPDATE workflows SET jira = 'ABC-1', title = ?1", [title])?)
+        })
+        .unwrap();
+}
+
+fn assert_title_refused(fx: &Poll, title: &str) {
+    set_jira_title(fx, title);
+    let (txns, remote) = (fx.txns(), fx.remote_branch("cpd/pay"));
+
+    let run = open(fx);
+
+    assert_eq!(code(&run), ("jira_title_invalid".into(), 3));
+    let error = run.error();
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("cpd workflow edit repo --title"),
+        "{error}"
+    );
+    assert_eq!(
+        (fx.plan_row().0, fx.txns(), open_jobs(fx)),
+        ("dispatch".to_owned(), txns, Vec::<(String, String)>::new())
+    );
+    assert_eq!(fx.remote_branch("cpd/pay"), remote, "nothing pushed");
+    assert!(fx.gh_calls().is_empty(), "no gh call");
+}
+
+#[test]
+fn pr_open_refuses_a_title_without_the_jira_key_before_any_push() {
+    let fx = fx_with("jira_required = true\n");
+    assert_title_refused(&fx, "Charge the card at checkout");
+}
+
+#[test]
+fn pr_open_refuses_a_title_holding_another_jira_key() {
+    let fx = fx_with("jira_required = true\n");
+    assert_title_refused(&fx, "feat: XYZ-9/Charge the card at checkout");
+}
+
+/// Guard: an adopted Workflow's title is not checked.
+#[test]
+fn pr_open_does_not_check_the_title_of_an_adopted_workflow() {
+    let fx = fx_with("jira_required = true\n");
+    set_jira_title(&fx, "Charge the card at checkout");
     fx.store()
         .write("fixture", |tx| {
             Ok(tx.execute_batch(
