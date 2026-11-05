@@ -75,8 +75,9 @@ export function Shell(props: {
           withHandle
           aria-label="Resize context tree and center"
           data-part="split-left"
+          onDoubleClick={() => treeRef.current?.resize("20%")}
         />
-        <ResizablePanel id="center" panelRef={centerRef} data-part="center-panel" defaultSize="58%" minSize="30%">
+        <ResizablePanel id="center" panelRef={centerRef} data-part="center-panel" defaultSize="50%" minSize="30%">
           <div
             data-column="center"
             data-part="center-frame"
@@ -169,12 +170,13 @@ export function Shell(props: {
           withHandle
           aria-label="Resize center and inbox"
           data-part="split-right"
+          onDoubleClick={() => inboxRef.current?.resize("30%")}
         />
         <ResizablePanel
           id="inbox"
           panelRef={inboxRef}
           data-part="inbox-panel"
-          defaultSize="22%"
+          defaultSize="30%"
           minSize="14%"
           maxSize="45%"
           collapsible

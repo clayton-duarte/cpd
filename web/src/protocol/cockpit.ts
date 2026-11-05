@@ -82,6 +82,7 @@ export interface InboxRow {
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;
+  readonly subject?: string; // the item's subject, e.g. `pr:<owner>/<repo>#<n>`
   readonly workflow?: string | null; // the Workflow key for PR kinds, from the item's data; null when none
   readonly openedAt: string; readonly ageSeconds: number;
   readonly actions: readonly InboxRowAction[];
@@ -100,11 +101,26 @@ export type CockpitAction =
   | { kind: "inbox.dismiss"; itemId: number }
   | { kind: "inbox.claim"; itemId: number }
   | { kind: "inbox.approve"; itemId: number }
-  | { kind: "pr.post"; planId: string; workflow: string }
-  | { kind: "pr.merge"; planId: string; workflow: string }
+  | { kind: "pr.post"; planId: string; workflow?: string; pull?: string }
+  | { kind: "pr.repost"; planId: string; workflow?: string; pull?: string }
+  | { kind: "pr.merge"; planId?: string; workflow?: string; pull?: string }
   | { kind: "engine.start" }
   | { kind: "session.retier"; sessionId: string; tier: string }
-  | { kind: "plan.reject"; planId: string; review: string };
+  | { kind: "plan.reject"; planId: string; review: string }
+  | { kind: "plan.new"; planId: string; contextId: string; title: string }
+  | { kind: "context.rename"; contextId: string; title: string }
+  | { kind: "plan.rename"; planId: string; title: string }
+  | { kind: "session.rename"; sessionId: string; name: string }
+  | { kind: "session.fork"; sourceId: string; name: string }
+  | { kind: "session.close"; sessionId: string }
+  | { kind: "context.archive"; contextId: string }
+  | { kind: "plan.archive"; planId: string }
+  | { kind: "session.archive"; sessionId: string }
+  | { kind: "context.unarchive"; contextId: string }
+  | { kind: "plan.unarchive"; planId: string }
+  | { kind: "session.unarchive"; sessionId: string }
+  | { kind: "context.delete"; contextId: string }
+  | { kind: "plan.delete"; planId: string };
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
 
 const DURATIONS: readonly string[] = ["15m", "1h", "tomorrow"];
@@ -126,11 +142,26 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "inbox.dismiss": ["itemId"],
     "inbox.claim": ["itemId"],
     "inbox.approve": ["itemId"],
-    "pr.post": ["planId", "workflow"],
-    "pr.merge": ["planId", "workflow"],
+    "pr.post": ["planId"],
+    "pr.repost": ["planId"],
+    "pr.merge": [],
     "engine.start": [],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
+    "plan.new": ["planId", "contextId", "title"],
+    "context.rename": ["contextId", "title"],
+    "plan.rename": ["planId", "title"],
+    "session.rename": ["sessionId", "name"],
+    "session.fork": ["sourceId", "name"],
+    "session.close": ["sessionId"],
+    "context.archive": ["contextId"],
+    "plan.archive": ["planId"],
+    "session.archive": ["sessionId"],
+    "context.unarchive": ["contextId"],
+    "plan.unarchive": ["planId"],
+    "session.unarchive": ["sessionId"],
+    "context.delete": ["contextId"],
+    "plan.delete": ["planId"],
   };
   if (typeof kind !== "string" || !Object.hasOwn(fields, kind)) throw new WebError("unknown_action", `unknown action kind ${String(kind)}`);
   for (const f of fields[kind]!) field(o, f, kind);

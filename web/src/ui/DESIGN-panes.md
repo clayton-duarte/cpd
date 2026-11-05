@@ -220,6 +220,8 @@ No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸`
 
 The web right column is the flat Inbox only. The TUI's machine block (hostname, CPU, GPU and memory) is not built (pro-d36). The Inbox is the TUI attention engine (`tui/src/widgets/inbox.rs`), so it follows that file: one flat list in `cpd inbox list` order, with no tier groups, no per-tier counts, no kind text, no inline buttons, no engine banner and no key footer. Secondary actions live in a right-click menu (pro-d40).
 
+The header is one row (`data-part="inbox-header"`, `flex h-8 shrink-0 items-center justify-between gap-8 px-2.5`; gap-8 is the minimum space between title and filters): the `Inbox` h2 (`shrink-0`, no count beside it) on the left and, right-aligned on the same line, the shadcn ToggleGroup tier filter (`type="multiple" variant="outline" size="sm"`, `data-part="inbox-filters"`, `ml-auto shrink-0`; decision pro-d49, supersedes the ButtonGroup). Items: `all`, then blocker (red), delivery (yellow), decision (magenta), support (blue), notice (cyan), unread (white), each `h-6 gap-1.5 px-1.5 text-xs` with `<label>` and a count in a `data-part="filter-count"` `font-mono text-[10px]` span; vanilla outline styling, the Dango tier colour is the text colour only (`text-status-*-bright`, `all` uses `text-fg-strong`), no fill; none is ever disabled (a tier with no rows shows 0; `all` shows the total). Behaviour is isolate-then-additive and controlled (`value` = `all` plus the six urgencies when all, else the set; `onClick` handlers): initial state `all`; a tier click while `all` isolates it, then each click adds or removes that tier; the state returns to `all` when the set is empty or holds all six. On/off reads from `data-state` and `aria-pressed`. An empty filter shows `no items in this filter`.
+
 ### 2a. Props
 
 ```ts
@@ -231,7 +233,7 @@ export function Inbox(props: {
   onSelectSession(sessionId: string): void;       // KEPT
 }): ReactElement;
 ```
-No new props. The inbox panel is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c, 22% of the row at start, 14% to 45%); `Inbox` fills it: `aside[aria-label="Inbox"]` (KEPT; nested in the column aside) `flex h-full min-h-0 w-full flex-col overflow-hidden`. **Resolution:** the board's `aside.pane[aria-label="Attention inbox"]` label is **not** used; Phase 2's `Inbox` is pinned by `App.test` and `Inbox.test`.
+No new props. The inbox panel is the Shell's (`aside[aria-label="Inbox column"]`, DESIGN 3c, 30% of the row at start, 14% to 45%; the center is 50%, the tree 20%; double click on a split handle resets the tree to 20% or the inbox to 30%, pro-d50); `Inbox` fills it: `aside[aria-label="Inbox"]` (KEPT; nested in the column aside) `flex h-full min-h-0 w-full flex-col overflow-hidden`. **Resolution:** the board's `aside.pane[aria-label="Attention inbox"]` label is **not** used; Phase 2's `Inbox` is pinned by `App.test` and `Inbox.test`.
 
 **Row order.** The rows are shown in the order of `inbox.rows` (the `cpd inbox list` order). The component does not sort, group or rank.
 
@@ -276,24 +278,29 @@ aside[aria-label="Inbox"]
 
 ### 2c. Row
 
-`li[data-kind="{row.kind}"][data-urgency="{row.urgency}"][data-id="{row.id}"]`. `data-kind` and `data-urgency` are KEPT. `data-id` is new. There is no `data-tier` and no `data-focused` (no tiers, no focus model). className: `flex gap-2.5 rounded-[7px] p-2` + `hover:bg-row-hover` (1.2 item 9). The row has no keyboard handler (2e).
+A row is a shadcn `Item` (`components/item.tsx`, base/item link pattern) in an `ItemGroup`; icons are lucide.
 
 ```
-li[data-kind][data-urgency][data-id]
-├─ span[aria-hidden="true"][data-part="glyph"]   className={glyphClass[inboxDisplay(urgency).glyph]} (2a)     mt-1.5
-└─ div[data-part="body"]   flex min-w-0 flex-1 flex-col gap-[3px]
-    ├─ div[data-part="line1"]   flex w-full items-baseline gap-2
-    │   ├─ (link kind with a url, see below) a[href="{row.url}"][data-part="link"]
-    │   │     ├─ strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong underline truncate
-    │   │     └─ span[aria-hidden="true"]  link cue (lucide ExternalLinkIcon, size 12)   text-muted-foreground
-    │   ├─ (otherwise) strong[data-part="subject"]  {first}   KEPT element; font-mono text-key font-normal text-fg-strong flex-1 min-w-0 truncate
-    │   └─ span[data-part="age"]  {age}   font-mono text-meta text-muted-foreground shrink-0
-    └─ span[data-part="subtitle"]   only when the label has a non-empty second line   text-muted-foreground text-[12px] truncate
-          text: the label after its first line break (`rest`), aligned under the label (indented past the glyph column)
+ItemGroup  min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5
+└─ Item[variant=outline][size=sm] asChild → a[data-kind][data-urgency][data-id]
+   │   href = row.url, target=_blank, rel="noopener noreferrer" for a link kind with a url; else href="#" with preventDefault
+   ├─ ItemMedia  flex-col justify-between self-stretch (full row height); three columns: media, text, actions
+   │   ├─ span.h-[19.25px] → RowIcon (lucide, size-4, urgency text colour), centred on the first text line
+   │   │     deploy Rocket; pr-ready/pr-closed GitPullRequest; review-requested GitPullRequestArrow; curate-retire Sparkles;
+   │   │     else by urgency: red CircleAlert, yellow CircleDot, magenta CircleHelp, blue Eye, cyan Bell, white MessageSquare
+   │   └─ span.mt-auto.block.text-sm.leading-normal → span[data-part="age"]  font-mono text-[10px] text-muted-foreground (baseline = last text line)
+   ├─ ItemContent  justify-between self-stretch
+   │   ├─ ItemTitle  first label line, urgency text colour
+   │   └─ ItemDescription  rest of the label joined by a space, only when non-empty
+   └─ ItemActions  flex-col items-end justify-between self-stretch
+       ├─ ExternalLinkIcon (linked) or ChevronRightIcon, size-4 text-muted-foreground
+       └─ Button[type=button][variant=outline][size=sm][data-part="item-action"] h-6 px-2 text-xs, only with a primary action
 ```
 
-- `first` = `row.label.split("\n")[0] ?? ""`; `rest` = the label after its first line break, shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
-- **Link kinds.** `row.url !== null` and `row.kind` is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy` (TUI `is_link`, `inbox.rs:492-494`): the label is the link. Clicking the label opens `row.url` (native anchor; TUI `mod.rs:591-601`). The link cue is the only extra mark. Other rows have no link.
+- **Primary action**: the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start` (built by the read model, pro-d52; the UI derives nothing). Its button calls `preventDefault` and `stopPropagation`, then `onAction(action)`: the jump and the link never fire. The right-click menu lists the same entry first for `pr-ready`.
+- Every row but `engine-down` is wrapped in the context menu (`ContextMenuTrigger asChild`).
+- `first` = `row.label.split("\n")[0] ?? ""`; the description is shown only when non-empty (TUI row 2, `inbox.rs:500-502`).
+- **Link kinds** (`plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`; TUI `is_link`, `inbox.rs:492-494`) with a url: the row anchor opens `row.url` in a new tab, and the kind's left click below still runs.
 - **Age** `{age}` from `row.ageSeconds` (DESIGN 2c Phase 2 rule, unchanged): `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`. The TUI shows `42s`, `5m`, `2d` (`inbox.rs:673-676`); its hour form is **unverified** (`read/age.rs` was not read), so the web keeps `h`.
 - Row 1 is cut with an ellipsis before the age (`truncate`); row 2 is cut with an ellipsis as well. Nothing else is cut.
 

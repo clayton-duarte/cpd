@@ -318,7 +318,7 @@ All eight `data-stat` / `data-part` hooks live inside the one `footer`. The `sty
 - `compact(n)` for tokens and the window: `n < 1000` → `String(n)`; `n < 1_000_000` → `Math.round(n / 1000) + "k"`; else `(n / 1_000_000).toFixed(1) + "M"` (`84000` → `84k`, `1_200_000` → `1.2M`, `1_000_000` → `1.0M`).
 - The meter has no threshold colours (the board has none): fill is always `bg-mizu` (`#67ada7`).
 - Colours: whole row `text-fg-dim` (`#87808c`, allowed: the footer sits on `bg-background`); session key, cost, tier, model, thinking `text-muted-foreground` (`#aba3af`).
-- Sizes: height 30px, padding `0 16px`, gap 14px, 11px (`text-meta`), mono (Maple Mono stack), no wrap, overflow hidden (the board; nothing scrolls).
+- Sizes: height 30px, padding `0 16px`, gap 14px, 11px (`text-meta`), mono (Roboto Mono), no wrap, overflow hidden (the board; nothing scrolls).
 - The Phase 2 prefixes `model: `, `tier: `, `thinking: `, `context: `, `cost: `, `branch: ` become `<span className="sr-only">model: </span>` (still in `textContent`; visible text is board-clean).
 
 **Unknown stats (KEPT contract):** a `Stat` with `state: "unknown"` renders `<span data-state="unknown" title={reason}>unknown</span>` in place of its value (className `text-muted-foreground`; no bar for an unknown context). With `footer === null` each of the six stats is `{ state: "unknown", reason: "not attached" }`, so exactly 6 `[data-state="unknown"]` elements exist (tier, model, thinking, context, cost, branch); the optional items (`cwd`, `sessionKey`, `tokens`, `cacheHitPercent`) render **nothing** when absent and never add an `unknown` marker (`Footer.test` "unknown stats render an explicit unknown marker" counts them). With every stat known there is no `[data-state="unknown"]`.
@@ -365,7 +365,7 @@ form[aria-label="Questions"][data-dialog="ask_user_question"]    KEPT
      (the board's 12px radius, `#ca88a3` border, `#211f26` card)
 ├─ div[data-part="title-bar"]    NEW
 │    className: flex h-11 shrink-0 items-center gap-2.5 border-b border-edge bg-status-decision/10 pl-3.5 pr-2
-│  ├─ span[data-part="phi"][aria-hidden]  "φ"      className: font-display text-[18px] font-bold text-status-decision-bright   (EB Garamond 700, #ecaec7)
+│  ├─ span[data-part="phi"][aria-hidden]  "φ"      className: font-display text-[18px] font-bold text-status-decision-bright   (Roboto 700, #ecaec7)
 │  ├─ span[data-part="title"]  "{asker} asks you" | "Questions for you"   className: font-semibold text-fg-strong
 │  ├─ span[data-part="count"]  "{N} questions" | "1 question"              className: font-mono text-[11.5px] text-muted-foreground
 │  ├─ span[aria-hidden] className: flex-1

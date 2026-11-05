@@ -11,6 +11,12 @@ const out = electronOutDir(process.env);
 
 const nodeBuiltins = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 
+// The main build emits two entries: main.js (Electron) and server.js (re-imported on SIGUSR1).
+const entryFiles = {
+  main: { entryFileNames: "main.js" },
+  server: { entryFileNames: "server.js" },
+};
+
 export default defineConfig(
   target === "renderer"
     ? {
@@ -32,9 +38,9 @@ export default defineConfig(
           rollupOptions:
             target === "main"
               ? {
-                  input: "src/electron/main.ts",
+                  input: { main: "src/electron/main.ts", server: "src/server/plugin.ts" },
                   external: ["electron", "node-pty", "@aurigax-ai/ghostty-web", ...nodeBuiltins],
-                  output: { format: "es", entryFileNames: "main.js" },
+                  output: { format: "es", entryFileNames: (chunk) => entryFiles[chunk.name === "server" ? "server" : "main"].entryFileNames },
                 }
               : {
                   input: "src/electron/preload.ts",

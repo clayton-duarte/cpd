@@ -13,12 +13,18 @@ export interface BootDeps {
   loadDevUrl(win: BootWindow, url: string): Promise<unknown>;
   loadFile(win: BootWindow, path: string): Promise<unknown>;
   env: Record<string, string | undefined>;
+  reloadServer(): Promise<void>;
 }
 export async function boot(deps: BootDeps): Promise<void> {
   deps.app.setName('CPD');
   await deps.app.whenReady();
   const win = new deps.BrowserWindow({ title: 'CPD' });
-  deps.process.on('SIGUSR1', () => {
+  deps.process.on('SIGUSR1', async () => {
+    try {
+      await deps.reloadServer();
+    } catch (error) {
+      console.error(error);
+    }
     if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
   });
   deps.registerIpc();

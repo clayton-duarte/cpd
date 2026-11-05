@@ -259,7 +259,7 @@ it("the Archived group is closed by default and folds by section archive", () =>
   expect(group).not.toBeNull();
   expect(group?.tagName).not.toBe("DETAILS");
   expect(m.container.querySelector("nav, details, summary")).toBeNull();
-  expect(group?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  expect(group?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   expect(group?.querySelector('[data-context="c2"]')).toBeNull();
   expect(group?.textContent).toContain("Archive");
   click(header(m.container, "Archive"));
@@ -288,28 +288,88 @@ const layered: ContextTreeModel = {
 };
 const ids = (root: ParentNode | null) => Array.from(root?.querySelectorAll("[data-context]") ?? []).map((e) => e.getAttribute("data-context"));
 const header = (c: ParentNode, name: string): HTMLElement | null =>
-  Array.from(c.querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"] button')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
+  Array.from(c.querySelectorAll<HTMLElement>('button[data-slot="sidebar-group-label"]')).find((b) => (b.textContent ?? "").includes(name)) ?? null;
 
-it("the tree has three layers: Contexts, a separator and a pinned bottom with Standing and Archive", () => {
+const section = (c: ParentNode, name: string): HTMLElement | null => c.querySelector<HTMLElement>(`[data-part="tree-section"][data-section="${name}"]`);
+
+it("every open section is flex-1 and a closed section is shrink-0", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const c = m.container;
-  const bottom = q(c, '[data-part="tree-pinned-bottom"]');
-  expect(bottom, "pinned bottom").not.toBeNull();
-  for (const cls of ["mt-auto", "max-h-[50%]", "shrink-0"]) expect(bottom?.className).toContain(cls);
-  expect(bottom?.querySelector('[data-slot="scroll-area"]'), "bottom scroll area").not.toBeNull();
-  expect(bottom?.querySelector("[data-standing]"), "standing").not.toBeNull();
-  expect(bottom?.querySelector("[data-archived]"), "archive").not.toBeNull();
-  expect(bottom?.querySelectorAll('[data-slot="separator"]').length, "separator inside bottom").toBeGreaterThanOrEqual(1);
-  const top = q(c, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
-  expect(top, "Contexts inside a scroll area").not.toBeNull();
-  expect(bottom?.contains(top)).toBe(false);
-  expect(c.querySelectorAll('[data-slot="separator"]').length, "separators").toBeGreaterThanOrEqual(2);
+  for (const name of ["contexts", "standing"]) {
+    expect(section(c, name)?.className, `${name} open`).toContain("flex-1");
+    expect(section(c, name)?.className).toContain("min-h-0");
+    expect(section(c, name)?.getAttribute("data-state")).toBe("open");
+  }
+  expect(section(c, "archive")?.className, "archive closed").toContain("shrink-0");
+  expect(section(c, "archive")?.className).not.toContain("flex-1");
+  expect(section(c, "archive")?.getAttribute("data-state")).toBe("closed");
+  click(header(c, "Archive"));
+  expect(section(c, "archive")?.className, "archive open").toContain("flex-1");
+  click(header(c, "Standing"));
+  expect(section(c, "standing")?.className, "standing closed").toContain("shrink-0");
   m.unmount();
+});
+
+it("no section has a max height of 50 percent", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(m.container.innerHTML).not.toContain("max-h-[50%]");
+  expect(q(m.container, '[data-part="tree-pinned-bottom"]')).toBeNull();
+  m.unmount();
+});
+
+it("each section label is outside the scroll area and only the section body scrolls", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  click(header(m.container, "Archive"));
+  for (const name of ["contexts", "standing", "archive"]) {
+    const sec = section(m.container, name);
+    const label = sec?.querySelector('[data-slot="sidebar-group-label"]');
+    expect(label, name).not.toBeNull();
+    expect(label?.closest('[data-slot="scroll-area"]'), `${name} label in scroll area`).toBeNull();
+    const areas = sec?.querySelectorAll('[data-slot="scroll-area"]') ?? [];
+    expect(areas, `${name} scroll areas`).toHaveLength(1);
+    expect(areas[0]?.closest('[data-slot="collapsible-content"]'), `${name} area in content`).not.toBeNull();
+    const group = label?.closest('[data-slot="sidebar-group"]');
+    expect(group, name).not.toBeNull();
+    expect(group?.contains(areas[0] ?? null), `${name} same group`).toBe(true);
+  }
+  click(header(m.container, "Archive"));
+  expect(section(m.container, "archive")?.querySelectorAll('[data-slot="scroll-area"]')).toHaveLength(0);
+  m.unmount();
+});
+
+it("sections are direct flex children of the sidebar content separated by shrink-0 separators", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const content = m.container.querySelector('[data-slot="sidebar-content"]');
+  expect(content).not.toBeNull();
+  const sections = Array.from(m.container.querySelectorAll('[data-part="tree-section"]'));
+  expect(sections).toHaveLength(3);
+  for (const sec of sections) expect(sec.parentElement).toBe(content);
+  const seps = Array.from(m.container.querySelectorAll('[data-slot="separator"]'));
+  expect(seps).toHaveLength(2);
+  for (const sep of seps) {
+    expect(sep.parentElement).toBe(content);
+    expect(sep.className).toContain("shrink-0");
+  }
+  expect(section(m.container, "contexts")?.className).toContain("min-h-0 flex-1");
+  expect(section(m.container, "archive")?.className).toContain("shrink-0");
+  m.unmount();
+});
+
+it("sections are separated by separators and Archive renders only when something is archived", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(m.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(2);
+  expect(section(m.container, "archive")).not.toBeNull();
+  m.unmount();
+  const none: ContextTreeModel = { cursor: 1, contexts: layered.contexts.filter((x) => !x.archived) };
+  const n = mount(<ContextTree {...props({ tree: none })} />);
+  expect(n.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(1);
+  expect(section(n.container, "archive")).toBeNull();
+  n.unmount();
 });
 
 it("the Contexts section lists live Contexts by dot tier then newest first", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
-  const top = q(m.container, '[data-part="tree-header"]')?.closest('[data-slot="scroll-area"]') ?? null;
+  const top = section(m.container, "contexts");
   expect(ids(top)).toEqual(["hot", "new", "old"]);
   m.unmount();
 });
@@ -340,7 +400,7 @@ it("the Archive section is closed by default and opens from its header", () => {
   expect(archive()).not.toBeNull();
   expect(archive()?.querySelector('[data-context="gone"]')).toBeNull();
   expect(header(m.container, "Archive")?.getAttribute("aria-expanded")).toBe("false");
-  expect(archive()?.closest('[data-part="tree-pinned-bottom"]')).not.toBeNull();
+  expect(archive()?.closest('[data-part="tree-section"][data-section="archive"]')).not.toBeNull();
   click(header(m.container, "Archive"));
   expect(archive()?.querySelector('[data-context="gone"]')).not.toBeNull();
   click(header(m.container, "Archive"));
@@ -541,7 +601,7 @@ it("a stopped or archived row shows a dim circle and never spins", () => {
   });
   const archived = (dot: Dot): Element => {
     const m = mount(<ContextTree {...props({ tree: dotTree({ dot, archived: true }) })} />);
-    const toggle = m.container.querySelector('[data-archived] [data-slot="sidebar-group-label"] button');
+    const toggle = m.container.querySelector('[data-archived] button[data-slot="sidebar-group-label"]');
     act(() => toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const el = ctxDot(m.container).cloneNode(true) as Element;
     m.unmount();
@@ -556,4 +616,199 @@ it("a stopped or archived row shows a dim circle and never spins", () => {
   icon(attentive, "circle");
   has(attentive, "text-fg-dim", "fill-current");
   lacks(attentive, "animate-spin", "text-status-blocked-bright");
+});
+
+// ---- context menus (pro-d46) ----
+// Radix opens a ContextMenu on a `contextmenu` event; the content is portalled to document.body and items select on click.
+const E = "\u2026";
+const menuOf = () => document.body.querySelector<HTMLElement>('[data-slot="context-menu-content"]');
+const labels = () => Array.from(menuOf()?.querySelectorAll('[role="menuitem"]') ?? []).map((i) => i.textContent);
+const item = (label: string) => Array.from(menuOf()?.querySelectorAll('[role="menuitem"]') ?? []).find((i) => i.textContent === label) ?? null;
+function rightClick(el: Element | null): void {
+  if (el === null) throw new Error("element not found");
+  act(() => {
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
+  });
+}
+const withMenu = () => ({ ...props(), onAction: vi.fn() });
+const ctxRow = (id: string) => `[data-context="${id}"] > button[data-select="context"]`;
+const planRow = (id: string) => `[data-plan="${id}"] > button[data-select="plan"]`;
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+});
+
+/** The tree with the Plan's Lead stopped: the Plan, and so the Context, is quiet. */
+const quietTree = (): ContextTreeModel => {
+  const c = tree.contexts[0]!;
+  const p = c.plans[0]!;
+  const lead = session("s-lead", "c1:p1", "stopped", null, { planId: "p1", role: "lead" });
+  return { cursor: 1, contexts: [{ ...c, plans: [{ ...p, sessions: [lead, ...p.sessions.slice(1)] }] }] };
+};
+const standingTree = (): ContextTreeModel => ({
+  cursor: 1,
+  contexts: [...tree.contexts, { id: "cpd", title: "cpd", archived: false, records: 0, openQuestions: 0, sessions: [session("s-cpd", "cpd", "idle", null)], plans: [] }],
+});
+
+it("right click on a Context row opens a menu with New Plan, Rename, Copy id, Archive and Delete", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={quietTree()} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("context");
+  expect(labels()).toEqual([`New Plan${E}`, `Rename${E}`, "Copy id", "Archive", "Delete"]);
+  click(item("Archive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.archive", contextId: "c1" });
+  m.unmount();
+});
+
+it("the Delete item is offered only when the Context or Plan is quiet", () => {
+  const busy = mount(<ContextTree {...withMenu()} />);
+  rightClick(q(busy.container, ctxRow("c1")));
+  expect(labels(), "busy Context").toEqual([`New Plan${E}`, `Rename${E}`, "Copy id", "Archive"]);
+  busy.unmount();
+  const busyPlan = mount(<ContextTree {...withMenu()} />);
+  rightClick(q(busyPlan.container, planRow("p1")));
+  expect(labels(), "busy Plan").toEqual([`New session${E}`, `Rename${E}`, "Copy id", "Archive"]);
+  busyPlan.unmount();
+  const quiet = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(quiet.container, planRow("p1")));
+  expect(labels().at(-1), "quiet Plan").toBe("Delete");
+  quiet.unmount();
+  const quietCtx = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(quietCtx.container, ctxRow("c1")));
+  expect(labels().at(-1), "quiet Context").toBe("Delete");
+  quietCtx.unmount();
+});
+
+it("a Standing Context menu offers only New Plan and Copy id", () => {
+  const m = mount(<ContextTree {...withMenu()} tree={standingTree()} />);
+  rightClick(q(m.container, `[data-standing] ${ctxRow("cpd")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("permanent");
+  expect(labels()).toEqual([`New Plan${E}`, "Copy id"]);
+  m.unmount();
+});
+
+it("right click on a Plan row opens a menu with New session, Rename, Copy id, Archive and Delete", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={quietTree()} />);
+  rightClick(q(m.container, planRow("p1")));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("plan");
+  expect(labels()).toEqual([`New session${E}`, `Rename${E}`, "Copy id", "Archive", "Delete"]);
+  click(item("Archive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.archive", planId: "p1" });
+  m.unmount();
+});
+
+it("right click on a Fork row offers Open, Rename, Fork, Copy id, Close and Archive", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, 'button[data-session="s-cfork"]'));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("fork");
+  expect(labels()).toEqual(["Open", `Rename${E}`, `Fork${E}`, "Copy id", "Close", "Archive"]);
+  click(item("Close"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "session.close", sessionId: "s-cfork" });
+  m.unmount();
+  const open = withMenu();
+  const again = mount(<ContextTree {...open} />);
+  rightClick(q(again.container, 'button[data-session="s-cfork"]'));
+  click(item("Open"));
+  expect(open.onSelectSession).toHaveBeenCalledExactlyOnceWith("s-cfork");
+  expect(open.onAction).not.toHaveBeenCalled();
+  again.unmount();
+});
+
+it("right click on an archived row offers Rename, Copy id and Unarchive, plus Delete on a Context or Plan", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:archive": "1" }));
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} tree={withArchivedPlans()} />);
+  rightClick(q(m.container, `[data-archived] ${ctxRow("c2")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "Context kind").toBe("archived");
+  expect(labels(), "archived Context").toEqual([`Rename${E}`, "Copy id", "Unarchive", "Delete"]);
+  click(item("Unarchive"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.unarchive", contextId: "c2" });
+  m.unmount();
+  const plans = withMenu();
+  const again = mount(<ContextTree {...plans} tree={withArchivedPlans()} />);
+  rightClick(q(again.container, `[data-archived] ${planRow("p9")}`));
+  expect(menuOf()?.getAttribute("data-menu-kind"), "Plan kind").toBe("archived");
+  expect(labels(), "archived Plan").toEqual([`Rename${E}`, "Copy id", "Unarchive", "Delete"]);
+  click(item("Unarchive"));
+  expect(plans.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.unarchive", planId: "p9" });
+  again.unmount();
+});
+
+it("Copy id writes the row id to the clipboard", () => {
+  const writeText = vi.fn(async () => undefined);
+  vi.stubGlobal("navigator", { userAgent: navigator.userAgent, clipboard: { writeText } });
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, planRow("p1")));
+  click(item("Copy id"));
+  expect(writeText).toHaveBeenCalledExactlyOnceWith("p1");
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item("Copy id"));
+  expect(writeText).toHaveBeenLastCalledWith("c1");
+  expect(p.onAction).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]');
+const field = () => dialog()?.querySelector<HTMLInputElement>("input") ?? null;
+function type(el: HTMLInputElement | null, value: string): void {
+  if (el === null) throw new Error("input not found");
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+const button = (label: string) => Array.from(dialog()?.querySelectorAll("button") ?? []).find((b) => b.textContent === label) ?? null;
+
+it("Rename and New Plan open a dialog with an input and submit the typed slug through onAction", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`Rename${E}`));
+  expect(dialog(), "rename dialog").not.toBeNull();
+  expect(field()?.value, "starts from the current title").toBe("Context One");
+  type(field(), "Better name");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "context.rename", contextId: "c1", title: "Better name" });
+  expect(dialog(), "dialog closes after submit").toBeNull();
+
+  p.onAction.mockClear();
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`New Plan${E}`));
+  expect(field()?.value, "New Plan starts empty").toBe("");
+  type(field(), "Fix the login page");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "plan.new", planId: "fix-the-login-page", contextId: "c1", title: "Fix the login page" });
+
+  p.onAction.mockClear();
+  rightClick(q(m.container, planRow("p1")));
+  click(item(`New session${E}`));
+  type(field(), "side quest");
+  click(button("OK"));
+  expect(p.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "session.fork", sourceId: "s-lead", name: "side quest" });
+  m.unmount();
+});
+
+it("the prompt dialog refuses an empty or invalid slug", () => {
+  const p = withMenu();
+  const m = mount(<ContextTree {...p} />);
+  rightClick(q(m.container, ctxRow("c1")));
+  click(item(`New Plan${E}`));
+  click(button("OK"));
+  expect(p.onAction, "empty title").not.toHaveBeenCalled();
+  expect(dialog(), "stays open on empty").not.toBeNull();
+  expect(dialog()?.textContent, "empty error").toContain("Title is required.");
+  expect(field()?.getAttribute("aria-invalid"), "invalid flag").toBe("true");
+  type(field(), "!!");
+  click(button("OK"));
+  expect(p.onAction, "title without a usable id").not.toHaveBeenCalled();
+  expect(dialog(), "stays open on invalid slug").not.toBeNull();
+  expect(field()?.getAttribute("aria-invalid"), "invalid flag for slug").toBe("true");
+  click(button("Cancel"));
+  expect(dialog(), "cancel closes").toBeNull();
+  expect(p.onAction).not.toHaveBeenCalled();
+  m.unmount();
 });
