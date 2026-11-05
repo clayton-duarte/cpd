@@ -1058,6 +1058,88 @@ fn a_package_json_with_dependencies_is_installed_beside_the_adapter_with_pnpm() 
     );
 }
 
+const GHOSTTY_PATCH: &str = "patches/@aurigax-ai__ghostty-web@0.3.9.patch";
+const GHOSTTY_PATCH_TEXT: &str = "--- a\n+++ b\n@@ ghostty @@\n";
+const OTHER_PATCH_TEXT: &str = "--- c\n+++ d\n@@ other @@\n";
+
+#[test]
+fn a_patches_directory_is_copied_beside_the_manifest_before_pnpm_runs() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    rig.write_in_checkout(GHOSTTY_PATCH, GHOSTTY_PATCH_TEXT);
+    rig.write_in_checkout("patches/sub/other.patch", OTHER_PATCH_TEXT);
+    let (share, seen) = (rig.share(), Arc::new(Mutex::new(Vec::new())));
+    let log = seen.clone();
+    (*rig.fakes.runner).clone().on(
+        "pnpm",
+        move |_| {
+            let same = |file: &str, text: &str| {
+                fs::read(share.join(file)).is_ok_and(|b| b == text.as_bytes())
+            };
+            log.lock().unwrap().push(
+                same(GHOSTTY_PATCH, GHOSTTY_PATCH_TEXT)
+                    && same("patches/sub/other.patch", OTHER_PATCH_TEXT),
+            );
+            true
+        },
+        Reply::ok(""),
+    );
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(rig.pnpm_calls().len(), 1, "exactly one pnpm call");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [true],
+        "the patches are in the share when pnpm runs"
+    );
+    for (file, text) in [
+        (GHOSTTY_PATCH, GHOSTTY_PATCH_TEXT),
+        ("patches/sub/other.patch", OTHER_PATCH_TEXT),
+    ] {
+        assert_eq!(
+            fs::read(rig.share().join(file)).unwrap(),
+            text.as_bytes(),
+            "{file} in share"
+        );
+    }
+}
+
+#[test]
+fn a_patches_directory_replaces_a_stale_one_in_the_share() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    rig.pnpm_answers(Reply::ok(""));
+    fs::create_dir_all(rig.share().join("patches")).unwrap();
+    fs::write(rig.share().join("patches/old.patch"), "old\n").unwrap();
+    rig.write_in_checkout("patches/new.patch", "new\n");
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(
+        fs::read(rig.share().join("patches/new.patch")).unwrap(),
+        b"new\n"
+    );
+    assert!(
+        !rig.share().join("patches/old.patch").exists(),
+        "the stale patch is gone"
+    );
+}
+
+#[test]
+fn no_patches_directory_in_the_checkout_leaves_the_share_without_one() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    rig.pnpm_answers(Reply::ok(""));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(!rig.share().join("patches").exists());
+}
+
 #[test]
 fn a_package_json_without_dependencies_runs_no_pnpm() {
     let variants: [(&str, Option<&str>); 3] = [
