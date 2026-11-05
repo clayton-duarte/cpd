@@ -5,7 +5,7 @@ import { CpdError } from "../../lib/cpd.ts";
 import { ENTRY_TYPE } from "../../lib/loop-guard.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
-import type { Conversation } from "../../durable-host/run.ts";
+import type { Conversation, ViewCall } from "../../durable-host/run.ts";
 import type { Config } from "../../durable-host/config.ts";
 import { runHost, type Deps } from "../../durable-host/run.ts";
 import { policyShow, shown } from "../answers.ts";
@@ -60,7 +60,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean; firs
   const logs: string[] = [];
   const submitted: unknown[] = [];
   const closeCalls = { n: 0 };
-  const watchListener = { call: undefined as ((c: unknown) => Promise<void>) | undefined };
+  const watchListener = { call: undefined as ((c: ViewCall) => Promise<void>) | undefined };
   const terminate = { handler: undefined as (() => void) | undefined };
   const ending = { code: undefined as number | undefined, error: undefined as unknown };
   let closeIt!: (v: unknown) => void;
@@ -103,7 +103,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean; firs
           if (over.firstMessage === true) return { id: 1, status: async () => "queued", wait: async () => "done" };
           throw new Error("the host submits nothing");
         },
-        watch: async () => ({ value: over.liveRun === true ? { docs: { "pi.live": { run: { id: 1 } } } } : {}, start: (l: (c: unknown) => Promise<void>) => { watchListener.call = l; }, stop: async () => ({ kind: "stopped" }), closed: new Promise<unknown>(() => {}) }),
+        watch: async () => ({ value: over.liveRun === true ? { docs: { "pi.live": { run: { id: 1 } } } } : {}, start: (l: (c: ViewCall) => Promise<void>) => { watchListener.call = l; }, stop: async () => ({ kind: "stopped" }), closed: new Promise<unknown>(() => {}) }),
         abort: async () => {},
         abortSubmission: async () => "not_found",
         write: async () => ({}),
