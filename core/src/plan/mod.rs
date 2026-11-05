@@ -34,7 +34,7 @@ mod lint_cmd;
 mod lint_tests;
 #[cfg(test)]
 mod lint_text_tests;
-mod list;
+pub(crate) mod list;
 pub(crate) mod lock;
 pub(crate) mod new;
 mod outline;
@@ -57,7 +57,7 @@ pub(crate) mod shape;
 pub mod shared;
 #[cfg(test)]
 mod shared_tests;
-mod show;
+pub(crate) mod show;
 #[cfg(test)]
 mod sql_trace;
 mod summary;

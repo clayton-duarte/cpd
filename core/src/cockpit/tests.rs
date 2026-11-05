@@ -2,8 +2,7 @@
 //!
 //! No process, tmux, sleep or clock: the store is a temp `$CPD_HOME`, time is the `Input::Tick`s of the script, and
 //! the `ChangeSource` is a fake that commits Events through a second handle on the same store when its script says so.
-//! `snapshot_panes_equal_the_list_readers` and `plan_show_request_returns_the_plan_value` read the list and show
-//! commands through `$CPD_HOME` (each sets it to its own temp dir; nextest runs one test per process).
+//! Serving reads everything through its own `Env`, never the process `$CPD_HOME`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -173,18 +172,46 @@ fn printed(out: Result<Output, crate::error::CpdError>) -> Value {
     value
 }
 
+fn plan_list_args() -> crate::plan::ListArgs {
+    match PlanCli::try_parse_from(["cpd", "list"]).unwrap().command {
+        crate::plan::Command::List(args) => args,
+        _ => unreachable!("list"),
+    }
+}
+
+fn plan_show_args(plan: &str) -> crate::plan::ShowArgs {
+    match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")])
+        .unwrap()
+        .command
+    {
+        crate::plan::Command::Show(args) => args,
+        _ => unreachable!("show"),
+    }
+}
+
+fn session_list_args() -> crate::session::ListArgs {
+    match SessionCli::try_parse_from(["cpd", "list"]).unwrap().command {
+        crate::session::Command::List(args) => args,
+        _ => unreachable!("list"),
+    }
+}
+
+fn inbox_list_args() -> crate::inbox::cmd::ListArgs {
+    match InboxCli::try_parse_from(["cpd", "list"]).unwrap().command {
+        crate::inbox::cmd::Command::List(args) => args,
+        _ => unreachable!("list"),
+    }
+}
+
 #[test]
 fn snapshot_panes_equal_the_list_readers() {
     let mut rig = rig();
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    let ports = ports();
-    let expect = Ports::scope(&ports, || {
-        json!({
-            "context": printed(crate::context::run(ContextCli::try_parse_from(["cpd", "list"]).unwrap().command)),
-            "plan": printed(crate::plan::run(PlanCli::try_parse_from(["cpd", "list"]).unwrap().command)),
-            "session": printed(crate::session::run(SessionCli::try_parse_from(["cpd", "list"]).unwrap().command)),
-            "inbox": printed(crate::inbox::cmd::run(InboxCli::try_parse_from(["cpd", "list"]).unwrap().command)),
-        })
+    let env = &mut rig.env;
+    let expect = json!({
+        "context": printed(crate::context::list::list_in(env)),
+        "plan": printed(crate::plan::list::list_in(env, plan_list_args())),
+        "session": printed(crate::session::row::list_in(env, session_list_args())),
+        "inbox": printed(crate::inbox::cmd::list_in(env, inbox_list_args())),
     });
     let frames = run_quiet(&mut rig, vec![]);
     assert_eq!(frames[1]["t"], "snapshot");
@@ -250,14 +277,10 @@ fn changes_within_the_coalesce_window_make_one_snapshot() {
 #[test]
 fn plan_show_request_returns_the_plan_value() {
     let mut rig = rig();
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    let expect = Ports::scope(&ports(), || {
-        printed(crate::plan::run(
-            PlanCli::try_parse_from(["cpd", "show", "--plan", "pay"])
-                .unwrap()
-                .command,
-        ))
-    });
+    let expect = printed(crate::plan::show::show_in(
+        &mut rig.env,
+        plan_show_args("pay"),
+    ));
     let input = vec![line(json!({"t": "plan_show", "id": "r1", "plan": "pay"}))];
     let frames = run_quiet(&mut rig, input);
     assert_eq!(kinds(&frames), ["hello", "snapshot", "plan_show"]);
@@ -310,4 +333,30 @@ fn end_of_input_ends_serving_cleanly() {
     assert!(result.is_ok());
     let text = String::from_utf8(out).unwrap();
     assert_eq!(text.lines().count(), 2, "only hello and snapshot 1: {text}");
+}
+
+#[test]
+fn serve_reads_its_own_env_not_process_cpd_home() {
+    let mut rig = rig();
+    let frames = run_quiet(&mut rig, vec![]);
+    assert_eq!(frames[1]["t"], "snapshot");
+    assert_eq!(frames[1]["panes"]["plan"]["plans"][0]["id"], "pay");
+}
+
+#[test]
+fn plan_show_reads_the_serving_env_not_process_cpd_home() {
+    let mut rig = rig();
+    let input = vec![
+        line(json!({"t": "plan_show", "id": "r1", "plan": "pay"})),
+        line(json!({"t": "plan_show", "id": "r2", "plan": "no-such-plan"})),
+        line(json!({"t": "refresh"})),
+    ];
+    let frames = run_quiet(&mut rig, input);
+    assert_eq!(
+        kinds(&frames),
+        ["hello", "snapshot", "plan_show", "error", "snapshot"]
+    );
+    assert_eq!(frames[2]["value"]["plan"]["id"], "pay");
+    assert_eq!(frames[3]["id"], "r2");
+    assert_eq!(frames[3]["error"]["code"], "plan_not_found");
 }
