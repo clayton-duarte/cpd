@@ -18,6 +18,14 @@ The Inbox owns only what the User must act on. Escalations from Workers go to th
 
 **Guarantee: one stored item per thing that needs the User, opened and closed by the engine from its cause — never by a command, except `inbox approve` closing a `deploy` item.** A snooze or a dismissal hides an item, it does not decide anything; a dismissed `curate-retire` item leaves the underlying proposals `pending` ([contract §2.2](../contract.md)). A closed item is kept forever ([contract §2.2](../contract.md)).
 
+## The reviewed PR of a review Plan
+
+A review Plan (a Plan of Context `codereview`, made by `inbox claim`) reviews one GitHub pull request, stored on the Plan as `reviewed_pr` (contract [§2.2](../contract.md) "Plan", decision pro-d412). Its Inbox items use it in the three ways below, and in no other:
+
+- **The url rule.** A `dialog` item (contract [§2.2](../contract.md) "Inbox item") whose Session's Plan has a `reviewed_pr` carries `url` = `https://github.com/<owner>/<repo>/pull/<n>`, the Plan's `reviewed_pr.url`. E8 reads it from the Plan's stored columns when it opens the item. A `dialog` of a Session whose Plan has no `reviewed_pr` keeps `url` null, as before. Every other kind keeps its own url rule. The url is not part of the item's identity.
+- **The primary click stays Go to Lead.** A `dialog` row is no link kind: no `Link` is drawn on its label (TUI `is_link`, web `linkKinds`), and a left click selects its Session and Plan as before. In the TUI that is `session open` of the item's Session, then `select-pane` on the chat slot ([commands §13.2](../commands.md), "Clicks on an Inbox item"). On the web it selects the row's Plan and Session ([DESIGN-panes §2.6](../../web/src/ui/DESIGN-panes.md)).
+- **The menu gets two entries.** **Open Link** and **Copy Link** come first on the row, before Snooze and Dismiss, and show only when `url` is set. Open Link opens `url` in the default browser: the TUI through `link::open_url`, the web in a new tab (`noopener,noreferrer`). Copy Link copies `url`: the TUI with `tmux set-buffer` (`Opener::copy_link`), the web to the clipboard. The menus themselves are in [commands §13.2](../commands.md) ("The Inbox's right-click menu") and [DESIGN-panes §2.3](../../web/src/ui/DESIGN-panes.md); this section is the rule they follow.
+
 ## Related notes
 
 - [[knowledge-plane]] — the curation this Inbox decides (`curate-retire`; `curate-docs` is history-only, pro-d327).

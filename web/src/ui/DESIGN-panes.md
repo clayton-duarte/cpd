@@ -47,9 +47,10 @@ section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT l
 │   └─ p[data-part="escalations"]        only when plan.openEscalations > 0; text exactly `Escalations: {n}`   KEPT copy; font-mono text-meta text-status-blocked
 ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
 ├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
-└─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs; text exactly "No workflows yet"; px-1 text-muted-foreground
+├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
+└─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
 ```
-Order of children: title row, explore strip, workflow cards (in `plan.workflows` order), no-work note.
+Order of children: title row, explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
 
 The old bare `<p>{plan.phase}</p>` is replaced by the stepper (no test pins it). The old standalone `h3`/`p` lines become the card header (1f).
 
@@ -199,7 +200,8 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 | State | Rendering |
 |---|---|
 | `plan === null` | 1b empty `p[data-empty]` |
-| plan, no workflows, no explore jobs | title row + `p[data-part="no-work"]` "No workflows yet" |
+| plan, no workflows, no explore jobs, no `reviewedPr` | title row + `p[data-part="no-work"]` "No workflows yet" |
+| plan, `reviewedPr` set, no workflows | title row + the Review PR card (1i); no `no-work` note, whatever the explore jobs |
 | plan, workflows only | no explore strip |
 | plan, explore only | strip, no cards, no `no-work` |
 | workflow with zero jobs | header + `p[data-part="no-jobs"]` "No jobs" |
@@ -213,6 +215,23 @@ No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸`
 `Retry ▸`: `button[data-action="retry"][type="button"]`, text exactly `Retry ▸` (U+25B8), `font-mono text-meta font-semibold text-status-blocked-bright` (board `#ffa796`), no border, `hover:underline`, `aria-label="Retry {job.key}"`. It exists **only** when `onRetryJob` is passed and the job is `failed`; click → `onRetryJob(job.key, wf.key)`. **No existing action fits**: `CockpitAction` has `inbox.*`, `pr.post`, `session.retier`, `plan.reject`; `actionArgs` has no `job retry` command (`session.retier` changes a Tier, it does not re-run a job). So Retry is **Not wired**: `App` does not pass `onRetryJob`, the button is not rendered, and nothing is dispatched to `onAction`.
 
 **Not wired (omitted, never faked)**: `Retry ▸` (no action); job and attempt durations (`merged · 1m 02s`, `running · 2m 14s`, `checking · 38s`); the plan's `18m·42s active` timer; plan, workflow and job cost (`$2.140`); the explore chip run time (`1m 48s`); `PR opens at <job>` note; workflow duration; the workflow phase badge (shows `wf.status` instead); PR checks/mergeable; clicking a node or chip (no handler on the board); plan-level counts (`plan.counts`) are not drawn in the Plan View (the Context Tree shows them).
+
+### 1i. Review PR card (pro-d412, assumption A5)
+
+A Plan with `plan.reviewedPr` (the read model's camelCase of the Plan's `reviewed_pr`, contract §2.2 Plan: `{repo, number, url, title, state}`, `state` `open`, `merged`, `closed` or null) and no Workflow (`plan.workflows` empty) renders one card, in the place of the Workflow cards, after the explore strip. It is a read-only card: no button and no handler of its own. The Workflow card's look is reused (its border, its header height and its title text classes, 1e).
+
+```
+section[data-part="review-pr"][aria-label="Review PR"]   rounded-[9px] border border-border bg-card
+├─ header[data-part="rpr-header"]   flex h-[34px] flex-wrap items-center gap-2.5 border-b border-border px-3   (the Workflow header's look, 1e)
+│   ├─ h3                           `Review {name}`, name = the part of repo after "/"   font-mono text-key font-semibold text-fg-strong
+│   └─ span[data-part="wf-route"]   {repo}   font-mono text-[11.5px] text-muted-foreground
+└─ div[data-part="rpr-body"]        flex flex-col gap-1.5 p-3
+    ├─ p[data-part="rpr-title"]     {title}, also its title attribute   font-mono text-[11.5px] text-foreground truncate
+    └─ p[data-part="rpr-link"]      flex items-center gap-2 font-mono text-[11.5px]
+        └─ a[href="{url}"][target="_blank"][rel="noopener noreferrer"]   text: `#{number}`, then ` {state}` when state is not null, then ` 󱆭`   text-status-focus-bright underline-offset-2 hover:underline
+```
+
+The anchor's text is `#912 open 󱆭` for state `open` and `#7 󱆭` for state null, with one space between the parts and no double space. Its class is the Workflow card's PR anchor's (`web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard`), plus the cue. `rel` is added: the anchor opens in a new tab, and `noopener noreferrer` is the rule of §2.6 for the Inbox's new-tab links. The TUI box's rows of the same Plan are in `docs/contract.md` §2.6 ("The Review PR box"), the same data and the same cut title.
 
 ---
 
@@ -288,6 +307,7 @@ Every row except `engine-down` is wrapped in a shadcn `ContextMenu` (`context-me
 | (separator) | when any entry above is shown | |
 | `Approve` | `deploy` | `inbox.approve` with `row.id` |
 | `Claim` | `review-requested` | `inbox.claim` with `row.id` |
+| `Open Link`, `Copy Link` | `dialog` with `url` (a review Plan's reviewed PR; `docs/architecture/attention-inbox.md`) | `Open Link` opens `row.url` in a new tab (`noopener,noreferrer`); `Copy Link` copies `row.url` to the clipboard, as the `pr-ready` and `pr-closed` entry above does. A `dialog` row's click stays the Go to Lead of 2.6 |
 | `Snooze 15 min`, `Snooze 1 h`, `Snooze until tomorrow 09:00` | every kind | `inbox.snooze` with `duration` `15m`, `1h`, `tomorrow` |
 | `Dismiss` | every kind | `inbox.dismiss` with `row.id` |
 
