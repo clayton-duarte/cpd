@@ -631,6 +631,9 @@ pub const CHECKS_LEGEND: [(&str, Checks); 4] = [
 mod colours;
 
 #[cfg(test)]
+mod tier_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
