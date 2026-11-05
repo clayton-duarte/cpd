@@ -672,3 +672,15 @@ fn a_stale_marker_is_replaced_by_the_next_merge_action_and_another_pull_requests
         other
     );
 }
+
+#[test]
+fn a_refused_merge_leaves_the_stored_state_of_the_read() {
+    let fx = fx_on_client(CLIENT);
+    gh_route_with(&fx, Poll::Merged, "BLOCKED", 0);
+    act(&fx, CLIENT);
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT merge_state FROM pull_requests WHERE number = 7"),
+        "blocked"
+    );
+}

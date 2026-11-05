@@ -1595,7 +1595,11 @@ mod tests {
             "unowned"
         );
         own(&mut f, 5);
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "owned");
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#5 updating\nT",
+            "owned, its Job live"
+        );
     }
 
     #[test]
