@@ -24,11 +24,14 @@ export const leadRule = (ev: CpdEvent) =>
   (ev.kind === "job-merged" && ev.data.turn !== true) || (ev.kind === "plan-done" && ev.data.turn === false) ? undefined : LEAD_MESSAGES[ev.kind];
 
 /** §15.7a: while a by-user Session's first message is pending, and §15.15 L4: while the loop guard is tripped, a send that would start a turn is queued for the next run instead. */
-export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions): SendOptions => ((r?.firstPending || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
+/** "tripped": only the loop guard holds the send; firstPending does not. */
+export type Hold = "all" | "tripped";
+
+export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions, hold: Hold = "all"): SendOptions => (((hold === "all" && r?.firstPending) || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
 
 /** §15.15 L8: the one send path; a send that starts a turn resets the loop guard counters first. */
-export function send(host: Host, r: Run, message: Parameters<Host["pi"]["sendMessage"]>[0], options: SendOptions): void {
-  const final = gated(r, options);
+export function send(host: Host, r: Run, message: Parameters<Host["pi"]["sendMessage"]>[0], options: SendOptions, hold: Hold = "all"): void {
+  const final = gated(r, options, hold);
   if (final.triggerTurn) resetTurn(r);
   host.pi.sendMessage(message, final);
 }
