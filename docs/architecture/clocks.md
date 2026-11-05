@@ -33,14 +33,14 @@ sequenceDiagram
 
 ## The GitHub poll clock: `pr_poll_seconds` (E5)
 
-Engine step E5 runs `cpd pr poll` (with no `--plan`) as a **subprocess** — a process boundary — `pr_poll_seconds` after the **end** of the previous poll, **never overlapping**, and **at its due time, not at the next tick** ([contract §3.7](../contract.md), [contract §8.2](../contract.md), [commands §9.2](../contract.md)). `pr_poll_seconds` defaults to `5` ([contract §8.2](../contract.md)). A poll of 1.3 s with `pr_poll_seconds = 5` and `tick_seconds = 5` runs every 6.3 s, not every 10 s, whether or not any Plan is in `deploy` ([contract §3.7](../contract.md)).
+Engine step E5 runs `cpd pr poll` (with no `--plan`) as a **subprocess** — a process boundary — `pr_poll_seconds` after the **end** of the previous poll, **never overlapping**, and **at its due time, not at the next tick**, or at once when a cpd action has requested a poll (the file `run/pr-poll-now`, [contract §1.4](../contract.md), [contract §3.7](../contract.md) E5) ([contract §3.7](../contract.md), [contract §8.2](../contract.md), [commands §9.2](../contract.md)). `pr_poll_seconds` defaults to `5` ([contract §8.2](../contract.md)). A poll of 1.3 s with `pr_poll_seconds = 5` and `tick_seconds = 5` runs every 6.3 s, not every 10 s, whether or not any Plan is in `deploy` ([contract §3.7](../contract.md)).
 
 One poll covers **every open pull request of the User**, any repo on github.com ([contract §7.6](../contract.md), [commands §9.2](../contract.md)); [CONTEXT — PR poll](../CONTEXT.md) calls it "the engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`." It watches the **external GitHub state after dispatch** and drives cpd's response ([contract §3.7](../contract.md) E5, [contract §7.6](../contract.md)):
 
 - it stores each pull request in the `pull_requests` table and appends `pr-feedback` for the Workflow that owns it (checks failed, changes requested, closed, approved, comments) ([contract §7.6](../contract.md), [commands §9.2](../commands.md));
 - when a pull request's `mergeable` becomes `conflicting` — or a merged base repoints it — it inserts an `update` Job for the Workflow ([contract §3.7](../contract.md) E5, [contract §7.6](../contract.md), [commands §9.2](../commands.md));
 - it records a merge (`pr-merged`), unstacking and base follows, and the Plan's `done` ([contract §7.6](../contract.md), [commands §9.2](../commands.md));
-- it reads the rate limit from the search: below 100 remaining, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` ([contract §3.7](../contract.md) E5);
+- it reads the rate limit from the search and pauses polls on it, with the `gh_rate_limited` error Event for a below-100 pause ([contract §3.7](../contract.md) E5);
 - a transient `gh` failure is tolerated for `watch.pr_poll_transient_minutes` (default `10`) before E5 raises an error ([contract §3.7](../contract.md) E5, [contract §8.2](../contract.md), [commands §9.2](../commands.md)).
 
 The Lead can also run `cpd pr poll` by hand, and a Workflow's Lead does so right after `pr open`; the tolerance above is the **engine's**, not the command's — a hand poll fails at once ([commands §9.2](../commands.md)).
@@ -58,7 +58,7 @@ sequenceDiagram
     GH-->>Poll: state, checks, reviews, mergeable, base
     Poll->>Store: pull_requests rows · pr-feedback · update Jobs · merges
     Poll-->>Eng: output (rate_limit.remaining, reset_at)
-    Note over Eng,Poll: below 100 remaining → skip until reset_at (gh_rate_limited)<br/>transient failures tolerated for pr_poll_transient_minutes
+    Note over Eng,Poll: rate limit → pause (contract §3.7 E5)<br/>transient failures tolerated for pr_poll_transient_minutes
     Note over Eng,Poll: never overlapping; a 1.3 s poll + 5 s/5 s runs every 6.3 s
 ```
 
