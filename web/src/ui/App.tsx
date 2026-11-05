@@ -8,7 +8,9 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
-import { loadSelection, saveSelection } from "./state/selection.ts";
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import type { CrashReport } from "../electron/health.ts";
+import { activeLeadPlanId as leadPlanIdOf, loadSelection, saveSelection, visiblePlan as visiblePlanOf } from "./state/selection.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { ContextTree } from "./cockpit/ContextTree.tsx";
 import { Header } from "./cockpit/Header.tsx";
@@ -32,10 +34,11 @@ const MemoInbox = memo(Inbox);
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
 
 export type { FileReaderBoundary };
-export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string }
+export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void }
 
 export function App(props: AppProps): ReactElement {
-  const { transport, scheduler, reader, newId } = props;
+  const { transport, scheduler, reader, newId, onCrash } = props;
+  const crash = onCrash === undefined ? {} : { onCrash };
   const { store, connection } = useMemo(() => {
     const s = createStore();
     const c = createConnection({ transport, scheduler, store: s, ...(newId === undefined ? {} : { newId }) });
@@ -97,12 +100,18 @@ export function App(props: AppProps): ReactElement {
     connection.selectSession(saved.sessionKey);
   }, [live, connection]);
   useEffect(() => {
-    if (!live || !restored.current || selectedPlanId === null || selectedSessionId === null) return;
+    if (!live || !restored.current || selectedSessionId === null) return;
     saveSelection(window.sessionStorage, { planId: selectedPlanId, sessionKey: selectedSessionId });
   }, [live, selectedPlanId, selectedSessionId]);
 
   // pro-d63: an unread Inbox item of the chat being viewed is read: hide it at once and dismiss it once per id
   const activeSessionId = session?.id ?? null;
+  const activeLeadPlanId = useMemo(() => leadPlanIdOf(cockpit.tree, activeSessionId), [cockpit.tree, activeSessionId]);
+  useEffect(() => {
+    if (!live || !restored.current || activeSessionId === null) return;
+    if (selectedPlanId !== activeLeadPlanId) connection.selectPlan(activeLeadPlanId);
+  }, [live, activeSessionId, activeLeadPlanId, selectedPlanId, connection]);
+  const visiblePlan = useMemo(() => visiblePlanOf(activeLeadPlanId, cockpit.plan), [activeLeadPlanId, cockpit.plan]);
   const dismissedUnread = useRef<Set<number>>(new Set());
   const inboxRows = cockpit.inbox?.rows;
   useEffect(() => {
@@ -271,34 +280,34 @@ export function App(props: AppProps): ReactElement {
         />
       }
       tree={
-        !live ? null : <MemoTree
+        !live ? null : <ErrorBoundary name="ContextTree" {...crash}><MemoTree
           tree={cockpit.tree}
           selectedSessionId={selectedSessionId}
-          selectedPlanId={cockpit.selectedPlanId}
+          selectedPlanId={activeLeadPlanId}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}
           costsOn={costsOn}
           costs={costs}
           onAction={onAction}
-        />
+        /></ErrorBoundary>
       }
-      plan={!live ? null : <MemoPlan plan={cockpit.plan} onAction={onAction} />}
+      plan={!live ? null : <ErrorBoundary name="PlanView" {...crash}><MemoPlan plan={visiblePlan} onAction={onAction} /></ErrorBoundary>}
       chat={
         session === null ? (
           <p data-empty className="grid h-full place-items-center text-muted-foreground">Select a session</p>
         ) : (
-          <ChatPane view={session} connection={connection} reader={reader} />
+          <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} /></ErrorBoundary>
         )
       }
       inbox={
-        !live ? null : <MemoInbox
+        !live ? null : <ErrorBoundary name="Inbox" {...crash}><MemoInbox
           inbox={inboxModel}
           onAction={onAction}
           onSelectSession={onSelectSession}
           onSelectPlan={onSelectPlan}
           pendingActionIds={pendingActionIds}
           completedActionIds={completedActionIds}
-        />
+        /></ErrorBoundary>
       }
     />
     <LegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />

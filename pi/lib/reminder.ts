@@ -82,3 +82,21 @@ export function lastAssistantText(messages: unknown): string | undefined {
   }
   return undefined;
 }
+
+/** The failed Jobs of `cpd plan show`, in list order, with their attempts count. A shape that is not the documented one is an error. */
+export function unaddressedFailedJobs(show: Record<string, unknown>): { key: string; attempts: number }[] {
+  const list = show.jobs;
+  if (!Array.isArray(list)) throw new CpdError("bad_output", "cpd plan show: `jobs` is not a list");
+  const out: { key: string; attempts: number }[] = [];
+  for (const item of list) {
+    if (!isObject(item) || item.status !== "failed") continue;
+    if (typeof item.key !== "string") throw new CpdError("bad_output", "cpd plan show: a failed entry of `jobs` has no key");
+    if (!Array.isArray(item.attempts)) throw new CpdError("bad_output", `cpd plan show: \`attempts\` of Job ${item.key} is not a list`);
+    out.push({ key: item.key, attempts: item.attempts.length });
+  }
+  return out;
+}
+
+/** The failed-Job reminder text. */
+export const failedJobReminderText = (keys: string[]): string =>
+  `cpd reminder: failed Job(s) ${keys.join(", ")} still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason "<why>" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.`;

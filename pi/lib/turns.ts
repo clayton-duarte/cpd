@@ -1,7 +1,8 @@
 import { toCpdError } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, Message } from "./pi.ts";
-import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
+import { FOLLOW_UP, send } from "./delivery.ts";
+import { failedJobReminderText, lastAssistantText, needsReminder, planKeys, unaddressedFailedJobs, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import type { Run } from "./run.ts";
 import { closedPrLines, contextCursorFrom, contextUpdate, type ErrorEvent, leadUpdate, parseErrorEvents, parsePending, parsePlanEvents, parsePrOpened, parseRecordEvents, parseRecords, parseTaken, PLAN_KINDS } from "./updates.ts";
 
@@ -101,11 +102,25 @@ export function registerReminderCheck(host: Host): void {
     if (!r || r.info.role !== "lead" || r.info.plan === null) return;
     r.reminderDue = false;
     const text = lastAssistantText(event?.messages);
-    if (text === undefined) return;
     const plan = r.info.plan;
     try {
-      const due = needsReminder(text, planKeys(await host.call(["plan", "show", "--plan", plan])));
-      if (host.run !== r || !due) return;
+      const show = await host.call(["plan", "show", "--plan", plan]);
+      if (host.run !== r) return;
+      const due = text !== undefined && needsReminder(text, planKeys(show));
+      const failed = unaddressedFailedJobs(show);
+      if (failed.length === 0) r.failedReminded = "";
+      else if (!r.facts.isBlocked()) {
+        const print = failed
+          .toSorted((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0))
+          .map((f) => `${f.key}:${f.attempts}`)
+          .join(",");
+        if (print !== r.failedReminded) {
+          r.failedReminded = print;
+          const keys = failed.map((f) => f.key);
+          send(host, r, { customType: REMINDER_TYPE, content: failedJobReminderText(keys), display: false, details: { rule: "failed-job-disposition", jobs: keys } }, FOLLOW_UP(true));
+        }
+      }
+      if (!due) return;
       r.reminderDue = true;
       registerReminder(host);
     } catch (e) {

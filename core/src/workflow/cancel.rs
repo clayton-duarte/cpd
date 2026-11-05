@@ -19,7 +19,7 @@ use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs;
-use crate::pr::open::{merged_workflows, opened_workflows};
+use crate::pr::open::opened_workflows;
 use crate::pr::{find_workflow, plan_phase, pulls};
 use crate::store::WriteTxn;
 
@@ -95,7 +95,7 @@ fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
                     None => NewEvent::workflow_cancelled(text, &key),
                 };
                 append(tx, event.plan(plan.clone()))?;
-                moved_to = if gave.is_some() { finish(tx, &plan, &key)? } else { advance(tx, &plan, &key)? };
+                moved_to = if gave.is_some() { finish(tx, &plan)? } else { advance(tx, &plan, &key)? };
                 crate::session::working_pr::name(tx, &plan, &key)?;
                 released = gave;
                 Ok(false)
@@ -243,43 +243,16 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option
         tx,
         NewEvent::plan_phase_deployed(text, opened_workflows(tx, plan)?).plan(plan.clone()),
     )?;
-    Ok(Some(finish(tx, plan, key)?.unwrap_or(Phase::Deploy)))
+    Ok(Some(finish(tx, plan)?.unwrap_or(Phase::Deploy)))
 }
 
 /// In phase `deploy`, when every Workflow that is not `cancelled` is `merged` and one is: `deploy → done` with `plan-done`
 /// (§3.1). The Plan's new phase, if it moved. Never in another phase: in `dispatch` Workflows remain to start or open.
-fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option<Phase>, CpdError> {
+fn finish(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<Option<Phase>, CpdError> {
     if plan_phase(tx, plan)? != Phase::Deploy {
         return Ok(None);
     }
-    let count = |statuses: &str| -> Result<i64, CpdError> {
-        Ok(tx.query_row(
-            &format!("SELECT count(*) FROM workflows WHERE plan = ?1 AND status {statuses}"),
-            [plan.as_str()],
-            |r| r.get(0),
-        )?)
-    };
-    if count("NOT IN ('merged', 'cancelled')")? > 0 || count("= 'merged'")? == 0 {
-        return Ok(None);
-    }
-    crate::plan::close_reviews(tx, plan, &crate::plan::Closing::Done)?;
-    let done = tx.execute(
-        "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
-        [plan.as_str()],
-    )?;
-    if done == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase deploy while Workflow {key} was cancelled: rerun the command."))
-            .with("plan", plan.as_str())
-            .with("workflow", key.as_str()));
-    }
-    let text = format!(
-        "Every Workflow of Plan {plan} is merged: the Plan is done. See cpd plan show --plan {plan}"
-    );
-    append(
-        tx,
-        NewEvent::plan_done(text, merged_workflows(tx, plan)?).plan(plan.clone()),
-    )?;
-    Ok(Some(Phase::Done))
+    Ok(crate::plan::done::settle_done(tx, plan, None)?.then_some(Phase::Done))
 }
 
 fn decide(

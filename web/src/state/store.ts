@@ -7,7 +7,7 @@ import type { ServerMessage } from "../protocol/wire.ts";
 import type { TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
 import {
-  appendItems, applyDelta, emptyTranscript, prependEarlier, setTail, updateItems, type TranscriptState,
+  appendItems, applyDelta, emptyTranscript, prependEarlier, removeItems, setTail, updateItems, type TranscriptState,
 } from "./transcript.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
@@ -140,6 +140,8 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
         transcript: updateItems(session.transcript, message.items),
         pending: echoed(session.pending, session.transcript, message.items),
       });
+    case "session.remove":
+      return set({ transcript: removeItems(session.transcript, [message.itemId]) });
     case "session.delta":
       return set({ transcript: applyDelta(session.transcript, message) });
     case "session.status":

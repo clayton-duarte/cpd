@@ -517,6 +517,7 @@ Applied by `Markdown.tsx` (`web/src/ui/chat/Markdown.tsx`): the root element of 
 - Custom variants: `data-open` (`[data-state="open"]` or `[data-open]` not `"false"`), `data-closed`, `data-checked`, `data-unchecked`, `data-selected` (`[data-selected="true"]`), `data-disabled`, `data-active`, `data-horizontal` (`[data-orientation="horizontal"]`), `data-vertical`.
 - Utilities: `no-scrollbar`; `scroll-fade`, `scroll-fade-y`, `scroll-fade-x`, `scroll-fade-t|b|l|r|s|e` and their `-*` size forms, `scroll-fade-none`; `shimmer` with `shimmer-once`, `shimmer-reverse`, `shimmer-none`, `shimmer-color-*`, `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`. A reduced-motion rule turns `shimmer` off.
 - `@property` declarations for `--scroll-fade-*`, `--shimmer-*`.
+- `@theme inline` keyframes `collapsible-down` and `collapsible-up`, and utilities `animate-collapsible-down` (200 ms) and `animate-collapsible-up` (160 ms). Contract in 5.1.
 
 The transcript's streaming marker text `Working…` uses `shimmer` (DESIGN-chat 2.4).
 
@@ -1043,7 +1044,7 @@ An archived fork Session has no Delete.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/ui-preview.md` (Server hot reload).
 
-## 4. Amendments pro-d48..pro-d61: where each decision is contracted
+## 4. Amendments pro-d48..pro-d65: where each decision is contracted
 
 Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
 
@@ -1063,5 +1064,53 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d59 no stamp | no session-key stamp on assistant messages | DESIGN-chat 2.4 |
 | pro-d60 header and ChatHeader | ChatHeader title only; Header `Breadcrumb` crumbs; `ask_user_question` interactive for pi | 3a; DESIGN-panes 4.1; DESIGN-chat 1; CONTRACT 11.4 |
 | pro-d61 chat items | Chain of Thought grouping; image thumbnails on optimistic and echoed user messages | DESIGN-chat 2.3.1, 2.4.2, 2.7; CONTRACT 11.3 |
+| pro-d62 live micro-interactions | collapsible height animations; Chain of Thought opens while busy and collapses when the turn ends; synthetic `Thinking…` step; step and message entry animations; transcript auto-scroll rules | 5.1, 5.2 |
+| pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; empty state `Select a lead to see plans`; header `min-h-11`, title truncates | 5.3 |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
+
+---
+
+## 5. Live micro-interactions and the Lead-following PlanView (pro-d62, pro-d65)
+
+Records: pro-d62 (User approved the live changes in the running preview; this section lands them) and pro-d65 (PlanView always reflects the selected Lead session's Plan). Where an older section says otherwise, this section wins (recency): it supersedes the Thinking-loader removal of pro-d57 (DESIGN-chat 2.4.3), the Plan-pane and Header bindings of 3e, and the Plan title row and empty state of DESIGN-panes 1.
+
+### 5.1 Collapsible animation (pro-d62)
+
+- `web/src/ui/components/collapsible.tsx`: `CollapsibleContent` always carries `overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up`. The caller's `className` is merged after these. Every collapsible inherits it: the Context Tree (3d) and the trace collapsibles (`trace.tsx`).
+- `web/src/lib/shadcn-tailwind.css` (2h):
+  - keyframes `collapsible-down`: from `height: 0; opacity: 0` to `height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto)); opacity: 1`;
+  - keyframes `collapsible-up`: the same values in reverse;
+  - utility `animate-collapsible-down`: `collapsible-down 200ms cubic-bezier(0.16, 1, 0.3, 1)`;
+  - utility `animate-collapsible-up`: `collapsible-up 160ms cubic-bezier(0.16, 1, 0.3, 1)`.
+- `web/src/ui/components/trace.tsx`: the chevron (`TraceIcon` of `TraceCollapsibleTrigger`) is `transition-transform duration-200 ease-out` and rotates 90° while open. `TraceCollapsibleContent` has no animation class of its own; it animates through `CollapsibleContent`.
+- No reduced-motion variant is specified for the collapsibles (unverified whether one is needed).
+
+### 5.2 Chain of Thought while busy, and the transcript (pro-d62)
+
+**Busy.** `Transcript` takes `busy?: boolean`. `ChatPane` passes `busy` as `view.busy || view.pending.some(p => p.state === "sending")` (the same definition as 2h), and passes `loadingEarlier` (now required on `Transcript`).
+
+**Chain of Thought** (`ChainOfThoughtRow`, `Trace[data-kind="chain-of-thought"]`) takes `active?: boolean`:
+- It is running when `row.running || active`. It opens while running: `isOpen = open ?? (isRunning || defaultOpen)`. When the turn ends it collapses to its default. An explicit toggle by the User is kept until the default changes.
+- **Synthetic step.** While `active` and the Chain has no running step (`showSyntheticThinking = active && !row.running`), the step count includes one more step and `LiveThinkingStep` renders after the last step: `Trace[data-part="live-thinking"]` with a running `TraceLine` (`Spinner`, and `TraceTitle data-part="label"` reading `Thinking…`). The shimmer comes from the running `TraceLine` (`shimmer` in `trace.tsx`, 2h). It fills the gap between tool steps.
+- **Trailing live Chain.** While busy, when the last row is not a Chain or a send is pending (`lastRowIsChain = lastRow.kind === "chain" && pending.length === 0`; `showTrailingLiveChain = busy && !lastRowIsChain`), `Transcript` renders an empty `ChainOfThoughtRow` with `data-row="live-chain"` and `active`. The transcript is not `empty` while it shows. The last row of a busy transcript gets `activeChain = busy && isLast && pending.length === 0`.
+
+**Entry animations.** Chain roots: `animate-in fade-in-0 slide-in-from-bottom-1 duration-200`. Each step wrapper (thinking, tool, tool group) and `LiveThinkingStep`: `animate-in fade-in-0 slide-in-from-top-1 duration-200`. User, assistant and pending messages: `animate-in fade-in-0 slide-in-from-bottom-1 duration-200`.
+
+**Auto-scroll** (`TranscriptAutoScroll`). The edge is `SCROLL_EDGE_THRESHOLD = 160` px, the distance from the bottom of the viewport.
+- Unpin only when `scrollTop` falls by more than 4 px since the last scroll event and the distance is above 160 px. Pin when the distance is at or below 160 px.
+- A `ResizeObserver` on the content re-scrolls to the end while pinned, so content that grows at the bottom stays in view. Without a `ResizeObserver` (`typeof ResizeObserver === "undefined"`) no growth follow happens.
+- Forced pin, scrolled to the end at once: the tail epoch changes, a pending or queued item is added, or a new user turn appears (the last user item's id changes). This covers "when the user sends".
+- Otherwise, the transcript scrolls to the end on item or `busy` changes only while pinned. A user who scrolled up is never scrolled.
+- The jump-to-end control re-pins.
+- `MessageScrollerProvider` gets no `threshold` and no `scrollToEndOnMount` props. The installed `@shadcn/react` 0.3.1 declares neither (its `MessageScrollerProviderProps` has `scrollEdgeThreshold`, `defaultScrollPosition`, `autoScroll`, `scrollPreviousItemPeek`, `scrollMargin`), so the 160 px edge and the pin are this rule alone.
+
+### 5.3 PlanView follows the active Lead (pro-d65)
+
+- **The Plan shown is the selected Lead's.** `activeLeadPlanId` is the id of the Plan (PlanNode in the Context tree) that holds the active session. It is `null` when no session is selected, and when the session has no Plan (a Manager, or a Context session outside any Plan).
+- **`selectedPlanId` follows it.** While the tree is live, the restore has run and a session is selected, `App` calls `connection.selectPlan(activeLeadPlanId)` whenever it differs from `selectedPlanId`. `selectedPlanId` is `string | null` (`web/src/ui/state/selection.ts`, `PersistedSelection.planId`), so `null` is saved and loaded. `ContextTree` receives `selectedPlanId={activeLeadPlanId}`.
+- **`visiblePlan`.** The Plan pane (`MemoPlan`) and the Header `location` use `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
+- **Empty state.** When `plan === null`, `PlanView` renders `Empty[data-empty]` (`className="h-full border-none py-6 text-muted-foreground"`) with `EmptyHeader` and `EmptyTitle` (`text-sm font-normal text-muted-foreground`) reading exactly `Select a lead to see plans`. This replaces `p[data-empty]` "No plan selected". A Manager or no selected session therefore shows it.
+- **Header.** `div[data-part="title-row"]` is `flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16`: `min-h-11` (44 px minimum, the row grows when it wraps) replaces the fixed `h-11`. The title `h2` is `max-w-full min-w-0 truncate` with `title={plan.title}` as its native tooltip. `plan-key`, `review` and `escalations` are `shrink-0`.
+
+**Tests this section changes.** `cockpit/PlanView.test.tsx` expects the empty text `Select a lead to see plans` (was `No plan selected`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.

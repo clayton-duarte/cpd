@@ -16,10 +16,13 @@ pub(crate) mod add;
 pub(crate) mod cancel;
 pub(crate) mod describe;
 pub(crate) mod edit;
+pub mod jira_title;
 pub(crate) mod reopen;
 pub(crate) mod row;
 pub mod start;
 
+#[cfg(test)]
+mod jira_title_tests;
 #[cfg(test)]
 pub(crate) mod reopen_tests;
 

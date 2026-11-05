@@ -15,7 +15,11 @@ use crate::output::Output;
 use crate::pr::pulls::PullRequest;
 
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
+    list_in(&mut Env::open()?, args)
+}
+
+/// `plan list` read through the open `env`.
+pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError> {
     let (plans, cursor) = env.store.read(|conn| snapshot(conn, &args))?;
     Ok(Output::success(
         json!({"plans": plans, "events_cursor": cursor}),

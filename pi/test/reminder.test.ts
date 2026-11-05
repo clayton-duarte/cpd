@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT } from "../lib/reminder.ts";
+import { CpdError } from "../lib/cpd.ts";
+import { failedJobReminderText, lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT, unaddressedFailedJobs } from "../lib/reminder.ts";
 import { Fixture, ID, planShow, shown, waitFor } from "./fake.ts";
 
 test("every phrase of the list makes a message talk of future work, in any case", () => {
@@ -100,7 +101,8 @@ test("a run that ends with no assistant text checks nothing", async (t) => {
   const plans = () => f.argvs().filter((a) => a[0] === "plan").length;
   const atStart = plans();
   await f.pi.fire("agent_end", { messages: [{ role: "assistant", content: [{ type: "toolCall" }] }] });
-  assert.equal(plans(), atStart, "the reminder ran no plan show for that run");
+  await f.quiet();
+  assert.equal(plans(), atStart + 1, "one plan show ran, for the failed-Job check");
   assert.deepEqual(hidden(await f.pi.fireWith("before_agent_start")), []);
 });
 
@@ -145,5 +147,151 @@ test("a Manager and a Worker get none, and read no Plan for it", async (t) => {
     assert.deepEqual(out, [], String(over.role));
     assert.equal(plans(), before, `${over.role}: no plan show`);
     assert.deepEqual(f.pi.sent.filter((s) => s.message.customType === "cpd-reminder"), []);
+  }
+});
+
+// ---- the failed-Job reminder (§15.8) ----
+
+const job = (key: string, status: string, attempts: unknown[] = [], over: Record<string, unknown> = {}) => ({ key, status, attempts, ...over });
+const failedShow = (...jobs: unknown[]) => planShow({ jobs });
+const FAILED = "cpd reminder: failed Job(s) a, b still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason \"<why>\" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.";
+const failedSent = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-reminder");
+
+test("unaddressedFailedJobs lists every failed Job with its attempts count, in order", () => {
+  const show = failedShow(job("b", "failed", [{}, {}]), job("x", "merged", [{}]), job("a", "failed", [{}]), job("c", "failed", []));
+  assert.deepEqual(unaddressedFailedJobs(show), [{ key: "b", attempts: 2 }, { key: "a", attempts: 1 }, { key: "c", attempts: 0 }]);
+});
+
+test("unaddressedFailedJobs ignores merged, queued, running, draft and cancelled Jobs", () => {
+  const show = failedShow(...["merged", "queued", "running", "draft", "cancelled"].map((s) => job(`j-${s}`, s, [{}])), job("f", "failed", [{}]));
+  assert.deepEqual(unaddressedFailedJobs(show), [{ key: "f", attempts: 1 }]);
+});
+
+test("unaddressedFailedJobs ignores a worked_on field: a failed Job always counts", () => {
+  const show = failedShow(job("a", "failed", [{}], { worked_on: true }), job("b", "failed", [{}], { worked_on: false }));
+  assert.deepEqual(unaddressedFailedJobs(show), [{ key: "a", attempts: 1 }, { key: "b", attempts: 1 }]);
+});
+
+test("unaddressedFailedJobs throws bad_output on a bad shape", () => {
+  const bad = (show: Record<string, unknown>) => assert.throws(() => unaddressedFailedJobs(show), (e) => e instanceof CpdError && e.code === "bad_output");
+  bad({});
+  bad({ jobs: "x" });
+  bad({ jobs: [{ status: "failed", attempts: [] }] });
+  bad({ jobs: [{ key: 1, status: "failed", attempts: [] }] });
+  bad({ jobs: [{ key: "a", status: "failed" }] });
+  bad({ jobs: [{ key: "a", status: "failed", attempts: 2 }] });
+});
+
+test("failedJobReminderText names the keys and the four ways to dispose", () => {
+  assert.equal(failedJobReminderText(["a", "b"]), FAILED);
+});
+
+test("a Lead run ending with a failed Job sends one failed-Job reminder that starts a turn", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}]), job("b", "failed", [{}])));
+  t.after(() => f.close());
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  const sent = failedSent(f);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.message.display, false);
+  assert.equal(sent[0]!.message.content, FAILED);
+  assert.deepEqual(sent[0]!.message.details, { rule: "failed-job-disposition", jobs: ["a", "b"] });
+  assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
+test("a Lead run ending with no assistant text still sends the failed-Job reminder", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}]), job("b", "failed", [{}])));
+  t.after(() => f.close());
+  await f.pi.fire("agent_end", { messages: [{ role: "assistant", content: [{ type: "toolCall" }] }] });
+  await f.quiet();
+  assert.equal(failedSent(f).length, 1);
+  assert.equal(failedSent(f)[0]!.message.content, FAILED);
+});
+
+test("no failed-Job reminder when no Job failed or the failed Job was retried or cancelled", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}])));
+  t.after(() => f.close());
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.equal(failedSent(f).length, 1, "the failed Job is reminded");
+  for (const status of ["merged", "queued", "cancelled"]) {
+    f.respond("plan-show", failedShow(job("a", status, [{}, {}])));
+    await f.pi.fire("agent_end", ended("Done."));
+    await f.quiet();
+    assert.equal(failedSent(f).length, 1, status);
+  }
+});
+
+test("no failed-Job reminder while the Lead is blocked on a dialog", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}])));
+  t.after(() => f.close());
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.deepEqual(failedSent(f), [], "blocked: nothing sent");
+  await f.pi.fire("ui_prompt_end");
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.equal(failedSent(f).length, 1, "the same failure state was not marked reminded while blocked");
+});
+
+test("the failed-Job reminder fires at most once for the same failure state", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}])));
+  t.after(() => f.close());
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.equal(failedSent(f).length, 1);
+});
+
+test("the failed-Job reminder fires again when attempts grow, another Job fails, or the set emptied before", async (t) => {
+  const f = await started({}, failedShow(job("a", "failed", [{}])));
+  t.after(() => f.close());
+  const end = async () => {
+    await f.pi.fire("agent_end", ended("Done."));
+    await f.quiet();
+  };
+  await end();
+  assert.equal(failedSent(f).length, 1);
+  f.respond("plan-show", failedShow(job("a", "failed", [{}, {}])));
+  await end();
+  assert.equal(failedSent(f).length, 2, "attempts grew");
+  f.respond("plan-show", failedShow(job("a", "failed", [{}, {}]), job("b", "failed", [{}])));
+  await end();
+  assert.equal(failedSent(f).length, 3, "another Job failed");
+  f.respond("plan-show", failedShow(job("a", "queued", [{}, {}]), job("b", "merged", [{}])));
+  await end();
+  assert.equal(failedSent(f).length, 3, "nothing failed");
+  f.respond("plan-show", failedShow(job("a", "failed", [{}, {}]), job("b", "merged", [{}])));
+  await end();
+  assert.equal(failedSent(f).length, 4, "failed again after the set emptied");
+});
+
+test("a failing plan show sends no failed-Job reminder", async (t) => {
+  const f = await started();
+  t.after(() => f.close());
+  f.respond("plan-show", { ok: false, error: { code: "plan_not_found", message: "No.", details: {} } }, { exit: 4 });
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.deepEqual(failedSent(f), []);
+  f.respond("plan-show", failedShow(job("a", "failed", [{}])));
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.equal(failedSent(f).length, 1, "a later good plan show reminds");
+});
+
+test("a Manager and a Worker get no failed-Job reminder", async (t) => {
+  const lead = await started({}, failedShow(job("a", "failed", [{}])));
+  t.after(() => lead.close());
+  await lead.pi.fire("agent_end", ended("Done."));
+  await lead.quiet();
+  assert.equal(failedSent(lead).length, 1, "a Lead gets one");
+  for (const over of [{ role: "manager", plan: null, plan_lead: false }, { role: "worker", plan: "p1", plan_lead: false }]) {
+    const f = await started(over, failedShow(job("a", "failed", [{}])));
+    t.after(() => f.close());
+    await f.pi.fire("agent_end", ended("Done."));
+    await f.quiet();
+    assert.deepEqual(failedSent(f), [], String(over.role));
   }
 });

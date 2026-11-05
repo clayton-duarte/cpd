@@ -10,7 +10,12 @@ use crate::output::Output;
 
 /// `context list` (§3.2).
 pub(super) fn list() -> Result<Output, CpdError> {
-    let Env { mut store, .. } = Env::open()?;
+    list_in(&mut Env::open()?)
+}
+
+/// `context list` read through the open `env`.
+pub(crate) fn list_in(env: &mut Env) -> Result<Output, CpdError> {
+    let store = &mut env.store;
     let (contexts, cursor) = store.read(|conn| {
         let mut contexts = Vec::new();
         let mut stmt = conn.prepare(&format!("SELECT {} FROM contexts WHERE deleted_at IS NULL ORDER BY id", ContextRow::COLUMNS))?;

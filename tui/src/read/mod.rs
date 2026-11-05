@@ -35,6 +35,8 @@ mod dot;
 #[cfg(test)]
 mod dot_pr_tests;
 #[cfg(test)]
+mod dot_tier_tests;
+#[cfg(test)]
 mod elapsed_tests;
 #[cfg(test)]
 mod explore_attempt_tests;

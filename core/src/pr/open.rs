@@ -589,31 +589,12 @@ pub fn record(
     if !pulled.is_merged() {
         return Ok(Some(Phase::Deploy));
     }
-    // The last Workflow to merge ends the Plan (§3.1).
-    let unmerged: i64 = tx.query_row(
-        "SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
-        [id.as_str()],
-        |r| r.get(0),
-    )?;
-    if unmerged > 0 {
-        return Ok(Some(Phase::Deploy));
-    }
-    crate::plan::close_reviews(tx, id, &crate::plan::Closing::Done)?;
-    let moved = tx.execute(
-        "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
-        [id.as_str()],
-    )?;
-    if moved == 0 {
-        return Err(cas_lost(id, key));
-    }
-    let text = format!(
-        "Every Workflow of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}"
-    );
-    append(
-        tx,
-        NewEvent::plan_done(text, merged_workflows(tx, id)?).plan(id.clone()),
-    )?;
-    Ok(Some(Phase::Done))
+    // The last Workflow to merge ends the Plan, unless a Job is non-final (§3.1).
+    Ok(Some(if crate::plan::done::settle_done(tx, id, None)? {
+        Phase::Done
+    } else {
+        Phase::Deploy
+    }))
 }
 
 /// What an `open` or `update` Job's `attempt submit` once checked (contract §7.7, hs-d340). It has had no caller since commit 84c274f
@@ -919,19 +900,39 @@ pub fn jira_required_of(
     plan: &PlanId,
     key: &WorkflowKey,
 ) -> Result<(), CpdError> {
-    let missing: bool = conn.query_row(
-        "SELECT jira IS NULL AND head_ref IS NULL FROM workflows WHERE plan = ?1 AND key = ?2",
+    let (missing, jira, title): (bool, Option<String>, Option<String>) = conn.query_row(
+        "SELECT jira IS NULL AND head_ref IS NULL, jira, CASE WHEN head_ref IS NULL THEN title END FROM workflows WHERE plan = ?1 AND key = ?2",
         [plan.as_str(), key.as_str()],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    if missing
-        && super::policy_of_workflow(conn, home, plan, key)?
-            .workflow
-            .jira_required
+    if !missing && jira.is_none() {
+        return Ok(());
+    }
+    if !super::policy_of_workflow(conn, home, plan, key)?
+        .workflow
+        .jira_required
     {
+        return Ok(());
+    }
+    if missing {
         return Err(jira_required(plan, key));
     }
+    if let (Some(jira), Some(title)) = (jira, title)
+        && crate::workflow::jira_title::conform(&title, &jira).as_deref() != Some(title.as_str())
+    {
+        return Err(jira_title_invalid(plan, key));
+    }
     Ok(())
+}
+
+/// `jira_title_invalid` (exit 3): the Workflow's title is not `<type>: <KEY>/<summary>` for its ticket.
+pub fn jira_title_invalid(plan: &PlanId, key: &WorkflowKey) -> CpdError {
+    CpdError::new(
+        ErrorCode::JiraTitleInvalid,
+        format!("Workflow {key} of Plan {plan} has a title that is not `<type>: <KEY>/<summary>` for its Jira ticket: run cpd workflow edit {key} --title \"<type>: <KEY>/<summary>\", then open it again."),
+    )
+    .with("plan", plan.as_str())
+    .with("workflow", key.as_str())
 }
 
 /// `jira_required` (exit 3): the Workflow has no Jira ticket and its owner's policy requires one.

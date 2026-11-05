@@ -1,3 +1,4 @@
+import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
@@ -14,7 +15,7 @@ import type {
   WhenBusy,
   WireImage,
 } from "../../protocol/domain.ts";
-import type { Disposable } from "../../protocol/runtime.ts";
+import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
@@ -24,6 +25,8 @@ import type { JsonlFacts, PiNormalizer, PushResult } from "./jsonl.ts";
 import { watchSession } from "./watch.ts";
 import type { WatchBoundary } from "./watch.ts";
 import { readEarlier, readTail } from "./window.ts";
+import type { TailWindow } from "./window.ts";
+import { createNormalizer } from "./jsonl.ts";
 import type { FileBoundary } from "./window.ts";
 
 export type { Disposable };
@@ -53,6 +56,7 @@ interface ShowStats {
   readonly model?: string;
   readonly thinking?: string;
   readonly tier?: string;
+  readonly file?: string;
   readonly error?: string;
 }
 
@@ -69,16 +73,26 @@ export function createPiBackend(deps: {
   cpdHome: string;
   attachmentsDir: string;
   now(): number;
+  scheduler: Scheduler;
   windowSize?: number;
+  /** One source per attach: pass a factory when the backend serves several sessions. */
+  live?: LiveSource | (() => LiveSource);
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
   async function attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle> {
     const { ref } = session;
-    const file = session.file;
-    if (file === undefined) throw new WebError("session_file_missing", `session ${ref.id} has no session file`, { sessionId: ref.id });
+    let currentFile: string | undefined = session.file;
     const sessionId = ref.id;
-    let tail = await readTail(file, deps.fs, windowSize);
+    const emptyTail = (): TailWindow => ({
+      window: { items: [], hasEarlier: false, cursor: null },
+      startOffset: 0,
+      endOffset: 0,
+      identity: "",
+      normalizer: createNormalizer(),
+      openDialogs: [],
+    });
+    let tail = currentFile === undefined ? emptyTail() : await readTail(currentFile, deps.fs, windowSize);
 
     const readShow = async (): Promise<ShowStats> => {
       try {
@@ -86,7 +100,7 @@ export function createPiBackend(deps: {
         const row = reply.session;
         const o = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
         const s = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
-        return { model: s(o.model), thinking: s(o.thinking), tier: s(o.tier) };
+        return { model: s(o.model), thinking: s(o.thinking), tier: s(o.tier), file: s(o.file) };
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
@@ -138,6 +152,18 @@ export function createPiBackend(deps: {
     };
 
     let disposed = false;
+    const live = typeof deps.live === "function" ? deps.live() : deps.live;
+    // `message.timestamp` of the committed assistant lines, and the `live:` items sent and not yet removed.
+    const committed = new Set<number>();
+    const liveIds = new Set<string>();
+    let turnsSeen = 0;
+    const syncTurns = (): number[] => {
+      const fresh = tail.normalizer.turns.slice(turnsSeen);
+      turnsSeen = tail.normalizer.turns.length;
+      for (const ts of fresh) committed.add(ts);
+      return fresh;
+    };
+    syncTurns();
     let busy = isBusy(tail.normalizer.facts);
     let watcher: Disposable | undefined;
     const out = (m: SessionServerMessage): void => {
@@ -153,8 +179,9 @@ export function createPiBackend(deps: {
     };
 
     const startWatch = (normalizer: PiNormalizer, offset: number, identity: string): void => {
+      if (currentFile === undefined) return;
       watcher = watchSession({
-        path: file,
+        path: currentFile,
         fs: deps.fs,
         watch: deps.watch,
         normalizer,
@@ -171,6 +198,7 @@ export function createPiBackend(deps: {
     };
 
     const applyAppend = (r: PushResult): void => {
+      for (const ts of syncTurns()) if (liveIds.delete(`live:${ts}`)) out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
       if (r.added.length > 0) out({ type: "session.append", sessionId, items: r.added });
       if (r.updated.length > 0) out({ type: "session.update", sessionId, items: r.updated });
       for (const d of r.dialogsOpened) dialog(d);
@@ -195,9 +223,13 @@ export function createPiBackend(deps: {
     };
 
     async function reload(): Promise<void> {
-      const next = await readTail(file as string, deps.fs, windowSize);
+      const next = await readTail(currentFile as string, deps.fs, windowSize);
       if (disposed) return;
       tail = next;
+      committed.clear();
+      liveIds.clear();
+      turnsSeen = 0;
+      syncTurns();
       busy = isBusy(tail.normalizer.facts);
       emitTail();
       startWatch(tail.normalizer, tail.endOffset, tail.identity);
@@ -206,11 +238,55 @@ export function createPiBackend(deps: {
     emit({ type: "session.attached", sessionId, capabilities, title: ref.title, meta: { ref, footer: footer() } });
     emitTail();
     startWatch(tail.normalizer, tail.endOffset, tail.identity);
+    live?.attach(
+      sessionId,
+      (m) => {
+        if (m.type === "session.append") for (const i of m.items) if (i.id.startsWith("live:")) liveIds.add(i.id);
+        if (m.type === "session.remove") liveIds.delete(m.itemId);
+        out(m);
+      },
+      (ts) => committed.has(ts),
+    );
+
+    const POLL_MS = 250;
+    const POLL_MAX = 20;
+    let poll: Disposable | undefined;
+    const pollError = (error: unknown): void => out({ type: "session.error", sessionId, error: toWireError(error) });
+    const startPoll = (): void => {
+      let ticks = 0;
+      const arm = (): void => {
+        poll = deps.scheduler.after(POLL_MS, () => {
+          void tick().catch(pollError);
+        });
+      };
+      const tick = async (): Promise<void> => {
+        ticks += 1;
+        const shown = await readShow();
+        if (disposed) return;
+        if (shown.file !== undefined) {
+          currentFile = shown.file;
+          poll = undefined;
+          await reload();
+          return;
+        }
+        if (ticks >= POLL_MAX) {
+          poll = undefined;
+          pollError(new WebError("session_file_missing", `session ${sessionId} has no session file`, { sessionId }));
+          return;
+        }
+        arm();
+      };
+      arm();
+    };
 
     return {
       capabilities,
       async loadEarlier(before) {
-        const page = await readEarlier(file, deps.fs, before, windowSize);
+        if (currentFile === undefined) {
+          out({ type: "session.window", sessionId, mode: "earlier", window: { items: [], hasEarlier: false, cursor: null } });
+          return;
+        }
+        const page = await readEarlier(currentFile, deps.fs, before, windowSize);
         out({ type: "session.window", sessionId, mode: "earlier", window: page.window });
       },
       async submit(input) {
@@ -227,6 +303,7 @@ export function createPiBackend(deps: {
         }
         await deps.cpd.json(sessionSendArgs(sessionId, text));
         out({ type: "session.submitAck", sessionId, clientSubmissionId: input.clientSubmissionId, queued: false });
+        if (currentFile === undefined && poll === undefined) startPoll();
       },
       abort: () => Promise.reject(unsupported(REASON.abort)),
       abortSubmission: () => Promise.reject(unsupported(REASON.abortSubmission)),
@@ -317,6 +394,8 @@ export function createPiBackend(deps: {
       },
       dispose() {
         disposed = true;
+        live?.detach();
+        poll?.dispose();
         watcher?.dispose();
         return Promise.resolve();
       },

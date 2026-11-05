@@ -174,9 +174,9 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
     /** §4.4 rule 6 and review.ts's flow: the summary and the pending entry, then the dialog. A `plan-review` Event reads the summary file through `readText`; the `cpd_plan_review` tool call passes it directly; the start hook reuses a pending entry that survived a restart. */
     async open(review, via, summary) {
       const { reviews } = reviewsFromEntries(await port.entries(), port.plan);
+      const content = summary ?? (await port.readText(SUMMARY_FILE(review)));
+      if (content.trim() === "") throw new Error(`plan review ${review} has an empty summary`);
       supersede(review, reviews);
-      let content = summary;
-      if (content === undefined) content = await port.readText(SUMMARY_FILE(review));
       const pending = reviews.get(review);
       // A review that is already pending is reopened (its earlier select was cancelled/Esc'd, or the host restarted):
       // the entry stays pending and the User is told it still waits (review-chat.ts `stillWaiting`).

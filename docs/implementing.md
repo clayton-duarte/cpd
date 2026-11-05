@@ -131,7 +131,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   | binary (`cli/tests/<area>/`) | modules |
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
-  | `workflow` | `pr*`, `merge*`, `git*`, `repo_hooks`, `workflow`, `workflow_adopt*`, `workflow_crud`, `workflow_describe`, `workflow_jira*`, `workflow_lead_branch`, `workflow_live_spec`, `workflow_local_needs`, `workflow_merge_drafts`, `workflow_needs_required`, `workflow_start`, `workflow_template_jobs` |
+  | `workflow` | `pr*`, `merge*`, `git*`, `repo_hooks`, `workflow`, `workflow_adopt*`, `workflow_crud`, `workflow_describe`, `workflow_done_guard`, `workflow_jira*`, `workflow_lead_branch`, `workflow_live_spec`, `workflow_local_needs`, `workflow_merge_drafts`, `workflow_needs_required`, `workflow_start`, `workflow_template_jobs` |
   | `flow` | `plan*`, `agent_key_names`, `agent_key_worker`, `agent_forbidden`, `grounding_guard`, `archive_blockers`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `config_experimental`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_wire`, `preset` |
   | `session` | `session*`, `agent_key_guards`, `agent_key_addressing`, `agent_key_row`, `agent_key_text`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |

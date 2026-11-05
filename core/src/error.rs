@@ -304,6 +304,7 @@ error_codes! {
     WorkflowTitleRequired = "workflow_title_required" => Refused,
     DescriptionRequired = "description_required" => Refused,
     JiraRequired = "jira_required" => Refused,
+    JiraTitleInvalid = "jira_title_invalid" => Refused,
     DescriptionInvalid = "description_invalid" => Refused,
     AdoptNotOpen = "adopt_not_open" => Refused,
     AdoptFork = "adopt_fork" => Refused,

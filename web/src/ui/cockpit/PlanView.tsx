@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
+import { Empty, EmptyHeader, EmptyTitle } from "../components/empty.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
 
@@ -215,12 +216,22 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
 }): ReactElement {
   const { plan, onAction } = props;
-  if (plan === null) return <p data-empty className="grid h-full place-items-center text-muted-foreground">No plan selected</p>;
+  if (plan === null) {
+    return (
+      <Empty data-empty className="h-full border-none py-6 text-muted-foreground">
+        <EmptyHeader>
+          <EmptyTitle className="text-sm font-normal text-muted-foreground">
+            Select a lead to see plans
+          </EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
   const explore = plan.jobs.filter((j) => j.workflow === null);
   return (
     <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex flex-col gap-2.5 px-4 pb-3">
-      <div data-part="title-row" className="flex h-11 flex-wrap items-center gap-3.5 pr-16">
-        <h2 className="font-mono text-[14px] font-semibold text-fg-strong">{plan.title}</h2>
+      <div data-part="title-row" className="flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16">
+        <h2 title={plan.title} className="max-w-full min-w-0 truncate font-mono text-[14px] font-semibold text-fg-strong">{plan.title}</h2>
         <span data-part="plan-key" className="font-mono text-meta text-fg-dim">{plan.planId}</span>
         <Stepper phase={plan.phase} />
         <span className="flex-1" />
