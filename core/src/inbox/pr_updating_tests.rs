@@ -51,8 +51,8 @@ fn row(merge_state: &str, kind: &str, status: &str) -> (Urgency, String) {
                  VALUES ('pay', 'p1', '/r', 'main', 'open', 'cpd/pay/p1', '/lw',
                          (SELECT id FROM pull_requests WHERE number = 1), 1, 'https://github.com/acme/shop/pull/1', '{T}', 1, '{T}', '{T}');
                  INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                                   fingerprint, created_txn, created_at, kind, merged_sha, failed_cause, cancel_reason, cancel_requested_at)
-                 VALUES ('pay', 'p1', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', '{kind}', {sha}, {cause}, {reason}, {requested});"
+                                   fingerprint, created_txn, created_at, kind, merged_sha, failed_cause, cancel_reason, cancel_requested_at, tests, test_files)
+                 VALUES ('pay', 'p1', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', '{kind}', {sha}, {cause}, {reason}, {requested}, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END);"
             ))?;
             Ok(())
         })

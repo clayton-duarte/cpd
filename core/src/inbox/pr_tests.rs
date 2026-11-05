@@ -106,8 +106,8 @@ impl Fx {
         };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                               fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
-             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested});"
+                               fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at, tests, test_files)
+             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested}, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END);"
         ));
     }
 
