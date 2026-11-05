@@ -48,6 +48,8 @@ fn condition(kind: Kind, urgency: Urgency, session: &str, context: &str) -> Cond
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     }
 }
 

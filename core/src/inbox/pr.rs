@@ -266,6 +266,8 @@ pub fn conditions(
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -293,6 +295,8 @@ pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> 
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             }
         })
         .collect())
