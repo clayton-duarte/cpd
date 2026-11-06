@@ -382,10 +382,12 @@ function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: 
   const contractTools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
   // Extract pi tool names from commands.md headings: "The pi tool `name`"
   const piTools: string[] = [];
-  for (const match of commandsDoc.matchAll(/^### \d+\.\d+ The pi tool `([a-z_]+)`/gm)) {
+  for (const match of commandsDoc.matchAll(/^### \d+\.\d+ .*?[Tt]he pi tool `([a-z_]+)`/gm)) {
     piTools.push(match[1]!);
   }
-  const tools = [...contractTools, ...piTools];
+  // The values of the `kind` parameter of `cpd_external_approve` (commands.md §15.27).
+  const kindValues = /`kind` \(([^)]+)\)/.exec(section(commandsDoc, "### 15.27 Guards for raw GitHub comment writes and Slack sends, and the pi tool `cpd_external_approve`"))?.[1]?.match(/[a-z]+_[a-z]+/g) ?? [];
+  const tools = [...contractTools, ...piTools, ...kindValues];
   return {
     causes: new Set(ticks(section(contractDoc, "### 3.4 Attempt statuses, outcomes and causes"), /^[a-z]+(_[a-z]+)*$/)),
     reasons: new Set(reasons),
