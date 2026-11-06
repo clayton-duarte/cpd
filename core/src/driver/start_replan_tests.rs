@@ -14,8 +14,13 @@ fn replanned(status: &str) -> Rig {
     let mut rig = Rig::new();
     rig.sql(&format!(
         "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
-         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'api', '/r/api', 'main', '{status}', 'cpd/pay/api', '/w/api', 'Api', 'config', cpd_txn(), 't', 't');
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) SELECT 'acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'T', 0, 'open', 'none', 'none', 't', 't' WHERE '{status}' = 'open'; 
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at,
+                                pr_number, pr_url, pr_opened_at, pull_request)
+           VALUES ('pay', 'api', '/r/api', 'main', '{status}', 'cpd/pay/api', CASE WHEN '{status}' = 'waiting' THEN NULL ELSE '/w/api' END, 'Api', 'config', cpd_txn(), 't',
+                   CASE WHEN '{status}' = 'waiting' THEN NULL ELSE 't' END,
+                   CASE WHEN '{status}' = 'open' THEN 7 END, CASE WHEN '{status}' = 'open' THEN 'https://github.com/acme/pay/pull/7' END,
+                   CASE WHEN '{status}' = 'open' THEN 't' END, (SELECT id FROM pull_requests WHERE number = 7));
          INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
            VALUES ('pay', 'api', 'work', 'T', 'S2', 'g', 'c', '[\"a.txt\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');"
     ));

@@ -89,7 +89,7 @@ pub(super) fn backing_off_with(
     backing_off(conn, plan, key, clock.utc())
 }
 
-/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose Workflow is `dispatch`
+/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy` (or in `plan` once locked: a re-planned Plan, pro-d433), whose Workflow is `dispatch`
 /// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no Workflow) is Ready in a live Plan (not archived)
 /// in `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
 /// An `open` or `update` Job has no Dependency rows: its rule is derived from the Workflow's other Jobs (§3.2),
@@ -100,7 +100,7 @@ pub(super) fn backing_off_with(
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
   LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
   WHERE j.status = 'queued' AND p.archived_at IS NULL
-    AND ((j.workflow IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
+    AND ((j.workflow IS NOT NULL AND (p.phase IN ('dispatch', 'deploy') OR (p.phase = 'plan' AND p.locked_at IS NOT NULL)) AND r.status IN ('dispatch', 'open'))
       OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
           AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs

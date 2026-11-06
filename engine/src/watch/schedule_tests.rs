@@ -429,7 +429,7 @@ fn ready_dispatches_queued_jobs_of_a_started_workflow_while_the_plan_is_in_phase
     for status in ["dispatch", "open"] {
         let mut fx = replanned();
         fx.fixture(&format!(
-            "UPDATE workflows SET status = '{status}' WHERE key = 'repo';"
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) SELECT 'acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'T', 0, 'open', 'none', 'none', 't', 't' WHERE '{status}' = 'open'; UPDATE workflows SET status = '{status}', pr_number = CASE WHEN '{status}' = 'open' THEN 7 END, pr_url = CASE WHEN '{status}' = 'open' THEN 'https://github.com/acme/pay/pull/7' END, pr_opened_at = CASE WHEN '{status}' = 'open' THEN 't' END, pull_request = (SELECT id FROM pull_requests WHERE number = 7 AND '{status}' = 'open') WHERE key = 'repo';"
         ));
         fx.add_job(
             "base",

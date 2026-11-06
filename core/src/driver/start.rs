@@ -340,6 +340,7 @@ fn decide(
     // The repo and status of the Job's Workflow (R34 A7).
     // An explore Job has no Workflow: it is Ready by its own rule (`require_ready_explore`).
     let explore = jobs::is_explore(&job.kind);
+    let locked = crate::plan::is_locked(conn, plan)?;
     let (repo, _workflow_status): (String, String) = if explore {
         require_ready_explore(conn, &all, job, plan, &phase)?;
         (String::new(), String::new())
@@ -349,7 +350,7 @@ fn decide(
             [plan.as_str(), key.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        require_ready(&all, job, plan, &phase, &workflow.1)?;
+        require_ready(&all, job, plan, &phase, locked, &workflow.1)?;
         workflow
     };
     if job.kind == "open" {
@@ -561,7 +562,7 @@ fn require_ready_explore(
     .with("waiting_for", waiting))
 }
 
-/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose Workflow is
+/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy` (or `plan` once locked, pro-d433), whose Workflow is
 /// `dispatch` or `open` (a `waiting` Workflow has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
 fn require_ready(
@@ -569,6 +570,7 @@ fn require_ready(
     job: &Job,
     plan: &PlanId,
     phase: &str,
+    locked: bool,
     workflow_status: &str,
 ) -> Result<(), CpdError> {
     // An `open` or `update` Job has no Dependency rows: it waits for the Workflow's other Jobs (§3.2, derived).
@@ -584,7 +586,7 @@ fn require_ready(
     };
     let why = if job.status != "queued" {
         format!("it is {}, not queued", job.status)
-    } else if !matches!(phase, "dispatch" | "deploy") {
+    } else if !(matches!(phase, "dispatch" | "deploy") || (phase == "plan" && locked)) {
         format!("Plan {plan} is in phase {phase}")
     } else if !matches!(workflow_status, "dispatch" | "open") {
         format!("its Workflow {} is {workflow_status}", job.workflow_str())
