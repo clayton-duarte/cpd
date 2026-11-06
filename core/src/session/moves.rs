@@ -393,7 +393,9 @@ fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
 /// label). Shared by `session open` and `session send`.
 pub(super) fn wake_durable(tx: &WriteTxn<'_>, id: &SessionId) -> Result<(), CpdError> {
     tx.execute(
-        "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label)
+        "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label),
+                host_restarts = iif(state_label = ?1, 0, host_restarts),
+                host_window_start = iif(state_label = ?1, NULL, host_window_start)
           WHERE id = ?2 AND (asleep_at IS NOT NULL OR state_label = ?1)",
         rusqlite::params![HOST_CRASH_LABEL, id.as_str()],
     )?;

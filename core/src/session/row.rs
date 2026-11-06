@@ -507,7 +507,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     session["switch"] = match &row.switch_failed {
         Some(failed) => {
             let mut switch = failed.clone();
-            switch["next"] = json!(format!("cpd session run {}", row.id));
+            if row.runner != Runner::Durable {
+                switch["next"] = json!(format!("cpd session run {}", row.id));
+            }
             switch
         }
         None => Value::Null,
