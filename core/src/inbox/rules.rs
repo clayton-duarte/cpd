@@ -13,7 +13,6 @@ use time::format_description::well_known::Rfc3339;
 
 use super::model::{Condition, Kind, Urgency, open_items};
 use super::models;
-use crate::swr::source::models as source_models;
 use super::team::{self, GhPr, Lookup, Memo, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
@@ -28,6 +27,7 @@ use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
+use crate::swr::source::models as source_models;
 
 /// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
@@ -803,9 +803,8 @@ fn models_changed(store: &mut Store, now: OffsetDateTime) -> Result<Vec<Conditio
         .iter()
         .filter(|i| i.kind == Kind::ModelsChanged)
         .filter(|i| {
-            models::parse_subject(&i.subject).is_some_and(|(provider, _)| {
-                !known.iter().any(|k| k == provider)
-            })
+            models::parse_subject(&i.subject)
+                .is_some_and(|(provider, _)| !known.iter().any(|k| k == provider))
         })
         .map(Condition::from)
         .collect();

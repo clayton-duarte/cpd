@@ -245,10 +245,7 @@ fn write_listed(
 }
 
 /// A failed or empty provider keeps its row but for `last_error`; a provider with no row gets one with no catalog.
-fn write_failed(
-    store: &mut Store,
-    failure: &ProviderFailure,
-) -> Result<Option<String>, CpdError> {
+fn write_failed(store: &mut Store, failure: &ProviderFailure) -> Result<Option<String>, CpdError> {
     let text = failure_text(failure);
     store.write("models refresh", |tx| {
         let base: Option<String> = tx
@@ -285,8 +282,7 @@ pub fn apply_answer(
     for entry in &answer.entries {
         let failure = match entry {
             Entry::Listed(listed) if !listed.ids.is_empty() => {
-                let (written, recovered) =
-                    write_listed(store, &answer.pi_version, listed, &stamp)?;
+                let (written, recovered) = write_listed(store, &answer.pi_version, listed, &stamp)?;
                 if recovered {
                     let name = endpoint_name(&listed.provider, listed.base.as_deref());
                     endpoint::record_ok(store, &name, now)?;
@@ -308,13 +304,7 @@ pub fn apply_answer(
         let base = write_failed(store, &failure)?;
         let name = endpoint_name(&failure.provider, base.as_deref());
         // The report is not left to the outage clock: the engine reports a permanent code at once (§4).
-        endpoint::record_failure(
-            store,
-            &name,
-            now,
-            &failure_text(&failure),
-            Kind::Transient,
-        )?;
+        endpoint::record_failure(store, &name, now, &failure_text(&failure), Kind::Transient)?;
         outcomes.push(Outcome::Failed(failure));
     }
     Ok(outcomes)
@@ -377,10 +367,7 @@ pub fn changes_of(store: &mut Store, provider: &str) -> Result<Option<Changes>, 
 }
 
 /// The rows whose `changes_json.at` is within `models::WINDOW` of `now` and whose announced part is not empty.
-pub fn changed(
-    store: &mut Store,
-    now: OffsetDateTime,
-) -> Result<Vec<(String, Changes)>, CpdError> {
+pub fn changed(store: &mut Store, now: OffsetDateTime) -> Result<Vec<(String, Changes)>, CpdError> {
     let cutoff = now - WINDOW;
     Ok(rows(store, None)?
         .into_iter()

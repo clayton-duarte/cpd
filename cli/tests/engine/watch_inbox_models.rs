@@ -84,12 +84,7 @@ impl Models {
     ) -> String {
         let at = stamp(self.ago(changed_ago));
         let changes = json!({"at": at, "appeared": appeared, "went_away": went_away});
-        cache_file(
-            &self.fx.env,
-            provider,
-            self.ago(60),
-            Some(changes),
-        );
+        cache_file(&self.fx.env, provider, self.ago(60), Some(changes));
         at
     }
 
@@ -99,9 +94,9 @@ impl Models {
     }
 
     fn remove(&self, provider: &str) {
-        self.fx
-            .env
-            .sql(&format!("DELETE FROM swr_models WHERE provider = '{provider}';"));
+        self.fx.env.sql(&format!(
+            "DELETE FROM swr_models WHERE provider = '{provider}';"
+        ));
     }
 
     /// The engine starts, ticks once and stops.

@@ -87,7 +87,8 @@ fn a_models_changed_notice_is_white() {
         "source": {"kind": "openai-models", "auth": "none", "base": null},
         "ids": ["gpt-new"],
     });
-    let changes = serde_json::json!({"at": "2026-01-01T00:00:00Z", "appeared": ["gpt-new"], "went_away": []});
+    let changes =
+        serde_json::json!({"at": "2026-01-01T00:00:00Z", "appeared": ["gpt-new"], "went_away": []});
     sql(
         &mut store,
         &format!(
