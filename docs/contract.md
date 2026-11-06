@@ -1810,6 +1810,9 @@ CREATE TABLE pull_requests (
   archived        INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),          -- migration `20261105T1521-pr-archived` (pro-d392): 1 when the repository is archived on GitHub
   head_oid        TEXT,                                           -- migration `swr` (docs/architecture/swr.md §3): the head commit of the pull request, from the poll
   gh_updated_at   TEXT,                                           -- migration `swr`: GitHub's updatedAt of the pull request at the last read
+  author_login    TEXT,                                           -- migration `pr-light-cache` (pro-d453): the pull request's author login, from the Light read; NULL = not polled since
+  reviews_json    TEXT,                                           -- migration `pr-light-cache`: the `latestReviews` nodes (state, author, commit oid) of the Light read; NULL = not polled since
+  labels_json     TEXT,                                           -- migration `pr-light-cache`: the label names of the Light read (a JSON array); NULL = not polled since
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
