@@ -766,7 +766,7 @@ div[data-shell]                                                   grid, one colu
 └─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (row 3)
 ```
 
-`div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **2** children, the centre group and the controls. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; `DESIGN-panes.md` keeps the right 64px of the plan title row free for them.
+`div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **2** children, the centre group and the controls. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; the plan title row is a `TopPaneHeader` with `pr-12` (48px), which keeps the right side free for them (3i).
 
 `react-resizable-panels` 4.15.3, through the wrappers of 2f, exact props:
 
@@ -839,7 +839,7 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
-**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|archive`, `data-state` `open|closed`) and a direct flex child of `SidebarContent`; an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside a section: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger plus the optional action) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47). The Contexts section is the one list of live Contexts: standing Contexts (`cpd`, `host`, `codereview`; pro-d79) are ordinary rows in it, sorted like the others by the Manager's dot tier, then newest first (`compareOrderKey`, `state/archiveNav.ts`), with no fixed place.
+**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|archive`) and a direct flex child of `SidebarContent`. **The Contexts section is not collapsible** (pro-d84): it has no `data-state` and always takes the free height (`min-h-0 flex-1`). Its header is the shared `TopPaneHeader` (3i), `data-part="tree-header"` with `hasOverlayControls` false, sticky and never scrolling; its body is a `ScrollArea` > `SidebarGroupContent`. **Archive** stays a collapsible section (`data-state` `open|closed`): an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside Archive: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47). The Contexts section is the one list of live Contexts: standing Contexts (`cpd`, `host`, `codereview`; pro-d79) are ordinary rows in it, sorted like the others by the Manager's dot tier, then newest first (`compareOrderKey`, `state/archiveNav.ts`), with no fixed place.
 
 **Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks or cursor (Not built). Costs are drawn only while the Status Bar's costs toggle is on (3b, Cost below).
 
@@ -856,10 +856,12 @@ DOM:
 ```
 div[aria-label="Context tree"]                                    Sidebar collapsible="none"   bg-sidebar text-sidebar-foreground flex h-full w-full flex-col min-h-full bg-background
 └─ SidebarContent                                                 the only child
-   ├─ SidebarGroup
-   │   ├─ SidebarGroupLabel[data-part="tree-header"]  "Contexts"   text-[11px] font-semibold uppercase tracking-[.08em] text-muted-foreground
-   │   ├─ SidebarGroupAction[type="button"][data-action="new-context"][aria-label="New context"]   only when onNewContext; PlusIcon 14
-   │   └─ SidebarGroupContent
+   ├─ div[data-part="tree-section"][data-section="contexts"]   not collapsible (3d, Section layout)
+   │   ├─ TopPaneHeader[data-part="tree-header"][hasOverlayControls=false]   the shared header (3i), sticky h-11
+   │   │   ├─ span[data-part="phi"][aria-hidden="true"]  "φ"   font-display text-[20px] font-bold text-fg-strong
+   │   │   ├─ span.sr-only  "Contexts"
+   │   │   └─ actions: Button[type="button"][data-action="new-context"][aria-label="New context"]   ghost, icon-sm, 26px; PlusIcon 14; only when onNewContext
+   │   └─ ScrollArea > SidebarGroupContent
    │       ├─ p[data-part="loading"]  "Loading contexts…"           (tree === null)   px-2 text-fg-dim
    │       ├─ p[data-part="empty"]  "No contexts"                  (no live and no archived contexts)   px-2 text-fg-dim
    │       └─ SidebarMenu[role="tree"]                               KEPT   (the live contexts)
@@ -917,7 +919,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Plan button: `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` where `lead` is the session of `plan.sessions` whose `ref.id === plan.leadSessionId`. **Assumption:** with no such Lead only `onSelectPlan(plan.id)` is called.
 - Fork button: `onSelectSession(ref.id)`.
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
-- Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is sticky.
+- Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is sticky (TopPaneHeader, 3i).
 
 Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
@@ -935,7 +937,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 ```
 
 - Chat slot when no session is selected: `<p data-empty>Select a session</p>` (KEPT copy and hook), restyled `grid h-full place-items-center text-muted-foreground`.
-- **Plan pane (pro-d70, pro-d75).** `visiblePlan !== null` renders `ErrorBoundary name="PlanView"` around `MemoPlan`, with `postableWorkflows` when the Inbox is loaded (DESIGN-panes 1f). Otherwise `ErrorBoundary name="ManagerView"` renders `MemoManager` (DESIGN-panes 1j) with `context` = the Context whose own `sessions`, or whose Plans' `sessions`, hold the selected session (`session?.id ?? selectedSessionId`), or `null` (then `CpdFlowCanvas`), and with `onSelectPlan` and `onSelectSession` as `App`'s handlers.
+- **Plan pane (pro-d70, pro-d75).** `visiblePlan !== null` renders `ErrorBoundary name="PlanView"` around `MemoPlan`, with `postableWorkflows` when the Inbox is loaded (DESIGN-panes 1f). Otherwise `ErrorBoundary name="ManagerView"` renders `MemoManager` (DESIGN-panes 1j) with `context` = the Context whose own `sessions`, or whose Plans' `sessions`, hold the selected session (`session?.id ?? selectedSessionId`), or `null` (then `CpdFlowCanvas`), and with `onSelectPlan` and `onSelectSession` as `App`'s handlers. `PlanView` gets `onSelectManager` (pro-d84, A5): it finds the Context's live Manager (its `manager` session that is not archived), calls `onSelectPlan(null)`, then `onSelectSession(manager.ref.id)` when there is one. The manager key of the title row (DESIGN-panes 1) calls it.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
 - `cockpit.status` is the status snapshot the server sends (3b, Data sources). The Status Bar's buttons, dialogs and the reset of 3c are wired inside the bar and `Shell`; `App` passes the snapshot and the costs flag only. `costsOn` is `App` state (`useState(false)`), never stored (3b).
 - Not built in `App`: `onOpenSearch`, `onNewContext`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is built from the tree and the selection (DESIGN-panes 4.1), so a Manager-only selection has crumbs too.
@@ -1081,6 +1083,45 @@ Status: contract for the web Job that implements it. No reducer or `App` code do
 
 It replaces the Composer placeholder of DESIGN-compose.md while the condition holds. Unarchive (the archived row menu, 3g) clears it.
 
+### 3i. TopPaneHeader, the shared pane header (pro-d84, pro-d85, pro-d86)
+
+File `web/src/ui/cockpit/TopPaneHeader.tsx`. One component gives the column headers the same bar. It lives in its own file, not in `ManagerView.tsx`: `ManagerView` imports `Dot` from `ContextTree`, so a `TopPaneHeader` imported from `ManagerView` by `ContextTree` would be a cycle (A2). No other file defines a pane header.
+
+```ts
+export function TopPaneHeader(props: {
+  /** The header's `data-part`. Default `pane-header`. */
+  dataPart?: string;
+  headerRef?: Ref<HTMLElement>;
+  /** Adds `pr-12` (48 px), keeping the right side free for Shell's absolute plan controls (3c). Default true. */
+  hasOverlayControls?: boolean;
+  /** The right slot. */
+  actions?: ReactNode;
+  /** The left content. */
+  children: ReactNode;
+}): ReactElement;
+```
+
+Markup:
+
+```
+header[data-part=dataPart]   sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4 [pr-12 when hasOverlayControls]
+├─ {children}                 the left content
+├─ span.flex-1                the spacer that pushes the actions to the right
+└─ {actions}                  the right content
+```
+
+- `h-11` is 44 px. The header is sticky at the top of its scroll container, so it stays put while its body scrolls.
+- Where it is used:
+
+| Header | `data-part` | `hasOverlayControls` | left content | `actions` | Contract |
+|---|---|---|---|---|---|
+| Context tree | `tree-header` | false | φ mark and sr-only `Contexts` | `New context` button, only with `onNewContext` | 3d |
+| Plan | `title-row` | true (`pr-12`) | manager key, `/`, Plan key, phase stepper | Review and Escalations badges | DESIGN-panes 1 |
+| Manager | `manager-header` | true (`pr-12`) | manager key, counters | none | DESIGN-panes 1j |
+| Inbox | `inbox-header` | false | `INBOX` heading | tier filters | DESIGN-panes 2 |
+
+- Collapsed Plan pane (pro-d84, A6; `app.css`): when `section[aria-label="Plan pane"][data-state="collapsed"]`, `[data-part="plan-body"]` (PlanView) and `[data-part="manager-body"]` (ManagerView) are hidden, and the bottom border of `title-row` and `manager-header` is transparent. Only the header shows, at the 44 px collapsed size (3c).
+
 ## 4. Amendments pro-d48..pro-d66: where each decision is contracted
 
 Every decision is stated as a testable contract in the section named. The shell's own contracts are here (2b, 2h, 3a, 3c, 3g); the cockpit panes are in `DESIGN-panes.md`, the chat in `DESIGN-chat.md`, the composer and dialogs in `DESIGN-compose.md`, the wire and store in `CONTRACT.md` section 11, and the manual checks in `VERIFY.md` section 9.
@@ -1104,6 +1145,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d62 live micro-interactions | collapsible height animations; Chain of Thought opens while busy and collapses when the turn ends; synthetic `Thinking…` step; step and message entry animations; transcript auto-scroll rules | 5.1, 5.2 |
 | pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; the empty state is the flowchart (pro-d68, 5.3) when no Context is selected, a selected Manager shows ManagerView (pro-d70, 3e); header `min-h-11`, title truncates | 5.3 |
 | pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
+| pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New context; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
 
@@ -1149,7 +1191,7 @@ Records: pro-d62 (User approved the live changes in the running preview; this se
 - **`selectedPlanId` follows it.** While the tree is live, the restore has run and a session is selected, `App` calls `connection.selectPlan(activeLeadPlanId)` whenever it differs from `selectedPlanId`. `selectedPlanId` is `string | null` (`web/src/ui/state/selection.ts`, `PersistedSelection.planId`), so `null` is saved and loaded. `ContextTree` receives `selectedPlanId={activeLeadPlanId}`.
 - **`visiblePlan`.** The Plan pane (`MemoPlan`) and the Header `location` use `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
 - **Empty state (pro-d68).** When `plan === null`, `PlanView` renders `CpdFlowCanvas` (`web/src/ui/cockpit/FlowCanvas.tsx`; root `div[data-part="flow-canvas"]`): the Plan flowchart that the Documentation dialog shows (`DocsDialog.tsx`, its flowchart tab), with its step cards collapsed at start. With no selected session, or a session in no Context, the Plan pane shows it through ManagerView (3e). A selected Manager shows ManagerView, not the flowchart (pro-d70, DESIGN-panes 1j).
-- **Header.** `div[data-part="title-row"]` is `flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16`: `min-h-11` (44 px minimum, the row grows when it wraps) replaces the fixed `h-11`. The title `h2` is `max-w-full min-w-0 truncate` with `title={plan.title}` as its native tooltip. `plan-key`, `review` and `escalations` are `shrink-0`.
+- **Header.** `div[data-part="title-row"]` is the shared `TopPaneHeader` (3i): `h-11` (44 px), no wrap, `pr-12`. It supersedes the wrapping `min-h-11` row of pro-d65. Its left content is the manager key, `/`, and `h2[data-part="plan-key"]` with the Plan id (`title={plan.title}` as its native tooltip; the key truncates), then the phase Stepper. The Review and Escalations badges are in its `actions` slot (DESIGN-panes 1).
 
 **Tests this section changes.** `cockpit/PlanView.test.tsx` expects `[data-part="flow-canvas"]` when `plan` is null. `AppPlanFollow.test.tsx` expects the flowchart only with no selection; with a Manager selected, or a Lead whose Plan is not loaded, it expects `[data-manager-view]` (pro-d70; the test changes with the ManagerView change). `app.css.test.ts` pins `overflow: hidden` on `[data-shell] aside` and `[data-part="plan-panel"]` (pro-d69, A10). The pro-d69 scroll tests assert `data-slot` markup, never scrollbars: `Shell.test.tsx` and `shell.consolidate.test.tsx` (the Plan pane content is a `[data-slot="scroll-area"]`; the Inbox aside is `overflow-hidden`), `Inbox.test.tsx` (the list is a `[data-slot="scroll-area"]`), `StatusDialogs.test.tsx` (the Legend sections and the Logs rows), `PlanView.test.tsx` (`dag-body` is a `[data-slot="scroll-area"]` with a horizontal `ScrollBar`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.
 
