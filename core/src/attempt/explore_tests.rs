@@ -607,18 +607,55 @@ fn job_show_of_a_merged_explore_job_shows_summary_and_artefact() {
     );
 }
 
+/// `cpd job add <key> --kind scout --tier H2 --spec <file> --plan pay` on `rig`, parsed by clap and run in process.
+fn job_add_scout(rig: &mut Rig, key: &str) -> Result<Output, CpdError> {
+    #[derive(clap::Parser)]
+    struct Wrap {
+        #[command(flatten)]
+        add: crate::job::AddArgs,
+    }
+    let spec = rig.tmp.path().join(format!("{key}-spec.json"));
+    std::fs::write(
+        &spec,
+        r#"{"goal": "g", "context": "c", "acceptance": ["b"], "out_of_scope": []}"#,
+    )
+    .unwrap();
+    let wrap = <Wrap as clap::Parser>::try_parse_from([
+        "wrap",
+        key,
+        "--title",
+        "T",
+        "--tier",
+        "H2",
+        "--spec",
+        spec.to_str().unwrap(),
+        "--kind",
+        "scout",
+        "--plan",
+        "pay",
+    ])
+    .unwrap();
+    crate::job::add::add_in(&mut rig.env, wrap.add)
+}
+
 #[test]
 fn ending_an_explore_job_keeps_a_replanned_plan_in_phase_plan() {
-    // pro-d429/pro-d433: a re-planned Plan is phase plan with locked_at set; settle_done never touches phase plan.
+    // pro-d429/pro-d433: an explore add moves the Plan to phase plan (locked_at kept); settle_done never touches phase plan.
     let mut rig = Rig::new();
     rig.sql(
         "INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
            VALUES (7, 'o/r', 7, 'https://example/7', 'Ship', 0, 'merged', 'none', 'none', 't', 't', 't', 'unknown', 'unknown', 0, 0);
          INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, merged_at, created_txn, created_at, started_at)
-           VALUES ('pay', 'api', '/r', 'main', 'merged', 'cpd/pay/api', '/lw', 7, 'https://example/7', 't', 7, 't', 1, 't', 't');
-         UPDATE plans SET phase = 'plan' WHERE id = 'pay';",
+           VALUES ('pay', 'api', '/r', 'main', 'merged', 'cpd/pay/api', '/lw', 7, 'https://example/7', 't', 7, 't', 1, 't', 't');",
     );
-    rig.add_job("look", "scout", "H2");
+    job_add_scout(&mut rig, "look").unwrap();
+    assert_eq!(
+        rig.one::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "plan",
+        "the add moved the Plan back to phase plan"
+    );
+    let locked = rig.one::<Option<String>>("SELECT locked_at FROM plans WHERE id = 'pay'");
+    assert!(locked.is_some());
     let attempt = rig.start("look");
     rig.write_artefact("look", "# Findings\nnothing to change\n");
     let summary = rig.summary_file("Nothing to change.\n");
@@ -633,7 +670,11 @@ fn ending_an_explore_job_keeps_a_replanned_plan_in_phase_plan() {
         "plan"
     );
     assert_eq!(
-        rig.one::<i64>("SELECT count(*) FROM events WHERE kind IN ('plan-phase', 'plan-done')"),
+        rig.one::<Option<String>>("SELECT locked_at FROM plans WHERE id = 'pay'"),
+        locked
+    );
+    assert_eq!(
+        rig.one::<i64>("SELECT count(*) FROM events WHERE kind = 'plan-done'"),
         0
     );
     assert_eq!(

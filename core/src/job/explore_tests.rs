@@ -448,9 +448,11 @@ fn locked_at(f: &mut Fixture) -> Option<String> {
 }
 
 /// Plan `pay` re-planned: phase `plan` with `locked_at` set (pro-d433, assumption A1).
+/// It is reached the way a Lead reaches it: an explore add (`first`) on a dispatch Plan.
 fn replanned() -> Fixture {
     let mut f = fixture("dispatch");
-    f.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
+    let spec = f.explore_spec("first.json");
+    fields(f.add("first", "scout", "H2", &spec, None, false, &[]));
     f
 }
 
@@ -545,6 +547,13 @@ fn explore_add_in_grounding_and_plan_leaves_the_phase() {
         assert!(plan_phases(&mut f).is_empty(), "{phase}");
         assert_eq!(f.events("job-added"), 1, "{phase}");
     }
+    // A Plan that an earlier add moved back to phase plan is not moved again, by the same or a later add.
+    let mut f = fixture("dispatch");
+    let spec = f.explore_spec("s.json");
+    fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+    fields(f.add("s2", "scout", "H2", &spec, None, false, &[]));
+    assert_eq!(plan_state(&mut f), ("plan".to_owned(), None));
+    assert_eq!(plan_phases(&mut f).len(), 1);
 }
 
 #[test]
@@ -553,13 +562,19 @@ fn explore_add_on_a_replanned_plan_changes_nothing_but_the_job() {
     assert_eq!(plan_state(&mut f), ("plan".to_owned(), None));
     let locked = locked_at(&mut f);
     assert!(locked.is_some());
+    let moved = plan_phases(&mut f);
+    assert_eq!(moved, vec![("dispatch".to_owned(), "plan".to_owned())]);
     let spec = f.explore_spec("s.json");
     fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
     assert_eq!(plan_state(&mut f), ("plan".to_owned(), None));
     assert_eq!(locked_at(&mut f), locked);
-    assert!(plan_phases(&mut f).is_empty());
+    assert_eq!(
+        plan_phases(&mut f),
+        moved,
+        "the second add appends no plan-phase"
+    );
     assert_eq!(f.column("s1", "status").as_deref(), Some("queued"));
-    assert_eq!(f.events("job-added"), 1);
+    assert_eq!(f.events("job-added"), 2);
 }
 
 #[test]
