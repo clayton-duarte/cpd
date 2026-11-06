@@ -415,6 +415,19 @@ fn a_posted_pr_that_is_not_ready_to_merge_is_a_white_in_review_row() {
 }
 
 #[test]
+fn a_posted_approved_pr_that_is_not_clean_is_a_white_waiting_row() {
+    let mut f = fixture();
+    f.policy(POST);
+    f.workflow(
+        1,
+        "merge_state = 'blocked', checks = 'passed', review_decision = 'approved'",
+    );
+    f.own("pay", 1);
+    f.posted(1);
+    is(&mut f, 1, White, "waiting");
+}
+
+#[test]
 fn an_authored_pr_that_matches_no_other_state_is_a_white_waiting_row() {
     let mut f = fixture();
     for (n, state) in [(1, "blocked"), (2, "behind"), (3, "unknown")] {

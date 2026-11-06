@@ -4,7 +4,7 @@
 use time::macros::datetime;
 
 use super::gh::{Listed, Membership, PolledPr};
-use super::pulls::{self, Excused, PostFacts, Reason};
+use super::pulls::{self, PostFacts, Reason};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::error::CpdError;
 use crate::home::CpdHome;
@@ -69,7 +69,6 @@ fn reasons(change: &pulls::Change) -> Vec<Reason> {
             enabled: false,
             posted: false,
         },
-        Excused(false),
     )
 }
 
