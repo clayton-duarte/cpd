@@ -341,6 +341,11 @@ struct Post {
 
 /// A ready, authored pull request `acme/pay#801` of Workflow `api`, posting enabled to `C0POLICY1`, the helper answering `SENT`.
 fn post_fixture() -> Post {
+    post_fixture_with((0, SENT))
+}
+
+/// [`post_fixture`] with the helper answering `reply` to every call.
+fn post_fixture_with(reply: (i32, &'static str)) -> Post {
     let mut rig = crate::janitor_tests::Rig::new();
     rig.workflow("api", "open");
     let root = rig.home.root().to_path_buf();
@@ -373,7 +378,7 @@ fn post_fixture() -> Post {
         .route(
             "node",
             Arc::new(Helper {
-                reply: (0, SENT),
+                reply,
                 calls: calls.clone(),
             }),
         )
@@ -413,6 +418,25 @@ impl Post {
 
     fn sent(&self) -> usize {
         self.calls.lock().unwrap().len()
+    }
+
+    /// `execute` of the oldest due `slack` mutation, as E24 claims it.
+    fn execute(&self) -> ExecOutcome {
+        let ports = &self.rig.fakes.ports;
+        let now = ports.clock.utc();
+        let home = &self.rig.home;
+        let config = Config::load(home).unwrap();
+        let mut store = self.store();
+        let m = outbox::claim_next(&mut store, now, "slack")
+            .unwrap()
+            .expect("a due slack mutation");
+        let mut cx = Cx {
+            store: &mut store,
+            ports,
+            home,
+            config: &config,
+        };
+        Slack.execute(&mut cx, &m)
     }
 }
 
@@ -648,8 +672,10 @@ fn slack_claim_eyes_reaction_goes_through_the_outbox() {
     );
 }
 
-const OK_REACT: &str = r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":false}"#;
-const ALREADY_REACTED: &str = r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":true}"#;
+const OK_REACT: &str =
+    r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":false}"#;
+const ALREADY_REACTED: &str =
+    r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":true}"#;
 
 /// The owner's policy text naming `emoji` as the merge reaction (none when `None`).
 fn owner_policy(emoji: Option<&str>) -> String {
@@ -684,7 +710,9 @@ impl Fx {
     /// The merge reaction of Workflow `repo`, enqueued the way the merge does (`react_merge_in`).
     fn enqueue_merge(&mut self) {
         self.store
-            .write("merge", |tx| slack::react_merge_in(tx, "pay", "repo").map_err(Into::into))
+            .write("merge", |tx| {
+                slack::react_merge_in(tx, "pay", "repo").map_err(Into::into)
+            })
             .unwrap();
     }
 
@@ -748,7 +776,8 @@ fn slack_merge_reaction_places_the_emoji_the_policy_names_at_execute() {
     assert_eq!(fx.execute(), ExecOutcome::Done);
     let args = helper_args(&fx);
     assert!(
-        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "rocket"),
+        args.windows(2)
+            .any(|w| w[0] == "--emoji" && w[1] == "rocket"),
         "the emoji is the policy's now, not the queued git-merge: {args:?}"
     );
 }
@@ -790,7 +819,8 @@ fn slack_merge_reaction_whose_policy_does_not_resolve_sends_the_queued_emoji() {
     );
     let args = helper_args(&fx);
     assert!(
-        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "git-merge"),
+        args.windows(2)
+            .any(|w| w[0] == "--emoji" && w[1] == "git-merge"),
         "{args:?}"
     );
 }
@@ -810,13 +840,23 @@ fn slack_parked_merge_reaction_is_requeued_when_the_policy_names_another_emoji()
         .filter(|(op, _, _, status)| op == "reaction" && status == "pending")
         .map(|(_, _, vars, _)| vars)
         .collect();
-    assert_eq!(reopened.len(), 1, "one new pending row: {:?}", fx.mutations());
-    assert!(reopened[0].contains("\"emoji\":\"rocket\""), "{}", reopened[0]);
+    assert_eq!(
+        reopened.len(),
+        1,
+        "one new pending row: {:?}",
+        fx.mutations()
+    );
+    assert!(
+        reopened[0].contains("\"emoji\":\"rocket\""),
+        "{}",
+        reopened[0]
+    );
 
     assert_eq!(fx.execute(), ExecOutcome::Done);
     let args = helper_args(&fx);
     assert!(
-        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "rocket"),
+        args.windows(2)
+            .any(|w| w[0] == "--emoji" && w[1] == "rocket"),
         "{args:?}"
     );
 }
@@ -856,5 +896,152 @@ fn slack_refused_merge_reaction_names_its_emoji_and_policy_file() {
         fx.count("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%slack_refused%' AND data LIKE '%git-merge%' AND data LIKE '%owner.toml%'"),
         1,
         "one error Event naming the emoji and the policy file to fix"
+    );
+}
+
+const AUTH: &str = r#"{"ok":false,"error":{"code":"slack_auth","message":"Slack needs a sign-in. Run: pi mcp login slack","details":{}}}"#;
+
+/// The send of a queued post (swr-slack.md 5): the message is the one rendered at enqueue, the helper runs with the pi entry and
+/// the channel, and the `pr_posts` row is written when the send answers, with the owner's merge reaction.
+#[test]
+fn slack_post_sends_the_message_and_records_its_pr_posts_row() {
+    let fx = post_fixture();
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+    let text = fx.mutations()[0].2["text"].as_str().unwrap().to_owned();
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+
+    let calls = fx.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1, "one helper run");
+    assert_eq!(calls[0].stdin.as_deref(), Some(text.as_bytes()));
+    let row: (String, String, String, Option<String>, Option<String>) = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT channel, ts, link, reaction, reacted_at FROM pr_posts WHERE plan = 'pay' AND workflow = 'api'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "C0POLICY1".to_owned(),
+            "1700000000.000100".to_owned(),
+            "https://slack.test/p1".to_owned(),
+            Some("merge".to_owned()),
+            None
+        ),
+        "the reaction is the owner's merged_reaction; reacted_at waits for E24's reaction"
+    );
+}
+
+#[test]
+fn slack_post_runs_the_helper_with_the_pi_entry_and_the_channel() {
+    let fx = post_fixture();
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    fx.execute();
+
+    let calls = fx.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    let call = &calls[0];
+    let root = fx.rig.home.root().canonicalize().unwrap();
+    let script = root.join("adapter/lib/slack-post.ts");
+    let entry = root
+        .join("install/releases/1.2.0/node_modules/@earendil-works/pi-coding-agent/dist/index.js");
+    let argv: Vec<&str> = call.args.iter().map(String::as_str).collect();
+    assert_eq!(
+        argv,
+        [
+            script.to_str().unwrap(),
+            "--coding-agent",
+            entry.to_str().unwrap(),
+            "--channel",
+            "C0POLICY1"
+        ]
+    );
+    assert_eq!(call.deadline, Duration::from_secs(60));
+}
+
+#[test]
+fn slack_post_to_the_machine_channel_when_the_owner_names_none() {
+    // The helper answers the channel it posted to, which the pr_posts row takes.
+    let fx = post_fixture_with((
+        0,
+        r#"{"ok":true,"channel":"C0MACHINE1","ts":"1700000000.000100","link":"https://slack.test/p1"}"#,
+    ));
+    let ports = fx.rig.fakes.ports.clone();
+    let policy = crate::policy::policy_dir(&fx.rig.home).join("acme");
+    std::fs::write(
+        policy.join("owner.toml"),
+        "[pr.post]\nenabled = true\nmerged_reaction = \"merge\"\n",
+    )
+    .unwrap();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+
+    let calls = fx.calls.lock().unwrap().clone();
+    assert_eq!(calls[0].args.last().map(String::as_str), Some("C0MACHINE1"));
+    assert_eq!(
+        fx.count("SELECT count(*) FROM pr_posts WHERE channel = 'C0MACHINE1'"),
+        1,
+        "the row names the channel the helper posted to"
+    );
+}
+
+#[test]
+fn slack_post_refused_for_a_sign_in_records_nothing() {
+    let fx = post_fixture_with((3, AUTH));
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    let ExecOutcome::Failed { error } = fx.execute() else {
+        panic!("a sign-in refusal fails the post")
+    };
+    assert!(error.starts_with("slack_auth"), "{error}");
+    assert_eq!(
+        fx.count("SELECT count(*) FROM pr_posts"),
+        0,
+        "nothing recorded"
+    );
+}
+
+#[test]
+fn slack_post_whose_helper_prints_nothing_fails_the_send() {
+    let fx = post_fixture_with((1, ""));
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    let ExecOutcome::Failed { error } = fx.execute() else {
+        panic!("a helper that prints nothing fails the post")
+    };
+    assert!(error.starts_with("spawn_failed"), "{error}");
+    assert_eq!(
+        fx.count("SELECT count(*) FROM pr_posts"),
+        0,
+        "nothing recorded"
+    );
+}
+
+#[test]
+fn slack_post_sends_the_message_verbatim_without_escaping() {
+    let fx = post_fixture();
+    let ports = fx.rig.fakes.ports.clone();
+    fx.rig
+        .sql("UPDATE pull_requests SET title = 'Fix a & b <c> \"d\"' WHERE number = 801;");
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+    let text = fx.mutations()[0].2["text"].as_str().unwrap().to_owned();
+    assert!(text.starts_with("Fix a & b <c> \"d\"\n"), "{text}");
+
+    fx.execute();
+
+    assert_eq!(
+        fx.calls.lock().unwrap()[0].stdin.as_deref(),
+        Some(text.as_bytes())
     );
 }

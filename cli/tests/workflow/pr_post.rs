@@ -152,44 +152,14 @@ fn posts_the_rendered_message_and_records_it() {
 
     let out = pay.post_cmd().ok();
 
+    // Queued, not sent (swr-slack.md 5): the message is rendered now, the row and the send come from E24.
     let message = ":git-pr-open: Pay the bills:\nhttps://github.com/acme/pay/pull/812";
-    let calls = pay.fx.calls("node");
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].stdin.as_deref(), Some(message.as_bytes()));
-    let posts = pay.posts();
-    assert_eq!(posts.len(), 1, "{posts:?}");
-    let row = &posts[0];
-    assert_eq!(
-        (
-            &row["plan"],
-            &row["workflow"],
-            &row["channel"],
-            &row["ts"],
-            &row["link"],
-            &row["reaction"],
-            &row["reacted_at"]
-        ),
-        (
-            &json!("pay"),
-            &json!("repo"),
-            &json!("C0POLICY1"),
-            &json!("1793040197.490209"),
-            &json!("https://acme.slack.com/archives/C0POLICY1/p1793040197490209"),
-            &Value::Null,
-            &Value::Null
-        )
-    );
-    let posted_at = row["posted_at"].as_str().unwrap();
-    assert!(!posted_at.is_empty());
-    let mut out = out;
-    out.as_object_mut().unwrap().remove("auto_merge"); // its own tests: pr_post_auto_merge
-    assert_eq!(
-        out,
-        json!({"ok": true, "plan": "pay", "pr": "repo", "number": 812, "url": URL,
-               "post": {"channel": "C0POLICY1", "ts": "1793040197.490209",
-                        "link": "https://acme.slack.com/archives/C0POLICY1/p1793040197490209",
-                        "posted_at": posted_at, "reaction": null, "reacted_at": null},
-               "message": message})
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(out["message"], message);
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
+    assert!(
+        pay.posts().is_empty(),
+        "no pr_posts row until the send answers"
     );
     assert_eq!(pay.events(), events, "a data row: no Event");
 }
@@ -198,46 +168,12 @@ fn posts_the_rendered_message_and_records_it() {
 fn calls_the_helper_with_the_pi_entry_and_the_channel() {
     let pay = post(Setup::baseline());
 
-    pay.post_cmd().ok();
+    let out = pay.post_cmd().ok();
 
-    let calls = pay.fx.calls("node");
-    assert_eq!(calls.len(), 1);
-    let call = &calls[0];
-    let root = pay.fx.env.root().canonicalize().unwrap();
-    let script = root.join("adapter/lib/slack-post.ts");
-    let entry = root.join(format!(
-        "install/releases/{}/node_modules/@earendil-works/pi-coding-agent/dist/index.js",
-        crate::common::healthy::PI_RELEASE
-    ));
-    let argv: Vec<&str> = call.args.iter().map(String::as_str).collect();
-    assert_eq!(
-        argv,
-        [
-            script.to_str().unwrap(),
-            "--coding-agent",
-            entry.to_str().unwrap(),
-            "--channel",
-            "C0POLICY1"
-        ]
-    );
-    let env = |key: &str| {
-        call.envs
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-    };
-    assert_eq!(
-        env("PI_CODING_AGENT_DIR"),
-        Some(Some(root.display().to_string()))
-    );
-    for removed in ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT"] {
-        assert_eq!(env(removed), Some(None), "{removed} is removed");
-    }
-    assert_eq!(
-        call.cwd,
-        Some(pay.fx.env.cpd_home().canonicalize().unwrap())
-    );
-    assert_eq!(call.deadline, std::time::Duration::from_secs(60));
+    // The helper's argv and env are the send's (swr-slack.md 5): core swr::source::slack_write_tests pins them.
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(out["channel"], "C0POLICY1");
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
 }
 
 #[test]
@@ -253,13 +189,15 @@ fn falls_back_to_the_config_team_channel_and_the_default_template() {
 
     let out = pay.post_cmd().ok();
 
-    let message = "Pay the bills\nhttps://github.com/acme/pay/pull/812";
-    let calls = pay.fx.calls("node");
-    assert_eq!(calls[0].stdin.as_deref(), Some(message.as_bytes()));
-    assert_eq!(calls[0].args.last().map(String::as_str), Some("C0MACHINE1"));
-    assert_eq!(out["message"], message);
-    assert_eq!(out["post"]["channel"], "C0MACHINE1");
-    assert_eq!(pay.posts()[0]["channel"], "C0MACHINE1");
+    // The channel and message are fixed at enqueue; the helper's channel is the send's (core test).
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(
+        out["message"],
+        "Pay the bills\nhttps://github.com/acme/pay/pull/812"
+    );
+    assert_eq!(out["channel"], "C0MACHINE1");
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
+    assert!(pay.posts().is_empty());
 }
 
 #[test]
@@ -419,10 +357,10 @@ fn open_human_comments_and_the_feedback_checks_policy_do_not_change_readiness() 
     let pay = post(Setup::baseline());
     pay.set(&format!("feedback = '{}'", json!([human_item()])));
 
-    pay.post_cmd().ok();
+    let out = pay.post_cmd().ok();
 
-    assert_eq!(pay.node_calls(), 1);
-    assert_eq!(pay.posts().len(), 1);
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
     drop(pay);
 
     let relaxed = post(Setup::baseline());
@@ -440,12 +378,11 @@ fn open_human_comments_and_the_feedback_checks_policy_do_not_change_readiness() 
 fn slack_not_signed_in_records_nothing() {
     let pay = post_with_node(Setup::baseline(), Reply::exit(3, &format!("{AUTH}\n"), ""));
 
-    let error = refused(&pay.post_cmd(), "slack_auth", 3);
+    // A sign-in refusal is the send's: core swr::source::slack_write_tests::slack_post_refused_for_a_sign_in_records_nothing.
+    let out = pay.post_cmd().ok();
 
-    assert_eq!(
-        error["message"],
-        "Slack needs a sign-in. Run: pi mcp login slack"
-    );
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
     assert!(pay.posts().is_empty());
 }
 
@@ -453,8 +390,11 @@ fn slack_not_signed_in_records_nothing() {
 fn a_helper_that_prints_nothing_is_spawn_failed() {
     let pay = post_with_node(Setup::baseline(), Reply::exit(1, "", ""));
 
-    refused(&pay.post_cmd(), "spawn_failed", 1);
+    // The helper's failure is the send's: core swr::source::slack_write_tests::slack_post_whose_helper_prints_nothing_fails_the_send.
+    let out = pay.post_cmd().ok();
 
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
     assert!(pay.posts().is_empty());
 }
 
@@ -465,12 +405,11 @@ fn the_message_is_sent_verbatim_without_escaping() {
 
     let out = pay.post_cmd().ok();
 
+    // The message is rendered at enqueue, verbatim; the stdin of the send is core's
+    // slack_write_tests::slack_post_sends_the_message_verbatim_without_escaping.
     let message = format!("Fix a & b <c> \"d\"\n{URL}");
-    assert_eq!(
-        pay.fx.calls("node")[0].stdin.as_deref(),
-        Some(message.as_bytes())
-    );
     assert_eq!(out["message"], message);
+    assert_eq!(pay.node_calls(), 0, "nothing is sent yet");
 }
 
 #[test]
@@ -481,18 +420,9 @@ fn the_post_records_the_reaction_the_owner_chose() {
 
     let out = pay.post_cmd().ok();
 
-    assert_eq!(out["post"]["reaction"], "git-merge");
-    assert_eq!(out["post"]["reacted_at"], Value::Null);
-    let posts = pay.posts();
-    assert_eq!(
-        (&posts[0]["reaction"], &posts[0]["reacted_at"]),
-        (&json!("git-merge"), &Value::Null)
-    );
-    drop(pay);
-
-    let plain = post(Setup::baseline());
-    plain.post_cmd().ok();
-    assert_eq!(plain.posts()[0]["reaction"], Value::Null);
+    // The reaction is recorded in pr_posts at the send: core slack_write_tests::slack_post_sends_the_message_and_records_its_pr_posts_row.
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(pay.posts().is_empty(), "no row until the send answers");
 }
 
 #[test]
