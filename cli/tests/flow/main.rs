@@ -80,6 +80,7 @@ mod plan_new_runner;
 mod plan_new_tier;
 mod plan_outline;
 mod plan_overlap;
+mod plan_pr_state;
 mod plan_render_cancelled;
 mod plan_render_waiting;
 mod plan_review_summary;

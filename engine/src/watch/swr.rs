@@ -203,3 +203,14 @@ pub(super) fn drain_github(engine: &mut Engine) {
         Err(e) => engine.fail(Step::E24, About::Machine, Failure::from(&e)),
     }
 }
+
+/// Guarantee (b) of swr-github.md §10: wakes the Review Lead of every claimed pull request whose cached `head_oid` differs from the
+/// claimed one while its cached `checks` are `passed`, once per head (a `session-message` Event with `data.head_oid`).
+/// Stub: the implementing Job replaces it and calls it where a pass commits a header.
+#[allow(
+    dead_code,
+    reason = "a red-test stub until the wake Job calls it from the pass"
+)]
+pub(super) fn wake_review_leads(_engine: &mut Engine) {
+    todo!("the Review Lead wake on a new green head")
+}

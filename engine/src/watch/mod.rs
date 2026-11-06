@@ -121,6 +121,8 @@ mod swr;
 mod swr_github_tests;
 #[cfg(test)]
 mod swr_tests;
+#[cfg(test)]
+mod swr_wake_tests;
 pub mod team;
 #[cfg(test)]
 mod testkit;
