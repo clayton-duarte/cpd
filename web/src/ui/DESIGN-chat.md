@@ -85,6 +85,11 @@ header   flex items-center gap-3 border-b px-4 py-2
 ├─ div[data-part="heading"]   min-w-0 flex-1
 │   └─ h1[data-part="title"]   m-0 truncate text-title font-semibold text-fg-strong      text = title ?? sessionKey
 └─ Badge[data-part="completion-badge"]   LAST child of the header, a sibling after the heading div (not inside it); only for role "lead" with a non-null completion (1.4); absent otherwise
+     (when `completion.others` is non-empty, the badge is the trigger of a HoverCard, 1.4)
+
+HoverCardContent[data-part="completion-scores"]   portaled (shadcn HoverCard, `components/hover-card.tsx`); NOT a header child; only when `others` is non-empty (1.4)
+├─ heading text   `kev-4b scores`
+└─ Badge[data-part="completion-other"] × n   tone="neutral"; text `<label text> · <score>%`; one per `others` entry, in the given order
 ```
 
 - `h1[data-part="title"]` is the only heading. Its text is the title, or the session key when there is no title (the `h1` is not a separate key line any more).
@@ -96,9 +101,11 @@ header   flex items-center gap-3 border-b px-4 py-2
 ### 1.4 Completion badge (pro-d422, pro-d424; CONTRACT 3.10)
 
 - **Rule.** The badge is shown only when `role === "lead"` and `completion` is non-null. Every other session (manager, worker, or a null `completion`) shows the unchanged title-only header.
-- **Element.** `<Badge data-part="completion-badge" tone={completion.tone} title={`kev-4b verdict: ${labelText}, archive-safety ${completion.score}%`}>{completion.text}</Badge>`, where `Badge` is the part of `components/badge.tsx` (DESIGN.md 2f; `tone` gives `outline` plus the tone classes). The tone is `completion.tone` (`done`, `decision` or `blocked`). No new Tone and no new CSS (pro-d424).
+- **Element.** `<Badge data-part="completion-badge" tone={completion.tone} title={`kev-4b verdict: ${labelText}, archive-safety ${completion.score}%`}>{completion.text}</Badge>`, where `Badge` is the part of `components/badge.tsx` (DESIGN.md 2f; `tone` gives `outline` plus the tone classes). The tone is `completion.tone` (`done`, `decision` or `blocked`). No new Tone and no new CSS (pro-d424). The `title` prop is set only when there is no card (see Tooltip below).
+- **HoverCard (when `completion.others` is non-empty; CONTRACT 3.10).** The badge is the trigger of the shadcn HoverCard (`components/hover-card.tsx`, the same parts as `Footer.tsx`): `<HoverCard openDelay={10} closeDelay={100}><HoverCardTrigger asChild>{badge}</HoverCardTrigger><HoverCardContent data-part="completion-scores">…</HoverCardContent></HoverCard>`. The badge keeps `data-part="completion-badge"`, its tone and its text, and stays the header's last child; the card is portaled and so is not inside the header. `others` absent or empty: no HoverCard, the badge is rendered alone.
+- **Card content.** A heading with the text `kev-4b scores`, then one row per `others` entry, in the given order (the server sorts them high to low, CONTRACT 3.10): `Badge[data-part="completion-other"]` with `tone="neutral"` and the text `<label text> · <score>%`. `<label text>` is the label text of CONTRACT 3.10 (`Safe to archive`, `Unanswered ask`, `Open work`, `Unrecorded decision`, `Unescalated bug`). No new Tone, no new CSS, no new component.
 - **Text.** `completion.text` verbatim, `<label> · <score>%`. `labelText` is the label text of CONTRACT 3.10 for `completion.label` (for example `Safe to archive`, `Unescalated bug`).
-- **Tooltip.** The native `title` attribute, not the Tooltip part. Example: `kev-4b verdict: Safe to archive, archive-safety 92%`.
+- **Tooltip.** The native `title` attribute, not the Tooltip part. Example: `kev-4b verdict: Safe to archive, archive-safety 92%`. The native `title` is kept only when there is NO card (`others` absent or empty); with a card the attribute is omitted, so the native title and the card never stack.
 - **Placement (pro-d437, supersedes the pro-d422 placement).** Same row as the title, aligned right, after the heading: the badge is the header's last child, a sibling after `div[data-part="heading"]` and not inside it. The heading keeps its classes; the badge's `shrink-0` keeps the badge whole while the title truncates.
 - **Not interactive.** No button, no click action, no `data-action`.
 - **Absence.** A null `completion` renders nothing; it is not an error. The badge never blocks the header, the title, attach or submission.

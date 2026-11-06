@@ -13,11 +13,16 @@ export const TOOL_PREVIEW_LINES = 10; // compact-tools previewLines default (sco
 export type Runner = "pi" | "durable"; // `runner` of `cpd session list` (scout-cockpit §4)
 export type CompletionLabel = "safe_to_archive" | "unanswered_ask" | "open_work" | "unrecorded_decision" | "unescalated_issue";
 export type CompletionTone = "done" | "decision" | "blocked";
+export interface CompletionScore {
+  readonly label: CompletionLabel;
+  readonly score: number;
+}
 export interface Completion {
   readonly label: CompletionLabel;
   readonly text: string;
   readonly score: number;
   readonly tone: CompletionTone;
+  readonly others?: readonly CompletionScore[];
 }
 
 export type SessionRole = "manager" | "lead" | "worker";

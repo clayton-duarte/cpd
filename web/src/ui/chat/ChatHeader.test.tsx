@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
 import { ChatHeader } from "./ChatHeader.tsx";
 import { toneClasses } from "../dango-status.ts";
@@ -76,4 +76,46 @@ it("header is a single non-wrapping row", () => {
   expect(heading.className).toContain("flex-1");
   expect(header.querySelector("h1")?.className).toContain("truncate");
   m.unmount();
+});
+
+const hover = async (el: HTMLElement) => {
+  await act(async () => { el.focus(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+};
+
+it("completion badge opens a hover card listing the other scores", async () => {
+  vi.useFakeTimers();
+  const others = [{ label: "unanswered_ask", score: 24 }, { label: "open_work", score: 10 }] as const;
+  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={{ ...completion, others }} />);
+  const header = m.container.querySelector("header") as HTMLElement;
+  const badge = header.querySelector<HTMLElement>('[data-part="completion-badge"]')!;
+  expect(header.lastElementChild).toBe(badge);
+  expect(badge.textContent).toBe("Safe to archive · 93%");
+  expect(badge.className).toContain(toneClasses.done.text);
+  expect(document.querySelector('[data-part="completion-scores"]')).toBeNull();
+  await hover(badge);
+  const card = document.querySelector('[data-part="completion-scores"]');
+  expect(card).not.toBeNull();
+  const rows = [...card!.querySelectorAll<HTMLElement>('[data-part="completion-other"]')];
+  expect(rows.map((r) => r.textContent)).toEqual(["Unanswered ask · 24%", "Open work · 10%"]);
+  expect(rows.every((r) => r.dataset["slot"] === "badge")).toBe(true);
+  m.unmount();
+  vi.useRealTimers();
+});
+
+it("completion badge without others has no hover card and keeps the native title", async () => {
+  vi.useFakeTimers();
+  const title = "kev-4b verdict: Safe to archive, archive-safety 93%";
+  for (const c of [completion, { ...completion, others: [] }]) {
+    const m = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={c} />);
+    const badge = m.container.querySelector<HTMLElement>('[data-part="completion-badge"]')!;
+    expect(badge.getAttribute("title")).toBe(title);
+    await hover(badge);
+    expect(document.querySelector('[data-part="completion-scores"]')).toBeNull();
+    m.unmount();
+  }
+  const m = mount(<ChatHeader sessionKey="lead-1" title="Fix" role="lead" completion={{ ...completion, others: [{ label: "open_work", score: 10 }] }} />);
+  expect(m.container.querySelector('[data-part="completion-badge"]')?.hasAttribute("title")).toBe(false);
+  m.unmount();
+  vi.useRealTimers();
 });

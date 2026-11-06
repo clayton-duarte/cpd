@@ -409,11 +409,16 @@ Decisions pro-d422 and pro-d424; assumptions A2 to A8 of the Lead completion bad
 ```ts
 export type CompletionLabel = "safe_to_archive" | "unanswered_ask" | "open_work" | "unrecorded_decision" | "unescalated_issue";
 export type CompletionTone = "done" | "decision" | "blocked"; // the existing Badge Tone members (DESIGN.md): success=done, warn=decision, danger=blocked (pro-d424). No new Tone, no new CSS.
+export interface CompletionScore {
+  readonly label: CompletionLabel;
+  readonly score: number; // integer 0..100
+}
 export interface Completion {
   readonly label: CompletionLabel;
   readonly text: string; // full display text: `<label text> · <score>%`
   readonly score: number; // integer 0..100
   readonly tone: CompletionTone;
+  readonly others?: readonly CompletionScore[]; // the other four labels' scores, sorted high to low (rule below); absent when there are none
 }
 ```
 
@@ -429,6 +434,8 @@ export interface Completion {
 
 - The score is clamped to 0..100 and is always the archive-safety score, whichever label is chosen.
 - kev-4b alone decides the label. There is no client-side override.
+- **`others` (server, `mapAnswer`).** When the answer's `probabilities` is an object, `others` is every label of the five EXCEPT the chosen one whose probability is a finite number, as `{label, score: clamp(round(p * 100), 0, 100)}`, sorted by `score` descending. Ties keep the label order `safe_to_archive`, `unanswered_ask`, `open_work`, `unrecorded_decision`, `unescalated_issue`. The key is OMITTED (absent, not `[]`) when there are no `probabilities` or none of the other labels' probabilities is finite. `label`, `text`, `score` and `tone` are unchanged: the badge keeps showing the chosen label and the archive-safety score.
+- **`others` (wire, `parseCompletion`).** `others` is optional. When present it must be an array of `{label, score}` where `label` is one of the five `CompletionLabel` values and `score` is a finite number; otherwise the parser refuses with `details.field` `others` (4.3). A parsed completion carries `others` only when the wire had it; no default is filled in, and the UI reads the array as given.
 
 ## 4. `web/src/protocol/wire.ts`: the browser/server wire
 
@@ -494,7 +501,7 @@ export type ServerMessage =
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
-  | { type: "session.completion"; sessionId: string; completion: Completion } // Lead only; never null: the last non-null completion is replayed on attach, computed results follow asynchronously and may never arrive (3.10)
+  | { type: "session.completion"; sessionId: string; completion: Completion } // Lead only; never null: the last non-null completion is replayed on attach, computed results follow asynchronously and may never arrive; `completion.others` is carried and parsed as 3.10 says (3.10)
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId: the attempted id of a session.attach error (e.g. session_not_found); null: not tied to a session (invalid_message)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
@@ -511,7 +518,7 @@ Message semantics (server behaviour):
 - A `session.dialog` with `interactive: false` is read-only (no current producer; pi and durable dialogs are interactive, 11.4).
 - **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. The badge is always visible for a Lead session and shows the last non-null value, across navigation and while a new classification runs; a failed or slow classification never clears it (pro-d438). The server keeps the last non-null completion per session id: on Lead attach it replays that value at once, before any computed result; a session with no last value gets nothing on attach. Otherwise the completion is computed asynchronously: it may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
 - A session is classified only when it has at least one transcript item (A5).
-- `completion: Completion` sets the badge and becomes the session's last non-null value. The server never sends `completion: null`. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label yields no completion: nothing is sent and the badge keeps its last value. No error is shown and there is no config switch (A4).
+- `completion: Completion` sets the badge and becomes the session's last non-null value. The server never sends `completion: null`. `completion.others` (3.10), when present, is carried by the server and parsed by `parseCompletion`; the Lead badge shows it in a HoverCard (DESIGN-chat 1.4), never in the badge text. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label yields no completion: nothing is sent and the badge keeps its last value. No error is shown and there is no config switch (A4).
 - Cache and in-flight (A7): the key is `${sessionId}|${lastTranscriptItemId}|${planCursor}`, where `planCursor` is `PlanViewModel.cursor` from `cpd plan show`. In-flight computations are shared per key. A null result is not cached. A result is never sent to a closed connection or to a detached session.
 - `action.result ok:true` carries `output` (section 5.4); `ok:false` carries the `cpd_failed` / `unknown_action` error.
 
