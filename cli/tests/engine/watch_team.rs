@@ -144,7 +144,9 @@ fn then_ticks(
 
 fn posts(db: &Path) -> Vec<(String, i64, String)> {
     let conn = reader(db);
-    let Ok(mut stmt) = conn.prepare("SELECT ts, number, reactions_json FROM swr_slack_posts ORDER BY ts, number") else {
+    let Ok(mut stmt) =
+        conn.prepare("SELECT ts, number, reactions_json FROM swr_slack_posts ORDER BY ts, number")
+    else {
         return Vec::new();
     };
     stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -203,7 +205,11 @@ fn e11_runs_the_helper_with_its_arguments_and_stores_the_posts_in_swr() {
 
     assert_eq!(
         t.posts(),
-        vec![("1760951522.011300".to_owned(), 812, r#"{"eyes":1}"#.to_owned())]
+        vec![(
+            "1760951522.011300".to_owned(),
+            812,
+            r#"{"eyes":1}"#.to_owned()
+        )]
     );
     assert!(
         !t.fx.env.cpd_home().join("run/team-review.json").exists(),
@@ -211,7 +217,12 @@ fn e11_runs_the_helper_with_its_arguments_and_stores_the_posts_in_swr() {
     );
 
     let calls = t.fx.calls("node");
-    let script = t.fx.env.root().join("adapter/lib/slack-channel.ts");
+    let script =
+        t.fx.env
+            .root()
+            .canonicalize()
+            .unwrap()
+            .join("adapter/lib/slack-channel.ts");
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let root = t.fx.env.root().canonicalize().unwrap();
     let argv: Vec<&str> = calls[0].args.iter().map(String::as_str).collect();
@@ -228,7 +239,10 @@ fn e11_runs_the_helper_with_its_arguments_and_stores_the_posts_in_swr() {
         ]
     );
     let stdin: Value = serde_json::from_slice(calls[0].stdin.as_ref().expect("a stdin")).unwrap();
-    assert_eq!(stdin, serde_json::json!({"version": 1, "known": [], "terminal": []}));
+    assert_eq!(
+        stdin,
+        serde_json::json!({"version": 1, "known": [], "terminal": []})
+    );
     let agent_dir = calls[0]
         .envs
         .iter()
@@ -304,7 +318,12 @@ fn e11_does_not_replace_the_cache_with_an_answer_that_holds_no_posts() {
     t.run_until(move |_| !errors(&db).is_empty());
 
     assert_eq!(t.errors()[0]["code"], "swr_endpoint_down");
-    assert!(t.errors()[0]["message"].as_str().unwrap().contains("slack_helper_failed"));
+    assert!(
+        t.errors()[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("slack_helper_failed")
+    );
     assert!(t.posts().is_empty());
 }
 
@@ -326,7 +345,12 @@ fn e11_reports_pi_not_found_once_and_keeps_ticking() {
 
     let errors = t.errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(errors[0]["message"].as_str().unwrap().contains("pi_not_found"));
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pi_not_found")
+    );
     assert_eq!(t.helper_calls(), 0);
 }
 

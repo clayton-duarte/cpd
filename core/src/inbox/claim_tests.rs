@@ -199,7 +199,11 @@ fn open_item_closes(column: &str) {
 #[test]
 fn a_dismissal_of_one_pull_request_does_not_stop_the_review_item_of_another() {
     let (_dir, home, mut store) = store();
-    write_cache(&mut store, NOW, &[(812, "1.1", 3600.0), (813, "1.2", 3600.0)]);
+    write_cache(
+        &mut store,
+        NOW,
+        &[(812, "1.1", 3600.0), (813, "1.2", 3600.0)],
+    );
     let open = reviews(&mut store, &home, NOW, &[812, 813]);
     assert_eq!(open.len(), 2);
     run(&mut store, &open, "2026-01-01T00:00:00.000Z");

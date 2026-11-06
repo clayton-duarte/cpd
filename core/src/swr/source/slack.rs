@@ -26,7 +26,7 @@ use crate::swr::{cache, endpoint};
 const DEADLINE: Duration = Duration::from_secs(120);
 
 /// A failed read is retried this long after it (the query row keeps its old `stale_after`, so memory holds the retry time).
-const RETRY: Duration = Duration::from_secs(300);
+const RETRY: Duration = Duration::from_secs(60);
 
 /// Until when each channel query is fresh, in this process only (D5): after a restart every query is stale once.
 static FRESH_UNTIL: Mutex<Option<HashMap<String, OffsetDateTime>>> = Mutex::new(None);
@@ -109,7 +109,9 @@ impl Source for Slack {
                     }
                     Ok(())
                 })?;
-                if endpoint::get(cx.store, "slack")?.is_some_and(|e| e.status.as_deref() == Some("error")) {
+                if endpoint::get(cx.store, "slack")?
+                    .is_some_and(|e| e.status.as_deref() == Some("error"))
+                {
                     endpoint::record_ok(cx.store, "slack", now)?;
                 }
                 confirm_own_posts(cx, &channel, &posts, now)?;
@@ -324,12 +326,15 @@ fn confirm_own_posts(
             .iter()
             .filter(|p| {
                 p["author_id"].as_str() == Some(me.as_str())
-                    && p["repo"].as_str().is_some_and(|r| r.eq_ignore_ascii_case(&repo))
+                    && p["repo"]
+                        .as_str()
+                        .is_some_and(|r| r.eq_ignore_ascii_case(&repo))
                     && p["number"].as_i64() == Some(number)
             })
             .filter_map(|p| {
                 let raw = p["ts_raw"].as_str()?;
-                let at = OffsetDateTime::from_unix_timestamp(raw.split('.').next()?.parse().ok()?).ok()?;
+                let at = OffsetDateTime::from_unix_timestamp(raw.split('.').next()?.parse().ok()?)
+                    .ok()?;
                 (at >= created).then_some((p["ts"].as_f64()?, raw, at))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));

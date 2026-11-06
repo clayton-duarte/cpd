@@ -443,6 +443,55 @@ impl Memo {
     }
 }
 
+/// Seeds the `slack` source's rows for a test, from posts in the helper's older shape (`repo`, `number`, `ts`, `ts_raw`,
+/// `primary`, `reactions` names, `claim`, `eyes_me`, `thread_tags_me`): the channel's query has data and one row per post.
+/// The row's `ts` is the post's `ts_raw` when that is the post's time, else the time itself (a row has no separate number).
+#[cfg(test)]
+pub(crate) fn seed_cache(store: &mut Store, channel: &str, posts: &[Value]) {
+    store
+        .write("seed", |tx| {
+            tx.execute("DELETE FROM swr_slack_posts", [])?;
+            tx.execute("DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%'", [])?;
+            tx.execute(
+                "INSERT INTO swr_queries (key, system, status, data_hash) VALUES (?1, 'slack', 'success', 'h')",
+                [format!("slack:channel:{channel}")],
+            )?;
+            for p in posts {
+                let time = p["ts"].as_f64().unwrap();
+                let ts = match p["ts_raw"].as_str() {
+                    Some(raw) if raw.parse::<f64>().is_ok_and(|v| (v - time).abs() < 1.0) => raw.to_owned(),
+                    _ => format!("{time:.6}"),
+                };
+                let reactions: serde_json::Map<String, Value> = p["reactions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| (n.as_str().unwrap().to_owned(), Value::from(1)))
+                    .collect();
+                let flag = |v: &Value| v.as_bool().map(i64::from);
+                tx.execute(
+                    "INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me,
+                       reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, 0, ?7, ?8, ?9, ?10, 't')",
+                    rusqlite::params![
+                        channel,
+                        ts,
+                        p["repo"].as_str().unwrap(),
+                        p["number"].as_i64().unwrap(),
+                        i64::from(p["primary"].as_bool().unwrap_or(true)),
+                        p["author"].as_str().unwrap_or(""),
+                        Value::Object(reactions).to_string(),
+                        (!p["claim"].is_null()).then(|| p["claim"].to_string()),
+                        flag(&p["eyes_me"]),
+                        flag(&p["thread_tags_me"]),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -849,53 +898,4 @@ mod tests {
         }
         assert_eq!(calls, 1);
     }
-}
-
-/// Seeds the `slack` source's rows for a test, from posts in the helper's older shape (`repo`, `number`, `ts`, `ts_raw`,
-/// `primary`, `reactions` names, `claim`, `eyes_me`, `thread_tags_me`): the channel's query has data and one row per post.
-/// The row's `ts` is the post's `ts_raw` when that is the post's time, else the time itself (a row has no separate number).
-#[cfg(test)]
-pub(crate) fn seed_cache(store: &mut Store, channel: &str, posts: &[Value]) {
-    store
-        .write("seed", |tx| {
-            tx.execute("DELETE FROM swr_slack_posts", [])?;
-            tx.execute("DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%'", [])?;
-            tx.execute(
-                "INSERT INTO swr_queries (key, system, status, data_hash) VALUES (?1, 'slack', 'success', 'h')",
-                [format!("slack:channel:{channel}")],
-            )?;
-            for p in posts {
-                let time = p["ts"].as_f64().unwrap();
-                let ts = match p["ts_raw"].as_str() {
-                    Some(raw) if raw.parse::<f64>().is_ok_and(|v| (v - time).abs() < 1.0) => raw.to_owned(),
-                    _ => format!("{time:.6}"),
-                };
-                let reactions: serde_json::Map<String, Value> = p["reactions"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|n| (n.as_str().unwrap().to_owned(), Value::from(1)))
-                    .collect();
-                let flag = |v: &Value| v.as_bool().map(i64::from);
-                tx.execute(
-                    "INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me,
-                       reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, 0, ?7, ?8, ?9, ?10, 't')",
-                    rusqlite::params![
-                        channel,
-                        ts,
-                        p["repo"].as_str().unwrap(),
-                        p["number"].as_i64().unwrap(),
-                        i64::from(p["primary"].as_bool().unwrap_or(true)),
-                        p["author"].as_str().unwrap_or(""),
-                        Value::Object(reactions).to_string(),
-                        (!p["claim"].is_null()).then(|| p["claim"].to_string()),
-                        flag(&p["eyes_me"]),
-                        flag(&p["thread_tags_me"]),
-                    ],
-                )?;
-            }
-            Ok(())
-        })
-        .unwrap();
 }

@@ -13,7 +13,7 @@ The Lead's answer to the one open question (swr-slack-docs-a1-q1) is in §6.2 an
 | the `slack_reactions` queue and E17 (`core/src/pr/reactions.rs`, `engine/src/watch/react.rs`) | `swr_mutations`, `system` `slack`, `op_kind` `reaction` |
 | `pr post` sends at once and writes its row after the send | `pr post` enqueues `op_kind` `post`; E24 sends it, then writes the row |
 | `pr repost` sends at once | `pr repost` enqueues `op_kind` `repost` |
-| `watch.team_review_seconds` (contract §8.2) sets the read cadence | the code constant `slack` channel staleTime, 30 min (swr.md §4, A4); the config key is removed in the cutover PR |
+| `watch.team_review_seconds` (contract §8.2) sets the read cadence | the key stays and is the cadence of the channel query (default 1800 s, the 30 min staleTime of swr.md §4); a failed read is retried 60 s later (the Lead's decision, swr-slack-impl-a1-q4) |
 
 The Slack helper `pi/lib/slack-channel.ts` stays and gains a stdin. The send helper `slack-post.ts` and the reaction helper `slack-react.ts` stay: they are the `execute` I/O (A7). Nothing else in Slack is cached or queued outside SWR (contract §4.7).
 
@@ -265,7 +265,7 @@ Each is removed in the cutover PR, with its old reader (swr.md §15, no dual wri
 | the reaction callers | `core/src/pr/poll.rs:973`, `core/src/pr/open.rs:540`, `core/src/pr/review.rs:191`, `core/src/inbox/cmd.rs:680` | enqueue (§4, §5) |
 | `policy_emoji` and `repo_sets_reaction` | `core/src/pr/reactions.rs` | moved into `source/slack.rs`, read at `execute` (§4.3) |
 | the table `slack_reactions` | contract §4.4 (migrations `slack-reactions` and `20261102T1300-slack-reaction-refusal`) | dropped by the Slack breaking migration (A1) |
-| the config key `watch.team_review_seconds` (contract §8.2) | config | the code constant of §2 (A4) |
+| the config key `watch.team_review_seconds` (contract §8.2) | kept: it is the channel query's cadence (§1), not retired | |
 
 **The breaking migration** (A1: a source Workflow adds only a breaking migration that copies open rows and drops a table it retires; name chosen by the Workflow, `<YYYYMMDDTHHMM>-swr-slack`). It copies each `slack_reactions` row with `reacted_at` NULL and `refused_at` NULL to a `pending` `reaction` mutation (`submitted_at` = `queued_at`, `vars_json` as §4.2), a parked row (`refused_at` set) to a `failed` mutation with `error` = `refusal`, and drops the reacted rows. Then it drops `slack_reactions`. `swr_slack_posts` is not migrated: the first fetch after upgrade is due at once and fills it.
 

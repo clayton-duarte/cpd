@@ -132,8 +132,10 @@ impl Own {
 /// Whether the channel's posts are in `swr_slack_posts`.
 fn stored(db: &std::path::Path) -> bool {
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    conn.query_row("SELECT count(*) FROM swr_slack_posts", [], |r| r.get::<_, i64>(0))
-        .is_ok_and(|n| n > 0)
+    conn.query_row("SELECT count(*) FROM swr_slack_posts", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .is_ok_and(|n| n > 0)
 }
 
 const TWO_ROW: (&str, &str, &str, &str) = (

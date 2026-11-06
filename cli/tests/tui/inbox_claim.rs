@@ -236,7 +236,9 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
         (3, "post_not_found".to_owned()),
         "a cache without a post of this pull request"
     );
-    fx.fx.env.sql("DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';");
+    fx.fx.env.sql(
+        "DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';",
+    );
     assert_eq!(
         refusal(&fx, &id.to_string()),
         (3, "post_not_found".to_owned()),
