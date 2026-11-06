@@ -759,8 +759,7 @@ div[data-shell]                                                   grid, one colu
 │   │       │   └─ ResizablePanel id="chat" data-part="chat-panel" panelRef={chatRef}   defaultSize 60% · minSize 20% · collapsible · collapsedSize 0%
 │   │       │       └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}   inert while zoomed
 │   │       └─ div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]   absolute right-4 top-[9px] z-10 flex gap-0.5
-│   │           ├─ button[type="button"][data-action="plan-collapse"]   26x26
-│   │           └─ button[type="button"][data-action="plan-zoom"][aria-pressed]   26x26
+│   │           └─ button[type="button"][data-action="plan-collapse"]   26x26
 │   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
 │   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 30% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
 │       └─ aside[aria-label="Inbox column"]   h-full overflow-hidden      {inbox}   (DESIGN-panes 2)
@@ -788,14 +787,15 @@ div[data-shell]                                                   grid, one colu
 
 Handle semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation` and `aria-value*` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the handle exists with `role="separator"` and its `aria-label`, and is focusable. The two outer handles override the library's double-click (see the table above); the inner handle keeps the library default (unverified).
 
-**Plan controls.** Buttons: both `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icons lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`, `MaximizeIcon`, `MinimizeIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
+**Plan controls.** The group holds one button: `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icon lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
 
-| State (`data-plan-state`) | Collapse button | Zoom button |
-|---|---|---|
-| `open` | label `Collapse plan view`, `ChevronUpIcon`, enabled; click → `planRef.collapse()` | label `Zoom plan view`, `aria-pressed="false"`, `MaximizeIcon`, enabled; click → `chatRef.collapse()` |
-| `collapsed` | label `Expand plan view`, `ChevronDownIcon`, enabled; click → `planRef.expand()` | label `Zoom plan view`, `aria-pressed="false"`, **disabled** |
-| `zoomed` | label `Collapse plan view`, `ChevronUpIcon`, **disabled** | label `Zoom plan view`, `aria-pressed="true"`, `MinimizeIcon`, enabled; click → `chatRef.expand()` (restores the previous split) |
+| State (`data-plan-state`) | Collapse button |
+|---|---|
+| `open` | label `Collapse plan view`, `ChevronUpIcon`, enabled; click → `planRef.collapse()` |
+| `collapsed` | label `Expand plan view`, `ChevronDownIcon`, enabled; click → `planRef.expand()` |
+| `zoomed` | label `Collapse plan view`, `ChevronUpIcon`, **disabled** |
 
+- `zoomed` is reached only by collapsing the chat panel (dragging the split handle below the chat's minimum); the plan controls have no button for it.
 - After a click the state hooks update through `onResize → sync()`: `data-plan-state` on the centre element, `data-state` on `section[aria-label="Plan pane"]` (`open` | `collapsed` | `zoomed`) and on `main[aria-label="Chat"]` (`open` | `zoomed`; `main` never reads `collapsed`).
 - `Enter` / `Space` on a focused button activates it (native). No global shortcut.
 - When `collapsed`, the plan `section` gets the `inert` attribute (its content below the 44px title row is clipped and must not take focus); when `zoomed`, `main[aria-label="Chat"]` gets `inert` (its Panel is 0% high). The controls are outside both, so they stay operable.
