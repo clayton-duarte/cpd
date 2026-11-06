@@ -152,11 +152,36 @@ impl GithubSource {
                     Err(e) => failed(refusal(&e)),
                 }
             }
-            ("pr", "auto_merge") => match auto_merge::attempt(runner, cwd, repo, number) {
-                Outcome::Enabled | Outcome::NotAllowed => ExecOutcome::Done,
-                Outcome::Refused(why) => failed(why),
-                Outcome::Failed(e) => retry(&e),
-            },
+            ("pr", "auto_merge") => {
+                let settle = |cx: &mut Cx<'_>, state: &str| {
+                    let at = crate::clock::timestamp(cx.ports.clock.utc());
+                    let _ = cx.store.write("swr auto_merge", |tx| {
+                        tx.execute(
+                            "UPDATE pr_posts SET auto_merge = ?3, auto_merge_at = ?4
+                              WHERE auto_merge = 'pending' AND (plan, workflow) IN (
+                                SELECT w.plan, w.key FROM workflows w JOIN pull_requests q ON q.id = w.pull_request
+                                 WHERE q.repo = ?1 AND q.number = ?2)",
+                            rusqlite::params![repo, number, state, at],
+                        )?;
+                        Ok::<(), CpdError>(())
+                    });
+                };
+                match auto_merge::attempt(runner, cwd, repo, number) {
+                    Outcome::Enabled => {
+                        settle(cx, "enabled");
+                        ExecOutcome::Done
+                    }
+                    Outcome::NotAllowed => {
+                        settle(cx, "none");
+                        ExecOutcome::Done
+                    }
+                    Outcome::Refused(why) => {
+                        settle(cx, "refused");
+                        failed(why)
+                    }
+                    Outcome::Failed(e) => retry(&e),
+                }
+            }
             ("pr", "approve") => {
                 let mut review = vars.clone();
                 if let Some(o) = review.as_object_mut() {

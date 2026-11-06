@@ -91,8 +91,6 @@ pub(super) struct Engine {
     pub react: react::State,
     /// E19: the Jira helper's run in flight and when the last failed one ended.
     pub jira: jira::State,
-    /// E18: the auto-merge request's run in flight and when the last one failed.
-    pub auto_merge: auto_merge::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
     /// E24: when `gc::sweep` last ran.
@@ -169,7 +167,6 @@ impl Engine {
             team: team::State::default(),
             react: react::State::default(),
             jira: jira::State::default(),
-            auto_merge: auto_merge::State::default(),
             models: models::State::default(),
             swr: swr::State::default(),
             hosts: hosts::State::default(),

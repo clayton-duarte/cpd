@@ -50,7 +50,7 @@ mod feedback;
 mod gh;
 pub mod jira_sync;
 pub(crate) use gh::head_ref_oid;
-pub(crate) use gh::{Adoptable, adoptable, describe_pr, retitle_pr};
+pub(crate) use gh::{Adoptable, adoptable};
 mod merge;
 pub mod merge_method;
 pub(crate) mod open;

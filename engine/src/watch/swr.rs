@@ -100,19 +100,7 @@ fn pass(
         home: &engine.home,
         config: &engine.config,
     };
-    let mut failed = Vec::new();
-    while let Some(m) = outbox::claim_next(cx.store, now, source.system())? {
-        match source.execute(&mut cx, &m) {
-            ExecOutcome::Done => outbox::complete(cx.store, m.id, now)?,
-            ExecOutcome::Retry { after } => {
-                outbox::fail(cx.store, m.id, now, "retry", Retry::After(after))?;
-            }
-            ExecOutcome::Failed { error } => {
-                outbox::fail(cx.store, m.id, now, &error, Retry::Never)?;
-                failed.push((m, error));
-            }
-        }
-    }
+    let failed = drain_outbox(&mut cx, source, now)?;
     let keys = source.due(&mut cx, now)?;
     if !keys.is_empty() {
         source.fetch(&mut cx, &keys, now)?;
@@ -124,17 +112,7 @@ fn pass(
             outages.push((*name, error));
         }
     }
-    for (m, error) in failed {
-        engine.fail(
-            Step::E24,
-            About::Machine,
-            failure(
-                "swr_mutation_failed",
-                format!("Mutation {} ({} on {}) failed: {error}", m.id, m.op_kind, m.target_key),
-                json!({"id": m.id, "system": m.system, "target_key": m.target_key, "op_kind": m.op_kind, "error": error}),
-            ),
-        );
-    }
+    report_failed(engine, failed);
     for (name, error) in outages {
         engine.fail(
             Step::E24,
@@ -150,4 +128,78 @@ fn pass(
         );
     }
     Ok(())
+}
+
+/// Claims every due mutation of `source` and runs it through `execute`; the failed ones with their error.
+fn drain_outbox(
+    cx: &mut Cx<'_>,
+    source: &'static dyn Source,
+    now: time::OffsetDateTime,
+) -> Result<Vec<(outbox::Mutation, String)>, CpdError> {
+    let mut failed = Vec::new();
+    while let Some(m) = outbox::claim_next(cx.store, now, source.system())? {
+        match source.execute(cx, &m) {
+            ExecOutcome::Done => outbox::complete(cx.store, m.id, now)?,
+            ExecOutcome::Retry { after } => {
+                outbox::fail(cx.store, m.id, now, "retry", Retry::After(after))?;
+            }
+            ExecOutcome::Failed { error } => {
+                outbox::fail(cx.store, m.id, now, &error, Retry::Never)?;
+                failed.push((m, error));
+            }
+        }
+    }
+    Ok(failed)
+}
+
+/// One `error` Event per failed mutation (swr.md §8).
+fn report_failed(engine: &mut Engine, failed: Vec<(outbox::Mutation, String)>) {
+    for (m, error) in failed {
+        engine.fail(
+            Step::E24,
+            About::Machine,
+            failure(
+                "swr_mutation_failed",
+                format!("Mutation {} ({} on {}) failed: {error}", m.id, m.op_kind, m.target_key),
+                json!({"id": m.id, "system": m.system, "target_key": m.target_key, "op_kind": m.op_kind, "error": error}),
+            ),
+        );
+    }
+}
+
+/// The `github` outbox drain (swr-github.md §9), run by E5's step each tick: a write command only enqueues, this calls GitHub through
+/// the Runner. It does nothing while no mutation is due or the endpoint is paused.
+pub(super) fn drain_github(engine: &mut Engine) {
+    let now = engine.ports.clock.utc();
+    let due = engine.store.read(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM swr_mutations WHERE system = 'github' AND status = 'pending'
+                              AND (next_attempt_at IS NULL OR next_attempt_at <= ?1))",
+            [cpd_core::clock::timestamp(now)],
+            |r| r.get::<_, bool>(0),
+        )?)
+    });
+    if !matches!(due, Ok(true)) {
+        return;
+    }
+    let paused = endpoint::get(&mut engine.store, "github")
+        .ok()
+        .flatten()
+        .is_some_and(|row| endpoint::is_paused(&row, now));
+    if paused {
+        return;
+    }
+    static GITHUB: source::github::GithubSource = source::github::GithubSource {
+        excused_labels: Vec::new(),
+    };
+    let mut cx = Cx {
+        store: &mut engine.store,
+        ports: &engine.ports,
+        home: &engine.home,
+        config: &engine.config,
+    };
+    match drain_outbox(&mut cx, &GITHUB, now) {
+        Ok(failed) => report_failed(engine, failed),
+        Err(e) => engine.fail(Step::E24, About::Machine, Failure::from(&e)),
+    }
 }

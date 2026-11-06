@@ -21,7 +21,7 @@ use crate::ids::{PlanId, RepoName, WorkflowKey};
 use crate::output::Output;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
-use crate::pr::retitle_pr;
+use crate::swr::source::github_write::{enqueue, target_of};
 use crate::pr::{find_workflow, plan_phase, workflow_locked};
 
 const COMMAND: &str = "workflow edit";
@@ -178,6 +178,7 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
+    let mut queued: Option<i64> = None;
     let (workflow, fields, already) = match decision {
         Decision::Already(workflow) => (workflow, Vec::new(), true),
         Decision::Update {
@@ -193,7 +194,7 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                 )?;
             }
             if let Some(title) = edits.title.as_deref().filter(|_| fields.contains(&"title")) {
-                retitle_open_pull_request(&mut env, &plan, &key, title)?;
+                queued = retitle_open_pull_request(&mut env, &plan, &key, title)?;
             }
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(workflow) => Ok((workflow, Vec::new(), true)),
@@ -212,16 +213,21 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     if already {
         out["already"] = json!(true);
     }
+    if let Some(id) = queued {
+        out["queued"] = json!(true);
+        out["mutation_id"] = json!(id);
+    }
     Ok(Output::success(out))
 }
 
-/// When the Workflow has an open pull request, retitles it on GitHub, before the title is stored: a failure stores nothing (§9.5).
+/// When the Workflow has an open pull request, queues its retitle on the outbox (swr-github.md §9; the overlay shows the new
+/// title at once) and returns the mutation id.
 fn retitle_open_pull_request(
     env: &mut Env,
     plan: &PlanId,
     key: &WorkflowKey,
     title: &str,
-) -> Result<(), CpdError> {
+) -> Result<Option<i64>, CpdError> {
     let open: Option<(String, i64)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
@@ -234,8 +240,16 @@ fn retitle_open_pull_request(
             .optional()?)
     })?;
     match open {
-        Some((repo, number)) => retitle_pr(env.home.root(), &repo, number, title),
-        None => Ok(()),
+        Some((repo, number)) => enqueue(
+            &mut env.store,
+            env.ports.clock.utc(),
+            &target_of(&repo, number),
+            "retitle",
+            json!({"title": title}),
+            Some(json!({"title": title})),
+        )
+        .map(Some),
+        None => Ok(None),
     }
 }
 

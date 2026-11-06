@@ -560,22 +560,6 @@ pub fn post_review(
     }
 }
 
-/// `gh api repos/<repo>/pulls/<number>`: the pull request's current head sha (`head.sha`). Anything else is `gh_failed`.
-pub fn pull_head(runner: &dyn Runner, repo: &str, number: &str) -> Result<String, CpdError> {
-    #[derive(Deserialize)]
-    struct Pull {
-        head: Head,
-    }
-    #[derive(Deserialize)]
-    struct Head {
-        sha: String,
-    }
-    let endpoint = format!("repos/{repo}/pulls/{number}");
-    let args = ["api", endpoint.as_str()];
-    let stdout = run_on(runner, Path::new("."), &args)?;
-    Ok(parse::<Pull>(&args, &stdout)?.head.sha)
-}
-
 // The poller (contract §7.6, commands.md §9.2): one search, one lookup.
 
 /// The fields of a pull request, as the search and the lookup both select them.
