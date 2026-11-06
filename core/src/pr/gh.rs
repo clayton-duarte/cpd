@@ -113,14 +113,12 @@ pub struct View {
     pub review_decision: Option<String>,
     /// The pull request's labels (`--json labels`).
     #[serde(default)]
-    #[allow(dead_code)] // stub: read by the implementation of the check-level excuse
     pub labels: Vec<LabelNode>,
 }
 
 /// One label of `gh pr view --json labels`.
 #[derive(Debug, Deserialize)]
 pub struct LabelNode {
-    #[allow(dead_code)] // stub: read by the implementation of the check-level excuse
     pub name: String,
 }
 
@@ -421,7 +419,7 @@ pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdErr
         "view",
         &n,
         "--json",
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url",
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels",
     ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }

@@ -28,6 +28,15 @@ pub(super) fn required_states<'a>(
     checks: &[Check],
     required: &'a [String],
 ) -> Vec<(&'a str, Required)> {
+    required_states_held(checks, required, false)
+}
+
+/// [`required_states`] where, under a `policy_hold`, a failing `danger` counts as passed.
+fn required_states_held<'a>(
+    checks: &[Check],
+    required: &'a [String],
+    policy_hold: bool,
+) -> Vec<(&'a str, Required)> {
     let newest = newest_runs(checks);
     required
         .iter()
@@ -36,7 +45,11 @@ pub(super) fn required_states<'a>(
                 let state = if c.name.is_none() && c.context.as_deref() == Some(name) {
                     let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
                     if failing(&state) {
-                        Required::Failed
+                        if policy_hold && is_danger(name) {
+                            Required::Passed
+                        } else {
+                            Required::Failed
+                        }
                     } else if matches!(state.as_str(), "PENDING" | "EXPECTED") {
                         Required::Pending
                     } else {
@@ -51,7 +64,11 @@ pub(super) fn required_states<'a>(
                         .unwrap_or_default()
                         .to_ascii_uppercase();
                     if failing(&conclusion) {
-                        Required::Failed
+                        if policy_hold && is_danger(name) {
+                            Required::Passed
+                        } else {
+                            Required::Failed
+                        }
                     } else if PENDING.contains(&conclusion.as_str()) {
                         Required::Pending
                     } else {
@@ -70,6 +87,18 @@ pub(super) fn required_states<'a>(
             (name.as_str(), state.unwrap_or(Required::Missing))
         })
         .collect()
+}
+
+/// The one check a policy hold excuses: named exactly `danger` (ASCII case-insensitive, never a substring).
+fn is_danger(name: &str) -> bool {
+    name.eq_ignore_ascii_case("danger")
+}
+
+/// A policy hold: the PR carries a label matching (ASCII case-insensitive) one of the `excused_labels`.
+pub(super) fn policy_hold(labels: &[String], excused_labels: &[String]) -> bool {
+    labels
+        .iter()
+        .any(|l| excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)))
 }
 
 pub(super) fn failing(conclusion: &str) -> bool {
@@ -153,7 +182,7 @@ impl ChecksSummary {
         checks: &[Check],
         human_gated: &[String],
         required: &[String],
-        _policy_hold: bool,
+        policy_hold: bool,
     ) -> ChecksSummary {
         let mut runs = 0;
         let mut run_pending = false;
@@ -162,7 +191,7 @@ impl ChecksSummary {
         for c in newest_runs(checks) {
             if let Some(context) = c.name.is_none().then_some(c.context.as_deref()).flatten() {
                 let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
-                failed |= failing(&state);
+                failed |= failing(&state) && !(policy_hold && is_danger(context));
                 contexts.push((context, matches!(state.as_str(), "PENDING" | "EXPECTED")));
             } else if c.name.is_some() {
                 let conclusion = c
@@ -173,11 +202,12 @@ impl ChecksSummary {
                     .unwrap_or_default()
                     .to_ascii_uppercase();
                 runs += 1;
-                failed |= failing(&conclusion);
+                let excused = policy_hold && c.name.as_deref().is_some_and(is_danger);
+                failed |= failing(&conclusion) && !excused;
                 run_pending |= PENDING.contains(&conclusion.as_str());
             }
         }
-        let required = required_states(checks, required);
+        let required = required_states_held(checks, required, policy_hold);
         if failed || required.iter().any(|(_, s)| *s == Required::Failed) {
             return ChecksSummary::Failed;
         }
