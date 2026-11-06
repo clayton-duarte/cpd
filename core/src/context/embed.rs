@@ -121,7 +121,7 @@ pub(super) fn embed(args: EmbedArgs) -> Result<Output, CpdError> {
         .rev()
         .map(|(_, r)| (r.id.clone(), r.text.clone()))
         .collect();
-    let embedder = bifrost_embedder(&config, &ports.runner)?;
+    let embedder = bifrost_embedder(&home, &config, &ports.runner)?;
     let vectors = VectorStore::at(&home);
     let report = embed_run(
         &home,

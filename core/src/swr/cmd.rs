@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::badge::{self, Classification};
-use super::cache;
+use super::{cache, endpoint};
 use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -166,6 +166,7 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
                 STATUSES.join(", ")
             )));
         }
+        Command::Health(HealthCommand::Record(a)) => check_health(a)?,
         Command::Badge(BadgeCommand::Put(a)) => {
             check_label(&a.label)?;
             check_score(a.score)?;
@@ -189,7 +190,7 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Endpoints => endpoints(store),
         Command::Mutation(MutationCommand::Show(a)) => mutation_show(store, id_of(&a)?),
         Command::Mutation(MutationCommand::List(a)) => mutation_list(store, a.status.as_deref()),
-        Command::Health(HealthCommand::Record(_)) => todo!("cpd swr health record"),
+        Command::Health(HealthCommand::Record(a)) => health_record(store, now, &a),
         Command::Badge(BadgeCommand::Get(a)) => {
             let badge = badge::get(store, &a.session_id)?;
             Ok(Output::success(
@@ -215,6 +216,55 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
             })))
         }
     }
+}
+
+fn check_health(a: &HealthRecordArgs) -> Result<(), CpdError> {
+    let pairs: [(&str, &[&str]); 4] = [
+        ("github", &["github"]),
+        ("slack", &["slack"]),
+        ("jira", &["jira"]),
+        ("classifier", &["ollama.lab", "bifrost"]),
+    ];
+    let known = pairs
+        .iter()
+        .any(|(s, e)| *s == a.system && e.contains(&a.endpoint.as_str()));
+    if !known {
+        return Err(usage(
+            "<system> and <endpoint> are github github, slack slack, jira jira, or classifier ollama.lab|bifrost."
+                .into(),
+        ));
+    }
+    match (a.result.as_str(), a.text.as_deref()) {
+        ("ok", None) => Ok(()),
+        ("ok", Some(_)) => Err(usage("--text is refused with ok.".into())),
+        ("error", Some(t)) if !t.trim().is_empty() => Ok(()),
+        ("error", _) => Err(usage("--text is required and non-empty with error.".into())),
+        _ => Err(usage("<result> is ok or error.".into())),
+    }
+}
+
+fn health_record(
+    store: &mut Store,
+    now: OffsetDateTime,
+    a: &HealthRecordArgs,
+) -> Result<Output, CpdError> {
+    if a.result == "ok" {
+        endpoint::record_ok(store, &a.endpoint, now)?;
+    } else {
+        let text = a.text.as_deref().unwrap_or_default();
+        endpoint::record_failure(store, &a.endpoint, now, text, endpoint::Kind::Transient)?;
+    }
+    let row = endpoint::get(store, &a.endpoint)?.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::Internal,
+            "The endpoint row is missing.".to_owned(),
+        )
+    })?;
+    Ok(Output::success(json!({
+        "system": a.system, "endpoint": a.endpoint,
+        "status": row.status, "error_count": row.error_count,
+        "failing_since": row.failing_since.map(timestamp),
+    })))
 }
 
 const LABELS: [&str; 5] = [
