@@ -275,15 +275,13 @@ fn workflow_reopen_allows_done_to_deploy_and_keeps_the_other_phases() {
         "grounding>done of Context cpd",
     );
 
-    // `done>plan` still aborts (a done Plan that is not `fin` any more: `rev`).
-    assert_illegal(
-        write(
-            &mut store,
-            "UPDATE plans SET phase = 'plan', done_at = NULL WHERE id = 'rev'",
-        ),
-        "done>plan",
-    );
-    assert_eq!(phase(&mut store, "rev"), "done");
+    // `done>plan` is allowed since `plan-relock` (pro-d433), `done_at` cleared in the same update.
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan', done_at = NULL WHERE id = 'rev'",
+    )
+    .expect("done>plan");
+    assert_eq!(phase(&mut store, "rev"), "plan");
 }
 
 #[test]

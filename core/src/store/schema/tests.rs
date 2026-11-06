@@ -945,8 +945,6 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated_4(&dir);
     for sql in [
-        "UPDATE plans SET phase = 'plan', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
-        "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'pr'",
         "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
         "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
     ] {
@@ -978,6 +976,202 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
             serde_json::json!(["pr", "dispatch", Value::Null]),
         ]
     );
+}
+
+fn plan_phase(store: &mut Store, id: &str) -> String {
+    rows(store, &format!("SELECT phase FROM plans WHERE id = '{id}'"))[0][0]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+// pro-d433: `dispatch`, `deploy` and `done` may go back to `plan` and keep `locked_at` (pro-d429).
+#[test]
+fn plans_phase_allows_dispatch_deploy_and_done_back_to_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = migrated_4(&dir);
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'di'",
+    )
+    .expect("dispatch>plan");
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'pr'",
+    )
+    .expect("deploy>plan");
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan', done_at = NULL WHERE id = 'dn'",
+    )
+    .expect("done>plan");
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT id, phase, locked_at IS NOT NULL, done_at FROM plans ORDER BY id"
+        ),
+        vec![
+            serde_json::json!(["di", "plan", 1, Value::Null]),
+            serde_json::json!(["dn", "plan", 1, Value::Null]),
+            serde_json::json!(["pr", "plan", 1, Value::Null]),
+        ]
+    );
+    // `plan>dispatch` still passes with `locked_at` set, and a new Plan still goes `grounding>plan`.
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'dispatch' WHERE id = 'di'",
+    )
+    .expect("plan>dispatch");
+    write(
+        &mut store,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('gr', 'ctx', 'G', 'grounding', 'l-di', 't');
+         UPDATE plans SET phase = 'plan' WHERE id = 'gr'",
+    )
+    .expect("grounding>plan");
+}
+
+#[test]
+fn plans_phase_still_refuses_every_other_backward_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = migrated_4(&dir);
+    // The new rule first: a Plan in `plan` with `locked_at` set is the starting point below.
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'di'",
+    )
+    .expect("dispatch>plan");
+    for sql in [
+        "UPDATE plans SET phase = 'grounding' WHERE id = 'di'",
+        "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
+        "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'pr'",
+        "UPDATE plans SET phase = 'grounding', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
+        "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
+    ] {
+        let err = refused(&mut store, sql);
+        assert_eq!(err.code(), ErrorCode::IllegalTransition, "{sql}: {err:?}");
+    }
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'dispatch' WHERE id = 'di'",
+    )
+    .unwrap();
+    let err = refused(
+        &mut store,
+        "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
+    );
+    assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
+    assert_eq!(plan_phase(&mut store, "di"), "dispatch");
+}
+
+#[test]
+fn plans_check_allows_plan_with_locked_at_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = migrated_4(&dir);
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'di'",
+    )
+    .expect("plan with locked_at set");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM plans WHERE id = 'di' AND phase = 'plan' AND locked_at IS NOT NULL"
+        ),
+        1
+    );
+    // `plan` with `locked_at` NULL stays valid; `grounding` with it set does not.
+    write(
+        &mut store,
+        "UPDATE plans SET locked_at = NULL WHERE id = 'di'",
+    )
+    .expect("plan with locked_at NULL");
+    refused(
+        &mut store,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('g2', 'ctx', 'G', 'grounding', 'l-di', 't', 't')",
+    );
+    // `dispatch`, `deploy` and `done` require `locked_at`.
+    for sql in [
+        "UPDATE plans SET locked_at = NULL WHERE id = 'pr'",
+        "UPDATE plans SET locked_at = NULL WHERE id = 'dn'",
+        "UPDATE plans SET phase = 'dispatch' WHERE id = 'di'",
+    ] {
+        refused(&mut store, sql);
+    }
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'di'",
+    )
+    .expect("plan>dispatch with locked_at");
+    refused(
+        &mut store,
+        "UPDATE plans SET locked_at = NULL WHERE id = 'di'",
+    );
+}
+
+#[test]
+fn plans_check_done_to_plan_requires_done_at_cleared() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = migrated_4(&dir);
+    // The trigger lets `done>plan` through; the CHECK (`done_at` only in `done`) refuses the row.
+    let err = refused(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'dn'",
+    );
+    assert_ne!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
+    assert_eq!(plan_phase(&mut store, "dn"), "done");
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan', done_at = NULL WHERE id = 'dn'",
+    )
+    .expect("done>plan with done_at NULL");
+    assert_eq!(plan_phase(&mut store, "dn"), "plan");
+}
+
+// pro-d433: `workflows_locked`, `workflow_needs_locked` and `workflow_needs_no_delete` key on `locked_at`, not on phase `plan`.
+#[test]
+fn workflow_lock_triggers_follow_locked_at_in_phase_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = migrated_4(&dir);
+    write(
+        &mut store,
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('di', 'web', '/src/web', 'main', 'waiting', 'cpd/di/web', cpd_txn(), 't');
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'web', 'pay');",
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'plan' WHERE id = 'di'",
+    )
+    .expect("dispatch>plan");
+
+    // locked_at set: the after-the-lock rules hold.
+    for sql in [
+        "UPDATE workflows SET repo = '/src/other' WHERE plan = 'di' AND key = 'pay'",
+        "UPDATE workflows SET lead_branch = 'cpd/di/x' WHERE plan = 'di' AND key = 'pay'",
+        "UPDATE workflows SET key = 'other' WHERE plan = 'di' AND key = 'pay'",
+        "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'pay', 'web')",
+        "DELETE FROM workflow_needs WHERE plan = 'di' AND workflow = 'web'",
+    ] {
+        let err = refused(&mut store, sql);
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{sql}: {err:?}");
+    }
+
+    // locked_at NULL: the pre-lock edits are allowed.
+    write(
+        &mut store,
+        "UPDATE plans SET locked_at = NULL WHERE id = 'di'",
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE workflows SET repo = '/src/other' WHERE plan = 'di' AND key = 'pay';
+         DELETE FROM workflow_needs WHERE plan = 'di' AND workflow = 'web';
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'web', 'pay')",
+    )
+    .expect("pre-lock edits with locked_at NULL");
 }
 
 #[test]
@@ -2401,7 +2595,6 @@ fn plans_phase_and_jobs_status_refuse_illegal_transitions() {
     let mut store = migrated(&dir);
     for sql in [
         "UPDATE plans SET phase = 'deploy', locked_at = 't' WHERE id = 'pl'",
-        "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'di'",
         "UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'di' AND key = 'x'",
     ] {
         let err = refused(&mut store, sql);
