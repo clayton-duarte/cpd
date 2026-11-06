@@ -1675,7 +1675,8 @@ impl Handler for Gh {
                 }
             }
             // The checks read (poll step 3b): by the rollup state the search reports for each pull request: PENDING or EXPECTED
-            // is one running check, anything else one failing check, so a FAILURE rollup is confirmed.
+            // is one running check, anything else one failing check, so a FAILURE rollup is confirmed; it carries no label (a test that
+            // needs labels answers the read itself). `pr view` is answered by the `pr_view` mock, whose labels are settable.
             ["api", "graphql", "-f", query, ..] if query.contains("contexts(first: 100") => {
                 let searched = match self.search.get() {
                     Reply::Exit { stdout, .. } => String::from_utf8_lossy(&stdout).into_owned(),
