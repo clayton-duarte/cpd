@@ -1,8 +1,9 @@
 //! A cpd command that changes a pull request on GitHub asks E5 for a poll at once (decision pro-d394, assumption A6): it writes
 //! the run file `run/pr-poll-now` after its successful GitHub write, and not after a failed one (no floor, no migration).
 //! `pr merge` and `pr rerun` are in `core/src/pr/poll_now_tests.rs`; here are `pr push`, `pr rebase`, `pr open` (the opener's
-//! merge, which creates the pull request), `pr post` (its GitHub auto-merge) and `review submit`, in process on the same
-//! fixtures as their own tests. `gh`, git and the Gate's `sh` are fakes; no process, no sleep.
+//! merge, which creates the pull request), and, through the outbox drain that makes their GitHub write, `pr post` (its
+//! auto-merge) and `review submit`, in process on the same fixtures as their own tests. `gh`, git and the Gate's `sh` are
+//! fakes; no process, no sleep.
 
 use crate::common;
 
@@ -21,6 +22,27 @@ use serde_json::{Value, json};
 /// `run/pr-poll-now` of the home under test.
 fn file(fx: &Fx) -> PathBuf {
     fx.env.cpd_home().join("run/pr-poll-now")
+}
+
+/// Runs the queued mutations through the source, as the engine's drain does.
+fn drain(fx: &Fx) {
+    use cpd_core::config::Config;
+    use cpd_core::swr::outbox;
+    use cpd_core::swr::source::github::GithubSource;
+    use cpd_core::swr::source::{Cx, Source};
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    let mut store = fx.env.store();
+    let config = Config::load(&home).unwrap();
+    let now = cpd_core::clock::Clock::utc(&*fx.fakes.ports.clock);
+    while let Some(m) = outbox::claim_next(&mut store, now, "github").unwrap() {
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &fx.fakes.ports,
+            home: &home,
+            config: &config,
+        };
+        let _ = GithubSource::default().execute(&mut cx, &m);
+    }
 }
 
 /// The bare `origin` of the poll fixture (`workflow::poll_fx`).
@@ -180,7 +202,9 @@ fn pr_commands_write_poll_now_file_after_github_write_post() {
 
     let out = post(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "enabled", "{out}");
+    assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
+    assert!(!file(&pay.fx).exists(), "the command itself wrote nothing on GitHub");
+    drain(&pay.fx);
     assert!(
         file(&pay.fx).exists(),
         "auto-merge was enabled on GitHub: a poll is asked for"
@@ -194,7 +218,8 @@ fn pr_commands_write_no_poll_now_file_after_a_failed_post_write() {
 
     let out = post(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "failed", "{out}");
+    assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
+    drain(&pay.fx);
     assert!(
         !file(&pay.fx).exists(),
         "the mutation failed: GitHub did not change"
@@ -205,7 +230,7 @@ fn pr_commands_write_no_poll_now_file_after_a_failed_post_write() {
 
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 
-/// The in-process `gh` of `review submit`: an `api` call with `POST` answers `post`, any other `api` call (the head read) the head.
+/// The in-process `gh` of `review submit`'s drain: an `api` call with `POST` answers `post`; any other call exits 9.
 struct ReviewGh {
     post: Reply,
 }
@@ -214,10 +239,6 @@ impl Handler for ReviewGh {
     fn handle(&self, call: &Call) -> Reply {
         match call.args.first().map(String::as_str) {
             Some("api") if call.args.iter().any(|a| a == "POST") => self.post.clone(),
-            Some("api") => Reply::ok(
-                &json!({"number": 7, "state": "open", "title": "t", "head": {"ref": "topic", "sha": HEAD}})
-                    .to_string(),
-            ),
             _ => Reply::exit(9, "", ""),
         }
     }
@@ -227,7 +248,10 @@ fn submit(post: Reply) -> (Fx, Value) {
     let fx = Fx::with_ports();
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    fx.env.sql("SELECT 1");
+    fx.env.sql(&format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, head_oid)
+           VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'T', 0, 'open', 'none', 'passed', 't', 't', '{HEAD}')"
+    ));
     let _ = (*fx.fakes.runner)
         .clone()
         .route("gh", Arc::new(ReviewGh { post }));
@@ -250,6 +274,8 @@ fn submit(post: Reply) -> (Fx, Value) {
         input.to_str().unwrap(),
     ]);
     let out = if run.exit == 0 { run.ok() } else { run.error() };
+    assert!(!file(&fx).exists(), "the command itself wrote nothing on GitHub");
+    drain(&fx);
     (fx, out)
 }
 
@@ -269,6 +295,6 @@ fn pr_commands_write_poll_now_file_after_github_write_review() {
 fn pr_commands_write_no_poll_now_file_after_a_failed_review() {
     let (fx, out) = submit(Reply::exit(1, "", "gh: HTTP 422\n"));
 
-    assert_ne!(out["ok"], true, "{out}");
+    assert_eq!(out["queued"], true, "{out}");
     assert!(!file(&fx).exists(), "the review was not posted");
 }

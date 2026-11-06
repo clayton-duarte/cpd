@@ -198,10 +198,6 @@ impl Pay {
             .unwrap()
     }
 
-    pub(super) fn gh_fails(&self, stderr: &str) {
-        *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
-    }
-
     fn gh_calls(&self) -> Vec<Vec<String>> {
         self.fx
             .calls("gh")
