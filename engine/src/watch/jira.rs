@@ -1,6 +1,6 @@
 //! E19, the Jira transition queue (Plan jira-sync; pro-d126, pro-d128; contract §3.7 E19; commands.md §21.11, §21.12): the helper
 //! `pi/lib/jira-transition.ts` moves the ticket of the OLDEST PENDING `jira_transitions` row whose Workflow has a ticket and is not
-//! cancelled, detached on its own thread, one run at a time, 120 s deadline, as E17 does. The ticket, the target and the three
+//! cancelled, detached on its own thread, one run at a time, 120 s deadline, as E24 does. The ticket, the target and the three
 //! status names are read when the row runs. A target whose name is empty settles the row `skipped` without a call. An `ok`
 //! answer settles it (`moved`, `unchanged`); a `jira_refused` answer parks it with one `error` Event, and each tick a parked row
 //! whose ticket or status name now differs from what was refused is reopened. Any other failure leaves the row PENDING and is

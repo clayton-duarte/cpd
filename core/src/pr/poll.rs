@@ -970,7 +970,7 @@ pub(super) fn merge(
         return Err(cas_lost(id, key));
     }
     super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
-    super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
+    crate::swr::source::slack::react_merge_in(tx, id.as_str(), key.as_str())?;
     super::jira_sync::queue(
         tx,
         id.as_str(),

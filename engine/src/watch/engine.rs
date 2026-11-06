@@ -19,7 +19,7 @@ use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
     SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
-    inbox, janitor, jira, liveness, models, open, parked, permanent, pr, react, restart, schedule,
+    inbox, janitor, jira, liveness, models, open, parked, permanent, pr, restart, schedule,
     sleep, swr, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
@@ -85,8 +85,6 @@ pub(super) struct Engine {
     pub curate_backoff: HashMap<ContextId, cpd_core::context::curate_backoff::Backoff>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
-    /// E17: the merge reaction's run in flight and when the last one ended.
-    pub react: react::State,
     /// E19: the Jira helper's run in flight and when the last failed one ended.
     pub jira: jira::State,
     /// E18: the auto-merge request's run in flight and when the last one failed.
@@ -164,7 +162,6 @@ impl Engine {
             curating: HashMap::new(),
             curate_backoff: HashMap::new(),
             titles: titles::Runs::default(),
-            react: react::State::default(),
             jira: jira::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),
@@ -284,7 +281,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 26] = [
+        let steps: [fn(&mut Engine); 25] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -301,7 +298,6 @@ impl Engine {
             inbox::run,
             distill::run,
             titles::run,
-            react::run,
             jira::run,
             auto_merge::run,
             models::run,
@@ -328,7 +324,7 @@ impl Engine {
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
     if !matches!(
         step,
-        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18 | Step::E19
+        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E18 | Step::E19
     ) {
         return false;
     }

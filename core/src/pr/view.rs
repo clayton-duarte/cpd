@@ -100,7 +100,9 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         let Some(p) = super::posts::find(conn, id.as_str(), workflow.key.as_str())? else { return Ok(None) };
         // The queue row of the Workflow's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
         let row: Option<(String, Option<String>, Option<String>)> = conn
-            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND workflow = ?2", [id.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT json_extract(vars_json, '$.emoji'), IIF(status IN ('revalidating', 'done'), completed_at, NULL), IIF(status = 'failed', error, NULL)
+               FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' AND status <> 'superseded'
+                AND json_extract(vars_json, '$.plan') = ?1 AND json_extract(vars_json, '$.workflow') = ?2 ORDER BY id DESC LIMIT 1", [id.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         let (reaction, reacted_at, refusal) = match row {
             Some((emoji, reacted_at, refusal)) => (Some(emoji), reacted_at, refusal),

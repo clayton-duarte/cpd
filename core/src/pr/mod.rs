@@ -60,7 +60,6 @@ pub(crate) mod postable;
 pub mod posts;
 pub mod pulls;
 mod push;
-pub mod reactions;
 pub(crate) mod rebase;
 mod reply;
 mod repost;

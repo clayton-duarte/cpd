@@ -15,9 +15,12 @@ use time::format_description::well_known::Rfc3339;
 use super::{Cx, ExecOutcome, QueryKey, Source};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
+use crate::events::{NewEvent, append};
+use crate::home::CpdHome;
 use crate::host::deadline::Failed;
-use crate::ids::{OwnerLogin, RepoName};
-use crate::policy::{PolicyKey, resolve};
+use crate::ids::{OwnerLogin, PlanId, RepoName, WorkflowKey};
+use crate::policy::{PolicyKey, policy_dir, repo_path, resolve};
+use crate::pr::posts::{self, PostRecord};
 use crate::pr::jira_sync;
 use crate::swr::outbox::{self, Coalesce, Mutation, Op};
 use crate::swr::{cache, endpoint};
@@ -27,6 +30,18 @@ const DEADLINE: Duration = Duration::from_secs(120);
 
 /// A failed read is retried this long after it (the query row keeps its old `stale_after`, so memory holds the retry time).
 const RETRY: Duration = Duration::from_secs(60);
+
+/// A reaction that failed for any reason but a refusal is tried again this long after (swr-slack.md §4.3).
+const REACTION_RETRY: Duration = Duration::from_secs(600);
+
+/// The deadline of a send or a reaction: above the helper's own 30 s call.
+const SEND_DEADLINE: Duration = Duration::from_secs(60);
+
+/// The reminder's text of `pr repost`.
+pub const REPOST_TEXT: &str = "Bibbidi-bobbidi-bump!";
+
+/// The statuses of a mutation the overlay shows.
+const ACTIVE: &str = "('pending', 'in_flight', 'revalidating')";
 
 /// Until when each channel query is fresh, in this process only (D5): after a restart every query is stale once.
 static FRESH_UNTIL: Mutex<Option<HashMap<String, OffsetDateTime>>> = Mutex::new(None);
@@ -54,6 +69,7 @@ impl Source for Slack {
         &["slack"]
     }
     fn due(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<Vec<QueryKey>, CpdError> {
+        requeue_parked(cx, now)?;
         let channel = &cx.config.inbox.team_channel;
         if channel.is_empty() {
             return Ok(Vec::new());
@@ -121,10 +137,23 @@ impl Source for Slack {
         }
     }
 
-    fn execute(&self, _cx: &mut Cx<'_>, _m: &Mutation) -> ExecOutcome {
-        todo!(
-            "swr-slack.md §4.3: run slack-react.ts / slack-post.ts through the Runner and map the answer"
-        )
+    fn execute(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
+        let vars: Value = match serde_json::from_str(&m.vars_json) {
+            Ok(v) => v,
+            Err(e) => {
+                return ExecOutcome::Failed {
+                    error: format!("vars_json is not JSON: {e}"),
+                };
+            }
+        };
+        match m.op_kind.as_str() {
+            "reaction" => execute_reaction(cx, &vars),
+            "post" => execute_post(cx, &vars),
+            "repost" => execute_repost(cx, &vars),
+            other => ExecOutcome::Failed {
+                error: format!("unknown slack op `{other}`"),
+            },
+        }
     }
     fn coalesce(&self, _op_kind: &str) -> Coalesce {
         Coalesce::LatestWins
@@ -145,33 +174,581 @@ pub struct Overlaid {
     pub eyes_me: Option<bool>,
 }
 
+/// This transaction's time, the `submitted_at` of a write made inside a caller's transaction.
+fn txn_at(tx: &crate::store::WriteTxn<'_>) -> Result<String, CpdError> {
+    Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| {
+        r.get(0)
+    })?)
+}
+
+/// Inserts a `pending` mutation of `op_kind` on the channel query; with `dedupe` an active one with the same `vars` is returned
+/// instead. `(id, new)`.
+fn insert(
+    tx: &crate::store::WriteTxn<'_>,
+    at: &str,
+    op_kind: &str,
+    channel: &str,
+    vars: &Value,
+    dedupe: bool,
+) -> Result<(i64, bool), CpdError> {
+    let key = channel_key(channel);
+    let vars = vars.to_string();
+    if dedupe {
+        let existing = tx
+            .query_row(
+                &format!(
+                    "SELECT id FROM swr_mutations WHERE system = 'slack' AND target_key = ?1 AND op_kind = ?2 AND vars_json = ?3
+                       AND status IN {ACTIVE} ORDER BY id LIMIT 1"
+                ),
+                params![key, op_kind, vars],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok((id, false));
+        }
+    }
+    tx.execute(
+        "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at)
+         VALUES ('slack', ?1, ?2, ?3, 'pending', ?4)",
+        params![key, op_kind, vars, at],
+    )?;
+    Ok((tx.last_insert_rowid(), true))
+}
+
+fn reaction_vars(channel: &str, ts: &str, emoji: &str, merge: Option<(&str, &str)>) -> Value {
+    match merge {
+        None => json!({"channel": channel, "emoji": emoji, "ts": ts}),
+        Some((plan, workflow)) => {
+            json!({"channel": channel, "emoji": emoji, "plan": plan, "ts": ts, "workflow": workflow})
+        }
+    }
+}
+
 /// Enqueues the `reaction` op of (`channel`, `ts`, `emoji`) on `slack:channel:<channel>`, deduped on those three (§4.2).
 pub fn react(
-    _store: &mut crate::store::Store,
-    _now: OffsetDateTime,
-    _channel: &str,
-    _ts: &str,
-    _emoji: &str,
+    store: &mut crate::store::Store,
+    now: OffsetDateTime,
+    channel: &str,
+    ts: &str,
+    emoji: &str,
 ) -> Result<Queued, CpdError> {
-    todo!("swr-slack.md §4.2: enqueue the reaction with Coalesce::Dedupe and the overlay patch")
+    let at = timestamp(now);
+    let vars = reaction_vars(channel, ts, emoji, None);
+    let (mutation_id, _) = store.write("swr slack react", |tx| {
+        insert(tx, &at, "reaction", channel, &vars, true)
+    })?;
+    Ok(Queued {
+        queued: true,
+        mutation_id,
+    })
+}
+
+/// [`react`] inside the caller's transaction: `(id, new)`; `new` is false when an active mutation of the same reaction exists.
+pub fn react_in(
+    tx: &crate::store::WriteTxn<'_>,
+    channel: &str,
+    ts: &str,
+    emoji: &str,
+) -> Result<(i64, bool), CpdError> {
+    let at = txn_at(tx)?;
+    insert(
+        tx,
+        &at,
+        "reaction",
+        channel,
+        &reaction_vars(channel, ts, emoji, None),
+        true,
+    )
+}
+
+/// Enqueues the merge reaction of Workflow `workflow` of Plan `plan` on its post when `pr_posts.reaction` is not NULL; whether a
+/// mutation was newly queued. The emoji is resolved from the policy again at `execute` (§4.3).
+pub fn react_merge_in(
+    tx: &crate::store::WriteTxn<'_>,
+    plan: &str,
+    workflow: &str,
+) -> Result<bool, CpdError> {
+    let post: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT channel, ts, reaction FROM pr_posts WHERE plan = ?1 AND workflow = ?2 AND reaction IS NOT NULL",
+            [plan, workflow],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((channel, ts, emoji)) = post else {
+        return Ok(false);
+    };
+    let at = txn_at(tx)?;
+    let vars = reaction_vars(&channel, &ts, &emoji, Some((plan, workflow)));
+    Ok(insert(tx, &at, "reaction", &channel, &vars, true)?.1)
+}
+
+/// Enqueues the `post` op in the caller's transaction: never deduped, `pr post` guards `already_posted` itself (§4.2).
+pub fn post_in(
+    tx: &crate::store::WriteTxn<'_>,
+    channel: &str,
+    vars: &Value,
+) -> Result<Queued, CpdError> {
+    let at = txn_at(tx)?;
+    let (mutation_id, _) = insert(tx, &at, "post", channel, vars, false)?;
+    Ok(Queued {
+        queued: true,
+        mutation_id,
+    })
+}
+
+/// Enqueues the `repost` op in the caller's transaction: never deduped, each is one reminder (§4.2).
+pub fn repost_in(
+    tx: &crate::store::WriteTxn<'_>,
+    channel: &str,
+    vars: &Value,
+) -> Result<Queued, CpdError> {
+    let at = txn_at(tx)?;
+    let (mutation_id, _) = insert(tx, &at, "repost", channel, vars, false)?;
+    Ok(Queued {
+        queued: true,
+        mutation_id,
+    })
+}
+
+/// The id of the active `post` mutation of Workflow `workflow` of Plan `plan`, if any.
+pub fn active_post(
+    conn: &rusqlite::Connection,
+    plan: &str,
+    workflow: &str,
+) -> Result<Option<i64>, CpdError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT id FROM swr_mutations WHERE system = 'slack' AND op_kind = 'post' AND status IN {ACTIVE}
+                   AND json_extract(vars_json, '$.plan') = ?1 AND json_extract(vars_json, '$.workflow') = ?2
+                 ORDER BY id LIMIT 1"
+            ),
+            [plan, workflow],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// The message (`channel`, `ts`) with the overlay of its active mutations; `None` when the channel holds no such row.
 pub fn overlaid(
-    _store: &mut crate::store::Store,
-    _channel: &str,
-    _ts: &str,
+    store: &mut crate::store::Store,
+    channel: &str,
+    ts: &str,
 ) -> Result<Option<Overlaid>, CpdError> {
-    todo!("swr-slack.md §4.4: the stored counts plus the active reaction mutations")
+    let key = channel_key(channel);
+    store.read(|c| {
+        let row: Option<(String, Option<i64>)> = c
+            .query_row(
+                "SELECT reactions_json, eyes_me FROM swr_slack_posts WHERE channel = ?1 AND ts = ?2 AND inactive_at IS NULL
+                 ORDER BY primary_pr DESC, repo, number LIMIT 1",
+                [channel, ts],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((reactions, eyes_me)) = row else {
+            return Ok(None);
+        };
+        let mut counts: std::collections::BTreeMap<String, i64> =
+            serde_json::from_str(&reactions).unwrap_or_default();
+        let mut eyes_me = eyes_me.map(|v| v == 1);
+        let mut stmt = c.prepare(&format!(
+            "SELECT json_extract(vars_json, '$.emoji') FROM swr_mutations
+              WHERE system = 'slack' AND target_key = ?1 AND op_kind = 'reaction' AND status IN {ACTIVE}
+                AND json_extract(vars_json, '$.channel') = ?2 AND json_extract(vars_json, '$.ts') = ?3
+              ORDER BY submitted_at, id"
+        ))?;
+        let emojis = stmt
+            .query_map(params![key, channel, ts], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for emoji in emojis {
+            if emoji == "eyes" {
+                eyes_me = Some(true);
+            }
+            *counts.entry(emoji).or_insert(0) += 1;
+        }
+        Ok(Some(Overlaid {
+            reactions: counts,
+            eyes_me,
+        }))
+    })
 }
 
 /// Whether Workflow `workflow` of Plan `plan` has an active `post` mutation: the overlay shows it as posting (§5.1).
 pub fn posting(
-    _store: &mut crate::store::Store,
-    _plan: &str,
-    _workflow: &str,
+    store: &mut crate::store::Store,
+    plan: &str,
+    workflow: &str,
 ) -> Result<bool, CpdError> {
-    todo!("swr-slack.md §5.1: the pr_posts overlay of an active post mutation")
+    store.read(|c| Ok(active_post(c, plan, workflow)?.is_some()))
+}
+
+/// What the Workflow's policy names as its merge reaction (`""` when none) and the policy file that sets, or should set, it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyEmoji {
+    pub emoji: String,
+    pub file: std::path::PathBuf,
+}
+
+/// The emoji Workflow `workflow` of `plan` names for its merge (`pr.post.merged_reaction`, `""` when none), resolved with the
+/// Workflow's repo and owner policy, and the file to edit: the repo's file when it sets the key, else the owner's `owner.toml`.
+pub fn policy_emoji(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &str,
+    workflow: &str,
+) -> Result<PolicyEmoji, CpdError> {
+    let plan_id = PlanId::parse(plan)?;
+    let key = WorkflowKey::parse(workflow)?;
+    let emoji = crate::pr::policy_of_workflow(conn, home, &plan_id, &key)?
+        .pr
+        .post
+        .merged_reaction;
+    let (owner, name): (String, Option<String>) = conn.query_row(
+        "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
+        [plan, workflow],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let owner = OwnerLogin::parse(&owner)?;
+    let owner_file = policy_dir(home).join(owner.as_str()).join("owner.toml");
+    let file = match name {
+        Some(name) => {
+            let repo = repo_path(home, &owner, &RepoName::parse(&name)?);
+            if repo_sets_reaction(&repo)? {
+                repo
+            } else {
+                owner_file
+            }
+        }
+        None => owner_file,
+    };
+    Ok(PolicyEmoji { emoji, file })
+}
+
+/// Whether the repo policy file exists and sets `pr.post.merged_reaction` (it parsed when the policy resolved).
+fn repo_sets_reaction(path: &std::path::Path) -> Result<bool, CpdError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(CpdError::new(
+                ErrorCode::Internal,
+                format!("cannot read {}: {e}", path.display()),
+            ));
+        }
+    };
+    let value: toml::Table = text.parse().map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("{} is not TOML: {e}", path.display()),
+        )
+    })?;
+    Ok(value
+        .get("pr")
+        .and_then(|v| v.get("post"))
+        .and_then(|v| v.get("merged_reaction"))
+        .is_some())
+}
+
+/// Re-enqueues each parked merge reaction whose Workflow's policy now names another, non-empty emoji (§4.3): a new mutation with
+/// the new `vars_json`, because a `failed` one never revalidates. The newest parked row of each Workflow is the one looked at.
+fn requeue_parked(cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<(), CpdError> {
+    let parked: Vec<(String, String, String, String, String)> = cx.store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT json_extract(vars_json, '$.plan'), json_extract(vars_json, '$.workflow'), json_extract(vars_json, '$.channel'),
+                    json_extract(vars_json, '$.ts'), json_extract(vars_json, '$.emoji')
+               FROM swr_mutations WHERE id IN (SELECT max(id) FROM swr_mutations
+                 WHERE system = 'slack' AND op_kind = 'reaction' AND json_extract(vars_json, '$.plan') IS NOT NULL
+                 GROUP BY json_extract(vars_json, '$.plan'), json_extract(vars_json, '$.workflow'))
+                AND status = 'failed' ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    for (plan, workflow, channel, ts, emoji) in parked {
+        let home = cx.home.clone();
+        // A policy that does not resolve is reported where the policy is used; nothing is re-queued for it.
+        let Ok(resolved) = cx
+            .store
+            .read(|c| policy_emoji(c, &home, &plan, &workflow))
+        else {
+            continue;
+        };
+        if resolved.emoji.is_empty() || resolved.emoji == emoji {
+            continue;
+        }
+        let vars = reaction_vars(&channel, &ts, &resolved.emoji, Some((&plan, &workflow)));
+        let at = timestamp(now);
+        cx.store.write("swr slack requeue", |tx| {
+            insert(tx, &at, "reaction", &channel, &vars, true)?;
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// Runs the helper `call` through the Runner and returns its `ok` answer; a helper that failed is the error it printed.
+fn run_call(cx: &mut Cx<'_>, call: &crate::host::runner::Call) -> Result<Value, CpdError> {
+    let out = cx.ports.runner.run(call).map_err(|f| match f {
+        Failed::Io(e) => CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot run {}: {e}.", call.args.join(" ")),
+        ),
+        Failed::Timeout(e) => e,
+    })?;
+    crate::slack::answer(&out, &call.args)
+}
+
+/// A refusal's Slack error name: the `reason` of its details, else `unknown`.
+fn reason_of(e: &CpdError) -> String {
+    e.details()["reason"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+/// Raises the one `error` Event `slack_refused` of a reaction that will not be placed, in its own transaction; scoped to the Plan
+/// for a merge reaction, with the policy file to fix.
+fn raise_refused(
+    cx: &mut Cx<'_>,
+    vars: &Value,
+    emoji: &str,
+    reason: &str,
+    file: Option<&std::path::Path>,
+) -> Result<(), CpdError> {
+    let text_of = |name: &str| vars[name].as_str().unwrap_or_default().to_owned();
+    let (channel, ts) = (text_of("channel"), text_of("ts"));
+    let mut details = json!({"emoji": emoji, "reason": reason, "channel": channel, "ts": ts});
+    let what = if reason == "policy_empty" {
+        "The policy names no emoji (pr.post.merged_reaction is empty)".to_owned()
+    } else {
+        format!("Slack refused the reaction `{emoji}`: {reason}")
+    };
+    let plan = vars["plan"].as_str().map(str::to_owned);
+    let text = match (&plan, file) {
+        (Some(plan), Some(file)) => {
+            let workflow = text_of("workflow");
+            details["plan"] = json!(plan);
+            details["pr"] = json!(workflow);
+            details["file"] = json!(file.display().to_string());
+            format!(
+                "The merge reaction of Workflow {workflow} of Plan {plan} on Slack message {ts} of {channel} was not placed. {what}. Set pr.post.merged_reaction in {} to an emoji of the workspace; the engine tries again when the policy names another emoji.",
+                file.display()
+            )
+        }
+        _ => format!(
+            "The reaction `{emoji}` on Slack message {ts} of {channel} was not placed. {what}. The engine does not try this reaction again."
+        ),
+    };
+    let mut event = NewEvent::error(
+        text.clone(),
+        "watch",
+        ErrorCode::SlackRefused.as_str(),
+        &text,
+        details,
+    );
+    if let Some(plan) = &plan {
+        event = event.plan(PlanId::parse(plan)?);
+    }
+    cx.store.write("swr slack refused", |tx| {
+        append(tx, event)?;
+        Ok(())
+    })
+}
+
+/// The failure of a Slack call that is not a refusal, recorded on the endpoint (the outage Event is the endpoint's, A3).
+fn record_endpoint_failure(cx: &mut Cx<'_>, e: &CpdError, now: OffsetDateTime) {
+    let text = format!("{}: {}", e.code().as_str(), e.message());
+    let kind = match e.code() {
+        ErrorCode::SlackAuth
+        | ErrorCode::SlackNotConfigured
+        | ErrorCode::SlackHelperFailed
+        | ErrorCode::PiNotFound
+        | ErrorCode::SpawnFailed => endpoint::Kind::Permanent,
+        _ => endpoint::Kind::Transient,
+    };
+    // A store that cannot take the note leaves the mutation's own retry to report.
+    let _ = endpoint::record_failure(cx.store, "slack", now, &text, kind);
+}
+
+fn execute_reaction(cx: &mut Cx<'_>, vars: &Value) -> ExecOutcome {
+    let text = |name: &str| vars[name].as_str().unwrap_or_default().to_owned();
+    let (channel, ts) = (text("channel"), text("ts"));
+    let mut emoji = text("emoji");
+    if let (Some(plan), Some(workflow)) = (vars["plan"].as_str(), vars["workflow"].as_str()) {
+        // A merge reaction's emoji is the policy's at the time it is placed (contract §3.7 A1). A policy that does not resolve
+        // is reported where the policy is used: the emoji queued with the reaction stands.
+        let home = cx.home.clone();
+        if let Ok(resolved) = cx.store.read(|c| policy_emoji(c, &home, plan, workflow)) {
+            if resolved.emoji.is_empty() {
+                let refused = raise_refused(
+                    cx,
+                    vars,
+                    &emoji,
+                    "policy_empty",
+                    Some(resolved.file.as_path()),
+                );
+                return match refused {
+                    Ok(()) => ExecOutcome::Failed {
+                        error: "policy_empty".into(),
+                    },
+                    Err(_) => ExecOutcome::Retry {
+                        after: REACTION_RETRY,
+                    },
+                };
+            }
+            emoji = resolved.emoji;
+        }
+    }
+    let now = cx.ports.clock.utc();
+    let call = match crate::slack::call(
+        cx.config,
+        "slack-react.ts",
+        &[("channel", &channel), ("ts", &ts), ("emoji", &emoji)],
+        None,
+        SEND_DEADLINE,
+    ) {
+        Ok(call) => call,
+        Err(e) => {
+            record_endpoint_failure(cx, &e, now);
+            return ExecOutcome::Retry {
+                after: REACTION_RETRY,
+            };
+        }
+    };
+    match run_call(cx, &call) {
+        Ok(_) => ExecOutcome::Done,
+        Err(e) if e.code() == ErrorCode::SlackRefused => {
+            let reason = reason_of(&e);
+            let file = match (vars["plan"].as_str(), vars["workflow"].as_str()) {
+                (Some(plan), Some(workflow)) => {
+                    let home = cx.home.clone();
+                    cx.store
+                        .read(|c| policy_emoji(c, &home, plan, workflow))
+                        .ok()
+                        .map(|p| p.file)
+                }
+                _ => None,
+            };
+            match raise_refused(cx, vars, &emoji, &reason, file.as_deref()) {
+                Ok(()) => ExecOutcome::Failed { error: reason },
+                Err(_) => ExecOutcome::Retry {
+                    after: REACTION_RETRY,
+                },
+            }
+        }
+        Err(e) => {
+            record_endpoint_failure(cx, &e, now);
+            ExecOutcome::Retry {
+                after: REACTION_RETRY,
+            }
+        }
+    }
+}
+
+/// A send that failed is never retried: it may have gone out before the answer was lost, and a second send is a duplicate.
+fn send_failed(e: &CpdError) -> ExecOutcome {
+    ExecOutcome::Failed {
+        error: format!("{}: {}", e.code().as_str(), e.message()),
+    }
+}
+
+fn execute_post(cx: &mut Cx<'_>, vars: &Value) -> ExecOutcome {
+    let text = |name: &str| vars[name].as_str().unwrap_or_default().to_owned();
+    let (channel, plan, workflow, message) =
+        (text("channel"), text("plan"), text("workflow"), text("text"));
+    let sent = crate::slack::call(
+        cx.config,
+        "slack-post.ts",
+        &[("channel", &channel)],
+        Some(message.into_bytes()),
+        SEND_DEADLINE,
+    )
+    .and_then(|call| run_call(cx, &call));
+    let sent = match sent {
+        Ok(sent) => sent,
+        Err(e) => return send_failed(&e),
+    };
+    let field = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
+    let now = cx.ports.clock.utc();
+    // The merge reaction the policy wants, as `pr post` recorded it at post time.
+    let home = cx.home.clone();
+    let reaction = PlanId::parse(&plan)
+        .and_then(|p| WorkflowKey::parse(&workflow).map(|w| (p, w)))
+        .and_then(|(p, w)| {
+            cx.store
+                .read(|c| crate::pr::policy_of_workflow(c, &home, &p, &w))
+        })
+        .ok()
+        .map(|p| p.pr.post.merged_reaction)
+        .filter(|r| !r.is_empty());
+    let record = PostRecord {
+        channel: field("channel"),
+        ts: field("ts"),
+        link: field("link"),
+        posted_at: timestamp(now),
+        reaction,
+        reacted_at: None,
+        auto_merge: "pending".to_owned(),
+        auto_merge_at: None,
+    };
+    let stored = cx.store.write("swr slack post", |tx| {
+        if posts::insert(tx, &plan, &workflow, &record)? {
+            jira_sync::queue(tx, &plan, &workflow, jira_sync::Target::InReview)?;
+        }
+        Ok(())
+    });
+    match stored {
+        Ok(()) => ExecOutcome::Done,
+        Err(e) => ExecOutcome::Failed {
+            error: format!(
+                "The message WAS posted ({}) but recording it failed: {}",
+                record.link,
+                e.message()
+            ),
+        },
+    }
+}
+
+fn execute_repost(cx: &mut Cx<'_>, vars: &Value) -> ExecOutcome {
+    let text = |name: &str| vars[name].as_str().unwrap_or_default().to_owned();
+    let (channel, thread_ts, plan, workflow, message) = (
+        text("channel"),
+        text("thread_ts"),
+        text("plan"),
+        text("workflow"),
+        text("text"),
+    );
+    let sent = crate::slack::call(
+        cx.config,
+        "slack-post.ts",
+        &[
+            ("channel", &channel),
+            ("thread-ts", &thread_ts),
+            ("reply-broadcast", "true"),
+        ],
+        Some(message.into_bytes()),
+        SEND_DEADLINE,
+    )
+    .and_then(|call| run_call(cx, &call));
+    if let Err(e) = sent {
+        return send_failed(&e);
+    }
+    match cx.store.write("swr slack repost", |tx| {
+        posts::mark_bumped(tx, &plan, &workflow)?;
+        Ok(())
+    }) {
+        Ok(()) => ExecOutcome::Done,
+        Err(e) => ExecOutcome::Failed {
+            error: format!(
+                "The reminder WAS posted but recording it failed: {}",
+                e.message()
+            ),
+        },
+    }
 }
 
 /// A failed read: the query and the endpoint record it, no row is written or deleted (swr.md §16).
@@ -223,7 +800,7 @@ fn stdin(cx: &mut Cx<'_>, channel: &str) -> Result<Value, CpdError> {
     })
 }
 
-/// Runs the helper and returns its `ok` answer; a helper that failed is the error it printed.
+/// Runs the channel helper and returns its `ok` answer; a helper that failed is the error it printed.
 fn read(cx: &mut Cx<'_>, channel: &str) -> Result<Value, CpdError> {
     let input = stdin(cx, channel)?;
     let call = crate::slack::call(
@@ -233,14 +810,7 @@ fn read(cx: &mut Cx<'_>, channel: &str) -> Result<Value, CpdError> {
         Some(input.to_string().into_bytes()),
         DEADLINE,
     )?;
-    let out = cx.ports.runner.run(&call).map_err(|f| match f {
-        Failed::Io(e) => CpdError::new(
-            ErrorCode::SpawnFailed,
-            format!("Cannot run {}: {e}.", call.args.join(" ")),
-        ),
-        Failed::Timeout(e) => e,
-    })?;
-    crate::slack::answer(&out, &call.args)
+    run_call(cx, &call)
 }
 
 /// The data hash (§3.5): the canonical rows, newest first, without the helper's `read` count.

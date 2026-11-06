@@ -94,7 +94,6 @@ mod provider_hold;
 mod provider_hold_e3_tests;
 #[cfg(test)]
 mod provider_hold_tests;
-mod react;
 #[cfg(test)]
 mod repeated_asks_tests;
 mod report;
