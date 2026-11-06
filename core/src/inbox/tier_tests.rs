@@ -82,17 +82,19 @@ fn a_curate_retire_notice_is_white() {
 #[test]
 fn a_models_changed_notice_is_white() {
     let (_dir, home, mut store) = open();
-    let file = serde_json::json!({
-        "version": 1,
-        "provider": "acme",
-        "polled_at": "2026-01-01T00:00:00Z",
+    let catalog = serde_json::json!({
         "pi_version": "0.0.0",
         "source": {"kind": "openai-models", "auth": "none", "base": null},
         "ids": ["gpt-new"],
-        "changes": {"at": "2026-01-01T00:00:00Z", "appeared": ["gpt-new"], "went_away": []}
     });
-    std::fs::create_dir_all(home.run_dir()).unwrap();
-    std::fs::write(home.run_dir().join("models-acme.json"), file.to_string()).unwrap();
+    let changes = serde_json::json!({"at": "2026-01-01T00:00:00Z", "appeared": ["gpt-new"], "went_away": []});
+    sql(
+        &mut store,
+        &format!(
+            "INSERT INTO swr_models (provider, catalog_json, changes_json, polled_at)
+             VALUES ('acme', '{catalog}', '{changes}', '2026-01-01T00:00:00Z');"
+        ),
+    );
     let c = only(of(&mut store, &home, Kind::ModelsChanged));
     assert_eq!(c.urgency, Urgency::White);
 }

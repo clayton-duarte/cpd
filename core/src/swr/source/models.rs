@@ -117,10 +117,16 @@ fn rows(store: &mut Store, provider: Option<&str>) -> Result<Vec<(String, Row)>,
         .collect()
 }
 
-/// The newest `polled_at` of the rows: `None` when there is no row (E15 is due at once).
+/// The newest `polled_at` of the rows: `None` when there is no row, or a provider has had no good list yet (its row
+/// has no `polled_at`), so E15 is due at once (gated by the run end).
 pub fn newest_polled_at(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError> {
-    let newest: Option<String> =
-        store.read(|c| Ok(c.query_row("SELECT max(polled_at) FROM swr_models", [], |r| r.get(0))?))?;
+    let newest: Option<String> = store.read(|c| {
+        Ok(c.query_row(
+            "SELECT CASE WHEN count(*) = count(polled_at) THEN max(polled_at) END FROM swr_models",
+            [],
+            |r| r.get(0),
+        )?)
+    })?;
     newest
         .map(|t| {
             OffsetDateTime::parse(&t, &time::format_description::well_known::Rfc3339).map_err(|e| {
@@ -162,7 +168,7 @@ fn write_listed(
     pi_version: &str,
     listed: &Listed,
     now: &str,
-) -> Result<Written, CpdError> {
+) -> Result<(Written, bool), CpdError> {
     let provider = listed.provider.as_str();
     let ids = sorted(&listed.ids);
     let kind = if listed.auth == "custom" {
@@ -181,14 +187,16 @@ fn write_listed(
         known: listed.known.as_deref().map(sorted),
     };
     store.write("models refresh", |tx| {
-        let (old, kept): (Option<String>, Option<String>) = tx
+        let seen: Option<(Option<String>, Option<String>, Option<String>)> = tx
             .query_row(
-                "SELECT catalog_json, changes_json FROM swr_models WHERE provider = ?1",
+                "SELECT catalog_json, changes_json, last_error FROM swr_models WHERE provider = ?1",
                 [provider],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .optional()?
-            .unwrap_or((None, None));
+            .optional()?;
+        // The endpoint hears of a provider that is new or was failing; a healthy one stays as it is (D5).
+        let recovered = seen.as_ref().is_none_or(|(_, _, e)| e.is_some());
+        let (old, kept, _) = seen.unwrap_or((None, None, None));
         let old: Option<Catalog> = parse(provider, "catalog", old)?;
         // Lists of another auth type are not comparable (an API-key login lists more than its plan allows).
         let comparable = old.filter(|o| o.source.auth == listed.auth);
@@ -226,12 +234,13 @@ fn write_listed(
                 changes_json.flatten()
             ],
         )?;
-        Ok(Written {
+        let written = Written {
             provider: provider.to_owned(),
             polled_at: now.to_owned(),
             count: catalog.ids.len(),
             changes: this,
-        })
+        };
+        Ok((written, recovered))
     })
 }
 
@@ -276,9 +285,12 @@ pub fn apply_answer(
     for entry in &answer.entries {
         let failure = match entry {
             Entry::Listed(listed) if !listed.ids.is_empty() => {
-                let written = write_listed(store, &answer.pi_version, listed, &stamp)?;
-                let name = endpoint_name(&listed.provider, listed.base.as_deref());
-                endpoint::record_ok(store, &name, now)?;
+                let (written, recovered) =
+                    write_listed(store, &answer.pi_version, listed, &stamp)?;
+                if recovered {
+                    let name = endpoint_name(&listed.provider, listed.base.as_deref());
+                    endpoint::record_ok(store, &name, now)?;
+                }
                 outcomes.push(Outcome::Written(written));
                 continue;
             }
