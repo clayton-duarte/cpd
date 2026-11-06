@@ -22,6 +22,10 @@ pub struct EffectivePr {
     pub review_decision: String,
     pub title: String,
     pub head_oid: Option<String>,
+    /// The author's login from the Light read (pro-d453); `None` before the first poll after `pr-light-cache`.
+    pub author_login: Option<String>,
+    /// The `latestReviews` nodes of the Light read (pro-d453): the reviewers' state and the reviewed commit without a hydrate.
+    pub light_reviews: Option<Value>,
     pub feedback_open: Option<usize>,
     /// The open feedback items, the patches applied (a queued reply removes its item).
     pub feedback: Option<Vec<crate::pr::comments::Item>>,
@@ -106,11 +110,13 @@ pub fn effective_in(
     else {
         return Ok(None);
     };
-    let head_oid: Option<String> = conn.query_row(
-        "SELECT head_oid FROM pull_requests WHERE id = ?1",
-        [raw.id],
-        |r| r.get(0),
-    )?;
+    let (head_oid, author_login, light_reviews): (Option<String>, Option<String>, Option<String>) =
+        conn.query_row(
+            "SELECT head_oid, author_login, reviews_json FROM pull_requests WHERE id = ?1",
+            [raw.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+    let light_reviews = light_reviews.and_then(|j| serde_json::from_str(&j).ok());
     let detail: Option<String> = conn
         .query_row(
             "SELECT detail_json FROM swr_pr_detail WHERE repo = ?1 AND number = ?2",
@@ -130,6 +136,8 @@ pub fn effective_in(
         review_decision: effective.review_decision,
         title: effective.title,
         head_oid,
+        author_login,
+        light_reviews,
         detail,
         overlay: patches(&active).into_iter().map(|(id, _)| id).collect(),
         row: raw,

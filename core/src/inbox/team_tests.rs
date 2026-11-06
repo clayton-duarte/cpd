@@ -63,7 +63,7 @@ fn inbox_team_gh_pr_takes_checks_state_from_the_effective_checks_first() {
     seed(&mut store, 1, "passed", Some("ryan"), Some("FAILURE"));
     seed(&mut store, 2, "failed", Some("ryan"), Some("SUCCESS"));
     seed(&mut store, 3, "pending", Some("ryan"), Some("SUCCESS"));
-    seed(&mut store, 4, "none", Some("ryan"), Some("SUCCESS"));
+    seed(&mut store, 4, "none", Some("ryan"), None);
     let states: Vec<Option<String>> = (1..=4).map(|n| read(&mut store, n).checks_state).collect();
     assert_eq!(
         states,

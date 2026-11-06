@@ -87,7 +87,7 @@ impl Pr {
             "autoMergeRequest": null,
             "commits": {"nodes": [{"commit": {"oid": self.oid,
                 "statusCheckRollup": {"state": if failed {"FAILURE"} else {"SUCCESS"}, "contexts": {"nodes": runs}}}}]},
-            "latestOpinionatedReviews": {"nodes": []}, "latestReviews": {"nodes": reviews},
+            "latestReviews": {"nodes": reviews},
             "reviewThreads": {"nodes": []}, "comments": {"nodes": []},
         })
     }

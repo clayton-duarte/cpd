@@ -74,6 +74,8 @@ struct Stored {
     number: i64,
     tracked: bool,
     hydrated: bool,
+    /// The stored rollup is failed and a label is excused: the contexts are needed to excuse a Danger (pro-d447).
+    held_failure: bool,
     hydrated_at: Option<OffsetDateTime>,
 }
 
@@ -103,7 +105,8 @@ impl GithubSource {
                 "SELECT pr.repo, pr.number,
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
-                        d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL
+                        d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
+                        pr.checks = 'failed', pr.labels_json
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -111,12 +114,18 @@ impl GithubSource {
                 .query_map([], |r| {
                     let (own, review): (bool, bool) = (r.get(2)?, r.get(3)?);
                     let (same, has): (bool, bool) = (r.get(5)?, r.get(6)?);
+                    let (failed, labels): (bool, Option<String>) = (r.get(7)?, r.get(8)?);
+                    let labels: Vec<String> = labels
+                        .and_then(|l| serde_json::from_str(&l).ok())
+                        .unwrap_or_default();
                     Ok((
                         Stored {
                             repo: r.get(0)?,
                             number: r.get(1)?,
                             tracked: own || review,
                             hydrated: has && same,
+                            held_failure: failed
+                                && swr_read::policy_hold(&labels, &self.excused_labels),
                             hydrated_at: cache::parse(r.get(4)?).ok().flatten(),
                         },
                         own,
@@ -126,8 +135,9 @@ impl GithubSource {
             Ok(rows
                 .into_iter()
                 .map(|(mut s, own)| {
-                    // Only the User's own pull requests (authored or owned) are hydrated.
-                    if !own {
+                    // Only the User's own pull requests (authored or owned) are hydrated, and a teammate's whose failed rollup
+                    // may hide an excused Danger (read again only when its head moved).
+                    if !own && !s.held_failure {
                         s.hydrated = true;
                     }
                     s
@@ -148,11 +158,15 @@ impl GithubSource {
             }
         }
         let floor = now.unix_timestamp() - SLACK_WINDOW;
+        // Every active Slack-posted pull request not yet merged or closed is read each pass (pro-d453): one with no row is
+        // first-seen, one whose row is open and not archived stays live (a teammate's PR is neither authored nor requested).
         let first_seen: Vec<(String, i64)> = cx.store.read(|c| {
             let mut stmt = c.prepare(
                 "SELECT s.repo, s.number, s.ts FROM swr_slack_posts s
-                 WHERE s.repo IS NOT NULL AND s.number IS NOT NULL
-                   AND NOT EXISTS (SELECT 1 FROM pull_requests p WHERE p.repo = s.repo AND p.number = s.number)",
+                 WHERE s.repo IS NOT NULL AND s.number IS NOT NULL AND s.inactive_at IS NULL
+                   AND (NOT EXISTS (SELECT 1 FROM pull_requests p WHERE p.repo = s.repo AND p.number = s.number)
+                        OR EXISTS (SELECT 1 FROM pull_requests p
+                                   WHERE p.repo = s.repo AND p.number = s.number AND p.state = 'open' AND p.archived = 0))",
             )?;
             let rows = stmt
                 .query_map([], |r| {
@@ -387,8 +401,22 @@ impl GithubSource {
                 "GitHub cannot find the pull request",
             )?;
         }
-        for ((repo, number), node) in &merged {
+        for ((repo, number), node) in &mut merged {
             let key = pr_key(repo, *number);
+            // The stored detail of the same head, for the excused Danger a Light node cannot see.
+            let stored: Option<serde_json::Value> = cx.store.read(|c| {
+                Ok(c.query_row(
+                    "SELECT detail_json FROM swr_pr_detail WHERE repo = ?1 AND number = ?2 AND head_oid = ?3",
+                    params![repo, number, node.head_oid],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
+                .and_then(|j| serde_json::from_str(&j).ok()))
+            })?;
+            if let Some(detail) = &stored {
+                swr_read::excuse_from_detail(node, detail, &self.excused_labels);
+            }
+            let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
                 Ok(c.query_row(
                     "SELECT detail_hash FROM swr_pr_detail WHERE repo = ?1 AND number = ?2",

@@ -261,8 +261,13 @@ pub fn lookup_from_store(store: &mut Store, refs: &[(String, u64)]) -> Result<Lo
 
 fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
     let detail = e.detail.as_ref();
-    let reviews = detail
-        .and_then(|d| d["latestReviews"]["nodes"].as_array())
+    // The Light read's `latestReviews` is the newest (every pass); the detail's is the fallback of a row not polled since.
+    let nodes = e
+        .light_reviews
+        .as_ref()
+        .and_then(|r| r["nodes"].as_array())
+        .or_else(|| detail.and_then(|d| d["latestReviews"]["nodes"].as_array()));
+    let reviews = nodes
         .map(Vec::as_slice)
         .unwrap_or_default()
         .iter()
@@ -272,15 +277,16 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
             commit_oid: r["commit"]["oid"].as_str().map(str::to_owned),
         })
         .collect();
-    let checks_state = detail
-        .and_then(|d| d["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str())
-        .map(str::to_owned)
-        .or_else(|| match e.checks.as_str() {
-            "passed" => Some("SUCCESS".to_owned()),
-            "failed" => Some("FAILURE".to_owned()),
-            "pending" => Some("PENDING".to_owned()),
-            _ => None,
-        });
+    // The effective checks first (pro-d453): the detail's raw rollup stays FAILURE on a Friday when the Danger is excused.
+    // `none` (no checks known) is the one case that leaves the detail's rollup, which a row the pass has not summed yet holds.
+    let checks_state = match e.checks.as_str() {
+        "passed" => Some("SUCCESS".to_owned()),
+        "failed" => Some("FAILURE".to_owned()),
+        "pending" => Some("PENDING".to_owned()),
+        _ => detail
+            .and_then(|d| d["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str())
+            .map(str::to_owned),
+    };
     GhPr {
         title: e.title.clone(),
         draft: e.row.draft,
@@ -289,10 +295,10 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
             "closed" => GhState::Closed,
             _ => GhState::Merged,
         },
-        author: if e.row.authored && !me.is_empty() {
-            me.to_owned()
-        } else {
-            "someone".to_owned()
+        author: match &e.author_login {
+            Some(login) => login.clone(),
+            None if e.row.authored && !me.is_empty() => me.to_owned(),
+            None => "someone".to_owned(),
         },
         decision: match e.review_decision.as_str() {
             "approved" => Some("APPROVED".to_owned()),

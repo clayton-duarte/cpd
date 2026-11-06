@@ -753,7 +753,8 @@ struct RawPr {
     base_ref: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
-    #[serde(rename = "latestOpinionatedReviews", default)]
+    /// `latestReviews` of the Light read (pro-d453); the legacy search still selects `latestOpinionatedReviews`, the same nodes.
+    #[serde(rename = "latestReviews", alias = "latestOpinionatedReviews", default)]
     latest_reviews: RawReviews,
     mergeable: String,
     #[serde(rename = "mergeStateStatus")]
@@ -2579,7 +2580,7 @@ pub struct PollPlan {
     pub meta: Vec<String>,
 }
 
-const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
+const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
 
 const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } }";
 
@@ -2629,6 +2630,11 @@ pub fn build_poll_query(plan: &PollPlan) -> String {
 pub struct PollNode {
     pub(in crate::pr) listed: Listed,
     pub head_oid: String,
+    /// The Light read's extras that no `PolledPr` field holds (pro-d453): the author's login, the `latestReviews` nodes with
+    /// their commit oid, and the label names.
+    pub author_login: Option<String>,
+    pub reviews: Value,
+    pub labels: Value,
     /// The heavy fields as GitHub answered them; `Some` only when the node carried `comments` (the heavy marker).
     pub heavy: Option<Value>,
 }
@@ -2685,7 +2691,10 @@ impl PollNode {
 
     /// Everything the header write stores, as text: equal text, equal header.
     pub fn fingerprint(&self) -> String {
-        format!("{:?}|{}", self.listed, self.head_oid)
+        format!(
+            "{:?}|{}|{:?}|{}|{}",
+            self.listed, self.head_oid, self.author_login, self.reviews, self.labels
+        )
     }
 
     /// GitHub's `updatedAt`.
@@ -2713,35 +2722,28 @@ fn poll_node(
         ))
     })?;
     let mut pr = reply.polled(raw, bots)?;
-    let labels: Vec<&str> = v["labels"]["nodes"]
+    let labels: Vec<String> = v["labels"]["nodes"]
         .as_array()
-        .map(|n| n.iter().filter_map(|l| l["name"].as_str()).collect())
+        .map(|n| {
+            n.iter()
+                .filter_map(|l| l["name"].as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default();
+    // pro-d447: a PR carrying an excused label has its failing `danger` check (a CheckRun or a StatusContext) excused; the
+    // hold is computed once and `ChecksSummary::of` applies it. Never unconditional: Danger without the label stays failed.
+    let hold = super::status::policy_hold(&labels, excused_labels);
     let contexts =
         v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array();
     if let Some(nodes) = contexts.filter(|n| !n.is_empty()) {
-        let excused = labels
-            .iter()
-            .any(|l| excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
         let mut checks = Vec::new();
         for n in nodes {
             let raw: RawCheck = serde_json::from_value(n.clone()).map_err(|e| {
                 reply.fail(format!("gh api graphql answered a malformed check: {e}."))
             })?;
-            let check = Check::from(raw);
-            // pro-d447: a PR carrying an excused label has its failing `danger` check excused.
-            if excused
-                && check
-                    .name
-                    .as_deref()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("danger"))
-            {
-                continue;
-            }
-            checks.push(check);
+            checks.push(Check::from(raw));
         }
-        // The excused `danger` run is already dropped above (pro-d447), so the summary holds no policy hold of its own.
-        pr.checks = ChecksSummary::of(&checks, &[], &[], false);
+        pr.checks = ChecksSummary::of(&checks, &[], &[], hold);
     }
     let mut membership = Membership::default();
     if let Some(did) = v.get("viewerDidAuthor").and_then(Value::as_bool) {
@@ -2764,9 +2766,17 @@ fn poll_node(
             "comments": v["comments"], "commits": v["commits"], "labels": v["labels"],
         })
     });
+    let reviews = v
+        .get("latestReviews")
+        .filter(|r| !r.is_null())
+        .cloned()
+        .unwrap_or_else(|| json!({"nodes": []}));
     Ok(PollNode {
         listed: Listed { pr, membership },
         head_oid,
+        author_login: v["author"]["login"].as_str().map(str::to_owned),
+        reviews,
+        labels: json!(labels),
         heavy,
     })
 }
