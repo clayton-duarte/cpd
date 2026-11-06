@@ -6,7 +6,6 @@ cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/tui/tui_plan_cancelled.rs 1  # m-tui-t: sleep or wall-clock wait
 core/src/host/deadline.rs 4  # m-units: sleep or wall-clock wait
 core/src/host/exe.rs 1  # m-units: sleep or wall-clock wait
-core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait
 core/src/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/mod.rs 1  # m-units: sleep or wall-clock wait
