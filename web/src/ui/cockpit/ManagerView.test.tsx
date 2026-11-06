@@ -56,19 +56,32 @@ it("ManagerView header is a TopPaneHeader with the manager key and counters", ()
   const { container } = show(ctx([plan("a"), plan("b", { phase: "done" })]));
   const header = q(container, '[data-part="manager-header"]')!;
   expect(header).not.toBeNull();
-  expect(header.classList.contains("sticky")).toBe(true);
-  expect(header.classList.contains("top-0")).toBe(true);
   expect(header.classList.contains("h-11")).toBe(true);
   expect(q(header, '[data-part="manager-key"]')!.textContent).toBe("ctx");
   expect(q(header, '[data-part="manager-counters"]')!.textContent).toBe("1 active · 1 done · 4 records");
   expect(header.querySelector("button")).toBeNull();
   expect(header.tagName).toBe("HEADER");
-  expect(header.classList.contains("pr-12")).toBe(true);
-  expect(header.classList.contains("pr-16")).toBe(false);
   const kids = Array.from(header.children);
   const spacer = kids.findIndex((k) => k.classList.contains("flex-1"));
   expect(spacer).toBeGreaterThan(0);
   expect(kids.slice(0, spacer).some((k) => k.getAttribute("data-part") === "manager-key")).toBe(true);
+});
+
+it("ManagerView header sits outside the scroll area above the scrolling body", () => {
+  const { container } = show(ctx([plan("a")]));
+  const header = q(container, '[data-part="manager-header"]')!;
+  const section = header.parentElement!;
+  expect(section.tagName).toBe("SECTION");
+  for (const c of ["flex", "h-full", "min-h-0", "w-full", "min-w-0", "flex-col", "overflow-hidden"]) expect(section.classList.contains(c)).toBe(true);
+  expect(section.firstElementChild).toBe(header);
+  expect(header.closest("[data-slot=scroll-area]")).toBeNull();
+  const scroll = q(section, '[data-part="plan-scroll"]')!;
+  expect(scroll.getAttribute("data-slot")).toBe("scroll-area");
+  expect(scroll.parentElement).toBe(section);
+  for (const c of ["min-h-0", "flex-1"]) expect(scroll.classList.contains(c)).toBe(true);
+  expect(scroll.querySelector('[data-part="manager-body"]')).not.toBeNull();
+  expect(Boolean(header.compareDocumentPosition(scroll) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  expect(header.classList.contains("sticky")).toBe(false);
 });
 
 it("ManagerView orders each plan row as dot, key, title, PRs, phase, actor, counters", () => {

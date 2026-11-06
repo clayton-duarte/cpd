@@ -102,7 +102,7 @@ it("PlanView header shows manager key, a slash, the plan key and the phase in a 
   const m = mount(<PlanView plan={plan} onAction={vi.fn()} onSelectManager={vi.fn()} />);
   const h = row(m.container)!;
   expect(h.tagName).toBe("HEADER");
-  for (const c of ["sticky", "h-11", "pr-12"]) expect(h.classList.contains(c)).toBe(true);
+  for (const c of ["h-11"]) expect(h.classList.contains(c)).toBe(true);
   const key = h.querySelector('h2[data-part="plan-key"]')!;
   expect(key.textContent).toBe("p1");
   expect(key.getAttribute("title")).toBe("Web UI");
@@ -114,6 +114,23 @@ it("PlanView header shows manager key, a slash, the plan key and the phase in a 
   expect(follows(mgr, key)).toBe(true);
   expect(follows(key, stepper)).toBe(true);
   expect(h.textContent).toContain("/");
+  m.unmount();
+});
+
+it("PlanView header sits outside the scroll area above the scrolling body", () => {
+  const m = mount(<PlanView plan={plan} onAction={vi.fn()} onSelectManager={vi.fn()} />);
+  const header = row(m.container)!;
+  const section = header.parentElement!;
+  expect(section.tagName).toBe("SECTION");
+  for (const c of ["flex", "h-full", "min-h-0", "w-full", "min-w-0", "flex-col", "overflow-hidden"]) expect(section.classList.contains(c)).toBe(true);
+  expect(section.firstElementChild).toBe(header);
+  expect(header.closest("[data-slot=scroll-area]")).toBeNull();
+  const scroll = section.querySelector<HTMLElement>('[data-part="plan-scroll"]')!;
+  expect(scroll.getAttribute("data-slot")).toBe("scroll-area");
+  expect(scroll.parentElement).toBe(section);
+  for (const c of ["min-h-0", "flex-1"]) expect(scroll.classList.contains(c)).toBe(true);
+  expect(scroll.querySelector('[data-part="plan-body"]')).not.toBeNull();
+  expect(header.classList.contains("sticky")).toBe(false);
   m.unmount();
 });
 

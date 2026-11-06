@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { expect, it, vi } from "vitest";
+import { useContext } from "react";
 import { mount } from "../../testing/render.tsx";
-import { Shell } from "./Shell.tsx";
+import { PlanCollapseContext, Shell } from "./Shell.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 
 // react-resizable-panels is an external dependency and jsdom has no layout: a plain double
@@ -63,9 +64,20 @@ function click(el: Element | null): void {
   });
 }
 
+// A plan child that renders what TopPaneHeader renders from the context: the collapse button.
+function PlanProbe() {
+  const ctl = useContext(PlanCollapseContext);
+  if (ctl === null) return <i id="p">plan</i>;
+  return (
+    <div data-part="plan-controls" role="group" aria-label="Plan pane controls">
+      <button type="button" data-action="plan-collapse" aria-label={ctl.collapsed ? "Expand plan view" : "Collapse plan view"} onClick={ctl.toggle} />
+    </div>
+  );
+}
+
 function shell() {
   return mount(
-    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} />,
+    <Shell tree={<i id="t">tree</i>} plan={<PlanProbe />} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} />,
   );
 }
 
@@ -122,12 +134,55 @@ it("plan pane can be collapsed and expanded", () => {
   expect(center?.getAttribute("data-plan-state")).toBe("collapsed");
   const section = c.querySelector('section[aria-label="Plan pane"]');
   expect(section?.getAttribute("data-state")).toBe("collapsed");
-  expect(section?.hasAttribute("inert")).toBe(true);
+  expect(section?.hasAttribute("inert")).toBe(false);
   expect(c.querySelector('main[aria-label="Chat"]')?.getAttribute("data-state")).toBe("open");
   click(c.querySelector('button[aria-label="Expand plan view"]'));
   expect(center?.getAttribute("data-plan-state")).toBe("open");
   expect(c.querySelector('section[aria-label="Plan pane"]')?.hasAttribute("inert")).toBe(false);
   expect(c.querySelector('button[aria-label="Collapse plan view"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("Shell provides PlanCollapseContext whose toggle collapses and expands the plan pane", () => {
+  const seen: Array<boolean | null> = [];
+  function Spy() {
+    const ctl = useContext(PlanCollapseContext);
+    seen.push(ctl === null ? null : ctl.collapsed);
+    return <button id="tg" onClick={ctl?.toggle} />;
+  }
+  const m = mount(<Shell tree={<i>t</i>} plan={<Spy />} chat={<i>c</i>} inbox={<i>i</i>} />);
+  const c = m.container;
+  const center = c.querySelector('[data-column="center"]');
+  expect(seen[seen.length - 1]).toBe(false);
+  click(c.querySelector("#tg"));
+  expect(seen[seen.length - 1]).toBe(true);
+  expect(center?.getAttribute("data-plan-state")).toBe("collapsed");
+  click(c.querySelector("#tg"));
+  expect(seen[seen.length - 1]).toBe(false);
+  expect(center?.getAttribute("data-plan-state")).toBe("open");
+  m.unmount();
+});
+
+it("Shell renders no plan controls or ScrollArea of its own around the plan", () => {
+  const m = mount(<Shell tree={<i>t</i>} plan={<i id="p">plan</i>} chat={<i>c</i>} inbox={<i>i</i>} />);
+  const c = m.container;
+  expect(c.querySelector('[data-part="plan-controls"]')).toBeNull();
+  expect(c.querySelector('button[data-action="plan-collapse"]')).toBeNull();
+  const section = c.querySelector('section[aria-label="Plan pane"]');
+  expect(section?.querySelector("[data-slot=scroll-area]")).toBeNull();
+  expect(section?.querySelector('[data-part="plan-scroll"]')).toBeNull();
+  expect(section?.firstElementChild?.id).toBe("p");
+  m.unmount();
+});
+
+it("the Plan pane is a flex column that is not inert when collapsed", () => {
+  const m = shell();
+  const c = m.container;
+  const section = () => c.querySelector('section[aria-label="Plan pane"]');
+  for (const k of ["flex", "h-full", "min-h-0", "flex-col", "overflow-hidden"]) expect(section()?.classList.contains(k)).toBe(true);
+  click(c.querySelector('button[data-action="plan-collapse"]'));
+  expect(section()?.getAttribute("data-state")).toBe("collapsed");
+  expect(section()?.hasAttribute("inert")).toBe(false);
   m.unmount();
 });
 

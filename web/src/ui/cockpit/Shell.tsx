@@ -1,5 +1,5 @@
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useEffect, useState } from "react";
 import type { MutableRefObject, ReactElement, ReactNode } from "react";
 import { Button } from "../components/button.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
@@ -10,6 +10,9 @@ import {
   ResizablePanelGroup,
   usePanelRef,
 } from "../components/resizable.tsx";
+
+export interface PlanCollapseControl { readonly collapsed: boolean; readonly toggle: () => void }
+export const PlanCollapseContext = createContext<PlanCollapseControl | null>(null);
 
 type Mode = "open" | "collapsed" | "zoomed";
 const CTRL = "size-[26px] rounded-[5px] text-fg-strong";

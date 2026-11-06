@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ContextTreeModel, InboxModel, InboxRow } from "../../protocol/cockpit.ts";
+import type { ContextNode, ContextTreeModel, InboxModel, InboxRow, PlanViewModel } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
 import { ContextTree } from "./ContextTree.tsx";
 import { Inbox } from "./Inbox.tsx";
-import { Shell } from "./Shell.tsx";
+import { ManagerView } from "./ManagerView.tsx";
+import { PlanView } from "./PlanView.tsx";
 
 vi.mock("../components/resizable.tsx", async () => {
   const { createElement } = await import("react");
@@ -37,11 +38,23 @@ function expectPane(area: Element | null | undefined, part: string): void {
   expect(cls).toContain(MIN);
 }
 
-it("Shell Plan pane scroll area is plan-scroll and keeps its content at pane width", () => {
-  const m = mount(<Shell tree={<i>t</i>} plan={<i id="p">p</i>} chat={<i>c</i>} inbox={<i>i</i>} />);
-  const kid = m.container.querySelector('section[aria-label="Plan pane"] #p');
-  expectPane(kid?.closest("[data-slot=scroll-area]"), "plan-scroll");
-  m.unmount();
+it("the Plan pane body scroller is plan-scroll inside PlanView and ManagerView and keeps its content at pane width", () => {
+  const plan: PlanViewModel = {
+    planId: "p1", contextId: "c1", title: "Web UI", phase: "dispatch",
+    counts: { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 },
+    review: null, openEscalations: 0, cursor: 1, workflows: [], jobs: [],
+  } as unknown as PlanViewModel;
+  const pv = mount(<PlanView plan={plan} onAction={vi.fn()} onSelectManager={vi.fn()} />);
+  const body = pv.container.querySelector('[data-part="plan-body"]');
+  expectPane(body?.closest("[data-slot=scroll-area]"), "plan-scroll");
+  expect(pv.container.querySelector("header")?.closest("[data-slot=scroll-area]")).toBeNull();
+  pv.unmount();
+  const context: ContextNode = { id: "ctx", title: "Context One", archived: false, records: 0, openQuestions: 0, sessions: [], plans: [] };
+  const mv = mount(<ManagerView context={context} onSelectPlan={vi.fn()} onSelectSession={vi.fn()} />);
+  const mbody = mv.container.querySelector('[data-part="manager-body"]');
+  expectPane(mbody?.closest("[data-slot=scroll-area]"), "plan-scroll");
+  expect(mv.container.querySelector("header")?.closest("[data-slot=scroll-area]")).toBeNull();
+  mv.unmount();
 });
 
 it("ContextTree section scroll area is tree-scroll and keeps its content at pane width", () => {
