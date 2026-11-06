@@ -40,26 +40,27 @@ CpdFlowCanvas   (cockpit/FlowCanvas.tsx, pro-d68)   root div[data-part="flow-can
     ├─ svg[data-part="dag-edges"][aria-hidden="true"]   the step edges
     └─ ul   one li[data-step] per Plan flowchart step (FLOW_STEPS), a collapsible card, closed at start
 ```
-No `section` element is rendered in that case (KEPT: `querySelector("section")` is null). The Plan pane's content (this outline) is wrapped in a `ScrollArea` by Shell (DESIGN 3c, pro-d69); the outline's own elements do not scroll.
+No `section` element is rendered in that case (KEPT: `querySelector("section")` is null). The outline is not wrapped in a `ScrollArea`: Shell's wrapper is removed (pro-d88), and the outline has no header. The Plan pane section clips it (`overflow-hidden`, DESIGN 3c). Whether it should scroll is not decided here (open, for the Lead).
 
 `plan !== null`:
 
 ```
-section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT label; flex min-w-0 flex-col overflow-x-hidden
-├─ TopPaneHeader[data-part="title-row"]   the shared header (DESIGN 3i): h-11 (44px), no wrap, pr-12 (48px kept free for Shell's plan controls, DESIGN 3c)
+section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT label; flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden (pro-d88)
+├─ TopPaneHeader[data-part="title-row"]   the shared header (DESIGN 3i): h-11 (44px), no wrap; not sticky, outside the body's ScrollArea (pro-d88); the plan collapse control follows the actions (DESIGN 3c, 3i)
 │   ├─ button[type="button"][data-action="select-manager"]   {context id}, the manager key; font-mono text-[14px] font-semibold text-muted-foreground hover:text-fg-strong; click → `onSelectManager()`. Only when `onSelectManager` is passed; else `span[data-part="manager-key"]` with the same text, no click
 │   ├─ span[aria-hidden="true"]          "/"   text-fg-dim
 │   ├─ h2[data-part="plan-key"][title={plan.title}]   {plan.planId}   truncate; font-mono text-[14px] font-semibold text-fg-strong
 │   ├─ ol[aria-label="Phase"][data-part="stepper"]     (1c)
 │   └─ actions: p[data-part="review"]    only when plan.review !== null; text exactly `Review {review.id}: {review.status}`   KEPT copy (PlanView.test 1: "Review r1: approved"); font-mono text-meta text-muted-foreground
 │       p[data-part="escalations"]       only when plan.openEscalations > 0; text exactly `Escalations: {n}`   KEPT copy; font-mono text-meta text-status-blocked
-├─ div[data-part="plan-body"]   flex flex-col gap-2.5 px-4 py-2.5; hidden when the Plan pane is collapsed (DESIGN 3i)
-│   ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
-│   ├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
-│   ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
-│   └─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
+└─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
+    └─ div[data-part="plan-body"]   flex flex-col gap-2.5 px-4 py-2.5; hidden when the Plan pane is collapsed (DESIGN 3i)
+        ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
+        ├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
+        ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
+        └─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
 ```
-Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
+Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
 
 The old bare `<p>{plan.phase}</p>` is replaced by the stepper (no test pins it). The old standalone `h3`/`p` lines become the card header (1f).
 
@@ -257,15 +258,16 @@ export interface ManagerViewProps {
 DOM:
 
 ```
-section[aria-label="Manager overview {context.id}"][data-manager-view="{context.id}"]   flex min-w-0 flex-col overflow-x-hidden
-├─ TopPaneHeader[data-part="manager-header"]   the shared header (DESIGN 3i), `hasOverlayControls` default (`pr-12`)
+section[aria-label="Manager overview {context.id}"][data-manager-view="{context.id}"]   flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden (pro-d88)
+├─ TopPaneHeader[data-part="manager-header"]   the shared header (DESIGN 3i), `hasOverlayControls` default (the plan collapse control, DESIGN 3c); not sticky, outside the body's ScrollArea (pro-d88)
 │   ├─ h2[data-part="manager-key"][title={context.title}]   {context.id}   font-mono text-[14px] font-semibold text-fg-strong
 │   ├─ span[data-part="manager-counters"]   `{n} active · {n} done · {n} records`   min-w-0 truncate font-mono text-meta text-muted-foreground
 │   └─ span.flex-1                                          (no Flowchart button, pro-d76)
-└─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
-    ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
-    ├─ ol[data-part="active-plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan that is not `done`; `p` "All current plans are done." when there are none
-    └─ Collapsible   only when a `done` Plan exists; closed at start; trigger `Done plans ({n})`; content ol[data-part="done-plans"] (same rows)
+└─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
+    └─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
+        ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
+        ├─ ol[data-part="active-plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan that is not `done`; `p` "All current plans are done." when there are none
+        └─ Collapsible   only when a `done` Plan exists; closed at start; trigger `Done plans ({n})`; content ol[data-part="done-plans"] (same rows)
 ```
 
 **Order.** The Plans are sorted by `compareOrderKey` (`state/archiveNav.ts`) on the Lead's dot and `created_at`, the key the tree's Plan rows use (3d).

@@ -704,21 +704,19 @@ div[data-shell]                                                   flex column (2
 │   ├─ ResizableHandle id="split-left" data-part="split-left" withHandle aria-label="Resize context tree and center"
 │   ├─ ResizablePanel id="center" data-part="center-panel"        defaultSize 50% · minSize 30%   (not collapsible)
 │   │   └─ div[data-column="center"][data-part="center-frame"][data-plan-state="open|collapsed|zoomed"]   relative flex h-full min-h-0 flex-col
-│   │       ├─ ResizablePanelGroup id="cpd-center" data-part="center-group" orientation="vertical"   h-full min-h-0 flex-1   (renders a div)
-│   │       │   ├─ ResizablePanel id="plan" data-part="plan-panel" panelRef={planRef}   defaultSize 40% · minSize 20% · maxSize 80% · collapsible · collapsedSize 44px
-│   │       │   │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   `ScrollArea` wraps {plan} (PlanView or ManagerView, 3e)   inert while collapsed (pro-d69)
-│   │       │   ├─ ResizableHandle id="split" data-part="split-handle" withHandle aria-label="Resize plan view and chat"
-│   │       │   └─ ResizablePanel id="chat" data-part="chat-panel" panelRef={chatRef}   defaultSize 60% · minSize 20% · collapsible · collapsedSize 0%
-│   │       │       └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}   inert while zoomed
-│   │       └─ div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]   absolute right-4 top-[9px] z-10 flex gap-0.5
-│   │           └─ button[type="button"][data-action="plan-collapse"]   26x26
+│   │       └─ ResizablePanelGroup id="cpd-center" data-part="center-group" orientation="vertical"   h-full min-h-0 flex-1   (renders a div)
+│   │           ├─ ResizablePanel id="plan" data-part="plan-panel" panelRef={planRef}   defaultSize 40% · minSize 20% · maxSize 80% · collapsible · collapsedSize 44px
+│   │           │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   flex h-full min-h-0 flex-col overflow-hidden   provides `PlanCollapseContext` around {plan} (PlanView or ManagerView, 3e; 3c)   not inert while collapsed (pro-d88)
+│   │           ├─ ResizableHandle id="split" data-part="split-handle" withHandle aria-label="Resize plan view and chat"
+│   │           └─ ResizablePanel id="chat" data-part="chat-panel" panelRef={chatRef}   defaultSize 60% · minSize 20% · collapsible · collapsedSize 0%
+│   │               └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}   inert while zoomed
 │   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
 │   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 30% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
 │       └─ aside[aria-label="Inbox column"]   h-full overflow-hidden      {inbox}   (DESIGN-panes 2)
 └─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (bottom; shrink-0)
 ```
 
-`div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **2** children, the centre group and the controls. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; the plan title row is a `TopPaneHeader` with `pr-12` (48px), which keeps the right side free for them (3i).
+`div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **1** child, the centre group. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan collapse control is not in the centre frame: `TopPaneHeader` (3i) renders it in the Plan header from `PlanCollapseContext` (3c, pro-d88).
 
 `react-resizable-panels` 4.15.3, through the wrappers of 2f, exact props:
 
@@ -739,27 +737,40 @@ div[data-shell]                                                   flex column (2
 
 Handle semantics come from the library, not written by cpd: `role="separator"`, focusable (`tabindex="0"`), `aria-orientation` and `aria-value*` (unverified). The library's keyboard handler contains ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, Enter and F6 (case labels read in `dist/react-resizable-panels.js`; the exact step and effect of each is unverified). Tests may pin only: the handle exists with `role="separator"` and its `aria-label`, and is focusable. The two outer handles override the library's double-click (see the table above); the inner handle keeps the library default (unverified).
 
-**Plan controls.** The group holds one button: `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icon lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
+**Plan collapse control (pro-d88).** The control lives in the Plan pane's header, not in a floating overlay. Shell owns the state and exports the context once; `TopPaneHeader` (3i) reads it:
 
-| State (`data-plan-state`) | Collapse button |
+```ts
+// web/src/ui/Shell.tsx
+export interface PlanCollapseControl {
+  readonly collapsed: boolean;   // the plan Panel is collapsed (`data-state="collapsed"`)
+  readonly toggle: () => void;   // expands when collapsed, else collapses, on the plan Panel ref
+}
+export const PlanCollapseContext = createContext<PlanCollapseControl | null>(null);
+```
+
+Shell provides `{collapsed, toggle}` (memoised) around `{props.plan}`, inside `section[aria-label="Plan pane"]`. `TopPaneHeader` renders the group and the button after `actions`: `div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]` holding `Button variant="ghost" size="icon-sm"` with `className="size-[26px] rounded-[5px] text-fg-strong"`, icon lucide at size 14 (`ChevronUpIcon`, `ChevronDownIcon`; existence in lucide-react 1.65 unverified, an equal-meaning icon may replace one). Exact behaviour:
+
+| Plan section `data-state` | Collapse button |
 |---|---|
-| `open` | label `Collapse plan view`, `ChevronUpIcon`, enabled; click → `planRef.collapse()` |
-| `collapsed` | label `Expand plan view`, `ChevronDownIcon`, enabled; click → `planRef.expand()` |
-| `zoomed` | label `Collapse plan view`, `ChevronUpIcon`, **disabled** |
+| `open` | label `Collapse plan view`, `ChevronUpIcon`, enabled; click → `toggle()` (collapses) |
+| `collapsed` | label `Expand plan view`, `ChevronDownIcon`, enabled; click → `toggle()` (expands) |
+| `zoomed` | label `Collapse plan view`, `ChevronUpIcon`, enabled; click → `toggle()`. The old disabled state is dropped with the floating controls. The result while the chat is collapsed is the library's (unverified). |
 
-- `zoomed` is reached only by collapsing the chat panel (dragging the split handle below the chat's minimum); the plan controls have no button for it.
+- The control is in the header, outside `main[aria-label="Chat"]`, so it stays operable when the chat is zoomed.
+- No header, no control: with no Context or Plan loaded the Plan pane shows the flowchart (DESIGN-panes 1b), which has no header. Accepted (pro-d88).
+- The Inbox and the Context tree pass `hasOverlayControls` false or sit outside the provider.
 - After a click the state hooks update through `onResize → sync()`: `data-plan-state` on the centre element, `data-state` on `section[aria-label="Plan pane"]` (`open` | `collapsed` | `zoomed`) and on `main[aria-label="Chat"]` (`open` | `zoomed`; `main` never reads `collapsed`).
 - `Enter` / `Space` on a focused button activates it (native). No global shortcut.
-- When `collapsed`, the plan `section` gets the `inert` attribute (its content below the 44px title row is clipped and must not take focus); when `zoomed`, `main[aria-label="Chat"]` gets `inert` (its Panel is 0% high). The controls are outside both, so they stay operable.
+- The plan `section` is never `inert` (pro-d88: its header holds the control). When `collapsed`, the body below the header is hidden by CSS (`app.css`; DESIGN-panes 1j, 3i). When `zoomed`, `main[aria-label="Chat"]` gets `inert` (its Panel is 0% high).
 - Dragging an inner handle below the plan `minSize` collapses the plan (library behaviour for a `collapsible` panel), above it expands it again; the same for the chat. Both use the same `sync()`.
-- jsdom has no layout: a test mocks `react-resizable-panels` (external dependency) and asserts the props tables above and that each button calls `collapse()` / `expand()` on the right ref; it does not assert pixel sizes.
+- jsdom has no layout: a test mocks `react-resizable-panels` (external dependency) and asserts the props tables above and that the button calls `collapse()` / `expand()` on the Plan ref through `toggle()`; it does not assert pixel sizes.
 
 **Columns (pro-d50).** The defaults are the Context tree at 20% of the row width (12% to 40%), the centre at 50% (min 30%), the Inbox at 30% (14% to 45%). The tree and inbox panels collapse when dragged below their minimum (library behaviour, `collapsedSize="0%"`). The handles resize; sizes are not persisted.
 
 **Double-click resets (pro-d50).** A double-click on `split-left` resets the tree panel to 20% (`treeRef.current?.resize("20%")`); a double-click on `split-right` resets the Inbox panel to 30% (`inboxRef.current?.resize("30%")`). Neither resets the centre. The inner `split` handle has no override here (library default; unverified). Tests mock `react-resizable-panels` and assert the call, not pixels. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently: the asides and the plan panel clip (`overflow: hidden`, pro-d69 A9, A10) and their content scrolls inside them through `ScrollArea` (see Scrolling below); the transcript scrolls through the `ScrollArea` Viewport (DESIGN-chat 2.2).
 
 **Scrolling (pro-d69, pro-d72).** Every scrollable area uses the shadcn `ScrollArea` and `ScrollBar` from `web/src/ui/components/scroll-area.tsx` (base variant over `@base-ui/react/scroll-area`, pro-d72), never a raw `overflow-y-auto` or `overflow-x-auto`. `ScrollArea` takes the Base UI Root props, has no orientation prop and always renders a vertical and a horizontal `ScrollBar` (pro-d72). A vertical-only pane (the Plan pane, the tree sections, the Inbox list) constrains its content width with the class pair `[&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0`, so its content never overflows sideways. A horizontal scroller (the DAG, DESIGN-panes 1e) keeps its bar. A height-limited scroller puts its limit on the viewport: `className="[&>[data-slot=scroll-area-viewport]]:max-h-64"`. The Documentation dialog (`DocsDialog.tsx`) is the model. The asides and the plan panel clip and never scroll themselves. The scrolling areas are:
-- Plan pane: the content of `section[aria-label="Plan pane"]` is wrapped in `ScrollArea` (`Shell.tsx`), vertical only; collapsed, its body and scrollbars are hidden (DESIGN-panes 1j).
+- Plan pane: the body under the header is a `ScrollArea` (`data-part="plan-scroll"`) in PlanView and ManagerView (DESIGN-panes 1, 1j), vertical only; the header stays fixed. Collapsed, the body and scrollbars are hidden (DESIGN-panes 1j).
 - Inbox: the list (DESIGN-panes 2.2, vertical only) and the curate dialog's checklist (DESIGN-panes 2.6).
 - Logs: the rows (3g), with the 60vh limit on the viewport.
 - Legend: the sections (3g).
@@ -791,7 +802,7 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
-**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|archive`) and a direct flex child of `SidebarContent`. **The Contexts section is not collapsible** (pro-d84): it has no `data-state` and always takes the free height (`min-h-0 flex-1`). Its header is the shared `TopPaneHeader` (3i), `data-part="tree-header"` with `hasOverlayControls` false, sticky and never scrolling; its body is a `ScrollArea` > `SidebarGroupContent`. **Archive** stays a collapsible section (`data-state` `open|closed`): an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside Archive: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47). The Contexts section is the one list of live Contexts: standing Contexts (`cpd`, `host`, `codereview`; pro-d79) are ordinary rows in it, sorted like the others by the Manager's dot tier, then newest first (`compareOrderKey`, `state/archiveNav.ts`), with no fixed place.
+**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|archive`) and a direct flex child of `SidebarContent`. **The Contexts section is not collapsible** (pro-d84): it has no `data-state` and always takes the free height (`min-h-0 flex-1`). Its header is the shared `TopPaneHeader` (3i), `data-part="tree-header"` with `hasOverlayControls` false, not sticky: it sits outside its body's `ScrollArea` and never scrolls; its body is a `ScrollArea` > `SidebarGroupContent`. **Archive** stays a collapsible section (`data-state` `open|closed`): an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside Archive: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47). The Contexts section is the one list of live Contexts: standing Contexts (`cpd`, `host`, `codereview`; pro-d79) are ordinary rows in it, sorted like the others by the Manager's dot tier, then newest first (`compareOrderKey`, `state/archiveNav.ts`), with no fixed place.
 
 **Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks or cursor (Not built). Costs are drawn only while the Status Bar's costs toggle is on (3b, Cost below).
 
@@ -809,7 +820,7 @@ DOM:
 div[aria-label="Context tree"]                                    Sidebar collapsible="none"   bg-sidebar text-sidebar-foreground flex h-full w-full flex-col min-h-full bg-background
 └─ SidebarContent                                                 the only child
    ├─ div[data-part="tree-section"][data-section="contexts"]   not collapsible (3d, Section layout)
-   │   ├─ TopPaneHeader[data-part="tree-header"][hasOverlayControls=false]   the shared header (3i), sticky h-11
+   │   ├─ TopPaneHeader[data-part="tree-header"][hasOverlayControls=false]   the shared header (3i), h-11
    │   │   ├─ span[data-part="phi"][aria-hidden="true"]  "φ"   font-display text-[20px] font-bold text-fg-strong
    │   │   ├─ span.sr-only  "Contexts"
    │   │   └─ actions: Button[type="button"][data-action="new-context"][aria-label="New context"]   ghost, icon-sm, 26px; PlusIcon 14; only when onNewContext
@@ -871,7 +882,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Plan button: `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` where `lead` is the session of `plan.sessions` whose `ref.id === plan.leadSessionId`. **Assumption:** with no such Lead only `onSelectPlan(plan.id)` is called.
 - Fork button: `onSelectSession(ref.id)`.
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
-- Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is sticky (TopPaneHeader, 3i).
+- Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is not sticky: it sits outside its body's `ScrollArea` (TopPaneHeader, 3i).
 
 Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
@@ -1041,7 +1052,7 @@ export function TopPaneHeader(props: {
   /** The header's `data-part`. Default `pane-header`. */
   dataPart?: string;
   headerRef?: Ref<HTMLElement>;
-  /** Adds `pr-12` (48 px), keeping the right side free for Shell's absolute plan controls (3c). Default true. */
+  /** Shows the plan pane collapse control (3c, pro-d88) when `PlanCollapseContext` is provided. Default true. */
   hasOverlayControls?: boolean;
   /** The right slot. */
   actions?: ReactNode;
@@ -1053,20 +1064,23 @@ export function TopPaneHeader(props: {
 Markup:
 
 ```
-header[data-part=dataPart]   sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4 [pr-12 when hasOverlayControls]
+header[data-part=dataPart]   flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4
 ├─ {children}                 the left content
 ├─ span.flex-1                the spacer that pushes the actions to the right
-└─ {actions}                  the right content
+├─ {actions}                  the right content
+└─ div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]   flex shrink-0 items-center gap-0.5   (only when `hasOverlayControls` and `PlanCollapseContext` is non-null)
+    └─ button[type="button"][data-action="plan-collapse"]   the collapse control (3c)
 ```
 
-- `h-11` is 44 px. The header is sticky at the top of its scroll container, so it stays put while its body scrolls.
+- `h-11` is 44 px. The header is not sticky. It is the first child of its pane's section, outside the body's `ScrollArea`, so it stays put while the body scrolls.
+- `hasOverlayControls` (pro-d88) means 'show the plan pane collapse control'. The control renders only when it is true and `PlanCollapseContext` (3c) is non-null. The Plan and Manager headers pass true; the Context tree and the Inbox pass false. The control follows `actions`, with no `pr-12` and no absolute positioning.
 - Where it is used:
 
 | Header | `data-part` | `hasOverlayControls` | left content | `actions` | Contract |
 |---|---|---|---|---|---|
 | Context tree | `tree-header` | false | φ mark and sr-only `Contexts` | `New context` button, only with `onNewContext` | 3d |
-| Plan | `title-row` | true (`pr-12`) | manager key, `/`, Plan key, phase stepper | Review and Escalations badges | DESIGN-panes 1 |
-| Manager | `manager-header` | true (`pr-12`) | manager key, counters | none | DESIGN-panes 1j |
+| Plan | `title-row` | true | manager key, `/`, Plan key, phase stepper | Review and Escalations badges | DESIGN-panes 1 |
+| Manager | `manager-header` | true | manager key, counters | none | DESIGN-panes 1j |
 | Inbox | `inbox-header` | false | `INBOX` heading | tier filters | DESIGN-panes 2 |
 
 - Collapsed Plan pane (pro-d84, A6; `app.css`): when `section[aria-label="Plan pane"][data-state="collapsed"]`, `[data-part="plan-body"]` (PlanView) and `[data-part="manager-body"]` (ManagerView) are hidden, and the bottom border of `title-row` and `manager-header` is transparent. Only the header shows, at the 44 px collapsed size (3c).
@@ -1096,6 +1110,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
 | pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New context; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
 | pro-d87 header bar removed | the full-width Header bar (φ link, Location breadcrumb, engine pill) and the Shell `header` slot are removed; the three column `TopPaneHeader`s form the top row; the engine pill and breadcrumb navigation are a known loss, not rebuilt | 2a, 3a, 3c, 3e; DESIGN-panes 4.1 (superseded) |
+| pro-d88 fixed pane header and plan collapse control | the ManagerView and PlanView headers stay fixed while their bodies scroll (`plan-scroll`, DESIGN-panes 1, 1j); the collapse control moves into `TopPaneHeader` through `PlanCollapseContext`; `TopPaneHeader` is not sticky (supersedes the `sticky` of the pro-d84..86 row); Shell's ScrollArea around the plan and its floating controls are removed; the Plan pane is not `inert` when collapsed | 3c, 3i, 5.3; DESIGN-panes 1, 1b, 1j |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
 
@@ -1141,7 +1156,7 @@ Records: pro-d62 (User approved the live changes in the running preview; this se
 - **`selectedPlanId` follows it.** While the tree is live, the restore has run and a session is selected, `App` calls `connection.selectPlan(activeLeadPlanId)` whenever it differs from `selectedPlanId`. `selectedPlanId` is `string | null` (`web/src/ui/state/selection.ts`, `PersistedSelection.planId`), so `null` is saved and loaded. `ContextTree` receives `selectedPlanId={activeLeadPlanId}`.
 - **`visiblePlan`.** The Plan pane (`MemoPlan`) uses `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
 - **Empty state (pro-d68).** When `plan === null`, `PlanView` renders `CpdFlowCanvas` (`web/src/ui/cockpit/FlowCanvas.tsx`; root `div[data-part="flow-canvas"]`): the Plan flowchart that the Documentation dialog shows (`DocsDialog.tsx`, its flowchart tab), with its step cards collapsed at start. With no selected session, or a session in no Context, the Plan pane shows it through ManagerView (3e). A selected Manager shows ManagerView, not the flowchart (pro-d70, DESIGN-panes 1j).
-- **Header.** `div[data-part="title-row"]` is the shared `TopPaneHeader` (3i): `h-11` (44 px), no wrap, `pr-12`. It supersedes the wrapping `min-h-11` row of pro-d65. Its left content is the manager key, `/`, and `h2[data-part="plan-key"]` with the Plan id (`title={plan.title}` as its native tooltip; the key truncates), then the phase Stepper. The Review and Escalations badges are in its `actions` slot (DESIGN-panes 1).
+- **Header.** `div[data-part="title-row"]` is the shared `TopPaneHeader` (3i): `h-11` (44 px), no wrap, not sticky: it sits outside the body's `ScrollArea` (pro-d88). It supersedes the wrapping `min-h-11` row of pro-d65. Its left content is the manager key, `/`, and `h2[data-part="plan-key"]` with the Plan id (`title={plan.title}` as its native tooltip; the key truncates), then the phase Stepper. The Review and Escalations badges are in its `actions` slot (DESIGN-panes 1); the collapse control follows them (3c, 3i).
 
 **Tests this section changes.** `cockpit/PlanView.test.tsx` expects `[data-part="flow-canvas"]` when `plan` is null. `AppPlanFollow.test.tsx` expects the flowchart only with no selection; with a Manager selected, or a Lead whose Plan is not loaded, it expects `[data-manager-view]` (pro-d70; the test changes with the ManagerView change). `app.css.test.ts` pins `overflow: hidden` on `[data-shell] aside` and `[data-part="plan-panel"]` (pro-d69, A10). The pro-d69 scroll tests assert `data-slot` markup, never scrollbars: `Shell.test.tsx` and `shell.consolidate.test.tsx` (the Plan pane content is a `[data-slot="scroll-area"]`; the Inbox aside is `overflow-hidden`), `Inbox.test.tsx` (the list is a `[data-slot="scroll-area"]`), `StatusDialogs.test.tsx` (the Legend sections and the Logs rows), `PlanView.test.tsx` (`dag-body` is a `[data-slot="scroll-area"]` with a horizontal `ScrollBar`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.
 
