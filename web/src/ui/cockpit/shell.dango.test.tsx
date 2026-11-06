@@ -2,7 +2,6 @@
 import { act } from "react";
 import { expect, it, vi } from "vitest";
 import { mount } from "../../testing/render.tsx";
-import { Header } from "./Header.tsx";
 import { Shell } from "./Shell.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 
@@ -66,53 +65,9 @@ function click(el: Element | null): void {
 
 function shell() {
   return mount(
-    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} header={<Header />} status={<i>s</i>} />,
+    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} />,
   );
 }
-
-it("header shows the phi mark, breadcrumb, jump trigger and engine indicator", () => {
-  const onOpenSearch = vi.fn();
-  const m = mount(<Header location={{ context: "Context One", plan: "Plan One" }} engine={true} onOpenSearch={onOpenSearch} />);
-  const c = m.container;
-  expect(c.querySelector('[data-part="phi"]')?.textContent).toBe("φ");
-  expect(c.querySelector("[data-emblem]")?.textContent).toBe("C-P-D");
-  const nav = c.querySelector('nav[aria-label="Location"][data-part="breadcrumb"]');
-  expect(nav?.querySelector('[data-part="breadcrumb-context"]')?.textContent).toBe("Context One");
-  expect(nav?.querySelector('[data-part="breadcrumb-plan"]')?.textContent).toBe("Plan One");
-  const search = c.querySelector('button[data-part="search"]');
-  expect(search?.textContent).toContain("Jump to context, plan, job, PR…");
-  expect(search?.textContent).toContain("⌘K");
-  click(search);
-  expect(onOpenSearch).toHaveBeenCalledTimes(1);
-  const engine = c.querySelector('[data-part="engine"]');
-  expect(engine?.getAttribute("data-state")).toBe("running");
-  expect(engine?.textContent).toContain("engine");
-  expect(engine?.textContent).toContain("running");
-  m.unmount();
-  const stopped = mount(<Header engine={false} />);
-  expect(stopped.container.querySelector('[data-part="engine"]')?.getAttribute("data-state")).toBe("stopped");
-  expect(stopped.container.querySelector('[data-part="engine"]')?.textContent).toContain("not running");
-  expect(stopped.container.querySelector('button[data-part="search"]')).toBeNull();
-  stopped.unmount();
-  const unknown = mount(<Header engine={null} />);
-  expect(unknown.container.querySelector('[data-part="engine"]')?.getAttribute("data-state")).toBe("unknown");
-  expect(unknown.container.querySelector('[data-part="engine"]')?.textContent).toContain("unknown");
-  unknown.unmount();
-});
-
-// Title kept from the Job; DESIGN.md 3a: no location means no breadcrumb, a null plan means the context alone.
-it("header breadcrumb falls back when no plan is selected", () => {
-  const none = mount(<Header location={null} engine={null} />);
-  expect(none.container.querySelector('[data-part="phi"]')).not.toBeNull();
-  expect(none.container.querySelector('[data-part="breadcrumb"]')).toBeNull();
-  none.unmount();
-  const noPlan = mount(<Header location={{ context: "Context One", plan: null }} />);
-  const nav = noPlan.container.querySelector('nav[data-part="breadcrumb"]');
-  expect(nav?.querySelector('[data-part="breadcrumb-context"]')?.textContent).toBe("Context One");
-  expect(nav?.querySelector('[data-part="breadcrumb-plan"]')).toBeNull();
-  expect(nav?.textContent).not.toContain("/");
-  noPlan.unmount();
-});
 
 // Title kept from the Job; the bar is the TUI's: five icon buttons, then the session pills until the machine status arrives.
 it("status bar shows reset layout, legend, logs and the runner pill", () => {
@@ -211,13 +166,16 @@ it("plan split exposes a keyboard operable separator", () => {
   m.unmount();
 });
 
-it("shell keeps its landmarks and data hooks", () => {
-  const m = shell();
+it("shell keeps its landmarks and data hooks without a cockpit header", () => {
+  // A legacy `header` slot is passed through a loose spread: the removed slot must render nothing.
+  const legacy = { header: <b data-emblem>C-P-D</b> };
+  const m = mount(
+    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} {...legacy} />,
+  );
   const c = m.container;
   const root = c.querySelector("div[data-shell]");
   expect(root).not.toBeNull();
   expect([...(root?.children ?? [])].map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-part"))).toEqual([
-    "Cockpit header",
     "columns-group",
     "Status bar",
   ]);
@@ -228,6 +186,7 @@ it("shell keeps its landmarks and data hooks", () => {
   expect(center?.querySelector('main[aria-label="Chat"] #c')).not.toBeNull();
   expect(root?.querySelector('aside[aria-label="Context tree column"] #t')).not.toBeNull();
   expect(root?.querySelector('aside[aria-label="Inbox column"] #i')).not.toBeNull();
-  expect(root?.querySelector('header[aria-label="Cockpit header"] [data-emblem]')?.textContent).toBe("C-P-D");
+  expect(root?.querySelector('header[aria-label="Cockpit header"]')).toBeNull();
+  expect(root?.querySelector("[data-emblem]")).toBeNull();
   m.unmount();
 });
