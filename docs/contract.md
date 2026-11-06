@@ -6143,6 +6143,9 @@ error_repeat_seconds = 600   # the same `error` Event at most once per this (§3
 models_discovery_seconds = 604800  # the model lists of the providers pi can use are read again this long after the last good one (E15, §3.7; 7 days); >= 1
 pr_poll_transient_minutes = 10  # minutes the same `gh` call of the PR poll may fail with an HTTP 5xx, a timeout or a cut response (`unexpected end of JSON input`) before E5 raises an error (§3.7 E5, §7.6, hs-d354)
 
+[swr]
+gc_days = 7                 # days a row of the SWR cache stays after it went inactive with no observer (E24, §3.7); >= 1
+
 [inbox]
 stuck_job_minutes = 10     # the Manager is told of a failed Job after this (E8, §3.7 "A stuck Job")
 team_channel = ""          # Slack channel id of the team review channel, "C02JU6C2Z1D" for the User; "" = no team review item (§2.2, E11)
@@ -6199,6 +6202,7 @@ turn_question_guard = true   # the switch of the turn-question-guard Experimenta
 | `watch.pr_poll_seconds`, `watch.error_repeat_seconds` | int | above | ≥ 1 |
 | `watch.pr_poll_transient_minutes` | int | `10` | ≥ 1; how long the same `gh` call of E5's poll may fail transiently (an HTTP 5xx, a timeout or a cut response, §7.6 step 4) before E5 raises an `error` Event (§3.7 E5, §7.6 step 4, hs-d354) |
 | `watch.models_discovery_seconds` | int | `604800` | ≥ 1, else `config_invalid` (`details.key`). Seven days from the `polled_at` of the newest `run/models-<provider>.json` (not from the engine's start); with no file the step is due at once. Each run is one helper process that lists every provider pi can use, detached from the tick (E15, §3.7). There is no `providers` key and no model or key name: cpd learns the providers from pi (pro-d20) |
+| `swr.gc_days` | int | `7` | ≥ 1, else `config_invalid` (`details.key`). gcTime of the SWR cache (`docs/architecture/swr.md` §4): E24's hourly `gc::sweep` deletes a row inactive this many days with no observer, and a `done`, `failed` or `superseded` mutation this old |
 | `watch.team_review_seconds` | int | `1800` | ≥ 1. Thirty minutes after the end of the previous read (the User's decision; hermes' own code speaks of a five-minute poll, `refresh.py:191`, while its cron job ran every 15 minutes, `*/15 * * * *`). Each read is the channel, then each post's thread and the `:eyes:` reactors (eight at a time); E11 is detached, so its length never holds a tick |
 | `inbox.stuck_job_minutes` | int | `10` | ≥ 1 |
 | `inbox.team_channel` | text | `""` | `""` or `^C[A-Z0-9]+$`. `""` switches E11 and the Inbox kind `review-requested` off (hs: the Context decision 'Team review Inbox', 2026-10-19, names `C02JU6C2Z1D`) |
