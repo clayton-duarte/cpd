@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssistantItem, ToolItem } from "../../protocol/domain.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
+import { applyDelta, appendItems, emptyTranscript, type TranscriptState } from "../../state/transcript.ts";
 import { createLiveSource, type LiveConnection } from "./live.ts";
 
 class FakeConn implements LiveConnection {
@@ -146,6 +147,52 @@ describe("live source", () => {
       { type: "session.delta", sessionId: "s1", itemId: "live:300", blockIndex: 1, blockType: "text", text: "ok" },
     ]);
     expect((s.out[0] as { items: AssistantItem[] }).items[0]?.model).toBe("m/2");
+  });
+
+  const applyAll = (out: SessionServerMessage[]): TranscriptState => {
+    let state: TranscriptState = emptyTranscript;
+    for (const m of out) {
+      if (m.type === "session.append") state = appendItems(state, m.items);
+      if (m.type === "session.delta") state = applyDelta(state, m);
+    }
+    return state;
+  };
+  const deltasOf = (out: SessionServerMessage[]) => out.flatMap((m) => (m.type === "session.delta" ? [m] : []));
+  const frameOf = (kind: string, phase: string, index: number, delta?: string) => ({ t: "delta", kind, phase, index, ...(delta === undefined ? {} : { delta }) });
+
+  it("an unstreamed thinking block takes no block index, so the next text delta is blockIndex 0", () => {
+    const s = begun();
+    conn(s).feed(start(400));
+    conn(s).feed(frameOf("thinking", "start", 0));
+    conn(s).feed(frameOf("thinking", "end", 0));
+    conn(s).feed(frameOf("text", "start", 1));
+    conn(s).feed(frameOf("text", "delta", 1, "ok"));
+    expect(deltasOf(s.out).map((d) => ({ blockIndex: d.blockIndex, blockType: d.blockType, text: d.text }))).toEqual([
+      { blockIndex: 0, blockType: "text", text: "ok" },
+    ]);
+    const state = applyAll(s.out);
+    expect((state.items[0] as AssistantItem).blocks).toEqual([{ type: "text", text: "ok" }]);
+  });
+
+  it("a thinking block that streams keeps blockIndex 0 and a following unstreamed block takes none", () => {
+    const s = begun();
+    conn(s).feed(start(500));
+    conn(s).feed(frameOf("thinking", "start", 0));
+    conn(s).feed(frameOf("thinking", "delta", 0, "hm"));
+    conn(s).feed(frameOf("thinking", "end", 0));
+    conn(s).feed(frameOf("text", "start", 1));
+    conn(s).feed(frameOf("text", "end", 1));
+    conn(s).feed(frameOf("text", "start", 2));
+    conn(s).feed(frameOf("text", "delta", 2, "ok"));
+    expect(deltasOf(s.out).map((d) => ({ blockIndex: d.blockIndex, blockType: d.blockType, text: d.text }))).toEqual([
+      { blockIndex: 0, blockType: "thinking", text: "hm" },
+      { blockIndex: 1, blockType: "text", text: "ok" },
+    ]);
+    const state = applyAll(s.out);
+    expect((state.items[0] as AssistantItem).blocks).toEqual([
+      { type: "thinking", text: "hm" },
+      { type: "text", text: "ok" },
+    ]);
   });
 
   const running = (callId: string, name: string, args: Record<string, unknown>, result?: { text: string; isError: boolean }): ToolItem => ({
