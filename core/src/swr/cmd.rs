@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::badge::{self, Classification};
 use super::cache;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -26,6 +27,48 @@ pub enum Command {
     /// The mutation outbox (§32.5, §32.6)
     #[command(subcommand)]
     Mutation(MutationCommand),
+    /// The Lead completion badge (classifier doc §3)
+    #[command(subcommand)]
+    Badge(BadgeCommand),
+}
+
+/// The `swr badge` commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum BadgeCommand {
+    /// Print a Session's stored badge, or null
+    Get(BadgeGetArgs),
+    /// Store a Session's badge
+    Put(BadgePutArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BadgeGetArgs {
+    /// The Session id
+    pub session_id: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BadgePutArgs {
+    /// The Session id
+    pub session_id: String,
+    /// The Session's last transcript item id at classify time
+    #[arg(long, value_name = "id")]
+    pub entry: String,
+    /// A completion label
+    #[arg(long, value_name = "label")]
+    pub label: String,
+    /// An integer from 0 to 100
+    #[arg(long, value_name = "n")]
+    pub score: i64,
+    /// The badge text
+    #[arg(long, value_name = "text")]
+    pub text: String,
+    /// done, decision or blocked
+    #[arg(long, value_name = "tone")]
+    pub tone: String,
+    /// A JSON array of {label, score}
+    #[arg(long, value_name = "json")]
+    pub others: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -111,6 +154,23 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Endpoints => endpoints(store),
         Command::Mutation(MutationCommand::Show(a)) => mutation_show(store, id_of(&a)?),
         Command::Mutation(MutationCommand::List(a)) => mutation_list(store, a.status.as_deref()),
+        Command::Badge(BadgeCommand::Get(a)) => {
+            let found = badge::get(store, &a.session_id)?;
+            let _ = found;
+            todo!("swr badge get output")
+        }
+        Command::Badge(BadgeCommand::Put(a)) => {
+            let c = Classification {
+                entry_id: a.entry,
+                label: a.label,
+                score: a.score,
+                text: a.text,
+                tone: a.tone,
+                others: None,
+            };
+            let _ = badge::put(store, now, &a.session_id, &c)?;
+            todo!("swr badge put output")
+        }
     }
 }
 

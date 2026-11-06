@@ -130,6 +130,8 @@ pub const TABLE: &[Entry] = &[
     ("swr endpoints", &[], false),
     ("swr mutation show", &[], false),
     ("swr mutation list", &[], false),
+    ("swr badge get", &[], false),
+    ("swr badge put", &[], false),
     ("preset list", &[Manager, Lead], false),
     ("preset show", &[Manager, Lead], false),
     ("preset apply", &[Manager], true),
