@@ -81,19 +81,20 @@ function start() {
 const q = (c: HTMLElement, sel: string) => c.querySelector<HTMLElement>(sel);
 const loadedPlan = { ...snapshot.plan, planId: "plan", title: "Plan One" };
 
-it("selecting a Lead session shows that Lead's Plan in PlanView", () => {
+it("selecting a Lead session shows that Lead Plan in PlanView", () => {
   const { transport, container } = start();
   // the loaded plan "other" is not the Lead's: it is hidden
   act(() => { q(container, '[data-plan="plan"] button[data-select="plan"]')!.click(); });
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan other"]')).toBeNull();
-  expect(q(container, 'section[aria-label="Plan pane"] [data-empty]')).not.toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).not.toBeNull();
   act(() => transport.emitMessage({ ...snapshot, plan: loadedPlan }));
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
 });
 
-it("selecting a Manager session shows the empty state in PlanView", () => {
+it("selecting a Manager session shows the flowchart in PlanView", () => {
   const { container } = start();
   act(() => { q(container, '[data-context="ctx"] button[data-select="context"]')!.click(); });
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label^="Plan "]')).toBeNull();
-  expect(q(container, 'section[aria-label="Plan pane"] [data-empty]')?.textContent).toBe("Select a lead to see plans");
+  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).not.toBeNull();
+  expect(q(container, '[data-empty]')).toBeNull();
 });
