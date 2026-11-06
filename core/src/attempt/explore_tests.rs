@@ -606,3 +606,38 @@ fn job_show_of_a_merged_explore_job_shows_summary_and_artefact() {
         "the artefact is shown: {shown}"
     );
 }
+
+#[test]
+fn ending_an_explore_job_keeps_a_replanned_plan_in_phase_plan() {
+    // pro-d429/pro-d433: a re-planned Plan is phase plan with locked_at set; settle_done never touches phase plan.
+    let mut rig = Rig::new();
+    rig.sql(
+        "INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
+           VALUES (7, 'o/r', 7, 'https://example/7', 'Ship', 0, 'merged', 'none', 'none', 't', 't', 't', 'unknown', 'unknown', 0, 0);
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, merged_at, created_txn, created_at, started_at)
+           VALUES ('pay', 'api', '/r', 'main', 'merged', 'cpd/pay/api', '/lw', 7, 'https://example/7', 't', 7, 't', 1, 't', 't');
+         UPDATE plans SET phase = 'plan' WHERE id = 'pay';",
+    );
+    rig.add_job("look", "scout", "H2");
+    let attempt = rig.start("look");
+    rig.write_artefact("look", "# Findings\nnothing to change\n");
+    let summary = rig.summary_file("Nothing to change.\n");
+    let result = rig.submit(&attempt, Some(&summary));
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        rig.one::<String>("SELECT status FROM jobs WHERE key = 'look'"),
+        "merged"
+    );
+    assert_eq!(
+        rig.one::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "plan"
+    );
+    assert_eq!(
+        rig.one::<i64>("SELECT count(*) FROM events WHERE kind IN ('plan-phase', 'plan-done')"),
+        0
+    );
+    assert_eq!(
+        rig.one::<Option<String>>("SELECT done_at FROM plans WHERE id = 'pay'"),
+        None
+    );
+}

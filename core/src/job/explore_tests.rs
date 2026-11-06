@@ -433,31 +433,133 @@ fn plan_phases(f: &mut Fixture) -> Vec<(String, String)> {
         .unwrap()
 }
 
+/// The Plan's `locked_at`.
+fn locked_at(f: &mut Fixture) -> Option<String> {
+    f.env
+        .store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT locked_at FROM plans WHERE id = 'pay'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
+}
+
+/// Plan `pay` re-planned: phase `plan` with `locked_at` set (pro-d433, assumption A1).
+fn replanned() -> Fixture {
+    let mut f = fixture("dispatch");
+    f.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
+    f
+}
+
+/// Kinds of the Events in order, of the kinds `plan-phase` and `job-added`.
+fn phase_and_added(f: &mut Fixture) -> Vec<String> {
+    f.env
+        .store
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT kind FROM events WHERE kind IN ('plan-phase', 'job-added') ORDER BY id",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<Result<Vec<String>, _>>()?)
+        })
+        .unwrap()
+}
+
 #[test]
-fn explore_add_in_a_done_plan_reopens_it_to_dispatch() {
-    for (key, kind, tier, file) in [
-        ("s1", "scout", "H2", "s.json"),
-        ("r1", "research", "S2", "r.json"),
-    ] {
-        let mut f = fixture("done");
-        let spec = f.explore_spec(file);
-        let out = fields(f.add(key, kind, tier, &spec, None, false, &[]));
-        assert_eq!(out["job"]["status"], "queued", "{kind}");
-        assert_eq!(out["job"]["appended"], true, "{kind}");
-        assert_eq!(f.column(key, "status").as_deref(), Some("queued"), "{kind}");
-        assert!(f.column(key, "fingerprint").is_some(), "{kind}");
-        assert_eq!(
-            plan_state(&mut f),
-            ("dispatch".to_owned(), None),
-            "{kind}: reopened, done_at cleared"
-        );
+fn explore_add_moves_a_dispatch_deploy_or_done_plan_back_to_phase_plan() {
+    // pro-d429: a Plan past planning goes back to phase plan; pro-d433: locked_at is kept.
+    for phase in ["dispatch", "deploy", "done"] {
+        for (key, kind, tier, file) in [
+            ("s1", "scout", "H2", "s.json"),
+            ("r1", "research", "S2", "r.json"),
+        ] {
+            let mut f = fixture(phase);
+            let locked = locked_at(&mut f);
+            assert!(locked.is_some(), "{phase}");
+            let spec = f.explore_spec(file);
+            let out = fields(f.add(key, kind, tier, &spec, None, false, &[]));
+            assert_eq!(out["job"]["status"], "queued", "{phase} {kind}");
+            assert_eq!(f.column(key, "status").as_deref(), Some("queued"));
+            assert_eq!(
+                plan_state(&mut f),
+                ("plan".to_owned(), None),
+                "{phase} {kind}: back in plan, done_at NULL"
+            );
+            assert_eq!(locked_at(&mut f), locked, "{phase} {kind}: locked_at kept");
+        }
+    }
+}
+
+#[test]
+fn explore_add_appends_one_plan_phase_event_before_job_added() {
+    for phase in ["dispatch", "deploy", "done"] {
+        let mut f = fixture(phase);
+        let spec = f.explore_spec("s.json");
+        fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
         assert_eq!(
             plan_phases(&mut f),
-            vec![("done".to_owned(), "dispatch".to_owned())],
-            "{kind}"
+            vec![(phase.to_owned(), "plan".to_owned())],
+            "{phase}"
         );
-        assert_eq!(f.events("job-added"), 1, "{kind}");
+        assert_eq!(
+            phase_and_added(&mut f),
+            ["plan-phase", "job-added"],
+            "{phase}"
+        );
+        // A rerun (already) appends no second plan-phase.
+        let again = fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+        assert_eq!(again["already"], true, "{phase}");
+        assert_eq!(plan_phases(&mut f).len(), 1, "{phase}");
+        // A refused add writes nothing more.
+        refused(
+            f.add("s2", "scout", "S2", &spec, None, false, &[]),
+            ErrorCode::TierNotAllowed,
+        );
+        assert_eq!(plan_phases(&mut f).len(), 1, "{phase}");
+        assert_eq!(plan_state(&mut f).0, "plan", "{phase}");
     }
+    // A refused add on a Plan not yet moved appends none and leaves the phase.
+    for phase in ["dispatch", "deploy", "done"] {
+        let mut f = fixture(phase);
+        let spec = f.explore_spec("s.json");
+        refused(
+            f.add("s1", "scout", "S2", &spec, None, false, &[]),
+            ErrorCode::TierNotAllowed,
+        );
+        assert!(plan_phases(&mut f).is_empty(), "{phase}");
+        assert_eq!(plan_state(&mut f).0, phase);
+    }
+}
+
+#[test]
+fn explore_add_in_grounding_and_plan_leaves_the_phase() {
+    for phase in ["grounding", "plan"] {
+        let mut f = fixture(phase);
+        let spec = f.explore_spec("s.json");
+        fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+        assert_eq!(plan_state(&mut f), (phase.to_owned(), None), "{phase}");
+        assert_eq!(locked_at(&mut f), None, "{phase}");
+        assert!(plan_phases(&mut f).is_empty(), "{phase}");
+        assert_eq!(f.events("job-added"), 1, "{phase}");
+    }
+}
+
+#[test]
+fn explore_add_on_a_replanned_plan_changes_nothing_but_the_job() {
+    let mut f = replanned();
+    assert_eq!(plan_state(&mut f), ("plan".to_owned(), None));
+    let locked = locked_at(&mut f);
+    assert!(locked.is_some());
+    let spec = f.explore_spec("s.json");
+    fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
+    assert_eq!(plan_state(&mut f), ("plan".to_owned(), None));
+    assert_eq!(locked_at(&mut f), locked);
+    assert!(plan_phases(&mut f).is_empty());
+    assert_eq!(f.column("s1", "status").as_deref(), Some("queued"));
+    assert_eq!(f.events("job-added"), 1);
 }
 
 #[test]
@@ -479,7 +581,7 @@ fn explore_add_refused_in_a_done_plan_leaves_it_done() {
     assert_eq!(f.jobs(), 0);
     // The refusals above are of the arguments, not of the phase: the same Plan accepts a valid add.
     fields(f.add("s3", "scout", "H2", &spec, None, false, &[]));
-    assert_eq!(plan_state(&mut f).0, "dispatch");
+    assert_eq!(plan_state(&mut f).0, "plan");
 }
 
 #[test]
@@ -492,7 +594,7 @@ fn explore_add_rerun_in_a_reopened_plan_adds_no_second_plan_phase() {
     assert_eq!(second["already"], true);
     assert_eq!(
         plan_phases(&mut f),
-        vec![("done".to_owned(), "dispatch".to_owned())]
+        vec![("done".to_owned(), "plan".to_owned())]
     );
     assert_eq!(f.jobs(), 1);
 }
