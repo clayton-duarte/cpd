@@ -362,6 +362,36 @@ _Avoid_: enable, load; install (as a word for it)
 A feature that is not permanent and can be turned on or off depending on how the User evaluates it. Its config lives only in the `[experimental]` table of config.toml, one bool key per feature (contract §8.2): `durable_workers` (the Worker runner), `write_curation`, `failure_triage` and `turn_question_guard`. The commands that show and set them are in commands.md §14.2b.
 _Avoid_: flag, beta; toggle (for a setting that is permanent)
 
+## Data
+
+**SWR** (mechanism, pro-d440, pro-d446):
+Stale-while-revalidate: cpd keeps the last confirmed upstream truth in SQLite, one engine poller revalidates it, every local reader reads SQLite, and every external write goes through one mutation outbox. Design: `docs/architecture/swr.md`; contract §4.4 and §4.7.
+_Avoid_: cache (alone), sync
+
+**query key** (term, pro-d446):
+The name of one cached upstream read, `<system>:<kind>:<id>`, for example `github:pr:owner/repo#12`, `slack:channel:C123` or `jira:issue:EEC-1`. Its row is in `swr_queries`.
+_Avoid_: cache key, id
+
+**staleTime** (term, pro-d440):
+How long a query stays fresh after its last confirmed change: a code constant per query rule (open pull request 5 s, repository, viewer and cloud id 24 h, Slack channel 30 min, models 7 d, a merged or closed pull request never). Freshness only: it never evicts a row.
+_Avoid_: TTL, expiry
+
+**gcTime** (term, pro-d440):
+How long a row whose last observer has gone is kept before eviction: 7 days, config key `swr.gc_days`. A row with an open Workflow, an open Inbox item or an active mutation is never evicted.
+_Avoid_: TTL, cache lifetime
+
+**mutation outbox** (mechanism, pro-d440):
+The one queue of every external write, `swr_mutations`: a CLI write enqueues it and returns its id with the optimistic state at once, and the engine drains it. Its statuses are `pending`, `in_flight`, `revalidating`, `done`, `failed` and `superseded`.
+_Avoid_: queue, posting set, pending list
+
+**overlay (effective state)** (mechanism, pro-d440):
+The state a reader sees: the raw cached row with the patches of its active mutations applied in submission order. A failed mutation's overlay is dropped at once; a `revalidating` one is dropped when a fetch that started after the write's completion confirms it (the fence, `docs/architecture/swr.md` §10).
+_Avoid_: optimistic cache, draft state
+
+**endpoint health** (term, pro-d440):
+The state of one external endpoint (`github`, `slack`, `jira`, `ollama.lab`, `bifrost`) in `swr_endpoints`: its last outcome, whether it is `idle`, `fetching` or `paused`, its outage and its rate limit. A failing endpoint raises one `error` Event per outage and never deletes cached data.
+_Avoid_: uptime, ping, status page
+
 ## Checks and gates
 
 **Gate** (mechanism, changed, pro-d146):

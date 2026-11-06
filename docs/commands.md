@@ -42,6 +42,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 28. [`tag` and `version`](#28-tag-and-version)
 29. [`janitor`](#29-janitor)
 30. [`resource`](#30-resource)
+32. [`swr`](#32-swr)
 
 ## 1. Conventions
 
@@ -7520,3 +7521,140 @@ With `--slack`:
 **What it does not do** (pro-d108, pro-d169): cpd checks one thing about the pull request, its head (pro-d169), no key of the Plan, the Context or a Workflow (FR10), and no content of the review. No refusal for failed or pending checks, comments outside the diff, an empty body, or any other condition. GitHub's own refusal is relayed. Review skill rules (FR4) and COMMENT reviews are out of scope.
 
 See §21.9 for the queue and the reaction step.
+
+## 32. `swr`
+
+The SWR cache and outbox (`docs/architecture/swr.md`; contract §4.4 "The SWR tables", §4.7). Every command prints one JSON value. The commands read the `swr_*` tables and never reach upstream (`swr.md` §13): a read returns what SWR holds, and the one write, `invalidate`, asks the engine to fetch. Times are the stored text. Every command is read-only except `invalidate`.
+
+### 32.1 `swr list`
+
+```
+cpd swr list [--system <system>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--system <system>` | only the queries of this datasource: `github`, `slack`, `jira`, `models` or `classifier`. Absent means every system |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--system`, when given, is one of the five names above | `usage` | 2 |
+
+Effects: none. Output: `queries`, one entry per row of `swr_queries` in key order, each `{key, system, status, fetched_at, stale_after, invalidated, error_count, last_error, inactive_at, age_seconds}`. `age_seconds` is the time since `fetched_at` in whole seconds, by the command's clock, and `null` when `fetched_at` is null. `invalidated` is a boolean. An empty store prints `queries: []`.
+
+```json
+{"ok": true, "queries": [
+  {"key": "github:pr:owner/repo#12", "system": "github", "status": "success", "fetched_at": "2026-11-06T15:50:00.000Z", "stale_after": "2026-11-06T15:50:05.000Z", "invalidated": false, "error_count": 0, "last_error": null, "inactive_at": null, "age_seconds": 42}
+]}
+```
+
+Idempotent: yes; it only reads.
+
+### 32.2 `swr show`
+
+```
+cpd swr show <key>
+```
+
+| Argument | Meaning |
+|---|---|
+| `<key>` | a query key, `<system>:<kind>:<id>` (swr.md §4) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<key>` has the form `<system>:<kind>:<id>` (three non-empty parts) | `usage` | 2 |
+| a row of `swr_queries` has the key; `details` `{key}` | `query_not_found` | 4 |
+
+Effects: none. Output: `query`, the row as `list` shows it (§32.1 fields), and `mutations`, the active mutations of the key in `submitted_at` order (the overlay's input, swr.md §9), each `{id, op_kind, status, patch}` with `patch` the parsed `patch_json` or `null`.
+
+```json
+{"ok": true, "query": {"key": "github:pr:owner/repo#12", "system": "github", "status": "success", "fetched_at": "2026-11-06T15:50:00.000Z", "stale_after": null, "invalidated": false, "error_count": 0, "last_error": null, "inactive_at": null, "age_seconds": 42}, "mutations": [
+  {"id": 7, "op_kind": "merge", "status": "revalidating", "patch": {"state": "merged"}}
+]}
+```
+
+Idempotent: yes; it only reads.
+
+### 32.3 `swr invalidate`
+
+```
+cpd swr invalidate <key>
+```
+
+| Argument | Meaning |
+|---|---|
+| `<key>` | a query key, as `show` (§32.2) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<key>` has the form `<system>:<kind>:<id>` | `usage` | 2 |
+| a row of `swr_queries` has the key; `details` `{key}` | `query_not_found` | 4 |
+| the write transaction opens within `store_busy_ms` | `store_busy` | 5 |
+
+Effects: one write transaction sets `swr_queries.invalidated` to 1 for the key (`cache::invalidate`, swr.md §6). No row of any other table changes and no Event is appended. After the transaction the engine is woken (`engine/src/watch/wake.rs`), so E24 fetches the key at once instead of at its next tick (swr.md §12). The command does not fetch and does not wait for the fetch.
+
+Output:
+
+```json
+{"ok": true, "key": "github:pr:owner/repo#12", "invalidated": true, "already": false}
+```
+
+`already` is true when the flag was already 1. Idempotent: yes; a rerun writes nothing and reports `already` true.
+
+### 32.4 `swr endpoints`
+
+```
+cpd swr endpoints
+```
+
+Effects: none. Output: `endpoints`, one entry per endpoint in the order `github`, `slack`, `jira`, `ollama.lab`, `bifrost`, each `{endpoint, status, fetch_status, paused_until, failing_since, reported_at, last_error, error_count, last_ok_at, rate_remaining, rate_reset_at}` (the columns of `swr_endpoints`, swr.md §3.2). An endpoint with no row yet reports the column defaults: `status` `pending`, `fetch_status` `idle`, `error_count` 0 and every other field `null`.
+
+```json
+{"ok": true, "endpoints": [
+  {"endpoint": "github", "status": "success", "fetch_status": "paused", "paused_until": "2026-11-06T16:00:00.000Z", "failing_since": null, "reported_at": null, "last_error": null, "error_count": 0, "last_ok_at": "2026-11-06T15:50:00.000Z", "rate_remaining": 0, "rate_reset_at": "2026-11-06T16:00:00.000Z"},
+  {"endpoint": "slack", "status": "pending", "fetch_status": "idle", "paused_until": null, "failing_since": null, "reported_at": null, "last_error": null, "error_count": 0, "last_ok_at": null, "rate_remaining": null, "rate_reset_at": null}
+]}
+```
+
+Idempotent: yes; it only reads.
+
+### 32.5 `swr mutation show`
+
+```
+cpd swr mutation show <id>
+```
+
+| Argument | Meaning |
+|---|---|
+| `<id>` | a mutation id, a positive integer (the `mutation_id` a write returns) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<id>` is a positive integer | `usage` | 2 |
+| a row of `swr_mutations` has the id; `details` `{id}` | `mutation_not_found` | 4 |
+
+Effects: none. Output: `mutation`, the row with `vars` and `patch` parsed from `vars_json` and `patch_json` (`patch` `null` when the column is NULL) and `context` parsed from `context_json` (`null` when NULL): `{id, system, target_key, op_kind, status, vars, patch, context, submitted_at, started_at, completed_at, next_attempt_at, attempt_count, error}`.
+
+```json
+{"ok": true, "mutation": {"id": 7, "system": "github", "target_key": "github:pr:owner/repo#12", "op_kind": "merge", "status": "revalidating", "vars": {"method": "squash"}, "patch": {"state": "merged"}, "context": {"plan": "p1", "workflow": "w1"}, "submitted_at": "2026-11-06T15:48:00.000Z", "started_at": "2026-11-06T15:48:02.000Z", "completed_at": "2026-11-06T15:48:09.000Z", "next_attempt_at": null, "attempt_count": 1, "error": null}}
+```
+
+Idempotent: yes; it only reads.
+
+### 32.6 `swr mutation list`
+
+```
+cpd swr mutation list [--status <status>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--status <status>` | only the mutations in this status: `pending`, `in_flight`, `revalidating`, `done`, `failed` or `superseded` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--status`, when given, is one of the six names above | `usage` | 2 |
+
+Effects: none. Output: `mutations`, every row of `swr_mutations` (of the status, if given) in `id` order, each in the shape of `mutation show` (§32.5). `done` and `superseded` rows are listed too: no command deletes a mutation. An empty result prints `mutations: []`.
+
+Idempotent: yes; it only reads.
