@@ -127,7 +127,9 @@ it("App renders no Cockpit header bar and keeps the status bar and the three col
   expect(container.querySelector('header[aria-label="Cockpit header"]')).toBeNull();
   expect(container.querySelector("[data-emblem]")).toBeNull();
   expect(container.querySelector("[data-shell] > header")).toBeNull();
-  expect(container.querySelectorAll('[data-shell] [data-part="pane-header"]').length).toBeGreaterThanOrEqual(3);
+  expect(container.querySelectorAll('[data-shell] [data-part="tree-header"]').length).toBe(1);
+  expect(container.querySelectorAll('[data-shell] [data-part="inbox-header"]').length).toBe(1);
+  expect(container.querySelectorAll('[data-shell] [data-column="center"] :is([data-part="manager-header"], [data-part="title-row"])').length).toBeLessThanOrEqual(1);
   expect(container.querySelector('footer[aria-label="Status bar"] [data-part="runner"]')?.textContent).toBe("Runner: none");
   act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
   act(() => {
