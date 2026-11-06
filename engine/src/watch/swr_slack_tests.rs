@@ -54,7 +54,7 @@ fn answer(posts: &[Value]) -> String {
 /// An engine whose Workflow `repo` of Plan `pay` is open on the open pull request `acme/pay#812` (created
 /// `created_at`) and posting is enabled by the owner's policy (`enabled`) with merge reaction `merged`; E24 runs the registry
 /// and the helper answers `replies`.
-fn fx(replies: Vec<String>, created_at: &str, enabled: bool) -> (Fx, Fakes) {
+fn fx(replies: Vec<String>, created_at: &str, enabled: bool) -> (Fx, Fakes, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let bin = root.join("bin");
@@ -78,8 +78,6 @@ fn fx(replies: Vec<String>, created_at: &str, enabled: bool) -> (Fx, Fakes) {
         "pi_adapter = \"{}\"\n[inbox]\nteam_channel = \"{CHANNEL}\"\nslack_user_id = \"{ME}\"\n",
         adapter.display()
     ));
-    // The temp dir lives as long as the process: one test per process.
-    std::mem::forget(tmp);
     let policy = fx.engine.home.root().join("policy/acme");
     std::fs::create_dir_all(&policy).unwrap();
     std::fs::write(
@@ -110,7 +108,7 @@ fn fx(replies: Vec<String>, created_at: &str, enabled: bool) -> (Fx, Fakes) {
     let _ = (*fakes.runner)
         .clone()
         .route("node", Arc::new(Helper(Mutex::new(replies.into()))));
-    (fx, fakes)
+    (fx, fakes, tmp)
 }
 
 fn tick(fx: &mut Fx) {
@@ -153,7 +151,7 @@ fn slack_confirmed_own_post_queues_pending_auto_merge_when_policy_enables_it() {
     // The User's message, an hour after the pull request was created; a colleague's earlier one is not the post.
     let ts = format!("{}.000100", EPOCH - 3600);
     let earlier_colleague = format!("{}.000200", EPOCH - 7200);
-    let (mut fx, _fakes) = fx(
+    let (mut fx, _fakes, _tmp) = fx(
         vec![answer(&[
             post(ME, &ts, 812),
             post("U0RYAN001", &earlier_colleague, 812),
@@ -184,7 +182,7 @@ fn slack_confirmed_own_post_queues_pending_auto_merge_when_policy_enables_it() {
 fn slack_post_older_than_the_pull_request_is_not_confirmed() {
     // D1 (contract §2.2 "PR post" (c)): a message before the pull request's created_at is not its post.
     let ts = format!("{}.000100", EPOCH - 7200);
-    let (mut fx, _fakes) = fx(
+    let (mut fx, _fakes, _tmp) = fx(
         vec![answer(&[post(ME, &ts, 812)])],
         "2025-12-31T23:00:00Z",
         true,
@@ -205,7 +203,7 @@ fn slack_post_older_than_the_pull_request_is_not_confirmed() {
 fn slack_unsent_post_never_gets_auto_merge() {
     // The User's own message does not exist in the channel (the post is still unsent): a colleague's message of the same
     // pull request, and the User's message of a pull request no Workflow owns, confirm nothing.
-    let (mut fx, _fakes) = fx(
+    let (mut fx, _fakes, _tmp) = fx(
         vec![answer(&[
             post("U0RYAN001", &format!("{}.000100", EPOCH - 3600), 812),
             post(ME, &format!("{}.000200", EPOCH - 1800), 999),
@@ -236,7 +234,7 @@ fn slack_unsent_post_never_gets_auto_merge() {
 #[test]
 fn slack_posts_unseen_for_seven_days_are_garbage_collected() {
     let seen = post("U0RYAN001", &format!("{}.000100", EPOCH - 3600), 812);
-    let (mut fx, fakes) = fx(
+    let (mut fx, fakes, _tmp) = fx(
         vec![answer(&[seen]), answer(&[])],
         "2025-12-31T23:00:00Z",
         true,

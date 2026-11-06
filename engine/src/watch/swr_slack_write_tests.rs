@@ -33,7 +33,7 @@ impl Handler for Helper {
 }
 
 /// An engine with Plan `pay` and a pending merge reaction of its Workflow `repo` on `CHANNEL`/`TS`.
-fn fx() -> (Fx, Fakes, Arc<Mutex<Vec<Call>>>) {
+fn fx() -> (Fx, Fakes, Arc<Mutex<Vec<Call>>>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let bin = root.join("bin");
@@ -57,8 +57,6 @@ fn fx() -> (Fx, Fakes, Arc<Mutex<Vec<Call>>>) {
         "pi_adapter = \"{}\"\n[inbox]\nteam_channel = \"C0TEAM001\"\nslack_user_id = \"U0USER001\"\n",
         adapter.display()
     ));
-    // The temp dir lives as long as the process: one test per process.
-    std::mem::forget(tmp);
     // SAFETY: one test per process (nextest); the variables point at this test's own temp dir.
     unsafe {
         std::env::set_var("CPD_HOME", fx.engine.home.root());
@@ -89,12 +87,12 @@ fn fx() -> (Fx, Fakes, Arc<Mutex<Vec<Call>>>) {
         Coalesce::Dedupe(vars.to_string()),
     )
     .unwrap();
-    (fx, fakes, reacts)
+    (fx, fakes, reacts, tmp)
 }
 
 #[test]
 fn slack_refused_reaction_parks_with_one_error_event() {
-    let (mut fx, _fakes, reacts) = fx();
+    let (mut fx, _fakes, reacts, _tmp) = fx();
 
     swr::run(&mut fx.engine);
 
@@ -142,7 +140,7 @@ fn slack_refused_reaction_parks_with_one_error_event() {
 /// reaction stays queued and no Slack call is made; the next tick after the incident ends drains it.
 #[test]
 fn incident_mode_holds_the_drain_until_it_ends() {
-    let (mut fx, _fakes, reacts) = fx();
+    let (mut fx, _fakes, reacts, _tmp) = fx();
     fx.engine
         .store
         .write("incident on", |tx| {
@@ -193,7 +191,7 @@ fn incident_mode_holds_the_drain_until_it_ends() {
 /// sends no reaction and raises no error.
 #[test]
 fn nothing_is_sent_or_reported_when_nothing_is_queued() {
-    let (mut fx, _fakes, reacts) = fx();
+    let (mut fx, _fakes, reacts, _tmp) = fx();
     fx.engine
         .store
         .write("empty outbox", |tx| {
