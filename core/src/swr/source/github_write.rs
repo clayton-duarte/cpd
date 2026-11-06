@@ -191,6 +191,62 @@ impl GithubSource {
                         Ok::<(), CpdError>(())
                     });
                 };
+                // Only an open pull request is asked: a merged, closed or not yet read one waits, its row stays pending (E18's rule).
+                let open = cx.store.read(|c| {
+                    Ok(c.query_row(
+                        "SELECT state FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                        rusqlite::params![repo, number],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?)
+                });
+                match open {
+                    Ok(Some(state)) if state == "open" => {}
+                    Ok(_) => return ExecOutcome::Retry { after: RETRY },
+                    Err(e) => return retry(&e),
+                }
+                // The repo's settings are the cache's (swr-github.md §9): a repo whose row the pass has not stored is fetched
+                // first, and a repo that does not allow auto-merge is settled with no call.
+                let allowed = cx.store.read(|c| {
+                    Ok(c.query_row(
+                        "SELECT auto_merge_allowed FROM swr_repos WHERE repo = ?1",
+                        [repo],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .optional()?)
+                });
+                match allowed {
+                    Ok(None) => return self.wait_for_repo(cx, repo),
+                    Ok(Some(false)) => {
+                        settle(cx, "none");
+                        return ExecOutcome::Done;
+                    }
+                    Ok(Some(true)) => {}
+                    Err(e) => return retry(&e),
+                }
+                // A stacked Workflow waits until it is unstacked (swr-github.md §9): the outbox tries again after its backoff.
+                let stacked = cx.store.read(|c| {
+                    let mut stmt = c.prepare(
+                        "SELECT w.plan, w.key FROM workflows w JOIN pull_requests q ON q.id = w.pull_request
+                          WHERE q.repo = ?1 AND q.number = ?2",
+                    )?;
+                    let workflows = stmt
+                        .query_map(rusqlite::params![repo, number], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    for (plan, key) in workflows {
+                        if auto_merge::stacked(c, &plan, &key)? {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                });
+                match stacked {
+                    Ok(true) => return ExecOutcome::Retry { after: RETRY },
+                    Ok(false) => {}
+                    Err(e) => return retry(&e),
+                }
                 match auto_merge::attempt(runner, cwd, repo, number) {
                     Outcome::Enabled => {
                         settle(cx, "enabled");

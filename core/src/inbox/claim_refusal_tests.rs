@@ -114,7 +114,7 @@ fn with_cache(runner: FakeRunner) -> (tempfile::TempDir, CpdHome, Store, Ports) 
     let mut f = fixture(Kind::ReviewRequested, SUBJECT, runner);
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": "1767225600.000100",
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    super::swr_fixture::posts(&mut f.2, &[post]).unwrap();
+    crate::inbox::team::seed_cache(&mut f.2, "C02JU6C2Z1D", &[post]);
     f
 }
 

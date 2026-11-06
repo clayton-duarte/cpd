@@ -6257,12 +6257,13 @@ fn queue_rows(store: &mut Store) -> Vec<String> {
 #[test]
 fn a_database_with_merged_posts_migrates_to_slack_reactions_copying_them() {
     let (_dir, home, _earlier) = before_slack_reactions();
-    let mut store = Store::open(&home, 5000).unwrap();
-    assert!(
-        store.schema_mismatch().is_none(),
-        "{:?}",
-        store.schema_mismatch()
-    );
+    // Only up to `slack-reactions`: `swr-slack` moves the open rows to the outbox and empties the queue.
+    let upto: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-slack-reaction-refusal"))
+        .collect();
+    let mut store = crate::store::tests::open_named(&home, &upto).unwrap();
     let rows: Vec<Value> = queue_rows(&mut store)
         .iter()
         .map(|r| serde_json::from_str(r).unwrap())

@@ -517,8 +517,8 @@ fn gh_poll_reads_a_first_seen_slack_pr_once() {
     rig.state().world.insert(("acme/pay".into(), 42), merged);
     let ts = rig.t0.unix_timestamp() - 86_400;
     rig.sql(&format!(
-        "INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, fetched_at)
-         VALUES ('C1', '{ts}.000100', 'acme/pay', 42, 0, 't')"
+        "INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_is_me, reactions_json, fetched_at)
+         VALUES ('C1', '{ts}.000100', 'acme/pay', 42, 1, 0, '{{}}', 't')"
     ));
     rig.pass(0).unwrap();
     assert!(

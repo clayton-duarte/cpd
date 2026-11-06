@@ -37,8 +37,9 @@ fn claimable() -> (Fixture, i64) {
                  '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);",
     );
     fx.fx.env.sql(
-        "INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, reply_count, reactions_json, eyes_me, claim, thread_tags_me, fetched_at)
-           VALUES ('C02JU6C2Z1D', '1700000000.000100', 'acme/pay', 812, 0, 0, '[]', NULL, NULL, 0, 't');",
+        "INSERT INTO swr_queries (key, system, status, data_hash) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'success', 'h');
+         INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me, reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
+           VALUES ('C02JU6C2Z1D', '1700000000.000100', 'acme/pay', 812, 1, '', 'Ryan Case', 0, '{}', NULL, NULL, 0, 't');",
     );
     let mut all = vec![
         condition(Kind::JobStuck, Urgency::Red, "stuck", "ctx1"),

@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use super::inbox;
 use super::testkit::Fx;
-use super::{auto_merge, inbox};
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::ports::{Fakes, Ports};
+use cpd_core::ports::Fakes;
 use cpd_core::swr::cache;
 use cpd_core::swr::outbox::{self, Coalesce, Op};
 
@@ -82,8 +82,9 @@ fn gh_inbox_review_requested_comes_from_swr_without_the_memo() {
                                     authored, review_requested, head_oid)
            VALUES ('acme/pay', 42, 'https://github.com/acme/pay/pull/42', 'Add retries', 0, 'open', 'none', 'passed',
                    'opened', 'opened', 0, 1, 'abc');
-         INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, reply_count, reactions_json, eyes_me, thread_tags_me, fetched_at)
-           VALUES ('C02JU6C2Z1D', '{ts}.000100', 'acme/pay', 42, 0, 0, '[]', 0, 0, 't');"
+         INSERT INTO swr_queries (key, system, status, data_hash) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'success', 'h');
+         INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_is_me, reactions_json, eyes_me, thread_tags_me, fetched_at)
+           VALUES ('C02JU6C2Z1D', '{ts}.000100', 'acme/pay', 42, 1, 0, '{{}}', 0, 0, 't');"
     ));
 
     inbox::run(&mut fx.engine);
@@ -107,40 +108,6 @@ fn gh_inbox_review_requested_comes_from_swr_without_the_memo() {
         gh_calls(&fakes),
         Vec::<String>::new(),
         "E8 never calls GitHub"
-    );
-}
-
-#[test]
-fn gh_auto_merge_is_an_outbox_op_for_posted_prs() {
-    let (mut fx, fakes) = fx("");
-    open_pull_request(&mut fx, "passed");
-    fx.fixture(
-        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, last_posted_at, auto_merge)
-           VALUES ('pay', 'repo', 'C0POLICY1', '1767225600.000100', 'https://slack.test/p1', 't', 't', 'pending');",
-    );
-
-    Ports::scope(&fakes.ports, || auto_merge::run(&mut fx.engine));
-
-    let rows: Vec<(String, String, String)> = fx
-        .engine
-        .store
-        .read(|c| {
-            let mut stmt =
-                c.prepare("SELECT system, target_key, op_kind FROM swr_mutations ORDER BY id")?;
-            Ok(stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .unwrap();
-    assert_eq!(
-        rows,
-        [("github".to_owned(), KEY.to_owned(), "auto_merge".to_owned())],
-        "E18 enqueues the op; the outbox drain and its retry replace E18's own thread"
-    );
-    assert_eq!(
-        gh_calls(&fakes),
-        Vec::<String>::new(),
-        "E18 itself never calls GitHub"
     );
 }
 

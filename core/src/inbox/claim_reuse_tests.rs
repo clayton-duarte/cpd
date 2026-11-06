@@ -98,7 +98,7 @@ fn world(existing: Existing, runner_kind: &str) -> World {
     reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z").unwrap();
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": TS_RAW,
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    super::swr_fixture::posts(&mut store, &[post]).unwrap();
+    crate::inbox::team::seed_cache(&mut store, CHANNEL, &[post]);
     seed(&mut store);
     let (phase, archived, done) = match existing {
         Existing::Done => ("done", "NULL", "'t'"),
@@ -220,11 +220,14 @@ fn claim_of_reused_plan_marks_item_claimed_with_head_oid() {
 fn claim_of_reused_plan_queues_eyes_reaction() {
     let mut w = world(Existing::Live, "pi");
     claim(&mut w);
+    // The eyes reaction is a `reaction` mutation of the outbox, keyed by (channel, ts, emoji) (swr-slack.md 4.2).
     assert_eq!(
         count(
             &mut w,
             &format!(
-                "SELECT count(*) FROM slack_reactions WHERE channel = '{CHANNEL}' AND ts = '{TS_RAW}' AND emoji = 'eyes'"
+                "SELECT count(*) FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' AND status = 'pending'
+                   AND json_extract(vars_json, '$.channel') = '{CHANNEL}' AND json_extract(vars_json, '$.ts') = '{TS_RAW}'
+                   AND json_extract(vars_json, '$.emoji') = 'eyes'"
             )
         ),
         1

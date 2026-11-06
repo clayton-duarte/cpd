@@ -227,6 +227,12 @@ fn merge(repeat: u32) -> Merge {
     });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let now = fx.stamp_ago(0);
+    // The repo's settings as the pass stored them: the executor reads them from the cache (swr-github.md §9).
+    fx.env.sql(&format!(
+        "INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, '{now}');"
+    ));
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -300,12 +306,24 @@ impl Merge {
                    VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, '{pr_state}', 'none', 'none', 't', {merged_at}, 't');"
             )
         };
+        // The Slack source queues the request when it confirms the post (swr-slack.md §6.2): the same row, here by hand.
+        let queued = if auto_merge == "pending" {
+            let at = self.fx.stamp_ago(0);
+            format!(
+                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at)
+                   VALUES ('github', 'github:pr:acme/pay#{number}', 'auto_merge',
+                           '{{\"number\":{number},\"plan\":\"pay\",\"repo\":\"acme/pay\",\"workflow\":\"{key}\"}}', 'pending', '{at}');"
+            )
+        } else {
+            String::new()
+        };
         self.fx.env.sql(&format!(
             "{pull_request}
              INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
                VALUES ('pay', '{key}', '/nowhere', '{base}', '{status}', 'cpd/pay/{key}', {worktree}, {n}, {u}, {opened}, {pull}, cpd_txn(), 't', {started}, {merged_at});
              INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, auto_merge, auto_merge_at)
-               VALUES ('pay', '{key}', 'C0POLICY1', '1793040{number:03}.000001', 'https://acme.slack.com/archives/C0POLICY1/p{number}', 't', '{auto_merge}', {at});"
+               VALUES ('pay', '{key}', 'C0POLICY1', '1793040{number:03}.000001', 'https://acme.slack.com/archives/C0POLICY1/p{number}', 't', '{auto_merge}', {at});
+             {queued}"
         ));
     }
 

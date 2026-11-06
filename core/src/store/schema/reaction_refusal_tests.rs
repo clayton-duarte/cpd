@@ -100,12 +100,13 @@ fn rows(store: &mut Store) -> Vec<Value> {
 #[test]
 fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
     let (_dir, home) = before_refusal();
-    let mut store = Store::open(&home, 5000).unwrap();
-    assert!(
-        store.schema_mismatch().is_none(),
-        "{:?}",
-        store.schema_mismatch()
-    );
+    // Only up to `swr-slack`, which moves the open rows to the outbox and empties the queue.
+    let upto: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-swr-slack"))
+        .collect();
+    let mut store = crate::store::tests::open_named(&home, &upto).unwrap();
     let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, workflow: Value| serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null});
     let expected = vec![
         row(
@@ -147,7 +148,7 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
         "the rows matching a post by channel, ts and emoji are linked; the others stay unlinked"
     );
     drop(store);
-    let mut again = Store::open(&home, 5000).unwrap();
+    let mut again = crate::store::tests::open_named(&home, &upto).unwrap();
     assert_eq!(
         rows(&mut again),
         expected,

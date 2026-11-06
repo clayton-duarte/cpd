@@ -572,6 +572,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         .with("item", item.id)
         .with("subject", item.subject.clone())
     };
+    let cache = team::read_cache(&mut env.store)?.ok_or_else(missing)?;
     let (repo, number) = item
         .subject
         .strip_prefix("pr:")
@@ -579,17 +580,8 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         .and_then(|(repo, n)| Some((repo, n.parse::<u64>().ok()?)))
         .ok_or_else(missing)?;
     // The live check reads the effective row, not GitHub (swr-github.md §9).
-    let post = env
-        .store
-        .read(|conn| team::primary_post(conn, repo, number))?
-        .ok_or_else(missing)?;
-    let channel: String = env.store.read(|conn| {
-        Ok(conn.query_row(
-            "SELECT channel FROM swr_slack_posts WHERE ts = ?1 AND repo = ?2 AND number = ?3",
-            rusqlite::params![post.ts_raw, repo, number as i64],
-            |r| r.get(0),
-        )?)
-    })?;
+    let post = cache.primary_post(repo, number).ok_or_else(missing)?;
+    let channel = cache.channel.clone();
     let lookup = team::lookup_from_store(&mut env.store, &[(repo.to_owned(), number)])?;
     let found = lookup
         .workflows
@@ -600,7 +592,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         None => Some("not-found"),
         Some(pr) => stale_reason(
             pr,
-            team::status(&post, pr, &lookup.me, &env.config.inbox.bot_reviewers),
+            team::status(post, pr, &lookup.me, &env.config.inbox.bot_reviewers),
         ),
     };
     if let Some(reason) = reason {
@@ -698,7 +690,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
             item.id,
         );
         events::append(tx, scoped(event, &item))?;
-        crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
+        crate::swr::source::slack::react_in(tx, &channel, &ts_raw, "eyes")?;
         // A live codereview Plan of this PR is reused (pro-d416 A5): its Lead re-reviews, no second Plan is spawned.
         let existing: Option<(String, String)> = tx
             .query_row(

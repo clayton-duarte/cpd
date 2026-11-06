@@ -587,8 +587,9 @@ fn gh_inbox_claim_reads_the_cache_and_makes_no_gh_call() {
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
                                     authored, review_requested, head_oid)
            VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Add retries', 0, 'open', 'none', 'passed', '{at}', '{at}', 0, 1, 'abc');
-         INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, reply_count, reactions_json, eyes_me, thread_tags_me, fetched_at)
-           VALUES ('C02JU6C2Z1D', '1767225600.000100', 'acme/pay', 812, 0, 0, '[]', 0, 0, '{at}');
+         INSERT INTO swr_queries (key, system, status, data_hash) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'success', 'h');
+         INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_is_me, reactions_json, eyes_me, thread_tags_me, fetched_at)
+           VALUES ('C02JU6C2Z1D', '1767225600.000100', 'acme/pay', 812, 1, 0, '{{}}', 0, 0, '{at}');
          INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, head_oid)
            VALUES ('review-requested', 'blue', 'pr:acme/pay#812', 'review pay#812', '{at}', 'abc');"
     ));

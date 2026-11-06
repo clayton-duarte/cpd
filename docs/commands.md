@@ -2863,6 +2863,8 @@ Idempotent: no (every run queues a reply). A reply to the same item with the sam
 
 ### 9.8b `pr post`
 
+**From the Slack cutover (`docs/architecture/swr-slack.md` §5.1).** `pr post` enqueues the send as an outbox mutation (`op_kind` `post`) and returns `{ok, plan, workflow, queued: true, mutation_id, message}`; engine E24 sends it, then writes the `pr_posts` row, the `in_review` Jira row and the `auto_merge` mutation. Check 8 reads the merge methods and `autoMergeAllowed` from `swr_repos`, not from `gh`. Check 2 also refuses `already_posted` while a `post` mutation of the Workflow is active. The checks and refusals below are otherwise as written.
+
 ```
 cpd pr post [--workflow <key>] [--plan <id>]
 ```
@@ -2907,7 +2909,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 
 **Order and unknown outcomes** (User, 2026-11-05 EST; supersedes the pending-row order of pro-d408 and every Slack lookup inside `pr post`). `pr post` does no lookup. The `pr_posts` row is written only after an OK send, with the sent message's `ts` and `link`: there is no pending row, and nothing is written ahead of the send. **Any error writes nothing**: a refusal of checks 1 to 8, `slack_auth`, `slack_not_configured`, `slack_helper_failed`, `spawn_failed`, `slack_failed`, `slack_unparseable` and `store_failed`. So a failed post writes no row: it is retryable with no workaround, and a second `pr post` sends the message again. A post whose outcome is unknown (`slack_failed`, `slack_unparseable`) may still have reached the channel. The engine's Slack poll E11 (§21.5) confirms it, and so confirms a post the User made by hand: the earliest message of the team channel that the User authored (`author_id` = `inbox.slack_user_id`), that carries the pull request's url `github.com/<owner>/<repo>/pull/<n>` and that was posted at or after the pull request opened, is recorded in `pr_posts` with that message's `ts` and a `link` `https://<workspace>.slack.com/archives/<channel>/p<ts without the dot>` (the match rule and the workspace: contract §2.2 "PR post"). Nothing is written before a send: the row comes only from a message the channel already holds. So a post whose outcome was unknown needs no retry workaround: once recorded, its Inbox row reads `waiting for peer review` instead of `ready for user review` (contract §2.2 "The authored pull request rule"), and a second `pr post` is refused `already_posted`. **Not built yet:** the recording is a later Job; until it lands, nothing records an unknown outcome, so check the channel before a retry of a post whose outcome was unknown.
 
-**Superseded for the github Workflow (swr-github §9).** `pr post` enqueues two ops and returns `{queued, mutation_id}`: the Slack send (op `post`, target `github:pr:<owner/repo>#<n>`, executed by the slack Workflow's drain) and, once that drain has written the `pr_posts` row, the auto-merge request (op `auto_merge`). The refusals of step 8 are read at enqueue from the effective row and `swr_repos`. The drain's writes are the ones below, unchanged in content; its result is read with `cpd swr mutation show`.
+**Superseded for the github Workflow (swr-github §9).** `pr post` enqueues one op, the Slack send (op `post`, executed by the slack Workflow's drain), and returns `{queued, mutation_id}`. The auto-merge request is queued once, by the Slack source, when the send confirms the post (swr-slack §6.2: op `auto_merge`, target `github:pr:<owner/repo>#<n>`). The refusals of step 8 are read at enqueue from the merge methods of `swr_repos`, the cache. The drain's writes are the ones below, unchanged in content; its result is read with `cpd swr mutation show`.
 
 Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3), sent with `unfurl_app_links: false` (pro-d245), so Slack shows no GitHub preview under it. Rows: one `pr_posts` row (contract §4.4), whose `last_posted_at` is set to its `posted_at` (the first post; `cpd pr repost`, §9.8b2, sets it at each repost, pro-d388) and, in the same transaction, the `jira_transitions` row `in_review` of the Workflow (§21.11, J4b; queued only when the `pr_posts` insert is new); the only later write is `reacted_at` (Workflow `react`). `pr post` never calls Jira: engine E19 does (§21.11). Events: none (contract §5.1). Limits: a crash after the send and before the row is written leaves the message posted with no row until the engine's Slack poll records it, and a retry before then can post it twice; `pr post` takes no lock, so two simultaneous runs of the same Workflow can both send, and the second's insert then fails `already_posted`; the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh and a Workflow the poll never read for comments is `comments_unread`.
 Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3), sent with `unfurl_app_links: false` (pro-d245), so Slack shows no GitHub preview under it. Rows: one `pr_posts` row (contract §4.4), whose `last_posted_at` is set to its `posted_at` (the first post; `cpd pr repost`, §9.8b2, sets it at each repost, pro-d388) and, in the same transaction, the Jira transition `in_review` of the Workflow (`swr-jira.md` §7) (`swr-jira.md` §7; queued only when the `pr_posts` insert is new); the only later write is `reacted_at` (Workflow `react`). `pr post` never calls Jira: the `jira` source of engine E24 does (`swr-jira.md` §8). Events: none (contract §5.1). Limits: a crash after the send and before the row is written leaves the message posted with no row until the engine's Slack poll records it, and a retry before then can post it twice; `pr post` takes no lock, so two simultaneous runs of the same Workflow can both send, and the second's insert then fails `already_posted`; the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh and a Workflow the poll never read for comments is `comments_unread`.
@@ -2923,6 +2925,8 @@ Output: `{"ok":true,"plan":<id>,"workflow":<key>,"number":<n>,"url":<the pull re
 Idempotent: no (every run tries to post).
 
 ### 9.8b2 `pr repost`
+
+**From the Slack cutover (`docs/architecture/swr-slack.md` §5.1).** `pr repost` enqueues one `repost` mutation and returns `queued: true` with its `mutation_id`; E24 sends it, and `last_posted_at` is set on completion. The checks below are as written.
 
 ```
 cpd pr repost [--workflow <key>] [--plan <id>]
@@ -3865,7 +3869,7 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 
 **Any other store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
 
-**Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. Each line:
+**Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. `cockpit serve` restarts in place the same way (§11a "Restart on a new install", pro-d450). Each line:
 
 ```json
 {"id": 48215, "at": "2026-10-14T21:41:02.114Z", "kind": "escalation", "context": "building-cpd", "plan": "cpd2", "job": "contract-commands", "attempt": "contract-commands-a1", "session": null, "text": "Worker contract-commands-a1 asks: … Answer: cpd answer contract-commands-a1-q1 \"<answer>\"", "data": {"escalation": "contract-commands-a1-q1", "question": "…"}}
@@ -3885,11 +3889,13 @@ No flags and no arguments; any argument is `usage` (exit 2). Callers: none. The 
 
 **Lifecycle.** It opens the store as `cpd events follow` does (§11.2: it waits out a migration in progress), once, as one Env (its store, home and ports). Every snapshot pane and every `plan_show` reply is read through that same open Env: `serve` never reads `$CPD_HOME` after start and never opens another store connection per snapshot (contract §5.5). It then writes `hello`, writes snapshot 1 and sets its cursor to the highest Event id, so no Event before the start is replayed: the first snapshot carries the state. It serves until stdin reaches end of file, then exits 0. The parent's death closes stdin, so the process never outlives its parent.
 
+**Restart on a new install** (pro-d450; hs-d140; §11.2 "Re-exec"). On each tick it checks its own executable path with the `(device, inode, mtime)` check of `core/src/host/exe.rs`, as `events follow` does between polls. When the executable was replaced, it execs the replacement in place as `<that path> cockpit serve`, with the same pid and pipes: the new process starts a fresh serve, says `hello` and writes snapshot 1 (`seq` starts at 1 again, and no Event is replayed). It does the same on a `store_too_new`, and writes no error frame then. A `store_too_new` while the executable is unchanged still ends serve with the error frame below.
+
 ### Frames out
 
 | `t` | When | Frame |
 |---|---|---|
-| `hello` | first, once | `{"t":"hello","protocol":1}` |
+| `hello` | first, once per process (also first in the process that restarts in place, above) | `{"t":"hello","protocol":1}` |
 | `snapshot` | after `hello`; after every batch of committed changes; on `refresh` | `{"t":"snapshot","seq":<n>,"panes":{"context":V,"plan":V,"session":V,"inbox":V}}` |
 | `event` | each newly committed Event, before the snapshot that follows it | `{"t":"event","event":E}` |
 | `plan_show` | the answer to a `plan_show` request | `{"t":"plan_show","id":"<request id>","value":V}` |
@@ -3926,7 +3932,7 @@ Each frame is one line, written and flushed when it is produced, in the order it
 | `plan_show` whose `id` or `plan` is missing or not a string | `usage` | `null` |
 | `plan_show` for which `cpd plan show --plan <id>` would print a failure value (`plan_not_found`, exit 4; `invalid_plan_id`, exit 2; a store code) | that value's code | the request's `id` |
 
-These keep the process serving. A **store error** that ends `cpd events follow` (§11.2: `store_too_new`, `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) ends this command too, the same way. Its last line is `{"t":"error","id":null,"error":{"code":"<code>","message":"<text>"}}` and it exits with that code's exit. A store that cannot be opened at the start ends it before `hello`, with the same last line.
+These keep the process serving. A **store error** that ends `cpd events follow` (§11.2: `store_too_new`, `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) ends this command too, the same way, except a `store_too_new` while the executable is replaced (restart above). `serve` does not track `PRAGMA schema_version`: each batch it flushes recomputes the store verdict (contract §4.5), so it ends at the first batch flushed after a migration it cannot read; `events follow` recomputes the verdict at its next poll after the schema changes. Its last line is `{"t":"error","id":null,"error":{"code":"<code>","message":"<text>"}}` and it exits with that code's exit. A store that cannot be opened at the start ends it before `hello`, with the same last line.
 
 | Exit | When | Codes |
 |---|---|---|
@@ -6278,7 +6284,7 @@ Idempotent: yes. An item already dismissed returns `"already": true` and writes 
 
 ### 21.5 The team review cache (engine E11)
 
-**Superseded (swr-github §12; swr.md §15, `slack`):** the cache is the `swr_slack_posts` rows the slack Workflow writes, not `run/team-review.json`. The GitHub state of their pull requests is read through `effective_pr` (swr-github §6). The file layout below is the pre-cutover one.
+**Superseded at the Slack cutover** (`docs/architecture/swr-slack.md` §9): the file is replaced by `swr_slack_posts` (SWR, swr.md §3.9), and E11 by the `slack` Source under E24. The GitHub state of their pull requests is read through `effective_pr` (swr-github §6). The text below is the design until then.
 
 Not a command. The team review read (Context decision "Team review Inbox", User, 2026-10-19; contract §2.2 "The team review rule", §3.7 E11): engine step E11 runs the Slack helper (§21.6) every `watch.team_review_seconds` (contract §8.2, default **1800**) after the end of the previous run, when `inbox.team_channel` is set and caches what it read in `run/team-review.json`. **It appends no Event of its own** (a failure is reported, below): the file is a derived cache (contract §1.4), like a Context digest. Its one store write is the `pr_posts` row of a confirmed post (the bullet Confirmation, below).
 
@@ -6289,6 +6295,8 @@ Not a command. The team review read (Context decision "Team review Inbox", User,
 - **What reads it.** The Inbox rule, in E8 (contract §2.2 "The team review rule", hs-d320): the status of each primary post's pull request from one `gh api graphql` call, memoised for `GITHUB_TTL` (30 s) and dropped at once when a `review-requested` row in the store changes (the invalidation token, contract §2.2 "The team review rule"), with the Slack overrides from `claim`, `eyes_me` and `thread_tags_me` (hermes `classify` 264-341, `refresh.build` 435-466); only `NEEDS_REVIEW` opens an item. It is not E11's: E11 calls no GitHub. A missing file is "unknown": the open items stay.
 
 ### 21.6 The helper `slack-channel.ts`
+
+**From the Slack cutover** (`docs/architecture/swr-slack.md` §3): the helper reads one JSON value on stdin (`known` and `terminal`), and its output carries the reaction counts, `reply_count`, `latest_reply`, `author_is_me`, and the `eyes_me` and `thread_tags_me` it read or echoed. The argv and the failure table below are unchanged, except that a malformed stdin is `usage`.
 
 `pi/lib/slack-channel.ts` in cpd's `pi/` package, beside the adapter (contract §8 `pi_adapter`). Not a cpd command: engine E11 (§21.5) runs it, detached. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client (hs-d107) and never reads, copies or logs the credential (as hermes' `slack_fetch.py:21-28` did through Hermes' own storage). Evidence and the rejected alternatives: `docs/research/team-review.md`.
 
@@ -6444,6 +6452,8 @@ or `"already": true` when the reaction was already there.
 Writes one Slack reaction (or confirms one already present) and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (engine E16, §21.9) writes the `reacted_at` column after a successful reaction.
 
 ### 21.9 The Slack reaction queue (engine E17)
+
+**Retired at the Slack cutover** (`docs/architecture/swr-slack.md` §4): the queue is `swr_mutations` (`op_kind` `reaction`), drained by E24; the table `slack_reactions` is dropped by the breaking migration. The text below is the design until then.
 
 Not a command. A queue of Slack reactions appended by every step that wants to add a reaction to a Slack post: today the merge reaction (Plan pr-post, Workflow `react`, User decision pro-d64 step 7) and the Claim reaction (Plan review-intake, Workflow `claim`). Engine step E17 drains the queue, running the helper (§21.8) once per tick for the oldest queued reaction that is due.
 

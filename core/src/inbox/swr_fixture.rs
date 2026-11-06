@@ -1,5 +1,5 @@
-//! Test support: the rows the single pass (`pull_requests`, `swr_pr_detail`, `swr_viewer`) and E11 (`swr_slack_posts`) write, so a
-//! review-requested test states its Slack posts and its GitHub answer as data, not through `run/team-review.json` and `gh`.
+//! Test support: the rows the single pass (`pull_requests`, `swr_pr_detail`, `swr_viewer`) writes, so a review-requested test
+//! states its GitHub answer as data, not through `gh`. Its Slack posts are `team::seed_cache`'s.
 
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -7,50 +7,6 @@ use serde_json::{Value, json};
 use super::team::{GhState, Lookup};
 use crate::error::CpdError;
 use crate::store::Store;
-
-/// The team channel the posts of these tests were read from.
-pub const CHANNEL: &str = "C02JU6C2Z1D";
-
-/// One Slack post, as the old cache's JSON had it (`repo`, `number`, `ts`, `primary`, `reactions`, `claim`, `eyes_me`,
-/// `thread_tags_me`); a post that is not primary is not stored.
-pub fn posts(store: &mut Store, posts: &[Value]) -> Result<(), CpdError> {
-    store.write("fixture posts", |tx| {
-        tx.execute("DELETE FROM swr_slack_posts", [])?;
-        let mut used = std::collections::HashSet::new();
-        for p in posts.iter().filter(|p| p["primary"].as_bool() == Some(true)) {
-            // The post's own `ts_raw` when it is that time as text; else the time.
-            let at = p["ts"].as_f64().unwrap_or_default();
-            let ts = match p["ts_raw"].as_str() {
-                Some(raw) if raw.parse::<f64>().is_ok_and(|v| (v - at).abs() < 1.0) => raw.to_owned(),
-                _ => format!("{at:.6}"),
-            };
-            // A channel has one post per `ts`: two posts of one instant differ by a microsecond.
-            let mut ts = ts;
-            let mut bump = 0.0;
-            while !used.insert(ts.clone()) {
-                bump += 0.000001;
-                ts = format!("{:.6}", at + bump);
-            }
-            let claim = (!p["claim"].is_null()).then(|| p["claim"].to_string());
-            tx.execute(
-                "INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, reply_count, reactions_json, eyes_me,
-                                              claim, thread_tags_me, fetched_at)
-                 VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, ?6, ?7, ?8, 't')",
-                params![
-                    CHANNEL,
-                    ts,
-                    p["repo"].as_str(),
-                    p["number"].as_i64(),
-                    p["reactions"].to_string(),
-                    p["eyes_me"].as_bool(),
-                    claim,
-                    p["thread_tags_me"].as_bool().unwrap_or(false)
-                ],
-            )?;
-        }
-        Ok::<(), CpdError>(())
-    })
-}
 
 /// The viewer and each pull request of `lookup`, as the pass would have stored them: an open or merged row, review requested of
 /// the viewer, its reviews and head checks in the detail. A `None` pull request has no row.

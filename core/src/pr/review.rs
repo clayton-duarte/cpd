@@ -192,7 +192,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
                 store.write("review submit", |tx| {
                     let queued = match slack {
                         Some((channel, ts)) => {
-                            Some(super::reactions::queue(tx, channel, ts, emoji)?)
+                            Some(crate::swr::source::slack::react_in(tx, channel, ts, emoji)?.1)
                         }
                         None => None,
                     };

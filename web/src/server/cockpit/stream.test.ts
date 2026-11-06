@@ -169,4 +169,16 @@ describe("cockpit stream", () => {
     children[1]!.feed(hello);
     expect(stream.ready()).toBe(true);
   });
+
+  it("a second hello resolves a pending planShow down and keeps the stream ready without onError", async () => {
+    const { stream, children, errors } = setup();
+    stream.start();
+    children[0]!.feed(hello);
+    const pending = stream.planShow("p1");
+    expect(children[0]!.writes).toHaveLength(1);
+    children[0]!.feed(hello);
+    expect(await Promise.race([pending, Promise.resolve("pending")])).toBe("down");
+    expect(stream.ready()).toBe(true);
+    expect(errors).toEqual([]);
+  });
 });

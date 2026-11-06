@@ -968,7 +968,7 @@ pub(super) fn merge(
         return Err(cas_lost(id, key));
     }
     super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
-    super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
+    crate::swr::source::slack::react_merge_in(tx, id.as_str(), key.as_str())?;
     crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "done")?;
     let text = format!("Workflow {key} (#{}) of Plan {id} is merged.", pull.number);
     append(

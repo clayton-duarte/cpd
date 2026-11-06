@@ -47,6 +47,14 @@ fn fixture(_head: (), _post: ()) -> Fx {
 }
 
 /// The mutations: `(target_key, op_kind, status, vars, patch)`.
+/// The GitHub mutations of the outbox: the review, not the Slack reaction the same submit queues.
+fn github_mutations(fx: &Fx) -> Vec<(String, String, String, Value, Value)> {
+    mutations(fx)
+        .into_iter()
+        .filter(|m| m.0.starts_with("github:"))
+        .collect()
+}
+
 fn mutations(fx: &Fx) -> Vec<(String, String, String, Value, Value)> {
     fx.env.read(|c| {
         let mut stmt = c.prepare("SELECT target_key, op_kind, status, vars_json, coalesce(patch_json, 'null') FROM swr_mutations ORDER BY id")?;
@@ -94,10 +102,12 @@ fn submit(
     fx.cpd(&args)
 }
 
+/// The Slack reaction mutations of the outbox: `channel`, `ts`, `emoji`, `reacted_at` (set once the send is done).
 fn rows(fx: &Fx) -> Vec<Value> {
     let text: String = fx.env.query(
-        "SELECT coalesce(json_group_array(json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at)), '[]')
-           FROM (SELECT * FROM slack_reactions ORDER BY id)",
+        "SELECT coalesce(json_group_array(json_object('channel', json_extract(vars_json, '$.channel'), 'ts', json_extract(vars_json, '$.ts'),
+                  'emoji', json_extract(vars_json, '$.emoji'), 'reacted_at', IIF(status IN ('revalidating', 'done'), completed_at, NULL))), '[]')
+           FROM (SELECT * FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' ORDER BY id)",
     );
     serde_json::from_str(&text).unwrap()
 }
@@ -145,7 +155,7 @@ fn request_changes_queues_the_review_and_changes_requested() {
         out["reaction"],
         json!({"channel": CHANNEL, "ts": TS, "emoji": "github-changes-requested", "already": false})
     );
-    let queued = mutations(&fx);
+    let queued = github_mutations(&fx);
     assert_eq!(queued.len(), 1, "{queued:?}");
     assert_eq!(queued[0].4, json!({"review_decision": "changes_requested"}));
 }
@@ -196,7 +206,7 @@ fn a_second_submit_queues_no_second_review_and_one_reaction_row() {
         first["mutation_id"], second["mutation_id"],
         "the same review dedupes"
     );
-    assert_eq!(mutations(&fx).len(), 1);
+    assert_eq!(github_mutations(&fx).len(), 1);
     assert_eq!(rows(&fx).len(), 1);
 }
 

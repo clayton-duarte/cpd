@@ -46,6 +46,15 @@ fn run(gh: Gh) -> (bool, ExecOutcome) {
     let rig = Rig::new();
     let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(gh));
     let now = rig.fakes.clock.utc();
+    // The rows the pass stored for the pull request and its repo: the executor reads them from the cache (swr-github.md §9).
+    let fetched = crate::clock::timestamp(now);
+    rig.sql(&format!(
+        "INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, '{fetched}');
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+           VALUES ('acme/pay', 801, 'https://github.com/acme/pay/pull/801', 'Add retries', 0, 'open', 'none', 'none', '{fetched}', '{fetched}', 0, 0);"
+    ));
     let mut store = Store::open(&rig.home, 5000).unwrap();
     outbox::enqueue(
         &mut store,

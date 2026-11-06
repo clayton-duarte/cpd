@@ -1,21 +1,31 @@
 //! The team review rule of the Inbox kind `review-requested` (contract §2.2 "The team review rule", hs-d320; commands.md
-//! §21.5): the posts of the team channel (`swr_slack_posts`), the GitHub state of their pull requests (`swr::github`'s
-//! effective rows), and hermes' own classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`,
-//! `refresh.py` `build`). Only `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`]
-//! turn it into items. Nothing here calls GitHub or reads a file: the single pass and E11 wrote the rows.
+//! §21.5): the posts of the `slack` source in `swr_slack_posts`, the GitHub state of their pull requests, and hermes' own
+//! classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`, `refresh.py` `build`). Only
+//! `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`] turn it into items.
+//!
+//! Nothing here calls GitHub or reads a file: the GitHub state is the SWR cache's effective rows (`swr::github`), which the
+//! one pass wrote, and the posts are the `slack` source's rows.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::CpdError;
 use crate::store::Store;
+use rusqlite::OptionalExtension;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// The posts of the team channel as `swr_slack_posts` holds them (commands.md §21.5).
+#[derive(Debug)]
+pub struct Cache {
+    /// The Slack channel id the posts were read from.
+    pub channel: String,
+    pub posts: Vec<Post>,
+}
 
 /// A post as the helper printed it (commands.md §21.6, `pi/lib/slack-parse.ts` `Post`).
 #[derive(Clone, Debug, Deserialize)]
@@ -42,65 +52,57 @@ pub struct Claim {
     pub reason: String,
 }
 
-/// The posts of the window, as `swr_slack_posts` holds them: every post of a pull request, posted at or after `cutoff` (Unix seconds).
-pub fn posts_in(conn: &Connection, cutoff: f64) -> Result<Vec<Post>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT repo, number, ts, reactions_json, eyes_me, claim, thread_tags_me FROM swr_slack_posts
-          WHERE repo IS NOT NULL AND number IS NOT NULL AND inactive_at IS NULL ORDER BY ts",
-    )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, Option<String>>(3)?,
-            r.get::<_, Option<bool>>(4)?,
-            r.get::<_, Option<String>>(5)?,
-            r.get::<_, Option<bool>>(6)?,
-        ))
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        let (repo, number, ts_raw, reactions, eyes_me, claim, tags) = row?;
-        let Ok(ts) = ts_raw.parse::<f64>() else {
-            continue;
+/// The cache of the team channel, read from `swr_slack_posts` (swr-slack.md §2): the primary rows the channel answer still
+/// holds. `None` when the channel was never read (the `slack:channel:*` query has no data yet): "unknown", not "empty".
+pub fn read_cache(store: &mut Store) -> Result<Option<Cache>, CpdError> {
+    store.read(|conn| {
+        let channel: Option<String> = conn
+            .query_row(
+                "SELECT substr(key, length('slack:channel:') + 1) FROM swr_queries
+                  WHERE key LIKE 'slack:channel:%' AND data_hash IS NOT NULL ORDER BY key LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(channel) = channel else {
+            return Ok(None);
         };
-        if ts < cutoff || number < 0 {
-            continue;
-        }
-        let reactions = reactions
-            .and_then(|j| serde_json::from_str::<Vec<Value>>(&j).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|v| match v {
-                Value::String(name) => Some(name),
-                other => other["name"].as_str().map(str::to_owned),
-            })
-            .collect();
-        out.push(Post {
-            repo,
-            number: number as u64,
-            ts,
-            ts_raw,
-            primary: true,
-            reactions,
-            claim: claim.filter(|c| !c.is_empty()).map(|c| Claim {
-                kind: c.clone(),
-                reason: c,
-            }),
-            eyes_me,
-            thread_tags_me: tags.unwrap_or(false),
-        });
-    }
-    Ok(out)
+        let mut stmt = conn.prepare(
+            "SELECT repo, number, ts, primary_pr, reactions_json, claim_json, eyes_me, thread_tags_me
+               FROM swr_slack_posts WHERE channel = ?1 AND inactive_at IS NULL ORDER BY ts DESC, repo, number",
+        )?;
+        let posts = stmt
+            .query_map([&channel], |r| {
+                let ts_raw: String = r.get(2)?;
+                let reactions: String = r.get(4)?;
+                let claim: Option<String> = r.get(5)?;
+                Ok(Post {
+                    repo: r.get(0)?,
+                    number: r.get::<_, i64>(1)?.cast_unsigned(),
+                    ts: ts_raw.parse().unwrap_or(0.0),
+                    ts_raw,
+                    primary: r.get::<_, i64>(3)? == 1,
+                    reactions: serde_json::from_str::<serde_json::Map<String, Value>>(&reactions)
+                        .map(|m| m.into_iter().map(|(k, _)| k).collect())
+                        .unwrap_or_default(),
+                    claim: claim.and_then(|c| serde_json::from_str(&c).ok()),
+                    eyes_me: r.get::<_, Option<i64>>(6)?.map(|v| v == 1),
+                    thread_tags_me: r.get::<_, Option<i64>>(7)? == Some(1),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(Some(Cache { channel, posts }))
+    })
 }
 
-/// The primary post of pull request `repo#number`: the newest by `ts`.
-pub fn primary_post(conn: &Connection, repo: &str, number: u64) -> Result<Option<Post>, CpdError> {
-    Ok(posts_in(conn, 0.0)?
-        .into_iter()
-        .filter(|p| p.repo == repo && p.number == number)
-        .max_by(|a, b| a.ts.total_cmp(&b.ts)))
+impl Cache {
+    /// The primary post of pull request `repo#number`: the newest by `ts`.
+    pub fn primary_post(&self, repo: &str, number: u64) -> Option<&Post> {
+        self.posts
+            .iter()
+            .filter(|p| p.primary && p.repo == repo && p.number == number)
+            .max_by(|a, b| a.ts.total_cmp(&b.ts))
+    }
 }
 
 /// A pull request's GitHub state, the fields hermes' `classify` reads.
@@ -302,6 +304,55 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
         head_oid: e.head_oid.clone(),
         checks_state,
     }
+}
+
+/// Seeds the `slack` source's rows for a test, from posts in the helper's older shape (`repo`, `number`, `ts`, `ts_raw`,
+/// `primary`, `reactions` names, `claim`, `eyes_me`, `thread_tags_me`): the channel's query has data and one row per post.
+/// The row's `ts` is the post's `ts_raw` when that is the post's time, else the time itself (a row has no separate number).
+#[cfg(test)]
+pub(crate) fn seed_cache(store: &mut Store, channel: &str, posts: &[Value]) {
+    store
+        .write("seed", |tx| {
+            tx.execute("DELETE FROM swr_slack_posts", [])?;
+            tx.execute("DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%'", [])?;
+            tx.execute(
+                "INSERT INTO swr_queries (key, system, status, data_hash) VALUES (?1, 'slack', 'success', 'h')",
+                [format!("slack:channel:{channel}")],
+            )?;
+            for p in posts {
+                let time = p["ts"].as_f64().unwrap();
+                let ts = match p["ts_raw"].as_str() {
+                    Some(raw) if raw.parse::<f64>().is_ok_and(|v| (v - time).abs() < 1.0) => raw.to_owned(),
+                    _ => format!("{time:.6}"),
+                };
+                let reactions: serde_json::Map<String, Value> = p["reactions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| (n.as_str().unwrap().to_owned(), Value::from(1)))
+                    .collect();
+                let flag = |v: &Value| v.as_bool().map(i64::from);
+                tx.execute(
+                    "INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me,
+                       reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, 0, ?7, ?8, ?9, ?10, 't')",
+                    rusqlite::params![
+                        channel,
+                        ts,
+                        p["repo"].as_str().unwrap(),
+                        p["number"].as_i64().unwrap(),
+                        i64::from(p["primary"].as_bool().unwrap_or(true)),
+                        p["author"].as_str().unwrap_or(""),
+                        Value::Object(reactions).to_string(),
+                        (!p["claim"].is_null()).then(|| p["claim"].to_string()),
+                        flag(&p["eyes_me"]),
+                        flag(&p["thread_tags_me"]),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[cfg(test)]

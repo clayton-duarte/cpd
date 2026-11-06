@@ -1,6 +1,6 @@
-//! The Slack reaction queue's merge-time append (commands.md §21.9; contract §4.4 `slack_reactions`, §7 poll "The reaction
-//! queue append"; User decisions pro-d107, pro-d110): the transaction that records a PR's merge queues the post's reaction,
-//! and `pr view` reads the post's `reacted_at` from the queue. In-process over a fake `gh`, like `pr_merge.rs`.
+//! The Slack reaction's merge-time enqueue (commands.md §21.9; swr-slack.md §4.2, §5): the transaction that records a PR's merge
+//! enqueues the post's `reaction` mutation on the outbox (`swr_mutations`), and `pr view` reads the post's `reacted_at` and
+//! `refusal` from it. In-process over a fake `gh`, like `pr_merge.rs`.
 
 use crate::common;
 
@@ -72,14 +72,9 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
     fx
 }
 
-/// How many queue rows there are: 0 while the table does not exist.
+/// How many merge reactions are on the outbox.
 fn queued(env: &TestEnv) -> i64 {
-    let table: i64 = env.query("SELECT count(*) FROM sqlite_master WHERE name = 'slack_reactions'");
-    if table == 0 {
-        0
-    } else {
-        env.query("SELECT count(*) FROM slack_reactions")
-    }
+    env.query("SELECT count(*) FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction'")
 }
 
 /// `pr merge` queues; the merge is recorded when a poll that started after it reads `MERGED` (swr-github.md §9).
@@ -101,12 +96,12 @@ fn a_merge_queues_the_posts_reaction() {
     let env = &fx.env;
     assert_eq!(queued(env), 1);
     let row = env.query::<String>(
-        "SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at, 'queued', json(CASE WHEN queued_at IS NOT NULL THEN 'true' END)) FROM slack_reactions",
+        "SELECT json_object('channel', json_extract(vars_json, '$.channel'), 'ts', json_extract(vars_json, '$.ts'), 'emoji', json_extract(vars_json, '$.emoji'), 'status', status) FROM swr_mutations WHERE op_kind = 'reaction'",
     );
     let row: serde_json::Value = serde_json::from_str(&row).unwrap();
     assert_eq!(
         row,
-        json!({"channel": CHANNEL, "ts": TS, "emoji": "git-merge", "reacted_at": null, "queued": true})
+        json!({"channel": CHANNEL, "ts": TS, "emoji": "git-merge", "status": "pending"})
     );
     assert_eq!(
         env.query::<Option<String>>("SELECT reacted_at FROM pr_posts"),
@@ -143,7 +138,7 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
     let fx = fixture(Some(Some("git-merged")));
     merge(&fx);
     let env = &fx.env;
-    let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'workflow', workflow) FROM slack_reactions")).unwrap();
+    let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', json_extract(vars_json, '$.emoji'), 'plan', json_extract(vars_json, '$.plan'), 'workflow', json_extract(vars_json, '$.workflow')) FROM swr_mutations WHERE op_kind = 'reaction'")).unwrap();
     assert_eq!(
         row,
         json!({"emoji": "git-merged", "plan": "pay-1", "workflow": "api"}),
@@ -160,11 +155,10 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
         "a post with no reaction queues no row"
     );
     assert_eq!(
-        none.env.query::<i64>(
-            "SELECT count(*) FROM pragma_table_info('slack_reactions') WHERE name = 'plan'"
-        ),
-        1,
-        "the table has plan"
+        none.env
+            .query::<i64>("SELECT count(*) FROM slack_reactions"),
+        0,
+        "the retired queue table is never written"
     );
 }
 
@@ -190,7 +184,10 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
     assert!(out["post"]["refusal"].is_null(), "{out}");
 
     env.sql(&format!(
-        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at, plan, workflow) VALUES ('{CHANNEL}', '{TS}', 'git-merged', 'q', 'fresh', 'pay', 'repo');"
+        "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at, completed_at)
+         VALUES ('slack', 'slack:channel:{CHANNEL}', 'reaction',
+                 json_object('channel', '{CHANNEL}', 'emoji', 'git-merged', 'plan', 'pay', 'ts', '{TS}', 'workflow', 'repo'),
+                 'done', 'q', 'fresh');"
     ));
     let out = view();
     assert_eq!(
@@ -200,9 +197,7 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
     assert_eq!(out["post"]["reacted_at"], "fresh", "{out}");
     assert!(out["post"]["refusal"].is_null(), "{out}");
 
-    env.sql(
-        "UPDATE slack_reactions SET reacted_at = NULL, refused_at = 'r', refusal = 'invalid_name';",
-    );
+    env.sql("UPDATE swr_mutations SET status = 'failed', completed_at = NULL, error = 'invalid_name' WHERE op_kind = 'reaction';");
     let out = view();
     assert_eq!(out["post"]["reaction"], "git-merged", "{out}");
     assert!(out["post"]["reacted_at"].is_null(), "{out}");

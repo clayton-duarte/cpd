@@ -202,16 +202,9 @@ fn pr_commands_write_poll_now_file_after_github_write_post() {
 
     let out = post(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
-    assert!(
-        !file(&pay.fx).exists(),
-        "the command itself wrote nothing on GitHub"
-    );
-    drain(&pay.fx);
-    assert!(
-        file(&pay.fx).exists(),
-        "auto-merge was enabled on GitHub: a poll is asked for"
-    );
+    // pr post queues the post; the auto-merge and its poll request are the executor's. Send half: moved to swr-github (gh-i-write).
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(!file(&pay.fx).exists(), "no poll is asked at enqueue");
 }
 
 #[test]
@@ -221,12 +214,9 @@ fn pr_commands_write_no_poll_now_file_after_a_failed_post_write() {
 
     let out = post(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
-    drain(&pay.fx);
-    assert!(
-        !file(&pay.fx).exists(),
-        "the mutation failed: GitHub did not change"
-    );
+    // The GitHub mutation is the executor's, not pr post's. Send half: moved to swr-github (gh-i-write).
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(!file(&pay.fx).exists(), "no poll is asked at enqueue");
 }
 
 // ---------------------------------------------------------------------------------------------------------------- review

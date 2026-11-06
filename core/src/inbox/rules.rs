@@ -592,7 +592,7 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 /// `review-requested` (label `review <repo>#<n>\n<GitHub title>`): a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
 ///
-/// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
+/// The posts are `swr_slack_posts` (the `slack` source); a channel never read is "unknown", not "empty", and so is a GitHub that
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
 /// as they are, and no `engine-error` is opened (hs-d314: the failure goes to an `error` Event). A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
@@ -604,9 +604,17 @@ fn review_requested(
     let Some(team) = team else {
         return Ok(Vec::new());
     };
+    let cache = match team::read_cache(store) {
+        Ok(Some(cache)) => cache,
+        Ok(None) => return kept_review_items(store),
+        Err(_) => return kept_review_items(store),
+    };
     let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
-    let posts: Vec<Post> = store.read(|conn| team::posts_in(conn, cutoff))?;
-    let posts: Vec<&Post> = posts.iter().collect();
+    let posts: Vec<&Post> = cache
+        .posts
+        .iter()
+        .filter(|p| p.primary && p.ts >= cutoff)
+        .collect();
     let plans = super::review_plan::open_plan_refs(store)?;
     if posts.is_empty() && plans.is_empty() {
         return Ok(Vec::new());
@@ -1909,8 +1917,14 @@ mod tests {
         post
     }
 
+    /// Stores `posts` (the helper's older shape) as the `slack` source's rows, the query read.
     fn write_cache(f: &mut Fixture, posts: &[Value]) {
-        crate::inbox::swr_fixture::posts(&mut f.store, posts).unwrap();
+        team::seed_cache(&mut f.store, "C02JU6C2Z1D", posts);
+    }
+
+    /// The channel was never read: no query data and no row, so the posts are "unknown".
+    fn clear_cache(f: &mut Fixture) {
+        f.sql("DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';");
     }
 
     fn open_pr() -> GhPr {
@@ -2149,13 +2163,13 @@ mod tests {
             "posts of other Workflows"
         );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
-        f.sql("DELETE FROM swr_slack_posts");
+        clear_cache(&mut f);
         let none = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
     }
 
     #[test]
-    fn only_primary_posts_within_seven_days_are_read_and_asked_of_github() {
+    fn only_primary_posts_within_seven_days_are_read_from_the_cache() {
         let mut f = fixture("dispatch");
         let day = 24.0 * 3600.0;
         let old = |n, age: f64| {
@@ -2212,6 +2226,16 @@ mod tests {
         reconcile(&mut f.store, &opened, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
+        clear_cache(&mut f);
+        let unknown = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
+        assert_eq!(
+            unknown.len(),
+            2,
+            "no file is unknown, not empty: {unknown:?}"
+        );
+        reconcile(&mut f.store, &unknown, T).unwrap();
+        assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
+
         let rest = reviews(
             &mut f,
             &[post("acme/pay", 2)],
@@ -2219,6 +2243,31 @@ mod tests {
         );
         reconcile(&mut f.store, &rest, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#2"], "#1 left the file");
+    }
+
+    #[test]
+    fn an_unreadable_channel_keeps_the_items_and_opens_no_engine_error() {
+        let mut f = fixture("dispatch");
+        let opened = reviews(
+            &mut f,
+            &[post("acme/pay", 1)],
+            &[("acme/pay", 1, open_pr())],
+        );
+        reconcile(&mut f.store, &opened, T).unwrap();
+        // A channel whose read failed has no data: unknown.
+        clear_cache(&mut f);
+        f.sql("INSERT INTO swr_queries (key, system, status, last_error, error_count) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'error', 'slack_failed: down', 1);");
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1
+        );
+        assert!(
+            all.iter().all(|c| c.kind != Kind::EngineError),
+            "no engine-error for an unreadable cache"
+        );
     }
 
     #[test]
@@ -2237,8 +2286,7 @@ mod tests {
             all.iter()
                 .filter(|c| c.kind == Kind::ReviewRequested)
                 .count(),
-            1,
-            "kept"
+            1
         );
         assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
