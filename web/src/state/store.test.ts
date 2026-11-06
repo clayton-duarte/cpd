@@ -126,8 +126,21 @@ describe("store", () => {
     const s1 = run(selected(), attached());
     const s2 = run(s1, server({ type: "session.completion", sessionId: "s1", completion }));
     expect(s2.session?.completion).toEqual(completion);
-    const s3 = run(s2, server({ type: "session.completion", sessionId: "s1", completion: null }));
-    expect(s3.session?.completion).toBeNull();
+  });
+
+  it("a null session.completion keeps the shown completion", () => {
+    const s1 = run(selected(), attached(), server({ type: "session.completion", sessionId: "s1", completion }));
+    const s2 = run(s1, server({ type: "session.completion", sessionId: "s1", completion: null }));
+    expect(s2.session?.completion).toEqual(completion);
+  });
+
+  it("selecting a session shows its last known completion at once", () => {
+    const s1 = run(selected(), attached(), server({ type: "session.completion", sessionId: "s1", completion }));
+    const s2 = run(s1, { type: "selectSession", sessionId: "s2" });
+    expect(s2.session?.completion).toBeNull();
+    const back = run(s2, { type: "selectSession", sessionId: "s1" });
+    expect(back.session?.completion).toEqual(completion);
+    expect(run(back, { type: "selectSession", sessionId: "never-seen" }).session?.completion).toBeNull();
   });
 
   it("session.completion for another session is ignored", () => {

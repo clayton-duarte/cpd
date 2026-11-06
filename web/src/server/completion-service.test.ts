@@ -44,6 +44,21 @@ const setup = (opts: { ref?: SessionRef; results?: Array<Completion | null>; pla
   const tracker = createCompletionService({ classifier, planOf }).track(opts.ref ?? lead, (m) => sent.push(m));
   return { tracker, sent, payloads, pending, planCalls: () => planCalls };
 };
+const multi = (results: Array<Completion | null> = []) => {
+  const payloads: CompletionPayload[] = [];
+  const queue = [...results];
+  let planCalls = 0;
+  const service = createCompletionService({
+    classifier: { classify: (p: CompletionPayload) => { payloads.push(p); return Promise.resolve(queue.length > 0 ? (queue.shift() ?? null) : done); } },
+    planOf: () => { planCalls += 1; return Promise.resolve(plan(1)); },
+  });
+  const track = (ref: SessionRef) => {
+    const sent: SessionServerMessage[] = [];
+    const tracker = service.track(ref, (m) => sent.push(m));
+    return { tracker, sent };
+  };
+  return { track, payloads, planCalls: () => planCalls };
+};
 const completions = (sent: SessionServerMessage[]) => sent.filter((m) => m.type === "session.completion");
 
 describe("completion service", () => {
@@ -138,15 +153,45 @@ describe("completion service", () => {
     await flush();
     expect(t.payloads).toHaveLength(1);
   });
-  it("a null classifier result is sent as null and not cached", async () => {
-    const t = setup({ results: [null, done] });
-    t.tracker.observe(tail([user("u1")]));
+  it("track replays the last known completion of the session at once", async () => {
+    const m = multi();
+    const a = m.track(lead);
+    a.tracker.observe(tail([user("u1")]));
     await flush();
-    expect(t.sent).toEqual([{ type: "session.completion", sessionId: "s1", completion: null }]);
-    t.tracker.observe(tail([user("u1")]));
+    const callsBefore = m.planCalls();
+    const b = m.track(lead);
+    expect(completions(b.sent)).toEqual([{ type: "session.completion", sessionId: "s1", completion: done }]);
     await flush();
-    expect(t.payloads).toHaveLength(2);
-    expect(t.sent[1]).toEqual({ type: "session.completion", sessionId: "s1", completion: done });
+    expect(completions(b.sent)).toHaveLength(1);
+    expect(m.planCalls()).toBe(callsBefore);
+  });
+  it("a null classifier result sends nothing and keeps the last completion", async () => {
+    const m = multi([done, null]);
+    const a = m.track(lead);
+    a.tracker.observe(tail([user("u1")]));
+    await flush();
+    expect(a.sent).toEqual([{ type: "session.completion", sessionId: "s1", completion: done }]);
+    a.tracker.observe(tail([user("u1"), user("u2")]));
+    await flush();
+    expect(m.payloads).toHaveLength(2);
+    expect(a.sent).toHaveLength(1);
+    expect(a.sent.some((x) => x.type === "session.completion" && x.completion === null)).toBe(false);
+    expect(m.track(lead).sent).toEqual([{ type: "session.completion", sessionId: "s1", completion: done }]);
+    const fresh = multi([null]);
+    const f = fresh.track(lead);
+    f.tracker.observe(tail([user("u1")]));
+    await flush();
+    expect(fresh.payloads).toHaveLength(1);
+    expect(f.sent).toEqual([]);
+  });
+  it("the last completion is kept per session and never replayed to a manager", async () => {
+    const m = multi();
+    const a = m.track(lead);
+    a.tracker.observe(tail([user("u1")]));
+    await flush();
+    expect(completions(m.track(lead).sent)).toHaveLength(1); // control: the same session replays
+    expect(m.track({ ...lead, id: "s2" }).sent).toEqual([]);
+    expect(m.track({ ...lead, role: "manager" }).sent).toEqual([]);
   });
   it("concurrent computations of one key share one classification", async () => {
     const t = setup({ manualClassify: true });

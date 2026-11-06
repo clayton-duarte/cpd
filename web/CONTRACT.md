@@ -494,7 +494,7 @@ export type ServerMessage =
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
-  | { type: "session.completion"; sessionId: string; completion: Completion | null } // Lead only, computed asynchronously, may never arrive (3.10)
+  | { type: "session.completion"; sessionId: string; completion: Completion } // Lead only; never null: the last non-null completion is replayed on attach, computed results follow asynchronously and may never arrive (3.10)
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId: the attempted id of a session.attach error (e.g. session_not_found); null: not tied to a session (invalid_message)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
@@ -509,9 +509,9 @@ Message semantics (server behaviour):
 - `session.submitAck` answers each `session.submit` that the backend accepted: `queued: true` when the host queued it behind a running turn, else false. A rejected submit answers `session.error` with `clientSubmissionId` set.
 - `session.status.busy` is true while a turn runs. `queued` lists accepted-but-not-started submissions (durable only; always `[]` for pi).
 - A `session.dialog` with `interactive: false` is read-only (no current producer; pi and durable dialogs are interactive, 11.4).
-- **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. It is computed asynchronously: it is never part of attach, may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
+- **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. The badge is always visible for a Lead session and shows the last non-null value, across navigation and while a new classification runs; a failed or slow classification never clears it (pro-d438). The server keeps the last non-null completion per session id: on Lead attach it replays that value at once, before any computed result; a session with no last value gets nothing on attach. Otherwise the completion is computed asynchronously: it may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
 - A session is classified only when it has at least one transcript item (A5).
-- `completion: Completion` sets the badge. `completion: null` clears it. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label sends `completion: null`. No error is shown and there is no config switch (A4).
+- `completion: Completion` sets the badge and becomes the session's last non-null value. The server never sends `completion: null`. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label yields no completion: nothing is sent and the badge keeps its last value. No error is shown and there is no config switch (A4).
 - Cache and in-flight (A7): the key is `${sessionId}|${lastTranscriptItemId}|${planCursor}`, where `planCursor` is `PlanViewModel.cursor` from `cpd plan show`. In-flight computations are shared per key. A null result is not cached. A result is never sent to a closed connection or to a detached session.
 - `action.result ok:true` carries `output` (section 5.4); `ok:false` carries the `cpd_failed` / `unknown_action` error.
 
@@ -810,7 +810,7 @@ export interface SessionView {
   readonly busy: boolean; readonly queued: readonly QueuedSubmission[];
   readonly pending: readonly PendingSubmission[];
   readonly dialog: Dialog | null; // the active dialog
-  readonly completion: Completion | null; // Lead completion badge (3.10); default null; set by session.completion
+  readonly completion: Completion | null; // Lead completion badge (3.10); the last non-null completion of this session (`completions[id]`, or the replay on attach); null only while none is known; set only by a non-null session.completion
   readonly models: readonly ModelChoice[] | null;
   readonly error: WireError | null; // the session.error without a clientSubmissionId for the selected id: the attach error the status line shows (6.2 Retry, 6.11 ChatPane)
 }
@@ -819,6 +819,7 @@ export interface AppState {
   readonly cockpit: { readonly tree: ContextTreeModel | null; readonly plan: PlanViewModel | null; readonly inbox: InboxModel | null; readonly selectedPlanId: string | null; readonly error: WireError | null };
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null; // null iff selectedSessionId is null
+  readonly completions: Readonly<Record<string, Completion>>; // last non-null Completion per session id (3.10); initial {}; a null completion never clears it
   readonly lastError: WireError | null; // last local protocol violation or action failure (action.result ok:false)
 }
 
@@ -843,14 +844,14 @@ Reducer behaviours (every ServerMessage is `{type:"server"}`):
 - `cockpit.snapshot` sets the three panes and clears `cockpit.error`; `cockpit.patch` replaces exactly the named pane; `cockpit.error` sets `cockpit.error` and keeps the panes. (A failed attach is retried on a tree update by `connection.ts`, 6.2 below.)
 - Optimistic Inbox removal (pro-d426): each `state.optimistic[actionId]` entry is `{before, after, subject}`, where `subject?: string` is the removed row's subject (e.g. `pr:clayton-duarte/cpd#891`). A `cockpit.snapshot`, and a `cockpit.patch` with `pane: "inbox"`, while any optimistic action is in flight, sets `cockpit.inbox` to `syncOptimisticInbox(incoming, state.optimistic)`: every in-flight optimistic subject is filtered out of `incoming`, and each in-flight entry gets `before = incoming` and `after = filtered`. So every in-flight removal is re-applied across a refresh and stays hidden.
 - A `cockpit.patch` with `pane: "inbox"` whose `data.cursor < state.cockpit.inbox.cursor` is ignored (state unchanged): a newer Inbox is never replaced by an older one.
-- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
+- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, completion: state.completions[id] ?? null, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`, and clears `error`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
 - `session.status` sets `busy` and `queued`. `session.footer` sets `footer`; `session.title` sets `title` (the header shows `title`; the footer and title also come from `session.attached.meta`).
 - `session.submitAck` (not queued) marks the pending submission with that `clientSubmissionId` `state:"sent"`, or removes it when its echo is already in the transcript; a queued ack removes it (11.2). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` when its `sessionId` is the selected id (and, when `sessionId` is null, `lastError`).
 - `submitPending` adds a `sending` submission (with `at` and `images`, 11.2); `dismissPending` removes one.
 - `session.dialog` sets `dialog`; `session.dialogResolved` clears `dialog` only when its `dialogId` equals the active dialog's id; `session.models` sets `models`.
-- `session.completion` sets `completion` (`null` clears it). `completion` is `null` in the empty state of `selectSession` and until the first `session.completion`.
+- `session.completion` with a non-null `completion` for the attached session sets `completion` and `completions[sessionId]`. A `null` completion changes nothing: it never clears `completion` or `completions`. `completions` is never reset by navigation, so `selectSession` shows the last known value (`completions[id] ?? null`) until a newer one arrives.
 - `action.result ok:false` sets `lastError` and removes the id from `pendingActionIds`; `ok:true` removes it from `pendingActionIds` and adds it to `completedActionIds` (11.2). The panes refresh through events. Its optimistic rollback (pro-d426) is `syncOptimisticInbox(record.before, remaining)`, where `remaining` is every other in-flight `state.optimistic` entry: the other in-flight removals stay hidden, and `record.before` is the latest server Inbox.
 - `connection` sets `connection` and `retryAttempt`.
 

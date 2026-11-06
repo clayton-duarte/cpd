@@ -61,6 +61,8 @@ export interface AppState {
   };
   readonly selectedSessionId: string | null;
   readonly session: SessionView | null;
+  /** Last non-null completion per session id; never cleared. */
+  readonly completions: Readonly<Record<string, Completion>>;
   readonly lastError: WireError | null;
   /** Optimistic inbox edits by actionId: the inbox before and after, for rollback. */
   readonly optimistic: Readonly<Record<string, { readonly before: InboxModel; readonly after: InboxModel; readonly subject: string }>>;
@@ -86,14 +88,15 @@ export const initialState: AppState = {
   cockpit: { tree: null, plan: null, inbox: null, selectedPlanId: null, error: null, status: null, costs: null, logs: null, settings: null, saved: null },
   selectedSessionId: null,
   session: null,
+  completions: {},
   lastError: null,
   optimistic: {},
   pendingActionIds: [],
   completedActionIds: [],
 };
-const emptySession = (id: string): SessionView => ({
+const emptySession = (id: string, completion: Completion | null = null): SessionView => ({
   id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
-  busy: false, queued: [], pending: [], dialog: null, models: null, error: null, completion: null,
+  busy: false, queued: [], pending: [], dialog: null, models: null, error: null, completion,
 });
 
 function normalizeUserText(text: string): string {
@@ -159,7 +162,8 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
     case "session.models":
       return set({ models: message.models });
     case "session.completion":
-      return message.sessionId === session.id ? set({ completion: message.completion }) : state;
+      if (message.sessionId !== session.id || message.completion === null) return state;
+      return { ...set({ completion: message.completion }), completions: { ...state.completions, [message.sessionId]: message.completion } };
     case "session.dialog":
       return set({ dialog: message.dialog });
     case "session.dialogResolved":
@@ -299,7 +303,7 @@ function reduceCore(state: AppState, action: StoreAction): AppState {
       return {
         ...state,
         selectedSessionId: action.sessionId,
-        session: action.sessionId === null ? null : emptySession(action.sessionId),
+        session: action.sessionId === null ? null : emptySession(action.sessionId, state.completions[action.sessionId] ?? null),
       };
     case "selectPlan":
       return { ...state, cockpit: { ...state.cockpit, selectedPlanId: action.planId } };
