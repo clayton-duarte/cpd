@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { electronBypass, reasonText } from "../lib/electronguard.ts";
-import { Fixture, shown, waitFor } from "./fake.ts";
+import { Fixture, shown } from "./fake.ts";
 
 // commands.md §15.28: no agent runs the electron binary by hand.
 
@@ -70,7 +70,7 @@ test("the adapter blocks a bash electron call of every role", async (t) => {
     f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
     f.load();
     await f.pi.fire("session_start");
-    await waitFor("the follower", () => f.follows().length > 0);
+    await f.followerStarted();
     const call = async (command: string) => (await f.pi.fireWith("tool_call", { toolName: "bash", toolCallId: "t", input: { command } }))[0] as Result;
     const r = await call("electron .");
     assert.equal(r?.block, true, role);

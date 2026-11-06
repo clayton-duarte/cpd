@@ -113,10 +113,11 @@ export function unaddressedFailingWorkflows(show: Record<string, unknown>): { ke
   for (const w of workflows) {
     if (!isObject(w) || w.status !== "open") continue;
     if (typeof w.key !== "string") throw new CpdError("bad_output", "cpd plan show: an open entry of `workflows` has no key");
-    if (!Array.isArray(w.jobs) || !w.jobs.every((k) => typeof k === "string")) throw new CpdError("bad_output", `cpd plan show: \`jobs\` of Workflow ${w.key} is not a list of keys`);
+    const jobs: unknown[] = Array.isArray(w.jobs) ? w.jobs : [];
+    if (!Array.isArray(w.jobs) || !jobs.every((k): k is string => typeof k === "string")) throw new CpdError("bad_output", `cpd plan show: \`jobs\` of Workflow ${w.key} is not a list of keys`);
     const pull = w.pull_request;
     if (!isObject(pull) || (pull.checks !== "failed" && pull.mergeable !== "conflicting")) continue;
-    if ((w.jobs as string[]).some((k) => active.has(k))) continue;
+    if (jobs.some((k) => typeof k === "string" && active.has(k))) continue;
     out.push({ key: w.key });
   }
   return out.toSorted((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));

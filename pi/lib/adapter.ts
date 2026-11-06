@@ -87,15 +87,12 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
       if (written !== undefined) return { block: true, reason: mainReasonText(written) };
     }
-    if (host.run && event.toolName === "bash" && typeof (event.input as { command?: unknown }).command === "string") {
-      const moved = primaryCheckoutMove((event.input as { command: string }).command, ctx.cwd, homedir());
-      if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
-      const secret = secretBypass((event.input as { command: string }).command);
-      if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
-      const electron = electronBypass((event.input as { command: string }).command);
-      if (electron !== undefined) return { block: true, reason: electronReasonText(electron) };
-      const hostApprove = hostApproveBypass((event.input as { command: string }).command);
-      if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
+    const bashCommand = (event.input as { command?: unknown }).command;
+    if (host.run && event.toolName === "bash" && typeof bashCommand === "string") {
+      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir()); if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
+      const secret = secretBypass(bashCommand); if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const electron = electronBypass(bashCommand); if (electron !== undefined) return { block: true, reason: electronReasonText(electron) };
+      const hostApprove = hostApproveBypass(bashCommand); if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
