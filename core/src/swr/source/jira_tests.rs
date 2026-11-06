@@ -411,3 +411,35 @@ fn jira_issue_rows_unused_for_seven_days_are_garbage_collected() {
         "the unused row goes; the one with a pending transition stays"
     );
 }
+
+/// The Rust half of the helper contract (swr-jira.md §3.1); the helper's own calls are pinned in
+/// `pi/test/jira-transition-swr.test.ts`. One spawn, and the stdin carries what the helper needs for its one read.
+#[test]
+fn jira_helper_makes_one_get_issue_call_with_fields() {
+    let mut rig = rig();
+    let (_, calls, _) = run_moved(&mut rig);
+    assert_eq!(calls.len(), 1, "one spawn per run");
+    let request = stdin_of(&calls[0]);
+    let keys: std::collections::BTreeSet<&str> = request
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "cloud_id",
+            "estimate_fields",
+            "later_names",
+            "server",
+            "target",
+            "target_name",
+            "ticket"
+        ]
+        .into_iter()
+        .collect(),
+        "no `names` object: Rust computes `later_names`"
+    );
+    assert_eq!(request["estimate_fields"], json!([]));
+}
