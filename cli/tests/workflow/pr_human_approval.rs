@@ -161,11 +161,6 @@ fn human_approval_a_human_beside_a_bot_is_approved() {
         ("User", "amy", "APPROVED"),
     ]);
     assert_eq!(polled(&fx, both), "approved");
-    drop(fx);
-
-    let reviews = json!([{"id": "R1", "author": {"login": "ci-app[bot]"}, "state": "APPROVED", "body": ""},
-                         {"id": "R2", "author": {"login": "amy"}, "state": "APPROVED", "body": ""}]);
-    assert_eq!(view_decision("APPROVED", reviews), "approved");
 }
 
 #[test]

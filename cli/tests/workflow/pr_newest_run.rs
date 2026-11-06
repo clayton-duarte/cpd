@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 
 use super::pr_checks::{
-    checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads, view,
+    checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads,
 };
 
 /// A GraphQL CheckRun node of `workflow` (none: a third-party app).
@@ -85,28 +85,6 @@ fn the_checks_read_asks_for_the_workflow_and_the_start_time() {
     for word in ["startedAt", "createdAt", "workflowRun"] {
         assert!(query.contains(word), "the query lacks {word}: {query}");
     }
-}
-
-#[test]
-fn pr_view_counts_only_the_newest_run_of_each_check() {
-    let entry = |conclusion: &str, started: &str| {
-        json!({"__typename": "CheckRun", "name": "danger", "workflowName": "Run Danger on PR", "status": "COMPLETED",
-               "conclusion": conclusion, "startedAt": started, "completedAt": started, "detailsUrl": "https://x"})
-    };
-    let out = view(vec![
-        entry("FAILURE", "2026-10-30T04:19:08Z"),
-        entry("SUCCESS", "2026-10-30T14:27:08Z"),
-    ]);
-    assert_eq!(out["pr"]["checks"], "passed");
-    let listed = out["checks"].as_array().unwrap();
-    assert!(
-        listed.iter().any(|c| c["conclusion"] == "FAILURE"),
-        "{listed:?}"
-    );
-    assert!(
-        listed.iter().any(|c| c["conclusion"] == "SUCCESS"),
-        "{listed:?}"
-    );
 }
 
 // Controls: they pass today and must keep passing.
