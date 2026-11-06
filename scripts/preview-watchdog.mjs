@@ -82,6 +82,7 @@ const watchdog = createWatchdog(
       }
     },
     signalReload: (pid) => process.kill(pid, "SIGUSR1"),
+    terminate: (pid) => process.kill(pid, "SIGTERM"),
     relaunch: async () => {
       const out = await open(watchdogLog, "a");
       const child = spawn(relaunchCmd[0], relaunchCmd.slice(1), { cwd: opts.worktree, detached: true, stdio: ["ignore", out.fd, out.fd] });

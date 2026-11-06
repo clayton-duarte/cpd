@@ -7,9 +7,14 @@ export interface WatchdogPorts {
   readHealth(): Promise<HealthRecord | null>;
   pidAlive(pid: number): boolean;
   signalReload(pid: number): void;
+  terminate(pid: number): void;
   relaunch(): Promise<void>;
   restore: RestorePoints;
   log(entry: object): Promise<void>;
+}
+
+export function productionEnv(_env: Record<string, string | undefined>): Record<string, string | undefined> {
+  throw new Error("not implemented");
 }
 
 export interface WatchdogOptions {

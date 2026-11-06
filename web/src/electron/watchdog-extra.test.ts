@@ -19,6 +19,7 @@ function setup() {
       readHealth: async () => s.health,
       pidAlive: () => s.alive,
       signalReload: (p) => void calls.push(`signal:${p}`),
+      terminate: (p) => void calls.push(`terminate:${p}`),
       relaunch: async () => void calls.push("relaunch"),
       restore: {
         captureCandidate: async () => void calls.push("capture"),
