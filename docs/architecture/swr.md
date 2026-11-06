@@ -244,6 +244,7 @@ It replaces `run/team-review.json` (§15).
 |---|---|---|
 | `id` | INTEGER PRIMARY KEY, CHECK `id = 1` | one row |
 | `cloud_id` | TEXT | the Atlassian cloud id |
+| `account_id` | TEXT | the authenticated user's Atlassian account id, from `atlassianUserInfo`; added by the additive migration `jira-account-id`, written and cleared with `cloud_id` ([swr-jira.md §3, §8](swr-jira.md); pro-d454) |
 | `fetched_at` | TEXT | when it was read (its staleTime is 24 h, §4) |
 
 ### 3.12 `swr_models`
