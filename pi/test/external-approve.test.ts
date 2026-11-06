@@ -5,6 +5,7 @@ import { takeSlackSend, resetSlackGrants } from "../lib/externalguard.ts";
 import { createHost, type Host } from "../lib/host.ts";
 import type { Run } from "../lib/run.ts";
 import { Fixture } from "./fake.ts";
+import { grammar } from "./usage.ts";
 
 // Decision pro-d451: the tool cpd_external_approve, driven through the fake host (model: host-approve.test.ts).
 
@@ -12,6 +13,8 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   resetSlackGrants();
   const f = new Fixture();
   t.after(() => f.close());
+  // The Rust `pr approve` lands in the pg Workflow of Plan pr-slack-perm-guard, which will then make this override redundant.
+  f.cpd.grammar = { ...grammar, "pr approve": { flags: { "--help": false, "--kind": true, "--plan": true, "--to": true, "--workflow": true }, positionals: { min: 0, max: 0 }, required: ["--kind", "--workflow"] } };
   const host: Host = createHost(f.pi, { env: process.env });
   if (role !== undefined) host.run = { info: { role, name: "s-x", plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];

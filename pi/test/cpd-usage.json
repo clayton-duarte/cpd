@@ -1060,23 +1060,6 @@
     },
     "required": []
   },
-  "pr approve": {
-    "flags": {
-      "--help": false,
-      "--kind": true,
-      "--plan": true,
-      "--to": true,
-      "--workflow": true
-    },
-    "positionals": {
-      "max": 0,
-      "min": 0
-    },
-    "required": [
-      "--kind",
-      "--workflow"
-    ]
-  },
   "pr merge": {
     "flags": {
       "--help": false
