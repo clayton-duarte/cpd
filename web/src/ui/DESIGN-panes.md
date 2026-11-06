@@ -243,7 +243,7 @@ section[data-part="review-pr"][aria-label="Review PR"]   rounded-[9px] border bo
 
 The anchor's text is `#912 open` for state `open` and `#7` for state null, followed by the `ExternalLinkIcon` (pro-d77), which replaces the `󱆭` glyph here; the TUI box in `docs/contract.md` keeps its glyph. Its class is the Workflow card's PR anchor's (`web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard`). `rel` is added: the anchor opens in a new tab, and `noopener noreferrer` is the rule of §2.6 for the Inbox's new-tab links. The TUI box's rows of the same Plan are in `docs/contract.md` §2.6 ("The Review PR box"), the same data and the same cut title.
 
-### 1j. ManagerView (a Manager or Context session selected; pro-d70, pro-d75, pro-d76)
+### 1j. ManagerView (a Manager or Context session selected; pro-d70, pro-d75, pro-d76, pro-d89)
 
 File `web/src/ui/cockpit/ManagerView.tsx`. The Plan pane shows it instead of PlanView when no Plan is loaded for the selection (`visiblePlan` null, DESIGN 5.3). `App` passes the Context that holds the selected session (its Manager, a Lead or a fork) and renders `CpdFlowCanvas` (1b) when there is none. So a selected Manager shows ManagerView, not the flowchart. `App` wraps it in `ErrorBoundary name="ManagerView"` and in `memo()` (DESIGN 3e).
 
@@ -266,11 +266,10 @@ section[aria-label="Manager overview {context.id}"][data-manager-view="{context.
 └─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
     └─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
         ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
-        ├─ ol[data-part="active-plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan that is not `done`; `p` "All current plans are done." when there are none
-        └─ Collapsible   only when a `done` Plan exists; closed at start; trigger `Done plans ({n})`; content ol[data-part="done-plans"] (same rows)
+        └─ ol[data-part="plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan, done Plans included, in `livePlans` order (Order below); the only Plan list, no collapsible (pro-d89)
 ```
 
-**Order.** The Plans are sorted by `compareOrderKey` (`state/archiveNav.ts`) on the Lead's dot and `created_at`, the key the tree's Plan rows use (3d).
+**Order.** The Plans are `livePlans(context)` (`state/archiveNav.ts`, pro-d89), the same filter and order as the ContextTree's Plan rows (DESIGN.md 3d). The view does not sort them again. The counters count the same list: active is a phase not `done`, done is a phase `done`.
 
 **Row** (pro-d76; the order is the one of pro-d76, which supersedes pro-d75):
 
