@@ -50,6 +50,10 @@ const LATER: &[(&str, &str)] = &[
         "ALTER TABLE sessions DROP COLUMN host_restarts; ALTER TABLE sessions DROP COLUMN host_window_start",
     ),
     (
+        "pull_requests",
+        "ALTER TABLE pull_requests DROP COLUMN head_oid; ALTER TABLE pull_requests DROP COLUMN gh_updated_at; DROP TABLE swr_queries; DROP TABLE swr_endpoints; DROP TABLE swr_mutations; DROP TABLE swr_viewer; DROP TABLE swr_repos; DROP TABLE swr_pr_detail; DROP TABLE swr_deploys; DROP TABLE gh_issues; DROP TABLE swr_slack_posts; DROP TABLE swr_jira_issues; DROP TABLE swr_atlassian; DROP TABLE swr_models; DROP TABLE swr_badges",
+    ),
+    (
         "record_topics",
         "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
     ),

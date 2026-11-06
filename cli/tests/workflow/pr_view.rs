@@ -22,6 +22,8 @@ pub(super) struct Gh {
     inline2: Mutex<Option<String>>,
     /// How GitHub answers the auto-merge calls of `pr post` (commands.md §9.8b).
     pub(super) auto: Mutex<AutoMerge>,
+    /// The labels `pr view` answers for the `labels` field; none by default.
+    labels: Mutex<Vec<String>>,
 }
 
 /// GitHub's side of squash auto-merge: the read query `autoMergeAllowed ... autoMergeRequest` and the mutation
@@ -95,7 +97,20 @@ impl Handler for Gh {
             }
         }
         match args[..2] {
-            ["pr", "view"] => Reply::ok(VIEW),
+            ["pr", "view"] => {
+                let mut view: serde_json::Value = serde_json::from_str(VIEW).unwrap();
+                if args.iter().any(|a| a.split(',').any(|f| f == "labels")) {
+                    let labels: Vec<_> = self
+                        .labels
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|name| json!({"name": name}))
+                        .collect();
+                    view["labels"] = json!(labels);
+                }
+                Reply::ok(&format!("{view}\n"))
+            }
             ["api", endpoint]
                 if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") =>
             {
@@ -199,6 +214,11 @@ impl Pay {
         *self.gh.inline2.lock().unwrap() = Some(format!("{text}\n"));
     }
 
+    /// The labels the pull request carries, as `pr view` answers them.
+    pub(super) fn gh_labels(&self, names: &[&str]) {
+        *self.gh.labels.lock().unwrap() = names.iter().map(|n| (*n).to_owned()).collect();
+    }
+
     pub(super) fn gh_fails(&self, stderr: &str) {
         *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
     }
@@ -238,7 +258,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
     assert_eq!(
         gh[0][4],
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels"
     );
     assert_eq!(
         gh[1],
@@ -391,5 +411,68 @@ fn view_with_an_empty_required_list_or_a_passed_required_check_reports_passed() 
             vec![guardian(), gate]
         ),
         "passed"
+    );
+}
+
+const HOLD: &str = "[pr]\nexcused_labels = [\"No Merges on Friday\", \"Dont Merge\"]\n";
+
+/// `pr view` of an open PR carrying `No Merges on Friday` whose head holds `checks`, under a policy with excused labels: the
+/// whole output.
+fn view_under_a_hold(checks: Vec<serde_json::Value>) -> serde_json::Value {
+    let fx = fx("open");
+    fx.fx.env.owner_policy("acme", HOLD);
+    let view = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": URL, "reviewDecision": null, "statusCheckRollup": checks,
+        "labels": [{"name": "No Merges on Friday"}], "reviews": [], "comments": []});
+    let _ = (*fx.fx.fakes.runner).clone().on(
+        "gh",
+        |c| c.args.starts_with(&["pr".into(), "view".into()]),
+        Reply::ok(&format!("{view}\n")),
+    );
+    fx.fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok()
+}
+
+fn check_run(name: &str, conclusion: &str) -> serde_json::Value {
+    json!({"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion})
+}
+
+#[test]
+fn pr_view_reports_passed_when_only_danger_fails_under_an_excused_label() {
+    let out = view_under_a_hold(vec![
+        check_run("ci/test", "SUCCESS"),
+        check_run("danger", "FAILURE"),
+        guardian(),
+    ]);
+
+    assert_eq!(out["pr"]["checks"], "passed");
+    assert_eq!(
+        out["checks"][1],
+        json!({"name": "danger", "conclusion": "FAILURE"}),
+        "the list keeps danger's real conclusion"
+    );
+}
+
+#[test]
+fn pr_view_reports_failed_when_a_test_check_fails_under_an_excused_label() {
+    let out = view_under_a_hold(vec![
+        check_run("ci/test", "FAILURE"),
+        check_run("danger", "FAILURE"),
+    ]);
+
+    assert_eq!(out["pr"]["checks"], "failed");
+}
+
+#[test]
+fn pr_view_asks_gh_for_the_labels() {
+    let fx = fx("open");
+    fx.gh_labels(&["Dont Merge"]);
+
+    fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
+
+    let fields = &fx.gh_calls()[0][4];
+    assert!(
+        fields.split(',').any(|f| f == "labels"),
+        "the field list is {fields}"
     );
 }

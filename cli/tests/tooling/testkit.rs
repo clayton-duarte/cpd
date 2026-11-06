@@ -248,7 +248,7 @@ fn calls_shows_the_argv_environment_and_directory_of_a_gh_call() {
             "view",
             "812",
             "--json",
-            "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"
+            "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels"
         ]
     );
     assert!(
