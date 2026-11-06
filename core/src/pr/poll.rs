@@ -13,14 +13,14 @@ use super::comments::{self, Read};
 use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
-/// The single-call poll's builder and runner-taking read, for `swr::source::github` (`gh` is private to `pr`).
-#[allow(unused_imports)] // a stub until swr-github calls them
-pub(crate) use super::swr_read::{PollPlan, build_poll_query, head_ref_oid_on};
 use super::posts;
 use super::pulls::{self, Change, Excused, PostFacts, Reason};
 use super::row::PlanWorkflows;
 use super::start::unstack;
 use super::status::{ChecksSummary, Mergeable, PrState};
+/// The single-call poll's builder and runner-taking read, for `swr::source::github` (`gh` is private to `pr`).
+#[allow(unused_imports)] // a stub until swr-github calls them
+pub(crate) use super::swr_read::{PollPlan, build_poll_query, head_ref_oid_on};
 use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};

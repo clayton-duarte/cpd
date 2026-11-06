@@ -2858,7 +2858,7 @@ pub fn build_poll_query(plan: &PollPlan) -> String {
 /// One pull request of the single read: the header, its head commit, the heavy part when the node carried it.
 #[derive(Clone, Debug)]
 pub struct PollNode {
-    pub listed: Listed,
+    pub(in crate::pr) listed: Listed,
     pub head_oid: String,
     /// The heavy fields as GitHub answered them; `Some` only when the node carried `comments` (the heavy marker).
     pub heavy: Option<Value>,
@@ -2894,6 +2894,35 @@ impl PollNode {
     pub fn is_open(&self) -> bool {
         self.listed.pr.state == PrState::Open
     }
+
+    /// `(owner/name, number)`.
+    pub fn id(&self) -> (String, i64) {
+        (self.listed.pr.repo.clone(), self.listed.pr.number)
+    }
+
+    /// `(authored, review_requested)`.
+    pub fn flags(&self) -> (bool, bool) {
+        (
+            self.listed.membership.authored,
+            self.listed.membership.review_requested,
+        )
+    }
+
+    /// Adds the searches that listed the pull request.
+    pub fn flag(&mut self, authored: bool, review_requested: bool) {
+        self.listed.membership.authored |= authored;
+        self.listed.membership.review_requested |= review_requested;
+    }
+
+    /// Everything the header write stores, as text: equal text, equal header.
+    pub fn fingerprint(&self) -> String {
+        format!("{:?}|{}", self.listed, self.head_oid)
+    }
+
+    /// GitHub's `updatedAt`.
+    pub fn updated_at(&self) -> &str {
+        &self.listed.pr.updated_at
+    }
 }
 
 fn poll_node(
@@ -2905,28 +2934,39 @@ fn poll_node(
     let head_oid = v
         .get("headRefOid")
         .and_then(Value::as_str)
-        .ok_or_else(|| reply.fail("gh api graphql answered a pull request without headRefOid.".into()))?
+        .ok_or_else(|| {
+            reply.fail("gh api graphql answered a pull request without headRefOid.".into())
+        })?
         .to_owned();
-    let raw: RawPr = serde_json::from_value(v.clone())
-        .map_err(|e| reply.fail(format!("gh api graphql answered a malformed pull request: {e}.")))?;
+    let raw: RawPr = serde_json::from_value(v.clone()).map_err(|e| {
+        reply.fail(format!(
+            "gh api graphql answered a malformed pull request: {e}."
+        ))
+    })?;
     let mut pr = reply.polled(raw, bots)?;
     let labels: Vec<&str> = v["labels"]["nodes"]
         .as_array()
         .map(|n| n.iter().filter_map(|l| l["name"].as_str()).collect())
         .unwrap_or_default();
-    let contexts = v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
-        .as_array();
+    let contexts =
+        v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array();
     if let Some(nodes) = contexts.filter(|n| !n.is_empty()) {
         let excused = labels
             .iter()
             .any(|l| excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
         let mut checks = Vec::new();
         for n in nodes {
-            let raw: RawCheck = serde_json::from_value(n.clone())
-                .map_err(|e| reply.fail(format!("gh api graphql answered a malformed check: {e}.")))?;
+            let raw: RawCheck = serde_json::from_value(n.clone()).map_err(|e| {
+                reply.fail(format!("gh api graphql answered a malformed check: {e}."))
+            })?;
             let check = Check::from(raw);
             // pro-d447: a PR carrying an excused label has its failing `danger` check excused.
-            if excused && check.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("danger")) {
+            if excused
+                && check
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("danger"))
+            {
                 continue;
             }
             checks.push(check);
@@ -3015,7 +3055,10 @@ fn parse_poll(
         meta.push(if m.is_null() {
             None
         } else {
-            let flag = |k: &str| m[k].as_bool().ok_or_else(|| missing(&format!("{alias}.{k}")));
+            let flag = |k: &str| {
+                m[k].as_bool()
+                    .ok_or_else(|| missing(&format!("{alias}.{k}")))
+            };
             Some(RepoMeta {
                 default_branch: m["defaultBranchRef"]["name"].as_str().map(str::to_owned),
                 is_archived: flag("isArchived")?,

@@ -12,8 +12,8 @@ use super::{Cx, ExecOutcome, QueryKey, Source};
 use crate::clock::timestamp;
 use crate::error::CpdError;
 use crate::pr::swr_read::{self, PollNode, PollPlan, PollRead};
-use crate::swr::{cache, endpoint};
 use crate::swr::outbox::{Coalesce, Mutation};
+use crate::swr::{cache, endpoint};
 
 pub struct Github;
 
@@ -58,7 +58,8 @@ const RATE_LIMITED_PAUSE: Duration = Duration::from_secs(15 * 60);
 
 /// What the previous pass's searches listed, per store: engine memory (D5), so after a restart the first pass confirms nobody
 /// and the next one confirms every flagged row the first one did not list.
-static LISTED: Mutex<Option<HashMap<String, BTreeSet<(String, i64)>>>> = Mutex::new(None);
+type Listed = HashMap<String, BTreeSet<(String, i64)>>;
+static LISTED: Mutex<Option<Listed>> = Mutex::new(None);
 
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
@@ -183,7 +184,10 @@ impl GithubSource {
             let mut stmt = c.prepare("SELECT repo, fetched_at FROM swr_repos")?;
             let rows = stmt
                 .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, cache::parse(r.get(1)?).ok().flatten()))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        cache::parse(r.get(1)?).ok().flatten(),
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows.into_iter().collect())
@@ -321,7 +325,10 @@ impl GithubSource {
                     ],
                 )?;
                 if meta.is_archived {
-                    tx.execute("UPDATE pull_requests SET archived = 1 WHERE repo = ?1", [repo])?;
+                    tx.execute(
+                        "UPDATE pull_requests SET archived = 1 WHERE repo = ?1",
+                        [repo],
+                    )?;
                 }
                 Ok(())
             })?;
@@ -341,14 +348,10 @@ impl GithubSource {
         let mut listed: BTreeSet<(String, i64)> = BTreeSet::new();
         for (nodes, authored) in [(&read.authored, true), (&read.reviews, false)] {
             for node in nodes {
-                let id = (node.listed.pr.repo.clone(), node.listed.pr.number);
+                let id = node.id();
                 listed.insert(id.clone());
                 let entry = merged.entry(id).or_insert_with(|| node.clone());
-                if authored {
-                    entry.listed.membership.authored = true;
-                } else {
-                    entry.listed.membership.review_requested = true;
-                }
+                entry.flag(authored, !authored);
                 entry.heavy = entry.heavy.take().or_else(|| node.heavy.clone());
             }
         }
@@ -363,13 +366,12 @@ impl GithubSource {
             };
             match merged.get_mut(id) {
                 Some(entry) => {
-                    let found = entry.listed.membership;
+                    let found = entry.flags();
                     let heavy = node.heavy.clone().or_else(|| entry.heavy.take());
                     *entry = node;
                     entry.heavy = heavy;
                     if entry.is_open() {
-                        entry.listed.membership.authored |= found.authored;
-                        entry.listed.membership.review_requested |= found.review_requested;
+                        entry.flag(found.0, found.1);
                     }
                 }
                 None => {
@@ -401,7 +403,7 @@ impl GithubSource {
                 .map(sha)
                 .or(stored_hash)
                 .unwrap_or_default();
-            let hash = sha(&format!("{:?}|{}|{detail_hash}", node.listed, node.head_oid));
+            let hash = sha(&format!("{}|{detail_hash}", node.fingerprint()));
             cache::commit(cx.store, &key, &hash, now, started, |tx| {
                 swr_read::write_header(tx, node)?;
                 if let Some(detail) = &detail {
@@ -415,7 +417,7 @@ impl GithubSource {
                             repo,
                             number,
                             node.head_oid,
-                            node.listed.pr.updated_at,
+                            node.updated_at(),
                             timestamp(now),
                             detail,
                             detail_hash
@@ -455,7 +457,8 @@ impl Source for GithubSource {
     }
     /// One pseudo-key for the whole pass: the document is one call, so it is due or not as a whole.
     fn due(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<Vec<QueryKey>, CpdError> {
-        let paused = endpoint::get(cx.store, "github")?.is_some_and(|r| endpoint::is_paused(&r, now));
+        let paused =
+            endpoint::get(cx.store, "github")?.is_some_and(|r| endpoint::is_paused(&r, now));
         Ok(if paused {
             Vec::new()
         } else {

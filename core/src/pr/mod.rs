@@ -61,12 +61,12 @@ pub mod posts;
 pub mod pulls;
 mod push;
 pub mod reactions;
-pub mod swr_read;
 pub(crate) mod rebase;
 mod reply;
 mod repost;
 mod rerun;
 pub mod review;
+pub mod swr_read;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod status;
