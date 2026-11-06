@@ -49,14 +49,22 @@ read_config() {
   fi
 }
 
-# serve <checkout>: the dev server of <checkout> in the web window, without the session identity.
+# serve <mode> <checkout>: the dev server of <checkout> in the web window, without the session identity.
+# 'on' exports CPD_MODE=preview and CPD_CHECKOUT=<checkout>; 'off' sets CPD_MODE=production and removes CPD_CHECKOUT.
 serve() {
-  if tmux_cmd list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx web; then
-    tmux_cmd respawn-pane -k -t "=$work:web" -c "$1" -- \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$1" --filter cpd-web-client run dev --host localhost
+  mode=$1
+  checkout=$2
+  if [ "$mode" = on ]; then
+    set -- env CPD_MODE=preview "CPD_CHECKOUT=$checkout"
   else
-    tmux_cmd new-window -d -n web -c "$1" -t "=$work:" -- \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$1" --filter cpd-web-client run dev --host localhost
+    set -- env CPD_MODE=production env -u CPD_CHECKOUT
+  fi
+  if tmux_cmd list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx web; then
+    tmux_cmd respawn-pane -k -t "=$work:web" -c "$checkout" -- "$@" \
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host localhost
+  else
+    tmux_cmd new-window -d -n web -c "$checkout" -t "=$work:" -- "$@" \
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host localhost
   fi
 }
 
@@ -77,7 +85,7 @@ start_watchdog() {
   mkdir -p "$wd_dir" "$cpd_home/run"
   cp "$repo/scripts/preview-watchdog.mjs" "$repo/web/src/electron/health.ts" \
     "$repo/web/src/electron/watchdog.ts" "$repo/web/src/electron/restore-points.ts" "$wd_dir/"
-  CPD_ELECTRON_DEV_URL="$dev_url" nohup node "$wd_dir/preview-watchdog.mjs" --worktree "$1" --home "$cpd_home" \
+  CPD_MODE=preview CPD_CHECKOUT="$1" CPD_ELECTRON_DEV_URL="$dev_url" nohup node "$wd_dir/preview-watchdog.mjs" --worktree "$1" --home "$cpd_home" \
     --relaunch pnpm --dir "$1/web" exec electron . >>"$cpd_home/run/preview-watchdog.log" 2>&1 </dev/null &
   echo "$!" >"$wd_pid"
 }
@@ -119,19 +127,19 @@ on() {
     pnpm --dir "$worktree" --filter cpd-web-client run build:electron >&2
   fi
 
-  serve "$worktree"
+  serve on "$worktree"
   sha=$(git -C "$worktree" rev-parse --short HEAD)
   tmux_cmd set -g @cpd_web_preview "$(basename "$worktree") $sha"
   mkdir -p "$dir"
   printf '%s\n%s\n' "$worktree" "$sha" >"$state"
   start_watchdog "$worktree"
   echo "previewing $worktree @ $sha at http://localhost:5173; revert with: sh $0 off" >&2
-  echo "Electron on it: CPD_ELECTRON_DEV_URL=$dev_url pnpm --dir $worktree/web run electron" >&2
+  echo "Electron on it: CPD_MODE=preview CPD_CHECKOUT=$worktree CPD_ELECTRON_DEV_URL=$dev_url pnpm --dir $worktree/web run electron" >&2
 }
 
 off() {
   read_config
-  serve "$repo"
+  serve off "$repo"
   tmux_cmd set -gu @cpd_web_preview
   rm -f "$state"
   stop_watchdog

@@ -6,15 +6,18 @@ export interface WatchdogPorts {
   now(): number;
   readHealth(): Promise<HealthRecord | null>;
   pidAlive(pid: number): boolean;
-  signalReload(pid: number): void;
-  terminate(pid: number): void;
+  /** Unused by the watchdog since rollback relaunches in production; kept optional for existing callers. */
+  signalReload?(pid: number): void;
+  /** Resolves once the process is gone. */
+  terminate(pid: number): Promise<void>;
   relaunch(): Promise<void>;
   restore: RestorePoints;
   log(entry: object): Promise<void>;
 }
 
-export function productionEnv(_env: Record<string, string | undefined>): Record<string, string | undefined> {
-  throw new Error("not implemented");
+export function productionEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  const { CPD_ELECTRON_DEV_URL: _devUrl, ...rest } = env;
+  return { ...rest, CPD_MODE: "production" };
 }
 
 export interface WatchdogOptions {
@@ -70,9 +73,10 @@ export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = 
       await ports.restore.restoreLastGood();
       rolledBack = true;
       if (ports.pidAlive(rec.pid)) {
-        ports.signalReload(rec.pid);
+        await ports.terminate(rec.pid);
+        await ports.relaunch();
       } else {
-        await log({ event: "relaunch", ...base });
+        await log({ event: "relaunch", ...base, mode: "production" });
         await ports.relaunch();
       }
     } catch (error) {
