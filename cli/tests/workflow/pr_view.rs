@@ -258,7 +258,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
     assert_eq!(
         gh[0][4],
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels"
     );
     assert_eq!(
         gh[1],
