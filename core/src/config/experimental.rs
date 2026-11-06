@@ -10,6 +10,8 @@ use crate::home::CpdHome;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Experimental {
     pub durable_workers: bool,
+    /// True makes each new Lead's runner `durable`.
+    pub durable_leads: bool,
     pub write_curation: bool,
     pub failure_triage: bool,
     pub turn_question_guard: bool,
@@ -29,6 +31,7 @@ impl Default for Experimental {
     fn default() -> Self {
         Experimental {
             durable_workers: false,
+            durable_leads: false,
             write_curation: true,
             failure_triage: true,
             turn_question_guard: true,

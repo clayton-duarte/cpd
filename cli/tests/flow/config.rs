@@ -86,7 +86,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"},
-            "experimental": {"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true}
+            "experimental": {"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true, "durable_leads": false}
         })
     );
 }
@@ -284,6 +284,7 @@ durable_workers = true
 write_curation = false
 failure_triage = false
 turn_question_guard = false
+durable_leads = true
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1

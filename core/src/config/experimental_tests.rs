@@ -104,8 +104,10 @@ fn experimental_appears_in_config_json_with_sources() {
             "write_curation": true,
             "failure_triage": false,
             "turn_question_guard": true,
+            "durable_leads": false,
         })
     );
+    assert_eq!(sources["experimental.durable_leads"], Source::Default);
     assert_eq!(sources["experimental.failure_triage"], Source::File);
     assert_eq!(sources["experimental.durable_workers"], Source::Default);
     assert_eq!(sources["experimental.write_curation"], Source::Default);
@@ -210,4 +212,24 @@ fn set_experimental_writes_one_key_atomically_keeping_comments() {
     let err = set(&home3, Feature::WriteCuration, false).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
     assert_eq!(std::fs::read_to_string(home3.config()).unwrap(), broken);
+}
+
+#[test]
+fn durable_leads_defaults_to_false() {
+    let (config, _) = parse(BASE).unwrap();
+    assert!(!config.experimental.durable_leads);
+    // The key is known and parses when set.
+    let (config, _) = parse(&format!("{BASE}\n[experimental]\ndurable_leads = true\n")).unwrap();
+    assert!(config.experimental.durable_leads);
+}
+
+#[test]
+fn durable_leads_rejects_a_non_bool() {
+    let err = parse(&format!(
+        "{BASE}\n[experimental]\ndurable_leads = \"yes\"\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(err.details()["key"], json!("experimental.durable_leads"));
+    assert!(err.to_string().contains("must be a boolean"), "{err}");
 }

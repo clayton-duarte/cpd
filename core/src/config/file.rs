@@ -224,6 +224,15 @@ impl Watch {
 }
 
 impl Config {
+    /// The runner of each new Lead: `durable` when `experimental.durable_leads`, else the `lead_runner` key.
+    pub fn new_lead_runner(&self) -> WorkerRunner {
+        if self.experimental.durable_leads {
+            WorkerRunner::Durable
+        } else {
+            self.lead_runner
+        }
+    }
+
     /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
     /// Derived from `experimental.durable_workers`.
     pub fn worker_runner(&self) -> WorkerRunner {
@@ -364,6 +373,7 @@ impl Config {
             };
             super::Experimental {
                 durable_workers: flag("durable_workers", defaults.durable_workers)?,
+                durable_leads: flag("durable_leads", defaults.durable_leads)?,
                 write_curation: flag("write_curation", defaults.write_curation)?,
                 failure_triage: flag("failure_triage", defaults.failure_triage)?,
                 turn_question_guard: flag("turn_question_guard", defaults.turn_question_guard)?,
