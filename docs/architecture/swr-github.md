@@ -51,7 +51,7 @@ query {
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest { ...Light } }
   }
-  # Only when the last pass answered hasNextPage: the next page, with the cursor that pass stored (§3.3).
+  # Only when the last pass answered hasNextPage: the next page, with the cursor that pass stored. Not built until the cursor column is decided (§3.3, §14).
   authoredMore: search(type: ISSUE, query: "...the same query...", first: 100, after: "<stored endCursor>") { ... }
 
   # One alias per absent or first-seen pull request (§4.2). Its repository alias is the lookup.
@@ -110,13 +110,13 @@ The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydr
 
 ### 3.3 Paging inside the document
 
-The search returns at most 100 pull requests (`first: 100`, oldest first). The design sends a second page **in the same document**, with the cursor the previous pass stored, and only when that pass answered `pageInfo.hasNextPage` true (`authoredMore` above). Pages beyond the second are not read: §4.2 covers every tracked pull request that a search does not list, so the limit hides none of them.
+The search returns at most 100 pull requests (`first: 100`, oldest first; the limit is `SEARCH_QUERY` of `core/src/pr/gh.rs:831` today). The design sends a second page **in the same document**, with the cursor the previous pass stored, and only when that pass answered `pageInfo.hasNextPage` true (`authoredMore` above). Pages beyond the second are not read: §4.2 covers every tracked pull request that a search does not list, so the limit hides none of them.
 
 **Blocked on a column (open item, §14).** The cursor is opaque text, and no `swr_*` table has a free text column for it: `swr_queries.data_hash` is the hash of confirmed data and `swr_queries.last_error` is the text of a failure. Until a column is decided, the pass sends the first page only, and §4.2 alone covers the rest. This is the one clause of the spec's paging rule that this page does not yet build.
 
 ### 3.4 Failure of the document
 
-A document that fails, times out or parses badly is one failure of the endpoint `github` (§7). It writes nothing: no header, no detail, no flag, no deploy row, no cursor, no rate record other than the failure itself. An answer with `errors` that carry `RATE_LIMITED` is a rate-limit pause (§7.2), not an error.
+A document that fails, times out or parses badly is one failure of the endpoint `github` (§7). It writes nothing: no header, no detail, no flag, no deploy row, no rate record other than the failure itself. An answer with `errors` that carry `RATE_LIMITED` is a rate-limit pause (§7.2), not an error.
 
 ## 4. The pass
 
@@ -142,6 +142,8 @@ Each step is one function in `core/src/swr/source/github.rs`; the reader is `cor
 10. **Drain the outbox** for `github`: `claim_next` and `execute` (§9), unless the endpoint is paused (§7.2).
 
 A pass that starts while a previous one still runs does not happen: the endpoint's `fetch_status` is `fetching` for the call (swr.md §16).
+
+**A reopen is not a second pass (rule 1 of the spec).** Today a pass that reopens a Workflow runs again: `core/src/pr/poll.rs:102-106` loops on `again`, which `rebind_reopened` sets (pro-d362). The github Workflow removes the loop. A Workflow reopened by a commit is owned from the next pass; that pass's document selects its heavy fields, because it has no `swr_pr_detail` row yet (§3.2), and reads its checks and feedback then. The cost is one pass of latency, which E5's cadence already has.
 
 ### 4.1 Which pull requests a pass reads
 
@@ -306,7 +308,7 @@ Its text names the pull request's URL, the new head and the claimed head, and te
 
 **(f) Open-only.** The rule of §4.2: a merged or closed pull request has `stale_after` NULL and is read only by the one confirmation read of a locally open pull request that left the open list, or by a Slack first-seen read. An archived repository's pull requests are not candidates.
 
-**(g) The Issues seam.** `gh_issues` exists (the swr-core migration) and nothing reads it. The builder carries `issues_alias(repo, number) -> String`, a pure function that returns the alias text for one issue (`i<n>: repository(owner, name) { issue(number: <n>) { number state title updatedAt } }`). It is unit-tested and never called by a pass, so a later Plan that polls issues adds a call site and no new query shape.
+**(g) The Issues seam.** `gh_issues` exists (the swr-core migration) and nothing reads it. A Rust constant, `GH_ISSUES_SEAM: &[&str] = &["issues_alias"]` in `core/src/pr/gh.rs`, lists the seam. The builder carries `issues_alias(repo, number) -> String`, a pure function that returns the alias text for one issue (`i<n>: repository(owner, name) { issue(number: <n>) { number state title updatedAt } }`). It is unit-tested and never called by a pass, so a later Plan that polls issues adds a call site and no new query shape.
 
 ## 11. Tests
 
@@ -318,7 +320,7 @@ The tests this design needs, by the rule they pin:
 - **One call per pass** (`pass_tests.rs`): a pass with twenty candidates makes one `FakeRunner` call of the endpoint.
 - **Open-only** (`candidates_tests.rs`): a merged or closed row is never an alias; a locally open row absent from the lists is read once; an archived row is not a candidate.
 - **Rate** (`rate_tests.rs`): `remaining` 99 pauses until `resetAt`; a `RATE_LIMITED` pause lasts `resetAt + 3 s`, or 60 s with no reset; a paused endpoint makes no call and no drain.
-- **Failures** (`classify_tests.rs`): a timeout, an HTTP 502 and a cut-off reply are transient; a 4xx is permanent; a failed pass writes nothing (no header, detail, flag, deploy row or cursor).
+- **Failures** (`classify_tests.rs`): a timeout, an HTTP 502 and a cut-off reply are transient; a 4xx is permanent; a failed pass writes nothing (no header, detail, flag or deploy row).
 - **Reader** (`github_tests.rs` in `core/src/swr/`): `effective_pr` applies the active patches in `submitted_at` order; a failed mutation contributes nothing; a `revalidating` one contributes until settled.
 - **Fence** (`settle_tests.rs`): a merge whose pass started before its `completed_at` leaves the overlay; the raw `MERGED` is the only trigger of the causal transitions.
 - **Single readers** (`readers_tests.rs`): no module outside `core/src/swr/` reads `pull_requests` for `checks`, `review_decision`, `state` or `head_oid` except through `effective_pr` or the pass; a grep test over the source fails on `Command::new("gh")` outside `core/src/host/runner.rs` and `core/src/pr/gh.rs`.

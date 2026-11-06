@@ -61,6 +61,7 @@ core/src/swr/
   endpoint.rs       swr_endpoints: record_ok, record_failure, due_report, record_rate, pause_until, is_paused
   outbox.rs         swr_mutations: enqueue, claim_next, complete, fail
   overlay.rs        active, the effective state
+  github.rs         the GitHub reader: effective_pr and the GitHub patches (swr-github.md §6)
   gc.rs             sweep: deletes rows past gcTime with no observer
   source/mod.rs     the Source trait, Cx, registry()
   source/github.rs  stub until the github Workflow (its file)
@@ -344,7 +345,7 @@ is_paused(row, now) -> bool
 - **`record_ok`** clears the outage: `failing_since`, `reported_at`, `last_error`, `error_count` = 0, sets `last_ok_at` = `now`, `status` = `success`, and `fetch_status` = `idle` when the pause has ended. (Assumption: a success ends a pause only once `paused_until` has passed, so a success never lifts a rate-limit pause early.)
 - **`record_failure`** with `Kind::Transient` sets `failing_since` on the first failure of the outage and increments `error_count`. With `Kind::Permanent` the report is due at once.
 - **`due_report`** is true **once**: for a transient outage, once `now - failing_since >= 10 minutes` and `reported_at` is NULL; for a permanent failure, at once and once only. A `true` answer sets `reported_at`, so one outage raises one report. The report is the existing `error` Event, raised through `engine/src/watch/report.rs`. No new Event kind (A3).
-- **`record_rate`** stores `rate_remaining` and `rate_reset_at`. When `remaining` is 0 it also pauses the endpoint until `reset_at`, as `pause_until` does. (Assumption, stated because the design names both calls as pausing: a spent limit pauses; a healthy one does not.)
+- **`record_rate`** stores `rate_remaining` and `rate_reset_at`. When `remaining` is 0 it also pauses the endpoint until `reset_at`, as `pause_until` does. (Assumption, stated because the design names both calls as pausing: a spent limit pauses; a healthy one does not.) **Superseded for `github` by [swr-github.md](swr-github.md) §7.2 (G7):** the endpoint pauses when `remaining` is under `RATE_FLOOR` (100), as the engine did before the cutover. The sentence above is the older rule, kept for the record.
 - **`pause_until`** sets `paused_until` = `reset_at` and `fetch_status` = `paused`.
 - **`is_paused(row, now)`** is `fetch_status` = `paused` and `now < paused_until`.
 
@@ -516,7 +517,7 @@ Each row is removed in the same PR as the datasource's cutover: its old file, qu
 
 ## 17. Accepted assumptions
 
-The design rests on these. Each is cited where it applies.
+The design rests on these. Each is cited where it applies. The GitHub datasource adds its own assumptions (G1 to G9, [swr-github.md §13](swr-github.md)).
 
 | # | Assumption |
 |---|---|
