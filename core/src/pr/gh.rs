@@ -98,7 +98,7 @@ pub struct InlineComment {
     pub body: Option<String>,
 }
 
-/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url`.
+/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels`.
 #[derive(Debug, Deserialize)]
 pub struct View {
     pub state: String,
