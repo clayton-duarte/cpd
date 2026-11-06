@@ -2,7 +2,7 @@
 
 Builds on `web/src/ui/DESIGN.md` (called **DESIGN** below). Reused by reference, not restated: conventions (DESIGN 1: `data-part`/`data-action` hooks, tokens never hex in `.tsx`, the four text sizes `text-meta` 11px / `text-key` 12.5px / `text-body` 13px / `text-title` 15px, `bg-row-hover`), tokens (DESIGN 2b), glyph classes (2c), `web/src/ui/dango-status.ts` (2d: `jobDisplay`, `parsePhase`, `phaseLabel`, `phaseTone`, `inboxDisplay`, `urgencyDisplay`, `glyphClass`, `toneClasses`), `cn` (2e), `Button`/`Badge` (2f). Hex values below are the board's rendered values, written next to the token that carries them; `.tsx` files use the token (an arbitrary opacity such as `bg-status-active/[.14]` is allowed, a hex is not).
 
-Files: `web/src/ui/cockpit/PlanView.tsx`, `web/src/ui/cockpit/Inbox.tsx`. Imports are relative (A1). Both stay wrapped in `memo()` by `App` (DESIGN 3e); their props change only by the optional additions named here, and `App` passes none of them. Phase 2 tests: `PlanView.test.tsx` (3 tests), `Inbox.test.tsx` (3 tests); no existing test changes (3d below).
+Files: `web/src/ui/cockpit/PlanView.tsx`, `web/src/ui/cockpit/Inbox.tsx`, and `web/src/ui/cockpit/ManagerView.tsx` (1j). Imports are relative (A1). All three stay wrapped in `memo()` by `App` (DESIGN 3e); their props change only by the optional additions named here, and `App` passes only `postableWorkflows` to PlanView (1f). Phase 2 tests: `PlanView.test.tsx` (3 tests), `Inbox.test.tsx` (3 tests); no existing test changes (3d below).
 
 Source for every field: `web/src/protocol/cockpit.ts` (`PlanViewModel`, `WorkflowView`, `JobView`, `AttemptView`, `InboxModel`, `InboxRow`, `InboxRowAction`, `CockpitAction`) and `web/src/server/cockpit/actions.ts` (`actionArgs`). Nothing in `web/src/protocol/**`, `state/**`, `server/**` changes (A6).
 
@@ -20,6 +20,8 @@ export function PlanView(props: {
   onAction(action: CockpitAction): void;                         // KEPT
   /** Retry a failed job. NOT WIRED: cpd has no retry action (see 1h). The `Retry ▸` button renders only when this is passed AND job.status is "failed". `App` does not pass it. */
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
+  /** Workflow keys, PR urls and `#<number>`s of the Plan's Inbox rows that carry a `pr.post` action (1f). Absent: no postable check. */
+  postableWorkflows?: ReadonlySet<string>;
 }): ReactElement;
 ```
 
@@ -111,7 +113,7 @@ The chip is **not** interactive (no handler exists; the board's chips have none 
 
 ### 1e. Workflow card and the job DAG
 
-Per `plan.workflows` entry `wf`. Card: `section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"][data-status="{wf.status}"]` (KEPT hooks; `data-status` new), className `rounded-[9px] border border-border bg-card`.
+Per `plan.workflows` entry `wf`. Card: `section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"][data-status="{wf.status}"]` (KEPT hooks; `data-status` new), className `min-w-0 overflow-hidden rounded-[9px] border border-border bg-card` (pro-d77: the card never widens the Plan pane).
 
 ```
 section[data-workflow]
@@ -122,7 +124,7 @@ section[data-workflow]
 │   ├─ span[data-part="wf-failed"]   only when failed > 0; text `{n} failed`   font-mono text-meta text-status-blocked-bright (board #ffa796)
 │   ├─ span.flex-1
 │   └─ p[data-part="pr"]   only when wf.pr !== null  (1f)
-└─ ScrollArea[data-part="dag-body"]   horizontal ScrollBar; the content keeps its p-3 (12px padding)   (pro-d69)
+└─ ScrollArea[data-part="dag-body"]   horizontal ScrollBar (the ScrollArea default, 3c); its content is `div.w-fit.p-3` (12px padding) around the canvas   (pro-d69, pro-d77)
     └─ div[data-part="dag-canvas"]   relative   style: width {W}px; height {H}px   (1e-ii)
         ├─ svg[data-part="dag-edges"][aria-hidden="true"]   absolute left-0 top-0 pointer-events-none   width={W} height={H} viewBox="0 0 {W} {H}" fill="none"
         │   └─ path[data-edge="{from}>{to}"][data-state="done|pending"] ×(one per edge)   stroke-width 1.5
@@ -194,8 +196,8 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 ### 1f. PR link and Post PR
 
 `p[data-part="pr"]` renders only when `wf.pr !== null` (KEPT behaviour), `flex items-center gap-2 font-mono text-[11.5px]`:
-- `a[href="{pr.url}"]` text exactly `` `#${pr.number} ${pr.state ?? ""}`.trim() `` (KEPT; test: contains `#7 open`); `text-status-focus-bright underline-offset-2 hover:underline`.
-- `button[type="button"][data-action="post-pr"]` text exactly `Post PR`; **KEPT hook**, KEPT copy. Click → `onAction({ kind: "pr.post", planId: plan.planId, workflow: wf.key })` (existing action; CLI `pr post --workflow <key> --plan <planId>`). `Button variant="outline" size="xs"` (h-6). Always enabled.
+- `a[href="{pr.url}"][target="_blank"][rel="noopener noreferrer"]`, `inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline`: a `span` with the text exactly `` `#${pr.number} ${pr.state ?? ""}`.trim() `` (KEPT; test: contains `#7 open`), then an `ExternalLinkIcon` (`size-3 shrink-0`, `aria-hidden="true"`) (pro-d77).
+- `button[type="button"][data-action="post-pr"]` text exactly `Post PR`; **KEPT hook**, KEPT copy. Rendered only when the PR can be posted (pro-d77, `canPost`): `wf.pr.posted !== true` (`plan show`'s `pr.posted`: no `pr_posts` row for the Workflow), `wf.pr.state !== "merged"`, `wf.status !== "merged"`, and, when `postableWorkflows` is passed, the Workflow's key, PR `url` or `#<number>` is in it. `App` passes `postableWorkflows` (the Plan's Inbox rows that carry a `pr.post` action) when the Inbox is loaded and passes nothing otherwise, so with no Inbox the guard is `posted` and merged alone. Click → `onAction({ kind: "pr.post", planId: plan.planId, workflow: wf.key })` (existing action; CLI `pr post --workflow <key> --plan <planId>`). `Button variant="outline" size="xs"` (h-6). Always enabled when rendered.
 
 `checks` and `mergeable` of the PR are not drawn (Not wired).
 
@@ -203,7 +205,7 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 
 | State | Rendering |
 |---|---|
-| `plan === null` | 1b `CpdFlowCanvas` flowchart (pro-d68) |
+| `plan === null` | 1b `CpdFlowCanvas` flowchart (pro-d68). `App` renders PlanView only for a loaded Plan; with no Plan it renders ManagerView (1j), which shows this flowchart only when no Context is selected |
 | plan, no workflows, no explore jobs, no `reviewedPr` | title row + `p[data-part="no-work"]` "No workflows yet" |
 | plan, `reviewedPr` set, no workflows | title row + the Review PR card (1i); no `no-work` note, whatever the explore jobs |
 | plan, workflows only | no explore strip |
@@ -232,10 +234,62 @@ section[data-part="review-pr"][aria-label="Review PR"]   rounded-[9px] border bo
 └─ div[data-part="rpr-body"]        flex flex-col gap-1.5 p-3
     ├─ p[data-part="rpr-title"]     {title}, also its title attribute   font-mono text-[11.5px] text-foreground truncate
     └─ p[data-part="rpr-link"]      flex items-center gap-2 font-mono text-[11.5px]
-        └─ a[href="{url}"][target="_blank"][rel="noopener noreferrer"]   text: `#{number}`, then ` {state}` when state is not null, then ` 󱆭`   text-status-focus-bright underline-offset-2 hover:underline
+        └─ a[href="{url}"][target="_blank"][rel="noopener noreferrer"]   text: `#{number}`, then ` {state}` when state is not null, then an `ExternalLinkIcon` (`size-3`, `aria-hidden`)   inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline
 ```
 
-The anchor's text is `#912 open 󱆭` for state `open` and `#7 󱆭` for state null, with one space between the parts and no double space. Its class is the Workflow card's PR anchor's (`web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard`), plus the cue. `rel` is added: the anchor opens in a new tab, and `noopener noreferrer` is the rule of §2.6 for the Inbox's new-tab links. The TUI box's rows of the same Plan are in `docs/contract.md` §2.6 ("The Review PR box"), the same data and the same cut title.
+The anchor's text is `#912 open` for state `open` and `#7` for state null, followed by the `ExternalLinkIcon` (pro-d77), which replaces the `󱆭` glyph here; the TUI box in `docs/contract.md` keeps its glyph. Its class is the Workflow card's PR anchor's (`web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard`). `rel` is added: the anchor opens in a new tab, and `noopener noreferrer` is the rule of §2.6 for the Inbox's new-tab links. The TUI box's rows of the same Plan are in `docs/contract.md` §2.6 ("The Review PR box"), the same data and the same cut title.
+
+### 1j. ManagerView (a Manager or Context session selected; pro-d70, pro-d75, pro-d76)
+
+File `web/src/ui/cockpit/ManagerView.tsx`. The Plan pane shows it instead of PlanView when no Plan is loaded for the selection (`visiblePlan` null, DESIGN 5.3). `App` passes the Context that holds the selected session (its Manager, a Lead or a fork) and renders `CpdFlowCanvas` (1b) when there is none. So a selected Manager shows ManagerView, not the flowchart. `App` wraps it in `ErrorBoundary name="ManagerView"` and in `memo()` (DESIGN 3e).
+
+```ts
+export interface ManagerViewProps {
+  readonly context: ContextNode | null;               // null: <CpdFlowCanvas />, no props
+  readonly onSelectPlan: (planId: string) => void;    // a Plan row's click, Clicks below
+  readonly onSelectSession: (sessionId: string) => void;
+}
+```
+
+DOM:
+
+```
+section[aria-label="Manager overview {context.id}"][data-manager-view="{context.id}"]   flex min-w-0 flex-col overflow-x-hidden
+├─ header[data-part="manager-header"]   sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4 pr-16
+│   ├─ h2[data-part="manager-key"][title={context.title}]   {context.id}   font-mono text-[14px] font-semibold text-fg-strong
+│   ├─ span[data-part="manager-counters"]   `{n} active · {n} done · {n} records`   min-w-0 truncate font-mono text-meta text-muted-foreground
+│   └─ span.flex-1                                          (no Flowchart button, pro-d76)
+└─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
+    ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
+    ├─ ol[data-part="active-plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan that is not `done`; `p` "All current plans are done." when there are none
+    └─ Collapsible   only when a `done` Plan exists; closed at start; trigger `Done plans ({n})`; content ol[data-part="done-plans"] (same rows)
+```
+
+**Order.** The Plans are sorted by `compareOrderKey` (`state/archiveNav.ts`) on the Lead's dot and `created_at`, the key the tree's Plan rows use (3d).
+
+**Row** (pro-d76; the order is the one of pro-d76, which supersedes pro-d75):
+
+```
+div[role="button"][tabIndex="0"]   flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-border bg-card px-2.5 py-1.5
+├─ Dot   the Lead's dot (DESIGN 3d, exported for this view, pro-d76); `stopped` with no Lead
+├─ span[data-part="plan-id"]        {plan.id}   shrink-0 font-mono text-[12px] font-semibold text-fg-strong
+├─ span[data-part="plan-title"][title={plan.title}]   min-w-0 flex-1 truncate text-[12px] text-muted-foreground   (the one flexible item)
+├─ span[data-part="plan-workflows"]   the PR chips (below); absent with no Workflow that is not `cancelled`
+├─ Badge[data-part="plan-phase"]     {plan.phase}   h-4 shrink-0 font-mono text-[10px]
+├─ Badge[data-part="plan-actor"]     `worker` when a Job is running; else `manager` when the Plan has no Lead, is `done` or is `shaping`; else `lead`
+└─ span[data-part="plan-counters"]  planned (draft + queued) · active (running + merging) · failed · merged   h-4 shrink-0 font-mono text-[10px]
+```
+
+No horizontal scroll: the row and the list clip (`min-w-0`, `overflow-hidden`), and the Plan pane's ScrollArea constrains the content width (3c, vertical-only pane).
+
+**PR chips** (pro-d75):
+- Up to two Workflows: one chip each. With a PR, `a[data-part="wf-pr-chip"][target="_blank"][rel="noopener noreferrer"]` with the text `#{number} {state}`, plus ` · {checks}` when the PR is not merged and checks is neither null nor `none`; `state` is the pull request's state, else the Workflow's status. Without a PR, `span[data-part="wf-chip"]` with `{key} ({status})`. A chip click does not select the Plan.
+- More than two Workflows: one `button[data-part="wf-pr-summary"]` with the text `{n} PRs` and a chevron, the trigger of a HoverCard (`data-part="wf-pr-hover-list"`) that lists every chip.
+- Tone: `anko` when a check failed or a PR is `conflicting`; `matcha` when all are merged; `mizu` otherwise.
+
+**Collapse** (pro-d76; `app.css`): when `section[aria-label="Plan pane"][data-state="collapsed"]` (the 44px title row only), `[data-part="manager-body"]` and every `[data-slot="scroll-area-scrollbar"]` of the Plan pane are hidden, and the header's bottom border is transparent.
+
+**Clicks** (pro-d70). A Plan row (click, Enter or Space) calls `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` when the Plan has a Lead (`leadSessionId` not null). The Plan and its Lead are selected; PlanView shows once the Plan is loaded. No back control is built: the Context's Manager row in the tree selects the Manager again, which shows ManagerView.
 
 ---
 
@@ -491,9 +545,9 @@ The contract of each item below is stated in full in the section it names. This 
 
 The defaults (tree 20%, centre 50%, Inbox 30%), the double-click on `split-left` (`treeRef` → 20%) and on `split-right` (`inboxRef` → 30%), and the `overflow-hidden` tree aside are in DESIGN.md 3c. `Reset layout` (the Status Bar button, DESIGN.md 3g) restores the same three values and the plan 40% / chat 60% split.
 
-### 4.3 Sidebar ContextTree (no change)
+### 4.3 Sidebar ContextTree
 
-pro-d48..pro-d61 name no tree change. The tree is DESIGN.md 3d and 3g as they stand.
+pro-d48..pro-d61 name no tree change. The tree is DESIGN.md 3d and 3g as they stand, with one later change, pro-d78 (transient, not persisted): when a Manager session is selected, the tree auto-collapses that Context's live Plans and forks (the Context row's `Collapsible`; the Archive is not affected). The User may toggle it by hand until the selection changes. Selecting any other agent expands it again.
 
 ### 4.4 Fonts and tokens (pro-d48)
 
