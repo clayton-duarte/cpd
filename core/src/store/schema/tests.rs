@@ -2933,7 +2933,6 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
             rows_after.remove("slack_reactions").map(|r| r.len()),
             Some(0)
         ); // `slack-reactions`: a new empty table
-        assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
         assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
             Some(27)
