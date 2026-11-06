@@ -267,8 +267,8 @@ export function AskCard(props: {
 ### 4.2 Interactive DOM
 
 ```
-div[class="mx-4 mb-3 max-h-[min(70vh,560px)] shrink-0 overflow-y-auto rounded-2xl border bg-card p-5"]
-└─ Questionnaire[aria-label="Questions"][data-dialog="ask_user_question"][defaultItem="q0"][shortcuts="letters"]   onKeyDown: Escape → cancel
+ScrollArea[class="mx-4 mb-3 shrink-0 rounded-2xl border bg-card [&>[data-slot=scroll-area-viewport]]:max-h-[min(70vh,560px)]"]   (the card's scroll element, DESIGN.md 3c, pro-d72; the limit sits on its Viewport; the `p-5` moves to the Questionnaire root)
+└─ Questionnaire[aria-label="Questions"][data-dialog="ask_user_question"][defaultItem="q0"][shortcuts="letters"]   className p-5; onKeyDown: Escape → cancel
     ├─ QuestionnaireProgress
     ├─ QuestionnaireItem[data-question="<i>"] ×questions        one step per question, in order
     │   ├─ QuestionnaireTitle        "{header}: {question}"
@@ -371,7 +371,7 @@ Item[variant="outline"][size="sm"][asChild]  mx-4 mb-3 w-auto shrink-0
 │  │       className: flex justify-between rounded-md px-2.5 py-1.5; active: bg-surface-pressed text-fg-strong; else text-muted-foreground hover:text-fg-strong
 │  │       items in order: "Outline" (always), "Workflows" + count (workflows.length), "Jobs" + count (sum of jobs), "Overlaps" + count (text-mitarashi-bright count), "Risks", "Out of scope"; an item exists only when its data is non-empty
 │  │       count: span font-mono; onClick → preventDefault() + scrollIntoView of the section element + set the active item
-│  └─ div[data-part="body"]   className: flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-[22px] py-[18px]
+│  └─ ScrollArea[data-part="body"]   className: flex min-w-0 min-h-0 flex-1 flex-col (the body scrolls through `ScrollArea`, DESIGN.md 3c, pro-d72); its Viewport is a div className: flex flex-col gap-5 px-[22px] py-[18px] that holds the sections below
 │     ├─ div[data-part="outline"][id="<dialog.id>-outline"]
 │     │    ├─ h4 "Outline"   (the section label style: text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground mb-2) — rendered only when other sections exist
 │     │    └─ div className: typeset typeset-chat max-w-[720px] text-[14px] text-fg-strong
