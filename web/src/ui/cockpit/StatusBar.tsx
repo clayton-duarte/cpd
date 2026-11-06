@@ -15,6 +15,8 @@ export interface StatusModel {
   readonly workers: { readonly queued: number; readonly ready: number; readonly tenants: number; readonly concurrency: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
+  readonly mode: "production" | "preview";
+  readonly drift: { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean } | null;
 }
 
 /** `5m`, `2h 5m`, `3d`: the elapsed time since `startedAt`. */
@@ -35,6 +37,8 @@ export function barStatus(s: WireStatus, nowMs: number): StatusModel {
     workers: s.workers === null ? null : { queued: s.workers.queued, ready: s.workers.waiting, tenants: s.workers.tenants, concurrency: s.workers.limit },
     version: s.version,
     hostAlert: s.hostAlert,
+    mode: s.mode,
+    drift: s.drift,
   };
 }
 

@@ -5,7 +5,7 @@ import { StatusBar } from "./StatusBar.tsx";
 import type { StatusModel } from "./StatusBar.tsx";
 
 const none = (): void => {};
-const base: StatusModel = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false };
+const base: StatusModel = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false, mode: "production", drift: null };
 let mounted: { unmount(): void } | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; });
 
