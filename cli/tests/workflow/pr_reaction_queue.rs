@@ -4,8 +4,6 @@
 
 use crate::common;
 
-use std::sync::Mutex;
-
 use common::TestEnv;
 use common::fx::Fx;
 use cpd_core::home::CpdHome;
@@ -18,35 +16,20 @@ const MERGED_AT: &str = "2026-10-21T15:01:30Z";
 const CHANNEL: &str = "C02JU6C2Z1D";
 const TS: &str = "1793040197.490209";
 
-/// A `gh` whose `pr view` says open until `pr merge` ran and merged after; the poll's `api graphql` fails.
-struct Gh {
-    merged: Mutex<bool>,
-}
+/// A `gh` whose poll document (`api graphql`) lists the pull request merged; every other call fails.
+struct Gh;
 
 impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
-        let view = |state: &str, merge_state: &str, merged_at: Option<&str>| {
-            Reply::ok(&format!(
-                "{}\n",
-                json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": SHA, "title": "Add", "mergedAt": merged_at})
-            ))
-        };
         match args[..2] {
-            ["pr", "view"] if *self.merged.lock().unwrap() => {
-                view("MERGED", "UNKNOWN", Some(MERGED_AT))
-            }
-            ["pr", "view"] => view("OPEN", "CLEAN", None),
-            ["repo", "view"]
-                if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") =>
-            {
-                Reply::ok(
-                    "{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n",
-                )
-            }
-            ["pr", "merge"] => {
-                *self.merged.lock().unwrap() = true;
-                Reply::ok("")
+            ["api", "graphql"] => {
+                let node = format!(
+                    r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{{"nodes":[]}},"mergedAt":"{MERGED_AT}","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+                );
+                Reply::ok(&format!(
+                    r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
+                ))
             }
             _ => Reply::exit(1, "", ""),
         }
@@ -60,15 +43,15 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    let _ = (*fx.fakes.runner).clone().route(
-        "gh",
-        std::sync::Arc::new(Gh {
-            merged: Mutex::new(false),
-        }),
-    );
-    env.sql(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored)
-           VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add', 0, 'open', 'none', 'none', 't', 't', 'clean', 1);
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("gh", std::sync::Arc::new(Gh));
+    env.sql(&format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored, base_ref, default_branch, head_oid)
+           VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add', 0, 'open', 'none', 'none', 't', 't', 'clean', 1, 'main', 'main', '{SHA}');
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/api', 'main', 0, 1, 1, 0, 0, 1, 't');
          INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -77,8 +60,8 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
          INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
-                   7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
-    );
+                   7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));"
+    ));
     if let Some(reaction) = post {
         let reaction = reaction.map_or("NULL".to_owned(), |r| format!("'{r}'"));
         env.sql(&format!(
@@ -99,8 +82,10 @@ fn queued(env: &TestEnv) -> i64 {
     }
 }
 
+/// `pr merge` queues; the merge is recorded when a poll that started after it reads `MERGED` (swr-github.md §9).
 pub(super) fn merge(fx: &Fx) {
-    fx.cpd(&["pr", "merge", REF]).ok();
+    assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["queued"], true);
+    fx.cpd(&["pr", "poll"]).ok();
     assert_eq!(
         fx.env
             .query::<String>("SELECT status FROM workflows WHERE key = 'api'"),
