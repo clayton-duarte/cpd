@@ -494,7 +494,7 @@ export type ServerMessage =
   | { type: "session.models"; sessionId: string; models: ModelChoice[] }
   | { type: "session.dialog"; sessionId: string; dialog: Dialog }
   | { type: "session.dialogResolved"; sessionId: string; dialogId: string; outcome: DialogOutcome }
-  | { type: "session.completion"; sessionId: string; completion: Completion | null } // Lead only, computed asynchronously, may never arrive (3.10)
+  | { type: "session.completion"; sessionId: string; completion: Completion } // Lead only; never null: the last non-null completion is replayed on attach, computed results follow asynchronously and may never arrive (3.10)
   | { type: "session.error"; sessionId: string | null; clientSubmissionId?: string; error: WireError }; // sessionId: the attempted id of a session.attach error (e.g. session_not_found); null: not tied to a session (invalid_message)
 
 export type SessionServerMessage = Extract<ServerMessage, { type: `session.${string}` }>; // what a SessionBackend emits
@@ -509,9 +509,9 @@ Message semantics (server behaviour):
 - `session.submitAck` answers each `session.submit` that the backend accepted: `queued: true` when the host queued it behind a running turn, else false. A rejected submit answers `session.error` with `clientSubmissionId` set.
 - `session.status.busy` is true while a turn runs. `queued` lists accepted-but-not-started submissions (durable only; always `[]` for pi).
 - A `session.dialog` with `interactive: false` is read-only (no current producer; pi and durable dialogs are interactive, 11.4).
-- **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. It is computed asynchronously: it is never part of attach, may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
+- **Completion badge (`session.completion`, 3.10).** Sent only for a Lead session (`role: "lead"`); no other role receives it. The badge is always visible for a Lead session and shows the last non-null value, across navigation and while a new classification runs; a failed or slow classification never clears it (pro-d438). The server keeps the last non-null completion per session id: on Lead attach it replays that value at once, before any computed result; a session with no last value gets nothing on attach. Otherwise the completion is computed asynchronously: it may arrive later than any other message, and may never arrive. Triggers (A8): Lead attach, after `session.attached`; and a turn settle (`session.status` `busy` true -> false). Neither trigger blocks attach, rendering or message submission.
 - A session is classified only when it has at least one transcript item (A5).
-- `completion: Completion` sets the badge. `completion: null` clears it. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label sends `completion: null`. No error is shown and there is no config switch (A4).
+- `completion: Completion` sets the badge and becomes the session's last non-null value. The server never sends `completion: null`. Fail open (pro-d369): an unreachable classifier, a 30 s timeout (on the Scheduler seam `b.scheduler`, never a real timer in tests), a non-zero exit, unparseable output or an unknown label yields no completion: nothing is sent and the badge keeps its last value. No error is shown and there is no config switch (A4).
 - Cache and in-flight (A7): the key is `${sessionId}|${lastTranscriptItemId}|${planCursor}`, where `planCursor` is `PlanViewModel.cursor` from `cpd plan show`. In-flight computations are shared per key. A null result is not cached. A result is never sent to a closed connection or to a detached session.
 - `action.result ok:true` carries `output` (section 5.4); `ok:false` carries the `cpd_failed` / `unknown_action` error.
 
