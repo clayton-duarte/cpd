@@ -90,9 +90,29 @@ export function parsePlanList(reply: Reply): RawPlan[] {
   cursorOf(reply, c);
   return arr(reply, "plans", c).map((v) => {
     const o = obj(v, c, "plans[]");
+    const rawWfs = Array.isArray(o["workflows"]) ? (o["workflows"] as unknown[]) : [];
+    const workflows: PlanWorkflowSummary[] = rawWfs.map((w) => {
+      const wo = obj(w, c, "plans[].workflows[]");
+      const prObj = wo["pr"] === null || wo["pr"] === undefined ? null : obj(wo["pr"], c, "pr");
+      const pullObj = wo["pull_request"] === null || wo["pull_request"] === undefined ? null : obj(wo["pull_request"], c, "pull_request");
+      const opt = (src: Obj | null, f: string): StrOrNull => (src !== null && typeof src[f] === "string" ? (src[f] as string) : null);
+      return {
+        key: str(wo, "key", c),
+        status: str(wo, "status", c),
+        repo: strN(wo, "repo", c) ?? "",
+        pr: prObj === null ? null : {
+          number: num(prObj, "number", c),
+          url: typeof prObj["url"] === "string" ? prObj["url"] : "",
+          state: opt(pullObj, "state"),
+          checks: opt(pullObj, "checks"),
+          mergeable: opt(pullObj, "mergeable"),
+        },
+      };
+    });
     return {
       id: str(o, "id", c), context: str(o, "context", c), title: str(o, "title", c), phase: str(o, "phase", c),
       archived_at: strN(o, "archived_at", c), created_at: str(o, "created_at", c), counts: counts(o, c), lead_session: strN(o, "lead_session", c),
+      workflows,
     };
   });
 }
@@ -215,7 +235,7 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
       c.node = { ...c.node, createdAt: p.created_at };
     }
     c.plans.set(p.id, {
-      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null, createdAt: p.created_at },
+      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null, createdAt: p.created_at, ...(p.workflows !== undefined ? { workflows: p.workflows } : {}) },
       sessions: [],
     });
   }
@@ -282,7 +302,7 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
     return {
       key: str(w, "key", c), title: str(w, "title", c), repo: strN(w, "repo", c) ?? "", base: strN(w, "base", c) ?? "", status: str(w, "status", c),
       needs: strList(w, "needs"), jobKeys: strList(w, "jobs"),
-      pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable") },
+      pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable"), ...(typeof prObj["posted"] === "boolean" ? { posted: prObj["posted"] } : {}) },
     };
   });
   const jobs: JobView[] = raw.jobs.map((j) => {
