@@ -1078,13 +1078,14 @@ it("selecting an archived session opens the Archive section", () => {
 });
 
 it("selecting a Manager keeps its own Context collapsed", () => {
-  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:contexts": "0", "cpd-ui:collapse:ctx:c1": "0" }));
+  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0", "cpd-ui:collapse:ctx:c1": "0" });
+  vi.stubGlobal("localStorage", preset);
   const m = remountable(treeSel(null));
   m.render(treeSel("s-mgr"));
   expect(sectionOpen(m.container, "Contexts")).toBe("true");
   expect(stateOf(m.container, "c1")).toBe("closed");
   expect(hasPlan(m.container, "p1")).toBe(false);
-  expect(store.getItem("cpd-ui:collapse:ctx:c1")).toBe("0");
+  expect(preset.getItem("cpd-ui:collapse:ctx:c1")).toBe("0");
   m.unmount();
 });
 
