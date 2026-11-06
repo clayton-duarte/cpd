@@ -132,6 +132,7 @@ it("context tree archive section collapses", () => {
 // Title kept from the Job; DESIGN.md 3d: the selected hook is aria-current="true".
 it("context tree marks the selected plan", () => {
   const m = mount(<ContextTree {...props({ selectedPlanId: "p1", selectedSessionId: "s-mgr" })} />);
+  act(() => m.container.querySelector('button[aria-label="Toggle c1"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   const c = m.container;
   const item = c.querySelector('li[role="treeitem"][data-plan="p1"]');
   expect(item?.querySelector('button[data-select="plan"]')?.hasAttribute("aria-current")).toBe(false);
