@@ -19,7 +19,7 @@ export async function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap
     return { bootstrap, stop: () => {} };
   }
   const updater = createUpdater({
-    sync: () => syncCheckout(deps.exec, root),
+    sync: () => syncCheckout(deps.exec, root, { rebase: false }),
     headSha: async () => (await deps.exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim(),
     builtSha: () => readBuiltSha(deps.fs, root),
     cliSha: () => readInstalledSha(deps.fs, root),

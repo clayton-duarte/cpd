@@ -120,3 +120,18 @@ it('startAutoUpdate stop stops following', async () => {
   expect(t.timers.pending).toEqual([]);
   expect(t.spawned).toHaveLength(1);
 });
+
+it('startAutoUpdate enables the rebase in preview mode only', async () => {
+  const DIVERGED = { ...CURRENT, 'git rev-parse origin/main': { stdout: 'def456\n' }, 'git merge-base --is-ancestor HEAD origin/main': { code: 1 }, 'git diff --name-only HEAD origin/main': {}, 'git status --porcelain --untracked-files=all': {}, 'git rebase --autostash origin/main': {}, 'git diff --name-only abc123 def456': {} };
+  const REBASE = 'git rebase --autostash origin/main';
+  const rebased = async (mode: string | undefined) => {
+    const env: Record<string, string> = { CPD_CHECKOUT: ROOT, ...(mode === undefined ? {} : { CPD_MODE: mode }) };
+    const t = setup({ table: DIVERGED, env });
+    await startAutoUpdate(t.deps);
+    await flush();
+    return t.fx.calls.some((c) => `${c.cmd} ${c.args.join(' ')}` === REBASE);
+  };
+  expect(await rebased('preview')).toBe(true);
+  expect(await rebased('production')).toBe(false);
+  expect(await rebased(undefined)).toBe(false);
+});

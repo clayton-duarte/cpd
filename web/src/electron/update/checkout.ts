@@ -8,8 +8,8 @@ export function resolveCheckout(deps: { env: Record<string, string | undefined>;
 export type SyncResult =
   | { kind: 'current'; sha: string }
   | { kind: 'updated'; from: string; to: string; lockfileChanged: boolean }
-  | { kind: 'skipped'; reason: 'branch' | 'dirty' | 'fetch-failed' | 'diverged' };
-export async function syncCheckout(exec: UpdateExec, root: string): Promise<SyncResult> {
+  | { kind: 'skipped'; reason: 'branch' | 'dirty' | 'fetch-failed' | 'diverged' | 'rebase-conflict' };
+export async function syncCheckout(exec: UpdateExec, root: string, _opts: { readonly rebase: boolean }): Promise<SyncResult> {
   const git = (...args: string[]) => exec('git', args, { cwd: root });
   if ((await git('fetch', 'origin')).code !== 0) return { kind: 'skipped', reason: 'fetch-failed' };
   const from = (await git('rev-parse', 'HEAD')).stdout.trim();
