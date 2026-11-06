@@ -42,7 +42,7 @@ export async function readDrift(
     .split('\n')
     .filter((l) => l.trim() !== '')
     .map((l) => {
-      const [ref, at] = l.split('\t');
+      const [ref = '', at = ''] = l.split('\t');
       return { kind: 'commit' as const, ref, at };
     });
   let headDate: string | null = null;
