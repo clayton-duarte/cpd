@@ -215,3 +215,54 @@ fn a_plans_jira_key_is_never_its_prs_ticket() {
     }
     assert_eq!(stored(fx.store(), "pay", "repo"), None);
 }
+
+/// The pending `jira` rows of the outbox as `[target_key, target]`, oldest first.
+fn pending(mut store: cpd_core::store::Store) -> serde_json::Value {
+    let json: String = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT coalesce(json_group_array(json_array(target_key, target)), '[]')
+                   FROM (SELECT target_key, json_extract(vars_json, '$.target') AS target
+                           FROM swr_mutations WHERE system = 'jira' AND status = 'pending' ORDER BY id)",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    serde_json::from_str(&json).unwrap()
+}
+
+#[test]
+fn workflow_edit_jira_on_an_open_workflow_queues_in_review() {
+    let fx = pr_view::fx("open");
+    assert_eq!(pending(fx.store()), json!([]), "nothing queued before");
+
+    fx.fx
+        .cpd(&[
+            "workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay",
+        ])
+        .ok();
+
+    assert_eq!(
+        pending(fx.store()),
+        json!([["jira:issue:ABC-1", "in_review"]])
+    );
+}
+
+/// Guard: a Workflow made by `workflow add` is `waiting`, which maps to no target.
+#[test]
+fn workflow_add_with_jira_queues_nothing_for_a_waiting_workflow() {
+    let fx = crud("plan");
+    let repo = fx.pay.to_str().unwrap().to_owned();
+
+    fx.pr(&[
+        "add", "k", "--repo", &repo, "--title", "T", "--jira", "ABC-12",
+    ])
+    .ok();
+
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM swr_mutations WHERE system = 'jira'"),
+        0
+    );
+}
