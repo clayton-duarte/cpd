@@ -20,9 +20,11 @@ text = ""
 
 [pr.feedback]
 checks = "any"
+reply = "all"
 
 [pr.post]
 enabled = false
+require_approval = false
 channel = ""
 template = "{{ title }}\n{{ url }}"
 merged_reaction = ""

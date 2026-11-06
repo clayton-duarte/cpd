@@ -7,10 +7,10 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Map, Value, json};
 
 use super::domain::{
-    BUILD, EXCUSED_LABELS, FEEDBACK_CHECKS, GATE_PR, HUMAN_GATED_CONTEXTS, JIRA_DONE,
-    JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, LIST, MERGE, PATHS,
-    POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT, PRE_MERGE,
-    PRE_START, REQUIRED_CHECKS, RUN, WORKFLOWS,
+    BUILD, EXCUSED_LABELS, FEEDBACK_CHECKS, FEEDBACK_REPLY, GATE_PR, HUMAN_GATED_CONTEXTS,
+    JIRA_DONE, JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, LIST, MERGE,
+    PATHS, POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION, POST_REQUIRE_APPROVAL, POST_TEMPLATE,
+    PRE_COMMIT, PRE_MERGE, PRE_START, REQUIRED_CHECKS, RUN, WORKFLOWS,
 };
 use super::resolve::{machine_path, owner_path, repo_path};
 use super::{
@@ -274,7 +274,9 @@ pub(super) fn typed_keys(
             let pr = &resolved.policy.pr;
             vec![
                 (FEEDBACK_CHECKS, value(&pr.feedback.checks)),
+                (FEEDBACK_REPLY, value(&pr.feedback.reply)),
                 (POST_ENABLED, value(&pr.post.enabled)),
+                (POST_REQUIRE_APPROVAL, value(&pr.post.require_approval)),
                 (POST_CHANNEL, value(&pr.post.channel)),
                 (POST_TEMPLATE, value(&pr.post.template)),
                 (POST_MERGED_REACTION, value(&pr.post.merged_reaction)),

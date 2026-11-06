@@ -389,7 +389,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\nhuman_gated_contexts = []\nexcused_labels = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\nestimate_fields = []\n",
+            "[pr]\nfeedback.checks = \"none\"\nfeedback.reply = \"all\"\nhuman_gated_contexts = []\nexcused_labels = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nrequire_approval = false\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\nestimate_fields = []\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -405,7 +405,9 @@ mod tests {
             src.left_out,
             [
                 "feedback.checks",
+                "pr.feedback.reply",
                 "pr.post.enabled",
+                "pr.post.require_approval",
                 "pr.post.channel",
                 "pr.post.template",
                 "pr.post.merged_reaction",

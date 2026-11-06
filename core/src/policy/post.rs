@@ -97,6 +97,7 @@ mod tests {
             channel: None,
             template: Some("{{ title }}".to_owned()),
             merged_reaction: None,
+            require_approval: None,
         };
         assert_eq!(check(&set).unwrap_err().0, "template");
     }
