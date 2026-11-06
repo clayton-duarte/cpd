@@ -23,6 +23,11 @@ const selected = (id = "s1"): AppState => run(initialState, { type: "selectSessi
 const pending = (id: string) => ({ clientSubmissionId: id, text: "hi", imageCount: 0, whenBusy: "followUp" as const });
 
 describe("store", () => {
+  it("an attach error of the selected session is kept until the same id is selected again", () => {
+    const failed = run(selected(), server({ type: "session.error", sessionId: "s1", error: err }));
+    expect(failed.session?.error).toEqual(err);
+    expect(run(failed, { type: "selectSession", sessionId: "s1" }).session?.error).toBeNull();
+  });
   it("cockpit snapshot and patches update the three panes", () => {
     const s1 = run(initialState, server({ type: "cockpit.snapshot", tree: tree(1), plan, inbox }));
     expect(s1.cockpit.tree).toEqual(tree(1));

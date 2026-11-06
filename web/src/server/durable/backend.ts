@@ -31,7 +31,6 @@ import type { HostClient, HostFrame } from "./client.ts";
 
 const ATTACH_RETRY_MS = 250;
 const ATTACH_RETRY_WINDOW_MS = 15_000;
-const isApproval = (d: Dialog): boolean => d.method === "ask_user_question" && d.questions.length === 1 && d.questions[0]?.header === "Approval";
 const FIRST_SNAPSHOT_MS = 5000; // same bound as the hello handshake (LIMITS.helloMs)
 const known = <T>(value: T): Stat<T> => ({ state: "known", value });
 const unknown = <T>(reason: string): Stat<T> => ({ state: "unknown", reason });
@@ -116,6 +115,7 @@ export function createDurableBackend(deps: {
       let lastFooter = "";
       let lastStatus = "";
       const dialogs = new Map<string, PendingDialog>();
+      const approvals = new Set<string>(); // dialog ids the host flagged as approvals
       const early: HostFrame[] = [];
 
       const send: SessionEmit = (message) => {
@@ -219,6 +219,7 @@ export function createDurableBackend(deps: {
           refuse();
           return;
         }
+        if (frame.approval === true || frame.purpose === "secret_approve") approvals.add(result.id);
         dialogs.set(result.id, { dialog: result });
         send({ type: "session.dialog", sessionId, dialog: result });
       };
@@ -457,7 +458,10 @@ export function createDurableBackend(deps: {
           guard();
           if (change.kind === "tier") {
             await deps.cpd.json(sessionRetierArgs(sessionId, change.tier));
-            tier = change.tier;
+            const shown = await deps.cpd.json(["session", "show", sessionId]);
+            const sw = shown["switch"];
+            const busy = typeof sw === "object" && sw !== null && (sw as { code?: unknown }).code === "host_busy";
+            if (!busy) tier = change.tier; // on host_busy the footer keeps the applied Tier
           } else if (change.kind === "model") {
             await client.configure({ model: change.model });
             agentModel = change.model;
@@ -506,7 +510,7 @@ export function createDurableBackend(deps: {
             send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
             return;
           }
-          if (pending.dialog.method === "ask_user_question" && isApproval(pending.dialog)) {
+          if (pending.dialog.method === "ask_user_question" && approvals.has(dialogId)) {
             // fail closed: a cancelled approval is a denial
             const answer = response.outcome === "answered" && response.method === "ask_user_question" ? response.result.answers[0]?.answer : undefined;
             return client.respond(dialogId, { value: answer === "Allow once" ? "Allow once" : "Deny" });
