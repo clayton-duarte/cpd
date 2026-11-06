@@ -34,7 +34,7 @@ pub struct Query {
 
 const COLUMNS: &str = "key, system, status, data_hash, fetched_at, invalidated, stale_after, last_error, error_count, inactive_at";
 
-fn parse(text: Option<String>) -> Result<Option<OffsetDateTime>, rusqlite::Error> {
+pub(super) fn parse(text: Option<String>) -> Result<Option<OffsetDateTime>, rusqlite::Error> {
     text.map(|t| {
         OffsetDateTime::parse(&t, &time::format_description::well_known::Rfc3339).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -71,7 +71,7 @@ pub fn get(store: &mut Store, key: &str) -> Result<Option<Query>, CpdError> {
 }
 
 /// The system of a key `<system>:<kind>:<id>`.
-fn system(key: &str) -> Result<&str, CpdError> {
+pub(super) fn system(key: &str) -> Result<&str, CpdError> {
     key.split(':')
         .next()
         .filter(|s| !s.is_empty() && key.matches(':').count() >= 2)
@@ -93,6 +93,8 @@ fn stale_time(key: &str) -> Result<Option<Duration>, CpdError> {
         ("github", "pr") => 5,
         ("github", "repo" | "viewer") | ("jira", "atlassian") => 24 * HOUR,
         ("slack", "channel") => 30 * 60,
+        // Not in swr.md §4; an assumption so a Jira issue key can commit.
+        ("jira", "issue") => 5 * 60,
         ("models", _) => 7 * 24 * HOUR,
         _ => {
             return Err(
@@ -105,7 +107,7 @@ fn stale_time(key: &str) -> Result<Option<Duration>, CpdError> {
 }
 
 const SETTLE: &str = "UPDATE swr_mutations SET status = 'done'
-     WHERE system = ?1 AND target_key = ?2 AND status = 'revalidating' AND completed_at <= ?3";
+     WHERE target_key = ?1 AND status = 'revalidating' AND completed_at <= ?2";
 
 pub fn commit(
     store: &mut Store,
@@ -123,8 +125,8 @@ pub fn commit(
         let settles = store.read(|c| {
             Ok(c.query_row(
                 "SELECT EXISTS (SELECT 1 FROM swr_mutations
-                   WHERE system = ?1 AND target_key = ?2 AND status = 'revalidating' AND completed_at <= ?3)",
-                params![system, key, started],
+                   WHERE target_key = ?1 AND status = 'revalidating' AND completed_at <= ?2)",
+                params![key, started],
                 |r| r.get::<_, bool>(0),
             )?)
         })?;
@@ -137,7 +139,7 @@ pub fn commit(
                         [key],
                     )?;
                 }
-                tx.execute(SETTLE, params![system, key, started])?;
+                tx.execute(SETTLE, params![key, started])?;
                 Ok::<(), CpdError>(())
             })?;
         }
@@ -153,7 +155,7 @@ pub fn commit(
                invalidated = 0, last_error = NULL",
             params![key, system, new_hash, timestamp(now), stale_after],
         )?;
-        tx.execute(SETTLE, params![system, key, started])?;
+        tx.execute(SETTLE, params![key, started])?;
         Ok::<(), CpdError>(())
     })?;
     Ok(Committed::Changed)
@@ -224,10 +226,10 @@ pub fn settle(
     _now: OffsetDateTime,
     poll_started_at: OffsetDateTime,
 ) -> Result<(), CpdError> {
-    let system = system(key)?.to_string();
+    system(key)?;
     let started = timestamp(poll_started_at);
     store.write("swr settle", |tx| {
-        tx.execute(SETTLE, params![system, key, started])?;
+        tx.execute(SETTLE, params![key, started])?;
         Ok::<(), CpdError>(())
     })
 }
