@@ -5337,7 +5337,7 @@ Decision hs-d540 (User): when the User creates a Lead or Manager from the tree, 
 
 Batch register (hs-d241, R2; the rule is hs-d239: no planned work lives only in a Lead's chat). A heuristic that nudges a Lead to register what it announced. It lives in its own module of the adapter (`pi/lib/reminder.ts`), with a few lines in `adapter.ts`.
 
-**When.** For a Session of role `lead` only (never a Manager, never a Worker). The future-work reminder is added at pi's `before_agent_start`: it never starts, wakes or interrupts a turn, it only adds a message to the run that is starting. The failed-Job reminder (**Failed Jobs**, below) is the one exception: it starts a turn.
+**When.** For a Session of role `lead` only (never a Manager, never a Worker). The future-work reminder is added at pi's `before_agent_start`: it never starts, wakes or interrupts a turn, it only adds a message to the run that is starting. The failed-Job reminder (**Failed Jobs**, below) and the failing-Workflow reminder (**Failing Workflows**, below) are the exceptions: they start a turn.
 
 **The check**, made at the end of each run of the Lead (so it concerns the Lead's **last assistant message of that run**) and held for the next run. The reminder is due when both hold:
 
@@ -5356,7 +5356,7 @@ A check that fails, whether `cpd plan show` returns an error or the message cann
 cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or Workflow. Register it now (cpd job add <k> --title "…" --tier <T> --spec <file>, or cpd workflow add … with --jobs <file.json> after the lock; contract §2.2 "A parked draft") and name its key.
 ```
 
-It is added **at most once per run** and once it has been added the reminder is not due again until a later run ends with a message that fails the check. The future-work reminder is never delivered to a Session that is not a `lead` and never starts a turn (`triggerTurn: false`, as §15.1's messages); the failed-Job reminder does start one (below).
+It is added **at most once per run** and once it has been added the reminder is not due again until a later run ends with a message that fails the check. The future-work reminder is never delivered to a Session that is not a `lead` and never starts a turn (`triggerTurn: false`, as §15.1's messages); the failed-Job and failing-Workflow reminders do start one (below).
 
 **Failed Jobs** (pro-d398; User, 2026-11-05 EST; supersedes pro-d396). A failed Job is never a final state: only `merged` and `cancelled` are final, so a failed Job is always unaddressed until a Lead disposes of it. A Lead disposes of it at once, in the turn that sees it: `cpd job retry <k> --tier <T>`; a fix Job (`cpd job add`); `cpd job cancel <k> --reason "<why>"` when it is superseded; or `ask_user_question` when the choice is the User's. A Lead never leaves a failed Job while idle, and never defers its retry to a background sleep or timer.
 
@@ -5370,6 +5370,19 @@ It is added **at most once per run** and once it has been added the reminder is 
 
 - **The dedupe.** The fingerprint is the failed entries sorted by key, each as `key:attempts` (`attempts` is the length of the Job's attempts list), joined with `,`. The message is sent only when the fingerprint differs from the Run's `failedReminded`, and then `failedReminded` is set to it. So one fingerprint fires at most once per Run; a retry that fails again (its attempts grow) or another failed Job is a new fingerprint and fires again. When no Job is failed, `failedReminded` is cleared to empty.
 - **A failed check adds nothing.** A `cpd plan show` that fails, or a show whose `jobs` is not a list, a failed Job with no string `key`, or a failed Job whose `attempts` is not a list (refused as `bad_output`), adds no message and is only logged, as the future-work check's failures are. A Manager and a Worker get none and read no Plan for it.
+
+**Failing Workflows** (pro-d456; User, decided work, no review). A Lead never goes idle leaving a red or conflicting Workflow pull request waiting. A Workflow is **unaddressed** when its pull request's `checks` is `failed` or its `mergeable` is `conflicting`, and no Job of it is `queued` or `running`. A Lead answers it in the turn that sees it: a fix Job (`cpd job add`), `cpd job retry <k> --tier <T>`, or `ask_user_question` when the choice is the User's. Every Workflow's pull request passes CI on its own (the Lead skill).
+
+- **The check** runs at every `agent_end` of a Lead with a plan, on the same one `cpd plan show --plan <plan>` call as the other two checks (**Failed Jobs**, above, and the future-work check). It lists the open Workflows (`status` `open`) whose `pull_request.checks` is `failed` or whose `pull_request.mergeable` is `conflicting` (a Workflow with no `pull_request` object lists nothing) and that have no Job queued or running. A Job belongs to a Workflow when its key is in that Workflow's `jobs` list, and its status is read from the top-level `jobs[]`. The list is sorted by Workflow key. It runs even when the run's last message has no assistant text, because it reads no message.
+- **Blocked.** While the Lead is blocked on a dialog (a pending `ask_user_question`) or on an open plan review, the check sends nothing and leaves `failingReminded` unchanged.
+- **The message.** When due it sends ONE message at once, so an idle Lead is woken: `customType: "cpd-reminder"`, `display: false` (never shown to the User), `triggerTurn: true` as a follow-up (the same delivery as the failed-Job reminder: `pi/lib/delivery.ts`; the loop guard of §15.15, L3 and L4, still gates it), `details: {rule: "failing-workflow-disposition", workflows: [<keys>]}`, and this `content`, `<k1, k2>` being the keys of the Workflows:
+
+  ```
+  cpd reminder: Workflow(s) <k1, k2> have a failing or conflicting pull request and no Job queued or running for it. Every Workflow PR must pass CI on its own: queue a fix Job now (cpd job add <k> --title "<title>" --tier <T> --spec <file> --workflow <key>), retry (cpd job retry <k> --tier <T>), or ask_user_question when the choice is the User's, in this turn. Never leave it waiting on another Workflow.
+  ```
+
+- **The dedupe.** The fingerprint is the keys of the unaddressed Workflows, sorted, joined with `,`. The message is sent only when the fingerprint differs from the Run's `failingReminded`, and then `failingReminded` is set to it. So a set of Workflows that is already reminded is not sent again while it stays the same. When no Workflow is failing and unaddressed, `failingReminded` is cleared to empty.
+- **A failed check adds nothing.** A `cpd plan show` that fails, or a show whose `workflows` or `jobs` is not a list, or an open Workflow whose `jobs` is not a list of strings (refused as `bad_output`), adds no message and is only logged. A Manager and a Worker get none and read no Plan for it.
 
 **Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
 
@@ -5947,6 +5960,43 @@ On `Allow once` the tool runs, by `kind`:
 `cpd pr approve --kind reply|post --workflow <key> [--to <item-id>] [--plan <id>]` is internal and Lead only: it needs `$CPD_SESSION` (else `usage`), requires `--to` for `reply` and refuses it for `post`, and writes one JSON file `$CPD_HOME/run/pr/approve/<uuid>.json` (directory 0700, file 0600, atomic write, valid 10 minutes, checked at read) holding `{session, kind, plan, workflow, to?, at}`. It is bound to the calling Session, the kind, the Workflow and, for `reply`, the item id. Kind `post` approves one `pr post` or one `pr repost` of that Workflow. It is removed only after the guarded action succeeded. Output `{"ok": true, "approved": {"kind", "workflow", "to", "expires_at"}}`. An agent is a process with `$CPD_SESSION` set and non-empty; the cockpit runs without it and is never asked.
 
 The same guards apply in the pi adapter (`pi/lib/adapter.ts`), the durable host (`pi/durable-host/guards.ts`) and the durable worker (`pi/durable-worker/guards.ts`).
+
+### 15.28 The electron guard (decision pro-d455)
+
+Decision pro-d455 (User): agents never run the electron binary by hand. The Electron app is `cpd app`'s (§14.4a), which owns its preview, reload, status and stop (`--preview`, `--reload`, `--status`, `--off`). A pi guard refuses a direct run and points there. The guard is a pure function of the command (`pi/lib/electronguard.ts`, like `pi/lib/secretguard.ts`).
+
+**When.** While a run is active, for every role (Lead, Manager, Worker, side forks), in the three bash-guard places that already call `secretBypass`, in the same order as the secret guard: the `tool_call` handler of `pi/lib/adapter.ts` (next to `secretBypass` and `hostApproveBypass`), `hostVerdict` of `pi/durable-host/guards.ts` and `workerVerdict` of `pi/durable-worker/guards.ts`. Each returns `{block: <reason>}` (the adapter returns `{block: true, reason}`).
+
+**What is refused.** `electronBypass(command: string): string | undefined` reads each simple command of the bash call with `simpleCommands` and `PREFIXES` of `pi/lib/shell.ts`, after the wrappers are skipped: env assignments (`NAME=value`), the `PREFIXES` (`sudo`, `time`, `nohup`, `env`, ...) and `timeout <duration>`. A simple command is refused when its command word, after the wrappers, is:
+
+- (a) `electron`, or a path ending `/electron`;
+- (b) `npx`, `bunx` or `pnpx`, and its first non-flag argument is `electron` or `electron@<version>`;
+- (c) `pnpm`, `npm`, `yarn` or `bun`, and a word `exec`, `dlx` or `x` is immediately followed by a word `electron`, anywhere after the command word (`pnpm exec electron .`, `pnpm --filter cpd-web-client exec electron .`, `npm exec electron`, `yarn dlx electron`);
+- (d) a path that ends with `Electron.app/Contents/MacOS/Electron`.
+
+**Not judged.** The guard reads command words and their runner words only. It does not judge `sh -c` or `bash -c` with a quoted string (the string is one word), a script file, `pnpm run <script>` even when the script wraps electron, `open -a Electron`, or a shell alias or function.
+
+**The refusal.** `reasonText(matched: string): string` gives the reason, one line, no newline:
+
+```
+φ: agents do not run the electron binary; use cpd app (--preview, --reload, --status, --off) (commands.md §15.28); refused: <matched>
+```
+
+`<matched>` is the words from the command word through the `electron` word (for (a) and (d), just the command word).
+
+**Examples.** Refused:
+
+| Command | `<matched>` |
+|---|---|
+| `electron .` | `electron` |
+| `npx electron` | `npx electron` |
+| `pnpm exec electron .` | `pnpm exec electron` |
+| `pnpm --filter cpd-web-client exec electron .` | `pnpm --filter cpd-web-client exec electron` |
+| `npm exec electron` | `npm exec electron` |
+| `yarn dlx electron` | `yarn dlx electron` |
+| `/Applications/Electron.app/Contents/MacOS/Electron` | `/Applications/Electron.app/Contents/MacOS/Electron` |
+
+Passed: `echo electron`, `grep electron f`, `cat web/electron.ts`, `pnpm run build:electron`, `pnpm --filter cpd-web-client run build:electron`, `ls node_modules/.bin/electron-builder`, `cpd app`, `cpd app --status`.
 
 ### 16.1 The Worker Spec
 
