@@ -1,16 +1,17 @@
 //! `pr reply` (Plan fb-path): answers an item of the Workflow's stored feedback list with a reply ending in the
-//! marker, as the User. It never resolves a thread, writes nothing in the store and appends no Event.
+//! marker, as the User, through the outbox (swr-github.md §9). It never resolves a thread.
 
 use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::comments::{Kind, MARKER};
-use super::{Env, approval, gh, workflow_policy};
+use super::comments::Kind;
+use super::{Env, approval, workflow_policy};
 use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
+use crate::swr::source::github_write::{enqueue, queued, target_of};
 
 #[derive(clap::Args, Debug)]
 pub struct ReplyArgs {
@@ -88,7 +89,6 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     };
 
     let key = workflow.key.clone();
-    let lead = workflow.lead(&id)?;
     let approval = match approval::agent_session() {
         Some(session)
             if bots_only(&workflow_policy(&mut env, &id, &key)?)
@@ -104,23 +104,22 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         }
         _ => approval::Guard::none(),
     };
-    let runner = &*env.ports.runner;
-    let url = match item.kind {
-        Kind::Thread => {
-            gh::reply_to_thread(runner, lead, &item.id, &format!("{text}\n\n{MARKER}"))?
-        }
-        Kind::Comment | Kind::Review => {
-            let node = gh::pull_request_id(runner, lead, &pull.repo, pull.number)?;
-            gh::reply_to_comment(
-                runner,
-                lead,
-                &node,
-                &format!("Re: {}\n\n{text}\n\n{MARKER}", item.url),
-            )?
-        }
-    };
+    let id_text = item.id.clone();
+    let mutation = enqueue(
+        &mut env.store,
+        ports.clock.utc(),
+        &target_of(&pull.repo, pull.number),
+        "reply",
+        json!({"to": id_text, "body": text}),
+        Some(json!({"feedback_without": id_text})),
+    )?;
+    let out = queued(
+        &mut env.store,
+        &pull.repo,
+        pull.number,
+        mutation,
+        json!({"replied": {"pr": workflow.key, "to": args.to, "url": item.url}}),
+    )?;
     approval.consume()?;
-    Ok(Output::success(
-        json!({"replied": {"pr": workflow.key, "to": args.to, "url": url}}),
-    ))
+    Ok(out)
 }

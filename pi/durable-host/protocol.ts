@@ -59,7 +59,7 @@ export type HostState = {
   held_ui: number;
 };
 
-export type UiPurpose = "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+export type UiPurpose = "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "external_approve" | "mcp_login" | "other";
 export type UiMethod = "select" | "confirm" | "input" | "editor" | "questionnaire";
 
 export type UiQuestion = {

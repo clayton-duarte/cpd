@@ -23,3 +23,13 @@ it("app.css hides the manager body and scrollbars when the Plan pane is collapse
   expect(header).not.toBeNull();
   expect(header).toMatch(/border-bottom-color:\s*transparent/);
 });
+
+it("app.css hides the plan body and the title row border when the Plan pane is collapsed", () => {
+  const pane = '[aria-label="Plan pane"][data-state="collapsed"]';
+  const body = rule(`${pane} [data-part="plan-body"]`);
+  expect(body).not.toBeNull();
+  expect(body).toMatch(/display:\s*none/);
+  const header = rule(`${pane} [data-part="title-row"]`);
+  expect(header).not.toBeNull();
+  expect(header).toMatch(/border-bottom-color:\s*transparent/);
+});

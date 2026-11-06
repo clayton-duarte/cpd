@@ -184,6 +184,9 @@ pub(super) fn fx(status: &str) -> Pay {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked});
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
          INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
@@ -210,19 +213,6 @@ impl Pay {
             .unwrap()
     }
 
-    fn gh_inline2(&self, text: &str) {
-        *self.gh.inline2.lock().unwrap() = Some(format!("{text}\n"));
-    }
-
-    /// The labels the pull request carries, as `pr view` answers them.
-    pub(super) fn gh_labels(&self, names: &[&str]) {
-        *self.gh.labels.lock().unwrap() = names.iter().map(|n| (*n).to_owned()).collect();
-    }
-
-    pub(super) fn gh_fails(&self, stderr: &str) {
-        *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
-    }
-
     fn gh_calls(&self) -> Vec<Vec<String>> {
         self.fx
             .calls("gh")
@@ -232,9 +222,29 @@ impl Pay {
     }
 }
 
+/// The pass's rows for `acme/pay#812`: the changed-requested, failed raw row and its hydrated detail.
+pub(super) fn hydrate(pay: &Pay) {
+    let detail = json!({
+        "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
+            {"__typename": "CheckRun", "name": "ci/test", "conclusion": "FAILURE", "status": "COMPLETED", "detailsUrl": "https://github.com/acme/pay/actions/runs/1"},
+            {"__typename": "StatusContext", "context": "ci/lint", "state": "SUCCESS", "targetUrl": "https://lint.example/1"},
+            {"__typename": "StatusContext", "context": "ci/old", "state": "SUCCESS"}]}}}}]},
+        "latestReviews": {"nodes": [{"id": "PRR_1", "author": {"login": "reviewer"}, "state": "CHANGES_REQUESTED", "body": "Please add a test."}]},
+        "comments": {"nodes": [{"id": "IC_1", "author": {"login": "reviewer"}, "body": "Thanks for the fix."}]},
+        "reviewThreads": {"nodes": [{"id": "T1", "path": "src/payout.rs", "comments": {"nodes": [
+            {"id": "1893", "author": {"login": "reviewer"}, "body": "This retry never backs off."}]}}]}
+    });
+    pay.fx.env.sql(&format!(
+        "UPDATE pull_requests SET review_decision = 'changes_requested', checks = 'failed', head_oid = 'abc' WHERE number = 812;
+         INSERT INTO swr_pr_detail (repo, number, head_oid, updated_at, hydrated_at, detail_json, detail_hash)
+           VALUES ('acme/pay', 812, 'abc', 'U', 't', '{detail}', 'h');"
+    ));
+}
+
 #[test]
-fn view_prints_the_checks_reviews_comments_and_inline_comments() {
+fn view_prints_the_cached_checks_reviews_comments_and_inline_comments_and_calls_no_gh() {
     let fx = fx("open");
+    hydrate(&fx);
 
     let out = fx
         .fx
@@ -245,7 +255,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
         out,
         json!({"ok": true, "plan": "pay",
             "pr": {"key": "repo", "number": 812, "url": URL, "title": "Pay the bills", "state": "open",
-                   "review_decision": "changes_requested", "checks": "failed", "jira": null},
+                   "review_decision": "changes_requested", "checks": "failed", "jira": null, "head_oid": "abc", "overlay": []},
             "checks": [
                 {"name": "ci/test", "conclusion": "FAILURE", "url": "https://github.com/acme/pay/actions/runs/1"},
                 {"name": "ci/lint", "conclusion": "SUCCESS", "url": "https://lint.example/1"},
@@ -254,37 +264,34 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
             "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null, "post": null})
     );
-    let gh = fx.gh_calls();
-    assert_eq!(gh[0][..3], ["pr", "view", "812"]);
+    assert!(fx.gh_calls().is_empty(), "a reader never calls GitHub");
+}
+
+#[test]
+fn view_before_the_first_hydrate_prints_no_checks_reviews_or_comments() {
+    let fx = fx("open");
+    let out = fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
     assert_eq!(
-        gh[0][4],
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels"
-    );
-    assert_eq!(
-        gh[1],
-        [
-            "api",
-            "repos/{owner}/{repo}/pulls/812/comments?per_page=100",
-            "--paginate"
-        ]
+        (
+            &out["checks"],
+            &out["reviews"],
+            &out["comments"],
+            &out["inline_comments"]
+        ),
+        (&json!([]), &json!([]), &json!([]), &json!([]))
     );
 }
 
 #[test]
-fn view_reads_every_page_of_inline_comments() {
+fn view_shows_the_overlay_of_a_queued_write_and_the_raw_row_stays() {
     let fx = fx("open");
-    fx.gh_inline2(r#"[{"id": 1894, "user": {"login": "other"}, "path": "src/lib.rs", "body": "Second page."}]"#);
-
-    let out = fx
-        .fx
-        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
-        .ok();
-
-    assert_eq!(
-        out["inline_comments"],
-        json!([{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."},
-               {"id": "1894", "author": "other", "path": "src/lib.rs", "body": "Second page."}])
+    fx.fx.env.sql(
+        "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, patch_json, status, submitted_at)
+           VALUES ('github', 'github:pr:acme/pay#812', 'retitle', '{\"title\":\"New\"}', '{\"title\":\"New\"}', 'pending', '2026-01-01T00:00:00.000Z')",
     );
+    let out = fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
+    assert_eq!(out["pr"]["title"], "New");
+    assert_eq!(out["pr"]["overlay"].as_array().map(Vec::len), Some(1));
 }
 
 #[test]
@@ -318,33 +325,6 @@ fn view_refuses_a_waiting_pr() {
 }
 
 #[test]
-fn view_reports_a_failing_gh_as_gh_failed() {
-    let fx = fx("open");
-    fx.gh_fails("HTTP 401: bad credentials");
-    let txns = fx.count("txns");
-
-    let run = fx.fx.cpd(&["pr", "view", "--plan", "pay"]);
-
-    assert_eq!(
-        (run.error()["code"].as_str().unwrap(), run.exit),
-        ("gh_failed", 1)
-    );
-    let details = &run.error()["details"];
-    assert_eq!(
-        details["argv"].as_array().unwrap()[..3],
-        [json!("gh"), json!("pr"), json!("view")]
-    );
-    assert!(
-        details["stderr"]
-            .as_str()
-            .unwrap()
-            .contains("bad credentials"),
-        "{details}"
-    );
-    assert_eq!(fx.count("txns"), txns);
-}
-
-#[test]
 fn view_prints_the_post_of_a_posted_pr() {
     let fx = fx("open");
     let link = "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209";
@@ -367,112 +347,5 @@ fn view_prints_the_post_of_a_posted_pr() {
     assert_eq!(
         out["post"],
         json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null, "refusal": null})
-    );
-}
-
-/// `pr view` of an open PR whose head holds `checks`, under the owner policy `body`: the checks summary it prints.
-fn summary_of(body: &str, checks: Vec<serde_json::Value>) -> serde_json::Value {
-    let fx = fx("open");
-    fx.fx.env.owner_policy("acme", body);
-    let view = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": URL, "reviewDecision": null, "statusCheckRollup": checks, "reviews": [], "comments": []});
-    let _ = (*fx.fx.fakes.runner).clone().on(
-        "gh",
-        |c| c.args.starts_with(&["pr".into(), "view".into()]),
-        Reply::ok(&format!("{view}\n")),
-    );
-    fx.fx
-        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
-        .ok()["pr"]["checks"]
-        .clone()
-}
-
-fn guardian() -> serde_json::Value {
-    json!({"__typename": "StatusContext", "context": "GitGuardian Security Checks", "state": "SUCCESS"})
-}
-
-#[test]
-fn view_reports_pending_checks_when_a_required_check_is_missing() {
-    assert_eq!(
-        summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian()]),
-        "pending"
-    );
-}
-
-#[test]
-fn view_with_an_empty_required_list_or_a_passed_required_check_reports_passed() {
-    assert_eq!(
-        summary_of("[pr]\nrequired_checks = []\n", vec![guardian()]),
-        "passed"
-    );
-    let gate = json!({"__typename": "CheckRun", "name": "gate", "status": "COMPLETED", "conclusion": "SUCCESS"});
-    assert_eq!(
-        summary_of(
-            "[pr]\nrequired_checks = [\"gate\"]\n",
-            vec![guardian(), gate]
-        ),
-        "passed"
-    );
-}
-
-const HOLD: &str = "[pr]\nexcused_labels = [\"No Merges on Friday\", \"Dont Merge\"]\n";
-
-/// `pr view` of an open PR carrying `No Merges on Friday` whose head holds `checks`, under a policy with excused labels: the
-/// whole output.
-fn view_under_a_hold(checks: Vec<serde_json::Value>) -> serde_json::Value {
-    let fx = fx("open");
-    fx.fx.env.owner_policy("acme", HOLD);
-    let view = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": URL, "reviewDecision": null, "statusCheckRollup": checks,
-        "labels": [{"name": "No Merges on Friday"}], "reviews": [], "comments": []});
-    let _ = (*fx.fx.fakes.runner).clone().on(
-        "gh",
-        |c| c.args.starts_with(&["pr".into(), "view".into()]),
-        Reply::ok(&format!("{view}\n")),
-    );
-    fx.fx
-        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
-        .ok()
-}
-
-fn check_run(name: &str, conclusion: &str) -> serde_json::Value {
-    json!({"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion})
-}
-
-#[test]
-fn pr_view_reports_passed_when_only_danger_fails_under_an_excused_label() {
-    let out = view_under_a_hold(vec![
-        check_run("ci/test", "SUCCESS"),
-        check_run("danger", "FAILURE"),
-        guardian(),
-    ]);
-
-    assert_eq!(out["pr"]["checks"], "passed");
-    assert_eq!(
-        out["checks"][1],
-        json!({"name": "danger", "conclusion": "FAILURE"}),
-        "the list keeps danger's real conclusion"
-    );
-}
-
-#[test]
-fn pr_view_reports_failed_when_a_test_check_fails_under_an_excused_label() {
-    let out = view_under_a_hold(vec![
-        check_run("ci/test", "FAILURE"),
-        check_run("danger", "FAILURE"),
-    ]);
-
-    assert_eq!(out["pr"]["checks"], "failed");
-}
-
-#[test]
-fn pr_view_asks_gh_for_the_labels() {
-    let fx = fx("open");
-    fx.gh_labels(&["Dont Merge"]);
-
-    fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
-
-    let fields = &fx.gh_calls()[0][4];
-    assert!(
-        fields.split(',').any(|f| f == "labels"),
-        "the field list is {fields}"
     );
 }

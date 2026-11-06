@@ -87,6 +87,8 @@ pub(super) fn reap(engine: &mut Engine) {
     if engine.outgrown() {
         return;
     }
+    // The outbox of GitHub writes drains here, in E5's step (swr-github.md §9).
+    super::swr::drain_github(engine);
     let Some(finished) = engine.poll.as_mut().and_then(PollRun::try_take) else {
         return;
     };

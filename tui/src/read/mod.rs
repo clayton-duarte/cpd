@@ -91,5 +91,5 @@ pub use tree::{
 };
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, ReviewDecision, Slots, Widgets,
-    WorkflowRow, open_pulls, slots, widgets,
+    WorkflowRow, slots, widgets,
 };

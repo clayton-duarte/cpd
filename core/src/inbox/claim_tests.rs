@@ -12,7 +12,7 @@ use crate::clock::ManualClock;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::runner::{FakeRunner, Reply};
+use crate::host::runner::FakeRunner;
 use crate::ports::Ports;
 use crate::store::Store;
 use std::sync::Arc;
@@ -66,10 +66,9 @@ fn reviews(
         workflows,
     };
     let bots = ["github-actions".to_owned()];
-    let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
+    crate::inbox::swr_fixture::lookup(store, &lookup).unwrap();
     let team = Team {
         bot_reviewers: &bots,
-        github: &mut github,
     };
     let all = conditions_with(store, home, now, 20, 1, Some(team)).unwrap();
     all.into_iter()
@@ -270,9 +269,43 @@ fn refused_claim(answer: &str) -> (CpdError, model::Item) {
     let open = reviews(&mut store, &home, NOW, &[812]);
     run(&mut store, &open, "2026-01-01T00:00:00.000Z");
     let id = store.read(model::open_items).unwrap()[0].id;
+    // The pass's rows, from the answer GitHub would have given.
+    let reply: Value = serde_json::from_str(answer).unwrap();
+    let me = reply["data"]["viewer"]["login"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let raw = &reply["data"]["p0"]["pullRequest"];
+    let found = (!reply["data"]["p0"].is_null()).then(|| GhPr {
+        title: raw["title"].as_str().unwrap().to_owned(),
+        draft: raw["isDraft"].as_bool().unwrap(),
+        state: match raw["state"].as_str().unwrap() {
+            "OPEN" => GhState::Open,
+            "MERGED" => GhState::Merged,
+            _ => GhState::Closed,
+        },
+        author: raw["author"]["login"].as_str().unwrap().to_owned(),
+        decision: raw["reviewDecision"].as_str().map(str::to_owned),
+        reviews: raw["latestReviews"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| super::team::Review {
+                author: r["author"]["login"].as_str().unwrap().to_owned(),
+                state: r["state"].as_str().unwrap().to_owned(),
+                commit_oid: None,
+            })
+            .collect(),
+        head_oid: None,
+        checks_state: None,
+    });
+    let lookup = Lookup {
+        me,
+        workflows: [(("acme/pay".to_owned(), 812), found)].into(),
+    };
+    super::swr_fixture::lookup(&mut store, &lookup).unwrap();
     let clock = ManualClock::new();
     let runner = FakeRunner::new(clock.clone());
-    let _ = runner.clone().on("gh", |_| true, Reply::ok(answer));
     let ports = Ports {
         clock: Arc::new(clock),
         runner: Arc::new(runner),

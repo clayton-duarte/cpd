@@ -22,6 +22,8 @@ export function PlanView(props: {
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
   /** Workflow keys, PR urls and `#<number>`s of the Plan's Inbox rows that carry a `pr.post` action (1f). Absent: no postable check. */
   postableWorkflows?: ReadonlySet<string>;
+  /** The manager key's click: `App` calls `onSelectPlan(null)` then the Manager's `onSelectSession` (DESIGN 3e, pro-d84). Absent: the key is a plain span. */
+  onSelectManager?: () => void;
 }): ReactElement;
 ```
 
@@ -38,25 +40,27 @@ CpdFlowCanvas   (cockpit/FlowCanvas.tsx, pro-d68)   root div[data-part="flow-can
     ├─ svg[data-part="dag-edges"][aria-hidden="true"]   the step edges
     └─ ul   one li[data-step] per Plan flowchart step (FLOW_STEPS), a collapsible card, closed at start
 ```
-No `section` element is rendered in that case (KEPT: `querySelector("section")` is null). The Plan pane's content (this outline) is wrapped in a `ScrollArea` by Shell (DESIGN 3c, pro-d69); the outline's own elements do not scroll.
+No `section` element is rendered in that case (KEPT: `querySelector("section")` is null). The outline is not wrapped in a `ScrollArea`: Shell's wrapper is removed (pro-d88), and the outline has no header. The Plan pane section clips it (`overflow-hidden`, DESIGN 3c). Whether it should scroll is not decided here (open, for the Lead).
 
 `plan !== null`:
 
 ```
-section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT label; flex flex-col gap-2.5 px-4 pb-3
-├─ div[data-part="title-row"]            flex h-11 flex-wrap items-center gap-3.5 pr-16      (h-11 = 44px; pr-16 = 64px kept free for Shell's plan controls, DESIGN 3c)
-│   ├─ h2                                {plan.title}      KEPT (test: h2 contains "Web UI"); font-mono text-[14px] font-semibold text-fg-strong
-│   ├─ span[data-part="plan-key"]        {plan.planId}     font-mono text-meta text-fg-dim
+section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT label; flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden (pro-d88)
+├─ TopPaneHeader[data-part="title-row"]   the shared header (DESIGN 3i): h-11 (44px), no wrap; not sticky, outside the body's ScrollArea (pro-d88); the plan collapse control follows the actions (DESIGN 3c, 3i)
+│   ├─ button[type="button"][data-action="select-manager"]   {context id}, the manager key; font-mono text-[14px] font-semibold text-muted-foreground hover:text-fg-strong; click → `onSelectManager()`. Only when `onSelectManager` is passed; else `span[data-part="manager-key"]` with the same text, no click
+│   ├─ span[aria-hidden="true"]          "/"   text-fg-dim
+│   ├─ h2[data-part="plan-key"][title={plan.title}]   {plan.planId}   truncate; font-mono text-[14px] font-semibold text-fg-strong
 │   ├─ ol[aria-label="Phase"][data-part="stepper"]     (1c)
-│   ├─ span.flex-1
-│   ├─ p[data-part="review"]             only when plan.review !== null; text exactly `Review {review.id}: {review.status}`   KEPT copy (PlanView.test 1: "Review r1: approved"); font-mono text-meta text-muted-foreground
-│   └─ p[data-part="escalations"]        only when plan.openEscalations > 0; text exactly `Escalations: {n}`   KEPT copy; font-mono text-meta text-status-blocked
-├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
-├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
-├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
-└─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
+│   └─ actions: p[data-part="review"]    only when plan.review !== null; text exactly `Review {review.id}: {review.status}`   KEPT copy (PlanView.test 1: "Review r1: approved"); font-mono text-meta text-muted-foreground
+│       p[data-part="escalations"]       only when plan.openEscalations > 0; text exactly `Escalations: {n}`   KEPT copy; font-mono text-meta text-status-blocked
+└─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
+    └─ div[data-part="plan-body"]   flex flex-col gap-2.5 px-4 py-2.5; hidden when the Plan pane is collapsed (DESIGN 3i)
+        ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
+        ├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
+        ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
+        └─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
 ```
-Order of children: title row, explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
+Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
 
 The old bare `<p>{plan.phase}</p>` is replaced by the stepper (no test pins it). The old standalone `h3`/`p` lines become the card header (1f).
 
@@ -239,7 +243,7 @@ section[data-part="review-pr"][aria-label="Review PR"]   rounded-[9px] border bo
 
 The anchor's text is `#912 open` for state `open` and `#7` for state null, followed by the `ExternalLinkIcon` (pro-d77), which replaces the `󱆭` glyph here; the TUI box in `docs/contract.md` keeps its glyph. Its class is the Workflow card's PR anchor's (`web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard`). `rel` is added: the anchor opens in a new tab, and `noopener noreferrer` is the rule of §2.6 for the Inbox's new-tab links. The TUI box's rows of the same Plan are in `docs/contract.md` §2.6 ("The Review PR box"), the same data and the same cut title.
 
-### 1j. ManagerView (a Manager or Context session selected; pro-d70, pro-d75, pro-d76)
+### 1j. ManagerView (a Manager or Context session selected; pro-d70, pro-d75, pro-d76, pro-d89)
 
 File `web/src/ui/cockpit/ManagerView.tsx`. The Plan pane shows it instead of PlanView when no Plan is loaded for the selection (`visiblePlan` null, DESIGN 5.3). `App` passes the Context that holds the selected session (its Manager, a Lead or a fork) and renders `CpdFlowCanvas` (1b) when there is none. So a selected Manager shows ManagerView, not the flowchart. `App` wraps it in `ErrorBoundary name="ManagerView"` and in `memo()` (DESIGN 3e).
 
@@ -254,18 +258,18 @@ export interface ManagerViewProps {
 DOM:
 
 ```
-section[aria-label="Manager overview {context.id}"][data-manager-view="{context.id}"]   flex min-w-0 flex-col overflow-x-hidden
-├─ header[data-part="manager-header"]   sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4 pr-16
+section[aria-label="Manager overview {context.id}"][data-manager-view="{context.id}"]   flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden (pro-d88)
+├─ TopPaneHeader[data-part="manager-header"]   the shared header (DESIGN 3i), `hasOverlayControls` default (the plan collapse control, DESIGN 3c); not sticky, outside the body's ScrollArea (pro-d88)
 │   ├─ h2[data-part="manager-key"][title={context.title}]   {context.id}   font-mono text-[14px] font-semibold text-fg-strong
 │   ├─ span[data-part="manager-counters"]   `{n} active · {n} done · {n} records`   min-w-0 truncate font-mono text-meta text-muted-foreground
 │   └─ span.flex-1                                          (no Flowchart button, pro-d76)
-└─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
-    ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
-    ├─ ol[data-part="active-plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan that is not `done`; `p` "All current plans are done." when there are none
-    └─ Collapsible   only when a `done` Plan exists; closed at start; trigger `Done plans ({n})`; content ol[data-part="done-plans"] (same rows)
+└─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
+    └─ div[data-part="manager-body"]   flex min-w-0 flex-col gap-2 px-4 py-2.5
+        ├─ Empty[data-empty]   "No plans in this context yet — chat with the Manager below to shape a Plan"   (no unarchived Plan)
+        └─ ol[data-part="plans"]   one li[data-manager-plan="{id}"][data-phase] per unarchived Plan, done Plans included, in `livePlans` order (Order below); the only Plan list, no collapsible (pro-d89)
 ```
 
-**Order.** The Plans are sorted by `compareOrderKey` (`state/archiveNav.ts`) on the Lead's dot and `created_at`, the key the tree's Plan rows use (3d).
+**Order.** The Plans are `livePlans(context)` (`state/archiveNav.ts`, pro-d89), the same filter and order as the ContextTree's Plan rows (DESIGN.md 3d). The view does not sort them again. The counters count the same list: active is a phase not `done`, done is a phase `done`.
 
 **Row** (pro-d76; the order is the one of pro-d76, which supersedes pro-d75):
 
@@ -331,8 +335,8 @@ export function Inbox(props: {
 
 ```
 aside[aria-label="Inbox"]
-├─ div[data-part="inbox-header"]   flex h-8 shrink-0 items-center justify-between gap-8 px-2.5
-│   └─ h2   text exactly "Inbox"    text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
+├─ TopPaneHeader[data-part="inbox-header"]   the shared header (DESIGN 3i), `hasOverlayControls` false, h-11 px-4
+│   └─ h2   text exactly "INBOX"    font-mono text-[14px] font-semibold uppercase text-fg-strong
 └─ p   text exactly "Loading inbox…"   px-[14px] text-fg-dim
 ```
 
@@ -340,10 +344,10 @@ aside[aria-label="Inbox"]
 
 ```
 aside[aria-label="Inbox"]
-├─ div[aria-hidden="true"]   the measuring copy (2.4.2): invisible absolute -z-10 flex h-8 w-max items-center gap-8 px-2.5
-├─ div[data-part="inbox-header"]   flex h-8 shrink-0 items-center justify-between gap-8 px-2.5
-│   ├─ h2   "Inbox"        shrink-0; text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
-│   └─ the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (ml-auto shrink-0), or the collapsed trigger (2.4.2)
+├─ div[aria-hidden="true"]   the measuring copy (2.4.2): invisible absolute -z-10 flex h-11 w-max items-center gap-8 px-4
+├─ TopPaneHeader[data-part="inbox-header"]   the shared header (DESIGN 3i), `hasOverlayControls` false
+│   ├─ h2   "INBOX"        shrink-0; font-mono text-[14px] font-semibold uppercase text-fg-strong
+│   └─ actions: the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (shrink-0), or the collapsed trigger (2.4.2)
 ├─ p[data-empty]     only when the filtered list is empty; text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
 └─ ScrollArea   min-h-0 flex-1 (pro-d69; the list scrolls here, the aside clips)     (only when filtered rows exist)
     └─ ItemGroup   gap-2 px-2.5 py-1.5
@@ -374,7 +378,7 @@ Snoozes and `Dismiss` go straight through `onAction` (they are not tracked in `p
 
 ### 2.4. Tier filter (pro-d49, pro-d50)
 
-**Header control.** `ToggleGroup[type="multiple"][variant="outline"][size="sm"][data-part="inbox-filters"][aria-label="Filter inbox by tier"]`, right-aligned (`ml-auto shrink-0`), in the header row after the `Inbox` h2. The header is `justify-between` with `gap-8`, so the title and the filters are at least `gap-8` (32px) apart. Seven `ToggleGroupItem`s in this order, each `h-6 gap-1.5 px-1.5 text-xs`:
+**Header control.** `ToggleGroup[type="multiple"][variant="outline"][size="sm"][data-part="inbox-filters"][aria-label="Filter inbox by tier"]`, right-aligned (`shrink-0`), in the `actions` slot of the header after the `INBOX` h2. The shared header (3i) separates them with its flex spacer only, so the 32px minimum of pro-d50 (`gap-8`) no longer holds. The measuring copy keeps `gap-8`. Seven `ToggleGroupItem`s in this order, each `h-6 gap-1.5 px-1.5 text-xs`:
 
 | Order | `value` | `data-tier-filter` | label | count | text class |
 |---|---|---|---|---|---|
@@ -397,7 +401,7 @@ Snoozes and `Dismiss` go straight through `onAction` (they are not tracked in `p
 
 **Collapse into a Popover (pro-d50).** The header measures itself with a `ResizeObserver` on the header and on the measuring copy (`measureRef`, the same items in a `w-max` row with `gap-8`). When the header's `clientWidth` is less than the copy's `scrollWidth`, the filters collapse:
 
-- The `ToggleGroup` is replaced by `Popover` > `PopoverTrigger asChild` > `Button[type="button"][variant="outline"][size="sm"][data-part="inbox-filters-trigger"][aria-label="Filter inbox by tier"]` (`ml-auto h-6 shrink-0`, `ListFilterIcon` size 3.5, the label `all` or `N tier` / `N tiers`, and the count `filteredRows.length`).
+- The `ToggleGroup` is replaced by `Popover` > `PopoverTrigger asChild` > `Button[type="button"][variant="outline"][size="sm"][data-part="inbox-filters-trigger"][aria-label="Filter inbox by tier"]` (`h-6 shrink-0`, `ListFilterIcon` size 3.5, the label `all` or `N tier` / `N tiers`, and the count `filteredRows.length`).
 - The `PopoverContent` (`align="end"`, `w-auto min-w-[8.5rem] p-1.5`) holds a `ToggleGroup` with the same `type`, `variant`, `size`, `value`, `aria-label`, `data-part="inbox-filters"` and the same seven items, with `orientation="vertical"` and `w-full`.
 - The measure runs on mount and whenever the tier counts or the row count change. The measuring copy shows the same labels and counts, in plain spans.
 
@@ -466,7 +470,7 @@ The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` 
 
 | State | Rendering |
 |---|---|
-| `inbox === null` | the 2b first outline: `Inbox` heading and `Loading inbox…` |
+| `inbox === null` | the 2b first outline: `INBOX` heading and `Loading inbox…` |
 | no rows in the snapshot | the header (the filters at `all 0`), `p[data-empty]` `up to date, drink some water`; no list |
 | rows exist, the filter selects none | the same `p[data-empty]` copy; the header keeps its filters |
 | engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row with `Start` |
@@ -507,19 +511,21 @@ Inbox: rows are listed in `inbox.rows` order with no groups; the `all` filter co
 
 ## 4. Cockpit amendments pro-d48..pro-d61 (consolidate-docs)
 
-The contract of each item below is stated in full in the section it names. This section is the index for the cockpit decisions and the one place the Header's breadcrumb is specified.
+The contract of each item below is stated in full in the section it names. This section is the index for the cockpit decisions. The Header's breadcrumb (4.1) is superseded by pro-d87.
 
 | Decision | Contract | Section |
 |---|---|---|
 | pro-d48 fonts | Roboto and Roboto Mono bundled; `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` | DESIGN.md 2b (already on main) |
 | pro-d49 tier filter | seven-item ToggleGroup, right-aligned, selection rules | 2.4 |
-| pro-d50 layout | `gap-8` title to filters; popover collapse; defaults 20 / 50 / 30; double-click resets | 2.4, 4.2 |
+| pro-d50 layout | `gap-8` title to filters (for the Inbox header superseded by pro-d85, DESIGN 3i); popover collapse; defaults 20 / 50 / 30; double-click resets | 2.4, 4.2 |
 | pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions | 2.5 |
 | pro-d52 columns | full-height media and actions columns; age and primary button at the bottom | 2.5 |
 | pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | 2.6, 2.7, 4.8 |
-| pro-d60 breadcrumb | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
+| pro-d60 breadcrumb (superseded by pro-d87) | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
 
-### 4.1 Header breadcrumb (pro-d60)
+### 4.1 Header breadcrumb (pro-d60), superseded by pro-d87
+
+**Superseded by pro-d87.** The Header bar that held these crumbs is removed (DESIGN.md 3a), so no crumb is shown and `App` builds none. The breadcrumb navigation is a known loss (A3) and is not rebuilt. The text below is the pro-d60 contract as written, kept as the record; it is not current.
 
 `App.tsx` builds the crumbs (`useMemo`) and passes them to `Header` as `crumbs` (DESIGN.md 3a). Each crumb is `{ part, label, onClick? }`, `part` one of `host`, `group`, `manager`, `lead`, `worker`. The crumbs are a shadcn `Breadcrumb` (2f) in the header, `aria-label="Location"`, `data-part="breadcrumb"`, `font-mono text-xs`, separated by `/`.
 
@@ -549,11 +555,11 @@ The defaults (tree 20%, centre 50%, Inbox 30%), the double-click on `split-left`
 
 pro-d48..pro-d61 name no tree change. The tree is DESIGN.md 3d and 3g as they stand, with one later change, pro-d78 (transient, not persisted): when a Manager session is selected, the tree auto-collapses that Context's live Plans and forks (the Context row's `Collapsible`; the Archive is not affected). The User may toggle it by hand until the selection changes. Selecting any other agent expands it again. pro-d79 and pro-d80 change the tree too: standing Contexts are rows of the Contexts section, ordered and marked as DESIGN.md 3d states, and the tree has only the Contexts and Archive sections.
 
-pro-d81: when `selectedSessionId` or `selectedPlanId` changes, whatever the source (tree, Inbox, Manager view, jump command), the tree opens the section and Context holding the selected row if collapsed (through the persisted open flags; a selected Manager's own Context stays collapsed, pro-d78) and scrolls the `[aria-current="true"]` row into view with `scrollIntoView({ block: "nearest", inline: "nearest" })`, once at once and once on the next animation frame, only where the element has `scrollIntoView`.
+pro-d81: when `selectedSessionId` or `selectedPlanId` changes, whatever the source (tree, Inbox, Manager view, jump command), the tree opens the Archive section if it holds the selected row (its persisted open flag), and the Context holding the selected row if collapsed (a selected Manager's own Context stays collapsed, pro-d78). The Contexts section has no collapse and no flag (pro-d84, DESIGN 3d) and scrolls the `[aria-current="true"]` row into view with `scrollIntoView({ block: "nearest", inline: "nearest" })`, once at once and once on the next animation frame, only where the element has `scrollIntoView`.
 
 ### 4.4 Fonts and tokens (pro-d48)
 
-Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark, the Header's φ and the fold markers use `font-display`, which is the sans family.
+Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark and the fold markers use `font-display`, which is the sans family.
 
 ### 4.5 Inbox (pro-d49 to pro-d53)
 

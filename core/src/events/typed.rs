@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::NewEvent;
 use super::kind::Kind;
+use crate::error::{CpdError, ErrorCode};
 
 /// The `number` and `url` of a `workflow-base-changed` Event (§5.2): the pull request's, for the poll's follow of GitHub's
 /// repoint; explicit nulls for the poll's unstack of a Workflow with no pull request (hs-d301); absent for every other `by`.
@@ -778,6 +779,26 @@ impl NewEvent {
         )
     }
 
+    /// The engine's Review Lead wake: a waking message from the User's side (`from` null) that names the woken `head_oid`,
+    /// stored as given. An empty or whitespace-only `head_oid` is refused with `usage`.
+    pub fn session_message_head(
+        text: impl Into<String>,
+        message: &str,
+        head_oid: &str,
+    ) -> Result<NewEvent, CpdError> {
+        if head_oid.trim().is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                "A session-message head_oid is never empty.",
+            ));
+        }
+        Ok(make(
+            Kind::SessionMessage,
+            text,
+            json!({"from": null, "text": message, "wake": true, "head_oid": head_oid}),
+        ))
+    }
+
     /// A `session-message` of `cpd session send`: it always wakes, so it carries `unblocks` and no `wake` (hs-d514).
     pub fn session_message_unblocking(
         text: impl Into<String>,
@@ -1036,6 +1057,7 @@ mod tests {
             Kind::SessionMessage => vec![
                 NewEvent::session_message(T, s, s, b),
                 NewEvent::session_message_unblocking(T, s, s, s),
+                NewEvent::session_message_head(T, s, "h2").unwrap(),
             ],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
@@ -1159,6 +1181,27 @@ mod tests {
     }
 
     /// Every append goes through a typed constructor (store-G1): `NewEvent::new` is for the tests of `append`'s refusals.
+    #[test]
+    fn the_head_wake_stores_the_head_as_given_and_refuses_an_empty_one() {
+        let event = NewEvent::session_message_head(T_TEXT, "m", " h2").unwrap();
+        assert_eq!(
+            event.data(),
+            &json!({"from": null, "text": "m", "wake": true, "head_oid": " h2"})
+        );
+        for empty in ["", "  ", "\t"] {
+            assert!(NewEvent::session_message_head(T_TEXT, "m", empty).is_err());
+        }
+    }
+
+    const T_TEXT: &str = "text";
+
+    #[test]
+    fn session_message_accepts_head_oid_and_still_refuses_an_unknown_field() {
+        let spec = Kind::SessionMessage.spec();
+        assert!(spec.optional.contains(&"head_oid"));
+        assert!(!spec.optional.contains(&"other"));
+    }
+
     #[test]
     fn no_command_builds_an_untyped_event() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

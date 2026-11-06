@@ -72,6 +72,7 @@ it("context tree renders sections glyphs and counters", () => {
   const m = mount(<ContextTree {...props({ onNewContext })} />);
   const c = m.container;
   expect(c.querySelector('[data-part="tree-header"]')?.textContent).toContain("Contexts");
+  expect(c.querySelector('[data-part="tree-header"]')?.querySelector("button[data-slot=sidebar-group-label]")?.getAttribute("aria-expanded") ?? null).toBeNull();
   const add = c.querySelector('button[data-action="new-context"]');
   expect(add?.getAttribute("aria-label")).toBe("New context");
   act(() => add?.dispatchEvent(new MouseEvent("click", { bubbles: true })));

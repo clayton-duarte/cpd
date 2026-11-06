@@ -410,13 +410,13 @@ Once the open Job's submit passes, cpd pushes the Lead Branch and opens the pull
 
 The pull request's reviewers and CI, as the owner's policy says, review each pull request on GitHub. The engine polls every open pull request and sends `pr-feedback` with the Workflow's key. You may run `cpd pr poll` right after `cpd pr open` or whenever you need the current status.
 
-A Workflow that turns ready to post wakes you with `pr-feedback` reason `ready_to_post`. Report ready_to_post in one chat line with the pull request link, and run `cpd pr post --workflow <key>` only when the User tells you to post in chat. It also shows in the cockpit as a yellow Inbox row `ready for user review` with a Post action. The refusals of `cpd pr post` name what is missing (no second post of the same pull request, no post of a draft or of a pull request with pending comments). Post through `cpd pr post` alone, never with Slack tools by hand.
+A Workflow that turns ready to post wakes you with `pr-feedback` reason `ready_to_post`. Report ready_to_post in one chat line with the pull request link, and run `cpd pr post --workflow <key>` only when the User tells you to post in chat. It also shows in the cockpit as a yellow Inbox row `ready for user review` with a Post action. The refusals of `cpd pr post` name what is missing (no second post of the same pull request, no post of a draft or of a pull request with pending comments). Post through `cpd pr post` alone, never with Slack tools by hand: the adapter refuses them (see [Review comments](#review-comments) for the approval).
 
 #### Posting for review
 
 For an owner whose `cpd policy show --workflow <key>` has `pr.post.enabled` true:
 
-1. On `ready_to_post`, follow [Pull request review](#pull-request-review). The User posts it from the cockpit (the `ready for user review` row's Post action) or tells you in chat to run `cpd pr post --workflow <key>`; give the User the link it prints. A refusal of `cpd pr post` names what is missing: answer the bot comments, wait for CI, run `cpd pr poll` and try again.
+1. On `ready_to_post`, follow [Pull request review](#pull-request-review). The User posts it from the cockpit (the `ready for user review` row's Post action) or tells you in chat to run `cpd pr post --workflow <key>`; give the User the link it prints. When the policy requires approval, get the User's one-shot approval first with the tool `cpd_external_approve` (kind `pr_post`), then run the post; a refusal `approval_required` means exactly that: no approval yet. Send a Slack message only on the User's explicit instruction, with the tool (kind `slack_send`). A refusal of `cpd pr post` otherwise names what is missing: answer the bot comments, wait for CI, run `cpd pr poll` and try again.
    - The post also turns on GitHub auto-merge for the pull request, with the method the repo allows (squash first): see `auto_merge.state` in the output (`commands.md` §9.8b). A stacked Workflow's auto-merge request waits until the Workflow is unstacked. A repo that does not allow auto-merge answers `auto_merge.state` `"not_allowed"`: nothing is wrong, cpd merges the pull request when it is ready, so run `cpd pr merge` after the human approval. Never run `gh pr merge --auto` by hand.
 
 2. A posted pull request is reviewed by peers: `changes_requested` is addressed at once (one `work` Job per cohesive fix; see [Addressing](#addressing)). `comments` on a posted pull request: when a person's open item does not request changes, ask the User with `ask_user_question` before any Job or reply (address it, reply only, or leave it), then act as [Review comments](#review-comments) says.
@@ -436,8 +436,11 @@ For an owner whose `cpd policy show --workflow <key>` has `pr.post.enabled` true
 
 `pr-feedback` with reason `comments` means the pull request has open feedback items (what a person said and nobody has answered: a review thread, an issue comment, a review with a body). For a posted pull request, see [Posting for review](#posting-for-review) (handle comments on a posted pull request there).
 
-1. Read them with `cpd pr view --workflow <key>`: its `feedback` list holds each item's `id`, `kind`, `author`, `path`, `url` and `excerpt`.
+1. Read them with `cpd pr view --workflow <key>`: its `feedback` list holds each item's `id`, `kind`, `bot`, `author`, `path`, `url` and `excerpt`.
 2. For each item, either fix it (append ONE `work` Job per cohesive fix, one feedback round in one Spec, as in [Addressing](#addressing)) or decide not to.
-3. Either way, answer it: `cpd pr reply --workflow <key> --to <id> --body "<what you did, or why not>"` (or `--body-file`). The item leaves the list at the next poll.
-4. Never resolve a thread: the reviewer does. A reviewer who replies after your answer opens the thread again.
-5. Open items do not block the merge, but answer all of them before you tell the User the pull request is ready.
+3. Answer a bot review thread (`bot: true` and `kind: "thread"`) of the Workflow's own pull request on your own: `cpd pr reply --workflow <key> --to <id> --body "<what you did, or why not>"` (or `--body-file`). The item leaves the list at the next poll.
+4. Reply to a human comment or review (`bot: false`) only when the User tells you to: ask the User with `ask_user_question` first, then get the one-shot approval with the tool `cpd_external_approve` (kind `pr_reply`, with the Workflow and the item id), then run the `cpd pr reply`. A refusal `approval_required` means exactly that: ask the User.
+5. Comment on your Workflow's own pull request alone. `gh pr comment` and every raw `gh` comment, review or reply write are refused; reading with `gh` is fine.
+6. `cpd pr post` and Slack messages only on the User's explicit instruction, with `cpd_external_approve` (kind `pr_post` or `slack_send`) when the policy requires approval.
+7. Never resolve a thread: the reviewer does. A reviewer who replies after your answer opens the thread again.
+8. Open items do not block the merge, but answer every bot thread, and ask the User about every human item, before you tell the User the pull request is ready.

@@ -48,7 +48,7 @@ pub mod deploys;
 mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
-pub(crate) use gh::{Adoptable, adoptable, describe_pr, retitle_pr};
+pub(crate) use gh::{Adoptable, adoptable};
 mod merge;
 pub mod merge_method;
 pub(crate) mod open;
@@ -63,6 +63,7 @@ mod reply;
 mod repost;
 mod rerun;
 pub mod review;
+pub mod swr_read;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod status;

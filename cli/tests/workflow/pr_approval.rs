@@ -12,8 +12,10 @@ use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
+use super::pr_reply::drain;
 use super::pr_view::{Pay, fx};
 use crate::common::Run;
+use cpd_core::swr::source::ExecOutcome;
 
 const LEAD: &str = "lead1";
 const URL: &str = "https://github.com/acme/pay/pull/812";
@@ -228,6 +230,27 @@ fn count(pay: &Pay, table: &str) -> i64 {
         .unwrap()
 }
 
+/// Runs every queued mutation as the engine's drain does; each must be `Done`, and there must be `n` of them.
+fn assert_drained(pay: &Pay, n: usize) {
+    let outcomes = drain(pay);
+    assert_eq!(outcomes.len(), n, "{outcomes:?}");
+    assert!(
+        outcomes.iter().all(|o| *o == ExecOutcome::Done),
+        "{outcomes:?}"
+    );
+}
+
+/// Puts the stored feedback list back, as a poll would after an item was answered.
+fn restore_feedback(pay: &Pay) {
+    let sql = format!(
+        "UPDATE pull_requests SET feedback = '{}' WHERE number = 812;",
+        list()
+    );
+    pay.store()
+        .write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into))
+        .unwrap();
+}
+
 /// `approval_required` (exit 3) naming the Workflow, the kind and (a reply) the item.
 fn assert_approval_required(run: &Run, kind: &str, to: Option<&str>) {
     let error = run.error();
@@ -246,14 +269,18 @@ fn assert_approval_required(run: &Run, kind: &str, to: Option<&str>) {
 /// An agent's reply to `to` is refused and leaves everything as it was.
 fn assert_reply_refused(pay: &Pay, session: &str, to: &str) {
     let calls = pay.fx.calls("gh").len();
-    let posted = mutations(pay);
+    let queued = count(pay, "swr_mutations");
     let stored = feedback(pay);
 
     let run = reply(pay, session, to);
 
     assert_approval_required(&run, "reply", Some(to));
     assert_eq!(pay.fx.calls("gh").len(), calls, "no GitHub call for {to}");
-    assert_eq!(mutations(pay), posted, "nothing is posted for {to}");
+    assert_eq!(
+        count(pay, "swr_mutations"),
+        queued,
+        "nothing is queued for {to}"
+    );
     assert_eq!(feedback(pay), stored, "the stored list is unchanged");
 }
 
@@ -267,6 +294,7 @@ fn bots_only_lets_an_agent_reply_to_a_bot_thread() {
     let pay = world(&setup("bots_only"));
 
     assert_replied(&reply(&pay, LEAD, "PRRT_B"), "PRRT_B");
+    assert_drained(&pay, 1);
 
     let posted = mutations(&pay);
     assert_eq!(posted.len(), 1, "{posted:?}");
@@ -304,6 +332,7 @@ fn all_lets_an_agent_reply_to_a_human_item() {
         assert_replied(&reply(&pay, LEAD, to), to);
     }
 
+    assert_drained(&pay, 4);
     assert_eq!(mutations(&pay).len(), 4);
     drop(pay);
     let strict = world(&setup("bots_only"));
@@ -321,6 +350,7 @@ fn a_reply_without_cpd_session_is_never_refused() {
         assert_replied(&run, to);
     }
 
+    assert_drained(&pay, 4);
     assert_eq!(mutations(&pay).len(), 4);
 }
 
@@ -331,6 +361,7 @@ fn an_approval_lets_the_agent_reply_to_that_item_once() {
     assert_eq!(approval_files(&pay).len(), 1);
 
     assert_replied(&reply(&pay, LEAD, "PRRT_H"), "PRRT_H");
+    assert_drained(&pay, 1);
 
     let posted = mutations(&pay);
     assert_eq!(posted.len(), 1, "{posted:?}");
@@ -339,6 +370,7 @@ fn an_approval_lets_the_agent_reply_to_that_item_once() {
         approval_files(&pay).is_empty(),
         "the approval is used up by the reply"
     );
+    restore_feedback(&pay);
     assert_reply_refused(&pay, LEAD, "PRRT_H");
 }
 
@@ -381,21 +413,26 @@ fn an_expired_approval_is_refused() {
 }
 
 #[test]
-fn a_failed_reply_keeps_the_approval() {
+fn a_reply_queued_for_a_send_that_later_fails_has_used_its_approval() {
     let pay = world(&Setup {
         gh_fails: true,
         ..setup("bots_only")
     });
     approve(&pay, LEAD, "reply", Some("PRRT_H"));
 
-    let run = reply(&pay, LEAD, "PRRT_H");
+    assert_replied(&reply(&pay, LEAD, "PRRT_H"), "PRRT_H");
 
-    assert_eq!(
-        (run.error()["code"].as_str().unwrap(), run.exit),
-        ("gh_failed", 1),
-        "{run:?}"
+    assert!(
+        approval_files(&pay).is_empty(),
+        "the queued reply consumed the approval"
     );
-    assert_eq!(approval_files(&pay).len(), 1, "a failed reply keeps it");
+    // An HTTP 5xx is transient: the drain puts the mutation back to pending (swr-github §7.1).
+    let outcomes = drain(&pay);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert!(
+        matches!(outcomes[0], ExecOutcome::Retry { .. }),
+        "{outcomes:?}"
+    );
 }
 
 #[test]

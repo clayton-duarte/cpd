@@ -117,15 +117,9 @@ fn status_of_item_reads_only_the_first_row_of_a_two_row_pr_ready_label() {
 #[test]
 fn a_deploy_label_is_the_repo_and_environment_with_the_run_title_on_row_two() {
     let (_d, home, mut store) = store();
-    let path = home.run_dir().join("deploy-runs.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let run = json!({"repo": "acme/pay", "workflow": "main.yml", "run_id": 7, "environment": "production", "title": "Release 1.2",
                      "url": "https://github.com/acme/pay/actions/runs/7", "created_at": "2026-10-27T13:05:00Z"});
-    std::fs::write(
-        &path,
-        json!({"version": 1, "polled_at": "2026-10-27T14:59:55.000Z", "runs": [run]}).to_string(),
-    )
-    .unwrap();
+    super::swr_fixture::deploys(&mut store, &[run]).unwrap();
     let found = conditions(&mut store, &home, Kind::Deploy);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].label, "acme/pay deploy production\nRelease 1.2");

@@ -62,7 +62,15 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
                     if let Some(items) = &loaded.feedback {
                         value["feedback_open"] = json!(items.len());
                     }
-                    loaded.to_json()
+                    let head_oid: Option<String> = conn.query_row(
+                        "SELECT head_oid FROM pull_requests WHERE id = ?1",
+                        [row],
+                        |r| r.get(0),
+                    )?;
+                    let mut shown = loaded.to_json();
+                    shown["feedback_open"] = value["feedback_open"].clone();
+                    shown["head_oid"] = json!(head_oid);
+                    shown
                 }
                 None => Value::Null,
             };

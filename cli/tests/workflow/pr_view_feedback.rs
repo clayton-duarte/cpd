@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr_view::fx;
+use super::pr_view::{fx, hydrate};
 
 fn item(id: &str, kind: &str, path: Value) -> Value {
     json!({"id": id, "kind": kind, "last": id, "author": "reviewer", "bot": false, "path": path, "outdated": false,
@@ -12,6 +12,7 @@ fn item(id: &str, kind: &str, path: Value) -> Value {
 #[test]
 fn pr_view_lists_the_stored_feedback_items() {
     let fx = fx("open");
+    hydrate(&fx);
     let list = json!([
         item("PRRT_1", "thread", json!("src/payout.rs")),
         item("IC_1", "comment", Value::Null)
@@ -39,6 +40,7 @@ fn pr_view_lists_the_stored_feedback_items() {
 #[test]
 fn pr_view_gives_null_feedback_for_a_pr_never_read_and_keeps_its_other_fields() {
     let fx = fx("open");
+    hydrate(&fx);
 
     let out = fx
         .fx

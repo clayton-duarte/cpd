@@ -472,7 +472,7 @@ pub(super) fn plan_heads(
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
-                r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
+                r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at, q.repo
            FROM plans p LEFT JOIN workflows r ON r.plan = p.id
                 AND r.key = (SELECT key FROM workflows WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
@@ -497,6 +497,13 @@ pub(super) fn plan_heads(
                 let checks = row_checks.ok_or_else(|| {
                     bad_row(format!("Workflow of Plan {plan} has no pull request row"))
                 })?;
+                // The overlay (swr-github.md §6): a queued rerun shows the checks pending at once.
+                let checks = match r.get::<_, Option<String>>(16)? {
+                    Some(repo) => cpd_core::swr::github::effective_text(
+                        conn, &repo, number, "checks", &checks,
+                    )?,
+                    None => checks,
+                };
                 Some(Pr {
                     number,
                     url,

@@ -1,6 +1,5 @@
 //! `pr rerun` (decision pro-d155): re-runs the failed GitHub Actions workflow runs of a pull request's head commit.
 
-use cpd_core::host::runner::{Call, Reply};
 use serde_json::{Value, json};
 
 use super::pr_view::{Pay, fx};
@@ -8,48 +7,39 @@ use crate::common::Run;
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
-fn has(text: &'static str) -> impl Fn(&Call) -> bool {
-    move |c: &Call| c.args.join("\n").contains(text)
-}
-
+/// A check of the head's rollup that ran in workflow run `id` and concluded `conclusion`.
 fn run(id: u64, name: &str, status: &str, conclusion: &str) -> Value {
-    json!({"databaseId": id, "name": name, "status": status, "conclusion": conclusion})
+    json!({"__typename": "CheckRun", "name": name, "conclusion": conclusion, "status": status, "detailsUrl": null,
+           "checkSuite": {"workflowRun": {"databaseId": id, "workflow": {"name": name}}}})
 }
 
-/// Open PR with `gh` answering the head commit, the run list `runs`, and `run rerun <id> --failed` ok for each of `ok`.
-fn setup(runs: &[Value], ok: &[u64]) -> Pay {
+/// Open PR whose cached detail has the head's checks `runs`.
+fn setup(runs: &[Value]) -> Pay {
     let pay = fx("open");
-    let runner = (*pay.fx.fakes.runner).clone();
-    let mut runner = runner.on(
-        "gh",
-        has("headRefOid"),
-        Reply::ok(&json!({"headRefOid": SHA}).to_string()),
-    );
-    runner = runner.on(
-        "gh",
-        |c: &Call| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == SHA),
-        Reply::ok(&Value::Array(runs.to_vec()).to_string()),
-    );
-    for id in ok {
-        let want = format!("run\nrerun\n{id}\n--failed");
-        runner = runner.on(
-            "gh",
-            move |c: &Call| c.args.join("\n") == want,
-            Reply::ok(""),
-        );
-    }
+    let detail = json!({"commits": {"nodes": [{"commit": {"oid": SHA, "statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": runs}}}}]}});
+    pay.fx.env.sql(&format!(
+        "UPDATE pull_requests SET head_oid = '{SHA}', checks = 'failed' WHERE number = 812;
+         INSERT INTO swr_pr_detail (repo, number, head_oid, updated_at, hydrated_at, detail_json, detail_hash)
+           VALUES ('acme/pay', 812, '{SHA}', 'U', 't', '{detail}', 'h');"
+    ));
     pay
 }
 
-fn reruns(pay: &Pay) -> Vec<Call> {
-    pay.fx
-        .calls("gh")
-        .into_iter()
-        .filter(|c| {
-            c.args
-                .starts_with(&["run".to_string(), "rerun".to_string()])
-        })
-        .collect()
+fn queued(pay: &Pay) -> Vec<(String, Value, Value)> {
+    pay.fx.env.read(|c| {
+        let mut stmt =
+            c.prepare("SELECT op_kind, vars_json, patch_json FROM swr_mutations ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    serde_json::from_str(&r.get::<_, String>(1)?).unwrap(),
+                    serde_json::from_str(&r.get::<_, String>(2)?).unwrap(),
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
 }
 
 const ARGS: [&str; 5] = ["pr", "rerun", "--workflow", "repo", "--plan"];
@@ -60,102 +50,73 @@ fn rerun(pay: &Pay) -> Run {
 }
 
 #[test]
-fn a_failed_run_of_the_head_commit_is_rerun_with_failed_only_and_listed() {
-    let pay = setup(
-        &[
-            run(111, "CI", "completed", "success"),
-            run(222, "Lint", "completed", "failure"),
-        ],
-        &[222],
-    );
+fn a_failed_run_of_the_cached_head_is_queued_with_the_checks_pending_and_listed() {
+    let pay = setup(&[
+        run(111, "CI", "COMPLETED", "SUCCESS"),
+        run(222, "Lint", "COMPLETED", "FAILURE"),
+    ]);
 
     let out = rerun(&pay).ok();
 
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(out["mutation_id"].is_i64());
+    assert_eq!(out["head_sha"], SHA);
+    assert_eq!(out["rerun"], json!([{"id": 222, "name": "Lint"}]));
+    assert_eq!(out["effective"]["checks"], "pending");
     assert_eq!(
-        out,
-        json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": [{"id": 222, "name": "Lint"}]})
+        queued(&pay),
+        [(
+            "rerun".to_owned(),
+            json!({"run_ids": [222]}),
+            json!({"checks": "pending"})
+        )]
     );
-    let calls = reruns(&pay);
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    assert_eq!(calls[0].args, ["run", "rerun", "222", "--failed"]);
-    assert_eq!(
-        calls[0].cwd.as_deref(),
-        Some(pay.fx.env.root().join("lead").as_path())
-    );
-    let list = pay
-        .fx
-        .calls("gh")
-        .into_iter()
-        .find(|c| c.args.starts_with(&["run".to_string(), "list".to_string()]))
-        .expect("run list call");
-    let at = list
-        .args
-        .iter()
-        .position(|a| a == "--commit")
-        .expect("--commit");
-    assert_eq!(list.args[at + 1], SHA);
+    assert!(pay.fx.calls("gh").is_empty(), "the command calls no GitHub");
 }
 
 #[test]
-fn every_failed_conclusion_is_rerun_whatever_its_case_and_no_other_run_is() {
+fn every_failed_conclusion_is_queued_whatever_its_case_and_no_other_run_is() {
     let runs = [
-        run(1, "A", "completed", "failure"),
-        run(2, "B", "completed", "success"),
-        run(3, "C", "completed", "timed_out"),
-        run(4, "D", "completed", "cancelled"),
-        run(5, "E", "completed", "startup_failure"),
-        run(6, "F", "completed", "skipped"),
-        run(7, "G", "completed", "neutral"),
-        run(8, "H", "completed", "action_required"),
-        run(9, "I", "in_progress", ""),
-        run(10, "J", "completed", "FAILURE"),
+        run(1, "A", "COMPLETED", "FAILURE"),
+        run(2, "B", "COMPLETED", "SUCCESS"),
+        run(3, "C", "COMPLETED", "TIMED_OUT"),
+        run(4, "D", "COMPLETED", "CANCELLED"),
+        run(5, "E", "COMPLETED", "STARTUP_FAILURE"),
+        run(6, "F", "COMPLETED", "SKIPPED"),
+        run(7, "G", "COMPLETED", "NEUTRAL"),
+        run(8, "H", "COMPLETED", "ACTION_REQUIRED"),
+        run(9, "I", "IN_PROGRESS", ""),
+        run(10, "J", "COMPLETED", "failure"),
     ];
-    let pay = setup(&runs, &[1, 3, 5, 10]);
+    let pay = setup(&runs);
 
     let out = rerun(&pay).ok();
 
-    let want = json!([{"id": 1, "name": "A"}, {"id": 3, "name": "C"}, {"id": 5, "name": "E"}, {"id": 10, "name": "J"}]);
     assert_eq!(
-        out,
-        json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": want})
+        out["rerun"],
+        json!([{"id": 1, "name": "A"}, {"id": 3, "name": "C"}, {"id": 5, "name": "E"}, {"id": 10, "name": "J"}])
     );
-    assert_eq!(reruns(&pay).len(), 4);
+    assert_eq!(queued(&pay)[0].1, json!({"run_ids": [1, 3, 5, 10]}));
 }
 
 #[test]
-fn a_head_commit_with_no_failed_run_is_refused_no_failed_run_and_reruns_nothing() {
-    let listed = [
-        run(1, "CI", "completed", "success"),
-        run(2, "Lint", "in_progress", ""),
-    ];
-    let pay = setup(&listed, &[]);
-
-    let r = rerun(&pay);
-
-    assert_eq!(
-        (r.error()["code"].as_str().unwrap(), r.exit),
-        ("no_failed_run", 3)
-    );
-    assert_eq!(
-        r.error()["details"],
-        json!({"pr": "repo", "head_sha": SHA, "runs": [
-            {"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
-            {"id": 2, "name": "Lint", "status": "in_progress", "conclusion": ""}]})
-    );
-    assert!(reruns(&pay).is_empty());
-
-    drop(pay);
-    let pay = setup(&[], &[]);
-    let r = rerun(&pay);
-    assert_eq!(
-        (r.error()["code"].as_str().unwrap(), r.exit),
-        ("no_failed_run", 3)
-    );
-    assert_eq!(
-        r.error()["details"],
-        json!({"pr": "repo", "head_sha": SHA, "runs": []})
-    );
-    assert!(reruns(&pay).is_empty());
+fn a_head_with_no_failed_run_is_refused_no_failed_run_and_queues_nothing() {
+    for runs in [
+        vec![
+            run(1, "CI", "COMPLETED", "SUCCESS"),
+            run(2, "Lint", "IN_PROGRESS", ""),
+        ],
+        vec![],
+    ] {
+        let pay = setup(&runs);
+        let r = rerun(&pay);
+        assert_eq!(
+            (r.error()["code"].as_str().unwrap(), r.exit),
+            ("no_failed_run", 3)
+        );
+        assert_eq!(r.error()["details"], json!({"pr": "repo", "head_oid": SHA}));
+        assert!(queued(&pay).is_empty());
+    }
 }
 
 #[test]
@@ -182,32 +143,4 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
         );
         assert!(pay.fx.calls("gh").is_empty(), "{status}");
     }
-}
-
-#[test]
-fn a_failing_gh_run_rerun_is_gh_failed_and_lists_the_runs_already_rerun() {
-    let pay = setup(
-        &[
-            run(222, "Lint", "completed", "failure"),
-            run(333, "CI", "completed", "failure"),
-        ],
-        &[222],
-    );
-    let runner = (*pay.fx.fakes.runner).clone();
-    let _ = runner.on(
-        "gh",
-        |c: &Call| c.args.join("\n") == "run\nrerun\n333\n--failed",
-        Reply::exit(1, "", "HTTP 502: bad gateway\n"),
-    );
-
-    let r = rerun(&pay);
-
-    assert_eq!(
-        (r.error()["code"].as_str().unwrap(), r.exit),
-        ("gh_failed", 1)
-    );
-    assert_eq!(
-        r.error()["details"]["rerun"],
-        json!([{"id": 222, "name": "Lint"}])
-    );
 }

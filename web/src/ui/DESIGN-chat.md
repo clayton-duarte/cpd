@@ -55,7 +55,7 @@ The Phase 2 rule (vertical space as padding inside a measured wrapper, for the w
 
 ## 1. ChatHeader (`web/src/ui/chat/ChatHeader.tsx`)
 
-pro-d60: the ChatHeader shows only the title. The breadcrumb lives in the cockpit Header (DESIGN-panes 4.1); the Thinking and Tools toggle buttons and the run status are removed (pro-d57).
+pro-d60: the ChatHeader shows only the title. The breadcrumb was in the cockpit Header (DESIGN-panes 4.1), which pro-d87 removed; the Thinking and Tools toggle buttons and the run status are removed (pro-d57).
 
 ### 1.1 Props
 

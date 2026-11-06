@@ -368,7 +368,10 @@ fn post_fixture_with(reply: (i32, &'static str)) -> Post {
     std::fs::write(policy.join("pay.toml"), "").unwrap();
     rig.sql(
         "UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]', merge_state = 'clean'
-           WHERE number = 801;",
+           WHERE number = 801;
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');",
     );
     // SAFETY: one test per process (nextest).
     unsafe { std::env::set_var("CPD_HOME", &root) };
@@ -599,6 +602,34 @@ fn slack_claim_eyes_reaction_goes_through_the_outbox() {
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": TS_RAW,
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
     crate::inbox::team::seed_cache(&mut store, CLAIM_CHANNEL, &[post]);
+    // The pass's row of the pull request the claim reads (the cache, not GitHub): changes requested by the User, head checks passed.
+    let me = "clayton-duarte";
+    let head = "5555555555555555555555555555555555555555";
+    crate::inbox::swr_fixture::lookup(
+        &mut store,
+        &crate::inbox::team::Lookup {
+            me: me.to_owned(),
+            workflows: [(
+                ("acme/pay".to_owned(), 5),
+                Some(crate::inbox::team::GhPr {
+                    title: "Add retries".to_owned(),
+                    draft: false,
+                    state: crate::inbox::team::GhState::Open,
+                    author: "ryan".to_owned(),
+                    decision: Some("CHANGES_REQUESTED".to_owned()),
+                    reviews: vec![crate::inbox::team::Review {
+                        author: me.to_owned(),
+                        state: "CHANGES_REQUESTED".to_owned(),
+                        commit_oid: Some("1111111111111111111111111111111111111111".to_owned()),
+                    }],
+                    head_oid: Some(head.to_owned()),
+                    checks_state: Some("SUCCESS".to_owned()),
+                }),
+            )]
+            .into(),
+        },
+    )
+    .unwrap();
     store
         .write("fixture", |tx| {
             tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
@@ -613,15 +644,7 @@ fn slack_claim_eyes_reaction_goes_through_the_outbox() {
             )?)
         })
         .unwrap();
-    let graphql = json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": {
-        "title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": "CHANGES_REQUESTED",
-        "headRefOid": "5555555555555555555555555555555555555555",
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}, "author": {"login": "ryan"},
-        "latestReviews": {"nodes": [{"state": "CHANGES_REQUESTED", "author": {"login": "clayton-duarte"},
-                                      "commit": {"oid": "1111111111111111111111111111111111111111"}}]}}}}})
-    .to_string();
-    let runner =
-        crate::host::runner::FakeRunner::with_tmux().on("gh", |_| true, Reply::ok(&graphql));
+    let runner = crate::host::runner::FakeRunner::with_tmux();
     let ports = Ports {
         clock: Arc::new(crate::clock::ManualClock::new()),
         runner: Arc::new(runner.clone()),
@@ -1174,4 +1197,39 @@ fn slack_post_send_runs_only_the_slack_helper() {
         ["slack-post.ts"],
         "node sees only the Slack helper"
     );
+}
+
+/// A failed send writes no `pr_posts` row, and a second post queues and sends again (the branch's
+/// `a_send_failure_writes_no_pr_posts_row_and_a_second_post_sends`, migrated to the outbox).
+#[test]
+fn slack_failed_send_writes_no_row_and_a_second_post_sends_again() {
+    let fx = post_fixture_with((1, ""));
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+    assert!(matches!(fx.execute(), ExecOutcome::Failed { .. }));
+    fx.rig
+        .sql("UPDATE swr_mutations SET status = 'failed' WHERE op_kind = 'post';");
+    assert_eq!(fx.count("SELECT count(*) FROM pr_posts"), 0, "no row");
+
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("a second post queues");
+    fx.execute();
+
+    assert_eq!(fx.sent(), 2, "the second post sent");
+    assert_eq!(fx.count("SELECT count(*) FROM pr_posts"), 0, "still no row");
+}
+
+/// A helper answer that is not JSON fails the send, writes no row, and the post is retryable (the branch's
+/// `an_unparseable_send_response_writes_no_pr_posts_row_and_is_retryable`, migrated to the outbox).
+#[test]
+fn slack_unparseable_send_response_writes_no_row_and_is_retryable() {
+    let fx = post_fixture_with((0, "not json"));
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    assert!(matches!(fx.execute(), ExecOutcome::Failed { .. }));
+    fx.rig
+        .sql("UPDATE swr_mutations SET status = 'failed' WHERE op_kind = 'post';");
+    assert_eq!(fx.count("SELECT count(*) FROM pr_posts"), 0, "no row");
+
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("the post is retryable");
 }

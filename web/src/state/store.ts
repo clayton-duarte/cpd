@@ -220,7 +220,7 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
   switch (message.type) {
     case "cockpit.snapshot": {
       const r = message.inbox === null ? { inbox: null, optimistic: state.optimistic } : rebase(message.inbox, state.optimistic);
-      return { ...state, optimistic: r.optimistic, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: r.inbox, status: message.status ?? state.cockpit.status, costs: message.costs ?? state.cockpit.costs, error: null } };
+      return { ...state, optimistic: r.optimistic, cockpit: { ...state.cockpit, tree: message.tree, plan: message.plan, inbox: r.inbox, status: message.status ?? state.cockpit.status, costs: message.costs ?? state.cockpit.costs, error: null }, lastError: state.lastError?.details?.["cpdCode"] === "store_too_new" ? null : state.lastError };
     }
     case "logs.result":
       return { ...state, cockpit: { ...state.cockpit, logs: message.rows } };

@@ -3,33 +3,21 @@
 //! classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`, `refresh.py` `build`). Only
 //! `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`] turn it into items.
 //!
-//! GitHub is read here, not in E11 (E11 calls no GitHub): one `gh api graphql` call for every primary post of the
-//! window, memoised ([`GITHUB_TTL`]) so the five-second E8 tick does not repeat it.
+//! Nothing here calls GitHub or reads a file: the GitHub state is the SWR cache's effective rows (`swr::github`), which the
+//! one pass wrote, and the posts are the `slack` source's rows.
 
 use std::collections::BTreeMap;
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
-use crate::ports::Ports;
+use crate::error::CpdError;
 use crate::store::Store;
 use rusqlite::OptionalExtension;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
-
-/// How long a GitHub answer is reused while the posts are the same. E8 runs every tick and the posts change at E11's
-/// 30-minute cadence; thirty seconds keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
-pub const GITHUB_TTL: Duration = Duration::from_secs(30);
-
-/// The deadline of the GitHub call (the pull request poll's, `pr::gh::POLL_TIMEOUT`).
-const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
 
 /// The posts of the team channel as `swr_slack_posts` holds them (commands.md §21.5).
 #[derive(Debug)]
@@ -249,197 +237,78 @@ pub fn status(post: &Post, workflow: &GhPr, me: &str, bots: &[String]) -> Status
     status
 }
 
-// ---- GitHub ------------------------------------------------------------------------------------------------------
+// ---- the cache ---------------------------------------------------------------------------------------------------
 
-/// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
-fn repo_parts(repo: &str) -> Option<(&str, &str)> {
-    let part = |p: &str| {
-        !p.is_empty()
-            && p.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-    };
-    repo.split_once('/')
-        .filter(|(owner, name)| part(owner) && part(name))
-}
-
-fn gh_failed(message: String, stderr: &str) -> CpdError {
-    CpdError::new(ErrorCode::GhFailed, message).with(
-        "stderr",
-        stderr
-            .lines()
-            .rev()
-            .take(20)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
-/// The one `gh api graphql` call: `viewer { login }` and one alias `p<i>` per pull request, 15 s at most. A pull
-/// request that GitHub cannot find (or whose repo is no `owner/name`) is `None`; any other error of the call, or
-/// an answer without `data`, is `gh_failed`, never "no pull requests". An empty `refs` makes no call.
-pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
-    github_lookup_with(&*Ports::current().runner, home, refs)
-}
-
-/// [`github_lookup`] on `runner`.
-pub fn github_lookup_with(
-    runner: &dyn Runner,
-    home: &CpdHome,
-    refs: &[(String, u64)],
-) -> Result<Lookup, CpdError> {
-    let mut query = String::from("query { viewer { login }");
-    for (i, (repo, number)) in refs.iter().enumerate() {
-        let Some((owner, name)) = repo_parts(repo) else {
-            continue;
-        };
-        query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision headRefOid commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ state }} }} }} }} author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} commit {{ oid }} }} }} }} }}"
-        ));
-    }
-    query.push_str(" }");
-    let mut cmd = Command::new("gh");
-    cmd.args(["api", "graphql", "-f", &format!("query={query}")])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("NO_COLOR", "1")
-        .current_dir(home.root())
-        .stdin(std::process::Stdio::null());
-    let out = match runner.output(&mut cmd, "gh", GITHUB_DEADLINE) {
-        Ok(out) => out,
-        Err(Failed::Io(e)) => {
-            return Err(gh_failed(format!("Cannot run gh: {e}."), &e.to_string()));
+/// The state of each of `refs` as a reader of the cache sees it (the effective row of `swr::github`, its detail for the
+/// reviews and the head's checks), and the User's login (`swr_viewer`; empty until the pass has read it, when no pull request
+/// is the User's own). A pull request with no row is `None` in the map.
+pub fn lookup_from_store(store: &mut Store, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
+    store.read(|conn| {
+        let me = conn
+            .query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .unwrap_or_default();
+        let mut workflows = BTreeMap::new();
+        for (repo, number) in refs {
+            let found = crate::swr::github::effective_in(conn, repo, *number as i64)?;
+            workflows.insert((repo.clone(), *number), found.map(|e| gh_pr(&e, &me)));
         }
-        Err(Failed::Timeout(e)) => return Err(e),
-    };
-    // `gh` exits 1 when an alias is NOT_FOUND, with data: the stdout decides, whatever the exit.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let reply: Value = serde_json::from_str(&stdout).map_err(|e| {
-        gh_failed(
-            format!("gh api graphql printed unexpected JSON: {e}."),
-            &stderr,
-        )
-    })?;
-    parse_lookup(&reply, refs).map_err(|message| gh_failed(message, &stderr))
+        Ok(Lookup { me, workflows })
+    })
 }
 
-/// The reply of [`github_lookup`]; `Err` is the message of its `gh_failed`.
-pub fn parse_lookup(reply: &Value, refs: &[(String, u64)]) -> Result<Lookup, String> {
-    let errors = reply["errors"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    if let Some(other) = errors
-        .iter()
-        .find(|e| e["type"].as_str() != Some("NOT_FOUND"))
-    {
-        return Err(format!(
-            "gh api graphql answered with errors: {}",
-            other["message"].as_str().unwrap_or("(no message)")
-        ));
-    }
-    let data = reply["data"]
-        .as_object()
-        .ok_or("gh api graphql answered without data.")?;
-    let me = data["viewer"]["login"]
-        .as_str()
-        .filter(|l| !l.is_empty())
-        .ok_or("gh api graphql answered without viewer.login.")?
-        .to_owned();
-    let mut workflows = BTreeMap::new();
-    for (i, key) in refs.iter().enumerate() {
-        let raw = &data
-            .get(&format!("p{i}"))
-            .map_or(&Value::Null, |v| &v["pullRequest"]);
-        let workflow = if raw.is_null() {
-            None
-        } else {
-            Some(parse_pr(raw)?)
-        };
-        workflows.insert(key.clone(), workflow);
-    }
-    Ok(Lookup { me, workflows })
-}
-
-fn parse_pr(raw: &Value) -> Result<GhPr, String> {
-    let state = match raw["state"].as_str() {
-        Some("OPEN") => GhState::Open,
-        Some("MERGED") => GhState::Merged,
-        Some("CLOSED") => GhState::Closed,
-        other => {
-            return Err(format!(
-                "gh api graphql answered a pull request state {other:?}."
-            ));
-        }
-    };
-    let login = |v: &Value| v["author"]["login"].as_str().unwrap_or_default().to_owned();
-    let reviews = raw["latestReviews"]["nodes"]
-        .as_array()
+fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
+    let detail = e.detail.as_ref();
+    // The Light read's `latestReviews` is the newest (every pass); the detail's is the fallback of a row not polled since.
+    let nodes = e
+        .light_reviews
+        .as_ref()
+        .and_then(|r| r["nodes"].as_array())
+        .or_else(|| detail.and_then(|d| d["latestReviews"]["nodes"].as_array()));
+    let reviews = nodes
         .map(Vec::as_slice)
         .unwrap_or_default()
         .iter()
         .map(|r| Review {
-            author: login(r),
+            author: r["author"]["login"].as_str().unwrap_or_default().to_owned(),
             state: r["state"].as_str().unwrap_or_default().to_owned(),
             commit_oid: r["commit"]["oid"].as_str().map(str::to_owned),
         })
         .collect();
-    Ok(GhPr {
-        title: raw["title"]
-            .as_str()
-            .ok_or("gh api graphql answered a pull request without title.")?
-            .to_owned(),
-        draft: raw["isDraft"]
-            .as_bool()
-            .ok_or("gh api graphql answered a pull request without isDraft.")?,
-        state,
-        author: login(raw),
-        decision: raw["reviewDecision"].as_str().map(str::to_owned),
-        reviews,
-        head_oid: raw["headRefOid"].as_str().map(str::to_owned),
-        checks_state: raw["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]
-            .as_str()
+    // The effective checks first (pro-d453): the detail's raw rollup stays FAILURE on a Friday when the Danger is excused.
+    // `none` (no checks known) is the one case that leaves the detail's rollup, which a row the pass has not summed yet holds.
+    let checks_state = match e.checks.as_str() {
+        "passed" => Some("SUCCESS".to_owned()),
+        "failed" => Some("FAILURE".to_owned()),
+        "pending" => Some("PENDING".to_owned()),
+        _ => detail
+            .and_then(|d| d["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str())
             .map(str::to_owned),
-    })
-}
-
-/// The last GitHub answer and when it came, so E8's tick does not ask again for the same posts within [`GITHUB_TTL`].
-/// A failure is held as well: a broken `gh` is asked again after the same time, not every tick.
-/// The posted pull requests asked, when, and the answer.
-type Held = (
-    Vec<(String, u64)>,
-    String,
-    Instant,
-    Result<Lookup, CpdError>,
-);
-
-#[derive(Default)]
-pub struct Memo {
-    held: Option<Held>,
-}
-
-impl Memo {
-    /// The held answer when `refs` are the same and it is younger than [`GITHUB_TTL`] and the store's
-    /// invalidation `token` is unchanged, else `fetch`'s.
-    pub fn get(
-        &mut self,
-        refs: &[(String, u64)],
-        token: &str,
-        now: Instant,
-        fetch: impl FnOnce(&[(String, u64)]) -> Result<Lookup, CpdError>,
-    ) -> Result<Lookup, CpdError> {
-        if let Some((held, held_token, at, answer)) = &self.held
-            && held == refs
-            && held_token == token
-            && now.saturating_duration_since(*at) < GITHUB_TTL
-        {
-            return answer.clone();
-        }
-        let answer = fetch(refs);
-        self.held = Some((refs.to_vec(), token.to_owned(), now, answer.clone()));
-        answer
+    };
+    GhPr {
+        title: e.title.clone(),
+        draft: e.row.draft,
+        state: match e.state.as_str() {
+            "open" => GhState::Open,
+            "closed" => GhState::Closed,
+            _ => GhState::Merged,
+        },
+        author: match &e.author_login {
+            Some(login) => login.clone(),
+            None if e.row.authored && !me.is_empty() => me.to_owned(),
+            None => "someone".to_owned(),
+        },
+        decision: match e.review_decision.as_str() {
+            "approved" => Some("APPROVED".to_owned()),
+            "changes_requested" => Some("CHANGES_REQUESTED".to_owned()),
+            "required" => Some("REVIEW_REQUIRED".to_owned()),
+            _ => None,
+        },
+        reviews,
+        head_oid: e.head_oid.clone(),
+        checks_state,
     }
 }
 
@@ -494,8 +363,6 @@ pub(crate) fn seed_cache(store: &mut Store, channel: &str, posts: &[Value]) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     const ME: &str = "clayton-duarte";
@@ -804,98 +671,5 @@ mod tests {
         ] {
             assert_eq!(status(&tagged, &workflow, ME, &bots()), want);
         }
-    }
-
-    // ---- the GitHub reply ----
-
-    fn reply() -> Value {
-        json!({"data": {
-            "viewer": {"login": ME},
-            "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
-                   "latestReviews": {"nodes": [{"state": "COMMENTED", "author": {"login": "github-actions"}}]}}},
-            "p1": null
-        }, "errors": [{"type": "NOT_FOUND", "path": ["p1"], "message": "Could not resolve"}]})
-    }
-
-    #[test]
-    fn a_reply_is_the_users_login_and_each_pull_request_or_none_when_not_found() {
-        let refs = [("acme/pay".to_owned(), 1), ("acme/gone".to_owned(), 2)];
-        let lookup = parse_lookup(&reply(), &refs).unwrap();
-        assert_eq!(lookup.me, ME);
-        assert_eq!(
-            lookup.workflows[&refs[0]],
-            Some(GhPr {
-                reviews: vec![review("github-actions", "COMMENTED")],
-                ..workflow()
-            })
-        );
-        assert_eq!(lookup.workflows[&refs[1]], None);
-    }
-
-    #[test]
-    fn a_reply_with_another_error_or_no_data_is_a_failure_never_an_empty_answer() {
-        let refs = [("acme/pay".to_owned(), 1)];
-        let mut other = reply();
-        other["errors"] = json!([{"type": "RATE_LIMITED", "message": "slow down"}]);
-        assert!(
-            parse_lookup(&other, &refs)
-                .unwrap_err()
-                .contains("slow down")
-        );
-        assert!(
-            parse_lookup(&json!({"errors": []}), &refs)
-                .unwrap_err()
-                .contains("without data")
-        );
-        let mut state = reply();
-        state["data"]["p0"]["pullRequest"]["state"] = json!("WEIRD");
-        assert!(parse_lookup(&state, &refs).unwrap_err().contains("state"));
-    }
-
-    // ---- the memo ----
-
-    #[test]
-    fn the_memo_asks_again_only_for_other_posts_or_after_the_ttl() {
-        let (a, b) = (
-            vec![("acme/pay".to_owned(), 1)],
-            vec![("acme/pay".to_owned(), 2)],
-        );
-        let lookup = Lookup {
-            me: ME.to_owned(),
-            workflows: BTreeMap::new(),
-        };
-        let mut calls = 0;
-        let mut memo = Memo::default();
-        let t0 = Instant::now();
-        let mut ask = |memo: &mut Memo, refs: &[(String, u64)], at: Instant| {
-            memo.get(refs, "", at, |_| {
-                calls += 1;
-                Ok(lookup.clone())
-            })
-            .unwrap();
-        };
-        ask(&mut memo, &a, t0);
-        ask(&mut memo, &a, t0 + Duration::from_secs(29));
-        ask(&mut memo, &b, t0 + Duration::from_secs(29));
-        ask(&mut memo, &b, t0 + Duration::from_secs(29 + 30));
-        assert_eq!(calls, 3, "first, other posts, and past the ttl");
-    }
-
-    #[test]
-    fn the_memo_holds_a_failure_too() {
-        let a = vec![("acme/pay".to_owned(), 1)];
-        let mut memo = Memo::default();
-        let t0 = Instant::now();
-        let mut calls = 0;
-        for _ in 0..3 {
-            let err = memo
-                .get(&a, "", t0, |_| {
-                    calls += 1;
-                    Err(CpdError::new(ErrorCode::GhFailed, "down"))
-                })
-                .unwrap_err();
-            assert_eq!(err.code(), ErrorCode::GhFailed);
-        }
-        assert_eq!(calls, 1);
     }
 }

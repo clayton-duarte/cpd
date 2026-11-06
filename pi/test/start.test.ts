@@ -220,7 +220,7 @@ test("a Manager reads no Plan, registers no plan-review tool, has no blocking re
   await f.quiet(); // the rename is the later Event: the plan-review before it was handled
   assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"], "no plan show");
   assert.deepEqual(stateCalls(f), ["idle"], "never blocked");
-  assert.deepEqual(f.pi.tools, []);
+  assert.deepEqual(f.pi.tools.map((x) => x.name), ["cpd_external_approve"], "a Manager registers only the external-approve tool");
   assert.deepEqual(f.pi.emitted, [], "nothing is emitted");
   assert.deepEqual(f.pi.delivered(), []);
 });

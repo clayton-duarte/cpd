@@ -105,22 +105,37 @@ fn snapshot(store: &mut Store) -> Value {
 
 const SUBJECT: &str = "pr:acme/pay#5";
 
-fn graphql(state: &str) -> Value {
-    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": {
-        "title": "Add retries", "isDraft": false, "state": state, "reviewDecision": null,
-        "author": {"login": "ryan"}, "latestReviews": {"nodes": []}}}}})
-}
-
 fn gh(reply: Reply) -> FakeRunner {
     FakeRunner::new(ManualClock::new()).on("gh", |_| true, reply)
 }
 
-/// A review-requested item 1 with a team cache holding its primary post.
+/// A review-requested item 1 with its primary post in `swr_slack_posts`.
 fn with_cache(runner: FakeRunner) -> (tempfile::TempDir, CpdHome, Store, Ports) {
     let mut f = fixture(Kind::ReviewRequested, SUBJECT, runner);
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": "1767225600.000100",
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
     crate::inbox::team::seed_cache(&mut f.2, "C02JU6C2Z1D", &[post]);
+    f
+}
+
+/// [`with_cache`] and the pass's rows for `acme/pay#5`: the viewer, and the pull request in `state`.
+fn with_state(state: super::team::GhState) -> (tempfile::TempDir, CpdHome, Store, Ports) {
+    let mut f = with_cache(gh(Reply::ok("{}")));
+    let pr = super::team::GhPr {
+        title: "Add retries".to_owned(),
+        draft: false,
+        state,
+        author: "ryan".to_owned(),
+        decision: None,
+        reviews: Vec::new(),
+        head_oid: None,
+        checks_state: None,
+    };
+    let lookup = super::team::Lookup {
+        me: "clayton-duarte".to_owned(),
+        workflows: [(("acme/pay".to_owned(), 5), Some(pr))].into(),
+    };
+    super::swr_fixture::lookup(&mut f.2, &lookup).unwrap();
     f
 }
 
@@ -163,17 +178,16 @@ fn a_refused_claim_with_no_team_cache_is_post_not_found_and_changes_no_row() {
 }
 
 #[test]
-fn a_refused_claim_whose_lookup_fails_is_gh_failed_and_leaves_the_row_open() {
-    let (_d, _h, mut store, ports) = with_cache(gh(Reply::exit(1, "", "gh: HTTP 500\n")));
-    let before = snapshot(&mut store);
-    refused(run(&ports, &["claim", "1"]), ErrorCode::GhFailed);
-    assert_eq!(snapshot(&mut store), before);
-    assert_eq!(closed_at(&mut store), None);
+fn a_refused_claim_of_a_pull_request_the_cache_does_not_hold_closes_the_row_as_not_found() {
+    let (_d, _h, mut store, ports) = with_cache(gh(Reply::ok("{}")));
+    let e = refused(run(&ports, &["claim", "1"]), ErrorCode::NotClaimable);
+    assert_eq!(e.details()["reason"], "not-found");
+    assert!(closed_at(&mut store).is_some());
 }
 
 #[test]
 fn a_refused_claim_of_a_merged_pull_request_closes_the_row_and_names_the_reason() {
-    let (_d, _h, mut store, ports) = with_cache(gh(Reply::ok(&graphql("MERGED").to_string())));
+    let (_d, _h, mut store, ports) = with_state(super::team::GhState::Merged);
     let e = refused(run(&ports, &["claim", "1"]), ErrorCode::NotClaimable);
     assert_eq!(e.details()["reason"], "merged");
     assert!(closed_at(&mut store).is_some());
@@ -183,7 +197,7 @@ fn a_refused_claim_of_a_merged_pull_request_closes_the_row_and_names_the_reason(
 
 #[test]
 fn a_refused_claim_of_a_closed_pull_request_closes_the_row_and_names_the_reason() {
-    let (_d, _h, mut store, ports) = with_cache(gh(Reply::ok(&graphql("CLOSED").to_string())));
+    let (_d, _h, mut store, ports) = with_state(super::team::GhState::Closed);
     let e = refused(run(&ports, &["claim", "1"]), ErrorCode::NotClaimable);
     assert_eq!(e.details()["reason"], "closed");
     assert!(closed_at(&mut store).is_some());

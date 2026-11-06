@@ -476,3 +476,55 @@ fn slack_failed_read_keeps_cached_posts() {
             .contains("slack_failed")
     );
 }
+
+/// A confirmed post queues its auto-merge once: the `auto_merge` op is the one enqueue site (swr-slack.md §6.2), and a later
+/// read that confirms the same post queues nothing more.
+#[test]
+fn slack_confirmed_post_queues_one_auto_merge_and_a_second_read_queues_none() {
+    let mut fx = fx(vec![
+        answer(&[own("1760951522.011300", 812)]),
+        answer(&[own("1760951522.011300", 812)]),
+    ]);
+    let dir = crate::policy::policy_dir(&fx.home).join("acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("owner.toml"),
+        "[pr.post]\nenabled = true\nchannel = \"C0POLICY1\"\nmerged_reaction = \"merge\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("pay.toml"), "").unwrap();
+    fx.store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored)
+                   VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay', 0, 'open', 'none', 'none',
+                           '2025-10-01T00:00:00Z', '2025-10-01T00:00:00Z', 1);
+                 INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
+                 INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                        pr_number, pr_url, pr_opened_at, pull_request)
+                   VALUES ('pay', 'repo', '/r', 'main', 'repo', 'open', 'cpd/pay/repo', '/w', cpd_txn(), 't', 't',
+                           812, 'https://github.com/acme/pay/pull/812', 't', (SELECT id FROM pull_requests WHERE number = 812));",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    fx.fetch().unwrap();
+    fx.fetch().unwrap();
+
+    let queued: i64 = fx
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM swr_mutations WHERE op_kind = 'auto_merge'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(queued, 1, "one auto-merge mutation for the confirmed post");
+}

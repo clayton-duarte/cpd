@@ -9,6 +9,8 @@ use serde_json::json;
 use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
+use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::swr::outbox::{self, Retry};
 use cpd_core::swr::source::jira;
 use cpd_core::swr::source::{self, Cx, ExecOutcome, Source};
@@ -107,24 +109,13 @@ fn pass(
         home: &engine.home,
         config: &engine.config,
     };
-    let mut failed = Vec::new();
     let mut machine = Vec::new();
-    if source.system() == "jira" {
+    let failed = if source.system() == "jira" {
         jira_drain(&mut cx, source, now, &mut machine)?;
+        Vec::new()
     } else {
-        while let Some(m) = outbox::claim_next(cx.store, now, source.system())? {
-            match source.execute(&mut cx, &m) {
-                ExecOutcome::Done => outbox::complete(cx.store, m.id, now)?,
-                ExecOutcome::Retry { after } => {
-                    outbox::fail(cx.store, m.id, now, "retry", Retry::After(after))?;
-                }
-                ExecOutcome::Failed { error } => {
-                    outbox::fail(cx.store, m.id, now, &error, Retry::Never)?;
-                    failed.push((m, error));
-                }
-            }
-        }
-    }
+        drain_outbox(&mut cx, source, now)?
+    };
     let keys = source.due(&mut cx, now)?;
     if !keys.is_empty() {
         source.fetch(&mut cx, &keys, now)?;
@@ -136,19 +127,9 @@ fn pass(
             outages.push((*name, error));
         }
     }
+    report_failed(engine, failed);
     for failure in machine {
         engine.fail(Step::E24, About::Machine, failure);
-    }
-    for (m, error) in failed {
-        engine.fail(
-            Step::E24,
-            About::Machine,
-            failure(
-                "swr_mutation_failed",
-                format!("Mutation {} ({} on {}) failed: {error}", m.id, m.op_kind, m.target_key),
-                json!({"id": m.id, "system": m.system, "target_key": m.target_key, "op_kind": m.op_kind, "error": error}),
-            ),
-        );
     }
     for (name, error) in outages {
         engine.fail(
@@ -163,6 +144,161 @@ fn pass(
                 json!({"endpoint": name, "error": error}),
             ),
         );
+    }
+    Ok(())
+}
+
+/// Claims every due mutation of `source` and runs it through `execute`; the failed ones with their error.
+fn drain_outbox(
+    cx: &mut Cx<'_>,
+    source: &'static dyn Source,
+    now: time::OffsetDateTime,
+) -> Result<Vec<(outbox::Mutation, String)>, CpdError> {
+    let mut failed = Vec::new();
+    while let Some(m) = outbox::claim_next(cx.store, now, source.system())? {
+        match source.execute(cx, &m) {
+            ExecOutcome::Done => outbox::complete(cx.store, m.id, now)?,
+            ExecOutcome::Retry { after } => {
+                outbox::fail(cx.store, m.id, now, "retry", Retry::After(after))?;
+            }
+            ExecOutcome::Failed { error } => {
+                outbox::fail(cx.store, m.id, now, &error, Retry::Never)?;
+                failed.push((m, error));
+            }
+        }
+    }
+    Ok(failed)
+}
+
+/// One `error` Event per failed mutation (swr.md §8).
+fn report_failed(engine: &mut Engine, failed: Vec<(outbox::Mutation, String)>) {
+    for (m, error) in failed {
+        engine.fail(
+            Step::E24,
+            About::Machine,
+            failure(
+                "swr_mutation_failed",
+                format!("Mutation {} ({} on {}) failed: {error}", m.id, m.op_kind, m.target_key),
+                json!({"id": m.id, "system": m.system, "target_key": m.target_key, "op_kind": m.op_kind, "error": error}),
+            ),
+        );
+    }
+}
+
+/// The `github` outbox drain (swr-github.md §9), run by E5's step each tick: a write command only enqueues, this calls GitHub through
+/// the Runner. It does nothing while no mutation is due or the endpoint is paused.
+pub(super) fn drain_github(engine: &mut Engine) {
+    wake_review_leads(engine);
+    let now = engine.ports.clock.utc();
+    let due = engine.store.read(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM swr_mutations WHERE system = 'github' AND status = 'pending'
+                              AND (next_attempt_at IS NULL OR next_attempt_at <= ?1))",
+            [cpd_core::clock::timestamp(now)],
+            |r| r.get::<_, bool>(0),
+        )?)
+    });
+    if !matches!(due, Ok(true)) {
+        return;
+    }
+    let paused = endpoint::get(&mut engine.store, "github")
+        .ok()
+        .flatten()
+        .is_some_and(|row| endpoint::is_paused(&row, now));
+    if paused {
+        return;
+    }
+    static GITHUB: source::github::GithubSource = source::github::GithubSource {
+        excused_labels: Vec::new(),
+    };
+    let mut cx = Cx {
+        store: &mut engine.store,
+        ports: &engine.ports,
+        home: &engine.home,
+        config: &engine.config,
+    };
+    match drain_outbox(&mut cx, &GITHUB, now) {
+        Ok(failed) => report_failed(engine, failed),
+        Err(e) => engine.fail(Step::E24, About::Machine, Failure::from(&e)),
+    }
+}
+
+/// Guarantee (b) of swr-github.md §10: wakes the Review Lead of every claimed pull request whose cached `head_oid` differs from the
+/// claimed one while its cached `checks` are `passed`, once per head: the wake is a `session-message` Event (`from` null, `wake`
+/// true, `data.head_oid`) and the same transaction moves the item's `head_oid` to the woken head, so that head wakes no more.
+pub(super) fn wake_review_leads(engine: &mut Engine) {
+    if let Err(e) = wake(engine) {
+        engine.fail(Step::E24, About::Machine, Failure::from(&e));
+    }
+}
+
+/// One claimed review item whose pull request moved to a green head.
+struct Moved {
+    item: i64,
+    plan: String,
+    lead: String,
+    context: String,
+    url: String,
+    claimed: String,
+    head: String,
+}
+
+fn wake(engine: &mut Engine) -> Result<(), CpdError> {
+    let moved = engine.store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT i.id, pl.id, pl.lead_session, pl.context, p.url, i.head_oid, p.head_oid
+               FROM inbox_items i
+               JOIN plans pl ON pl.id = i.plan
+               JOIN pull_requests p ON p.repo = pl.reviewed_repo AND p.number = pl.reviewed_number
+              WHERE i.claimed_at IS NOT NULL AND i.closed_at IS NULL AND i.head_oid IS NOT NULL
+                AND pl.archived_at IS NULL AND pl.deleted_at IS NULL AND pl.lead_session IS NOT NULL
+                AND p.state = 'open' AND p.checks = 'passed'
+                AND p.head_oid IS NOT NULL AND p.head_oid <> i.head_oid
+              ORDER BY i.id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Moved {
+                    item: r.get(0)?,
+                    plan: r.get(1)?,
+                    lead: r.get(2)?,
+                    context: r.get(3)?,
+                    url: r.get(4)?,
+                    claimed: r.get(5)?,
+                    head: r.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
+    for m in moved {
+        engine.store.write(super::SOURCE, |tx| {
+            let moved = tx.execute(
+                "UPDATE inbox_items SET head_oid = ?2 WHERE id = ?1 AND head_oid <> ?2",
+                rusqlite::params![m.item, m.head],
+            )?;
+            if moved == 0 {
+                return Ok(());
+            }
+            let text = format!(
+                "re-review requested: {url}\nreviewed_oid: {claimed}\nhead_oid: {head}\n\
+                 The pull request moved and its checks are green. Please re-review {claimed}..{head}.",
+                url = m.url,
+                claimed = m.claimed,
+                head = m.head,
+            );
+            let preview: String = text.chars().take(120).collect();
+            let event = NewEvent::session_message_head(
+                format!("Message from the User: {preview}"),
+                &text,
+                &m.head,
+            )?
+            .plan(PlanId::parse(&m.plan)?)
+            .session(SessionId::parse(&m.lead)?)
+            .context(ContextId::parse(&m.context)?);
+            events::append(tx, event)?;
+            Ok(())
+        })?;
     }
     Ok(())
 }

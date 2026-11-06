@@ -68,7 +68,8 @@ it("inbox tier filter lists all, blocker, delivery, decision, support, notice an
   const group = m.container.querySelector('[data-slot="toggle-group"]');
   expect(group?.getAttribute("data-part")).toBe("inbox-filters");
   expect(group?.getAttribute("aria-label")).toBe("Filter inbox by tier");
-  expect(group?.className).toContain("ml-auto");
+  expect(m.container.querySelector("[data-part=inbox-header]")?.lastElementChild).toBe(group);
+  expect(group?.className).not.toContain("ml-auto");
   const names = Array.from(group?.querySelectorAll('[data-slot="toggle-group-item"]') ?? []);
   expect(names.map((b) => b.getAttribute("data-tier-filter"))).toEqual(["all", ...TIERS]);
   // each item reads `<label> <count>`: the label span, then the count span (font-mono text-[10px] opacity-80)
@@ -313,4 +314,31 @@ it("inbox unread row click selects the session and dispatches inbox.dismiss", ()
   expect(onSelectSession).toHaveBeenLastCalledWith("s2");
   expect(onAction).not.toHaveBeenCalled();
   m.unmount();
+});
+
+function errorToastApp(error: { code: string; message: string; details?: Record<string, unknown> }) {
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+  const transport = new FakeTransport();
+  const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+  act(() => transport.emitStatus("open"));
+  act(() => transport.emitMessage(snapshot([mergeRow()])));
+  click(actionBtn(view.container));
+  act(() => transport.emitMessage({ type: "action.result", actionId: "c1", ok: false, error }));
+  return { transport, view };
+}
+const reportBtn = () => document.body.querySelector('[data-part="cockpit-error-toast"] [data-part="error-toast-report"]');
+
+it("error toast Send to host dispatches error.report and dismisses", () => {
+  const { transport, view } = errorToastApp({ code: "cpd_failed", message: "too new", details: { cpdCode: "store_too_new" } });
+  expect(reportBtn()?.textContent).toBe("Send to host");
+  click(reportBtn());
+  expect(transport.sent).toContainEqual({ type: "cockpit.action", actionId: expect.any(String), action: { kind: "error.report", target: "host", code: "cpd_failed", message: "too new" } });
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).toBeNull();
+  view.unmount();
+});
+
+it("error toast Send to cpd for a protocol_error", () => {
+  const { view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  expect(reportBtn()?.textContent).toBe("Send to cpd");
+  view.unmount();
 });

@@ -8,7 +8,7 @@ export type Timers = { after(ms: number, fn: () => void): () => void };
 export type HeldUI = {
   id: string;
   method: "select" | "confirm" | "input" | "editor" | "questionnaire";
-  purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+  purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "external_approve" | "mcp_login" | "other";
   created_at: number;
   expires_at?: number;
   fields: object;

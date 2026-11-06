@@ -562,7 +562,7 @@ fn a_live_merge_marker_shows_the_merging_entry_busy() {
     let fx = shop(vec![owned("ready to merge")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    crate::tui_merge::put_marker_at(&fx.env.cpd_home(), "acme__shop__4.json", fx.live_pid());
+    crate::tui_merge::queue_merge_at(&fx.env.cpd_home(), "acme/shop#4");
     let screen = first_rows(&fx);
     let glyph = screen
         .iter()

@@ -1,17 +1,16 @@
-//! The deploy read of `pr poll` (contract §7.6 step 8) on a scripted `gh`: which calls it makes and what it writes to
-//! `run/deploy-runs.json`. No process, no network.
+//! The deploy read (contract §7.6 step 8, swr-github.md §8) on a scripted `gh`: which calls it makes and what it writes to
+//! `swr_deploys`. No process, no network.
 
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::deploys::read;
+use super::deploys::read_into_store;
 use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::runner::{Call, FakeRunner, Handler, Reply};
-
-const POLLED_AT: &str = "2026-10-27T15:00:00.000Z";
+use crate::store::Store;
 
 /// The `gh` of the read: the login of `gh api user`, the waiting runs of each `<owner>/<repo>/<file>` (`None`: the call
 /// fails) and the `pending_deployments` of each run id.
@@ -86,23 +85,77 @@ fn declare(home: &CpdHome, repo: &str, workflows: Option<&[&str]>) {
     std::fs::write(path, text).unwrap();
 }
 
-fn cache_path(home: &CpdHome) -> std::path::PathBuf {
-    home.run_dir().join("deploy-runs.json")
+fn store(home: &CpdHome) -> Store {
+    Store::open(home, 5000).unwrap()
 }
 
-fn put_cache(home: &CpdHome, runs: Value) {
-    std::fs::create_dir_all(home.run_dir()).unwrap();
-    std::fs::write(
-        cache_path(home),
-        json!({"version": 1, "polled_at": "2026-10-27T14:00:00.000Z", "runs": runs}).to_string(),
+/// Reads the deploys for the viewer `me` (the login the pass stored in `swr_viewer`).
+fn read(runner: &FakeRunner, home: &CpdHome, me: &str) -> Result<(), CpdError> {
+    let mut store = store(home);
+    store
+        .write("fixture viewer", |tx| {
+            tx.execute(
+                "INSERT INTO swr_viewer (id, login, fetched_at) VALUES (1, ?1, 't')
+                 ON CONFLICT (id) DO UPDATE SET login = excluded.login",
+                [me],
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    read_into_store(
+        runner,
+        &mut store,
+        home,
+        crate::clock::Clock::utc(&ManualClock::new()),
     )
-    .unwrap();
 }
 
+/// Seeds the active rows the old cache held (`runs`: `entry` values).
+fn put_cache(home: &CpdHome, runs: Value) {
+    let mut store = store(home);
+    store
+        .write("fixture deploys", |tx| {
+            for r in runs.as_array().unwrap() {
+                let pending: Vec<Value> = r["environment"]
+                    .as_str()
+                    .unwrap()
+                    .split(", ")
+                    .map(|n| json!({"environment": {"id": 1, "name": n}, "current_user_can_approve": true}))
+                    .collect();
+                let run = json!({"id": r["run_id"], "updated_at": "U0", "display_title": r["title"], "html_url": r["url"],
+                                 "created_at": r["created_at"], "_workflow": r["workflow"]});
+                tx.execute(
+                    "INSERT INTO swr_deploys (repo, run_id, updated_at, run_json, pending_json, inactive_at) VALUES (?1, ?2, 'U0', ?3, ?4, NULL)",
+                    rusqlite::params![r["repo"].as_str(), r["run_id"].as_i64(), run.to_string(), Value::Array(pending).to_string()],
+                )?;
+            }
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+}
+
+/// The active rows, as the old cache listed them: by `created_at`, then run id.
 fn cached(home: &CpdHome) -> Value {
-    let text =
-        std::fs::read_to_string(cache_path(home)).expect("the read wrote run/deploy-runs.json");
-    serde_json::from_str(&text).unwrap()
+    let rows: Vec<Value> = store(home)
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT repo, run_id, run_json, pending_json FROM swr_deploys WHERE inactive_at IS NULL
+                  ORDER BY json_extract(run_json, '$.created_at'), run_id",
+            )?;
+            Ok(stmt
+                .query_map([], |r| {
+                    let run: Value = serde_json::from_str(&r.get::<_, String>(2)?).unwrap();
+                    let pending: Vec<Value> = serde_json::from_str(&r.get::<_, String>(3)?).unwrap();
+                    let mut names: Vec<&str> = pending.iter().filter_map(|p| p["environment"]["name"].as_str()).collect();
+                    names.sort_unstable();
+                    Ok(json!({"repo": r.get::<_, String>(0)?, "workflow": run["_workflow"], "run_id": r.get::<_, i64>(1)?,
+                              "environment": names.join(", "), "title": run["display_title"], "url": run["html_url"],
+                              "created_at": run["created_at"]}))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    json!({"runs": rows})
 }
 
 fn entry(repo: &str, workflow: &str, run_id: u64, environment: &str, created_at: &str) -> Value {
@@ -146,11 +199,9 @@ fn one_waiting_run_of_the_user_is_cached() {
         )],
         &[(40508749055, json!([can("production", true)]))],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let file = cached(&home);
-    assert_eq!(file["version"], 1);
-    assert_eq!(file["polled_at"], POLLED_AT);
     assert_eq!(
         file["runs"],
         json!([entry(
@@ -188,7 +239,7 @@ fn a_run_of_another_actor_is_skipped_and_its_pending_deployments_not_asked() {
             (2, json!([can("production", true)])),
         ],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let ids: Vec<u64> = cached(&home)["runs"]
         .as_array()
@@ -230,7 +281,7 @@ fn a_run_nobody_can_approve_by_the_user_is_skipped() {
             (3, json!([can("production", true)])),
         ],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let ids: Vec<u64> = cached(&home)["runs"]
         .as_array()
@@ -264,7 +315,7 @@ fn environments_the_user_can_approve_join_sorted() {
             ]),
         )],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
     assert_eq!(
         cached(&home)["runs"][0]["environment"],
         "production, staging"
@@ -291,7 +342,7 @@ fn the_login_compare_ignores_case() {
             (3, json!([can("production", true)])),
         ],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "Clayton-Duarte").unwrap();
     let ids: Vec<u64> = cached(&home)["runs"]
         .as_array()
         .unwrap()
@@ -320,7 +371,7 @@ fn one_runs_call_per_declared_workflow() {
         ],
         &[(1, json!([can("production", true)]))],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let mut runs_calls: Vec<String> = calls(&runner)
         .into_iter()
@@ -351,7 +402,7 @@ fn one_runs_call_per_declared_workflow() {
         )]),
     );
     let runner = scripted(gh("clayton-duarte", &[], &[]));
-    read(&runner, &empty, POLLED_AT).unwrap();
+    read(&runner, &empty, "clayton-duarte").unwrap();
     assert!(
         !calls(&runner)
             .iter()
@@ -360,7 +411,6 @@ fn one_runs_call_per_declared_workflow() {
         calls(&runner)
     );
     assert_eq!(cached(&empty)["runs"], json!([]));
-    assert_eq!(cached(&empty)["polled_at"], POLLED_AT);
 }
 
 #[test]
@@ -398,7 +448,7 @@ fn a_failed_workflow_call_keeps_its_previous_runs_and_updates_the_others() {
         ],
         &[(3, json!([can("staging", true)]))],
     ));
-    let err: CpdError = read(&runner, &home, POLLED_AT)
+    let err: CpdError = read(&runner, &home, "clayton-duarte")
         .expect_err("a failed call fails the read like a failed Workflow lookup");
     assert_eq!(err.code(), ErrorCode::GhFailed);
 
@@ -449,7 +499,7 @@ fn a_removed_declaration_drops_its_runs() {
         )],
         &[(4, json!([can("production", true)]))],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let repos: Vec<(String, u64)> = cached(&home)["runs"]
         .as_array()
@@ -471,12 +521,9 @@ fn a_removed_declaration_drops_its_runs() {
 }
 
 #[test]
-fn the_cache_file_has_version_1_and_sorted_runs() {
+fn the_rows_come_back_sorted_by_created_at_then_run_id() {
     let (_d, home) = tmp();
     declare(&home, "acme/pay", Some(&["main.yml"]));
-    // A file that is not that JSON is replaced.
-    std::fs::create_dir_all(home.run_dir()).unwrap();
-    std::fs::write(cache_path(&home), "{ not json").unwrap();
     let runner = scripted(gh(
         "clayton-duarte",
         &[(
@@ -495,11 +542,9 @@ fn the_cache_file_has_version_1_and_sorted_runs() {
             (40, json!([can("p", true)])),
         ],
     ));
-    read(&runner, &home, POLLED_AT).unwrap();
+    read(&runner, &home, "clayton-duarte").unwrap();
 
     let file = cached(&home);
-    assert_eq!(file["version"], 1);
-    assert_eq!(file["polled_at"], POLLED_AT);
     let ids: Vec<u64> = file["runs"]
         .as_array()
         .unwrap()
@@ -507,10 +552,4 @@ fn the_cache_file_has_version_1_and_sorted_runs() {
         .map(|r| r["run_id"].as_u64().unwrap())
         .collect();
     assert_eq!(ids, [40, 20, 30, 10], "by created_at, then run_id");
-    // Written atomically: the temp file is renamed, none is left beside it.
-    let names: Vec<String> = std::fs::read_dir(home.run_dir())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(names, ["deploy-runs.json"]);
 }

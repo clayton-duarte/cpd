@@ -22,6 +22,7 @@ it("WorkflowCard shows Post PR only for an unposted open PR that is postable", (
   const show = (p: Pr, set?: ReadonlySet<string>) => {
     const m = mount(<PlanView plan={plan([wf(p)])} onAction={vi.fn()} {...(set === undefined ? {} : { postableWorkflows: set })} />);
     const found = post(m.container) !== null;
+    expect(m.container.querySelector('[data-part="title-row"] [data-action=post-pr]')).toBeNull();
     m.unmount();
     return found;
   };

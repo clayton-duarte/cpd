@@ -1,6 +1,7 @@
-//! `pr post`'s squash auto-merge (commands.md §9.8b): after the Slack send and the `pr_posts` insert, one read query and the
-//! GraphQL mutation `enablePullRequestAutoMerge` (never `gh pr merge`). Its outcome never undoes or fails the post.
-//! `gh` and the Slack helper are the repo's fakes; every `gh` call is recorded.
+//! `pr post`'s auto-merge request (commands.md §9.8b): `pr post` queues the post and makes no GitHub call; the merge methods it
+//! checks are the cache's (`swr_repos`). The auto-merge is queued when the Slack send confirms (swr-slack.md §6.2) and enabled
+//! by the outbox drain, which the tests of cli/tests/engine/watch_auto_merge.rs run. `gh` and the Slack helper are the repo's
+//! fakes; every `gh` call is recorded.
 
 use std::fs;
 
@@ -92,12 +93,11 @@ fn mutations(pay: &Pay) -> Vec<String> {
 }
 
 // `pr post` only validates and queues the post (swr-slack.md §5): the send, the `pr_posts` row and the auto-merge run in the
-// outbox and in E18. What this file keeps is what `pr post` does before the queue: its one read of the merge methods, the refusals
-// and that no GitHub mutation and no Slack send happen at enqueue. The send-time auto-merge assertions are the E18 tests of
-// cli/tests/engine/watch_auto_merge.rs, named per test in the commit that made this change.
+// outbox. What this file keeps is what `pr post` does before the queue: the merge-method check from the cache, the refusals,
+// and that no GitHub call, no GitHub mutation and no Slack send happen at enqueue.
 
 #[test]
-fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
+fn enqueues_the_post_with_no_gh_call_and_no_send() {
     let pay = post();
 
     let out = post_cmd(&pay).ok();
@@ -107,22 +107,11 @@ fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
         out.get("auto_merge").is_none(),
         "no auto-merge at enqueue: {out}"
     );
-    let calls = gh(&pay);
-    assert_eq!(calls.len(), 1, "only the read: {calls:?}");
-    assert!(
-        calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"),
-        "the read query: {calls:?}"
+    assert_eq!(
+        gh(&pay),
+        Vec::<String>::new(),
+        "the merge methods are the cache's"
     );
-    for field in [
-        "squashMergeAllowed",
-        "mergeCommitAllowed",
-        "rebaseMergeAllowed",
-    ] {
-        assert!(
-            calls[0].contains(field),
-            "the read query asks {field}: {calls:?}"
-        );
-    }
     assert!(mutations(&pay).is_empty(), "no mutation at enqueue");
     assert_eq!(row(&pay), None, "no pr_posts row until the send answers");
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
@@ -189,11 +178,18 @@ fn events(pay: &Pay, kind: &str) -> i64 {
         .unwrap()
 }
 
+/// The merge methods `acme/pay` allows, as the pass stored them in `swr_repos`, which `pr post` reads.
 fn methods(pay: &Pay, squash: bool, merge: bool, rebase: bool) {
-    let mut auto = pay.gh.auto.lock().unwrap();
-    auto.squash = squash;
-    auto.merge = merge;
-    auto.rebase = rebase;
+    sql(
+        pay,
+        &format!(
+            "UPDATE swr_repos SET squash_merge_allowed = {}, merge_commit_allowed = {}, rebase_merge_allowed = {}
+              WHERE repo = 'acme/pay';",
+            i32::from(squash),
+            i32::from(merge),
+            i32::from(rebase)
+        ),
+    );
 }
 
 #[test]
@@ -219,7 +215,7 @@ fn a_repo_that_allows_merge_commit_and_rebase_enables_merge_auto_merge() {
 }
 
 #[test]
-fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
+fn a_stacked_pr_is_queued_with_no_gh_call() {
     let pay = post();
     stack(&pay);
 
@@ -227,7 +223,7 @@ fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
 
     assert_eq!(out["queued"], true, "{out}");
     assert_eq!(row(&pay), None);
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
 }
 
@@ -235,13 +231,16 @@ fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
 fn a_stacked_pr_on_a_repo_without_auto_merge_says_not_allowed_and_stores_none() {
     let pay = post();
     stack(&pay);
-    pay.gh.auto.lock().unwrap().allowed = false;
+    sql(
+        &pay,
+        "UPDATE swr_repos SET auto_merge_allowed = 0 WHERE repo = 'acme/pay';",
+    );
 
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["queued"], true, "{out}");
     assert_eq!(row(&pay), None);
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
 }
 
@@ -263,18 +262,6 @@ fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
             .is_some_and(|m| m.contains("acme/pay")),
         "{error}"
     );
-    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
-    assert_eq!(posts(&pay), 0);
-    assert_eq!(row(&pay), None);
-}
-
-#[test]
-fn a_failing_read_refuses_gh_failed_before_the_send() {
-    let pay = post();
-    pay.gh_fails("gh: HTTP 502");
-
-    refused(&post_cmd(&pay), "gh_failed", 1);
-
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None);
@@ -306,13 +293,13 @@ fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands()
 }
 
 #[test]
-fn a_failed_slack_send_makes_only_the_read_call_and_writes_no_row() {
+fn a_post_makes_no_gh_call_and_writes_no_row() {
     let pay = post_with_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["queued"], true, "{out}");
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
     assert_eq!(

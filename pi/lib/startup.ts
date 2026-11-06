@@ -17,6 +17,7 @@ import { registerPlanReviewCommand } from "./plan-review-command.ts";
 import { adapterPath, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
 import { registerSecretTool } from "./secret.ts";
+import { registerExternalApproveTool } from "./externalapprove.ts";
 import { registerHostApproveTool } from "./hostapprove.ts";
 import { QUESTION_LABEL, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
@@ -191,6 +192,8 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     registerHostApproveTool(host);
     registerPlanReviewCommand(host);
   }
+  // Plan Leads and Managers (the Plan-Lead block above lacks the Managers): the tool cpd_external_approve
+  if (info.role === "manager" || (info.role === "lead" && info.planLead)) registerExternalApproveTool(host);
   // 5a. MCP replay
   await replayServers(host, r);
   if (host.run !== r) return;

@@ -1,4 +1,5 @@
 import { exploreVerdict, isInsideRepo, type ExploreKind } from "../lib/explore.ts";
+import { externalBlock } from "../lib/externalguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReason } from "../lib/mainguard.ts";
 import { reasonText as secretReason, secretBypass } from "../lib/secretguard.ts";
@@ -15,6 +16,8 @@ export type Where = {
 export type Verdict = { block: string } | undefined;
 
 export function workerVerdict(call: { name: string; arguments: Record<string, unknown> }, where: Where): Verdict {
+  const external = externalBlock(call.name, call.arguments, { grantable: false });
+  if (external !== undefined) return { block: external };
   if (where.kind !== undefined) {
     const refused = exploreVerdict(where.kind, call, { cwd: where.cwd, home: where.cpdHome, plan: where.plan ?? "" }, isInsideRepo);
     if (refused !== undefined) return refused;
