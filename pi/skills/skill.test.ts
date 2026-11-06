@@ -382,10 +382,12 @@ function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: 
   const contractTools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
   // Extract pi tool names from commands.md headings: "The pi tool `name`"
   const piTools: string[] = [];
-  for (const match of commandsDoc.matchAll(/^### \d+\.\d+ The pi tool `([a-z_]+)`/gm)) {
+  for (const match of commandsDoc.matchAll(/^### \d+\.\d+ .*?[Tt]he pi tool `([a-z_]+)`/gm)) {
     piTools.push(match[1]!);
   }
-  const tools = [...contractTools, ...piTools];
+  // The values of the `kind` parameter of `cpd_external_approve` (commands.md §15.27).
+  const kindValues = /`kind` \(([^)]+)\)/.exec(section(commandsDoc, "### 15.27 Guards for raw GitHub comment writes and Slack sends, and the pi tool `cpd_external_approve`"))?.[1]?.match(/[a-z]+_[a-z]+/g) ?? [];
+  const tools = [...contractTools, ...piTools, ...kindValues];
   return {
     causes: new Set(ticks(section(contractDoc, "### 3.4 Attempt statuses, outcomes and causes"), /^[a-z]+(_[a-z]+)*$/)),
     reasons: new Set(reasons),
@@ -911,5 +913,18 @@ test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four
       assert.ok(line.includes(t), `${c.skill}: step ${i + 1} text`);
     });
     assert.ok(!/^ {2}5\. /.test(lines[at + 5] ?? ""), `${c.skill}: no fifth step`);
+  }
+});
+
+test("cpd-manager and cpd-lead state the three external-approval rules (pro-d451)", () => {
+  for (const { skill } of skills) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.ok(text.includes("cpd_external_approve"), `${skill}: names the tool`);
+    assert.ok(text.includes("bot review thread"), `${skill}: only a bot review thread is answered on its own`);
+    assert.ok(text.includes("`bot: true`"), `${skill}: names bot: true`);
+    assert.ok(text.includes("`gh pr comment`"), `${skill}: raw gh comment writes are refused`);
+    assert.ok(text.includes("approval_required"), `${skill}: approval_required`);
+    assert.ok(text.includes("Slack"), `${skill}: Slack needs the User`);
+    assert.ok(!text.includes("cpd pr approve"), `${skill}: never names cpd pr approve`);
   }
 });

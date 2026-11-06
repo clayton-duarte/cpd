@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { adapter, type Options } from "../lib/adapter.ts";
-import { usageError } from "./usage.ts";
+import { grammar, usageError, type Grammar } from "./usage.ts";
 import { answers, ID, policyShow, sessionShow, shown } from "./answers.ts";
 import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
@@ -110,6 +110,8 @@ export type Call = { phase: "start" | "end"; argv: string[]; since?: string; fee
 /** What the fake `cpd` knows and has seen: the answers, the Events the followers print, the calls. The Fixture owns one; a second `FakePi` runs against the same one. */
 export class FakeCpd {
   timers: Timers = realTimers;
+  /** The grammar `call` checks argv against; a test may extend it. */
+  grammar: Grammar = grammar;
   readonly responses = new Map<string, Answer>();
   /** The Event lines emitted so far (objects as JSON). */
   readonly lines: string[] = [];
@@ -148,7 +150,7 @@ export class FakeCpd {
     const { signal, timeout } = options;
     if (signal?.aborted) return Promise.resolve(killed);
     this.log({ phase: "start", argv, since: flagOf(argv, "--since") });
-    const refused = usageError(argv);
+    const refused = usageError(argv, this.grammar);
     const r: Answer = refused === undefined ? this.answer(argv) : { stdout: { ok: false, error: { code: "usage", message: refused, details: {} } }, exit: 2 };
     let feedback: string | undefined;
     const file = flagOf(argv, "--feedback-file");
