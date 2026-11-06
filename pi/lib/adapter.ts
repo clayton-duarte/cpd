@@ -77,10 +77,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return { block: true, reason: looped };
     const role = host.run?.info.role;
-    if (host.run) {
-      const external = externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
-      if (external !== undefined) return { block: true, reason: external };
-    }
+    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" }); if (external) return { block: true, reason: external };
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
