@@ -2,8 +2,12 @@
 
 use time::OffsetDateTime;
 
+use serde_json::Value;
+
 use super::{Cx, ExecOutcome, QueryKey, Source};
 use crate::error::CpdError;
+use crate::models::{Answer, Changes, Outcome};
+use crate::store::Store;
 use crate::swr::outbox::{Coalesce, Mutation};
 
 pub struct Models;
@@ -34,4 +38,30 @@ impl Source for Models {
     fn coalesce(&self, _op_kind: &str) -> Coalesce {
         Coalesce::LatestWins
     }
+}
+
+/// Writes the rows of one validated helper answer, one `Store::write` per provider (swr-models.md §2.1).
+pub fn apply_answer(
+    _store: &mut Store,
+    _answer: &Answer,
+    _now: OffsetDateTime,
+) -> Result<Vec<Outcome>, CpdError> {
+    todo!("swr-models.md §2.1")
+}
+
+/// `cpd models show`: `{providers, warnings}` read from the rows; writes nothing (swr-models.md §5).
+pub fn show(
+    _store: &mut Store,
+    _provider: Option<&str>,
+    _now: OffsetDateTime,
+) -> Result<Value, CpdError> {
+    todo!("swr-models.md §5")
+}
+
+/// The rows whose `changes_json.at` is within `models::WINDOW` of `now` and whose announced part is not empty.
+pub fn changed(
+    _store: &mut Store,
+    _now: OffsetDateTime,
+) -> Result<Vec<(String, Changes)>, CpdError> {
+    todo!("swr-models.md §5")
 }
