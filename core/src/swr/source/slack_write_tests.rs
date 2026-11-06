@@ -1141,18 +1141,15 @@ fn slack_post_send_queues_the_in_review_transition() {
     let fx = post_fixture();
     let ports = fx.rig.fakes.ports.clone();
     pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
-    assert_eq!(
-        fx.count("SELECT count(*) FROM jira_transitions"),
-        0,
-        "nothing is queued at enqueue"
-    );
+    let in_review = "SELECT count(*) FROM swr_mutations WHERE system = 'jira' AND json_extract(vars_json, '$.target') = 'in_review'";
+    assert_eq!(fx.count(in_review), 0, "nothing is queued at enqueue");
 
     assert_eq!(fx.execute(), ExecOutcome::Done);
 
     assert_eq!(
-        fx.count("SELECT count(*) FROM jira_transitions WHERE plan = 'pay' AND pr = 'api' AND target = 'in_review'"),
+        fx.count(&format!("{in_review} AND json_extract(context_json, '$.plan') = 'pay' AND json_extract(context_json, '$.workflow') = 'api'")),
         1,
-        "the in_review row is queued with the pr_posts row"
+        "the in_review transition is queued with the pr_posts row"
     );
 }
 
