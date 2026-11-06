@@ -709,7 +709,7 @@ export function Inbox(props: {
           up to date, drink some water
         </p>
       ) : (
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea data-part="inbox-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
         <ItemGroup className="gap-2 px-2.5 py-1.5">
           {filteredRows.map((row) => (
             <InboxItemRow

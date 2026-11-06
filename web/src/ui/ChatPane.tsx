@@ -70,36 +70,37 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         thinking={toggles.thinking}
         tools={toggles.tools}
       />
-      {dialog === null ? null : dialog.method === "ask_user_question" ? (
+      {dialog === null ? (
+        <Composer
+          ref={composer}
+          sessionId={view.id}
+          capabilities={view.capabilities}
+          archived={view.archived ?? false}
+          busy={isBusy}
+          queued={view.queued}
+          reader={reader}
+          settings={
+            <TierSelector
+              capabilities={view.capabilities}
+              footer={view.footer}
+              models={view.models}
+              busy={view.busy}
+              onConfigure={(c) => connection.configure(c)}
+              onRequestModels={() => connection.listModels()}
+            />
+          }
+          onSubmit={({ text, attachments, whenBusy }) => {
+            const { text: prompt, images } = buildPrompt(text, attachments);
+            connection.submit({ text: prompt, images, whenBusy });
+          }}
+          onAbort={() => connection.abort()}
+          onCancelQueued={(id) => connection.abortSubmission(id)}
+        />
+      ) : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (
         <PlanReviewCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       )}
-      <Composer
-        ref={composer}
-        sessionId={view.id}
-        capabilities={view.capabilities}
-        archived={view.archived ?? false}
-        busy={isBusy}
-        queued={view.queued}
-        reader={reader}
-        settings={
-          <TierSelector
-            capabilities={view.capabilities}
-            footer={view.footer}
-            models={view.models}
-            busy={view.busy}
-            onConfigure={(c) => connection.configure(c)}
-            onRequestModels={() => connection.listModels()}
-          />
-        }
-        onSubmit={({ text, attachments, whenBusy }) => {
-          const { text: prompt, images } = buildPrompt(text, attachments);
-          connection.submit({ text: prompt, images, whenBusy });
-        }}
-        onAbort={() => connection.abort()}
-        onCancelQueued={(id) => connection.abortSubmission(id)}
-      />
     </div>
   );
 }

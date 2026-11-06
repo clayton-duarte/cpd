@@ -1,7 +1,7 @@
 import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CockpitAction, ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { formatCost } from "../../server/cockpit/cost.ts";
@@ -18,7 +18,7 @@ import {
 } from "../components/sidebar.tsx";
 import { clearDraft } from "../composer/drafts.ts";
 import { usePersistedBoolean } from "./persisted.ts";
-import { PERMANENT_IDS, STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
+import { STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
 
 const COUNTERS = [
   ["draft", "text-status-decision"],
@@ -219,7 +219,7 @@ const WORK_COLOUR = {
   review: "text-status-landing-bright",
 } as const;
 
-function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode; archived?: boolean }): ReactElement {
+export function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode; archived?: boolean }): ReactElement {
   const { state } = dot;
   const attention = dot.attention === "blue" ? null : dot.attention;
   const label = attention === null ? state : `${state}, needs you (${attention})`;
@@ -338,6 +338,29 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   const forks = context.sessions.filter(isFork);
   const hasChildren = plans.length > 0 || forks.length > 0;
   const current = manager !== undefined && props.selectedSessionId === manager.ref.id;
+  const hasSelectedChild =
+    plans.some((p) => p.id === props.selectedPlanId || p.sessions.some((s) => s.ref.id === props.selectedSessionId)) ||
+    forks.some((s) => s.ref.id === props.selectedSessionId);
+  // pro-d81: a selection that newly lands inside this Context opens it (pro-d78 wins for the Manager row itself)
+  const prevHasSelectedChild = useRef(hasSelectedChild);
+  useEffect(() => {
+    if (!prevHasSelectedChild.current && hasSelectedChild && !open) setOpen(true);
+    prevHasSelectedChild.current = hasSelectedChild;
+  }, [hasSelectedChild, open, setOpen]);
+  // pro-d78: a selected Manager collapses its Context row transiently (never persisted)
+  const [overrideWhileCurrent, setOverrideWhileCurrent] = useState<boolean | null>(null);
+  const prevCurrent = useRef(current);
+  useEffect(() => {
+    if (prevCurrent.current === current) return;
+    prevCurrent.current = current;
+    setOverrideWhileCurrent(null);
+    if (!current && !props.allPlans && !open) setOpen(true);
+  }, [current, open, props.allPlans, setOpen]);
+  const effectiveOpen = !props.allPlans && current ? (overrideWhileCurrent ?? false) : open;
+  const handleOpenChange = (next: boolean): void => {
+    if (!props.allPlans && current) setOverrideWhileCurrent(next);
+    else setOpen(next);
+  };
   const api = props.menu;
   const permanent = isPermanent(context.id);
   const archivedRow = props.allPlans && context.archived;
@@ -352,7 +375,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   // in the Archive section a live Context only holds archived Plans: its own row has no menu
   const rowApi = props.allPlans && !context.archived ? undefined : api;
   return (
-    <Collapsible open={open} onOpenChange={setOpen} asChild>
+    <Collapsible open={effectiveOpen} onOpenChange={handleOpenChange} asChild>
       <SidebarMenuItem role="treeitem" data-context={context.id}>
         <RowMenu api={rowApi} kind={permanent ? "permanent" : archivedRow ? "archived" : "context"} items={items}>
         <SidebarMenuButton
@@ -366,15 +389,20 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
           className={hasChildren ? "pr-7" : undefined}
         >
           <Dot dot={manager === undefined ? STOPPED : manager.dot} archived={props.allPlans || context.archived} />
-          <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span data-part="context-id" title={context.title} className="truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+            {permanent ? (
+              <span data-part="phi" aria-hidden="true" className="-translate-y-[1px] shrink-0 select-none font-display text-[14px] font-bold leading-none text-fg-strong">φ</span>
+            ) : null}
+          </span>
           <RowCost on={props.costsOn} value={props.costs?.contexts[context.id]} />
         </SidebarMenuButton>
         </RowMenu>
         {hasChildren ? (
           <>
             <CollapsibleTrigger asChild>
-              <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={open ? "open" : "closed"}>
-                {open ? <MinusIcon /> : <PlusIcon />}
+              <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
+                {effectiveOpen ? <MinusIcon /> : <PlusIcon />}
               </SidebarMenuAction>
             </CollapsibleTrigger>
             <CollapsibleContent>
@@ -395,7 +423,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
 }
 
 function TreeSection(props: {
-  section: "contexts" | "standing" | "archive";
+  section: "contexts" | "archive";
   label: string;
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -429,7 +457,7 @@ function TreeSection(props: {
           {props.action}
         </div>
         <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea data-part="tree-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
             <SidebarGroupContent className="px-2">{props.children}</SidebarGroupContent>
           </ScrollArea>
         </CollapsibleContent>
@@ -468,16 +496,13 @@ export function ContextTree(props: {
   const menu: MenuApi | undefined = onAction === undefined ? undefined : { act: onAction, ask: setPrompt, taken };
   const handlers = menu === undefined ? rest : { ...rest, menu };
   const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
-  const [standingOpen, setStandingOpen] = usePersistedBoolean("section:standing", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);
 
   const all = tree === null ? [] : tree.contexts;
   const projectContexts = all
-    .filter((c) => !c.archived && !isPermanent(c.id))
+    .filter((c) => !c.archived)
     .sort((a, b) => compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
-  const standing = PERMANENT_IDS.map((id) => all.find((c) => c.id === id)).filter(
-    (c): c is ContextNode => c !== undefined,
-  );
+  const sessionId = props.selectedSessionId;
   const archived: ContextNode[] = [
     ...all.filter((c) => c.archived && !isPermanent(c.id)),
     ...all
@@ -485,10 +510,32 @@ export function ContextTree(props: {
       .map((c) => ({ ...c, plans: c.plans.filter((p) => p.archived) })),
   ];
 
-  const showStanding = standing.length > 0 || archived.length > 0;
+  // pro-d81: open the section holding the selected row, then scroll that row into view
+  const holds = (c: ContextNode, plansOnly: boolean): boolean =>
+    sessionId !== null && ((!plansOnly && c.sessions.some((s) => s.ref.id === sessionId)) || c.plans.some((p) => p.sessions.some((s) => s.ref.id === sessionId)));
+  const inArchive = archived.some((c) => holds(c, !c.archived));
+  const inLive = !inArchive && projectContexts.some((c) => holds(c, false));
+  useEffect(() => {
+    if (inArchive && !archivedOpen) setArchivedOpen(true);
+    if (inLive && !contextsOpen) setContextsOpen(true);
+  }, [inArchive, inLive, archivedOpen, contextsOpen, setArchivedOpen, setContextsOpen]);
+
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (props.selectedSessionId === null && props.selectedPlanId === null) return;
+    const scrollSelectedIntoView = (): void => {
+      const active = sidebarRef.current?.querySelector<HTMLElement>('[aria-current="true"]');
+      if (active !== null && active !== undefined && typeof active.scrollIntoView === "function") {
+        active.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    };
+    scrollSelectedIntoView();
+    const frame = requestAnimationFrame(scrollSelectedIntoView);
+    return () => cancelAnimationFrame(frame);
+  }, [props.selectedSessionId, props.selectedPlanId]);
 
   return (
-    <Sidebar collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
+    <Sidebar ref={sidebarRef} collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
       <SidebarContent className="flex h-full min-h-0 flex-col gap-0 overflow-hidden">
         <TreeSection
           section="contexts"
@@ -512,12 +559,6 @@ export function ContextTree(props: {
             <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
           )}
         </TreeSection>
-        {showStanding ? <Separator className="shrink-0" /> : null}
-        {showStanding ? (
-          <TreeSection section="standing" label="Standing" open={standingOpen} onOpenChange={setStandingOpen} groupAttrs={{ "data-standing": true }}>
-            <ContextList contexts={standing} allPlans={false} {...handlers} />
-          </TreeSection>
-        ) : null}
         {archived.length > 0 ? <Separator className="shrink-0" /> : null}
         {archived.length > 0 ? (
           <TreeSection section="archive" label="Archive" open={archivedOpen} onOpenChange={setArchivedOpen} groupAttrs={{ "data-archived": true }}>
