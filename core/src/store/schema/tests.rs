@@ -2933,7 +2933,6 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
             rows_after.remove("slack_reactions").map(|r| r.len()),
             Some(0)
         ); // `slack-reactions`: a new empty table
-        assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
         assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
             Some(27)
@@ -2988,6 +2987,24 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         assert_eq!(rows_after.remove("context_reads"), Some(Vec::new())); // `context-reads`: a new empty table
         assert_eq!(rows_after.remove("record_topics"), Some(Vec::new())); // `record-topics`: a new empty table
+        // `swr` made the SWR data tables, and they are empty.
+        for table in [
+            "swr_queries",
+            "swr_endpoints",
+            "swr_mutations",
+            "swr_viewer",
+            "swr_repos",
+            "swr_pr_detail",
+            "swr_deploys",
+            "gh_issues",
+            "swr_slack_posts",
+            "swr_jira_issues",
+            "swr_atlassian",
+            "swr_models",
+            "swr_badges",
+        ] {
+            assert_eq!(rows_after.remove(table), Some(Vec::new()), "{table}");
+        }
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));

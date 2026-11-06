@@ -10,7 +10,6 @@
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
 //! - [`auto_merge`] E18: turns on squash auto-merge for posted Workflows whose request is pending (deferred while stacked);
-//! - [`jira`] E19: moves the Jira ticket of the oldest queued transition through the helper `pi/lib/jira-transition.ts`;
 //! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
@@ -64,7 +63,6 @@ mod incident_tests;
 mod janitor;
 #[cfg(test)]
 mod janitor_tests;
-mod jira;
 mod liveness;
 #[cfg(test)]
 mod local_time_tests;
@@ -117,6 +115,12 @@ mod stacked_ready_tests;
 #[cfg(test)]
 mod stuck_explore_tests;
 mod swr;
+#[cfg(test)]
+mod swr_jira_run_tests;
+#[cfg(test)]
+mod swr_jira_tests;
+#[cfg(test)]
+mod swr_models_tests;
 #[cfg(test)]
 mod swr_tests;
 pub mod team;

@@ -1,7 +1,6 @@
 //! `PiClassifier` over a scripted `FakeRunner`, over a temp `$CPD_HOME`: no node, no network, no sleep.
 
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,11 +14,8 @@ use crate::home::CpdHome;
 use crate::host::runner::{FakeRunner, Reply};
 use crate::store::Store;
 
-const MESSAGE: &str =
-    "http://ollama.lab/v1 is unreachable (connect Tailscale or disable in [experimental])";
-
 struct Fixture {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
     home: CpdHome,
     runner: FakeRunner,
     port: PiClassifier,
@@ -40,7 +36,7 @@ fn fixture(replies: Vec<Reply>) -> Fixture {
         &home,
     );
     Fixture {
-        dir,
+        _dir: dir,
         home,
         runner,
         port,
@@ -48,9 +44,6 @@ fn fixture(replies: Vec<Reply>) -> Fixture {
 }
 
 impl Fixture {
-    fn marker(&self) -> PathBuf {
-        self.home.run_dir().join("classifier-unreachable.json")
-    }
     fn choose(&self) -> Result<crate::classifier::Chosen, crate::error::CpdError> {
         let state = json!({"k": 1});
         let labels = [
@@ -179,61 +172,7 @@ fn classifier_adapter_maps_timeout_exit_and_io_to_classifier_unreachable() {
 }
 
 #[test]
-fn unreachable_classifier_raises_one_error_event_per_outage() {
-    let fx = fixture(vec![unreachable_exit(), Reply::io(ErrorKind::TimedOut)]);
-    assert_eq!(
-        fx.choose().unwrap_err().code(),
-        ErrorCode::ClassifierUnreachable
-    );
-    let events = fx.errors();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["code"], "classifier_unreachable");
-    assert_eq!(events[0]["message"], MESSAGE);
-    assert!(fx.marker().is_file());
-    // The same outage: an Err again, no new Event.
-    assert_eq!(
-        fx.choose().unwrap_err().code(),
-        ErrorCode::ClassifierUnreachable
-    );
-    assert_eq!(fx.errors().len(), 1);
-}
-
-#[test]
-fn success_clears_the_notice_so_the_next_outage_notifies_again() {
-    let fx = fixture(vec![unreachable_exit(), answer("yes"), unreachable_exit()]);
-    fx.choose().unwrap_err();
-    assert!(fx.marker().is_file());
-    fx.choose().unwrap();
-    assert!(!fx.marker().exists());
-    fx.choose().unwrap_err();
-    assert!(fx.marker().is_file());
-    assert_eq!(fx.errors().len(), 2);
-}
-
-#[test]
-fn notice_failure_never_fails_the_classification() {
-    let fx = fixture(vec![unreachable_exit(), answer("yes")]);
-    std::fs::set_permissions(fx.home.run_dir(), std::fs::Permissions::from_mode(0o555)).unwrap();
-    let failed = fx.choose();
-    let ok = fx.choose();
-    // Restore before asserting, so the temp dir is removable.
-    std::fs::set_permissions(fx.home.run_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(failed.unwrap_err().code(), ErrorCode::ClassifierUnreachable);
-    assert_eq!(ok.unwrap().label, "yes");
-    drop(fx.dir);
-
-    // A marker that cannot be removed does not fail a success.
-    let fx = fixture(vec![unreachable_exit(), answer("no")]);
-    fx.choose().unwrap_err();
-    assert!(fx.marker().is_file());
-    std::fs::set_permissions(fx.home.run_dir(), std::fs::Permissions::from_mode(0o555)).unwrap();
-    let ok = fx.choose();
-    std::fs::set_permissions(fx.home.run_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(ok.unwrap().label, "no");
-}
-
-#[test]
-fn refused_or_bad_reply_raise_no_unreachable_notice() {
+fn refused_or_bad_reply_raise_no_error_event() {
     let refused = Reply::exit(
         1,
         r#"{"ok":false,"error":{"code":"classifier_refused","message":"m","details":{"status":500}}}"#,
@@ -244,5 +183,4 @@ fn refused_or_bad_reply_raise_no_unreachable_notice() {
         fx.choose().unwrap_err();
     }
     assert!(fx.errors().is_empty());
-    assert!(!fx.marker().exists());
 }

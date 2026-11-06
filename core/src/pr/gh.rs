@@ -98,7 +98,7 @@ pub struct InlineComment {
     pub body: Option<String>,
 }
 
-/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url`.
+/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels`.
 #[derive(Debug, Deserialize)]
 pub struct View {
     pub state: String,
@@ -111,6 +111,15 @@ pub struct View {
     /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or empty.
     #[serde(rename = "reviewDecision")]
     pub review_decision: Option<String>,
+    /// The pull request's labels (`--json labels`).
+    #[serde(default)]
+    pub labels: Vec<LabelNode>,
+}
+
+/// One label of `gh pr view --json labels`.
+#[derive(Debug, Deserialize)]
+pub struct LabelNode {
+    pub name: String,
 }
 
 /// A Workflow as `gh` names it.
@@ -410,7 +419,7 @@ pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdErr
         "view",
         &n,
         "--json",
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url",
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels",
     ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }

@@ -31,7 +31,7 @@ flowchart LR
   end
 
   DB[("cpd.db: swr_* tables")]
-  POLL["engine poller: E24 (E5 for github)"]
+  POLL["engine poller: E24 (E5 for github, E15 for models)"]
   SRC["Source trait: source/{github,slack,jira,models}.rs"]
   UP["upstream: gh, node helpers, Atlassian, providers"]
 
@@ -235,7 +235,7 @@ It replaces `run/team-review.json` (§15).
 | `ticket` | TEXT PRIMARY KEY | the Jira key, e.g. `EEC-1` |
 | `cloud_id` | TEXT | the Atlassian cloud id the ticket belongs to |
 | `summary` | TEXT | the summary |
-| `status_name` | TEXT | the workflow status's name |
+| `status_name` | TEXT | the name of the ticket's Jira status |
 | `status_category` | TEXT | the status category |
 | `estimates_json` | TEXT | the estimates |
 | `synced_at` | TEXT | when it was read |
@@ -271,14 +271,14 @@ One row per Session's classifier badge.
 | Column | Type and constraint | Meaning |
 |---|---|---|
 | `session_id` | TEXT PRIMARY KEY | the Session |
-| `entry_id` | TEXT NOT NULL | the entry the badge is about |
+| `entry_id` | TEXT NOT NULL | the Session's last transcript item id when the badge was computed; the row is fresh while it matches the Session's current last item (`swr-classifier.md` §2.1). It is not a query key |
 | `label` | TEXT | the badge's label |
 | `score` | REAL | the classifier's score |
 | `text` | TEXT | the badge's text |
 | `tone` | TEXT | the badge's tone |
 | `others_json` | TEXT | the other completion scores (the hover card) |
 | `synced_at` | TEXT | when it was computed |
-| `inactive_at` | TEXT | when no observer needs it |
+| `inactive_at` | TEXT | when no observer needs it: set when the Session is marked `stopped`, cleared by a write (`swr-classifier.md` §2.4) |
 
 ## 4. The two clocks
 
@@ -288,9 +288,11 @@ One row per Session's classifier badge.
 |---|---|
 | open pull request | 5 s |
 | repository, viewer, Atlassian cloud id | 24 h |
+| Jira issue | never: Jira has no read loop, so a row is as fresh as its last transition ([swr-jira.md §10](swr-jira.md)) |
 | Slack channel | 30 min |
 | models | 7 d |
 | merged or closed pull request, and an unchanged `(updated_at, head_oid)` detail | never (`stale_after` NULL) |
+| Lead completion badge (`swr_badges`, not a query) | while its `entry_id` matches the Session's last transcript item; the freshness is in the row, so it survives a restart (`swr-classifier.md` §2.1) |
 
 A Changed commit sets `stale_after` to its time plus the query's staleTime. An Unchanged fetch writes no query row (D5), so the poller keeps the fresh-until instant of each key **in memory**. After a restart a key has no in-memory instant, so every query is due once. That is the one stale-after-restart rule, and it is the reason `is_fresh` reads `stale_after` and the poller's memory together.
 
@@ -365,11 +367,12 @@ Lifecycle: `pending` → `in_flight` → `revalidating` → `done`, with `failed
 
 - **`enqueue`** inserts a `pending` row and then applies the coalesce rule:
   - **`Coalesce::LatestWins`**: every `pending` (not started) mutation with the same active key becomes `superseded`. An `in_flight` one is never superseded: the new one waits behind it.
-  - **`Coalesce::Forward(rank)`**: when an unstarted mutation with the same active key and a **higher** rank exists, the new one is dropped itself (`superseded` at once). Otherwise every unstarted one with a lower rank is superseded. Each row keeps its rank in `vars_json`, so the comparison reads the table alone. Jira's ranks are `in_progress` < `in_review` < `done` (A5).
+  - **`Coalesce::Forward(rank)`**: when an unstarted mutation with the same active key and a rank **≥** the new one's exists, the new one is dropped itself (`superseded` at once). Equal rank counts, so a repeat collapses. Otherwise every unstarted one with a lower rank is superseded. Each row keeps its rank in `vars_json`, so the comparison reads the table alone. Jira's ranks are `in_progress` < `in_review` < `done` (A5).
   - **`Coalesce::Dedupe(key)`**: when an active mutation with the same active key and the same canonical `vars_json` exists, `enqueue` returns its id and writes nothing. Slack reactions dedupe on `(channel, ts, emoji)` (A5). The canonical `vars_json` is the datasource's, so two equal keys produce equal strings.
   - The new row's id is returned in every case (the existing id for `Dedupe`).
-- **`claim_next`** takes the oldest `pending` row of `system` whose `next_attempt_at` is NULL or `<= now`, sets `in_flight`, `started_at` = `now`, `attempt_count` + 1, and returns it. It is the only way a mutation is started.
-- **`complete`** sets `revalidating`, `completed_at` = `now`, and invalidates `target_key` (`cache::invalidate`). The overlay stays until §10 settles it.
+- **`claim_next`** takes the oldest `pending` row of `system` whose `target_key` is not NULL (a row without one waits, as a ticketless Jira transition does) and whose `next_attempt_at` is NULL or `<= now`, sets `in_flight`, `started_at` = `now`, `attempt_count` + 1, and returns it. It is the only way a mutation is started.
+- **`complete`** sets `revalidating`, `completed_at` = `now`, and invalidates `target_key` (`cache::invalidate`). The overlay stays until §10 settles it. A datasource whose write answer is itself the post-write read (Jira, [swr-jira.md §10](swr-jira.md) J5) runs `complete` and the commit that settles it in one transaction.
+- **`skip`** sets `done` with no write: no overlay, no revalidation, no invalidation. A datasource uses it when the upstream state already matches the write (Jira's skip rule, [swr-jira.md §5](swr-jira.md)).
 - **`fail`** with `Retry::After(d)` puts the mutation back to `pending` with `next_attempt_at` = `now + d` and records `error`. With `Retry::Never` it sets `failed` and `error`; the caller raises the `error` Event. A failed mutation's overlay is dropped at once.
 
 `cpd` never calls `enqueue` from a datasource: a CLI write calls it and returns `{queued, mutation_id}` (A6); the engine drains with `claim_next` and `execute` (§12).
@@ -396,6 +399,7 @@ A poll answers "is upstream's state at least as new as this write?" only if it k
 4. A poll that started earlier can never settle it. The mutation waits for the next poll that started after `completed_at`.
 5. Settling happens on a Changed commit, and also when the fetched data is Unchanged (the status-only write of §6).
 6. A failed or paused fetch settles nothing.
+7. **The exception of a write answer** ([swr-jira.md §10](swr-jira.md), J5): a datasource with no poll (Jira) may settle a mutation with the answer to its own write, which reports the state after the write. Its `poll_started_at` is then the instant of that answer, and the settle runs in the same transaction as `complete`. No other source may do this.
 
 ```mermaid
 sequenceDiagram
@@ -434,7 +438,7 @@ trait Source {
     fn endpoints(&self) -> &'static [&'static str];
     fn due(&self, cx: &Cx, now: OffsetDateTime) -> Result<Vec<QueryKey>>;
     fn fetch(&self, cx: &mut Cx, keys: &[QueryKey], poll_started_at: OffsetDateTime) -> Result<()>;
-    fn execute(&self, cx: &mut Cx, m: &Mutation) -> ExecOutcome; // Done | Retry { after } | Failed { error }
+    fn execute(&self, cx: &mut Cx, m: &Mutation) -> ExecOutcome; // Done | Skipped | Retry { after } | Failed { code, message, details, plan }
     fn coalesce(&self, op_kind: &str) -> Coalesce;
 }
 
@@ -443,14 +447,15 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 
 - `due` lists the keys that are stale or invalidated, from the rows and the in-memory fresh-until instants (§4).
 - `fetch` makes **at most one call per endpoint per pass** (read coalescing): a pass that needs twenty pull requests of one repository makes one `gh` call for them. It calls `cache::commit` or `cache::fail` for each key and `endpoint::record_*` for each endpoint.
-- `execute` performs one claimed mutation and returns its outcome. The engine then calls `complete` (Done), `fail` with `Retry::After` (Retry) or `fail` with `Retry::Never` (Failed).
+- `execute` performs one claimed mutation and returns its outcome. The engine then calls `complete` (Done), `skip` (Skipped), `fail` with `Retry::After` (Retry) or `fail` with `Retry::Never` (Failed). A Failed outcome carries the error Event's `code`, `message`, `details` and, when the Event is Plan-scoped, its `plan`; the engine appends that Event in the same transaction as `fail`.
+- A datasource may run `execute` detached (the Jira helper, [swr-jira.md §8](swr-jira.md)): one run at a time per system, and the outcome is delivered on the tick that collects the answer. No tick waits on upstream.
 - `coalesce` gives the rule `enqueue` applies to the op kind.
 - Node helpers do I/O only and run on the `Runner` port (A7). Datasource logic is Rust.
 - `registry()` returns the four sources as `&'static dyn Source`.
 
 ## 12. The engine step E24 and gc
 
-Step E24 (contract §4.7) runs every tick. It runs every source **except `github`**, which E5's own thread already runs through the same trait. For each source it:
+Step E24 (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`** and **`models`**: E5's own thread runs `github` through the same trait, and E15 runs `models` through it (`swr-models.md` §1, §3). For each source it:
 
 1. skips the source while any of its endpoints is paused (`is_paused`);
 2. calls `fetch` for the keys `due` returns;
@@ -481,8 +486,8 @@ No `swr` command reads upstream. A write command is `cpd`'s `enqueue` (A6), whic
 | `github` | `github.rs` | `docs/architecture/swr-github.md` | `swr_queries`, `swr_repos`, `swr_viewer`, `swr_pr_detail`, `swr_deploys`, `gh_issues`, and the raw `pull_requests` | `github` | `github:pr:owner/repo#12`, `github:repo:owner/repo` | `merge`, `auto_merge` |
 | `slack` | `slack.rs` | `docs/architecture/swr-slack.md` | `swr_slack_posts` | `slack` | `slack:channel:C123` | `reaction` (dedupe on `(channel, ts, emoji)`), `post` |
 | `jira` | `jira.rs` | `docs/architecture/swr-jira.md` | `swr_jira_issues`, `swr_atlassian` | `jira` | `jira:issue:EEC-1` | `transition` (`Forward`: `in_progress` < `in_review` < `done`) |
-| `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` | the provider's endpoint, named by its Workflow | `models:provider:openai` | none |
-| `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` | `ollama.lab`, `bifrost` | `classifier:badge:<session id>` (the form the classifier Workflow confirms) | none |
+| `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` (no `swr_queries` row: `swr-models.md` §3.1) | one per provider: `github-copilot`, or the `host:port` of a custom `base` (`swr-models.md` §4) | `models:discovery` (the run) | none |
+| `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` (not `swr_queries`) | `ollama.lab`, `bifrost` | none: a badge is keyed by its Session id (`swr-classifier.md` §2.3) | none |
 
 Each Workflow writes its design page and nothing else of this one. Until a page exists, its row is the whole specification.
 
@@ -535,6 +540,6 @@ The design rests on these. Each is cited where it applies.
 Not decided by this design. Each is recorded so no Job guesses it.
 
 - **Columns added to `pull_requests`.** Accepted assumption A1 has the swr-core migration add columns to `pull_requests`, but this design does not name them. The swr-core Job names them when it writes the migration, and they must be additive (nullable, or with a constant default).
-- **The `classifier` source file.** The module list has no `source/classifier.rs`. The classifier Workflow decides its file and its key kind.
+- **The `classifier` source file.** The module list has no `source/classifier.rs`. The classifier Workflow decides its file and its key kind, and whether the badge's helper call moves into it (`swr-classifier.md` §7, open item 3).
 - **Lifetime of `swr_pr_detail` rows.** The table has no `inactive_at`, so `gc::sweep` cannot age it. Its removal rule is for the github Workflow.
 - **The position of E24 in the tick.** Contract §4.7 says it runs every tick and does not place it among E1 to E22. The engine order is set when the step lands.

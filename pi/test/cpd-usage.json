@@ -1600,6 +1600,32 @@
     },
     "required": []
   },
+  "swr badge get": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "swr badge put": {
+    "flags": {
+      "--entry": true,
+      "--help": false,
+      "--label": true,
+      "--others": true,
+      "--score": true,
+      "--text": true,
+      "--tone": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "swr endpoints": {
     "flags": {
       "--help": false
@@ -1607,6 +1633,17 @@
     "positionals": {
       "max": 0,
       "min": 0
+    },
+    "required": []
+  },
+  "swr health record": {
+    "flags": {
+      "--help": false,
+      "--text": true
+    },
+    "positionals": {
+      "max": 3,
+      "min": 3
     },
     "required": []
   },

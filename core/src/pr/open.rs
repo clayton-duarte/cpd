@@ -538,12 +538,7 @@ pub fn record(
         }
         super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
         super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
-        super::jira_sync::queue(
-            tx,
-            id.as_str(),
-            key.as_str(),
-            super::jira_sync::Target::Done,
-        )?;
+        crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "done")?;
         let text = format!("Workflow {key} (#{number}) of Plan {id} is merged.");
         append(
             tx,

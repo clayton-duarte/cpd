@@ -150,6 +150,20 @@ fn parse(line: &str) -> Result<Judged, CpdError> {
 
 impl JudgePort for BifrostJudge {
     fn judge(&self, request: &JudgeRequest) -> Result<Judged, CpdError> {
+        use crate::clock::Clock;
+        let result = self.call(request);
+        crate::swr::health::record_result(
+            &self.home,
+            "bifrost",
+            crate::clock::SystemClock.utc(),
+            &result,
+        );
+        result
+    }
+}
+
+impl BifrostJudge {
+    fn call(&self, request: &JudgeRequest) -> Result<Judged, CpdError> {
         let script = self.config.pi_adapter_dir()?.join("lib").join("judge.ts");
         let body = json!({"model": MODEL, "new": view(&request.new),
                           "neighbour": request.neighbour.as_ref().map(view)});

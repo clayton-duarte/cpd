@@ -14,10 +14,10 @@ use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
 use super::posts;
-use super::pulls::{self, Change, Excused, PostFacts, Reason};
+use super::pulls::{self, Change, PostFacts, Reason};
 use super::row::PlanWorkflows;
 use super::start::unstack;
-use super::status::{ChecksSummary, Mergeable, PrState};
+use super::status::{self, ChecksSummary, Mergeable, PrState};
 use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
@@ -127,7 +127,6 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
                 post_enabled: policy.pr.post.enabled,
                 human_gated: policy.pr.human_gated_contexts.clone(),
                 excused_labels: policy.pr.excused_labels.clone(),
-                excused: false,
                 required: policy.pr.required_checks.clone(),
             }),
             Err(error) => unresolved.push(Unresolved {
@@ -215,7 +214,7 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
     // empty, or whose rollup says `passed` or `none` while its `required_checks` is not empty (hs-d743): one call, before anything is written. Each Workflow's summary is the one rule with its own list.
     let mut confirm: Vec<(String, i64)> = Vec::new();
-    let mut lists: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+    let mut lists: Vec<(Vec<String>, Vec<String>, Vec<String>)> = Vec::new();
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
@@ -233,12 +232,13 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
             .filter(|(_, _, row)| row.repo == *repo && row.number == number)
             .filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
         // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a Workflow no Plan resolved a policy for has its repo's `required_checks` alone.
-        let mut policies: Vec<(bool, Vec<String>, Vec<String>)> = mine
+        let mut policies: Vec<Policy> = mine
             .map(|r| {
                 (
-                    r.checks == Checks::Any,
+                    r.checks == Checks::Any || !r.excused_labels.is_empty(),
                     r.human_gated.clone(),
                     r.required.clone(),
+                    r.excused_labels.clone(),
                 )
             })
             .collect();
@@ -247,17 +247,17 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
                 false,
                 Vec::new(),
                 repo_required(&env.home, repo).unwrap_or_default(),
+                Vec::new(),
             )); // an unreadable policy is reported for the owned Workflows above
         }
-        let wanted =
-            |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
-                ChecksSummary::Failed => *any,
-                ChecksSummary::Pending => !gated.is_empty(),
-                ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
-            };
-        if let Some((_, gated, required)) = policies.iter().find(wanted) {
+        let wanted = |(any, gated, required, _): &&Policy| match listed.pr.checks {
+            ChecksSummary::Failed => *any,
+            ChecksSummary::Pending => !gated.is_empty(),
+            ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
+        };
+        if let Some((_, gated, required, excused)) = policies.iter().find(wanted) {
             confirm.push((repo.clone(), number));
-            lists.push((gated.clone(), required.clone()));
+            lists.push((gated.clone(), required.clone(), excused.clone()));
         }
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
@@ -266,22 +266,12 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
             .iter()
             .position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number)
         {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
-        }
-    }
-
-    for (plan, key, row) in &owned {
-        let Some(i) = confirm
-            .iter()
-            .position(|(repo, number)| *repo == row.repo && *number == row.number)
-        else {
-            continue;
-        };
-        if let Some(r) = checks.iter_mut().find(|r| r.plan == *plan && r.key == *key) {
-            r.excused = confirmed[i]
-                .labels
-                .iter()
-                .any(|l| r.excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
+            listed.pr.checks = ChecksSummary::of(
+                &confirmed[i].checks,
+                &lists[i].0,
+                &lists[i].1,
+                status::policy_hold(&confirmed[i].labels, &lists[i].2),
+            );
         }
     }
 
@@ -700,6 +690,9 @@ pub(super) fn repo_required(
     )
 }
 
+/// (reads a failed rollup's checks, `human_gated_contexts`, `required_checks`, `excused_labels`) of one owner.
+type Policy = (bool, Vec<String>, Vec<String>, Vec<String>);
+
 /// What the poll resolved of an owned Workflow's policy: `pr.feedback.checks` and `pr.post.enabled`.
 struct Resolved {
     plan: PlanId,
@@ -708,8 +701,6 @@ struct Resolved {
     post_enabled: bool,
     human_gated: Vec<String>,
     excused_labels: Vec<String>,
-    /// Set once the checks are read: the Workflow carries one of `excused_labels`. A Workflow not read is never excused.
-    excused: bool,
     required: Vec<String>,
 }
 
@@ -850,7 +841,6 @@ fn tell(
         resolved.checks,
         &new,
         post,
-        Excused(resolved.excused),
     );
     if reasons.is_empty() {
         return Ok(false);
@@ -971,12 +961,7 @@ pub(super) fn merge(
     }
     super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
     super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
-    super::jira_sync::queue(
-        tx,
-        id.as_str(),
-        key.as_str(),
-        super::jira_sync::Target::Done,
-    )?;
+    crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "done")?;
     let text = format!("Workflow {key} (#{}) of Plan {id} is merged.", pull.number);
     append(
         tx,

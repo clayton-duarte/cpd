@@ -1,7 +1,7 @@
-//! Engine step E14, model discovery (contract §3.7 E14, §1.4 `models-<provider>.json`, §8.2 `watch.models_discovery_seconds`;
+//! Engine step E15, model discovery (contract §3.7 E15, §4.4 `swr_models`, §8.2 `watch.models_discovery_seconds`;
 //! Context decisions pro-d13, pro-d17, pro-d20): with the engine running, E14 starts the helper `pi/lib/models-list.ts`
 //! (no argument, under pi's Node, the engine's environment) when no cached list exists or the newest `polled_at` is old
-//! enough, validates its answer, writes one `run/models-<provider>.json` per provider that has a good list and reports a
+//! enough, validates its answer, writes one `swr_models` row per provider that has a good list and reports a
 //! failure once.
 //!
 //! In-process, on virtual time (docs/implementing.md, "Processes in tests", "Virtual-time loops"): the engine runs on the
@@ -93,29 +93,49 @@ impl Probe {
         self.node.seen.lock().unwrap().len()
     }
 
-    fn path(&self, provider: &str) -> PathBuf {
-        self.home.join(format!("run/models-{provider}.json"))
-    }
-
+    /// The row of `provider` as one value: its catalog, `polled_at`, `changes` (when it has them) and `last_error`.
     fn file(&self, provider: &str) -> Option<Value> {
-        serde_json::from_str(&fs::read_to_string(self.path(provider)).ok()?).ok()
+        let (catalog, changes, polled, error): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = self
+            .store()
+            .query_row(
+                "SELECT catalog_json, changes_json, polled_at, last_error FROM swr_models WHERE provider = ?1",
+                [provider],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .ok()?;
+        let mut file: Value = serde_json::from_str(&catalog?).ok()?;
+        file["polled_at"] = json!(polled);
+        if let Some(changes) = changes {
+            file["changes"] = serde_json::from_str(&changes).unwrap();
+        }
+        if let Some(error) = error {
+            file["last_error"] = json!(error);
+        }
+        Some(file)
     }
 
-    /// A cached file the engine wrote on an earlier run: `polled_at` is `ago` seconds before the clock's now.
+    /// A row the engine wrote on an earlier run: `polled_at` is `ago` seconds before the clock's now. The store exists.
     fn cache(&self, provider: &str, ago: i64, auth: &str, ids: &[&str], changes: Option<Value>) {
         let polled_at = (self.clock.utc() - time::Duration::seconds(ago))
             .format(&Rfc3339)
             .unwrap();
-        let mut file = json!({
-            "version": 1, "provider": provider, "polled_at": polled_at, "pi_version": "1.2.0",
+        let catalog = json!({
+            "pi_version": "1.2.0",
             "source": {"kind": if auth == "custom" { "openai-models" } else { "copilot-available" }, "auth": auth, "base": if auth == "custom" { json!(BASE) } else { Value::Null }},
             "ids": ids
         });
-        if let Some(changes) = changes {
-            file["changes"] = changes;
-        }
-        fs::create_dir_all(self.home.join("run")).unwrap();
-        fs::write(self.path(provider), file.to_string()).unwrap();
+        rusqlite::Connection::open(self.home.join("cpd.db"))
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO swr_models (provider, catalog_json, changes_json, polled_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![provider, catalog.to_string(), changes.map(|c| c.to_string()), polled_at],
+            )
+            .unwrap();
     }
 
     /// The engine's store, read on a connection of its own.
@@ -171,7 +191,7 @@ struct Fx {
     adapter: PathBuf,
 }
 
-/// The engine on virtual time (E14 is due: no file is cached yet), a pi install, the helper `node` answering
+/// The engine on virtual time (E15 is due: no row is cached yet), a pi install, the helper `node` answering
 /// `first` and the fake tmux. `watch` is more `[watch]` keys.
 fn fx(watch: &str, first: &Value) -> Fx {
     let ip = Ip::with_ports();
@@ -191,7 +211,6 @@ fn fx(watch: &str, first: &Value) -> Fx {
         seen: Mutex::default(),
     });
     let _ = (*ip.fakes.runner).clone().route("node", node.clone());
-    fs::create_dir_all(ip.env.cpd_home().join("run")).unwrap();
     Fx { ip, node, adapter }
 }
 
@@ -228,11 +247,8 @@ impl Fx {
     }
 
     fn cache(&self, provider: &str, ago: i64, auth: &str, ids: &[&str], changes: Option<Value>) {
+        drop(self.ip.env.store());
         self.probe().cache(provider, ago, auth, ids, changes);
-    }
-
-    fn path(&self, provider: &str) -> PathBuf {
-        self.probe().path(provider)
     }
 
     fn file(&self, provider: &str) -> Option<Value> {
@@ -266,7 +282,7 @@ fn both(p: &Probe) -> bool {
 }
 
 #[test]
-fn the_first_poll_writes_a_file_per_provider_with_sorted_ids_and_no_changes_and_opens_nothing_else()
+fn the_first_poll_writes_a_row_per_provider_with_sorted_ids_and_no_changes_and_opens_nothing_else()
 {
     let fx = fx(
         "",
@@ -278,8 +294,6 @@ fn the_first_poll_writes_a_file_per_provider_with_sorted_ids_and_no_changes_and_
     fx.run_until(both, 3);
 
     let bifrost = fx.file("bifrost").unwrap();
-    assert_eq!(bifrost["version"], 1);
-    assert_eq!(bifrost["provider"], "bifrost");
     assert_eq!(bifrost["ids"], json!(["vertex/a", "vertex/b"]));
     assert_eq!(bifrost["pi_version"], "1.3.0");
     assert_eq!(
@@ -310,9 +324,9 @@ fn the_first_poll_writes_a_file_per_provider_with_sorted_ids_and_no_changes_and_
             !fx.ip
                 .env
                 .cpd_home()
-                .join(format!("run/models-{provider}.json.tmp"))
+                .join(format!("run/models-{provider}.json"))
                 .exists(),
-            "written by rename"
+            "no file"
         );
     }
     // The helper takes no argument: pi's Node runs the script, and nothing else.
@@ -471,7 +485,7 @@ fn a_failed_run_keeps_the_files_raises_one_error_and_waits_error_repeat_seconds(
     let fx = fx("error_repeat_seconds = 3600", &down);
     fx.probe().say(1, &down);
     fx.cache("bifrost", WEEK + 3600, "custom", &["m-a"], None);
-    let before = fs::read_to_string(fx.path("bifrost")).unwrap();
+    let before = fx.file("bifrost").unwrap();
     // The error is raised; three ticks later 3000 s pass, and the next attempt is not before 3600 s after the run's end;
     // then 700 s more.
     let mut raised_at = None;
@@ -509,9 +523,9 @@ fn a_failed_run_keeps_the_files_raises_one_error_and_waits_error_repeat_seconds(
         "the next attempt is after error_repeat_seconds"
     );
     assert_eq!(
-        fs::read_to_string(fx.path("bifrost")).unwrap(),
+        fx.file("bifrost").unwrap(),
         before,
-        "the last good file stays"
+        "the last good row stays"
     );
     assert_eq!(
         fx.query("SELECT count(*) FROM inbox_items"),
@@ -552,12 +566,25 @@ fn an_empty_list_is_an_error_and_never_replaces_a_good_file() {
         &answer(vec![listed("bifrost", "custom", Some(BASE), &[])]),
     );
     fx.cache("bifrost", WEEK + 3600, "custom", &["m-a"], None);
-    let before = fs::read_to_string(fx.path("bifrost")).unwrap();
-    fx.run_until(|p| !p.errors().is_empty(), 0);
+    let before = fx.file("bifrost").unwrap();
+    // `models_empty` is transient: it is reported when the outage is ten minutes old, at the next run.
+    let mut skipped = false;
+    fx.run(move |p, _| {
+        if !skipped
+            && p.file("bifrost")
+                .is_some_and(|f| f.get("last_error").is_some())
+        {
+            p.skip(3600);
+            skipped = true;
+        }
+        !p.errors().is_empty()
+    });
 
     assert_eq!(fx.errors()[0]["code"], "models_empty");
     assert_eq!(fx.errors()[0]["details"]["provider"], "bifrost");
-    assert_eq!(fs::read_to_string(fx.path("bifrost")).unwrap(), before);
+    let after = fx.file("bifrost").unwrap();
+    assert_eq!(after["ids"], before["ids"]);
+    assert_eq!(after["polled_at"], before["polled_at"]);
 }
 
 #[test]
@@ -584,7 +611,7 @@ fn one_failing_provider_keeps_its_file_and_raises_its_own_error_while_the_others
         ]),
     );
     fx.cache("bifrost", WEEK + 3600, "custom", &["m-a"], None);
-    let before = fs::read_to_string(fx.path("bifrost")).unwrap();
+    let before = fx.file("bifrost").unwrap();
     fx.run_until(
         |p| p.file("github-copilot").is_some() && !p.errors().is_empty(),
         0,
@@ -594,11 +621,12 @@ fn one_failing_provider_keeps_its_file_and_raises_its_own_error_while_the_others
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["code"], "models_unauthorized");
     assert_eq!(errors[0]["details"]["provider"], "bifrost");
+    let after = fx.file("bifrost").unwrap();
     assert_eq!(
-        fs::read_to_string(fx.path("bifrost")).unwrap(),
-        before,
-        "the failing provider keeps its file"
+        after["ids"], before["ids"],
+        "the failing provider keeps its row"
     );
+    assert_eq!(after["polled_at"], before["polled_at"]);
     assert_eq!(
         fx.file("github-copilot").unwrap()["ids"],
         json!(["gpt-5.6-sol"])
@@ -606,7 +634,7 @@ fn one_failing_provider_keeps_its_file_and_raises_its_own_error_while_the_others
 }
 
 #[test]
-fn an_auth_type_change_rewrites_the_file_with_no_changes() {
+fn an_auth_type_change_rewrites_the_row_with_no_changes() {
     let fx = fx(
         "",
         &answer(vec![
@@ -640,14 +668,14 @@ fn an_auth_type_change_rewrites_the_file_with_no_changes() {
 }
 
 #[test]
-fn a_provider_the_helper_no_longer_lists_keeps_its_file_untouched() {
+fn a_provider_the_helper_no_longer_lists_keeps_its_row_untouched() {
     let fx = fx(
         "",
         &answer(vec![listed("bifrost", "custom", Some(BASE), &["m-b"])]),
     );
     fx.cache("bifrost", WEEK + 3600, "custom", &["m-a"], None);
     fx.cache("ghost", WEEK + 7200, "custom", &["g-1"], None);
-    let ghost = fs::read_to_string(fx.path("ghost")).unwrap();
+    let ghost = fx.file("ghost").unwrap();
     fx.run_until(
         |p| {
             p.file("bifrost")
@@ -656,32 +684,34 @@ fn a_provider_the_helper_no_longer_lists_keeps_its_file_untouched() {
         0,
     );
 
-    assert_eq!(fs::read_to_string(fx.path("ghost")).unwrap(), ghost);
+    assert_eq!(fx.file("ghost").unwrap(), ghost);
     assert_eq!(fx.errors(), Vec::<Value>::new());
 }
 
 #[test]
-fn a_file_the_engine_cannot_parse_is_treated_as_missing_and_reported_once() {
+fn a_row_the_engine_cannot_parse_is_a_store_fault_reported_once() {
     let fx = fx(
-        "",
+        "error_repeat_seconds = 3600",
         &answer(vec![listed("bifrost", "custom", Some(BASE), &["m-a"])]),
     );
-    fs::write(fx.path("bifrost"), "{not json").unwrap();
-    fx.run_until(|p| p.file("bifrost").is_some() && !p.errors().is_empty(), 3);
-
-    let file = fx.file("bifrost").unwrap();
-    assert!(
-        file.get("changes").is_none(),
-        "a missing file is a first run"
+    fx.cache("bifrost", WEEK + 3600, "custom", &["m-a"], None);
+    fx.ip
+        .env
+        .sql("UPDATE swr_models SET catalog_json = '{not json' WHERE provider = 'bifrost';");
+    fx.run_until(
+        |p| {
+            p.query("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%E15%'")
+                > 0
+        },
+        3,
     );
-    let errors = fx.errors();
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0]["code"], "models_unparseable");
-    assert!(
-        errors[0]["details"]["file"]
-            .as_str()
-            .unwrap()
-            .ends_with("models-bifrost.json")
+
+    assert_eq!(
+        fx.query(
+            "SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%E15%'"
+        ),
+        1,
+        "once"
     );
 }
 
@@ -692,7 +722,7 @@ fn the_helper_runs_with_the_engines_environment_and_the_key_is_never_an_argument
         "error_repeat_seconds = 3600",
         &answer(vec![
             listed("bifrost", "custom", Some(BASE), &["m-a"]),
-            failed("github-copilot", "models_unreachable"),
+            failed("github-copilot", "models_unauthorized"),
         ]),
     );
     fx.run_until(|p| p.file("bifrost").is_some() && !p.errors().is_empty(), 0);
@@ -721,9 +751,5 @@ fn the_helper_runs_with_the_engines_environment_and_the_key_is_never_an_argument
     drop(seen);
     let events = fx.probe().column("SELECT data FROM events").join("\n");
     assert!(!events.contains(KEY), "no Event holds the key");
-    assert!(
-        !fs::read_to_string(fx.path("bifrost"))
-            .unwrap()
-            .contains(KEY)
-    );
+    assert!(!fx.file("bifrost").unwrap().to_string().contains(KEY));
 }
