@@ -839,7 +839,7 @@ export function ContextTree(props: {
 
 Data: `ContextTreeModel { contexts: ContextNode[]; cursor }`, `ContextNode { id, title, archived, records, openQuestions, sessions: SessionNode[], plans: PlanNode[] }`, `PlanNode { id, contextId, title, phase, archived, counts: PlanCounts, leadSessionId, sessions }`, `SessionNode { ref: SessionRef, contextId, planId, jobKey, archived, dot: SessionDot }` (`web/src/protocol/cockpit.ts`). `PlanCounts` gains `merging?: number` (pro-d43, 3d Counters).
 
-**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts, Standing and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|standing|archive`, `data-state` `open|closed`) and a direct flex child of `SidebarContent`; an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside a section: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger plus the optional action) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47).
+**Section layout.** `SidebarContent` is a flex column (`h-full min-h-0 gap-0 overflow-hidden`, no outer scroll). Contexts and Archive are each a block `data-part="tree-section"` (`data-section` `contexts|archive`, `data-state` `open|closed`) and a direct flex child of `SidebarContent`; an open section is `min-h-0 flex-1`, so open sections share the height equally, and a closed one is `shrink-0`, just its label row. Shadcn `Separator`s (`shrink-0`) are direct children of `SidebarContent` between sections that exist (Archive renders only when something is archived). Inside a section: `Collapsible` > `SidebarGroup` > a fixed `shrink-0` label row (the `SidebarGroupLabel` trigger plus the optional action) and `CollapsibleContent` > `ScrollArea` > `SidebarGroupContent`. The label is outside the `ScrollArea` and never scrolls; only the section body scrolls (pro-d47). The Contexts section is the one list of live Contexts: standing Contexts (`cpd`, `host`, `codereview`; pro-d79) are ordinary rows in it, sorted like the others by the Manager's dot tier, then newest first (`compareOrderKey`, `state/archiveNav.ts`), with no fixed place.
 
 **Source of the rows.** The tree follows the cpd TUI tree (`docs/commands.md` section 13.2, read with `git show origin/main:docs/commands.md`; evidence `sc-tree-tui.md`): a Context is one row with its Manager's dot, a Plan is one row with its Lead's dot, and a fork is a row of its own. The web keeps its own markup (the Sidebar, below); it does not draw the TUI's fold glyphs, closing rows, Standing or Archive docks or cursor (Not built). Costs are drawn only while the Status Bar's costs toggle is on (3b, Cost below).
 
@@ -919,7 +919,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
 - Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is sticky.
 
-Not built: Active/Standing sections, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
 ### 3e. `App.tsx` wiring
 
@@ -982,6 +982,8 @@ Delete is offered when the Context is not Standing and it is archived, or it has
 | New Plan… | `plan.new` | as above | `NewPlan` |
 | Copy id | — (clipboard) | none | `CopyId` |
 
+A standing Context row is an ordinary row of the Contexts section (pro-d79), with the same Manager button and dot. Its name is followed by a bold phi, `span[data-part="phi"][aria-hidden="true"]` with text `φ` (`-translate-y-[1px] shrink-0 select-none font-display text-[14px] font-bold leading-none text-fg-strong`), placed immediately after `span[data-part="context-id"]` (pro-d80). The id and the phi sit in a `flex min-w-0 flex-1 items-center gap-1.5` wrapper, so the names stay aligned after the status dot; the id span keeps `truncate` and has no `flex-1`. Only standing Contexts show the phi.
+
 No Rename, Archive or Delete. The TUI's Permanent menu has the same two items (`Kind::Permanent`); whether the TUI could append Delete to one is **unverified**.
 
 **Plan row** (`data-menu-kind="plan"`, a live Plan, its button is the Lead)
@@ -1018,7 +1020,7 @@ Delete is offered when the Plan is archived, or its Lead's dot is `stopped`, or 
 
 An archived fork Session has no Delete.
 
-**Not offered.** No menu on the Manager (it has no row of its own on the web; the Context row above is its row), on the empty tree area (`New Context…` is not built: `CockpitAction` has no context-create kind and `data-action="new-context"` is never rendered), on the toggle, on the `New Plan` tree row, on the Archive tree row or on the Standing header (the TUI has no menu on these either).
+**Not offered.** No menu on the Manager (it has no row of its own on the web; the Context row above is its row), on the empty tree area (`New Context…` is not built: `CockpitAction` has no context-create kind and `data-action="new-context"` is never rendered), on the toggle, on the `New Plan` tree row or on the Archive tree row (the TUI has no menu on these either).
 
 **Prompts.** One `TreeModal` (a shadcn `Dialog` (2f) with an `Input`). The `DialogTitle` is the title, the `DialogDescription` is the prompt, the `Input` has `aria-label` set to the prompt and `aria-invalid` on error, its error text sits under it, and the footer has `Cancel` and `OK`. The field is focused and holds its initial value when the dialog opens. The `Input` part (`web/src/ui/components/input.tsx`, shadcn/ui `input` on the Dango tokens) is not on this base; the implementation Job adds it.
 
@@ -1066,7 +1068,7 @@ Status: contract for the web Job that implements it. No reducer or `App` code do
 
 **Navigation out of an archived selection (A1).** The web compares the `cockpit.tree` it holds with the next one (a `cockpit.snapshot`, or a `cockpit.patch` of pane `tree`). It navigates when the selected session, the selected Plan or the selected Context goes from live (`archived` false) to archived (`archived` true). That covers an archive the User clicked, `/q` or `/quit` (CONTRACT 6.6) and engine E14 alike. It does **not** navigate when the User dispatches an archive: an archive can be refused (`archive_blocked`), and the User must then stay where they are. Where the selection goes:
 
-- **Context archived** (the selected row belongs to it): the next live non-Standing Context in the 3d order, after the archived one's place and wrapping. Select its Manager; if it has no live Manager, its first live Plan Lead. Else the `cpd` Manager. Else the `host` Manager.
+- **Context archived** (the selected row belongs to it): the next live Context in the 3d order, standing Contexts included (pro-d79), after the archived one's place and wrapping. Select its Manager; if it has no live Manager, its first live Plan Lead. Else the `cpd` Manager. Else the `host` Manager.
 - **Plan or session archived, its Context still live:** the next live Plan Lead of the same Context (its live Plans in the 3d order, after the archived one's place, wrapping to the first), selecting that Plan and its Lead. Else that Context's live Manager (`planId` null).
 - A Context archive takes the first rule when both apply (a Plan Lead archived with its Context).
 - No target: the selection clears (`selectedSessionId` null) and the chat slot shows `Select a session` (3e).
