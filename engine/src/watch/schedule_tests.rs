@@ -411,3 +411,76 @@ fn e3_with_a_config_that_does_not_parse_starts_no_attempt_and_reports_it() {
     assert_eq!(fx.job_status("api"), "queued");
     assert_eq!(fx.count("error"), 1, "{:?}", texts(&mut fx, "error"));
 }
+
+/// How many queued Jobs E3's `READY` query returns.
+fn ready_count(fx: &mut Fx) -> i64 {
+    fx.query(&format!("SELECT count(*) FROM ({})", schedule::READY))
+}
+
+/// A Plan re-planned (pro-d429, pro-d433, A1, A5): phase `plan` with `locked_at` set.
+fn replanned() -> Fx {
+    let mut fx = Fx::with_plan_in("plan", "");
+    fx.fixture("UPDATE plans SET locked_at = 't' WHERE id = 'pay';");
+    fx
+}
+
+#[test]
+fn ready_dispatches_queued_jobs_of_a_started_workflow_while_the_plan_is_in_phase_plan() {
+    for status in ["dispatch", "open"] {
+        let mut fx = replanned();
+        fx.fixture(&format!(
+            "UPDATE workflows SET status = '{status}' WHERE key = 'repo';"
+        ));
+        fx.add_job(
+            "base",
+            &[],
+            "UPDATE jobs SET status = 'running' WHERE key = 'base'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'base';",
+        );
+        fx.add_job("api", &["base"], "");
+        assert_eq!(ready_count(&mut fx), 1, "{status}: api is Ready");
+    }
+}
+
+#[test]
+fn ready_still_holds_workflow_jobs_in_an_unlocked_phase_plan() {
+    let mut fx = Fx::with_plan_in("plan", "");
+    fx.fixture("UPDATE plans SET locked_at = NULL WHERE id = 'pay';");
+    fx.add_job("api", &[], "");
+    fx.fixture(
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', NULL, 'look', 'T', 'H2', 'g', 'c', '[\"run/pay/explore/look.md\"]', '[\"b\"]', '[]', 'scout', 'queued', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');",
+    );
+    assert_eq!(
+        fx.query::<String>(&format!(
+            "SELECT group_concat(key) FROM ({})",
+            schedule::READY
+        )),
+        "look",
+        "only the explore Job is Ready, not the Workflow's Job"
+    );
+    // The lock is what changes it (A1, A5): the same Plan with `locked_at` set dispatches the Workflow's Job too.
+    fx.fixture("UPDATE plans SET locked_at = 't' WHERE id = 'pay';");
+    assert_eq!(ready_count(&mut fx), 2, "locked: api and look are Ready");
+}
+
+#[test]
+fn a_waiting_workflow_does_not_start_while_the_plan_is_in_phase_plan() {
+    let mut fx = replanned();
+    fx.fixture(
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
+           VALUES ('pay', 'web', '/repos/w', 'main', 'waiting', 'cpd/pay/web', 'Web', 'config', cpd_txn(), 't');",
+    );
+    fx.add_job("api", &[], "");
+    assert!(
+        super::engine::startable_workflows(&mut fx.engine)
+            .unwrap()
+            .is_empty(),
+        "E7 starts nothing in phase plan"
+    );
+    // The started Workflow's Job is dispatched in the same Plan (A5): the part that is red today.
+    assert_eq!(
+        ready_count(&mut fx),
+        1,
+        "api of the started Workflow is Ready"
+    );
+}

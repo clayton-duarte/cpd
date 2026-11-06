@@ -70,3 +70,36 @@ fn pr_open_on_a_cancelled_workflow_with_a_closed_pull_request_is_refused() {
     );
     assert!(events_since(&rig, since).is_empty());
 }
+
+/// A re-planned Plan (pro-d429, A1, A5): phase `plan` with `locked_at` set. `pr open` on its `dispatch` Workflow is not refused
+/// as the Plan not being locked (`illegal_phase`), and it never writes the Plan's phase.
+#[test]
+fn pr_open_accepts_a_replanned_plan_and_keeps_phase_plan() {
+    let mut rig = crate::janitor_tests::Rig::new();
+    rig.workflow_with("api", "dispatch", "merged", "merged");
+    rig.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
+    // `Env::open` reads `$CPD_HOME`: the one variable this test sets, to its own temp dir (as `poll_now_tests.rs`).
+    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
+    let args = super::Args {
+        workflow: crate::args::WorkflowArg {
+            workflow: Some(crate::ids::WorkflowKey::parse("api").unwrap()),
+        },
+        plan: crate::args::PlanArg {
+            plan: Some(crate::ids::PlanId::parse("pay").unwrap()),
+        },
+    };
+
+    let result = crate::ports::Ports::scope(&rig.fakes.ports, || super::open::open(args));
+
+    if let Err(e) = &result {
+        assert_ne!(
+            e.code(),
+            ErrorCode::IllegalPhase,
+            "a locked phase-plan Plan is not 'not locked': {e:?}"
+        );
+    }
+    assert_eq!(
+        rows(&rig, "SELECT phase, locked_at FROM plans WHERE id = 'pay'"),
+        ["plan|t"]
+    );
+}
