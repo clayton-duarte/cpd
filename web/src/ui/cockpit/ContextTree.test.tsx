@@ -297,7 +297,7 @@ const section = (c: ParentNode, name: string): HTMLElement | null => c.querySele
 it("every open section is flex-1 and a closed section is shrink-0", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const c = m.container;
-  for (const name of ["contexts", "standing"]) {
+  for (const name of ["contexts"]) {
     expect(section(c, name)?.className, `${name} open`).toContain("flex-1");
     expect(section(c, name)?.className).toContain("min-h-0");
     expect(section(c, name)?.getAttribute("data-state")).toBe("open");
@@ -307,8 +307,8 @@ it("every open section is flex-1 and a closed section is shrink-0", () => {
   expect(section(c, "archive")?.getAttribute("data-state")).toBe("closed");
   click(header(c, "Archive"));
   expect(section(c, "archive")?.className, "archive open").toContain("flex-1");
-  click(header(c, "Standing"));
-  expect(section(c, "standing")?.className, "standing closed").toContain("shrink-0");
+  click(header(c, "Contexts"));
+  expect(section(c, "contexts")?.className, "contexts closed").toContain("shrink-0");
   m.unmount();
 });
 
@@ -322,7 +322,7 @@ it("no section has a max height of 50 percent", () => {
 it("each section label is outside the scroll area and only the section body scrolls", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   click(header(m.container, "Archive"));
-  for (const name of ["contexts", "standing", "archive"]) {
+  for (const name of ["contexts", "archive"]) {
     const sec = section(m.container, name);
     const label = sec?.querySelector('[data-slot="sidebar-group-label"]');
     expect(label, name).not.toBeNull();
@@ -344,10 +344,8 @@ it("sections are direct flex children of the sidebar content separated by shrink
   const content = m.container.querySelector('[data-slot="sidebar-content"]');
   expect(content).not.toBeNull();
   const sections = Array.from(m.container.querySelectorAll('[data-part="tree-section"]'));
-  expect(sections).toHaveLength(3);
   for (const sec of sections) expect(sec.parentElement).toBe(content);
   const seps = Array.from(m.container.querySelectorAll('[data-slot="separator"]'));
-  expect(seps).toHaveLength(2);
   for (const sep of seps) {
     expect(sep.parentElement).toBe(content);
     expect(sep.className).toContain("shrink-0");
@@ -359,12 +357,10 @@ it("sections are direct flex children of the sidebar content separated by shrink
 
 it("sections are separated by separators and Archive renders only when something is archived", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
-  expect(m.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(2);
   expect(section(m.container, "archive")).not.toBeNull();
   m.unmount();
   const none: ContextTreeModel = { cursor: 1, contexts: layered.contexts.filter((x) => !x.archived) };
   const n = mount(<ContextTree {...props({ tree: none })} />);
-  expect(n.container.querySelectorAll('[data-slot="separator"]')).toHaveLength(1);
   expect(section(n.container, "archive")).toBeNull();
   n.unmount();
 });
@@ -372,20 +368,85 @@ it("sections are separated by separators and Archive renders only when something
 it("the Contexts section lists live Contexts by dot tier then newest first", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const top = section(m.container, "contexts");
-  expect(ids(top)).toEqual(["hot", "new", "old"]);
+  expect(ids(top).filter((id) => !["cpd", "host", "codereview"].includes(id))).toEqual(["hot", "new", "old"]);
   m.unmount();
 });
 
-it("the Standing section lists cpd host codereview in that order", () => {
+it("the tree has no Standing section or Standing header", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
-  expect(ids(q(m.container, "[data-standing]"))).toEqual(["cpd", "host", "codereview"]);
+  expect(section(m.container, "standing")).toBeNull();
+  expect(header(m.container, "Standing")).toBeNull();
+  expect(q(m.container, "[data-standing]")).toBeNull();
+  const names = Array.from(m.container.querySelectorAll('[data-part="tree-section"]')).map((e) => e.getAttribute("data-section"));
+  expect(names).toEqual(["contexts", "archive"]);
+  m.unmount();
+});
+
+it("standing Contexts are rows of the Contexts section sorted with the others", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(ids(section(m.container, "contexts"))).toEqual(["hot", "new", "old", "cpd", "host", "codereview"]);
+  m.unmount();
+});
+
+it("a standing Context row shows an aria-hidden phi immediately after its context-id span in a flex wrapper", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  const row = q(section(m.container, "contexts") ?? m.container, '[data-context="cpd"]');
+  const idSpan = row?.querySelector('span[data-part="context-id"]') ?? null;
+  expect(idSpan?.textContent).toBe("cpd");
+  const phi = idSpan?.nextElementSibling ?? null;
+  expect(phi?.getAttribute("data-part")).toBe("phi");
+  expect(phi?.tagName).toBe("SPAN");
+  expect(phi?.getAttribute("aria-hidden")).toBe("true");
+  expect(phi?.textContent).toBe("φ");
+  expect(phi?.className).toContain("font-bold");
+  const wrap = idSpan?.parentElement ?? null;
+  expect(wrap?.firstElementChild).toBe(idSpan);
+  expect(phi?.parentElement).toBe(wrap);
+  for (const cls of ["flex", "min-w-0", "flex-1", "items-center"]) expect(wrap?.className.split(/\s+/), cls).toContain(cls);
+  expect(wrap?.className).toContain("gap-");
+  expect(idSpan?.className.split(/\s+/)).toContain("truncate");
+  expect(idSpan?.className.split(/\s+/)).not.toContain("flex-1");
+  m.unmount();
+});
+
+it("a regular Context row shows no phi", () => {
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  for (const id of ["hot", "new", "old"]) {
+    const row = q(m.container, `[data-context="${id}"]`);
+    expect(row?.querySelector('span[data-part="context-id"]'), id).not.toBeNull();
+    expect(row?.querySelector('[data-part="phi"]'), id).toBeNull();
+  }
+  expect(m.container.querySelectorAll('[data-part="phi"]'), "one phi per standing row").toHaveLength(3);
+  m.unmount();
+});
+
+it("the Standing section collapse key is never written", () => {
+  const preset = fakeStorage({ "cpd-ui:collapse:section:standing": "0" });
+  const set = vi.spyOn(preset, "setItem");
+  vi.stubGlobal("localStorage", preset);
+  const m = mount(<ContextTree {...props({ tree: layered })} />);
+  expect(q(section(m.container, "contexts") ?? m.container, '[data-context="cpd"]'), "stale key does not hide cpd").not.toBeNull();
+  click(header(m.container, "Contexts"));
+  click(header(m.container, "Contexts"));
+  click(header(m.container, "Archive"));
+  expect(set.mock.calls.map((c) => c[0]).filter((k) => String(k).includes("standing"))).toEqual([]);
+  expect(preset.getItem("cpd-ui:collapse:section:standing")).toBe("0");
+  m.unmount();
+});
+
+it("an archived standing Context is not listed in the Archive section", () => {
+  const t: ContextTreeModel = { cursor: 1, contexts: layered.contexts.map((c) => (c.id === "cpd" ? { ...c, archived: true } : c)) };
+  const m = mount(<ContextTree {...props({ tree: t })} />);
+  click(header(m.container, "Archive"));
+  expect(ids(q(m.container, "[data-archived]"))).toEqual(["gone"]);
+  expect(ids(section(m.container, "contexts"))).toEqual(["hot", "new", "old", "host", "codereview"]);
   m.unmount();
 });
 
 it("each section header shows a minus icon when open and a plus icon when closed", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const icon = (name: string) => header(m.container, name)?.querySelector("svg")?.getAttribute("class") ?? "";
-  for (const name of ["Contexts", "Standing"]) {
+  for (const name of ["Contexts"]) {
     expect(icon(name), `${name} open`).toContain("lucide-minus");
     click(header(m.container, name));
     expect(icon(name), `${name} closed`).toContain("lucide-plus");
@@ -438,8 +499,6 @@ it("section and context open state persists in localStorage under cpd-ui collaps
   expect(key("section:contexts")).toBe("0");
   click(header(m.container, "Contexts"));
   expect(key("section:contexts")).toBe("1");
-  click(header(m.container, "Standing"));
-  expect(key("section:standing")).toBe("0");
   click(header(m.container, "Archive"));
   expect(key("section:archive")).toBe("1");
   click(q(m.container, '[data-context="c1"] [data-slot="sidebar-menu-action"]'));
@@ -451,11 +510,9 @@ it("section and context open state persists in localStorage under cpd-ui collaps
 
 it("a closed section stays closed after a remount", () => {
   const first = mount(<ContextTree {...props({ tree: layered })} />);
-  click(header(first.container, "Standing"));
   click(header(first.container, "Archive"));
   first.unmount();
   const again = mount(<ContextTree {...props({ tree: layered })} />);
-  expect(q(again.container, '[data-standing] [data-context="cpd"]')).toBeNull();
   expect(q(again.container, '[data-archived] [data-context="gone"]')).not.toBeNull();
   again.unmount();
   const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0" });
@@ -682,9 +739,9 @@ it("the Delete item is offered only when the Context or Plan is quiet", () => {
   quietCtx.unmount();
 });
 
-it("a Standing Context menu offers only New Plan and Copy id", () => {
+it("a standing Context menu in the Contexts section offers only New Plan and Copy id", () => {
   const m = mount(<ContextTree {...withMenu()} tree={standingTree()} />);
-  rightClick(q(m.container, `[data-standing] ${ctxRow("cpd")}`));
+  rightClick(q(m.container, `[data-section="contexts"] ${ctxRow("cpd")}`));
   expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("permanent");
   expect(labels()).toEqual([`New Plan${E}`, "Copy id"]);
   m.unmount();
