@@ -1,3 +1,4 @@
+import { readPreviewMode } from "../../electron/preview-mode.ts";
 export interface StatusDeps {
   cpd(argv: readonly string[]): Promise<string>;
   tmux(argv: readonly string[]): Promise<string>;
@@ -24,6 +25,7 @@ async function attempt<T>(f: () => Promise<T | null>): Promise<T | null> {
 const json = (text: string): Record<string, unknown> | null => { try { return obj(JSON.parse(text)); } catch { return null; } };
 
 export async function readStatus(deps: StatusDeps): Promise<Status> {
+  const pm = readPreviewMode(deps.env);
   const home = process.env["CPD_HOME"] ?? `${process.env["HOME"] ?? ""}/.cpd`;
   const tmuxOpt = (name: string): Promise<string | null> => attempt(async () => (await deps.tmux(["show-options", "-qv", name])).trim() || null);
   const [version, incident, runner, workers, preview, install] = await Promise.all([
@@ -44,5 +46,10 @@ export async function readStatus(deps: StatusDeps): Promise<Status> {
     tmuxOpt("@cpd_preview"),
     attempt(async () => { const t = await deps.readFile(`${home}/run/cpd-install.json`); return t === null ? null : json(t); }),
   ]);
-  return { runner, preview, incident, workers, version, hostAlert: install?.["status"] === "skipped", mode: "production", drift: null };
+  let drift: DriftSummary | null = null;
+  if (pm.mode === "preview") {
+    const d = await deps.drift(pm.checkout);
+    drift = { count: d.count, oldestAt: d.oldestAt, stale: d.stale };
+  }
+  return { runner, preview, incident, workers, version, hostAlert: install?.["status"] === "skipped", mode: pm.mode, drift };
 }

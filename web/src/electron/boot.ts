@@ -1,3 +1,4 @@
+import { readPreviewMode } from './preview-mode';
 export interface BootWindow {
   webContents: { isDestroyed(): boolean; reloadIgnoringCache(): void };
 }
@@ -16,6 +17,7 @@ export interface BootDeps {
   reloadServer(): Promise<void>;
 }
 export async function boot(deps: BootDeps): Promise<void> {
+  const preview = readPreviewMode(deps.env);
   deps.app.setName('CPD');
   await deps.app.whenReady();
   const win = new deps.BrowserWindow({ title: 'CPD' });
@@ -31,7 +33,7 @@ export async function boot(deps: BootDeps): Promise<void> {
   deps.registerWebuiIpc();
   const update = await deps.startAutoUpdate(win);
   if (update.bootstrap.state === 'ready') deps.startServices();
-  const devUrl = deps.env['CPD_ELECTRON_DEV_URL'];
+  const devUrl = preview.mode === 'preview' ? preview.devUrl : null;
   if (devUrl) {
     try {
       await deps.loadDevUrl(win, devUrl);
