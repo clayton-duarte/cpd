@@ -56,7 +56,6 @@ pub(super) enum Step {
     E19,
     E20,
     E22,
-    #[allow(dead_code)] // E24's stub raises none yet
     E24,
 }
 

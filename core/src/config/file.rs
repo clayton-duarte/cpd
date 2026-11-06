@@ -422,9 +422,8 @@ impl Config {
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
-        // Stub: the red test pins that 0 is refused (`positive`); the implementation Job replaces this.
         let swr = Swr {
-            gc_days: r.get("swr.gc_days", 7, |v| int(v, 0, u32::MAX))?,
+            gc_days: positive(&mut r, "swr.gc_days", 7)?,
         };
         let slack_id = |first: char| {
             move |v: Value| {
