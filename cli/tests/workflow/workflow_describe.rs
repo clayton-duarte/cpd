@@ -6,7 +6,7 @@ use std::fs;
 
 use serde_json::json;
 
-use super::workflow::{DESCRIPTION, Poll, Rows, code, in_git_repo, open_jobs, poll_fx};
+use super::workflow::{DESCRIPTION, Poll, Rows, code, open_jobs, poll_fx};
 
 impl Poll {
     /// `cpd pr describe --workflow repo --file <file holding text> --plan pay`.
@@ -167,59 +167,25 @@ fn pr_describe_refuses_an_adopted_or_closed_pr() {
 }
 
 #[test]
-fn pr_describe_on_an_open_pr_edits_the_pull_request_body() {
-    {
-        let fx = poll_fx("deploy");
-        let body = "## What and why\n\nNew words.\n";
+fn pr_describe_on_an_open_pr_stores_the_body_and_queues_the_pull_request_update() {
+    let fx = poll_fx("deploy");
+    let body = "## What and why\n\nNew words.\n";
 
-        let out = fx.describe(body).ok();
+    let out = fx.describe(body).ok();
 
-        assert_eq!(out["workflow"], json!({"key": "repo", "status": "open"}));
-        let calls = fx.calls("gh");
-        assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
-        assert_eq!(
-            calls[0].args,
-            [
-                "api",
-                "-X",
-                "PATCH",
-                "repos/acme/pay/pulls/812",
-                "--input",
-                "-"
-            ]
-        );
-        let sent: serde_json::Value =
-            serde_json::from_slice(calls[0].stdin.as_deref().expect("a JSON body on stdin"))
-                .unwrap();
-        assert_eq!(sent, json!({"body": body}));
-        assert_eq!(fx.description().as_deref(), Some(body));
-    }
-    {
-        // A failing GitHub update stores nothing.
-        let fx = poll_fx("deploy");
-        fx.fail_update("HTTP 422: nope");
-        let txns = fx.txns();
-
-        let run = fx.describe("New words.\n");
-
-        assert_eq!(code(&run), ("gh_failed".into(), 1));
-        assert_eq!(
-            (fx.description().as_deref(), fx.txns()),
-            (Some(DESCRIPTION), txns)
-        );
-    }
-    for phase in ["plan", "dispatch"] {
-        let fx = poll_fx(phase);
-
-        fx.describe("New words.\n").ok();
-
-        assert!(
-            fx.gh_calls().is_empty(),
-            "{phase}: no gh call, {:?}",
-            fx.gh_calls()
-        );
-        assert_eq!(fx.description().as_deref(), Some("New words.\n"));
-    }
+    assert_eq!(out["workflow"], json!({"key": "repo", "status": "open"}));
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(out["mutation_id"].is_i64(), "{out}");
+    assert!(fx.calls("gh").is_empty(), "{:?}", fx.gh_calls());
+    assert_eq!(
+        fx.env.query::<String>("SELECT target_key || '|' || op_kind || '|' || status FROM swr_mutations"),
+        "github:pr:acme/pay#812|describe|pending"
+    );
+    assert_eq!(
+        fx.env.query::<String>("SELECT json_extract(vars_json, '$.body') FROM swr_mutations"),
+        body
+    );
+    assert_eq!(fx.description().as_deref(), Some(body));
 }
 
 #[test]
@@ -293,41 +259,3 @@ fn pr_open_refuses_description_required_without_a_body() {
     assert_eq!(open_jobs(&fx).len(), 1, "the open Job is queued");
 }
 
-#[test]
-fn pr_describe_of_an_open_pr_succeeds_from_a_cwd_that_is_not_a_repository() {
-    let fx = poll_fx("deploy");
-    let body = "## What and why\n\nFrom anywhere.\n";
-
-    let out = fx.describe(body).ok();
-
-    assert_eq!(out["workflow"], json!({"key": "repo", "status": "open"}));
-    let calls = fx.calls("gh");
-    assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
-    let cwd = calls[0].cwd.clone().expect("gh runs with a cwd");
-    assert!(
-        !in_git_repo(&cwd, fx.env.root()),
-        "{cwd:?} must not be a git repository: the fake's refusal is live"
-    );
-    assert_eq!(fx.description().as_deref(), Some(body));
-}
-
-#[test]
-fn pr_describe_refuses_an_open_pull_request_repo_that_is_not_owner_name() {
-    let fx = poll_fx("deploy");
-    fx.exec("UPDATE pull_requests SET repo = 'acme/pay x'");
-    let txns = fx.txns();
-
-    let run = fx.describe("New words.\n");
-
-    assert_eq!(code(&run), ("gh_failed".into(), 1));
-    assert_eq!(run.error()["details"]["repo"], "acme/pay x");
-    assert!(
-        fx.gh_calls().is_empty(),
-        "nothing sent: {:?}",
-        fx.gh_calls()
-    );
-    assert_eq!(
-        (fx.description().as_deref(), fx.txns()),
-        (Some(DESCRIPTION), txns)
-    );
-}

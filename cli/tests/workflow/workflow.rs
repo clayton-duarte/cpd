@@ -1877,11 +1877,6 @@ impl Poll {
         self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
     }
 
-    /// From now on the `gh api -X PATCH` update of a pull request fails with `text` on stderr.
-    pub(super) fn fail_update(&self, text: &str) {
-        self.gh.update.set(Reply::exit(1, "", &format!("{text}\n")));
-    }
-
     /// Makes every call of the fake `gh` fail with `text` on stderr.
     pub(super) fn fail(&self, text: &str) {
         *self.gh.fail.lock().unwrap() = Some(text.to_owned());

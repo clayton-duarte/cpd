@@ -1881,7 +1881,7 @@ fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
 }
 
 #[test]
-fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
+fn edit_title_of_an_open_pull_request_stores_it_and_queues_the_retitle() {
     // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
     let fx = crud("plan");
     fx.add("api", &fx.pay, &["--no-needs"]).ok();
@@ -1892,16 +1892,13 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
 
     assert_eq!(out["fields"], json!(["title"]));
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(gh_args(&fx).is_empty(), "the command calls no GitHub: {:?}", gh_args(&fx));
     assert_eq!(
-        gh_args(&fx),
-        [[
-            "api",
-            "-X",
-            "PATCH",
-            "repos/acme/pay/pulls/7",
-            "-f",
-            "title=Charge the card"
-        ]]
+        fx.env.query::<String>(
+            "SELECT target_key || '|' || op_kind || '|' || json_extract(vars_json, '$.title') || '|' || json_extract(patch_json, '$.title') FROM swr_mutations"
+        ),
+        "github:pr:acme/pay#7|retitle|Charge the card|Charge the card"
     );
     assert_eq!(
         fx.env
@@ -1913,53 +1910,10 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
         json!({"workflow": "api", "fields": ["title"]})
     );
 
-    // The same title again: already, and gh is not called.
+    // The same title again: already, and nothing more is queued.
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
     assert_eq!(out["already"], true);
-    assert_eq!(fx.calls("gh").len(), 1);
-}
-
-#[test]
-fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
-    // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
-    let fx = crud("plan");
-    fx.add("api", &fx.pay, &["--no-needs"]).ok();
-    fx.env
-        .sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
-    open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
-    let writes = fx.writes();
-
-    let error = fx.refused(
-        &fx.pr(&["edit", "api", "--title", "Charge the card"]),
-        "gh_failed",
-        1,
-        writes,
-    );
-
-    assert_eq!(
-        error["details"]["argv"],
-        json!([
-            "gh",
-            "api",
-            "-X",
-            "PATCH",
-            "repos/acme/pay/pulls/7",
-            "-f",
-            "title=Charge the card"
-        ])
-    );
-    assert!(
-        error["details"]["stderr"]
-            .as_str()
-            .unwrap()
-            .contains("HTTP 422"),
-        "{error}"
-    );
-    assert_eq!(
-        fx.env
-            .query::<String>("SELECT title FROM workflows WHERE key = 'api'"),
-        "Change api"
-    );
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM swr_mutations"), 1);
 }
 
 #[test]
