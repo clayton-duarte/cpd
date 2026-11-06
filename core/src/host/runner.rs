@@ -304,9 +304,16 @@ impl FakeRunner {
     ) -> FakeRunner {
         self.rule(program, Box::new(matches), reply, true)
     }
-    /// Answers every call of `program` that no rule matched.
+    /// Answers every call of `program` that no rule matched. A second route for the same program (by file name) replaces the
+    /// first: the later wins.
     pub fn route(self, program: &str, handler: Arc<dyn Handler>) -> FakeRunner {
-        self.script().routes.push((program.to_owned(), handler));
+        {
+            let mut script = self.script();
+            script
+                .routes
+                .retain(|(known, _)| file_name(known) != file_name(program));
+            script.routes.push((program.to_owned(), handler));
+        }
         self
     }
     /// This runner as a [`Runner`] that does not keep the script alive.

@@ -27,6 +27,7 @@ it("the inbox list scrolls with a ScrollArea", () => {
   expect(area).not.toBeNull();
   expect(rows.every((r) => area?.contains(r) === true)).toBe(true);
   expect(m.container.querySelector(".overflow-y-auto")).toBeNull();
+  expect(area?.closest('[data-part="inbox-header"]')).toBeNull();
   m.unmount();
 });
 

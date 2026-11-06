@@ -1,42 +1,25 @@
-//! The deploy read of `pr poll` (contract §7.6 step 8): the workflow runs that wait for the User's approval, of every
-//! repo whose policy declares `[deploys] workflows`, cached in `run/deploy-runs.json` (§1.4) for E8's `deploy` item.
+//! The deploy read (swr-github.md §8, contract §7.6 step 8): the workflow runs that wait for the User's approval, of every
+//! repo whose policy declares `[deploys] workflows`, kept in `swr_deploys` for E8's `deploy` item.
 
 use std::path::Path;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use rusqlite::{OptionalExtension, params};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 use super::gh::run_raw_with;
-use crate::atomic::write_atomic;
+use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, Runner};
 use crate::policy::{self, load_scope_file};
+use crate::store::Store;
 
 /// How long one `gh api` call of the read may take.
 const TIMEOUT: Duration = Duration::from_secs(15);
-
-/// A run waiting for the User's approval, as `run/deploy-runs.json` holds it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct Run {
-    repo: String,
-    workflow: String,
-    run_id: u64,
-    environment: String,
-    title: String,
-    url: String,
-    created_at: String,
-}
-
-/// `run/deploy-runs.json`.
-#[derive(Serialize, Deserialize)]
-struct Cache {
-    version: u32,
-    polled_at: String,
-    runs: Vec<Run>,
-}
 
 #[derive(Deserialize)]
 struct Runs {
@@ -46,10 +29,11 @@ struct Runs {
 #[derive(Deserialize)]
 struct Listed {
     id: u64,
-    display_title: String,
-    html_url: String,
-    created_at: String,
+    #[serde(default)]
+    updated_at: String,
     triggering_actor: Option<Actor>,
+    #[serde(flatten)]
+    rest: serde_json::Map<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -57,71 +41,128 @@ struct Actor {
     login: String,
 }
 
-#[derive(Deserialize)]
-struct Pending {
-    environment: Environment,
-    current_user_can_approve: bool,
-}
-
-#[derive(Deserialize)]
-struct Environment {
-    name: String,
-}
-
-/// Reads the deploys that wait for the User's approval and rewrites `run/deploy-runs.json`, `polled_at` its time.
-/// A workflow whose read fails keeps the runs the file had for it; the first failure is returned after the file is written.
-pub(super) fn read(runner: &dyn Runner, home: &CpdHome, polled_at: &str) -> Result<(), CpdError> {
-    let path = home.run_dir().join("deploy-runs.json");
+/// The delta read of `swr_deploys` (swr-github.md §8): the waiting runs of every declared workflow, filtered by
+/// `swr_viewer.login`, `pending_deployments` only for a run whose `(repo, run_id, updated_at)` is not stored; rows of runs that
+/// are no longer waiting, or whose pull request reads `closed` or `merged`, get `inactive_at` = `now`. A workflow whose read
+/// fails keeps its rows; the first failure is returned after the others are written. Unchanged data opens no write.
+pub fn read_into_store(
+    runner: &dyn Runner,
+    store: &mut Store,
+    home: &CpdHome,
+    now: OffsetDateTime,
+) -> Result<(), CpdError> {
     let declared = declared(home)?;
-    let previous = previous(&path);
-    let mut me: Option<Result<String, CpdError>> = None;
-    let mut runs = Vec::new();
+    let me: Option<String> = store.read(|c| {
+        Ok(
+            c.query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .optional()?,
+        )
+    })?;
+    // No viewer yet: the pass writes it; there is nobody to filter by before that.
+    let Some(me) = me else { return Ok(()) };
+    let at = timestamp(now);
     let mut failure: Option<CpdError> = None;
+    let mut writes: Vec<Write> = Vec::new();
+    // A repo whose policy no longer declares a workflow: its waiting runs are nobody's to approve.
+    let undeclared: Vec<(String, i64)> = store.read(|c| {
+        let mut stmt =
+            c.prepare("SELECT repo, run_id FROM swr_deploys WHERE inactive_at IS NULL")?;
+        Ok(stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    writes.extend(
+        undeclared
+            .into_iter()
+            .filter(|(repo, _)| !declared.iter().any(|(r, _)| r == repo))
+            .map(|(repo, id)| Write::Inactive(repo, id)),
+    );
     for (repo, workflow) in &declared {
-        let me = me
-            .get_or_insert_with(|| login(runner, home.root()))
-            .as_ref()
-            .map_err(Clone::clone);
-        let read = me.and_then(|me| workflow_runs(runner, home.root(), me, repo, workflow));
-        match read {
-            Ok(found) => runs.extend(found),
+        let alone = declared.iter().filter(|(r, _)| r == repo).count() == 1;
+        let stored: Vec<(i64, String, bool, Option<String>)> = store.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT run_id, updated_at, inactive_at IS NULL, json_extract(run_json, '$._workflow')
+                   FROM swr_deploys WHERE repo = ?1",
+            )?;
+            Ok(stmt
+                .query_map(params![repo], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })?;
+        match changed_runs(runner, home.root(), &me, repo, workflow, &stored) {
+            Ok((listed, changed)) => {
+                for (id, _, active, of) in &stored {
+                    let ours = match of {
+                        Some(of) => of == workflow,
+                        None => alone,
+                    };
+                    if *active && ours && !listed.contains(&(*id as u64)) {
+                        writes.push(Write::Inactive(repo.clone(), *id));
+                    }
+                }
+                writes.extend(changed.into_iter().map(|c| Write::Row(repo.clone(), c)));
+            }
             Err(e) => {
-                runs.extend(
-                    previous
-                        .iter()
-                        .filter(|r| r.repo == *repo && r.workflow == *workflow)
-                        .cloned(),
-                );
                 failure.get_or_insert(e);
             }
         }
     }
-    runs.sort_by(|a, b| (&a.created_at, a.run_id).cmp(&(&b.created_at, b.run_id)));
-    let cache = Cache {
-        version: 1,
-        polled_at: polled_at.to_owned(),
-        runs,
-    };
-    let text = serde_json::to_string(&cache).expect("the cache serializes");
-    write_atomic(&path, text).map_err(|e| {
-        CpdError::new(
-            ErrorCode::StoreFailed,
-            format!("Cannot write {}: {e}.", path.display()),
-        )
-        .with("path", path.display().to_string())
+    let closed = "UPDATE swr_deploys SET inactive_at = ?1 WHERE inactive_at IS NULL AND EXISTS (
+                    SELECT 1 FROM pull_requests p WHERE p.repo = swr_deploys.repo
+                      AND p.number = json_extract(swr_deploys.run_json, '$.pull_requests[0].number')
+                      AND p.state IN ('closed', 'merged'))";
+    let closing: bool = store.read(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM swr_deploys WHERE inactive_at IS NULL AND EXISTS (
+                        SELECT 1 FROM pull_requests p WHERE p.repo = swr_deploys.repo
+                          AND p.number = json_extract(swr_deploys.run_json, '$.pull_requests[0].number')
+                          AND p.state IN ('closed', 'merged')))",
+            [],
+            |r| r.get(0),
+        )?)
     })?;
+    if !writes.is_empty() || closing {
+        store.write("swr deploys", |tx| {
+            for w in &writes {
+                match w {
+                    Write::Row(repo, c) => {
+                        tx.execute(
+                            "INSERT INTO swr_deploys (repo, run_id, updated_at, run_json, pending_json, inactive_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, NULL)
+                             ON CONFLICT (repo, run_id) DO UPDATE SET updated_at = excluded.updated_at,
+                               run_json = excluded.run_json, pending_json = excluded.pending_json, inactive_at = NULL",
+                            params![repo, c.run_id as i64, c.updated_at, c.run_json, c.pending_json],
+                        )?;
+                    }
+                    Write::Inactive(repo, id) => {
+                        tx.execute(
+                            "UPDATE swr_deploys SET inactive_at = ?3 WHERE repo = ?1 AND run_id = ?2 AND inactive_at IS NULL",
+                            params![repo, id, at],
+                        )?;
+                    }
+                }
+            }
+            tx.execute(closed, [&at])?;
+            Ok::<(), CpdError>(())
+        })?;
+    }
     failure.map_or(Ok(()), Err)
 }
 
-/// The runs the file holds now; none when it is missing or is not that JSON (the next write replaces it).
-fn previous(path: &Path) -> Vec<Run> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    match serde_json::from_str::<Cache>(&text) {
-        Ok(cache) if cache.version == 1 => cache.runs,
-        _ => Vec::new(),
-    }
+enum Write {
+    Row(String, Changed),
+    Inactive(String, i64),
+}
+
+/// A run to write: new or moved since the stored row.
+struct Changed {
+    run_id: u64,
+    updated_at: String,
+    run_json: String,
+    pending_json: String,
 }
 
 /// Every `(owner/repo, workflow)` the repo policy files declare, sorted.
@@ -231,62 +272,65 @@ fn parsed<T: for<'de> Deserialize<'de>>(args: &[&str], stdout: &str) -> Result<T
     })
 }
 
-/// The login of the User (`gh api user --jq .login`).
-fn login(runner: &dyn Runner, cwd: &Path) -> Result<String, CpdError> {
-    let args = ["api", "user", "--jq", ".login"];
-    let me = api(runner, cwd, &args)?.trim().to_owned();
-    if me.is_empty() {
-        return Err(
-            CpdError::new(ErrorCode::GhFailed, "gh api user printed no login.")
-                .with("argv", json!(["gh", "api", "user", "--jq", ".login"])),
-        );
-    }
-    Ok(me)
-}
-
-/// The runs of `workflow` of `repo` that wait for `me` to approve.
-fn workflow_runs(
+/// The waiting runs of `workflow` of `repo` that are the User's (`me`): their ids, and the ones whose `(run_id, updated_at)` is
+/// not in `stored` with the `pending_deployments` read for them. A run with nothing the User can approve is not kept.
+fn changed_runs(
     runner: &dyn Runner,
     cwd: &Path,
     me: &str,
     repo: &str,
     workflow: &str,
-) -> Result<Vec<Run>, CpdError> {
+    stored: &[(i64, String, bool, Option<String>)],
+) -> Result<(Vec<u64>, Vec<Changed>), CpdError> {
     let path =
         format!("repos/{repo}/actions/workflows/{workflow}/runs?status=waiting&per_page=100");
     let args = ["api", path.as_str()];
     let listed: Runs = parsed(&args, &api(runner, cwd, &args)?)?;
+    let mut ids = Vec::new();
     let mut out = Vec::new();
     for run in listed.workflow_runs {
         if !run
             .triggering_actor
+            .as_ref()
             .is_some_and(|a| a.login.eq_ignore_ascii_case(me))
         {
             continue;
         }
-        let path = format!("repos/{repo}/actions/runs/{}/pending_deployments", run.id);
-        let args = ["api", path.as_str()];
-        let pending: Vec<Pending> = parsed(&args, &api(runner, cwd, &args)?)?;
-        let mut names: Vec<String> = pending
-            .into_iter()
-            .filter(|p| p.current_user_can_approve)
-            .map(|p| p.environment.name)
-            .collect();
-        if names.is_empty() {
+        let known = stored
+            .iter()
+            .find(|(id, _, _, _)| *id == run.id as i64)
+            .is_some_and(|(_, updated, active, _)| *active && *updated == run.updated_at);
+        if known {
+            ids.push(run.id);
             continue;
         }
-        names.sort();
-        out.push(Run {
-            repo: repo.to_owned(),
-            workflow: workflow.to_owned(),
+        let path = format!("repos/{repo}/actions/runs/{}/pending_deployments", run.id);
+        let args = ["api", path.as_str()];
+        let pending: Vec<Value> = parsed(&args, &api(runner, cwd, &args)?)?;
+        let approvable: Vec<Value> = pending
+            .into_iter()
+            .filter(|p| p["current_user_can_approve"].as_bool() == Some(true))
+            .collect();
+        if approvable.is_empty() {
+            continue;
+        }
+        ids.push(run.id);
+        let mut json_run = run.rest;
+        json_run.insert("id".into(), json!(run.id));
+        json_run.insert("updated_at".into(), json!(run.updated_at));
+        json_run.insert(
+            "triggering_actor".into(),
+            json!({"login": run.triggering_actor.map(|a| a.login)}),
+        );
+        json_run.insert("_workflow".into(), json!(workflow));
+        out.push(Changed {
             run_id: run.id,
-            environment: names.join(", "),
-            title: run.display_title,
-            url: run.html_url,
-            created_at: run.created_at,
+            updated_at: run.updated_at,
+            run_json: Value::Object(json_run).to_string(),
+            pending_json: Value::Array(approvable).to_string(),
         });
     }
-    Ok(out)
+    Ok((ids, out))
 }
 
 /// An entry of `pending_deployments` the User can approve, as `approve` reads it.
@@ -401,34 +445,4 @@ pub fn approve(
             None,
         )),
     }
-}
-
-/// Removes the entries of run `run_id` of `repo` from `run/deploy-runs.json`, rewriting it only when one was removed.
-/// A missing, unreadable, invalid or not-version-1 file is left as it is.
-pub fn forget_run(home: &CpdHome, repo: &str, run_id: u64) -> Result<(), CpdError> {
-    let path = home.run_dir().join("deploy-runs.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(());
-    };
-    let Ok(mut cache) = serde_json::from_str::<Cache>(&text) else {
-        return Ok(());
-    };
-    if cache.version != 1 {
-        return Ok(());
-    }
-    let before = cache.runs.len();
-    cache
-        .runs
-        .retain(|r| !(r.repo == repo && r.run_id == run_id));
-    if cache.runs.len() == before {
-        return Ok(());
-    }
-    let text = serde_json::to_string(&cache).expect("the cache serializes");
-    write_atomic(&path, text).map_err(|e| {
-        CpdError::new(
-            ErrorCode::StoreFailed,
-            format!("Cannot write {}: {e}.", path.display()),
-        )
-        .with("path", path.display().to_string())
-    })
 }

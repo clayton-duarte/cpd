@@ -1,4 +1,4 @@
-//! E8's `deploy` condition (contract §2.2 "The deploy rule"): one yellow item per run of `run/deploy-runs.json`.
+//! E8's `deploy` condition (contract §2.2 "The deploy rule"): one yellow item per active row of `swr_deploys`.
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -27,10 +27,8 @@ fn run_entry(run_id: u64, created_at: &str) -> Value {
 }
 
 fn write_cache(home: &CpdHome, runs: &[Value]) {
-    let path = home.run_dir().join("deploy-runs.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let cache = json!({"version": 1, "polled_at": "2026-10-27T14:59:55.000Z", "runs": runs});
-    std::fs::write(path, cache.to_string()).unwrap();
+    let mut store = Store::open(home, 5000).unwrap();
+    super::swr_fixture::deploys(&mut store, runs).unwrap();
 }
 
 /// The `deploy` conditions E8 computes now.

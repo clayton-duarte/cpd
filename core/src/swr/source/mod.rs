@@ -12,6 +12,7 @@ use crate::ports::Ports;
 use crate::store::Store;
 
 pub mod github;
+pub mod github_write;
 pub mod jira;
 #[cfg(test)]
 mod jira_adopt_tests;
@@ -24,6 +25,12 @@ mod slack_tests;
 #[cfg(test)]
 mod slack_write_tests;
 
+#[cfg(test)]
+mod github_poll_tests;
+#[cfg(test)]
+mod github_tests;
+#[cfg(test)]
+mod github_write_tests;
 #[cfg(test)]
 mod models_tests;
 

@@ -1,9 +1,7 @@
 //! `pr post` (commands.md §9.8b): posts the Workflow's stored pull request to Slack through the helper and records it in
-//! `pr_posts`, then turns on auto-merge for the pull request on GitHub (`auto_merge`: deferred while the Workflow is
-//! stacked; its outcome never undoes or fails the post). It appends no Event. No lock: two simultaneous runs could both
+//! `pr_posts` through the outbox. The auto-merge is queued by the Slack source when the send confirms (swr-slack.md §6.2), once
+//! and behind the GitHub executor; its outcome never undoes or fails the post. It appends no Event. No lock: two simultaneous runs could both
 //! send, and the second's insert then fails as `already_posted`.
-
-use std::path::Path;
 
 use serde_json::json;
 
@@ -14,6 +12,7 @@ use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
+use crate::swr::source::github_write::merge_method;
 use crate::swr::source::slack;
 
 #[derive(clap::Args, Debug)]
@@ -65,7 +64,11 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let row = workflow
         .pull_request
         .expect("an open Workflow has its pull_request row (prs CHECK)");
-    let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
+    let pull = env.store.read(|conn| {
+        let mut pull = super::pulls::load(conn, row)?;
+        crate::swr::github::effective_row(conn, &mut pull)?;
+        Ok(pull)
+    })?;
     if !pull.authored {
         return Err(CpdError::new(
             ErrorCode::NotAuthored,
@@ -105,23 +108,34 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("url", pull.url.as_str())
         .with("reasons", json!(names)));
     }
-    // (g2) one read of the repo and the pull request: a repo with no merge method refuses before the send
-    let read =
-        super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
-    if read.methods.choose().is_none() {
-        let m = read.methods;
-        return Err(CpdError::new(
-            ErrorCode::NoMergeMethod,
-            format!(
-                "{} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{}. Allow one in the repo's settings.",
-                pull.repo, pull.number
-            ),
-        )
-        .with("repo", pull.repo.as_str())
-        .with("number", pull.number)
-        .with("squash", m.squash)
-        .with("merge", m.merge)
-        .with("rebase", m.rebase));
+    // (g2) the repo's settings from the cache: a repo with no merge method refuses before the send
+    match merge_method(&mut env.store, &pull.repo)? {
+        Some(Ok(_)) => {}
+        Some(Err(m)) => {
+            return Err(CpdError::new(
+                ErrorCode::NoMergeMethod,
+                format!(
+                    "{} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{}. Allow one in the repo's settings.",
+                    pull.repo, pull.number
+                ),
+            )
+            .with("repo", pull.repo.as_str())
+            .with("number", pull.number)
+            .with("squash", m.squash)
+            .with("merge", m.merge)
+            .with("rebase", m.rebase));
+        }
+        None => {
+            crate::swr::cache::invalidate(&mut env.store, &format!("github:repo:{}", pull.repo))?;
+            return Err(CpdError::new(
+                ErrorCode::ItemNotFound,
+                format!(
+                    "The settings of {} are not in the cache yet: the next poll reads them; try again then.",
+                    pull.repo
+                ),
+            )
+            .with("repo", pull.repo.as_str()));
+        }
     }
     // (h)
     let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url)

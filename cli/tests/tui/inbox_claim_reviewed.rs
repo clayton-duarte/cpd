@@ -2,7 +2,6 @@
 //! claim` stores it, `plan show` prints it. Mocks only: `Fx::with_ports`, `fake_gh`, the fake cockpit.
 
 use crate::inbox::{Fixture, condition};
-use cpd_core::host::runner::Reply;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
 
@@ -25,7 +24,7 @@ fn sql(fx: &mut Fixture, statements: &str) {
 /// in the team cache and the fake cockpit up. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(GH));
+    crate::inbox_claim::seed(&fx, "acme/pay", 812, GH);
     let socket = fx.fx.env.tmux_socket();
     fx.fx.env.write_config(&format!(
         "version = 1\nmachine = \"m1\"\nlead_tier = \"S4\"\nlead_runner = \"pi\"\n[tmux]\nsocket = \"{socket}\"\n"
@@ -80,8 +79,9 @@ fn shown(fx: &Fixture, plan: &str) -> Value {
 
 fn pull_request(state: &str) -> String {
     format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, '{state}', 'none', 'none', 't', NULL, 't');"
+        "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored, review_requested)
+         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, '{state}', 'none', 'none', 't', NULL, 't', 0, 1);"
     )
 }
 
@@ -118,6 +118,10 @@ fn reviewed_pr_state_follows_the_pull_requests_row() {
     assert!(
         shown(&fx, PLAN)["reviewed_pr"].is_object(),
         "claimed Plan has a reviewed_pr"
+    );
+    sql(
+        &mut fx,
+        "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;",
     );
     assert_eq!(state(&fx), Value::Null, "no row, no state");
     sql(&mut fx, &pull_request("open"));

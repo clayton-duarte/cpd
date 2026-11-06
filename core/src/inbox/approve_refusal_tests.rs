@@ -11,7 +11,7 @@ use super::model::{Condition, Kind, Urgency, reconcile};
 use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::runner::{FakeRunner, Reply};
+use crate::host::runner::FakeRunner;
 use crate::host::spawn::FakeSpawn;
 use crate::output::Output;
 use crate::ports::Ports;
@@ -124,18 +124,5 @@ fn a_refused_approve_of_an_item_of_another_kind_is_not_approvable_and_changes_no
     );
     let before = snapshot(&mut store);
     refused(run(&ports, &["approve", "1"]), ErrorCode::NotApprovable);
-    assert_eq!(snapshot(&mut store), before);
-}
-
-#[test]
-fn a_refused_approve_whose_gh_read_fails_is_gh_failed_and_leaves_the_row_open() {
-    let runner = FakeRunner::new(ManualClock::new()).on(
-        "gh",
-        |_| true,
-        Reply::exit(1, "", "gh: HTTP 500\n"),
-    );
-    let (_d, _h, mut store, ports) = fixture(Kind::Deploy, "deploy:acme/pay#123", runner);
-    let before = snapshot(&mut store);
-    refused(run(&ports, &["approve", "1"]), ErrorCode::GhFailed);
     assert_eq!(snapshot(&mut store), before);
 }

@@ -351,7 +351,11 @@ fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
         api["pr"],
         json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z", "posted": false})
     );
-    assert_eq!(api["pull_request"], pull_request());
+    // `plan show` adds the open feedback count and the head commit to a pull request (plan_pr_state.rs); neither is set here.
+    let mut shown = pull_request();
+    shown["feedback_open"] = Value::Null;
+    shown["head_oid"] = Value::Null;
+    assert_eq!(api["pull_request"], shown);
     assert_eq!(
         (
             &api["closed_unmerged"],

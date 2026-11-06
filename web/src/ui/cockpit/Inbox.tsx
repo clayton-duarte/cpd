@@ -61,6 +61,7 @@ import {
   PopoverTrigger,
 } from "../components/popover.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
+import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
 import {
   age,
@@ -514,11 +515,11 @@ export function Inbox(props: {
     setCurateRow(row);
   };
   const [collapsed, setCollapsed] = useState(false);
-  const headerRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
   const shell = "relative flex h-full min-h-0 w-full flex-col overflow-hidden";
   const heading =
-    "text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground";
+    "font-mono text-[14px] font-semibold uppercase text-fg-strong";
 
   const rows = inbox?.rows ?? [];
   const counts = new Map<Urgency, number>();
@@ -620,9 +621,9 @@ export function Inbox(props: {
       <div
         ref={measureRef}
         aria-hidden="true"
-        className="pointer-events-none invisible absolute top-0 left-0 -z-10 flex h-8 w-max items-center gap-8 px-2.5"
+        className="pointer-events-none invisible absolute top-0 left-0 -z-10 flex h-11 w-max items-center gap-8 px-4"
       >
-        <span className={cn(heading, "shrink-0")}>Inbox</span>
+        <span className={cn(heading, "shrink-0")}>INBOX</span>
         <div className="flex shrink-0 items-center">
           <div className="inline-flex h-6 items-center px-1.5 text-xs">
             <span>all</span>
@@ -641,12 +642,12 @@ export function Inbox(props: {
           ))}
         </div>
       </div>
-      <div
-        ref={headerRef}
-        data-part="inbox-header"
-        className="flex h-8 shrink-0 items-center justify-between gap-8 px-2.5"
-      >
-        <h2 className={cn(heading, "shrink-0")}>Inbox</h2>
+      <TopPaneHeader
+        dataPart="inbox-header"
+        headerRef={headerRef}
+        hasOverlayControls={false}
+        actions={
+          <>
         {collapsed ? (
           <Popover>
             <PopoverTrigger asChild>
@@ -656,7 +657,7 @@ export function Inbox(props: {
                 size="sm"
                 data-part="inbox-filters-trigger"
                 aria-label="Filter inbox by tier"
-                className="ml-auto h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
+                className="h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
               >
                 <ListFilterIcon className="size-3.5 text-muted-foreground" />
                 <span>
@@ -696,12 +697,16 @@ export function Inbox(props: {
             value={activeValues}
             aria-label="Filter inbox by tier"
             data-part="inbox-filters"
-            className="ml-auto shrink-0"
+            className="shrink-0"
           >
             {renderFilterItems()}
           </ToggleGroup>
         )}
-      </div>
+          </>
+        }
+      >
+        <h2 className={cn(heading, "shrink-0")}>INBOX</h2>
+      </TopPaneHeader>
       {inbox === null ? (
         <p className="px-[14px] text-fg-dim">Loading inbox…</p>
       ) : filteredRows.length === 0 ? (

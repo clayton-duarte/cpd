@@ -2,7 +2,6 @@
 //! §21.1; contract §8.2): a temporary `$CPD_HOME`, the Inbox fixture of `inbox.rs`, a fake tmux.
 
 use crate::inbox::{CLOSED_Y, Fixture, condition};
-use cpd_core::host::runner::Reply;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
 use std::fs;
@@ -73,6 +72,7 @@ fn codereview_context(fx: &mut Fixture, state: &str) {
     );
 }
 
+/// The post of `acme/pay#<number>` in `swr_slack_posts`, the only one.
 fn write_cache(fx: &Fixture, number: u64) {
     seed_post(&fx.fx, CHANNEL, "acme/pay", number, TS_RAW);
 }
@@ -87,16 +87,62 @@ fn seed_post(env: &crate::common::fx::Fx, channel: &str, repo: &str, number: u64
     ));
 }
 
+/// The single pass's rows for `repo#number`, from the GraphQL answer GitHub would have given (alias `p0`, the viewer): the
+/// viewer, the raw row, and the detail with the reviews and the head's checks.
+pub(super) fn seed(fx: &Fixture, repo: &str, number: u64, answer: &str) {
+    let reply: Value = serde_json::from_str(answer).unwrap();
+    let me = reply["data"]["viewer"]["login"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut sql = format!(
+        "INSERT INTO swr_viewer (id, login, fetched_at) VALUES (1, '{me}', 't') ON CONFLICT (id) DO UPDATE SET login = excluded.login;
+         DELETE FROM pull_requests WHERE repo = '{repo}' AND number = {number};"
+    );
+    if !reply["data"]["p0"].is_null() {
+        let raw = &reply["data"]["p0"]["pullRequest"];
+        let state = match raw["state"].as_str().unwrap() {
+            "OPEN" => "open",
+            "MERGED" => "merged",
+            _ => "closed",
+        };
+        let decision = match raw["reviewDecision"].as_str() {
+            Some("APPROVED") => "approved",
+            Some("CHANGES_REQUESTED") => "changes_requested",
+            _ => "none",
+        };
+        let head = raw["headRefOid"].as_str();
+        let head_sql = head.map_or("NULL".to_owned(), |h| format!("'{h}'"));
+        let authored = raw["author"]["login"].as_str() == Some(me.as_str());
+        let detail = json!({
+            "latestReviews": raw["latestReviews"].clone(),
+            "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"state": raw["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].clone(), "contexts": {"nodes": []}}}}]},
+            "reviewThreads": {"nodes": []}, "comments": {"nodes": []}
+        });
+        sql.push_str(&format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested, head_oid, merged_at)
+               VALUES ('{repo}', {number}, 'https://github.com/{repo}/pull/{number}', '{}', {}, '{state}', '{decision}', 'none', 't', 't', {}, 1, {head_sql}, {});
+             INSERT OR REPLACE INTO swr_pr_detail (repo, number, head_oid, updated_at, hydrated_at, detail_json, detail_hash)
+               VALUES ('{repo}', {number}, {head_sql}, 'U', 't', '{detail}', 'h');",
+            raw["title"].as_str().unwrap(),
+            i32::from(raw["isDraft"].as_bool().unwrap()),
+            i32::from(authored),
+            if state == "merged" { "'t'" } else { "NULL" }
+        ));
+    }
+    fx.fx.env.sql(&sql);
+}
+
 /// The Fixture with an open `review-requested` item for `acme/pay#812`, the Context `codereview` with an idle live
 /// Manager and the post in the cache. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     claimable_with(NEEDS_REVIEW)
 }
 
-/// [`claimable`] with the one `gh` answering `gh` (the live GraphQL lookup of the claim).
+/// [`claimable`] with the pass's rows as the GraphQL answer `gh` says (the cache the claim's live check reads).
 fn claimable_with(gh: &str) -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(gh));
+    seed(&fx, "acme/pay", 812, gh);
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "idle");
     write_cache(&fx, 812);
@@ -242,7 +288,7 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
     assert_eq!(
         refusal(&fx, &id.to_string()),
         (3, "post_not_found".to_owned()),
-        "no cache"
+        "no post at all"
     );
     assert_nothing_written(&fx);
 }
@@ -337,13 +383,13 @@ fn claiming_an_already_claimed_item_queues_nothing_more() {
 
 /// A Fixture whose store has the Inbox item and the cache but no `codereview` Context; the fake cockpit is up.
 fn without_codereview() -> (Fixture, i64) {
-    without_codereview_with(Reply::ok(NEEDS_REVIEW))
+    without_codereview_with(NEEDS_REVIEW)
 }
 
-/// [`without_codereview`] with the one `gh` answering `gh`.
-fn without_codereview_with(gh: Reply) -> (Fixture, i64) {
+/// [`without_codereview`] with the pass's rows as the GraphQL answer `gh` says.
+fn without_codereview_with(gh: &str) -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(gh);
+    seed(&fx, "acme/pay", 812, gh);
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     write_cache(&fx, 812);
     let mut all = base();
@@ -517,7 +563,7 @@ fn a_stale_claim_writes_only_the_item_close() {
 fn a_stale_claim_creates_no_context_and_starts_no_window() {
     let merged = gh_answer("MERGED", false, None, "ryan", &[]);
     // no `codereview` Context: the stale claim creates none and starts nothing
-    let (fx, id) = without_codereview_with(Reply::ok(&merged));
+    let (fx, id) = without_codereview_with(&merged);
     assert_eq!(
         refusal(&fx, &id.to_string()),
         (3, "not_claimable".to_owned())
@@ -530,53 +576,15 @@ fn a_stale_claim_creates_no_context_and_starts_no_window() {
 }
 
 #[test]
-fn claim_asks_github_live_once_and_an_already_claimed_item_asks_nothing() {
+fn claim_reads_the_cache_and_asks_github_nothing() {
     let (fx, id) = claimable();
     let id = id.to_string();
     let out = fx.ok(&["claim", &id]);
     assert_eq!(out["ok"], true);
-    let calls = fx.fx.calls("gh");
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    let args = &calls[0].args;
-    assert_eq!(args[..2], ["api", "graphql"], "{args:?}");
-    let query = args
-        .iter()
-        .find_map(|a| a.strip_prefix("query="))
-        .unwrap_or_else(|| panic!("{args:?}"));
-    assert!(
-        query.contains(r#"repository(owner: "acme", name: "pay")"#),
-        "{query}"
-    );
-    assert!(query.contains("pullRequest(number: 812)"), "{query}");
+    assert!(fx.fx.calls("gh").is_empty(), "{:?}", fx.fx.calls("gh"));
 
     assert_eq!(fx.ok(&["claim", &id])["already"], true);
-    assert_eq!(fx.fx.calls("gh").len(), 1, "no further gh call");
-}
-
-#[test]
-fn claim_with_a_failing_gh_is_gh_failed_and_writes_nothing() {
-    let (fx, id) = without_codereview_with(Reply::exit(1, "", "gh: HTTP 502"));
-    let closed_before = fx.events("inbox-closed").len();
-    let (exit, error) = fx.fail(&["claim", &id.to_string()]);
-    assert_eq!(
-        (exit, error["code"].as_str()),
-        (1, Some("gh_failed")),
-        "{error}"
-    );
-    assert_eq!(
-        fx.store_count(&format!(
-            "SELECT count(*) FROM inbox_items WHERE id = {id} AND closed_at IS NULL AND claimed_at IS NULL"
-        )),
-        1
-    );
-    assert_eq!(fx.events("inbox-closed").len(), closed_before);
-    assert!(queued(&fx).is_empty());
-    assert!(fx.events("session-message").is_empty());
-    assert_nothing_written(&fx);
-    assert_eq!(
-        fx.store_count("SELECT count(*) FROM contexts WHERE id = 'codereview'"),
-        0
-    );
+    assert!(fx.fx.calls("gh").is_empty(), "no gh call");
 }
 
 // ---- the review Plan and its Lead (commands.md §21.7, FR10) ----
@@ -589,7 +597,7 @@ const POINTER: &str = "Context on demand: cpd context search <query> · cpd cont
 fn claimable_pr(owner: &str, repo: &str, number: u64) -> (Fixture, i64) {
     let subject = format!("pr:{owner}/{repo}#{number}");
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
+    seed(&fx, &format!("{owner}/{repo}"), number, NEEDS_REVIEW);
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "idle");
     seed_post(&fx.fx, CHANNEL, &format!("{owner}/{repo}"), number, TS_RAW);
@@ -874,7 +882,7 @@ fn claim_twice_creates_one_review_plan() {
 #[test]
 fn claim_leaves_a_stopped_codereview_manager_stopped_and_unmessaged() {
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
+    seed(&fx, "acme/pay", 812, NEEDS_REVIEW);
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "stopped");
     write_cache(&fx, 812);

@@ -46,7 +46,15 @@ pub fn closed_unmerged(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
+    // The overlay (swr-github.md §6): a queued write can change what the item says.
+    let mut open = Vec::new();
+    for row in rows {
+        let effective = crate::swr::github::effective_in(conn, &row.4, row.5)?;
+        if effective.is_none_or(|e| e.state == "closed") {
+            open.push(row);
+        }
+    }
+    open.into_iter()
         .map(
             |(plan, workflow, context, lead, repo, number, url, title)| {
                 Ok(ClosedUnmerged {

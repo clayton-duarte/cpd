@@ -22,7 +22,6 @@ use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, FakeRunner, Reply};
-use cpd_core::host::spawn::{Launch, Spawn};
 use cpd_core::output::Output;
 use cpd_core::ports::{Fakes, Ports};
 use cpd_core::store::Store;
@@ -230,23 +229,20 @@ pub(crate) fn run(home: &CpdHome, script: Vec<Signal>) -> Seen {
     run_with_setup(home, |_, _| {}, script)
 }
 
-/// Marks the merge of `acme/api#3` as running: a marker whose pid is alive on the fake spawn.
-pub(crate) fn merging(fakes: &Fakes, home: &CpdHome) {
-    let pid = fakes
-        .spawn
-        .spawn(&Launch {
-            program: "cpd".into(),
-            args: vec!["pr".into(), "merge".into()],
-            ..Launch::default()
-        })
-        .unwrap();
-    let dir = home.run_dir().join("tui/merging");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("acme__api__3.json"),
-        format!(r#"{{"pid": {}, "at": "2026-01-01T00:00:00Z"}}"#, pid.0),
-    )
-    .unwrap();
+/// Marks the merge of `acme/api#3` as running: a queued `merge` mutation on the outbox.
+pub(crate) fn merging(_fakes: &Fakes, home: &CpdHome) {
+    use cpd_core::swr::outbox::{self, Coalesce, Op};
+    let mut store = Store::open(home, 5000).unwrap();
+    let now = cpd_core::clock::Clock::utc(&ManualClock::new());
+    let op = Op {
+        system: "github".into(),
+        target_key: "github:pr:acme/api#3".into(),
+        op_kind: "merge".into(),
+        vars: serde_json::json!({"expected_head_oid": "h", "method": "squash"}),
+        patch: Some(serde_json::json!({"state": "merging"})),
+        context: None,
+    };
+    outbox::enqueue(&mut store, now, op, Coalesce::LatestWins).unwrap();
 }
 
 /// Where `text` starts in the frame: its column and row.

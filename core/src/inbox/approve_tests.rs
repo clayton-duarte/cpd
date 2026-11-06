@@ -1,5 +1,5 @@
-//! `cpd inbox approve <id>` (commands.md §21.13) on a scripted `gh`: the calls it makes, what it writes, and its refusals.
-//! No process, no network.
+//! `cpd inbox approve <id>` (commands.md §21.13, swr-github.md §9): the mutation it queues from the stored run, and its refusals.
+//! No process, no network, no `gh` call.
 
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +47,6 @@ impl Handler for Gh {
 
 struct Fixture {
     _dir: tempfile::TempDir,
-    home: CpdHome,
     env: Env,
     runner: Arc<FakeRunner>,
 }
@@ -100,6 +99,18 @@ fn fixture_of(
         ..Ports::real()
     };
     let mut env = Env::open_home_with(&ports, home.clone()).unwrap();
+    if let Some(pending) = &gh.get {
+        let run = json!({"id": 123, "updated_at": "U0", "display_title": "Release 1.2", "created_at": "2026-10-27T13:05:00Z"});
+        env.store
+            .write("fixture deploy", |tx| {
+                tx.execute(
+                    "INSERT INTO swr_deploys (repo, run_id, updated_at, run_json, pending_json, inactive_at) VALUES ('acme/pay', 123, 'U0', ?1, ?2, NULL)",
+                    [run.to_string(), pending.to_string()],
+                )?;
+                Ok::<(), CpdError>(())
+            })
+            .unwrap();
+    }
     reconcile(
         &mut env.store,
         &[condition(kind, subject)],
@@ -109,7 +120,6 @@ fn fixture_of(
     (
         Fixture {
             _dir: dir,
-            home,
             env,
             runner,
         },
@@ -155,177 +165,92 @@ fn closed_at(f: &mut Fixture) -> Option<String> {
         .unwrap()
 }
 
-fn closed_events(f: &mut Fixture) -> Vec<Value> {
+/// `(target_key, op_kind, status, vars, patch)` of every mutation.
+fn mutations(f: &mut Fixture) -> Vec<(String, String, String, Value, Value)> {
     f.env
         .store
         .read(|c| {
-            let mut s =
-                c.prepare("SELECT data FROM events WHERE kind = 'inbox-closed' ORDER BY id")?;
+            let mut s = c.prepare("SELECT target_key, op_kind, status, vars_json, patch_json FROM swr_mutations ORDER BY id")?;
             let rows = s
-                .query_map([], |r| r.get::<_, String>(0))?
+                .query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+                })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .unwrap()
         .into_iter()
-        .map(|d| serde_json::from_str(&d).unwrap())
+        .map(|(t, k, st, v, p)| (t, k, st, serde_json::from_str(&v).unwrap(), serde_json::from_str(&p).unwrap()))
         .collect()
 }
 
-fn cache_path(f: &Fixture) -> std::path::PathBuf {
-    f.home.run_dir().join("deploy-runs.json")
-}
-
-fn run_entry(repo: &str, run_id: u64) -> Value {
-    json!({"repo": repo, "workflow": "main.yml", "run_id": run_id, "environment": "production", "title": "Release 1.2",
-           "url": format!("https://github.com/{repo}/actions/runs/{run_id}"), "created_at": "2026-10-27T13:05:00Z"})
-}
-
-fn cache(runs: &[Value]) -> Value {
-    json!({"version": 1, "polled_at": "2026-10-27T14:59:55.000Z", "runs": runs})
-}
-
-fn put_cache(f: &Fixture, value: &Value) {
-    put_raw(f, &value.to_string());
-}
-
-fn put_raw(f: &Fixture, text: &str) {
-    std::fs::create_dir_all(f.home.run_dir()).unwrap();
-    std::fs::write(cache_path(f), text).unwrap();
-}
-
-fn read_cache(f: &Fixture) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(cache_path(f)).unwrap()).unwrap()
-}
-
-fn stdin_of(call: &Call) -> Value {
-    serde_json::from_slice(call.stdin.as_ref().expect("a stdin")).unwrap()
-}
-
 #[test]
-fn approve_posts_the_environments_the_user_can_approve_and_closes_the_item() {
+fn approve_queues_the_environments_the_user_can_approve_and_calls_no_gh() {
     let mut f = fixture(json!([
         entry(7, "production", true),
         entry(9, "staging", false)
     ]));
-    put_cache(&f, &cache(&[run_entry("acme/pay", 123)]));
     let out = fields(approve_in(&mut f.env, 1));
 
-    let calls = gh_calls(&f);
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert_eq!(calls[0].args, ["api", GET]);
-    assert_eq!(calls[0].cwd.as_deref(), Some(f.home.root()));
-    assert_eq!(calls[0].deadline, std::time::Duration::from_secs(15));
+    assert!(gh_calls(&f).is_empty(), "the command never calls GitHub");
+    assert_eq!(out["queued"], true);
+    assert!(out["mutation_id"].is_i64());
+    assert_eq!(out["environments"], json!(["production"]));
     assert_eq!(
-        calls[1].args,
-        ["api", "--method", "POST", GET, "--input", "-"]
+        mutations(&mut f),
+        [(
+            "github:deploy:acme/pay#123".to_owned(),
+            "approve".to_owned(),
+            "pending".to_owned(),
+            json!({"run_id": 123, "environments": ["production"]}),
+            json!({"deploy": "approving"})
+        )]
     );
-    assert_eq!(calls[1].deadline, std::time::Duration::from_secs(15));
-    assert_eq!(
-        stdin_of(&calls[1]),
-        json!({"environment_ids": [7], "state": "approved", "comment": ""})
-    );
-    assert_eq!(
-        out,
-        json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": ["production"]})
-    );
-    assert!(out.get("already").is_none());
-
-    assert!(closed_at(&mut f).is_some());
-    assert_eq!(
-        closed_events(&mut f),
-        [json!({"item": 1, "kind": "deploy"})]
-    );
-    assert_eq!(read_cache(&f)["runs"], json!([]));
 }
 
 #[test]
-fn every_approvable_environment_is_posted_sorted_by_name() {
+fn every_approvable_environment_is_named_sorted() {
     let mut f = fixture(json!([
         entry(3, "staging", true),
         entry(7, "production", true)
     ]));
     let out = fields(approve_in(&mut f.env, 1));
-    let calls = gh_calls(&f);
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert_eq!(stdin_of(&calls[1])["environment_ids"], json!([7, 3]));
     assert_eq!(out["environments"], json!(["production", "staging"]));
 }
 
 #[test]
-fn approve_removes_only_that_run_from_the_cache() {
-    let mut f = fixture(json!([entry(7, "production", true)]));
-    let others = [run_entry("acme/pay", 124), run_entry("acme/web", 123)];
-    put_cache(
-        &f,
-        &cache(&[
-            run_entry("acme/pay", 123),
-            others[0].clone(),
-            others[1].clone(),
-        ]),
-    );
-    fields(approve_in(&mut f.env, 1));
-    assert_eq!(read_cache(&f), cache(&others));
-}
-
-#[test]
-fn nothing_approvable_posts_nothing_and_still_clears_the_cache_and_the_item() {
+fn nothing_approvable_queues_nothing() {
     for get in [json!([]), json!([entry(9, "staging", false)])] {
         let mut f = fixture(get);
-        put_cache(&f, &cache(&[run_entry("acme/pay", 123)]));
         let out = fields(approve_in(&mut f.env, 1));
-        let calls = gh_calls(&f);
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        assert_eq!(calls[0].args, ["api", GET]);
+        assert!(gh_calls(&f).is_empty());
         assert_eq!(
             out,
             json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": [], "already": true})
         );
-        assert!(closed_at(&mut f).is_some());
-        assert_eq!(
-            closed_events(&mut f),
-            [json!({"item": 1, "kind": "deploy"})]
-        );
-        assert_eq!(read_cache(&f)["runs"], json!([]));
+        assert!(mutations(&mut f).is_empty());
     }
 }
 
 #[test]
-fn a_missing_or_invalid_cache_is_left_alone_and_the_item_still_closes() {
-    let version2 = json!({"version": 2, "polled_at": "2026-10-27T14:59:55.000Z", "runs": [run_entry("acme/pay", 123)]}).to_string();
-    for raw in [None, Some("not json".to_owned()), Some(version2)] {
-        let mut f = fixture(json!([entry(7, "production", true)]));
-        if let Some(raw) = &raw {
-            put_raw(&f, raw);
-        }
-        fields(approve_in(&mut f.env, 1));
-        match &raw {
-            None => assert!(!cache_path(&f).exists()),
-            Some(raw) => assert_eq!(&std::fs::read_to_string(cache_path(&f)).unwrap(), raw),
-        }
-        assert_eq!(gh_calls(&f).len(), 2);
-        assert!(closed_at(&mut f).is_some());
-    }
-}
-
-#[test]
-fn an_unknown_item_is_item_not_found_and_makes_no_gh_call() {
+fn an_unknown_item_is_item_not_found_and_queues_nothing() {
     let mut f = fixture(json!([entry(7, "production", true)]));
     let e = refused(approve_in(&mut f.env, 99), ErrorCode::ItemNotFound);
     assert_eq!(e.exit().code(), 4);
-    assert!(gh_calls(&f).is_empty());
-    // A positive effect beside the negative one: the known item is approved.
+    assert!(mutations(&mut f).is_empty());
+    // A positive effect beside the negative one: the known item is queued.
     fields(approve_in(&mut f.env, 1));
-    assert_eq!(gh_calls(&f).len(), 2);
+    assert_eq!(mutations(&mut f).len(), 1);
 }
 
 #[test]
-fn a_closed_item_is_item_closed_and_a_second_approve_posts_nothing() {
+fn a_second_approve_of_the_same_run_queues_no_second_mutation() {
     let mut f = fixture(json!([entry(7, "production", true)]));
-    fields(approve_in(&mut f.env, 1));
-    let e = refused(approve_in(&mut f.env, 1), ErrorCode::ItemClosed);
-    assert_eq!(e.exit().code(), 3);
-    assert_eq!(gh_calls(&f).len(), 2);
+    let first = fields(approve_in(&mut f.env, 1));
+    let second = fields(approve_in(&mut f.env, 1));
+    assert_eq!(first["mutation_id"], second["mutation_id"]);
+    assert_eq!(mutations(&mut f).len(), 1);
+    assert!(gh_calls(&f).is_empty());
 }
 
 #[test]
@@ -345,37 +270,6 @@ fn a_malformed_deploy_subject_is_a_store_error_and_makes_no_gh_call() {
     refused(approve_in(&mut f.env, 1), ErrorCode::StoreFailed);
     assert!(gh_calls(&f).is_empty());
     assert_eq!(closed_at(&mut f), None);
-}
-
-#[test]
-fn a_failed_read_leaves_the_item_open_and_the_cache_intact() {
-    let (mut f, _) = fixture_of(Kind::Deploy, "deploy:acme/pay#123", None, false);
-    let raw = cache(&[run_entry("acme/pay", 123)]).to_string();
-    put_raw(&f, &raw);
-    refused(approve_in(&mut f.env, 1), ErrorCode::GhFailed);
-    let calls = gh_calls(&f);
-    assert_eq!(
-        calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(),
-        [["api", GET]]
-    );
-    assert_eq!(closed_at(&mut f), None);
-    assert_eq!(std::fs::read_to_string(cache_path(&f)).unwrap(), raw);
-}
-
-#[test]
-fn a_failed_post_leaves_the_item_open_and_the_cache_intact() {
-    let (mut f, _) = fixture_of(
-        Kind::Deploy,
-        "deploy:acme/pay#123",
-        Some(json!([entry(7, "production", true)])),
-        true,
-    );
-    let raw = cache(&[run_entry("acme/pay", 123)]).to_string();
-    put_raw(&f, &raw);
-    refused(approve_in(&mut f.env, 1), ErrorCode::GhFailed);
-    assert_eq!(gh_calls(&f).len(), 2);
-    assert_eq!(closed_at(&mut f), None);
-    assert_eq!(std::fs::read_to_string(cache_path(&f)).unwrap(), raw);
 }
 
 #[derive(Parser)]

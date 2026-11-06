@@ -1,6 +1,7 @@
-//! `pr merge` and `pr rerun` ask E5 for a poll at once (decision pro-d394, assumption A6): each writes the run file
-//! `run/pr-poll-now` after its successful GitHub write, and not after a failed one. In process on the janitor's `Rig`, with `gh`
-//! scripted on the runner; no process, no sleep. (The other commands are in `cli/tests/workflow/pr_poll_now.rs`.)
+//! The drain of a queued `pr merge` and `pr rerun` asks E5 for a poll at once (decision pro-d394, assumption A6): it writes the run
+//! file `run/pr-poll-now` after its successful GitHub write, and not after a failed one; the commands themselves call no GitHub.
+//! In process on the janitor's `Rig`, with `gh` scripted on the runner; no process, no sleep. (The other commands are in
+//! `cli/tests/workflow/pr_poll_now.rs`.)
 
 use std::path::PathBuf;
 
@@ -62,6 +63,18 @@ impl Handler for Gh {
 fn rig(write_ok: bool) -> (Rig, PathBuf) {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
+    let detail = serde_json::json!({"commits": {"nodes": [{"commit": {"oid": SHA, "statusCheckRollup": {"state": "FAILURE",
+        "contexts": {"nodes": [{"__typename": "CheckRun", "name": "build", "conclusion": "FAILURE", "status": "COMPLETED",
+          "detailsUrl": null, "checkSuite": {"workflowRun": {"databaseId": 11, "workflow": {"name": "ci"}}}}]}}}}]}});
+    rig.sql(&format!(
+        "UPDATE pull_requests SET mergeable = 'mergeable', merge_state = 'clean', base_ref = 'main', default_branch = 'main',
+                head_oid = '{SHA}', checks = 'failed' WHERE number = 801;
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');
+         INSERT INTO swr_pr_detail (repo, number, head_oid, updated_at, hydrated_at, detail_json, detail_hash)
+           VALUES ('acme/pay', 801, '{SHA}', 'U', 't', '{detail}', 'h');"
+    ));
     let _ = (*rig.fakes.runner)
         .clone()
         .route("gh", std::sync::Arc::new(Gh { write_ok }));
@@ -78,11 +91,36 @@ struct Merge {
     args: MergeArgs,
 }
 
+/// Runs the queued mutations through the source, as the engine's drain does: whether every one was done.
+fn drain(rig: &Rig) -> bool {
+    use crate::config::Config;
+    use crate::swr::outbox;
+    use crate::swr::source::github::GithubSource;
+    use crate::swr::source::{Cx, ExecOutcome, Source};
+    let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let now = crate::clock::Clock::utc(&*rig.fakes.ports.clock);
+    let mut all = true;
+    while let Some(m) = outbox::claim_next(&mut store, now, "github").unwrap() {
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        all &= GithubSource::default().execute(&mut cx, &m) == ExecOutcome::Done;
+    }
+    all
+}
+
+/// Queues the merge, then drains it: whether GitHub took it. The command itself never calls `gh`.
 fn merge_it(rig: &Rig) -> bool {
     let args = Merge::try_parse_from(["merge", "acme/pay#801"])
         .unwrap()
         .args;
-    Ports::scope(&rig.fakes.ports, || merge::merge(&rig.fakes.ports, args)).is_ok()
+    Ports::scope(&rig.fakes.ports, || merge::merge(&rig.fakes.ports, args)).expect("queued");
+    assert!(rig.fakes.runner.calls().iter().all(|c| c.tool != "gh"));
+    drain(rig)
 }
 
 fn rerun_it(rig: &Rig) -> bool {
@@ -94,7 +132,9 @@ fn rerun_it(rig: &Rig) -> bool {
             plan: Some(PlanId::parse("pay").unwrap()),
         },
     };
-    Ports::scope(&rig.fakes.ports, || rerun::rerun(&rig.fakes.ports, args)).is_ok()
+    Ports::scope(&rig.fakes.ports, || rerun::rerun(&rig.fakes.ports, args)).expect("queued");
+    assert!(rig.fakes.runner.calls().iter().all(|c| c.tool != "gh"));
+    drain(rig)
 }
 
 #[test]

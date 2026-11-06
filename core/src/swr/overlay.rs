@@ -3,6 +3,7 @@
 use super::outbox::{Mutation, mutation};
 use crate::error::CpdError;
 use crate::store::Store;
+use rusqlite::Connection;
 
 /// The `pending`, `in_flight` and `revalidating` mutations of the key, in `submitted_at` order.
 pub fn active(
@@ -10,7 +11,16 @@ pub fn active(
     system: &str,
     target_key: &str,
 ) -> Result<Vec<Mutation>, CpdError> {
-    store.read(|c| {
+    store.read(|c| active_in(c, system, target_key))
+}
+
+/// [`active`] on a connection a reader already holds (a reader that joins the overlay to its own query).
+pub fn active_in(
+    c: &Connection,
+    system: &str,
+    target_key: &str,
+) -> Result<Vec<Mutation>, CpdError> {
+    {
         let mut stmt = c.prepare(
             "SELECT id, system, target_key, op_kind, vars_json, patch_json, status, submitted_at, started_at,
                     completed_at, next_attempt_at, attempt_count, error, context_json
@@ -21,5 +31,5 @@ pub fn active(
         Ok(stmt
             .query_map([system, target_key], mutation)?
             .collect::<Result<Vec<_>, _>>()?)
-    })
+    }
 }

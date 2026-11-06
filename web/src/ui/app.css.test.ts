@@ -33,14 +33,15 @@ function expectDecls(what: string, got: Map<string, string>, want: Record<string
   for (const [prop, value] of Object.entries(want)) expect(got.get(prop), `${what}: ${prop}`).toBe(value);
 }
 
-it("the shell is a bounded grid that does not scroll", () => {
+it("the shell is a bounded flex column that does not scroll", () => {
   expectDecls("[data-shell]", decls("[data-shell]"), {
-    display: "grid",
+    display: "flex",
+    "flex-direction": "column",
     height: "100vh",
     overflow: "hidden",
-    "grid-template-rows": "auto minmax(0, 1fr) auto",
   });
   expect(decls("[data-shell] > *").get("min-height"), "[data-shell] > *: min-height").toBe("0");
+  expect(decls("[data-shell] > footer").get("flex-shrink"), "footer: flex-shrink").toBe("0");
 });
 
 it("the transcript log scrolls on its own", () => {
@@ -73,8 +74,10 @@ it("the shell asides and the plan pane clip and leave scrolling to ScrollArea", 
   expect(decls('[data-column="center"]').get("min-height"), "center column: min-height").toBe("0");
 });
 
-it("the shell grid is a single minmax column and the column fills its panel", () => {
-  expect(decls("[data-shell]").get("grid-template-columns"), "shell: grid-template-columns").toBe("minmax(0, 1fr)");
+it("the shell has no grid rows or grid columns", () => {
+  const shell = declsMatching(/\[data-shell\]/);
+  for (const prop of ["grid-template-rows", "grid-template-columns", "grid-row", "grid-column"]) expect(shell.has(prop), `[data-shell]: no ${prop}`).toBe(false);
+  expect(shell.get("display"), "[data-shell]: display").not.toBe("grid");
+  expect(css, "no [data-shell] > header rule").not.toMatch(/\[data-shell\] > header/);
   expect(decls("[data-column]").get("height"), "column: height").toBe("100%");
 });
-

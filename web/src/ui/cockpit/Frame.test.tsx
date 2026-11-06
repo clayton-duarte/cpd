@@ -6,7 +6,6 @@ import type { Disposable, Transport } from "../../protocol/runtime.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import { mount } from "../../testing/render.tsx";
 import { App } from "../App.tsx";
-import { Header } from "./Header.tsx";
 import { Shell } from "./Shell.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 
@@ -86,11 +85,6 @@ const labels = (c: HTMLElement) =>
 /** Direct children of [data-shell]: header, the one columns group, footer. */
 const shellParts = (c: HTMLElement) => Array.from(c.querySelector("[data-shell]")!.children).map((e) => e.tagName === "DIV" ? e.getAttribute("data-part") : e.tagName);
 
-  it("Header shows the C-P-D emblem text", () => {
-  const c = show(<Header />);
-  expect(c.querySelector("[data-emblem]")?.textContent).toBe("C-P-D");
-});
-
 it("StatusBar shows the runner pill and version, without State", () => {
   const status = { runner: "pi", preview: null, incident: null, workers: null, version: "0.21.102", hostAlert: false, mode: "production", drift: null } as const;
   const c = show(<StatusBar status={status} costsOn={false} onReset={() => {}} onLegend={() => {}} onLogs={() => {}} onCosts={() => {}} onSettings={() => {}} />);
@@ -106,36 +100,36 @@ it("StatusBar omits runner and version while unknown", () => {
   expect(c.querySelector('[data-part="version"]')).toBeNull();
 });
 
-it("Shell renders header and status slots around the panes", () => {
+it("Shell renders only the columns group and the status footer", () => {
   const c = show(<AnyShell {...panes} header={<span>H</span>} status={<span>S</span>} />);
-  expect(labels(c)).toEqual(["Cockpit header", "Context tree column", "center", "Inbox column", "Status bar"]);
+  expect(labels(c)).toEqual(["Context tree column", "center", "Inbox column", "Status bar"]);
   const shell = c.querySelector("[data-shell]")!;
-  expect(shell.firstElementChild?.tagName).toBe("HEADER");
-  expect(shell.firstElementChild?.textContent).toBe("H");
+  expect(shell.querySelector('header[aria-label="Cockpit header"]')).toBeNull();
+  expect(shell.firstElementChild?.getAttribute("data-part")).toBe("columns-group");
   expect(shell.lastElementChild?.tagName).toBe("FOOTER");
   expect(shell.lastElementChild?.textContent).toBe("S");
-  expect(shell.querySelector('[data-column="center"]')!.children.length).toBe(2);
-  expect(shellParts(c)).toEqual(["HEADER", "columns-group", "FOOTER"]);
-});
-
-it("Shell without header or status renders as before", () => {
-  const c = show(<AnyShell {...panes} />);
-  expect(labels(c)).toEqual(["Context tree column", "center", "Inbox column"]);
-  expect(c.querySelector("header, footer")).toBeNull();
-  expect(shellParts(c)).toEqual(["columns-group"]);
+  expect(shell.querySelector('[data-column="center"]')!.children.length).toBe(1);
+  expect(shellParts(c)).toEqual(["columns-group", "FOOTER"]);
   mounted?.unmount();
-  const c2 = show(<AnyShell {...panes} header={<span>H</span>} />);
-  expect(labels(c2)).toEqual(["Cockpit header", "Context tree column", "center", "Inbox column"]);
+  const c2 = show(<AnyShell {...panes} />);
+  expect(labels(c2)).toEqual(["Context tree column", "center", "Inbox column"]);
+  expect(c2.querySelector("header, footer")).toBeNull();
+  expect(shellParts(c2)).toEqual(["columns-group"]);
 });
 
-it("App shows the header and the status bar with the selected session runner", () => {
+it("App renders no Cockpit header bar and keeps the status bar and the three column headers", () => {
   const transport = new FakeTransport();
   const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
   mounted = view;
   const container = view.container;
   act(() => transport.emitStatus("open"));
   act(() => transport.emitMessage(snapshot));
-  expect(container.querySelector('header[aria-label="Cockpit header"] [data-emblem]')?.textContent).toBe("C-P-D");
+  expect(container.querySelector('header[aria-label="Cockpit header"]')).toBeNull();
+  expect(container.querySelector("[data-emblem]")).toBeNull();
+  expect(container.querySelector("[data-shell] > header")).toBeNull();
+  expect(container.querySelectorAll('[data-shell] [data-part="tree-header"]').length).toBe(1);
+  expect(container.querySelectorAll('[data-shell] [data-part="inbox-header"]').length).toBe(1);
+  expect(container.querySelectorAll('[data-shell] [data-column="center"] :is([data-part="manager-header"], [data-part="title-row"])').length).toBeLessThanOrEqual(1);
   expect(container.querySelector('footer[aria-label="Status bar"] [data-part="runner"]')?.textContent).toBe("Runner: none");
   act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
   act(() => {

@@ -91,59 +91,6 @@ fn poll_merge_cancels_drafts() {
     assert_draft_cancelled_with_the_merge(&fx);
 }
 
-#[test]
-fn pr_merge_cancels_drafts() {
-    let fx = Fx::with_ports();
-    world(&fx, true);
-    let view = |state: &str, merge_state: &str, merged_at: Option<&str>| {
-        serde_json::json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": "0123456789abcdef0123456789abcdef01234567", "title": "Add the thing", "mergedAt": merged_at})
-            .to_string()
-    };
-    let open = view("OPEN", "CLEAN", None);
-    let merged = view("MERGED", "UNKNOWN", Some(MERGED_AT));
-    // `pr view` reads open until `pr merge` ran, merged after; the poll after it fails, so the command itself records the merge.
-    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    struct Gh(
-        String,
-        String,
-        std::sync::Arc<std::sync::atomic::AtomicBool>,
-    );
-    impl cpd_core::host::runner::Handler for Gh {
-        fn handle(&self, call: &cpd_core::host::runner::Call) -> Reply {
-            use std::sync::atomic::Ordering::SeqCst;
-            let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
-            match args[..2] {
-                ["pr", "view"] => Reply::ok(&format!(
-                    "{}\n",
-                    if self.2.load(SeqCst) {
-                        &self.1
-                    } else {
-                        &self.0
-                    }
-                )),
-                ["repo", "view"]
-                    if args
-                        .contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") =>
-                {
-                    Reply::ok(
-                        "{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n",
-                    )
-                }
-                ["pr", "merge"] => {
-                    self.2.store(true, SeqCst);
-                    Reply::ok("")
-                }
-                _ => Reply::exit(1, "", ""),
-            }
-        }
-    }
-    let _ = (*fx.fakes.runner)
-        .clone()
-        .route("gh", std::sync::Arc::new(Gh(open, merged, ran)));
-    fx.cpd(&["pr", "merge", "acme/api#7"]).ok();
-    assert_draft_cancelled_with_the_merge(&fx);
-}
-
 /// Guard: a PR with no draft changes nothing more than today.
 #[test]
 fn poll_merge_without_drafts_cancels_nothing() {

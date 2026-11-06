@@ -13,7 +13,7 @@
 //! `merge::marker::tests::*` (`DEAD_PID` = a pid no process has) -> `a_marker_is_live_while_its_pid_is_alive_on_the_spawn`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -35,7 +35,6 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::dialog::{Dialog, Mode, Outcome};
-use crate::merge::marker;
 use crate::merge::{self, Pull};
 use crate::plan::Offsets;
 use crate::pump::{Pump, Schedule, Signal};
@@ -53,7 +52,6 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::runner::{FakeRunner, Reply};
-use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::{Fakes, Ports};
@@ -795,68 +793,6 @@ fn a_view_log_line_is_stamped_by_the_clock() {
     );
 }
 
-#[test]
-fn a_merge_marker_is_stamped_by_the_clock() {
-    let (fakes, home) = (Fakes::new(), home());
-    let pull = Pull::parse("acme/api#3").unwrap();
-    fakes.clock.advance(Duration::from_secs(90));
-    marker::write_on(&fakes.ports, &home.home, &pull).unwrap();
-    let text = std::fs::read_to_string(marker::path(&home.home, &pull)).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(json["at"], stamp(&fakes.clock), "{text}");
-}
-
-fn put_marker(home: &CpdHome, file: &str, pid: u32) {
-    let dir = home.run_dir().join("tui/merging");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join(file),
-        format!(r#"{{"pid": {pid}, "at": "2026-01-01T00:00:00Z"}}"#),
-    )
-    .unwrap();
-}
-
-fn running(fakes: &Fakes) -> Pid {
-    fakes
-        .spawn
-        .spawn(&Launch {
-            program: "cpd".into(),
-            args: vec!["pr".into(), "merge".into()],
-            ..Launch::default()
-        })
-        .unwrap()
-}
-
-fn open() -> BTreeSet<String> {
-    BTreeSet::new()
-}
-
-#[test]
-fn a_marker_is_live_while_its_pid_is_alive_on_the_spawn() {
-    let (fakes, home) = (Fakes::new(), home());
-    let pid = running(&fakes);
-    put_marker(&home.home, "acme__api__3.json", pid.0);
-    assert_eq!(
-        marker::live_with(&fakes.ports, &home.home, &open()),
-        BTreeSet::from(["acme/api#3".to_owned()])
-    );
-    fakes.spawn.exit(pid, 0);
-    assert_eq!(
-        marker::live_with(&fakes.ports, &home.home, &open()),
-        BTreeSet::new()
-    );
-}
-
-#[test]
-fn a_pid_the_spawn_never_handed_out_is_not_alive_whatever_the_machine_runs() {
-    let (fakes, home) = (Fakes::new(), home());
-    put_marker(&home.home, "acme__api__3.json", 4242);
-    assert_eq!(
-        marker::live_with(&fakes.ports, &home.home, &open()),
-        BTreeSet::new()
-    );
-}
-
 fn folds(collapsed: &[&str]) -> Folds {
     serde_json::from_value(json!({"collapsed": collapsed, "expanded": []})).unwrap()
 }
@@ -1215,21 +1151,15 @@ fn ok_output(_: &[String]) -> Result<Output, CpdError> {
 }
 
 #[test]
-fn merge_the_action_runs_pr_merge_then_pr_poll_with_the_argv_it_builds() {
+fn merge_the_action_runs_pr_merge_with_the_argv_it_builds() {
     let (fakes, home) = (Fakes::new(), home());
     let (result, calls) = merge_action(ok_output, &home, &fakes);
     result.unwrap();
-    assert_eq!(
-        calls,
-        vec![
-            words(&["cpd", "pr", "merge", "acme/api#7"]),
-            words(&["cpd", "pr", "poll"])
-        ]
-    );
+    assert_eq!(calls, vec![words(&["cpd", "pr", "merge", "acme/api#7"])]);
 }
 
 #[test]
-fn merge_a_failed_merge_runs_no_poll() {
+fn merge_a_failed_merge_opens_no_further_command() {
     let (fakes, home) = (Fakes::new(), home());
     let (_, calls) = merge_action(
         |_| Err(CpdError::new(ErrorCode::StoreBusy, "busy")),
@@ -1237,24 +1167,6 @@ fn merge_a_failed_merge_runs_no_poll() {
         &fakes,
     );
     assert_eq!(calls, vec![words(&["cpd", "pr", "merge", "acme/api#7"])]);
-}
-
-#[test]
-fn merge_the_action_does_nothing_while_a_live_marker_of_the_pull_exists_on_the_spawn() {
-    let (fakes, home) = (Fakes::new(), home());
-    let pid = running(&fakes);
-    put_marker(&home.home, "acme__api__7.json", pid.0);
-    let (result, calls) = merge_action(ok_output, &home, &fakes);
-    result.unwrap();
-    assert_eq!(calls, Vec::<Vec<String>>::new());
-}
-
-#[test]
-fn merge_the_action_leaves_no_marker_after_a_merge_whose_row_is_not_open() {
-    let (fakes, home) = (Fakes::new(), home());
-    let (result, _) = merge_action(ok_output, &home, &fakes);
-    result.unwrap();
-    assert!(!marker::path(&home.home, &Pull::parse("acme/api#7").unwrap()).exists());
 }
 
 // ---- the legend of the Dispatch column ---------------------------------------------------------------------------------

@@ -3,10 +3,9 @@
 //! --client <name>` with tmux `run-shell -b` at once.
 //!
 //! - [`start`]: the merge, started on the newest client;
-//! - [`action`]: the merge it starts, in the background: `pr merge`, then `pr poll`; a failed merge opens
-//!   the cockpit's one failure dialog ([`dialog::show_error_on`]), a failed poll is a line of the log.
-
-pub mod marker;
+//! - [`action`]: the merge it starts, in the background: `pr merge`, which queues the merge on the outbox (swr-github.md §9); a
+//!   refused one opens the cockpit's one failure dialog ([`dialog::show_error_on`]). The spinner is the queued mutation
+//!   ([`in_flight`]), not a file.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -15,7 +14,6 @@ use super::dialog;
 use super::popup;
 use super::view_ports::RunFn;
 use super::viewlog::ViewLog;
-use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
@@ -99,33 +97,27 @@ fn start_args(pull: &Pull, client: &str) -> Vec<String> {
     .to_vec()
 }
 
-/// The open pull requests as `<owner>/<repo>#<n>` (`SELECT repo, number FROM pull_requests WHERE state = 'open'`).
-fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, CpdError> {
-    crate::read::open_pulls(store)
+/// The pull requests whose merge is queued or not yet proven: an active `merge` mutation of the outbox (`pending`, `in_flight`,
+/// `revalidating`), as `<owner>/<repo>#<n>`.
+pub fn in_flight(store: &mut Store) -> Result<std::collections::BTreeSet<String>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT target_key FROM swr_mutations
+              WHERE system = 'github' AND op_kind = 'merge' AND status IN ('pending', 'in_flight', 'revalidating')",
+        )?;
+        let keys = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(keys
+            .filter_map(|k| k.ok()?.strip_prefix("github:pr:").map(str::to_owned))
+            .collect())
+    })
 }
 
 /// `cpd tui action merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2, the `merge` action; hs-d473,
-/// hs-d312): runs `cpd pr merge` in process and, once it succeeds, `cpd pr poll`, the full refresh the periodic poll
-/// runs, so the Dispatch column shows the merge at once. A success says nothing. A failed poll is a line of the log
-/// only: the pull request did merge. A failed merge runs no poll; it is a line of the log, written before any tmux
-/// call so that it is always there, then the cockpit's one failure dialog on `client`. The `Err` is what the dialog
-/// could not show: the caller shows it with `display-message -c <client>`.
-///
-/// The merge marker ([`marker`], hs-d495) is written first, before `pr merge`, and removed when the request ends:
-/// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
-/// exists, the action does nothing but log `merge already running`.
-#[cfg(test)]
-pub(crate) fn action(
-    home: &CpdHome,
-    tmux: &Tmux,
-    pull: &Pull,
-    client: &str,
-    run_command: super::RunCommand,
-) -> Result<(), CpdError> {
-    action_with(&Ports::real(), home, tmux, pull, client, &run_command)
-}
-
-/// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
+/// hs-d312): runs `cpd pr merge` in process, which queues the merge; a success says nothing (the overlay shows the pull request
+/// merging at once). A failed merge is a line of the log, written before any tmux call so that it is always there, then the
+/// cockpit's one failure dialog on `client`. The `Err` is what the dialog could not show: the caller shows it with
+/// `display-message -c <client>`.
+/// The merge action on injected ports: the clock stamps the log, the commands are `run`'s, tmux is `tmux`'s.
 pub(crate) fn action_with(
     ports: &Ports,
     home: &CpdHome,
@@ -135,77 +127,19 @@ pub(crate) fn action_with(
     run: RunFn,
 ) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
-    let config = Config::load(home)?;
-    let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
-    let open = open_pulls(&mut store)?;
-    // The only clean-up of a marker left behind: a merged one whose row is no longer open.
-    marker::remove_settled(home, &open);
-    if marker::live_with(ports, home, &open).contains(&pull.to_string()) {
-        // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
-        let _ = log.append_with(ports, &format!("merge already running {pull}"));
-        return Ok(());
-    }
-    marker::write_on(ports, home, pull)?;
-    let mut marked = Marked {
-        home,
-        pull,
-        keep: false,
-    };
-    let cpd = |words: &[&str]| {
-        run(std::iter::once(PROGRAM)
-            .chain(words.iter().copied())
-            .map(OsString::from)
-            .collect())
-    };
-    let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
-        Ok(_) => {
-            // The merge happened: the marker stays, marked merged, until a read stores it (hs-d550).
-            marker::write_merged_on(ports, home, pull)?;
-            if let Err(e) = cpd(&["pr", "poll"]) {
-                // Nothing else to show it with: the next periodic poll refreshes the column.
-                let _ = log.append_with(
-                    ports,
-                    &format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()),
-                );
-            }
-            match open_pulls(&mut store) {
-                Ok(open) => marked.keep = open.contains(&pull.to_string()),
-                Err(e) => {
-                    marked.keep = true;
-                    let _ = log.append_with(
-                        ports,
-                        &format!("read after merge {pull}: {}: {}", e.code(), e.message()),
-                    );
-                }
-            }
-            return Ok(());
-        }
+    let failed = match run([PROGRAM, "pr", "merge", &pull.to_string()]
+        .map(OsString::from)
+        .to_vec())
+    {
+        Ok(_) => return Ok(()),
         Err(e) => e,
     };
-    // The request has ended: the spinner goes before the dialog opens.
-    drop(marked);
     let mut text = format!("merge {pull}: {}: {}", failed.code(), failed.message());
     if let Err(unwritten) = log.append_with(ports, &text) {
         text = format!("{text}\n{unwritten}");
     }
     dialog::show_error_on(tmux, client, &format!("merge {pull}"), &text)
         .map_err(|unshown| CpdError::new(unshown.code(), text).with("dialog", unshown.message()))
-}
-
-/// The marker of a merge this process runs, removed when it is dropped: no exit, a panic included, leaves it behind.
-struct Marked<'a> {
-    home: &'a CpdHome,
-    pull: &'a Pull,
-    /// The action decided the marker stays (the merge is not stored yet).
-    keep: bool,
-}
-
-impl Drop for Marked<'_> {
-    fn drop(&mut self) {
-        if !self.keep {
-            marker::remove(self.home, self.pull);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -222,6 +156,50 @@ mod tests {
         for bad in ["", "o/r", "o/r#", "o/r#x", "o/r#0", "o/r#-1", "r#7", "o#7"] {
             assert!(Pull::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// The pull requests with a queued, running or not-yet-proven `merge` mutation are the ones in flight; a failed or superseded one is not.
+    #[test]
+    fn the_merge_in_flight_is_the_active_merge_mutation_of_the_outbox() {
+        use cpd_core::swr::outbox::{self, Coalesce, Op, Retry};
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let now = cpd_core::clock::Clock::utc(&cpd_core::clock::ManualClock::new());
+        let op = |kind: &str, target: &str| Op {
+            system: "github".into(),
+            target_key: target.into(),
+            op_kind: kind.into(),
+            vars: serde_json::json!({"n": target}),
+            patch: None,
+            context: None,
+        };
+        outbox::enqueue(
+            &mut store,
+            now,
+            op("merge", "github:pr:o/r#1"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
+        outbox::enqueue(
+            &mut store,
+            now,
+            op("rerun", "github:pr:o/r#2"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
+        let failed = outbox::enqueue(
+            &mut store,
+            now,
+            op("merge", "github:pr:o/r#3"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
+        outbox::fail(&mut store, failed, now, "refused", Retry::Never).unwrap();
+        assert_eq!(
+            in_flight(&mut store).unwrap(),
+            std::collections::BTreeSet::from(["o/r#1".to_owned()])
+        );
     }
 
     #[test]
@@ -260,7 +238,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "action_d550.rs"]
-mod d550;

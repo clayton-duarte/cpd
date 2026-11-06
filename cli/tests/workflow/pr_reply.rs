@@ -78,6 +78,30 @@ fn mutations(pay: &Pay) -> Vec<String> {
         .collect()
 }
 
+/// Runs the queued mutations through the source as the engine's drain does, with the pay fixture's `gh`: the outcomes.
+fn drain(pay: &Pay) -> Vec<cpd_core::swr::source::ExecOutcome> {
+    use cpd_core::config::Config;
+    use cpd_core::home::CpdHome;
+    use cpd_core::swr::outbox;
+    use cpd_core::swr::source::github::GithubSource;
+    use cpd_core::swr::source::{Cx, Source};
+    let home = CpdHome::resolve(Some(pay.fx.env.cpd_home().into()), None).unwrap();
+    let mut store = pay.store();
+    let config = Config::load(&home).unwrap();
+    let now = cpd_core::clock::Clock::utc(&*pay.fx.fakes.ports.clock);
+    let mut out = Vec::new();
+    while let Some(m) = outbox::claim_next(&mut store, now, "github").unwrap() {
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &pay.fx.fakes.ports,
+            home: &home,
+            config: &config,
+        };
+        out.push(GithubSource::default().execute(&mut cx, &m));
+    }
+    out
+}
+
 fn count(pay: &Pay, table: &str) -> i64 {
     pay.store()
         .read(|c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?))
@@ -97,7 +121,7 @@ fn feedback(pay: &Pay) -> Option<String> {
 }
 
 #[test]
-fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_prints_its_url() {
+fn a_reply_to_a_thread_is_queued_and_the_drain_posts_the_thread_reply_with_the_marker() {
     let pay = setup("open", false);
 
     let out = pay
@@ -116,10 +140,11 @@ fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_print
         ])
         .ok();
 
-    assert_eq!(
-        out,
-        json!({"ok": true, "replied": {"pr": "repo", "to": "PRRT_1", "url": THREAD_URL}})
-    );
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(out["replied"]["to"], "PRRT_1");
+    assert!(mutations(&pay).is_empty(), "the command calls no GitHub");
+    assert_eq!(drain(&pay), [cpd_core::swr::source::ExecOutcome::Done]);
+    let _ = THREAD_URL;
     let posted = mutations(&pay);
     assert_eq!(posted.len(), 1, "{posted:?}");
     assert!(
@@ -136,7 +161,7 @@ fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_print
 }
 
 #[test]
-fn a_reply_to_a_comment_or_review_posts_an_issue_comment_quoting_its_url_and_ending_with_the_marker()
+fn a_reply_to_a_comment_or_review_is_queued_and_the_drain_posts_an_issue_comment_quoting_its_url_and_ending_with_the_marker()
  {
     for (to, url) in [
         ("IC_1", COMMENT_URL),
@@ -163,10 +188,9 @@ fn a_reply_to_a_comment_or_review_posts_an_issue_comment_quoting_its_url_and_end
             ])
             .ok();
 
-        assert_eq!(
-            out,
-            json!({"ok": true, "replied": {"pr": "repo", "to": to, "url": "https://github.com/acme/repo/pull/7#issuecomment-2"}})
-        );
+        assert_eq!(out["queued"], true, "{out}");
+        assert_eq!(out["replied"]["to"], to);
+        assert_eq!(drain(&pay), [cpd_core::swr::source::ExecOutcome::Done]);
         let posted = mutations(&pay);
         assert_eq!(posted.len(), 1, "{posted:?}");
         assert!(posted[0].contains("addComment"), "{}", posted[0]);
@@ -214,6 +238,7 @@ fn the_body_can_come_from_a_file() {
         .ok();
 
     assert_eq!(out["ok"], true);
+    drain(&pay);
     let posted = mutations(&pay);
     assert_eq!(posted.len(), 1, "{posted:?}");
     assert!(
@@ -311,37 +336,40 @@ fn an_empty_body_or_both_or_neither_body_option_is_a_usage_error() {
 }
 
 #[test]
-fn a_gh_failure_is_gh_failed_and_writes_nothing_in_the_store() {
+fn a_gh_failure_in_the_drain_leaves_the_stored_feedback_and_events_as_they_were() {
     let pay = setup("open", true);
-    let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
+    let before = (count(&pay, "events"), feedback(&pay));
 
-    let run = pay.fx.cpd(&[
-        "pr",
-        "reply",
-        "--workflow",
-        "repo",
-        "--plan",
-        "pay",
-        "--to",
-        "PRRT_1",
-        "--body",
-        "Hi.",
-    ]);
+    let out = pay
+        .fx
+        .cpd(&[
+            "pr",
+            "reply",
+            "--workflow",
+            "repo",
+            "--plan",
+            "pay",
+            "--to",
+            "PRRT_1",
+            "--body",
+            "Hi.",
+        ])
+        .ok();
 
-    assert_eq!(
-        (run.error()["code"].as_str().unwrap(), run.exit),
-        ("gh_failed", 1)
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(
+        drain(&pay)
+            .iter()
+            .all(|o| *o != cpd_core::swr::source::ExecOutcome::Done),
+        "GitHub refused"
     );
-    assert_eq!(
-        (count(&pay, "txns"), count(&pay, "events"), feedback(&pay)),
-        before
-    );
+    assert_eq!((count(&pay, "events"), feedback(&pay)), before);
 }
 
 #[test]
 fn it_never_resolves_a_thread_and_writes_no_event() {
     let pay = setup("open", false);
-    let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
+    let before = (count(&pay, "events"), feedback(&pay));
 
     pay.fx
         .cpd(&[
@@ -357,6 +385,7 @@ fn it_never_resolves_a_thread_and_writes_no_event() {
             "Done.",
         ])
         .ok();
+    drain(&pay);
 
     let calls: Vec<String> = pay
         .fx
@@ -369,8 +398,5 @@ fn it_never_resolves_a_thread_and_writes_no_event() {
         calls.iter().all(|c| !c.contains("resolveReviewThread")),
         "{calls:?}"
     );
-    assert_eq!(
-        (count(&pay, "txns"), count(&pay, "events"), feedback(&pay)),
-        before
-    );
+    assert_eq!((count(&pay, "events"), feedback(&pay)), before);
 }

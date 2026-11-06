@@ -823,7 +823,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": REPO_TITLE, "draft": false, "state": "open",
                "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
-               "created_at": "opened", "merged_at": null})
+               "created_at": "opened", "merged_at": null, "feedback_open": null, "head_oid": null})
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
@@ -1878,11 +1878,6 @@ impl Poll {
         self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
     }
 
-    /// From now on the `gh api -X PATCH` update of a pull request fails with `text` on stderr.
-    pub(super) fn fail_update(&self, text: &str) {
-        self.gh.update.set(Reply::exit(1, "", &format!("{text}\n")));
-    }
-
     /// Makes every call of the fake `gh` fail with `text` on stderr.
     pub(super) fn fail(&self, text: &str) {
         *self.gh.fail.lock().unwrap() = Some(text.to_owned());
@@ -1891,6 +1886,16 @@ impl Poll {
     /// The `pull_request` of the Plan's PR, as `plan show` prints it.
     fn shown_pull_request(&self) -> Value {
         self.cpd(&["plan", "show", "--plan", "pay"]).ok()["workflows"][0]["pull_request"].clone()
+    }
+
+    /// The pull request as `pr poll` prints it: `plan show`'s, without `feedback_open` and `head_oid`, which only `plan show` adds.
+    fn polled_pull_request(&self) -> Value {
+        let mut pull_request = self.shown_pull_request();
+        pull_request
+            .as_object_mut()
+            .unwrap()
+            .retain(|k, _| k != "feedback_open" && k != "head_oid");
+        pull_request
     }
 
     /// The argv, after `gh`, of every call of the fake `gh` so far.
@@ -3481,7 +3486,7 @@ fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
     assert_eq!(out["workflows"].as_array().unwrap().len(), 2);
     assert_eq!(
         out["workflows"][0],
-        json!({"key": "repo", "status": "open", "pull_request": fx.shown_pull_request()})
+        json!({"key": "repo", "status": "open", "pull_request": fx.polled_pull_request()})
     );
     assert_eq!(out["workflows"][0]["pull_request"]["checks"], "pending");
     assert_eq!(
@@ -4702,7 +4707,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     );
     assert_eq!(
         out["workflows"],
-        json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}])
+        json!([{"key": "repo", "status": "merged", "pull_request": fx.polled_pull_request()}])
     );
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     assert_eq!(

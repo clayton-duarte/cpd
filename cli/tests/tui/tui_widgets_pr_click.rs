@@ -315,7 +315,7 @@ fn the_pr_row_glyph_takes_the_colour_of_its_urgency() {
 fn the_merge_spinner_of_a_ready_to_merge_row_stays_yellow() {
     let fx = rig(vec![pr_row(4, Urgency::Yellow, "ready to merge", true)]);
     let _engine = engine(&fx);
-    crate::tui_merge::put_marker_at(&fx.env.cpd_home(), "acme__shop__4.json", fx.live_pid());
+    crate::tui_merge::queue_merge_at(&fx.env.cpd_home(), "acme/shop#4");
     let (frame, row) = locate(&fx, "shop#4 ready to merge");
     assert_pinned_to_bottom(&frame);
     let glyph = frame.cell(1, row);
