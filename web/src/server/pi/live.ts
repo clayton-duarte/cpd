@@ -150,6 +150,7 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
           open = null;
           if (ts === undefined || committed(ts)) return;
           const blocks = blocksOf(f.message.content);
+          if (typeof f.message.errorMessage === "string" && f.message.errorMessage !== "") blocks.push({ type: "text", text: "Error: " + f.message.errorMessage });
           if (blocks.length === 0) {
             out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
             return;

@@ -122,8 +122,12 @@ function blocksOf(message: Obj, live: boolean): AssistantBlock[] {
   for (const raw of arr(message.content, "assistant content")) {
     const b = obj(raw, "assistant block");
     if (b.type === "text") blocks.push({ type: "text", text: live && typeof b.text !== "string" ? "" : str(b.text, "text block") });
-    else if (b.type === "thinking") blocks.push({ type: "thinking", text: live && typeof b.thinking !== "string" ? "" : str(b.thinking, "thinking block") });
+    else if (b.type === "thinking") {
+      const text = live && typeof b.thinking !== "string" ? "" : str(b.thinking, "thinking block");
+      if (text !== "") blocks.push({ type: "thinking", text });
+    }
   }
+  if (typeof message.errorMessage === "string" && message.errorMessage !== "") blocks.push({ type: "text", text: "Error: " + message.errorMessage });
   return blocks;
 }
 

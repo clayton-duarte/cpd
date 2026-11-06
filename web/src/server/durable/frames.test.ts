@@ -415,4 +415,13 @@ describe("durable frames v2 dialect", () => {
     const withIt = load([user(1, "hi")], { "pi.live": { compactionFailure: { taskId: 5, trigger: "auto", error: "boom" } } });
     expect(withIt.length).toBe(items.length + 1);
   });
+
+  it("pi.assistant entry with errorMessage yields an Error text block", () => {
+    const errorMessage = "Error reading stream: stream idle timeout: no data received within configured window";
+    for (const content of [[], [{ type: "thinking", thinking: "", thinkingSignature: "sig" }]]) {
+      const items = load([assistant(1, content, { stopReason: "error", errorMessage })]);
+      const a = items.find((i) => i.kind === "assistant") as AssistantItem;
+      expect(a.blocks).toEqual([{ type: "text", text: "Error: "+"Error reading stream: stream idle timeout: no data received within configured window" }]);
+    }
+  });
 });
