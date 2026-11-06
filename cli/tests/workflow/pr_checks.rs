@@ -41,7 +41,7 @@ pub(super) fn contexts(nodes: Vec<Value>, next: Option<&str>) -> Value {
         "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}, "nodes": nodes}}}}]}})
 }
 
-/// `pull` (from [`contexts`]) carrying the pull request's `labels`.
+/// `pull` (from [`contexts`]) carrying the pull request's `labels` (the policy hold of pro-d447 reads them from the checks read).
 pub(super) fn with_labels(mut pull: Value, labels: &[&str]) -> Value {
     let nodes: Vec<Value> = labels.iter().map(|name| json!({"name": name})).collect();
     pull["labels"] = json!({"nodes": nodes});

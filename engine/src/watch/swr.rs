@@ -8,10 +8,11 @@ use serde_json::json;
 
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
-use cpd_core::error::CpdError;
+use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::swr::outbox::{self, Retry};
+use cpd_core::swr::source::jira;
 use cpd_core::swr::source::{self, Cx, ExecOutcome, Source};
 use cpd_core::swr::{endpoint, gc};
 
@@ -102,7 +103,13 @@ fn pass(
         home: &engine.home,
         config: &engine.config,
     };
-    let failed = drain_outbox(&mut cx, source, now)?;
+    let mut machine = Vec::new();
+    let failed = if source.system() == "jira" {
+        jira_drain(&mut cx, source, now, &mut machine)?;
+        Vec::new()
+    } else {
+        drain_outbox(&mut cx, source, now)?
+    };
     let keys = source.due(&mut cx, now)?;
     if !keys.is_empty() {
         source.fetch(&mut cx, &keys, now)?;
@@ -115,6 +122,9 @@ fn pass(
         }
     }
     report_failed(engine, failed);
+    for failure in machine {
+        engine.fail(Step::E24, About::Machine, failure);
+    }
     for (name, error) in outages {
         engine.fail(
             Step::E24,
@@ -285,4 +295,41 @@ fn wake(engine: &mut Engine) -> Result<(), CpdError> {
         })?;
     }
     Ok(())
+}
+
+/// Drain the `jira` outbox (swr-jira.md §8, §9). `execute` settles what it moved or skipped itself (J5). A refusal is parked
+/// with one plan-scoped `error` Event; any other failure retries after `watch.error_repeat_seconds`, and a missing sign-in
+/// or server is one machine-wide failure, returned in `machine`. The helper runs inside the tick: its calls are bounded by
+/// the 120 s deadline, and a test needs one pass to see its answer.
+fn jira_drain(
+    cx: &mut Cx<'_>,
+    source: &'static dyn Source,
+    now: time::OffsetDateTime,
+    machine: &mut Vec<Failure>,
+) -> Result<(), CpdError> {
+    jira::reopen_refused(cx.store, cx.home, now)?;
+    while let Some(m) = outbox::claim_next(cx.store, now, "jira")? {
+        let ExecOutcome::Failed { error } = source.execute(cx, &m) else {
+            continue;
+        };
+        let (code, rest) = error.split_once(": ").unwrap_or((&error, ""));
+        if code == ErrorCode::JiraRefused.as_str() {
+            let name = jira::target_name(cx.store, cx.home, &m)?;
+            jira::park_refused(cx.store, &m, now, super::SOURCE, rest, &name)?;
+            continue;
+        }
+        outbox::fail(
+            cx.store,
+            m.id,
+            now,
+            &error,
+            Retry::After(cx.config.watch.error_repeat()),
+        )?;
+        if code == ErrorCode::JiraAuth.as_str() || code == ErrorCode::JiraNotConfigured.as_str() {
+            machine.push(failure(code, rest.to_owned(), json!({"id": m.id})));
+            // This Event is the report of the outage: the endpoint's own (`swr_endpoint_down`) would repeat it.
+            endpoint::due_report(cx.store, "jira", now)?;
+        }
+    }
+    jira::mark_inactive(cx.store, now)
 }

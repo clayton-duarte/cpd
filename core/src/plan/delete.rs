@@ -443,7 +443,7 @@ pub(crate) fn delete_rows(tx: &Connection, plan: &PlanId) -> Result<(), CpdError
         "DELETE FROM jobs WHERE plan = ?1",
         "DELETE FROM workflow_needs WHERE plan = ?1",
         "DELETE FROM pr_posts WHERE plan = ?1",
-        "DELETE FROM jira_transitions WHERE plan = ?1",
+        "DELETE FROM swr_mutations WHERE system = 'jira' AND json_extract(context_json, '$.plan') = ?1",
         "DELETE FROM workflows WHERE plan = ?1",
         "DELETE FROM plan_reviews WHERE plan = ?1",
         "DELETE FROM sessions WHERE plan = ?1 AND id <> (SELECT lead_session FROM plans WHERE id = ?1)",

@@ -14,6 +14,10 @@ use crate::store::Store;
 pub mod github;
 pub mod github_write;
 pub mod jira;
+#[cfg(test)]
+mod jira_adopt_tests;
+#[cfg(test)]
+mod jira_tests;
 pub mod models;
 pub mod slack;
 
@@ -23,6 +27,8 @@ mod github_poll_tests;
 mod github_tests;
 #[cfg(test)]
 mod github_write_tests;
+#[cfg(test)]
+mod models_tests;
 
 /// A query key `<system>:<kind>:<id>` (swr.md §4).
 pub type QueryKey = String;

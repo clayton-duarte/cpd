@@ -18,14 +18,21 @@ const json = (v: unknown): Answer => ({ isError: false, text: JSON.stringify(v, 
 const failed = (statusCode: number, message = "boom"): Answer => ({ isError: true, text: JSON.stringify({ error: true, message, statusCode }, null, 2) });
 const jira = { id: CLOUD, url: "https://s.atlassian.net", scopes: ["read:jira-work", "write:jira-work"] };
 const confluence = { id: CLOUD, url: "https://s.atlassian.net", scopes: ["read:page:confluence", "write:page:confluence"] };
-const issue = (name: string, key = "indeterminate"): Answer => json({ key: "ABC-1", fields: { status: { name, statusCategory: { key } } } });
+const SUMMARY = "Retry failed payouts";
+const issue = (name: string, key = "indeterminate", extra: Record<string, unknown> = {}): Answer => json({ key: "ABC-1", fields: { status: { name, statusCategory: { key } }, summary: SUMMARY, ...extra } });
+type Names = { in_progress: string; in_review: string; done: string };
+const TARGETS = ["in_progress", "in_review", "done"] as const;
+/** What a successful read adds to every answer: the site, the summary and the estimate values read. */
+const facts = (estimates: Record<string, unknown> = {}) => ({ cloud_id: CLOUD, summary: SUMMARY, estimates });
 const tr = (id: string, name: string, to = name) => ({ id, name, to: { name: to } });
 const moved = (statusName: string): Answer => json({ success: true, statusName });
 
 type Table = Record<string, Answer | Error | ((args: Record<string, unknown>) => Answer | Error)>;
 
-function request(target: Request["target"] = "in_review", names: Request["names"] = NAMES, estimate_fields: string[] = []): Request {
-  return { server: SERVER, ticket: "ABC-1", target, names, estimate_fields };
+/** The request of swr-jira.md §3.1: Rust computes `target_name` and `later_names` from the policy's names; so does this. */
+function request(target: Request["target"] = "in_review", names: Names = NAMES, estimate_fields: string[] = [], cloud_id: string | null = null): Request {
+  const later = TARGETS.slice(TARGETS.indexOf(target) + 1).map((t) => names[t]).filter((n) => n !== "");
+  return { server: SERVER, ticket: "ABC-1", target, cloud_id, target_name: names[target], later_names: later, estimate_fields };
 }
 
 function scripted(table: Table) {
@@ -65,23 +72,23 @@ test("transition moves the issue with the first transition whose target status h
   const out = await transition(f.call, request());
   assert.deepEqual(f.calls, [
     { name: "getAccessibleAtlassianResources", args: {}, timeoutMs: 30000 },
-    { name: "getJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", fields: ["status"] }, timeoutMs: 30000 },
+    { name: "getJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", fields: ["status", "summary"] }, timeoutMs: 30000 },
     { name: "getTransitionsForJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1" }, timeoutMs: 30000 },
     { name: "transitionJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", transition: { id: "2" } }, timeoutMs: 30000 },
   ]);
-  assert.deepEqual(out, { ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review" });
+  assert.deepEqual(out, { ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review", ...facts() });
 });
 
-test("transition reads only the status and takes the site with both Jira scopes", async () => {
+test("transition reads only the status and summary and takes the site with both Jira scopes", async () => {
   const f = scripted(happy({ getAccessibleAtlassianResources: json([{ ...confluence, id: OTHER }, jira]) }));
   await transition(f.call, request());
   for (const c of f.calls.slice(1)) assert.equal(c.args.cloudId, CLOUD);
   const read = f.calls.find((c) => c.name === "getJiraIssue")!;
-  assert.deepEqual(read.args.fields, ["status"]);
+  assert.deepEqual(read.args.fields, ["status", "summary"]);
 });
 
 test("transition leaves a ticket at the target, in a later status or in a done category alone and makes no transition call", async () => {
-  const cases: Array<[Request["target"], string, string, string, Request["names"]?]> = [
+  const cases: Array<[Request["target"], string, string, string]> = [
     ["in_review", "In Review", "indeterminate", "at_target"],
     ["in_review", "Won't Do", "done", "done_category"],
     ["in_progress", "In Review", "indeterminate", "past_target"],
@@ -90,7 +97,7 @@ test("transition leaves a ticket at the target, in a later status or in a done c
   for (const [target, status, category, why] of cases) {
     const f = scripted(happy({ getJiraIssue: issue(status, category) }));
     const out = await transition(f.call, request(target));
-    assert.deepEqual(out, { ticket: "ABC-1", target, outcome: "unchanged", status, why }, why);
+    assert.deepEqual(out, { ticket: "ABC-1", target, outcome: "unchanged", status_name: status, status_category: category, why, ...facts() }, why);
     assert.deepEqual(f.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue"], why);
   }
   // A later target with an empty name does not count as past.
@@ -109,7 +116,7 @@ test("transition picks by target status name, never by transition name or id, an
   const f = scripted(happy({ getJiraIssue: issue("In Review"), getTransitionsForJiraIssue: json({ transitions: list }), transitionJiraIssue: moved("Done") }));
   const out = await transition(f.call, request("done"));
   assert.deepEqual(f.calls.at(-1), { name: "transitionJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", transition: { id: "31" } }, timeoutMs: 30000 });
-  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done" });
+  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done", ...facts() });
 
   const g = scripted(happy({ getJiraIssue: issue("In Progress"), getTransitionsForJiraIssue: json({ transitions: [tr("21", "In Progress"), tr("6", "PR Approved", "Done"), tr("7", "In Review", "Backlog")] }), transitionJiraIssue: moved("Done") }));
   await transition(g.call, request("done"));
@@ -177,7 +184,7 @@ test("transition maps 429, 5xx, a 400 of the transition, a timeout and unparseab
 });
 
 function body(over: Record<string, unknown> = {}): string {
-  return JSON.stringify({ server: SERVER, ticket: "ABC-1", target: "in_review", names: NAMES, estimate_fields: [], ...over });
+  return JSON.stringify({ server: SERVER, ticket: "ABC-1", target: "in_review", cloud_id: null, target_name: "In Review", later_names: ["Done"], estimate_fields: [], ...over });
 }
 
 test("main refuses a stdin that is not the request with usage before connecting", async () => {
@@ -188,7 +195,7 @@ test("main refuses a stdin that is not the request with usage before connecting"
     [ARGS, ENV, body({ ticket: "abc-1" })],
     [ARGS, ENV, body({ ticket: "ABC-" })],
     [ARGS, ENV, body({ target: "later" })],
-    [ARGS, ENV, body({ names: { ...NAMES, in_review: "" } })],
+    [ARGS, ENV, body({ target_name: "" })],
     [ARGS, ENV, body({ server: { command: "x" } })],
     [ARGS, ENV, body({ server: {} })],
     [[], ENV, body()],
@@ -218,7 +225,7 @@ test("main connects with the server of the request and prints one ok line for a 
   assert.equal(opens[0]![1], "/agent");
   assert.equal(opens[0]![2], "/cwd");
   assert.deepEqual(opens[0]![3], server);
-  assert.deepEqual(r, { value: { ok: true, ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review" }, exit: 0 });
+  assert.deepEqual(r, { value: { ok: true, ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review", ...facts() }, exit: 0 });
   assert.equal(closed, 1);
 });
 
@@ -258,10 +265,11 @@ test("run as a script it prints one usage line for an empty stdin", () => {
   assert.equal(JSON.parse(lines[0]!).error.code, "usage");
 });
 
-const EST = (over: Table = {}, fields: string[] = ["customfield_10016"]) => ({
+/** A `done` move of an issue at In Review whose single read carries `fields` (default: the estimate empty). */
+const EST = (over: Table = {}, fields: string[] = ["customfield_10016"], read: Record<string, unknown> = { customfield_10016: null }) => ({
   req: request("done", NAMES, fields),
   table: happy({
-    getJiraIssue: (args: Record<string, unknown>) => (JSON.stringify(args.fields) === '["status"]' ? issue("In Review") : json({ fields: { customfield_10016: null } })),
+    getJiraIssue: issue("In Review", "indeterminate", read),
     getTransitionsForJiraIssue: json({ transitions: [tr("31", "Done")] }),
     editJiraIssue: json({ id: "1" }),
     transitionJiraIssue: moved("Done"),
@@ -277,37 +285,35 @@ test("transition to done writes an empty estimate field with one edit and then m
   const out = await transition(f.call, req);
   assert.deepEqual(f.calls, [
     C("getAccessibleAtlassianResources", {}),
-    C("getJiraIssue", { ...base, fields: ["status"] }),
+    C("getJiraIssue", { ...base, fields: ["status", "summary", "customfield_10016"] }),
     C("getTransitionsForJiraIssue", base),
-    C("getJiraIssue", { ...base, fields: ["customfield_10016"] }),
     C("editJiraIssue", { ...base, fields: { customfield_10016: 1 } }),
     C("transitionJiraIssue", { ...base, transition: { id: "31" } }),
   ]);
-  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done" });
+  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done", ...facts({ customfield_10016: 1 }) });
 });
 
 test("transition to done leaves a filled estimate field, zero included, and skips a field the issue does not carry", async () => {
-  for (const read of [json({ fields: { customfield_10016: 0 } }), json({ key: "ABC-1" })]) {
-    const { req, table } = EST({}, ["customfield_10016", "customfield_10030"]);
-    const f = scripted({ ...table, getJiraIssue: (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : read) });
+  for (const read of [{ customfield_10016: 0 }, {}]) {
+    const { req, table } = EST({}, ["customfield_10016", "customfield_10030"], read);
+    const f = scripted(table);
     await transition(f.call, req);
-    assert.deepEqual(f.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue", "getTransitionsForJiraIssue", "getJiraIssue", "transitionJiraIssue"]);
-    assert.deepEqual(f.calls[3], C("getJiraIssue", { ...base, fields: ["customfield_10016", "customfield_10030"] }));
+    assert.deepEqual(f.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue", "getTransitionsForJiraIssue", "transitionJiraIssue"]);
+    assert.deepEqual(f.calls[1], C("getJiraIssue", { ...base, fields: ["status", "summary", "customfield_10016", "customfield_10030"] }));
   }
 });
 
 test("transition to done writes every empty estimate field in one edit and only those", async () => {
-  const { req, table } = EST({}, ["customfield_10016", "customfield_10030", "customfield_10040"]);
-  const f = scripted({ ...table, getJiraIssue: (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : json({ fields: { customfield_10016: null, customfield_10030: 5, customfield_10040: null } })) });
+  const { req, table } = EST({}, ["customfield_10016", "customfield_10030", "customfield_10040"], { customfield_10016: null, customfield_10030: 5, customfield_10040: null });
+  const f = scripted(table);
   await transition(f.call, req);
   const edits = f.calls.filter((c) => c.name === "editJiraIssue");
   assert.deepEqual(edits, [C("editJiraIssue", { ...base, fields: { customfield_10016: 1, customfield_10040: 1 } })]);
 });
 
 test("transition to done does not move the ticket when the estimate read or write fails", async () => {
-  const readFail = (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : failed(503));
   const cases: Array<[Table, string, string, number | undefined]> = [
-    [{ getJiraIssue: readFail }, "jira_failed", "getJiraIssue", 503],
+    [{ getJiraIssue: failed(503) }, "jira_failed", "getJiraIssue", 503],
     [{ editJiraIssue: failed(400, "Field 'customfield_10016' cannot be set") }, "jira_failed", "editJiraIssue", 400],
     [{ editJiraIssue: failed(401) }, "jira_auth", "", undefined],
     [{ editJiraIssue: new Error("timed out after 30000ms") }, "jira_failed", "editJiraIssue", undefined],

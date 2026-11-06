@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::clock::Clock;
 use crate::config::catalog::node;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
@@ -113,6 +114,7 @@ pub struct BifrostEmbedding {
     runner: Arc<dyn Runner>,
     script: PathBuf,
     agent_dir: PathBuf,
+    home: Option<crate::home::CpdHome>,
 }
 
 impl BifrostEmbedding {
@@ -121,12 +123,34 @@ impl BifrostEmbedding {
             runner,
             script,
             agent_dir,
+            home: None,
         }
+    }
+
+    /// Record each call's result on the `bifrost` endpoint of `home`.
+    pub fn with_health(mut self, home: &crate::home::CpdHome) -> BifrostEmbedding {
+        self.home = Some(home.clone());
+        self
     }
 }
 
 impl EmbeddingPort for BifrostEmbedding {
     fn embed(&self, text: &str, dims: usize) -> Result<Embedded, CpdError> {
+        let result = self.embed_call(text, dims);
+        if let Some(home) = &self.home {
+            crate::swr::health::record_result(
+                home,
+                "bifrost",
+                crate::clock::SystemClock.utc(),
+                &result,
+            );
+        }
+        result
+    }
+}
+
+impl BifrostEmbedding {
+    fn embed_call(&self, text: &str, dims: usize) -> Result<Embedded, CpdError> {
         let answer = run_helper(
             &*self.runner,
             &self.script,

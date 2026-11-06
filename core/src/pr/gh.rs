@@ -2740,7 +2740,8 @@ fn poll_node(
             }
             checks.push(check);
         }
-        pr.checks = ChecksSummary::of(&checks, &[], &[]);
+        // The excused `danger` run is already dropped above (pro-d447), so the summary holds no policy hold of its own.
+        pr.checks = ChecksSummary::of(&checks, &[], &[], false);
     }
     let mut membership = Membership::default();
     if let Some(did) = v.get("viewerDidAuthor").and_then(Value::as_bool) {

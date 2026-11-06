@@ -22,6 +22,8 @@ pub(super) struct Gh {
     inline2: Mutex<Option<String>>,
     /// How GitHub answers the auto-merge calls of `pr post` (commands.md §9.8b).
     pub(super) auto: Mutex<AutoMerge>,
+    /// The labels `pr view` answers for the `labels` field; none by default.
+    labels: Mutex<Vec<String>>,
 }
 
 /// GitHub's side of squash auto-merge: the read query `autoMergeAllowed ... autoMergeRequest` and the mutation
@@ -95,7 +97,20 @@ impl Handler for Gh {
             }
         }
         match args[..2] {
-            ["pr", "view"] => Reply::ok(VIEW),
+            ["pr", "view"] => {
+                let mut view: serde_json::Value = serde_json::from_str(VIEW).unwrap();
+                if args.iter().any(|a| a.split(',').any(|f| f == "labels")) {
+                    let labels: Vec<_> = self
+                        .labels
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|name| json!({"name": name}))
+                        .collect();
+                    view["labels"] = json!(labels);
+                }
+                Reply::ok(&format!("{view}\n"))
+            }
             ["api", endpoint]
                 if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") =>
             {

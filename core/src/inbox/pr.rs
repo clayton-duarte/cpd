@@ -166,7 +166,7 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     let stacked = matches!((&r.base_ref, &r.default_branch), (Some(b), Some(d)) if b != d);
     if stacked && (approved || !f.posted) {
         Status::Stacked
-    } else if f.posted {
+    } else if f.posted && !approved {
         Status::InReview
     } else {
         Status::Waiting

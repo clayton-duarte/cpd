@@ -12,12 +12,12 @@
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use serde_json::json;
-
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::models::{Answer, Applied, Helper, Outcome, apply_at, newest_polled_at};
+use cpd_core::models::{Answer, Helper, Outcome};
+use cpd_core::swr::endpoint::{self, Kind};
+use cpd_core::swr::source::models::{apply_answer, endpoint_of, kind_of, newest_polled_at};
 
 /// What E15 remembers between ticks.
 #[derive(Default)]
@@ -41,9 +41,8 @@ pub(super) fn run(engine: &mut Engine) {
         engine.models.running = None;
         engine.models.last_end = Some(engine.ports.clock.now());
         let at = engine.ports.clock.utc();
-        match answer.and_then(|answer| apply_at(&engine.home, &engine.config.timeouts, &answer, at))
-        {
-            Ok(applied) => report(engine, &applied),
+        match answer.and_then(|answer| apply_answer(&mut engine.store, &answer, at)) {
+            Ok(outcomes) => report(engine, &outcomes, at),
             Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }
         return;
@@ -73,10 +72,10 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// No file, or the newest `polled_at` is at least `watch.models_discovery_seconds` old.
-fn due(engine: &Engine) -> Result<bool, CpdError> {
+/// No row, or the newest `polled_at` is at least `watch.models_discovery_seconds` old.
+fn due(engine: &mut Engine) -> Result<bool, CpdError> {
     let period = time::Duration::seconds(i64::from(engine.config.watch.models_discovery_seconds));
-    Ok(newest_polled_at(&engine.home)?
+    Ok(newest_polled_at(&mut engine.store)?
         .is_none_or(|newest| engine.ports.clock.utc() - newest >= period))
 }
 
@@ -93,10 +92,11 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Answer, CpdError>>, CpdError
     Ok(rx)
 }
 
-/// Reports what the write found: a failing provider and a file that did not parse, each once; nothing failing clears.
-fn report(engine: &mut Engine, applied: &Applied) {
+/// Reports what the write found: a failing provider once per outage (a permanent code at once, a transient one after
+/// ten minutes of failing); nothing failing clears.
+fn report(engine: &mut Engine, outcomes: &[Outcome], now: time::OffsetDateTime) {
     let mut clean = true;
-    for outcome in &applied.outcomes {
+    for outcome in outcomes {
         match outcome {
             Outcome::Written(w) => {
                 let changed = w
@@ -110,20 +110,30 @@ fn report(engine: &mut Engine, applied: &Applied) {
             }
             Outcome::Failed(failure) => {
                 clean = false;
-                engine.fail(Step::E15, About::Machine, Failure::from(&failure.error()));
+                let name = match endpoint_of(&mut engine.store, &failure.provider) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        engine.fail(Step::E15, About::Machine, Failure::from(&e));
+                        continue;
+                    }
+                };
+                let due = match kind_of(&failure.code) {
+                    Kind::Permanent => Ok(true),
+                    Kind::Transient => endpoint::due_report(&mut engine.store, &name, now),
+                };
+                match due {
+                    Ok(true) => {
+                        let mut f = Failure::from(&failure.error());
+                        if let Some(d) = f.details.as_object_mut() {
+                            d.insert("endpoint".to_owned(), name.into());
+                        }
+                        engine.fail(Step::E15, About::Machine, f);
+                    }
+                    Ok(false) => {}
+                    Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
+                }
             }
         }
-    }
-    for (provider, path) in &applied.unparseable {
-        clean = false;
-        let failure = Failure {
-            code: ErrorCode::ModelsUnparseable.as_str().to_owned(),
-            message: format!(
-                "The cached model list of {provider} is not readable and was treated as missing."
-            ),
-            details: json!({"provider": provider, "file": path.display().to_string()}),
-        };
-        engine.fail(Step::E15, About::Machine, failure);
     }
     if clean {
         engine.clear(Step::E15, &About::Machine);

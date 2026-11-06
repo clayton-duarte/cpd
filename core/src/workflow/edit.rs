@@ -444,7 +444,7 @@ fn check_restack(
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a Workflow that has it already is not touched).
 fn update(
-    tx: &Connection,
+    tx: &crate::store::WriteTxn<'_>,
     plan: &PlanId,
     before: &WorkflowRow,
     after: &WorkflowRow,
@@ -463,6 +463,8 @@ fn update(
             "UPDATE workflows SET jira = ?1 WHERE plan = ?2 AND key = ?3 AND jira IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
             [jira, plan.as_str(), after.key.as_str()],
         )?;
+        // The Workflow's pending Jira transitions follow its ticket (swr-jira.md §7).
+        crate::swr::source::jira::adopt_ticket(tx, plan.as_str(), after.key.as_str(), jira)?;
     }
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
