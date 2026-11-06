@@ -27,7 +27,8 @@ fn setup(runs: &[Value]) -> Pay {
 
 fn queued(pay: &Pay) -> Vec<(String, Value, Value)> {
     pay.fx.env.read(|c| {
-        let mut stmt = c.prepare("SELECT op_kind, vars_json, patch_json FROM swr_mutations ORDER BY id")?;
+        let mut stmt =
+            c.prepare("SELECT op_kind, vars_json, patch_json FROM swr_mutations ORDER BY id")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
@@ -64,7 +65,11 @@ fn a_failed_run_of_the_cached_head_is_queued_with_the_checks_pending_and_listed(
     assert_eq!(out["effective"]["checks"], "pending");
     assert_eq!(
         queued(&pay),
-        [("rerun".to_owned(), json!({"run_ids": [222]}), json!({"checks": "pending"}))]
+        [(
+            "rerun".to_owned(),
+            json!({"run_ids": [222]}),
+            json!({"checks": "pending"})
+        )]
     );
     assert!(pay.fx.calls("gh").is_empty(), "the command calls no GitHub");
 }
@@ -97,7 +102,10 @@ fn every_failed_conclusion_is_queued_whatever_its_case_and_no_other_run_is() {
 #[test]
 fn a_head_with_no_failed_run_is_refused_no_failed_run_and_queues_nothing() {
     for runs in [
-        vec![run(1, "CI", "COMPLETED", "SUCCESS"), run(2, "Lint", "IN_PROGRESS", "")],
+        vec![
+            run(1, "CI", "COMPLETED", "SUCCESS"),
+            run(2, "Lint", "IN_PROGRESS", ""),
+        ],
         vec![],
     ] {
         let pay = setup(&runs);

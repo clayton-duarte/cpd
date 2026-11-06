@@ -499,9 +499,9 @@ pub(super) fn plan_heads(
                 })?;
                 // The overlay (swr-github.md §6): a queued rerun shows the checks pending at once.
                 let checks = match r.get::<_, Option<String>>(16)? {
-                    Some(repo) => {
-                        cpd_core::swr::github::effective_text(conn, &repo, number, "checks", &checks)?
-                    }
+                    Some(repo) => cpd_core::swr::github::effective_text(
+                        conn, &repo, number, "checks", &checks,
+                    )?,
                     None => checks,
                 };
                 Some(Pr {

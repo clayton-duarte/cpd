@@ -117,7 +117,10 @@ fn approve_queues_the_review_and_the_check_mark() {
     let out = submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)).ok();
     assert_eq!(out["queued"], true, "{out}");
     assert!(out["mutation_id"].is_i64(), "{out}");
-    assert_eq!(out["review"], json!({"event": "APPROVE", "commit_id": HEAD, "queued": true}));
+    assert_eq!(
+        out["review"],
+        json!({"event": "APPROVE", "commit_id": HEAD, "queued": true})
+    );
     assert_eq!(
         out["reaction"],
         json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "already": false})
@@ -126,7 +129,10 @@ fn approve_queues_the_review_and_the_check_mark() {
         rows(&fx),
         [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]
     );
-    assert!(gh_calls(&fx).is_empty(), "a command never calls GitHub for a write");
+    assert!(
+        gh_calls(&fx).is_empty(),
+        "a command never calls GitHub for a write"
+    );
 }
 
 #[test]
@@ -155,7 +161,11 @@ fn the_queued_review_is_the_input_with_the_event_and_commit_id_added() {
     let queued = mutations(&fx);
     assert_eq!(queued.len(), 1, "{queued:?}");
     assert_eq!(
-        (queued[0].0.as_str(), queued[0].1.as_str(), queued[0].2.as_str()),
+        (
+            queued[0].0.as_str(),
+            queued[0].1.as_str(),
+            queued[0].2.as_str()
+        ),
         ("github:pr:acme/api#7", "approve", "pending")
     );
     assert_eq!(queued[0].3, want);
@@ -182,7 +192,10 @@ fn a_second_submit_queues_no_second_review_and_one_reaction_row() {
     let second = submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)).ok();
     assert_eq!(first["reaction"]["already"], false);
     assert_eq!(second["reaction"]["already"], true);
-    assert_eq!(first["mutation_id"], second["mutation_id"], "the same review dedupes");
+    assert_eq!(
+        first["mutation_id"], second["mutation_id"],
+        "the same review dedupes"
+    );
     assert_eq!(mutations(&fx).len(), 1);
     assert_eq!(rows(&fx).len(), 1);
 }

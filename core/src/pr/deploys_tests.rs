@@ -12,7 +12,6 @@ use crate::home::CpdHome;
 use crate::host::runner::{Call, FakeRunner, Handler, Reply};
 use crate::store::Store;
 
-
 /// The `gh` of the read: the login of `gh api user`, the waiting runs of each `<owner>/<repo>/<file>` (`None`: the call
 /// fails) and the `pending_deployments` of each run id.
 #[derive(Default)]

@@ -14,7 +14,8 @@ const FAILED: [&str; 3] = ["failure", "timed_out", "startup_failure"];
 
 /// The workflow runs whose head-commit checks failed, in the cached detail: the `databaseId`s, each once, sorted.
 fn failed_runs(detail: &Value) -> Vec<(i64, String)> {
-    let mut runs: Vec<(i64, String)> = detail["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+    let mut runs: Vec<(i64, String)> = detail["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+        ["contexts"]["nodes"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default()
@@ -28,7 +29,10 @@ fn failed_runs(detail: &Value) -> Vec<(i64, String)> {
             let run = &n["checkSuite"]["workflowRun"];
             Some((
                 run["databaseId"].as_i64()?,
-                run["workflow"]["name"].as_str().unwrap_or_default().to_owned(),
+                run["workflow"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
             ))
         })
         .collect();
@@ -93,7 +97,10 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         json!({"run_ids": ids}),
         Some(json!({"checks": "pending"})),
     )?;
-    let rerun: Vec<Value> = runs.iter().map(|(i, n)| json!({"id": i, "name": n})).collect();
+    let rerun: Vec<Value> = runs
+        .iter()
+        .map(|(i, n)| json!({"id": i, "name": n}))
+        .collect();
     queued(
         &mut env.store,
         &raw.repo,

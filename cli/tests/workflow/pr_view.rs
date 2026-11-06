@@ -257,7 +257,12 @@ fn view_before_the_first_hydrate_prints_no_checks_reviews_or_comments() {
     let fx = fx("open");
     let out = fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
     assert_eq!(
-        (&out["checks"], &out["reviews"], &out["comments"], &out["inline_comments"]),
+        (
+            &out["checks"],
+            &out["reviews"],
+            &out["comments"],
+            &out["inline_comments"]
+        ),
         (&json!([]), &json!([]), &json!([]), &json!([]))
     );
 }

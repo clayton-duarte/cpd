@@ -77,7 +77,10 @@ pub fn queued(
 }
 
 /// The merge method a repo allows (the first of squash, merge, rebase), from `swr_repos`; `None` when the row is missing.
-pub fn merge_method(store: &mut Store, repo: &str) -> Result<Option<Result<Method, MergeMethods>>, CpdError> {
+pub fn merge_method(
+    store: &mut Store,
+    repo: &str,
+) -> Result<Option<Result<Method, MergeMethods>>, CpdError> {
     let flags: Option<MergeMethods> = store.read(|c| {
         Ok(c.query_row(
             "SELECT squash_merge_allowed, merge_commit_allowed, rebase_merge_allowed FROM swr_repos WHERE repo = ?1",
@@ -149,14 +152,21 @@ impl GithubSource {
         let runner = &*ports.runner;
         let cwd = cx.home.root().to_path_buf();
         let cwd: &Path = &cwd;
-        let text = |k: &str| vars.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        let text = |k: &str| {
+            vars.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
         crate::ports::Ports::scope(&ports, || match (kind, m.op_kind.as_str()) {
             ("pr", "merge") => {
                 let head = text("expected_head_oid");
                 let method = match merge_method(cx.store, repo) {
                     Ok(Some(Ok(method))) => method,
                     Ok(Some(Err(_))) => {
-                        return failed(format!("{repo} allows no merge method: squash, merge commit and rebase are all off."));
+                        return failed(format!(
+                            "{repo} allows no merge method: squash, merge commit and rebase are all off."
+                        ));
                     }
                     Ok(None) => return self.wait_for_repo(cx, repo),
                     Err(e) => return retry(&e),
@@ -211,10 +221,12 @@ impl GithubSource {
                 let run_id = u64::try_from(number).unwrap_or_default();
                 match crate::pr::deploys::approvable(runner, cx.home, repo, run_id) {
                     Ok(envs) if envs.is_empty() => ExecOutcome::Done,
-                    Ok(envs) => match crate::pr::deploys::approve(runner, cx.home, repo, run_id, &envs) {
-                        Ok(()) => ExecOutcome::Done,
-                        Err(e) => retry(&e),
-                    },
+                    Ok(envs) => {
+                        match crate::pr::deploys::approve(runner, cx.home, repo, run_id, &envs) {
+                            Ok(()) => ExecOutcome::Done,
+                            Err(e) => retry(&e),
+                        }
+                    }
                     Err(e) => retry(&e),
                 }
             }
@@ -229,7 +241,12 @@ impl GithubSource {
             ("pr", "retitle") => gh::retitle_pr(cwd, repo, number, &text("title"))
                 .map_or_else(|e| retry(&e), |()| ExecOutcome::Done),
             ("pr", "rerun") => {
-                for id in vars["run_ids"].as_array().into_iter().flatten().filter_map(Value::as_i64) {
+                for id in vars["run_ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_i64)
+                {
                     if let Err(e) = gh::rerun_failed(runner, cwd, id) {
                         // Stops at the first failure, which is tried again (swr-github.md §9).
                         let _ = e;
@@ -284,10 +301,18 @@ impl GithubSource {
             return ExecOutcome::Done;
         };
         let sent = match item.kind {
-            ItemKind::Thread => gh::reply_to_thread(runner, cwd, &item.id, &format!("{body}\n\n{MARKER}")),
-            ItemKind::Comment | ItemKind::Review => gh::pull_request_id(runner, cwd, repo, number).and_then(|node| {
-                gh::reply_to_comment(runner, cwd, &node, &format!("Re: {}\n\n{body}\n\n{MARKER}", item.url))
-            }),
+            ItemKind::Thread => {
+                gh::reply_to_thread(runner, cwd, &item.id, &format!("{body}\n\n{MARKER}"))
+            }
+            ItemKind::Comment | ItemKind::Review => gh::pull_request_id(runner, cwd, repo, number)
+                .and_then(|node| {
+                    gh::reply_to_comment(
+                        runner,
+                        cwd,
+                        &node,
+                        &format!("Re: {}\n\n{body}\n\n{MARKER}", item.url),
+                    )
+                }),
         };
         sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)
     }

@@ -147,11 +147,13 @@ pub fn effective_pr(
 
 /// Whether an active mutation of the deploy run `repo#run_id` has the effective deploy state `approving`.
 pub fn deploy_approving(conn: &Connection, repo: &str, run_id: i64) -> Result<bool, CpdError> {
-    Ok(overlay::active_in(conn, "github", &deploy_key(repo, run_id))?
-        .iter()
-        .filter_map(|m| m.patch_json.as_deref())
-        .filter_map(|p| serde_json::from_str::<Value>(p).ok())
-        .any(|p| p.get("deploy").and_then(Value::as_str) == Some("approving")))
+    Ok(
+        overlay::active_in(conn, "github", &deploy_key(repo, run_id))?
+            .iter()
+            .filter_map(|m| m.patch_json.as_deref())
+            .filter_map(|p| serde_json::from_str::<Value>(p).ok())
+            .any(|p| p.get("deploy").and_then(Value::as_str) == Some("approving")),
+    )
 }
 
 /// The effective text of `field` (`state`, `checks`, `review_decision`, `title`) of `repo#number`: `raw` with the patches of the

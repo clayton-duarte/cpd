@@ -3,9 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr_checks::{
-    checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads,
-};
+use super::pr_checks::{checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads};
 
 /// A GraphQL CheckRun node of `workflow` (none: a third-party app).
 fn node_run(

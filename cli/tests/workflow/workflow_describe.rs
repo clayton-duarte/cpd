@@ -178,11 +178,14 @@ fn pr_describe_on_an_open_pr_stores_the_body_and_queues_the_pull_request_update(
     assert!(out["mutation_id"].is_i64(), "{out}");
     assert!(fx.calls("gh").is_empty(), "{:?}", fx.gh_calls());
     assert_eq!(
-        fx.env.query::<String>("SELECT target_key || '|' || op_kind || '|' || status FROM swr_mutations"),
+        fx.env.query::<String>(
+            "SELECT target_key || '|' || op_kind || '|' || status FROM swr_mutations"
+        ),
         "github:pr:acme/pay#812|describe|pending"
     );
     assert_eq!(
-        fx.env.query::<String>("SELECT json_extract(vars_json, '$.body') FROM swr_mutations"),
+        fx.env
+            .query::<String>("SELECT json_extract(vars_json, '$.body') FROM swr_mutations"),
         body
     );
     assert_eq!(fx.description().as_deref(), Some(body));
@@ -258,4 +261,3 @@ fn pr_open_refuses_description_required_without_a_body() {
 
     assert_eq!(open_jobs(&fx).len(), 1, "the open Job is queued");
 }
-

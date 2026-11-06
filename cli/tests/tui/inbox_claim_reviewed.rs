@@ -118,7 +118,10 @@ fn reviewed_pr_state_follows_the_pull_requests_row() {
         shown(&fx, PLAN)["reviewed_pr"].is_object(),
         "claimed Plan has a reviewed_pr"
     );
-    sql(&mut fx, "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;");
+    sql(
+        &mut fx,
+        "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;",
+    );
     assert_eq!(state(&fx), Value::Null, "no row, no state");
     sql(&mut fx, &pull_request("open"));
     assert_eq!(state(&fx), json!("open"));

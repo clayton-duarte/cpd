@@ -12,11 +12,11 @@ use time::OffsetDateTime;
 use super::gh::run_raw_with;
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
-use crate::store::Store;
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, Runner};
 use crate::policy::{self, load_scope_file};
+use crate::store::Store;
 
 /// How long one `gh api` call of the read may take.
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -53,8 +53,12 @@ pub fn read_into_store(
 ) -> Result<(), CpdError> {
     let declared = declared(home)?;
     let me: Option<String> = store.read(|c| {
-        Ok(c.query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| r.get(0))
-            .optional()?)
+        Ok(
+            c.query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .optional()?,
+        )
     })?;
     // No viewer yet: the pass writes it; there is nobody to filter by before that.
     let Some(me) = me else { return Ok(()) };
@@ -63,7 +67,8 @@ pub fn read_into_store(
     let mut writes: Vec<Write> = Vec::new();
     // A repo whose policy no longer declares a workflow: its waiting runs are nobody's to approve.
     let undeclared: Vec<(String, i64)> = store.read(|c| {
-        let mut stmt = c.prepare("SELECT repo, run_id FROM swr_deploys WHERE inactive_at IS NULL")?;
+        let mut stmt =
+            c.prepare("SELECT repo, run_id FROM swr_deploys WHERE inactive_at IS NULL")?;
         Ok(stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?)

@@ -21,8 +21,8 @@ use crate::ids::{PlanId, RepoName, WorkflowKey};
 use crate::output::Output;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
-use crate::swr::source::github_write::{enqueue, target_of};
 use crate::pr::{find_workflow, plan_phase, workflow_locked};
+use crate::swr::source::github_write::{enqueue, target_of};
 
 const COMMAND: &str = "workflow edit";
 

@@ -203,7 +203,10 @@ fn pr_commands_write_poll_now_file_after_github_write_post() {
     let out = post(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
-    assert!(!file(&pay.fx).exists(), "the command itself wrote nothing on GitHub");
+    assert!(
+        !file(&pay.fx).exists(),
+        "the command itself wrote nothing on GitHub"
+    );
     drain(&pay.fx);
     assert!(
         file(&pay.fx).exists(),
@@ -274,7 +277,10 @@ fn submit(post: Reply) -> (Fx, Value) {
         input.to_str().unwrap(),
     ]);
     let out = if run.exit == 0 { run.ok() } else { run.error() };
-    assert!(!file(&fx).exists(), "the command itself wrote nothing on GitHub");
+    assert!(
+        !file(&fx).exists(),
+        "the command itself wrote nothing on GitHub"
+    );
     drain(&fx);
     (fx, out)
 }

@@ -495,7 +495,8 @@ pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
         .filter_map(|p| p["environment"]["name"].as_str().map(str::to_owned))
         .collect();
     environments.sort();
-    let mut fields = json!({"id": id, "repo": repo, "run_id": run_id, "environments": environments});
+    let mut fields =
+        json!({"id": id, "repo": repo, "run_id": run_id, "environments": environments});
     if environments.is_empty() {
         fields["already"] = json!(true);
         return Ok(Output::success(fields));

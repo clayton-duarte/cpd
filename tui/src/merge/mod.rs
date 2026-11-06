@@ -117,18 +117,7 @@ pub fn in_flight(store: &mut Store) -> Result<std::collections::BTreeSet<String>
 /// merging at once). A failed merge is a line of the log, written before any tmux call so that it is always there, then the
 /// cockpit's one failure dialog on `client`. The `Err` is what the dialog could not show: the caller shows it with
 /// `display-message -c <client>`.
-#[cfg(test)]
-pub(crate) fn action(
-    home: &CpdHome,
-    tmux: &Tmux,
-    pull: &Pull,
-    client: &str,
-    run_command: super::RunCommand,
-) -> Result<(), CpdError> {
-    action_with(&Ports::real(), home, tmux, pull, client, &run_command)
-}
-
-/// [`action`] on injected ports: the clock stamps the log, the commands are `run`'s, tmux is `tmux`'s.
+/// The merge action on injected ports: the clock stamps the log, the commands are `run`'s, tmux is `tmux`'s.
 pub(crate) fn action_with(
     ports: &Ports,
     home: &CpdHome,
@@ -138,11 +127,10 @@ pub(crate) fn action_with(
     run: RunFn,
 ) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
-    let failed = match run(
-        [PROGRAM, "pr", "merge", &pull.to_string()]
-            .map(OsString::from)
-            .to_vec(),
-    ) {
+    let failed = match run([PROGRAM, "pr", "merge", &pull.to_string()]
+        .map(OsString::from)
+        .to_vec())
+    {
         Ok(_) => return Ok(()),
         Err(e) => e,
     };
@@ -186,9 +174,27 @@ mod tests {
             patch: None,
             context: None,
         };
-        outbox::enqueue(&mut store, now, op("merge", "github:pr:o/r#1"), Coalesce::LatestWins).unwrap();
-        outbox::enqueue(&mut store, now, op("rerun", "github:pr:o/r#2"), Coalesce::LatestWins).unwrap();
-        let failed = outbox::enqueue(&mut store, now, op("merge", "github:pr:o/r#3"), Coalesce::LatestWins).unwrap();
+        outbox::enqueue(
+            &mut store,
+            now,
+            op("merge", "github:pr:o/r#1"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
+        outbox::enqueue(
+            &mut store,
+            now,
+            op("rerun", "github:pr:o/r#2"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
+        let failed = outbox::enqueue(
+            &mut store,
+            now,
+            op("merge", "github:pr:o/r#3"),
+            Coalesce::LatestWins,
+        )
+        .unwrap();
         outbox::fail(&mut store, failed, now, "refused", Retry::Never).unwrap();
         assert_eq!(
             in_flight(&mut store).unwrap(),

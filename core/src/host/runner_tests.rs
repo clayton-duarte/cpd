@@ -389,9 +389,8 @@ fn a_second_route_for_the_same_program_replaces_the_first_and_rules_still_win() 
         .route("gh", Arc::new(Says("one")))
         .route("tmux", Arc::new(Says("tmux")))
         .route("gh", Arc::new(Says("two")));
-    let said = |program: &str| {
-        String::from_utf8(run(&runner, program, &[]).unwrap().stdout).unwrap()
-    };
+    let said =
+        |program: &str| String::from_utf8(run(&runner, program, &[]).unwrap().stdout).unwrap();
     assert_eq!(said("gh"), "two", "the later route wins");
     assert_eq!(said("tmux"), "tmux", "a route for another program is kept");
     let runner = runner.on("gh", any, Reply::ok("rule"));

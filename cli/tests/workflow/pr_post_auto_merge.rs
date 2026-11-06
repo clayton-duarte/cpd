@@ -172,8 +172,15 @@ fn queues_the_auto_merge_of_an_unstacked_pr_after_posting_and_the_drain_enables_
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
-    assert!(gh(&pay).is_empty(), "the command calls no GitHub: {:?}", gh(&pay));
-    assert_eq!(queued(&pay), [("github:pr:acme/pay#812".to_owned(), "pending".to_owned())]);
+    assert!(
+        gh(&pay).is_empty(),
+        "the command calls no GitHub: {:?}",
+        gh(&pay)
+    );
+    assert_eq!(
+        queued(&pay),
+        [("github:pr:acme/pay#812".to_owned(), "pending".to_owned())]
+    );
     assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
     assert_eq!(pay.fx.calls("node").len(), 1);
 
@@ -199,11 +206,28 @@ fn the_drain_uses_the_graphql_mutation_and_never_gh_pr_merge() {
     post_cmd(&pay).ok();
     drain(&pay);
 
-    let calls: Vec<Vec<String>> = pay.fx.calls("gh").into_iter().map(|call| call.args).collect();
-    assert!(calls.iter().any(|a| a.join(" ").contains("enablePullRequestAutoMerge")), "{calls:?}");
-    assert!(calls.iter().all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]), "only `gh api graphql`: {calls:?}");
+    let calls: Vec<Vec<String>> = pay
+        .fx
+        .calls("gh")
+        .into_iter()
+        .map(|call| call.args)
+        .collect();
     assert!(
-        calls.iter().all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))),
+        calls
+            .iter()
+            .any(|a| a.join(" ").contains("enablePullRequestAutoMerge")),
+        "{calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]),
+        "only `gh api graphql`: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))),
         "never `gh pr merge`: {calls:?}"
     );
 }
@@ -217,7 +241,10 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
 
     assert_eq!(out["auto_merge"]["state"], "not_allowed");
     let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
-    assert!(reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"), "{out}");
+    assert!(
+        reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"),
+        "{out}"
+    );
     assert!(queued(&pay).is_empty(), "nothing is queued");
     assert_eq!(row(&pay), Some(("none".to_owned(), None)));
     assert_eq!(pay.fx.calls("node").len(), 1);
@@ -226,14 +253,20 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
 
 #[test]
 fn a_repo_that_allows_only_rebase_or_merge_commit_enables_that_method() {
-    for ((squash, merge, rebase), want) in [((false, false, true), "REBASE"), ((false, true, true), "MERGE")] {
+    for ((squash, merge, rebase), want) in [
+        ((false, false, true), "REBASE"),
+        ((false, true, true), "MERGE"),
+    ] {
         let pay = post();
         repo(&pay, true, squash, merge, rebase);
         post_cmd(&pay).ok();
         drain(&pay);
         let sent = mutations(&pay);
         assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
-        assert!(sent[0].contains(want) && !sent[0].contains("SQUASH"), "{sent:?}");
+        assert!(
+            sent[0].contains(want) && !sent[0].contains("SQUASH"),
+            "{sent:?}"
+        );
         assert_eq!(row(&pay).map(|r| r.0), Some("enabled".to_owned()));
     }
 }
@@ -277,7 +310,12 @@ fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
         error["details"],
         json!({"repo": "acme/pay", "number": 812, "squash": false, "merge": false, "rebase": false})
     );
-    assert!(error["message"].as_str().is_some_and(|m| m.contains("acme/pay")), "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("acme/pay")),
+        "{error}"
+    );
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None);
@@ -295,7 +333,11 @@ fn repo_settings_the_poll_has_not_read_refuse_before_the_send_and_ask_for_them()
     assert_eq!(row(&pay), None);
     assert_eq!(
         pay.store()
-            .read(|c| Ok(c.query_row("SELECT invalidated FROM swr_queries WHERE key = 'github:repo:acme/pay'", [], |r| r.get::<_, i64>(0))?))
+            .read(|c| Ok(c.query_row(
+                "SELECT invalidated FROM swr_queries WHERE key = 'github:repo:acme/pay'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?))
             .unwrap(),
         1,
         "the next pass reads the settings"
@@ -328,8 +370,18 @@ fn a_gh_failure_of_the_mutation_is_retried_and_the_post_stands() {
 
     let outcomes = drain(&pay);
 
-    assert!(matches!(&outcomes[..], [cpd_core::swr::source::ExecOutcome::Retry { .. }]), "{outcomes:?}");
-    assert_eq!(row(&pay).map(|r| r.0), Some("pending".to_owned()), "a failed call settles nothing");
+    assert!(
+        matches!(
+            &outcomes[..],
+            [cpd_core::swr::source::ExecOutcome::Retry { .. }]
+        ),
+        "{outcomes:?}"
+    );
+    assert_eq!(
+        row(&pay).map(|r| r.0),
+        Some("pending".to_owned()),
+        "a failed call settles nothing"
+    );
     assert_eq!(pay.fx.calls("node").len(), 1, "the Slack message was sent");
     assert_eq!(posts(&pay), 1);
 }
@@ -355,7 +407,11 @@ fn a_failed_slack_send_queues_nothing_and_writes_no_row() {
     assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
     assert!(queued(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
-    assert_eq!(row(&pay), None, "no pr_posts row, auto_merge column included");
+    assert_eq!(
+        row(&pay),
+        None,
+        "no pr_posts row, auto_merge column included"
+    );
 }
 
 #[test]
@@ -367,7 +423,10 @@ fn auto_merge_adds_no_readiness_check_of_its_own() {
     drop(pay);
 
     let unready = post();
-    sql(&unready, "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;");
+    sql(
+        &unready,
+        "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;",
+    );
     let error = refused(&post_cmd(&unready), "pr_not_ready", 3);
     assert_eq!(error["details"]["reasons"], json!(["checks_failed"]));
     assert!(gh(&unready).is_empty(), "{:?}", gh(&unready));

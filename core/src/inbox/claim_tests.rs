@@ -268,7 +268,10 @@ fn refused_claim(answer: &str) -> (CpdError, model::Item) {
     let id = store.read(model::open_items).unwrap()[0].id;
     // The pass's rows, from the answer GitHub would have given.
     let reply: Value = serde_json::from_str(answer).unwrap();
-    let me = reply["data"]["viewer"]["login"].as_str().unwrap().to_owned();
+    let me = reply["data"]["viewer"]["login"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let raw = &reply["data"]["p0"]["pullRequest"];
     let found = (!reply["data"]["p0"].is_null()).then(|| GhPr {
         title: raw["title"].as_str().unwrap().to_owned(),

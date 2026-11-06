@@ -131,7 +131,11 @@ fn deploys(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
                 kind: Kind::Deploy,
                 urgency: Urgency::Yellow,
                 subject: format!("deploy:{repo}#{run_id}"),
-                label: format!("{repo} deploy {}\n{}", names.join(", "), text("display_title")),
+                label: format!(
+                    "{repo} deploy {}\n{}",
+                    names.join(", "),
+                    text("display_title")
+                ),
                 url: Some(text("html_url")),
                 context: None,
                 plan: None,
@@ -632,7 +636,9 @@ fn review_requested(
             "SELECT repo, number FROM pull_requests WHERE review_requested = 1 AND state = 'open'",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })?
             .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     })?;
@@ -2167,15 +2173,7 @@ mod tests {
         );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         f.sql("DELETE FROM swr_slack_posts");
-        let none = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team()),
-        )
-        .unwrap();
+        let none = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
     }
 
@@ -2229,8 +2227,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pull_request_that_leaves_the_posts_closes_its_item()
-     {
+    fn a_pull_request_that_leaves_the_posts_closes_its_item() {
         let mut f = fixture("dispatch");
         let two = [post("acme/pay", 1), post("acme/pay", 2)];
         let both = [("acme/pay", 1, open_pr()), ("acme/pay", 2, open_pr())];
@@ -2276,15 +2273,7 @@ mod tests {
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.workflows.insert(("acme/gone".to_owned(), 2), None);
         crate::inbox::swr_fixture::lookup(&mut f.store, &answer).unwrap();
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team()),
-        )
-        .unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert_eq!(
             all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
             ["pr:acme/pay#1"],
@@ -2372,18 +2361,11 @@ mod tests {
         write_cache(&mut f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
         crate::inbox::swr_fixture::lookup(&mut f.store, &lookup).unwrap();
-        let kinds: Vec<_> = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team()),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|c| c.kind)
-        .collect();
+        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team()))
+            .unwrap()
+            .into_iter()
+            .map(|c| c.kind)
+            .collect();
         assert_eq!(
             kinds[3..],
             [Kind::PrReady, Kind::PrReady, Kind::ReviewRequested]

@@ -1893,7 +1893,11 @@ fn edit_title_of_an_open_pull_request_stores_it_and_queues_the_retitle() {
 
     assert_eq!(out["fields"], json!(["title"]));
     assert_eq!(out["queued"], true, "{out}");
-    assert!(gh_args(&fx).is_empty(), "the command calls no GitHub: {:?}", gh_args(&fx));
+    assert!(
+        gh_args(&fx).is_empty(),
+        "the command calls no GitHub: {:?}",
+        gh_args(&fx)
+    );
     assert_eq!(
         fx.env.query::<String>(
             "SELECT target_key || '|' || op_kind || '|' || json_extract(vars_json, '$.title') || '|' || json_extract(patch_json, '$.title') FROM swr_mutations"

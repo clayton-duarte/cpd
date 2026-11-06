@@ -89,7 +89,10 @@ fn write_post(fx: &Fixture, repo: &str, number: u64) {
 /// viewer, the raw row, and the detail with the reviews and the head's checks.
 pub(super) fn seed(fx: &Fixture, repo: &str, number: u64, answer: &str) {
     let reply: Value = serde_json::from_str(answer).unwrap();
-    let me = reply["data"]["viewer"]["login"].as_str().unwrap().to_owned();
+    let me = reply["data"]["viewer"]["login"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let mut sql = format!(
         "INSERT INTO swr_viewer (id, login, fetched_at) VALUES (1, '{me}', 't') ON CONFLICT (id) DO UPDATE SET login = excluded.login;
          DELETE FROM pull_requests WHERE repo = '{repo}' AND number = {number};"

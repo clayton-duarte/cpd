@@ -84,7 +84,9 @@ fn act(fx: &Fx, client: &str) {
 /// The merge mutations on the outbox: `(target_key, status)`.
 fn queued(env: &TestEnv) -> Vec<(String, String)> {
     env.read(|c| {
-        let mut stmt = c.prepare("SELECT target_key, status FROM swr_mutations WHERE op_kind = 'merge' ORDER BY id")?;
+        let mut stmt = c.prepare(
+            "SELECT target_key, status FROM swr_mutations WHERE op_kind = 'merge' ORDER BY id",
+        )?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -105,7 +107,13 @@ pub(crate) fn queue_merge_at(home: &Path, pull: &str) {
         context: None,
     };
     let now = cpd_core::clock::Clock::utc(&cpd_core::clock::ManualClock::new());
-    cpd_core::swr::outbox::enqueue(&mut store, now, op, cpd_core::swr::outbox::Coalesce::LatestWins).unwrap();
+    cpd_core::swr::outbox::enqueue(
+        &mut store,
+        now,
+        op,
+        cpd_core::swr::outbox::Coalesce::LatestWins,
+    )
+    .unwrap();
 }
 
 /// The merge of every pull request in `home` is over: GitHub refused it (the mutation `failed`), so its spinner goes.
@@ -114,7 +122,10 @@ pub(crate) fn fail_merges_at(home: &Path) {
     let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
     store
         .write("fixture", |tx| {
-            tx.execute("UPDATE swr_mutations SET status = 'failed' WHERE op_kind = 'merge'", [])?;
+            tx.execute(
+                "UPDATE swr_mutations SET status = 'failed' WHERE op_kind = 'merge'",
+                [],
+            )?;
             Ok::<(), cpd_core::error::CpdError>(())
         })
         .unwrap();
@@ -158,15 +169,33 @@ fn a_refused_merge_opens_the_failure_dialog_on_the_client_logs_it_and_queues_not
 
     let popups = naming(args_of(&fx, "tmux"), "display-popup");
     assert_eq!(popups.len(), 1, "one dialog: {popups:?}");
-    assert!(popups[0].windows(2).any(|w| w == ["-c", CLIENT]), "on the client: {popups:?}");
-    assert!(popups[0].last().unwrap().starts_with("cpd tui view dialog text "), "a `text` dialog: {popups:?}");
-    assert!(popups[0].last().unwrap().contains(&format!("--body='{text}")), "its text: {popups:?}");
+    assert!(
+        popups[0].windows(2).any(|w| w == ["-c", CLIENT]),
+        "on the client: {popups:?}"
+    );
+    assert!(
+        popups[0]
+            .last()
+            .unwrap()
+            .starts_with("cpd tui view dialog text "),
+        "a `text` dialog: {popups:?}"
+    );
+    assert!(
+        popups[0]
+            .last()
+            .unwrap()
+            .contains(&format!("--body='{text}")),
+        "its text: {popups:?}"
+    );
     let log = merge_log(&fx.env);
     assert_eq!(log.len(), 1, "{log:?}");
     assert!(log[0].starts_with(text), "{log:?}");
     assert!(queued(&fx.env).is_empty());
     assert!(args_of(&fx, "gh").is_empty());
-    assert!(naming(args_of(&fx, "tmux"), "display-message").is_empty(), "the dialog opened, no message");
+    assert!(
+        naming(args_of(&fx, "tmux"), "display-message").is_empty(),
+        "the dialog opened, no message"
+    );
 }
 
 #[test]
@@ -204,11 +233,19 @@ fn when_the_dialog_cannot_open_the_log_line_is_first_then_the_client_gets_the_me
     // after the dialog, the message on that client, as every `tui action` does for its own failures
     let messages = naming(args_of(&fx, "tmux"), "display-message");
     assert_eq!(messages.len(), 1, "{:?}", args_of(&fx, "tmux"));
-    assert!(messages[0].windows(2).any(|w| w == ["-c", "/dev/pts/nobody"]), "{messages:?}");
+    assert!(
+        messages[0]
+            .windows(2)
+            .any(|w| w == ["-c", "/dev/pts/nobody"]),
+        "{messages:?}"
+    );
     assert!(messages[0].last().unwrap().contains(text), "{messages:?}");
     // the log line was written before the first tmux call of the action, so before the dialog was tried
     let seen = seen.lock().unwrap();
-    assert!(!seen.is_empty() && seen.iter().all(|logged| *logged), "{seen:?}");
+    assert!(
+        !seen.is_empty() && seen.iter().all(|logged| *logged),
+        "{seen:?}"
+    );
 }
 
 #[test]

@@ -61,7 +61,14 @@ fn a_clean_open_pull_request_is_queued_with_the_head_it_was_cached_at() {
     let out = fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(out["queued"], true, "{out}");
     assert!(out["mutation_id"].is_i64(), "{out}");
-    assert_eq!((out["repo"].as_str(), out["number"].as_i64(), out["method"].as_str()), (Some("acme/api"), Some(7), Some("squash")));
+    assert_eq!(
+        (
+            out["repo"].as_str(),
+            out["number"].as_i64(),
+            out["method"].as_str()
+        ),
+        (Some("acme/api"), Some(7), Some("squash"))
+    );
     assert_eq!(out["effective"]["state"], "merging", "{out}");
     assert_eq!(
         mutations(&fx.env),
@@ -85,7 +92,11 @@ fn the_first_method_the_repo_allows_is_the_one_queued() {
     ] {
         let fx = Fx::with_ports();
         cached(&fx.env, "open", "clean", methods);
-        assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["method"], want, "{methods:?}");
+        assert_eq!(
+            fx.cpd(&["pr", "merge", REF]).ok()["method"],
+            want,
+            "{methods:?}"
+        );
         assert_eq!(mutations(&fx.env)[0].3["method"], want);
     }
 }
@@ -161,15 +172,28 @@ const REQUIRED: &str = "[pr]\nrequired_checks = [\"gate\"]\n";
 #[test]
 fn a_required_check_that_is_missing_pending_or_failed_refuses_the_merge() {
     for (nodes, want) in [
-        (json!([]), json!({"missing": ["gate"], "pending": [], "failed": []})),
-        (json!([gate("IN_PROGRESS", json!(null))]), json!({"missing": [], "pending": ["gate"], "failed": []})),
-        (json!([gate("COMPLETED", json!("FAILURE"))]), json!({"missing": [], "pending": [], "failed": ["gate"]})),
+        (
+            json!([]),
+            json!({"missing": ["gate"], "pending": [], "failed": []}),
+        ),
+        (
+            json!([gate("IN_PROGRESS", json!(null))]),
+            json!({"missing": [], "pending": ["gate"], "failed": []}),
+        ),
+        (
+            json!([gate("COMPLETED", json!("FAILURE"))]),
+            json!({"missing": [], "pending": [], "failed": ["gate"]}),
+        ),
     ] {
         let fx = Fx::with_ports();
         fx.env.repo_policy("acme", "api", REQUIRED);
         cached(&fx.env, "open", "clean", (true, false, false));
         rollup(&fx, nodes);
-        let error = refused(&fx.cpd(&["pr", "merge", REF]), "required_check_not_passed", 3);
+        let error = refused(
+            &fx.cpd(&["pr", "merge", REF]),
+            "required_check_not_passed",
+            3,
+        );
         for key in ["missing", "pending", "failed"] {
             assert_eq!(error["details"][key], want[key], "{key}");
         }
@@ -190,13 +214,26 @@ fn a_passed_required_check_or_an_empty_required_list_queues_the_merge() {
         }
         cached(&fx.env, "open", "clean", (true, false, false));
         rollup(&fx, nodes);
-        assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["queued"], true, "{policy:?}");
+        assert_eq!(
+            fx.cpd(&["pr", "merge", REF]).ok()["queued"],
+            true,
+            "{policy:?}"
+        );
     }
 }
 
 #[test]
 fn a_bad_argument_is_usage_and_nothing_is_queued() {
-    for bad in ["foo", "acme/api#x", "acme/api#0", "acme/api", "#7", "acme/#7", "/api#7", "a/b/c#7"] {
+    for bad in [
+        "foo",
+        "acme/api#x",
+        "acme/api#0",
+        "acme/api",
+        "#7",
+        "acme/#7",
+        "/api#7",
+        "a/b/c#7",
+    ] {
         let fx = Fx::with_ports();
         refused(&fx.cpd(&["pr", "merge", bad]), "usage", 2);
         assert_eq!(gh_calls(&fx), 0, "{bad}");

@@ -123,7 +123,9 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
     let Some(head) = e.head_oid.clone() else {
         return Err(CpdError::new(
             ErrorCode::ItemNotFound,
-            format!("{repo}#{number} has no head commit in the cache yet: the poll has not read it."),
+            format!(
+                "{repo}#{number} has no head commit in the cache yet: the poll has not read it."
+            ),
         )
         .with("repo", repo.as_str())
         .with("number", number));

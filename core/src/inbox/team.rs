@@ -287,7 +287,11 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
             "closed" => GhState::Closed,
             _ => GhState::Merged,
         },
-        author: if e.row.authored && !me.is_empty() { me.to_owned() } else { "someone".to_owned() },
+        author: if e.row.authored && !me.is_empty() {
+            me.to_owned()
+        } else {
+            "someone".to_owned()
+        },
         decision: match e.review_decision.as_str() {
             "approved" => Some("APPROVED".to_owned()),
             "changes_requested" => Some("CHANGES_REQUESTED".to_owned()),

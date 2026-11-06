@@ -1,5 +1,5 @@
 //! `pr view` (commands.md §9.8, contract §7.6): the checks, reviews and comments
-//! of one Workflow's pull request, which the poller does not store. 
+//! of one Workflow's pull request, which the poller does not store.
 
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -34,9 +34,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let row = workflow
         .pull_request
         .expect("an open or merged Workflow has its pull_request row (workflows CHECK)");
-    let raw = env
-        .store
-        .read(|conn| crate::pr::pulls::load(conn, row))?;
+    let raw = env.store.read(|conn| crate::pr::pulls::load(conn, row))?;
     let effective = env
         .store
         .read(|conn| effective_in(conn, &raw.repo, raw.number))?

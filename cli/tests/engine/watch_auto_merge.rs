@@ -437,9 +437,22 @@ fn a_gh_failure_keeps_the_row_pending_and_the_outbox_tries_again_after_its_backo
         Some(1),
         "three seconds after the failed run is not 60 s: no call"
     );
-    assert_eq!(p.reads(), 2, "after the backoff the same request is tried again, once: {:?}", p.calls());
-    assert_eq!(p.row("repo"), ("pending".to_owned(), None), "a failure leaves the row pending");
-    assert_eq!(p.errors(), Vec::<Value>::new(), "a retried failure raises no Event");
+    assert_eq!(
+        p.reads(),
+        2,
+        "after the backoff the same request is tried again, once: {:?}",
+        p.calls()
+    );
+    assert_eq!(
+        p.row("repo"),
+        ("pending".to_owned(), None),
+        "a failure leaves the row pending"
+    );
+    assert_eq!(
+        p.errors(),
+        Vec::<Value>::new(),
+        "a retried failure raises no Event"
+    );
 }
 
 #[test]

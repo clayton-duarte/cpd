@@ -424,4 +424,3 @@ fn e11_reports_pi_not_found_once_and_keeps_ticking() {
     assert_eq!(errors[0]["code"], "pi_not_found");
     assert_eq!(t.helper_calls(), 0);
 }
-
