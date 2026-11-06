@@ -71,7 +71,7 @@ fragment Light on PullRequest {
   labels(first: 100) { nodes { name } }
   autoMergeRequest { enabledAt }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-  latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } }
+  latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } }
   reviewThreads(first: 100) { nodes { id isResolved } }   # owned pull requests only (§3.2)
 }
 
@@ -89,7 +89,7 @@ fragment Heavy on PullRequest {
 
 Notes on the shape:
 
-- **`labels`, `autoMergeRequest`, `latestOpinionatedReviews` and `reviewThreads` are light** here, though the spec's list put them elsewhere. Reason: `labels` and `autoMergeRequest` are header scalars that the readers need on every pass; `latestOpinionatedReviews` is what the human-approval rule of contract §7.6 step 2 (pro-d158) reads, so `review_decision` cannot be computed without it on every pass; `reviewThreads(first: 100){ id isResolved }` is what the pro-d387 resolution check reads (contract §7.6 step 3a), and a thread resolved on GitHub moves no `updatedAt`, so without it on every pass a resolution would be invisible. The last one is selected only for pull requests a Plan owns (the builder knows them from `workflows`).
+- **`labels`, `autoMergeRequest`, `latestReviews` and `reviewThreads` are light** here, though the spec's list put them elsewhere. Reason: `labels` and `autoMergeRequest` are header scalars that the readers need on every pass; `latestReviews` (pro-d453: it replaces `latestOpinionatedReviews`, and adds `commit { oid }`) is what the human-approval rule of contract §7.6 step 2 (pro-d158) reads, so `review_decision` cannot be computed without it on every pass, and it gives every polled pull request its reviewers' state and reviewed commit without a heavy read. The pass stores the `latestReviews` nodes, the label names and the author's login in `pull_requests.reviews_json`, `labels_json` and `author_login` (migration `pr-light-cache`); `reviewThreads(first: 100){ id isResolved }` is what the pro-d387 resolution check reads (contract §7.6 step 3a), and a thread resolved on GitHub moves no `updatedAt`, so without it on every pass a resolution would be invisible. The last one is selected only for pull requests a Plan owns (the builder knows them from `workflows`).
 - **`comments(first: 50)` and `reviewThreads(first: 50)` are heavy, and the `first` counts are this page's choice.** Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 covers the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
 - The check contexts (`... on CheckRun`, `... on StatusContext`) replace `gh run list --commit` and the `gh pr view --json statusCheckRollup` of `pr view`. `checkSuite.workflowRun.databaseId` is the id `pr rerun` needs (§9, `rerun`).
 - Repository metadata (`m<i>`) is fetched only for a repository missing from `swr_repos` or whose `fetched_at` is older than 24 h.
@@ -159,13 +159,13 @@ The document carries one alias `p<i>` per **candidate**. A candidate is a stored
 - **(a) owned:** a `workflows` row of a Plan in status `open` points to it, and no search of the **previous** pass listed it;
 - **(b) authored:** `authored` is 1 and the previous pass's `authored` search did not list it;
 - **(c) review requested:** `review_requested` is 1 and the previous pass's `reviews` search did not list it;
-- **(d) first seen:** it is a primary post of `swr_slack_posts` (the team review channel) with no row in `pull_requests` yet, and the post is inside the 7-day window.
+- **(d) Slack-posted (pro-d453):** an active row of `swr_slack_posts` (the team review channel; `repo` and `number` set, inside the 7-day window) points to it, and it has no row in `pull_requests` yet (first seen) **or** its row is `open` and not archived. A teammate's pull request posted without a review request is neither authored nor requested, so without this it would be read once and then go stale; it is read every pass until it merges or closes. It is an alias at most once per document, and not when it is in the `Heavy` set.
 
 "The previous pass" is the document the stored rows came from: the rows are built from it, so the candidate rule is decided before the call, which is why this design can send the alias in the same document. A pull request that left the open list between passes is therefore confirmed by the alias of the **next** pass, not the current one.
 
 The rule's effect, and the reason for it:
 
-- **Open-only (rule 2 of the spec).** A row whose stored `state` is `merged` or `closed` is never a candidate, so no alias reads it. The non-open reads are exactly two: the one confirmation read of a locally open pull request that left the open list (its answer sets `state`), and the first-seen Slack pull request (d). A confirmation answer of `OPEN` clears (b) and (c), whose flags follow what the searches list (contract §7.6 step 5, S4); an owned pull request stays a candidate while it is open (contract §7.6 step 3).
+- **Open-only (rule 2 of the spec).** A row whose stored `state` is `merged` or `closed` is never a candidate, so no alias reads it. The non-open reads are exactly two: the one confirmation read of a locally open pull request that left the open list (its answer sets `state`), and the first-seen Slack pull request (d); a Slack-posted pull request whose row is merged or closed is not read again. A confirmation answer of `OPEN` clears (b) and (c), whose flags follow what the searches list (contract §7.6 step 5, S4); an owned pull request stays a candidate while it is open (contract §7.6 step 3).
 - **Limit (rule 3 of the spec).** A tracked pull request beyond the first page of a search is not listed by it, so (a) to (c) cover it, in the document of the next pass. No tracked pull request is hidden by the limit.
 - **Archived (rule 2).** A repository that GitHub reports archived sets `archived` 1 on its rows; an archived row is not a candidate and the search's `archived:false` never lists it.
 
@@ -375,3 +375,9 @@ Not decided by this page. Each is recorded so no Job guesses it.
 - **`pr view` when no detail is hydrated yet**: the design prints `detail` `null`. Whether the Lead should wait for it is not decided.
 - **`prune/mod.rs:179`** calls `gh` directly (§7.3). It is not an SWR reader; moving it is in this Plan's scope by rule 7, but its owner Job is not named here.
 - **The `triggering_actor.login` of the deploy list** is compared case-insensitively against the viewer's login (§8). Assumption from contract §7.6 step 8; verified only against the live example of 2026-10-27 that the contract cites.
+
+## Decision pro-d453 (Light read, Danger freeze)
+
+- A teammate's open pull request whose stored rollup is `failed` and whose labels (`labels_json`) match an excused label is hydrated (the `Heavy` set, within the cap) although it is not the User's own, and once for its head: the contexts are what excuse a failing Danger. The Light read has only the rollup state, so a later light node of the same head reduces the stored detail's contexts again under the policy hold instead of bringing `failed` back.
+- `poll_node` computes the policy hold once (`status::policy_hold`) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold needs the excused label: a failing Danger without it stays failed (pro-d447).
+- The Inbox reader derives `checks_state` from the effective `checks` first (`passed` is `SUCCESS`, `failed` `FAILURE`, `pending` `PENDING`); only a row with `none` falls back to the detail's rollup. It takes the reviews from the Light read's `latestReviews` and the author from `author_login`.
