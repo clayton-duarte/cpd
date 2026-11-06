@@ -153,34 +153,41 @@ fn panes(env: &mut Env) -> Result<Value, CpdError> {
     else {
         unreachable!("`list` parses to List")
     };
+    // A store written by a newer cpd ends the serve; any other pane failure is embedded.
+    let pane = |result: Result<Output, CpdError>| match result {
+        Err(e) if e.code() == ErrorCode::StoreTooNew => Err(e),
+        other => Ok(printed(other)),
+    };
     Ok(json!({
-        "context": printed(crate::context::list::list_in(env)),
-        "plan": printed(crate::plan::list::list_in(env, plan)),
-        "session": printed(crate::session::row::list_in(env, session)),
-        "inbox": printed(crate::inbox::cmd::list_in(env, inbox)),
+        "context": pane(crate::context::list::list_in(env))?,
+        "plan": pane(crate::plan::list::list_in(env, plan))?,
+        "session": pane(crate::session::row::list_in(env, session))?,
+        "inbox": pane(crate::inbox::cmd::list_in(env, inbox))?,
     }))
 }
 
-fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
+fn plan_show(env: &mut Env, id: String, plan: &str, replaced: bool) -> Result<Frame, CpdError> {
     let args = match PlanCli::try_parse_from(["cpd", "show", &format!("--plan={plan}")]) {
         Ok(PlanCli {
             command: crate::plan::Command::Show(args),
         }) => args,
         Ok(_) => unreachable!("`show` parses to Show"),
         Err(e) => {
-            return Frame::Error {
+            return Ok(Frame::Error {
                 id: Some(id),
                 code: "invalid_plan_id".to_owned(),
                 message: e.to_string(),
-            };
+            });
         }
     };
     match crate::plan::show::show_in(env, args) {
-        Ok(out) => Frame::PlanShow {
+        Ok(out) => Ok(Frame::PlanShow {
             id,
             value: printed(Ok(out)),
-        },
-        Err(e) => Frame::error(Some(id), &e),
+        }),
+        // A replaced binary serves again instead of answering.
+        Err(e) if replaced && e.code() == ErrorCode::StoreTooNew => Err(e),
+        Err(e) => Ok(Frame::error(Some(id), &e)),
     }
 }
 
@@ -190,33 +197,45 @@ enum Request {
     Answer(Frame),
 }
 
-fn request(env: &mut Env, line: &str) -> Request {
+fn request(env: &mut Env, line: &str, replaced: bool) -> Result<Request, CpdError> {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(line) else {
-        return Request::Answer(Frame::usage(None, "A request is one JSON object per line."));
+        return Ok(Request::Answer(Frame::usage(
+            None,
+            "A request is one JSON object per line.",
+        )));
     };
     let id = obj.get("id").and_then(Value::as_str).map(str::to_owned);
     let Some(t) = obj.get("t").and_then(Value::as_str) else {
-        return Request::Answer(Frame::usage(id, "A request needs a string field `t`."));
+        return Ok(Request::Answer(Frame::usage(
+            id,
+            "A request needs a string field `t`.",
+        )));
     };
     let allowed: &[&str] = match t {
         "refresh" => &["t"],
         "plan_show" => &["t", "id", "plan"],
         other => {
-            return Request::Answer(Frame::usage(id, format!("Unknown request `{other}`.")));
+            return Ok(Request::Answer(Frame::usage(
+                id,
+                format!("Unknown request `{other}`."),
+            )));
         }
     };
     if let Some(extra) = obj.keys().find(|k| !allowed.contains(&k.as_str())) {
-        return Request::Answer(Frame::usage(id, format!("`{t}` takes no field `{extra}`.")));
+        return Ok(Request::Answer(Frame::usage(
+            id,
+            format!("`{t}` takes no field `{extra}`."),
+        )));
     }
     if t == "refresh" {
-        return Request::Refresh;
+        return Ok(Request::Refresh);
     }
     match (id, obj.get("plan").and_then(Value::as_str)) {
-        (Some(id), Some(plan)) => Request::Answer(plan_show(env, id, plan)),
-        _ => Request::Answer(Frame::usage(
+        (Some(id), Some(plan)) => Ok(Request::Answer(plan_show(env, id, plan, replaced)?)),
+        _ => Ok(Request::Answer(Frame::usage(
             None,
             "`plan_show` needs a string `id` and a string `plan`.",
-        )),
+        ))),
     }
 }
 
@@ -331,10 +350,15 @@ fn serve_frames(
     let mut batch: Option<u64> = None;
     for item in input {
         match item {
-            Input::Line(line) => match request(env, &line) {
-                Request::Refresh => snapshot!(),
-                Request::Answer(frame) => emit!(frame),
-            },
+            Input::Line(line) => {
+                if replaced() {
+                    return Ok(Done::Restart);
+                }
+                match request(env, &line, replaced())? {
+                    Request::Refresh => snapshot!(),
+                    Request::Answer(frame) => emit!(frame),
+                }
+            }
             Input::Tick => {
                 if replaced() {
                     return Ok(Done::Restart);
