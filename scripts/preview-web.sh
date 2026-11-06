@@ -15,7 +15,7 @@
 # ${CPD_PREVIEW_DIR}/watchdog.pid, log in ${CPD_HOME:-~/.cpd}/run/preview-watchdog.log).
 # The watchdog relaunches Electron with CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html (Vite HMR);
 # when that URL fails to load, Electron loads the built renderer.
-# CPD_PREVIEW_ELECTRON=1 also builds the Electron bundle. While a preview is on, the
+# `on` builds the Electron bundle when web/dist-electron/main.js is missing. While a preview is on, the
 # tmux server option @cpd_web_preview holds '<name> <sha>'. State: ${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}/web-state.
 # Safe to rerun.
 set -eu
@@ -115,7 +115,7 @@ on() {
     git -C "$repo" worktree add -B preview/web "$worktree" origin/main >&2
     pnpm --dir "$worktree" install --frozen-lockfile >&2
   fi
-  if [ "${CPD_PREVIEW_ELECTRON:-}" = 1 ]; then
+  if [ ! -f "$worktree/web/dist-electron/main.js" ]; then
     pnpm --dir "$worktree" --filter cpd-web-client run build:electron >&2
   fi
 

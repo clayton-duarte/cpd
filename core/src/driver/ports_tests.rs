@@ -110,7 +110,7 @@ impl Spawn for Stubborn {
                 self.ignored.lock().unwrap().push(p);
                 Ok(())
             }
-            Signal::Kill => self.inner.signal(p, s),
+            Signal::Kill | Signal::Usr1 => self.inner.signal(p, s),
         }
     }
     fn alive(&self, p: Pid) -> bool {

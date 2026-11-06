@@ -66,6 +66,9 @@ fn resolve(args: Args) -> Result<Install, CpdError> {
         .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
         .map(Duration::from_secs)
         .unwrap_or(install::DEFAULT_LOCK_WAIT);
+    let preview_dir = std::env::var_os("CPD_PREVIEW_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/cpd-preview"));
     Ok(Install {
         root,
         target_dir,
@@ -73,5 +76,7 @@ fn resolve(args: Args) -> Result<Install, CpdError> {
         cpd_home: CpdHome::from_env()?,
         pid: std::process::id(),
         lock_wait,
+        preview_dir,
+        macos: cfg!(target_os = "macos"),
     })
 }

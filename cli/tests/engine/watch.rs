@@ -5133,6 +5133,8 @@ impl InstallRig {
             home: fx.env.home().to_path_buf(),
             cpd_home: CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
             pid: 4242,
+            preview_dir: fx.env.home().join(".cache/cpd-preview"),
+            macos: false,
             lock_wait: cpd_core::install::DEFAULT_LOCK_WAIT,
         };
         InstallRig { fx, install }

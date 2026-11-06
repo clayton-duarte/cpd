@@ -18,6 +18,7 @@ pub mod lock;
 pub mod output;
 
 // One module per area, each filled in by its own Job.
+pub mod app;
 pub mod ask;
 pub mod attempt;
 pub mod board;

@@ -122,6 +122,8 @@ error_codes! {
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
+    // `cpd app` finds no checkout: `cpd install` never wrote `app-root` (commands.md §14.4a).
+    AppNotInstalled = "app_not_installed" => Failure,
     // A `durable` Worker's transcript has not grown for `timeouts.stall_minutes` (contract §3.4 A4, hs-d798):
     // the code of the driver's informational `error` Event. Never a command's failure (like `cleanup_failed`).
     WorkerStalled = "worker_stalled" => Failure,
