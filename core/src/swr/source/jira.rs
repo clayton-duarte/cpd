@@ -291,13 +291,28 @@ pub fn mark_inactive(store: &mut Store, now: OffsetDateTime) -> Result<(), CpdEr
 pub fn target_name(
     store: &mut Store,
     home: &crate::home::CpdHome,
-    plan: &str,
-    workflow: &str,
-    target: &str,
+    m: &Mutation,
 ) -> Result<String, CpdError> {
-    let (plan, key) = (PlanId::parse(plan)?, WorkflowKey::parse(workflow)?);
+    let (plan, workflow, target) = ids_of(m)?;
+    let (plan, key) = (PlanId::parse(&plan)?, WorkflowKey::parse(&workflow)?);
     let policy = store.read(|c| crate::pr::policy_of_workflow(c, home, &plan, &key))?;
-    Ok(wanted_of(&policy, target)?.target_name)
+    Ok(wanted_of(&policy, &target)?.target_name)
+}
+
+/// The `plan`, `workflow` and `target` of a row.
+fn ids_of(m: &Mutation) -> Result<(String, String, String), CpdError> {
+    let bad = |what: &str| CpdError::new(ErrorCode::Internal, format!("A Jira transition has bad {what}."));
+    let context: Value = serde_json::from_str(m.context_json.as_deref().unwrap_or("{}"))
+        .map_err(|_| bad("context"))?;
+    let vars: Value = serde_json::from_str(&m.vars_json).map_err(|_| bad("vars"))?;
+    match (
+        context["plan"].as_str(),
+        context["workflow"].as_str(),
+        vars["target"].as_str(),
+    ) {
+        (Some(p), Some(w), Some(t)) => Ok((p.to_owned(), w.to_owned(), t.to_owned())),
+        _ => Err(bad("plan, workflow or target")),
+    }
 }
 
 /// Park a refused transition (swr-jira.md §8): `failed`, `refused_with` in its context, and the one plan-scoped `error`
@@ -393,7 +408,7 @@ pub fn reopen_refused(
         })?;
         let Some(ticket) = ticket else { continue };
         // A policy that does not resolve is reported when a row of the Workflow runs; here it only holds the reopen.
-        let Ok(name) = target_name(store, home, plan, workflow, target) else {
+        let Ok(name) = target_name(store, home, &m) else {
             continue;
         };
         let rank = rank(target).ok_or_else(|| unknown_target(target))?;

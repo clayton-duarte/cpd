@@ -178,14 +178,7 @@ fn jira_drain(
         };
         let (code, rest) = error.split_once(": ").unwrap_or((&error, ""));
         if code == ErrorCode::JiraRefused.as_str() {
-            let (context, vars) = (json_of(m.context_json.as_deref()), json_of(Some(&m.vars_json)));
-            let name = jira::target_name(
-                cx.store,
-                cx.home,
-                context["plan"].as_str().unwrap_or_default(),
-                context["workflow"].as_str().unwrap_or_default(),
-                vars["target"].as_str().unwrap_or_default(),
-            )?;
+            let name = jira::target_name(cx.store, cx.home, &m)?;
             jira::park_refused(cx.store, &m, now, super::SOURCE, rest, &name)?;
             continue;
         }
@@ -197,7 +190,3 @@ fn jira_drain(
     jira::mark_inactive(cx.store, now)
 }
 
-fn json_of(text: Option<&str>) -> serde_json::Value {
-    text.and_then(|t| serde_json::from_str(t).ok())
-        .unwrap_or(serde_json::Value::Null)
-}
