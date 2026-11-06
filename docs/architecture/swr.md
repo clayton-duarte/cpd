@@ -271,14 +271,14 @@ One row per Session's classifier badge.
 | Column | Type and constraint | Meaning |
 |---|---|---|
 | `session_id` | TEXT PRIMARY KEY | the Session |
-| `entry_id` | TEXT NOT NULL | the entry the badge is about |
+| `entry_id` | TEXT NOT NULL | the Session's last transcript item id when the badge was computed; the row is fresh while it matches the Session's current last item (`swr-classifier.md` §2.1). It is not a query key |
 | `label` | TEXT | the badge's label |
 | `score` | REAL | the classifier's score |
 | `text` | TEXT | the badge's text |
 | `tone` | TEXT | the badge's tone |
 | `others_json` | TEXT | the other completion scores (the hover card) |
 | `synced_at` | TEXT | when it was computed |
-| `inactive_at` | TEXT | when no observer needs it |
+| `inactive_at` | TEXT | when no observer needs it: set when the Session is marked `stopped`, cleared by a write (`swr-classifier.md` §2.4) |
 
 ## 4. The two clocks
 
@@ -291,6 +291,7 @@ One row per Session's classifier badge.
 | Slack channel | 30 min |
 | models | 7 d |
 | merged or closed pull request, and an unchanged `(updated_at, head_oid)` detail | never (`stale_after` NULL) |
+| Lead completion badge (`swr_badges`, not a query) | while its `entry_id` matches the Session's last transcript item; the freshness is in the row, so it survives a restart (`swr-classifier.md` §2.1) |
 
 A Changed commit sets `stale_after` to its time plus the query's staleTime. An Unchanged fetch writes no query row (D5), so the poller keeps the fresh-until instant of each key **in memory**. After a restart a key has no in-memory instant, so every query is due once. That is the one stale-after-restart rule, and it is the reason `is_fresh` reads `stale_after` and the poller's memory together.
 
@@ -450,7 +451,7 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 
 ## 12. The engine step E24 and gc
 
-Step E24 (contract §4.7) runs every tick. It runs every source **except `github`**, which E5's own thread already runs through the same trait. For each source it:
+Step E24 (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`**, which E5's own thread already runs through the same trait. For each source it:
 
 1. skips the source while any of its endpoints is paused (`is_paused`);
 2. calls `fetch` for the keys `due` returns;
@@ -482,7 +483,7 @@ No `swr` command reads upstream. A write command is `cpd`'s `enqueue` (A6), whic
 | `slack` | `slack.rs` | `docs/architecture/swr-slack.md` | `swr_slack_posts` | `slack` | `slack:channel:C123` | `reaction` (dedupe on `(channel, ts, emoji)`), `post` |
 | `jira` | `jira.rs` | `docs/architecture/swr-jira.md` | `swr_jira_issues`, `swr_atlassian` | `jira` | `jira:issue:EEC-1` | `transition` (`Forward`: `in_progress` < `in_review` < `done`) |
 | `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` | the provider's endpoint, named by its Workflow | `models:provider:openai` | none |
-| `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` | `ollama.lab`, `bifrost` | `classifier:badge:<session id>` (the form the classifier Workflow confirms) | none |
+| `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` (not `swr_queries`) | `ollama.lab`, `bifrost` | none: a badge is keyed by its Session id (`swr-classifier.md` §2.3) | none |
 
 Each Workflow writes its design page and nothing else of this one. Until a page exists, its row is the whole specification.
 
@@ -535,6 +536,6 @@ The design rests on these. Each is cited where it applies.
 Not decided by this design. Each is recorded so no Job guesses it.
 
 - **Columns added to `pull_requests`.** Accepted assumption A1 has the swr-core migration add columns to `pull_requests`, but this design does not name them. The swr-core Job names them when it writes the migration, and they must be additive (nullable, or with a constant default).
-- **The `classifier` source file.** The module list has no `source/classifier.rs`. The classifier Workflow decides its file and its key kind.
+- **The `classifier` source file.** The module list has no `source/classifier.rs`. The classifier Workflow decides its file and its key kind, and whether the badge's helper call moves into it (`swr-classifier.md` §7, open item 3).
 - **Lifetime of `swr_pr_detail` rows.** The table has no `inactive_at`, so `gc::sweep` cannot age it. Its removal rule is for the github Workflow.
 - **The position of E24 in the tick.** Contract §4.7 says it runs every tick and does not place it among E1 to E22. The engine order is set when the step lands.

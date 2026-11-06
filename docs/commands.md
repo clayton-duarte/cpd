@@ -7524,7 +7524,7 @@ See §21.9 for the queue and the reaction step.
 
 ## 32. `swr`
 
-The SWR cache and outbox (`docs/architecture/swr.md`; contract §4.4 "The SWR tables", §4.7). Every command prints one JSON value. The commands read the `swr_*` tables and never reach upstream (`swr.md` §13): a read returns what SWR holds, and the one write, `invalidate`, asks the engine to fetch. Times are the stored text. Every command is read-only except `invalidate`.
+The SWR cache and outbox (`docs/architecture/swr.md`; contract §4.4 "The SWR tables", §4.7). Every command prints one JSON value. The commands read the `swr_*` tables and never reach upstream (`swr.md` §13): a read returns what SWR holds, and `invalidate` asks the engine to fetch. The classifier's badge and health commands (§32.7 to §32.9; `docs/architecture/swr-classifier.md`) write cache rows, not upstream. Times are the stored text. Every command is read-only except `invalidate`, `badge put` and `health record`.
 
 ### 32.1 `swr list`
 
@@ -7658,3 +7658,85 @@ cpd swr mutation list [--status <status>]
 Effects: none. Output: `mutations`, every row of `swr_mutations` (of the status, if given) in `id` order, each in the shape of `mutation show` (§32.5). `done` and `superseded` rows are listed too: no command deletes a mutation. An empty result prints `mutations: []`.
 
 Idempotent: yes; it only reads.
+
+### 32.7 `swr badge get`
+
+```
+cpd swr badge get <session_id>
+```
+
+| Argument | Meaning |
+|---|---|
+| `<session_id>` | the Session whose Lead completion badge is read (a non-empty text) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<session_id>` is non-empty | `usage` | 2 |
+
+Effects: none. A Session with no row is not an error. Output: `badge`, `null` when the Session has no row, otherwise `{session_id, entry_id, label, score, text, tone, others, synced_at}`. `others` is present only when the row has it (`swr-classifier.md` §2.3), so the shape matches the optional `others?` of the web's `Completion`.
+
+```json
+{"ok": true, "badge": {"session_id": "s-1", "entry_id": "e-41", "label": "open_work", "score": 62, "text": "Open work · 62%", "tone": "decision", "others": [{"label": "unanswered_ask", "score": 20}], "synced_at": "2026-11-06T15:50:00.000Z"}}
+```
+
+Idempotent: yes; it only reads.
+
+### 32.8 `swr badge put`
+
+```
+cpd swr badge put <session_id> --entry <id> --label <label> --score <n> --text <text> --tone <tone> [--others <json>]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `<session_id>` | the Session the badge is about (a non-empty text) |
+| `--entry <id>` | the Session's last transcript item id at classify time (non-empty text); the freshness key |
+| `--label <label>` | one of `safe_to_archive`, `unanswered_ask`, `open_work`, `unrecorded_decision`, `unescalated_issue` |
+| `--score <n>` | an integer from 0 to 100 |
+| `--text <text>` | the badge's text (non-empty), as the web shows it |
+| `--tone <tone>` | `done`, `decision` or `blocked` |
+| `--others <json>` | optional: a non-empty JSON array of `{"label", "score"}` (labels as `--label`, scores as `--score`); absent when the completion has no other scores |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| every required flag is given, and each value is of its form above | `usage` | 2 |
+| `--others`, when given, is not `[]` | `usage` | 2 |
+| the write transaction, when one is needed, opens within `store_busy_ms` | `store_busy` | 5 |
+
+Effects: the values are compared with the row of `<session_id>`. When they are equal (`entry_id`, `label`, `score`, `text`, `tone` and `others_json`, the canonical JSON of `--others` or NULL), no write transaction opens and the stored `synced_at` stays. When they differ, one write transaction replaces the row, sets `synced_at` to the command's time and `inactive_at` to NULL. No Event is appended, and no outbox row is written. Output: `{session_id, entry_id, changed, synced_at}`, `changed` true when a write was made.
+
+```json
+{"ok": true, "session_id": "s-1", "entry_id": "e-41", "changed": true, "synced_at": "2026-11-06T15:50:00.000Z"}
+```
+
+Idempotent: yes; a rerun with the same values writes nothing and reports `changed` false.
+
+### 32.9 `swr health record`
+
+```
+cpd swr health record <system> <endpoint> <ok|error> [--text <text>]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `<system>` | the datasource the call is for: `github`, `slack`, `jira` or `classifier` |
+| `<endpoint>` | the endpoint, one of the pairs below |
+| `ok` | the endpoint answered (any answer, an answer, or an HTTP refusal) |
+| `error` | the endpoint could not be reached (connect, DNS, timeout, deadline) |
+| `--text <text>` | the failure text: required with `error` (non-empty), refused with `ok` |
+
+The accepted pairs are `github` with `github`, `slack` with `slack`, `jira` with `jira`, and `classifier` with `ollama.lab` or `bifrost` (`swr-classifier.md` §5).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<system>`, `<endpoint>` form an accepted pair | `usage` | 2 |
+| `ok` or `error` is given; `--text` is given with `error` and not with `ok` | `usage` | 2 |
+| the write transaction opens within `store_busy_ms` | `store_busy` | 5 |
+
+Effects: one write transaction on the row of `<endpoint>` in `swr_endpoints`. `ok` clears the outage (`failing_since`, `reported_at`, `last_error`), sets `error_count` to 0, `last_ok_at` to the command's time and `status` to `success`; on a row already in that state it writes nothing. `error` records one failure: the first one of an outage sets `failing_since`, every one adds 1 to `error_count` and sets `last_error`. No Event is appended by this command: the outage's `error` Event is raised by the engine after 10 minutes (E24, contract §4.7). Output: `{system, endpoint, status, error_count, failing_since}`.
+
+```json
+{"ok": true, "system": "classifier", "endpoint": "ollama.lab", "status": "error", "error_count": 3, "failing_since": "2026-11-06T15:44:00.000Z"}
+```
+
+Idempotent: `ok` yes; `error` no, each call counts one failure.
