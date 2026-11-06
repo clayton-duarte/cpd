@@ -82,33 +82,17 @@ fn repost_sends_the_thread_broadcast_and_moves_last_posted_at() {
 
     let out = pay.repost_cmd().ok();
 
-    let calls = pay.fx.calls("node");
-    assert_eq!(calls.len(), 1);
-    let args: Vec<&str> = calls[0].args.iter().map(String::as_str).collect();
-    assert_eq!(
-        args[args.len() - 6..],
-        [
-            "--channel",
-            "C0FIRST001",
-            "--thread-ts",
-            "1.2",
-            "--reply-broadcast",
-            "true"
-        ]
-    );
-    assert_eq!(
-        calls[0].stdin.as_deref(),
-        Some(&b"Bibbidi-bobbidi-bump!"[..])
-    );
+    // Queued (swr-slack.md 5): the broadcast and last_posted_at move when the send completes, in core
+    // swr::source::slack_write_tests::slack_repost_sends_the_broadcast_and_moves_last_posted_at_each_time.
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(out["post"], json!({"channel": "C0FIRST001", "ts": "1.2"}));
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
     let (posted_at, last) = pay.times().unwrap();
-    let last = last.unwrap();
     assert_eq!(posted_at, FIRST, "the first post never changes");
-    assert!(last.as_str() > FIRST, "last_posted_at moved: {last}");
     assert_eq!(
-        out,
-        json!({"ok": true, "plan": "pay", "workflow": "repo",
-               "post": {"channel": "C0FIRST001", "ts": "1.2"},
-               "message": "Bibbidi-bobbidi-bump!", "last_posted_at": last})
+        last.as_deref(),
+        Some(FIRST),
+        "last_posted_at waits for the send"
     );
     assert_eq!(pay.event_count(), events, "a data row: no Event");
 }
@@ -118,18 +102,14 @@ fn repost_twice_moves_last_posted_at_each_time() {
     let pay = world(Reply::ok(&format!("{OK}\n")));
 
     let first = pay.repost_cmd().ok();
-    let after_first = pay.times().unwrap().1.unwrap();
     let second = pay.repost_cmd().ok();
-    let after_second = pay.times().unwrap().1.unwrap();
 
-    assert_eq!(pay.fx.calls("node").len(), 2, "one send per repost");
-    assert_eq!(first["last_posted_at"], after_first.as_str());
-    assert_eq!(second["last_posted_at"], after_second.as_str());
-    assert!(after_first.as_str() > FIRST, "{after_first}");
-    assert!(
-        after_second > after_first,
-        "{after_first} then {after_second}"
-    );
+    // Each repost is one reminder: two queued mutations, none coalesced (core
+    // swr::source::slack_write_tests::slack_repost_goes_through_the_outbox).
+    assert_eq!(first["queued"], true, "{first}");
+    assert_eq!(second["queued"], true, "{second}");
+    assert_ne!(first["mutation_id"], second["mutation_id"], "no coalescing");
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
     assert_eq!(pay.times().unwrap().0, FIRST);
 }
 
@@ -148,12 +128,11 @@ fn repost_refuses_a_workflow_without_a_post() {
 fn a_failed_send_leaves_last_posted_at_unchanged_and_reports_the_helper_code() {
     let pay = world(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
-    let error = refused(&pay.repost_cmd(), "slack_auth", 3);
+    // A sign-in refusal is the send's: core swr::source::slack_write_tests::slack_repost_refused_for_a_sign_in_leaves_last_posted_at.
+    let out = pay.repost_cmd().ok();
 
-    assert_eq!(
-        error["message"],
-        "Slack needs a sign-in. Run: pi mcp login slack"
-    );
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
     assert_eq!(
         pay.times(),
         Some((FIRST.to_owned(), Some(FIRST.to_owned())))

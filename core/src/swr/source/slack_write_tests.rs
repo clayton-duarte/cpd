@@ -1045,3 +1045,95 @@ fn slack_post_sends_the_message_verbatim_without_escaping() {
         Some(text.as_bytes())
     );
 }
+
+/// A post of Workflow `api` stored long ago (`FIRST`), as the first repost needs.
+const REPOST_FIRST: &str = "2026-01-01T00:00:00.000Z";
+
+fn seeded_post() -> Post {
+    seeded_post_with((0, SENT))
+}
+
+/// [`seeded_post`] with the helper answering `reply`.
+fn seeded_post_with(reply: (i32, &'static str)) -> Post {
+    let fx = post_fixture_with(reply);
+    fx.rig.sql(&format!(
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, last_posted_at, auto_merge)
+           VALUES ('pay', 'api', 'C0POLICY1', '1700000000.000100', 'https://slack.test/p1', '{REPOST_FIRST}', '{REPOST_FIRST}', 'none')"
+    ));
+    fx
+}
+
+/// The send of a queued repost (swr-slack.md 5): the broadcast in the thread of the post, and `last_posted_at` moves when
+/// the send completes, each time.
+#[test]
+fn slack_repost_sends_the_broadcast_and_moves_last_posted_at_each_time() {
+    let fx = seeded_post();
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["repost", "--plan", "pay", "--workflow", "api"]).expect("queues");
+    pr(&ports, &["repost", "--plan", "pay", "--workflow", "api"]).expect("queues");
+    let last_at = |fx: &Post| -> String {
+        fx.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT last_posted_at FROM pr_posts WHERE plan = 'pay' AND workflow = 'api'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
+    };
+    assert_eq!(last_at(&fx), REPOST_FIRST, "nothing moves at enqueue");
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+    let calls = fx.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    let args: Vec<&str> = calls[0].args.iter().map(String::as_str).collect();
+    assert_eq!(
+        args[args.len() - 6..],
+        [
+            "--channel",
+            "C0POLICY1",
+            "--thread-ts",
+            "1700000000.000100",
+            "--reply-broadcast",
+            "true"
+        ]
+    );
+    assert_eq!(
+        calls[0].stdin.as_deref(),
+        Some(&b"Bibbidi-bobbidi-bump!"[..])
+    );
+    let after_first = last_at(&fx);
+    assert!(after_first.as_str() > REPOST_FIRST, "{after_first}");
+
+    // E24 completes a sent mutation before it claims the next one of the same channel.
+    let first_id: i64 = fx
+        .count("SELECT min(id) FROM swr_mutations WHERE op_kind = 'repost'")
+        .into();
+    let now = fx.rig.fakes.ports.clock.utc();
+    outbox::complete(&mut fx.store(), first_id, now).unwrap();
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+    let after_second = last_at(&fx);
+    assert!(
+        after_second > after_first,
+        "{after_first} then {after_second}"
+    );
+}
+
+#[test]
+fn slack_repost_refused_for_a_sign_in_leaves_last_posted_at() {
+    let fx = seeded_post_with((3, AUTH));
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["repost", "--plan", "pay", "--workflow", "api"]).expect("queues");
+
+    let ExecOutcome::Failed { error } = fx.execute() else {
+        panic!("a sign-in refusal fails the repost")
+    };
+    assert!(error.starts_with("slack_auth"), "{error}");
+    assert_eq!(
+        fx.count("SELECT count(*) FROM pr_posts WHERE last_posted_at = '2026-01-01T00:00:00.000Z'"),
+        1,
+        "last_posted_at does not move on a failed send"
+    );
+}
