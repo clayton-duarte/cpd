@@ -279,7 +279,7 @@ describe("live source", () => {
     const s = begun();
     conn(s).feed(start(600));
     conn(s).feed({ t: "message_end", message: { role: "assistant", timestamp: 600, content: [], stopReason: "error", errorMessage: "Error reading stream: stream idle timeout: no data received within configured window" } });
-    expect(s.out.slice(1)).toEqual([
+    expect(s.out).toEqual([
       { type: "session.append", sessionId: "s1", items: [{ kind: "assistant", id: "live:600", blocks: [], streaming: true }] },
       {
         type: "session.update",
