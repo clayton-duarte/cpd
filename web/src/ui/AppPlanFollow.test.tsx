@@ -107,5 +107,5 @@ it("selecting a plan in ManagerView shows its PlanView and Lead", () => {
   act(() => transport.emitMessage({ ...snapshot, plan: loadedPlan }));
   expect(q(container, 'section[aria-label="Plan pane"] [data-manager-view]')).toBeNull();
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
-  expect(q(container, '[data-session="s1"][aria-current="true"]')).not.toBeNull();
+  expect(q(container, '[data-plan="plan"] button[data-select="plan"][aria-current="true"]')).not.toBeNull();
 });
