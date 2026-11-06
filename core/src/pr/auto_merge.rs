@@ -85,4 +85,30 @@ mod tests {
         assert!(!stacked(&conn, "a", "one").unwrap());
         assert!(!stacked(&conn, "b", "three").unwrap());
     }
+
+    /// The send half of `pr_post_auto_merge`'s `an_already_enabled_request_counts_as_enabled_without_a_second_mutation`
+    /// (the enqueue half stays in that file): a pull request that already has a request is enabled, with no mutation.
+    #[test]
+    fn an_already_enabled_request_counts_as_enabled_without_a_second_mutation() {
+        let fakes = crate::ports::Fakes::new();
+        let read = gh::AutoMergeRead {
+            allowed: true,
+            id: "PR_1".to_owned(),
+            requested: true,
+            methods: crate::pr::merge_method::MergeMethods {
+                squash: true,
+                merge: false,
+                rebase: false,
+            },
+        };
+        assert!(matches!(
+            after_read(&*fakes.runner, Path::new("."), &read),
+            Outcome::Enabled
+        ));
+        assert!(
+            fakes.runner.calls().is_empty(),
+            "no mutation: {:?}",
+            fakes.runner.calls()
+        );
+    }
 }
