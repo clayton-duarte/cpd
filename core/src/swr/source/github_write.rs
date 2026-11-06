@@ -171,7 +171,7 @@ impl GithubSource {
                     let at = crate::clock::timestamp(cx.ports.clock.utc());
                     let _ = cx.store.write("swr auto_merge", |tx| {
                         tx.execute(
-                            "UPDATE pr_posts SET auto_merge = ?3, auto_merge_at = ?4
+                            "UPDATE pr_posts SET auto_merge = ?3, auto_merge_at = CASE WHEN ?3 IN ('enabled', 'refused') THEN ?4 END
                               WHERE auto_merge = 'pending' AND (plan, workflow) IN (
                                 SELECT w.plan, w.key FROM workflows w JOIN pull_requests q ON q.id = w.pull_request
                                  WHERE q.repo = ?1 AND q.number = ?2)",

@@ -1,8 +1,9 @@
 //! Engine step E18, the pending auto-merge requests (commands.md §9.8b, §21.9; contract §2.2 "PR post"; Plan auto-merge,
 //! decisions pro-d115 and pro-d117): every tick the engine picks a `pr_posts` row with `auto_merge = 'pending'` whose PR is
-//! open, whose Plan is not archived or held and which is not stacked, and runs the one core function `pr post` runs.
-//! `enabled` -> row `enabled`; `not_allowed` or `refused` -> row `refused` and ONE `error` Event (`auto_merge_refused`);
-//! `failed` -> the row stays pending, reported once per code and tried again `watch.error_repeat_seconds` after the run.
+//! open, whose Plan is not archived and which is not stacked, and queues an `auto_merge` mutation (swr-github.md §9); the outbox
+//! drain runs the one core function `pr post` runs. `enabled` -> row `enabled`; `not_allowed` -> row `none`; `refused` -> row
+//! `refused` and ONE `error` Event (`swr_mutation_failed`); `failed` -> the row stays pending and the outbox tries again after
+//! its own backoff, with no Event. The incident hold is the shared drain's (Workflow swr-slack's tests), not E18's.
 //!
 //! In-process, on virtual time, like `watch_react.rs`: the engine runs on the `Fx`'s `ManualClock` and `FakeRunner`, `gh` is
 //! a route that answers the read query and the mutation and records every call. No process, no sleep: a run ends when a
@@ -175,10 +176,6 @@ impl Probe {
             .map(|(p, s, d)| (p, s, serde_json::from_str::<Value>(&d).unwrap()))
             .filter(|(_, _, d)| d["code"] == code)
             .collect()
-    }
-
-    fn log(&self) -> String {
-        fs::read_to_string(self.home.join("run/watch.log")).unwrap_or_default()
     }
 
     /// A write of the store, as another process's: a fixture the engine finds at its next tick.
@@ -406,21 +403,19 @@ fn waits_while_the_base_is_another_prs_lead_branch_then_enables_after_the_unstac
 }
 
 #[test]
-fn a_gh_failure_keeps_the_row_pending_and_is_tried_again_after_error_repeat_seconds() {
-    const REPEAT: u32 = 600;
-    let t = merge(REPEAT);
+fn a_gh_failure_keeps_the_row_pending_and_the_outbox_tries_again_after_its_backoff() {
+    let t = merge(LONG);
     t.script(|s| s.fail = Some("HTTP 502: Bad Gateway".to_owned()));
     t.pending("repo", 7);
-    // The first run fails (its Event is the signal that its end was seen). Then 500 s pass and three ticks: below the
-    // period, no new run. Then 200 s more pass: the period is over, the same request is tried again and fails again.
+    // The first run fails (its call is the signal that its end was seen). Then three ticks pass: below the backoff, no new
+    // run. Then 60 s more pass: the same request is tried again and fails again.
     let (mut failed_at, mut again) = (None, false);
     let mut tail = then_ticks(3, |p| p.reads() >= 2);
     let seen = Arc::new(Mutex::new(None));
     let record = seen.clone();
     t.run(move |p, nap| {
         let Some(at) = failed_at else {
-            if !p.errors().is_empty() {
-                p.skip(u64::from(REPEAT) - 100);
+            if p.reads() >= 1 {
                 failed_at = Some(nap);
             }
             return false;
@@ -428,7 +423,7 @@ fn a_gh_failure_keeps_the_row_pending_and_is_tried_again_after_error_repeat_seco
         if !again {
             if nap >= at + 3 * NAPS_PER_TICK {
                 *record.lock().unwrap() = Some(p.reads());
-                p.skip(200);
+                p.skip(60);
                 again = true;
             }
             return false;
@@ -440,26 +435,11 @@ fn a_gh_failure_keeps_the_row_pending_and_is_tried_again_after_error_repeat_seco
     assert_eq!(
         seen.lock().unwrap().take(),
         Some(1),
-        "500 s after the failed run's end is not 600 s: no call"
+        "three seconds after the failed run is not 60 s: no call"
     );
-    assert_eq!(
-        p.reads(),
-        2,
-        "after the period the same request is tried again, once: {:?}",
-        p.calls()
-    );
-    assert_eq!(
-        p.row("repo"),
-        ("pending".to_owned(), None),
-        "a failure leaves the row pending"
-    );
-    let errors = p.errors();
-    assert_eq!(errors.len(), 1, "reported once per code: {errors:?}");
-    assert_eq!(errors[0]["source"], "watch");
-    assert!(
-        errors[0]["message"].as_str().unwrap().contains("502"),
-        "{errors:?}"
-    );
+    assert_eq!(p.reads(), 2, "after the backoff the same request is tried again, once: {:?}", p.calls());
+    assert_eq!(p.row("repo"), ("pending".to_owned(), None), "a failure leaves the row pending");
+    assert_eq!(p.errors(), Vec::<Value>::new(), "a retried failure raises no Event");
 }
 
 #[test]
@@ -474,20 +454,13 @@ fn a_github_refusal_marks_the_row_refused_raises_one_error_event_and_is_not_retr
     assert_eq!(state, "refused");
     assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
     assert_eq!(p.mutations().len(), 1, "never retried: {:?}", p.calls());
-    let refused = p.errors_of("auto_merge_refused");
+    let refused = p.errors_of("swr_mutation_failed");
     assert_eq!(refused.len(), 1, "ONE error Event: {:?}", p.errors());
-    let (plan, session, data) = &refused[0];
-    assert_eq!(
-        plan.as_deref(),
-        Some("pay"),
-        "the Lead sees it: Plan scoped"
-    );
+    let (_, session, data) = &refused[0];
     assert_eq!(*session, None);
     let message = data["message"].as_str().unwrap();
     assert!(
-        message.contains("repo")
-            && message.contains('7')
-            && message.contains("Pull request is in clean status"),
+        message.contains("acme/pay#7") && message.contains("Pull request is in clean status"),
         "{message}"
     );
     assert_eq!(p.errors().len(), 1, "no other error: {:?}", p.errors());
@@ -551,7 +524,7 @@ fn a_repo_that_allows_no_merge_method_is_refused_with_one_error_event() {
         p.calls()
     );
     assert_eq!(p.reads(), 1, "never retried: {:?}", p.calls());
-    let refused = p.errors_of("auto_merge_refused");
+    let refused = p.errors_of("swr_mutation_failed");
     assert_eq!(refused.len(), 1, "ONE error Event: {:?}", p.errors());
     let message = refused[0].2["message"].as_str().unwrap();
     assert!(
@@ -583,41 +556,4 @@ fn rows_that_are_not_pending_or_whose_pr_is_not_open_make_no_gh_call() {
     assert_eq!(p.state("merged"), "pending");
     assert_eq!(p.state("waits"), "pending");
     assert_eq!(p.errors(), Vec::<Value>::new());
-}
-
-#[test]
-fn holds_while_incident_mode_is_on() {
-    let t = merge(LONG);
-    t.pending("repo", 7);
-    t.fx.env.sql(&format!(
-        "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, '{}', 'pay-lead', 'why', cpd_txn());
-         INSERT INTO incident_plans (plan, started_txn) VALUES ('pay', cpd_txn());",
-        t.fx.stamp_ago(0)
-    ));
-    // Held for five ticks; then incident mode ends and the step runs.
-    let held = Arc::new(Mutex::new(None));
-    let record = held.clone();
-    let mut over = false;
-    let mut tail = then_ticks(3, |p| p.state("repo") == "enabled");
-    t.run(move |p, nap| {
-        if !over {
-            if nap >= 5 * NAPS_PER_TICK {
-                *record.lock().unwrap() = Some((p.calls(), p.state("repo"), p.log()));
-                p.write("DELETE FROM incident_plans; DELETE FROM incident;");
-                over = true;
-            }
-            return false;
-        }
-        tail(p, nap)
-    });
-    let p = t.probe();
-
-    let (calls, state, log) = held.lock().unwrap().take().expect("five ticks passed");
-    assert_eq!(
-        (calls, state),
-        (Vec::<String>::new(), "pending".to_owned()),
-        "while incident mode is on: no gh call, no row written"
-    );
-    assert!(log.contains("E18: holding: incident mode is on"), "{log}");
-    assert_eq!(p.state("repo"), "enabled", "off again: it runs");
 }

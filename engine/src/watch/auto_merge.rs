@@ -1,19 +1,16 @@
 //! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117; swr-github.md §9): a posted Workflow whose request
 //! is `pending` (deferred because it was stacked, or not yet queued) becomes an `auto_merge` mutation on the outbox. The drain
 //! (`GithubSource::execute`) calls GitHub, retries a failure with the outbox's own backoff, settles `pr_posts.auto_merge`, and a
-//! refusal is the one `error` Event of a failed mutation. E18 itself never calls GitHub.
+//! refusal is the one `error` Event of a failed mutation. E18 itself never calls GitHub. The incident hold is the shared drain's
+//! (E24, Workflow swr-slack), not E18's.
 
-use super::engine::{Engine, incident_holds};
+use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use cpd_core::pr::posts;
 use cpd_core::swr::github::pr_key;
 use cpd_core::swr::source::github_write::enqueue;
 
 pub(super) fn run(engine: &mut Engine) {
-    if incident_holds(engine, Step::E18) {
-        engine.log.line("E18: holding: incident mode is on");
-        return;
-    }
     loop {
         let next = match engine.store.read(posts::next_pending) {
             Ok(Some(next)) => next,
