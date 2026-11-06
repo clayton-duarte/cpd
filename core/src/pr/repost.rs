@@ -24,6 +24,7 @@ pub(super) fn repost(ports: &Ports, args: RepostArgs) -> Result<Output, CpdError
     let mut env = super::Env::open_with(ports)?;
     let plan = env.plan(&id)?;
     let key = plan.select(&args.workflow)?.key.clone();
+    let approval = super::approval::post_guard(&mut env, &id, &key)?;
 
     let post = env
         .store
@@ -44,6 +45,7 @@ pub(super) fn repost(ports: &Ports, args: RepostArgs) -> Result<Output, CpdError
     let queued = env
         .store
         .write("pr repost", |tx| slack::repost_in(tx, &post.channel, &vars))?;
+    approval.consume()?;
     Ok(Output::success(json!({
         "plan": id, "workflow": key,
         "post": {"channel": post.channel, "ts": post.ts},

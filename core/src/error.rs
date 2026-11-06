@@ -323,6 +323,7 @@ error_codes! {
     DurableSession = "durable_session" => Refused,
     HostRunning = "host_running" => Refused,
     AgentForbidden = "agent_forbidden" => Refused,
+    ApprovalRequired = "approval_required" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
     AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
@@ -597,6 +598,7 @@ mod tests {
             (ErrorCode::DurableSession, 3),
             (ErrorCode::HostRunning, 3),
             (ErrorCode::AgentForbidden, 3),
+            (ErrorCode::ApprovalRequired, 3),
             (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),

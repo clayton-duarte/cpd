@@ -30,6 +30,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let workflow = plan.select(&args.workflow)?.clone();
     let key = workflow.key.clone();
+    let approval = super::approval::post_guard(&mut env, &id, &key)?;
 
     // (a)
     if workflow.status != "open" {
@@ -146,6 +147,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         }
         slack::post_in(tx, &channel, &vars)
     })?;
+    approval.consume()?;
     Ok(Output::success(json!({
         "plan": id, "pr": key, "number": pull.number, "url": pull.url, "channel": channel,
         "queued": queued.queued, "mutation_id": queued.mutation_id, "message": message,
