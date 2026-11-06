@@ -169,8 +169,6 @@ it("plan pane can be collapsed and expanded", () => {
   expect(section?.getAttribute("data-state")).toBe("collapsed");
   expect(section?.hasAttribute("inert")).toBe(true);
   expect(c.querySelector('main[aria-label="Chat"]')?.getAttribute("data-state")).toBe("open");
-  const zoom = c.querySelector<HTMLButtonElement>('button[aria-label="Zoom plan view"]');
-  expect(zoom?.disabled).toBe(true);
   click(c.querySelector('button[aria-label="Expand plan view"]'));
   expect(center?.getAttribute("data-plan-state")).toBe("open");
   expect(c.querySelector('section[aria-label="Plan pane"]')?.hasAttribute("inert")).toBe(false);
@@ -178,23 +176,28 @@ it("plan pane can be collapsed and expanded", () => {
   m.unmount();
 });
 
-it("plan pane can be zoomed over the chat", () => {
+it("plan pane controls hold only the collapse button", () => {
+  const m = shell();
+  const group = m.container.querySelector('div[data-part="plan-controls"][role="group"][aria-label="Plan pane controls"]');
+  expect(group).not.toBeNull();
+  const buttons = [...(group?.querySelectorAll("button") ?? [])];
+  expect(buttons.map((b) => b.getAttribute("data-action"))).toEqual(["plan-collapse"]);
+  expect(buttons[0]?.getAttribute("aria-label")).toBe("Collapse plan view");
+  m.unmount();
+});
+
+it("the plan pane has no zoom button in any state", () => {
   const m = shell();
   const c = m.container;
-  const center = c.querySelector('[data-column="center"]');
-  expect(c.querySelector('button[data-action="plan-zoom"]')?.getAttribute("aria-pressed")).toBe("false");
-  click(c.querySelector('button[aria-label="Zoom plan view"]'));
-  expect(center?.getAttribute("data-plan-state")).toBe("zoomed");
-  expect(c.querySelector('section[aria-label="Plan pane"]')?.getAttribute("data-state")).toBe("zoomed");
-  const chat = c.querySelector('main[aria-label="Chat"]');
-  expect(chat?.getAttribute("data-state")).toBe("zoomed");
-  expect(chat?.hasAttribute("inert")).toBe(true);
-  const zoom = c.querySelector('button[aria-label="Zoom plan view"]');
-  expect(zoom?.getAttribute("aria-pressed")).toBe("true");
-  expect(c.querySelector<HTMLButtonElement>('button[data-action="plan-collapse"]')?.disabled).toBe(true);
-  click(zoom);
-  expect(center?.getAttribute("data-plan-state")).toBe("open");
-  expect(c.querySelector('main[aria-label="Chat"]')?.getAttribute("data-state")).toBe("open");
+  const none = () => {
+    expect(c.querySelector('button[data-action="plan-zoom"]')).toBeNull();
+    expect(c.querySelector('button[aria-label="Zoom plan view"]')).toBeNull();
+  };
+  none();
+  click(c.querySelector('button[aria-label="Collapse plan view"]'));
+  none();
+  click(c.querySelector('button[aria-label="Expand plan view"]'));
+  none();
   m.unmount();
 });
 

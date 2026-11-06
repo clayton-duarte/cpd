@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, MaximizeIcon, MinimizeIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { MutableRefObject, ReactElement, ReactNode } from "react";
 import { Button } from "../components/button.tsx";
@@ -149,19 +149,6 @@ export function Shell(props: {
                 onClick={() => (collapsed ? planRef.current?.expand() : planRef.current?.collapse())}
               >
                 {collapsed ? <ChevronDownIcon size={14} /> : <ChevronUpIcon size={14} />}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                data-action="plan-zoom"
-                className={CTRL}
-                aria-label="Zoom plan view"
-                aria-pressed={zoomed}
-                disabled={collapsed}
-                onClick={() => (zoomed ? chatRef.current?.expand() : chatRef.current?.collapse())}
-              >
-                {zoomed ? <MinimizeIcon size={14} /> : <MaximizeIcon size={14} />}
               </Button>
             </div>
           </div>
