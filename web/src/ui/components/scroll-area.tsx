@@ -25,6 +25,13 @@ function ScrollArea({
   );
 }
 
+function ScrollAreaRoot({
+  className,
+  ...props
+}: ScrollAreaPrimitive.Root.Props): React.ReactElement {
+  return <ScrollAreaPrimitive.Root data-slot="scroll-area" className={cn("relative", className)} {...props} />;
+}
+
 function ScrollBar({
   className,
   orientation = "vertical",
@@ -49,4 +56,4 @@ function ScrollBar({
   );
 }
 
-export { ScrollArea, ScrollBar };
+export { ScrollArea, ScrollAreaRoot, ScrollBar };
