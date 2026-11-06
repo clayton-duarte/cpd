@@ -698,7 +698,8 @@ export type CockpitAction =
   | { kind: "pr.post"; planId: string; workflow: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
-  | { kind: "context.retire"; contextId: string; approve: string; reject: string }; // 11.1
+  | { kind: "context.retire"; contextId: string; approve: string; reject: string } // 11.1
+  | { kind: "error.report"; target: "cpd" | "host"; code: string; message: string }; // 11.7
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
 ```
 
@@ -712,6 +713,9 @@ export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply o
 | `session.retier` | `["session","retier",sessionId,"--tier",tier]` | scout-cockpit §3 |
 | `plan.reject` | `["plan","decide",review,"--reject","--plan",planId]` | scout-cockpit §3 (internal command; unverified that the web User may call it, O9) |
 | `context.retire` | `["context","retire","--context=<contextId>"]` plus `--approve=<approve>` and `--reject=<reject>` each only when non-empty (ids are comma-separated) | 11.1 (approved preview, `actions.ts`) |
+| `error.report` | `["session","send","<target>:manager","--unblocks","WebUI error toast (<code>)","--","Error toast reported from WebUI:\n- code: <code>\n- message: <message>"]`; `<target>` is `cpd` or `host`, and `\n` is a newline in the element. The cpd command is `cpd session send <target>:manager --unblocks 'WebUI error toast (<code>)' -- 'Error toast reported from WebUI:\n- code: <code>\n- message: <message>'` | 11.7 (assumption A5, pro-d452) |
+
+`error.report` parses as one kind: `target` must be `"cpd"` or `"host"`; `code` and `message` must be strings (else `invalid_message` with `details.field`, as 5.5).
 
 Pi prompt sending is not a cockpit action: it is `sessionSendArgs` (6.3, `actions.ts`).
 
@@ -1905,6 +1909,8 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 ### 11.7 Errors
 
 - An action failure shows the error code and message in the cockpit error Alert (DESIGN-panes 4.8). Its dismiss button dispatches `dismissError`.
+- **Report button** (pro-d452; assumptions A4, A5). The error toast has a button, `data-part="error-toast-report"`, labelled `Send to <target>`, where `<target>` is `routeErrorTarget(error)`. A click dispatches `{kind: "error.report", target, code, message}` (the action of 5.4, argv in its table), with the toast's `code` and `message`, then `dismissError`.
+- `routeErrorTarget(error: WireError): "cpd" | "host"` lives in `web/src/ui/errorReport.ts`. It returns `"host"` when `error.code === "cpd_unavailable"`, or when `error.details.cpdCode` is one of `store_too_new`, `spawn_failed`, `adapter_missing`, `gh_failed`, `slack_auth`, `slack_not_configured`, `jira_auth`, `jira_not_configured`, `classifier_unreachable`, or `error.message` matches `/store_too_new|Upgrade cpd|unreachable|needs a sign-in/i`. It returns `"cpd"` for every other error: `protocol_error`, `cpd_malformed_json`, `invalid_message`, `unknown_action`, an application `cpd_failed`, and session errors.
 
 ### 11.8 Footer
 
@@ -2043,6 +2049,7 @@ Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7
 - The follow child runs while the stream is not ready. `start()` starts it as 6.3 says. The first `hello` stops it. A child's exit starts it again from `lastCursor`. `lastCursor` is the highest Event id seen from either source, so Events committed while the stream was down come back through `events follow --since`, and the next snapshot carries the state.
 - `start()` still runs `loadAll` by spawn first (6.3 rule 1), then starts the stream.
 - A `plan_show` request made while the stream is not ready, or in flight when the child exits, resolves `down` at once. The service then loads the plan by spawn.
+- **`store_too_new` heal** (pro-d452; A3). An `error` frame with a null id and `code` `store_too_new`, or a `plan_show` rejection (an `error` frame with a string id) with `code` `store_too_new`, makes the stream kill the child and respawn it at once, with no wait of 13.7. It reports no `cockpit.error`. Its pending requests, the rejected one included, resolve `down` as for a restart. If the respawned child emits `store_too_new` again before its `hello`, that error is reported as an ordinary `cpd_failed` with `details.cpdCode` `store_too_new`, and the normal backoff of 13.7 applies; that child is not healed again.
 
 ### 13.7 Restart backoff
 
@@ -2054,6 +2061,7 @@ Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7
 - The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
 - n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off. A repeated `hello` on the same child is not a new child: it is an in-place restart (13.9), and it changes neither n nor the wait.
 - The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
+- The `store_too_new` respawn of 13.6 is not a wait: it starts at once, and it does not change n.
 - Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
 
 ### 13.8 Frame-to-pane mapping
@@ -2063,11 +2071,11 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 | Frame (`t`) | Accepted shape | Effect on the cockpit |
 |---|---|---|
 | `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). On a child that already said hello, it is an in-place restart (13.9): the stream stays ready. Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
-| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. |
+| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. A snapshot also clears `lastError` when its `details.cpdCode` is `store_too_new`, as it already clears `cockpit.error`. |
 | `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
 | `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
-| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. |
-| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (13.9). |
+| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. A `store_too_new` code: the heal of 13.6 instead, with no error update. |
+| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (13.9). A `store_too_new` code: the heal of 13.6 instead, with no error update. |
 | anything else | none | `cpd_malformed_json`: one error update, the line skipped, the child kept (as commands.md §11a: a malformed line keeps the process serving). |
 
 ### 13.9 Failure rules
@@ -2077,6 +2085,7 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 - An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
 - A failed write to stdin means the child is gone: it is killed and handled as an exit.
 - A malformed frame never restarts the child (13.8).
+- A child killed by the `store_too_new` heal (13.6) is a respawn, not a failure: its exit emits nothing, as the exit of `stop()` does, and its pending requests resolve `down`.
 
 ### 13.10 Tests and limits
 

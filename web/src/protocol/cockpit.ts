@@ -119,6 +119,7 @@ export type CockpitAction =
   | { kind: "pr.repost"; planId: string; workflow?: string; pull?: string }
   | { kind: "pr.merge"; planId?: string; workflow?: string; pull?: string }
   | { kind: "engine.start" }
+  | { kind: "error.report"; target: "cpd" | "host"; code: string; message: string }
   | { kind: "context.retire"; contextId: string; approve: string; reject: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
@@ -161,6 +162,7 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "pr.repost": ["planId"],
     "pr.merge": [],
     "engine.start": [],
+    "error.report": ["code", "message"],
     "context.retire": ["contextId"],
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
@@ -181,6 +183,9 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
   };
   if (typeof kind !== "string" || !Object.hasOwn(fields, kind)) throw new WebError("unknown_action", `unknown action kind ${String(kind)}`);
   for (const f of fields[kind]!) field(o, f, kind);
+  if (kind === "error.report" && o["target"] !== "cpd" && o["target"] !== "host") {
+    throw new WebError("invalid_message", `action ${kind}: bad field target`, { field: "target" });
+  }
   return o as unknown as CockpitAction;
 }
 

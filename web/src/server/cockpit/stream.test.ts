@@ -181,4 +181,52 @@ describe("cockpit stream", () => {
     expect(stream.ready()).toBe(true);
     expect(errors).toEqual([]);
   });
+
+  const tooNew = { t: "error", id: null, error: { code: "store_too_new", message: "store is newer than this cpd" } };
+
+  it("store_too_new error frame restarts the child at once and reports no error", () => {
+    const { stream, scheduler, children, errors } = setup();
+    stream.start();
+    children[0]!.feed(hello);
+    children[0]!.feed(tooNew);
+    expect(children[0]!.killed).toBe(true);
+    expect(children).toHaveLength(2);
+    expect(scheduler.pending()).toBe(0);
+    children[0]!.exit(1);
+    expect(children).toHaveLength(2);
+    expect(errors).toEqual([]);
+  });
+
+  it("store_too_new plan_show rejection restarts the child and resolves the request down", async () => {
+    const { stream, scheduler, children, errors } = setup();
+    stream.start();
+    children[0]!.feed(hello);
+    const outcome = stream.planShow("p1").catch(() => "rejected");
+    const { id } = JSON.parse(children[0]!.writes[0]!) as { id: string };
+    children[0]!.feed({ t: "error", id, error: { code: "store_too_new", message: "store is newer than this cpd" } });
+    expect(children[0]!.killed).toBe(true);
+    expect(children).toHaveLength(2);
+    expect(scheduler.pending()).toBe(0);
+    expect(await outcome).toBe("down");
+    expect(errors).toEqual([]);
+  });
+
+  it("a second store_too_new before hello after a heal restart is reported", () => {
+    const { stream, scheduler, children, errors } = setup();
+    stream.start();
+    children[0]!.feed(hello);
+    children[0]!.feed(tooNew);
+    expect(children).toHaveLength(2);
+    children[1]!.feed(tooNew);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(WebError);
+    expect((errors[0] as WebError).code).toBe("cpd_failed");
+    expect((errors[0] as WebError).details?.["cpdCode"]).toBe("store_too_new");
+    children[1]!.exit(1);
+    expect(errors).toHaveLength(1);
+    scheduler.advance(499);
+    expect(children).toHaveLength(2);
+    scheduler.advance(1);
+    expect(children).toHaveLength(3);
+  });
 });

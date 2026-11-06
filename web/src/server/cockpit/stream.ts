@@ -90,6 +90,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
   let failures = 0;
   let nextId = 0;
   let reported = false;
+  let healed = false;
   let wait: { dispose(): void } | null = null;
   let pending = new Map<string, Pending>();
 
@@ -113,7 +114,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
       return;
     }
     switch (frame.t) {
-      case "hello": failures = 0; downAll(); setReady(true); return;
+      case "hello": failures = 0; healed = false; downAll(); setReady(true); return;
       case "snapshot": for (const cb of snapshotCbs) cb(frame.snapshot); return;
       case "event": for (const cb of eventCbs) cb(frame.event); return;
       case "plan_show": {
@@ -124,6 +125,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
         return;
       }
       case "error": {
+        if (frame.code === "store_too_new" && !healed && (frame.id === null || pending.has(frame.id))) { heal(); return; }
         const err = new WebError("cpd_failed", frame.message, { cpdCode: frame.code });
         if (frame.id === null) { reported = true; fail(err); return; }
         const p = pending.get(frame.id);
@@ -132,6 +134,16 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
         p.reject(err);
       }
     }
+  };
+  /** store_too_new: the child is older than the store; replace it at once, silently, once per hello. */
+  const heal = (): void => {
+    const old = child;
+    child = null;
+    healed = true;
+    setReady(false);
+    downAll();
+    old?.kill();
+    launch();
   };
   const launch = (): void => {
     const c = deps.spawn(cockpitServeArgs());

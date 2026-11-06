@@ -514,3 +514,64 @@ fn cockpit_serve_store_too_new_with_unchanged_binary_still_emits_error_frame() {
     assert_eq!(last["error"]["code"], "store_too_new");
     assert!(spawn.launches().is_empty());
 }
+
+/// Serves one request `request`, delivered after the binary is replaced (and the store migrated, when `migrate`):
+/// the side effects run when serve pulls the line, so the env is already open and the read hits the new store.
+fn serve_line_after_upgrade(
+    rig: &mut Rig,
+    install: &Install,
+    migrate: bool,
+    request: Value,
+) -> Vec<Value> {
+    let home = rig.home.clone();
+    let mut input = std::iter::once_with(|| {
+        install.upgrade();
+        if migrate {
+            newer_cpd_migrates(&home);
+        }
+        line(request)
+    });
+    let mut out = Vec::new();
+    let mut changes = Script::new(&rig.home, &[]);
+    let _ = serve(&mut rig.env, &mut input, &mut out, &mut changes);
+    String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn cockpit_serve_execs_replaced_binary_on_request_line_and_answers_nothing() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let frames = serve_line_after_upgrade(&mut rig, &install, false, json!({"t": "refresh"}));
+    assert_one_exec_of(&spawn, &install);
+    assert_eq!(kinds(&frames), ["hello", "snapshot"], "{frames:?}");
+}
+
+#[test]
+fn cockpit_serve_execs_replaced_binary_on_plan_show_store_too_new_and_writes_no_error_frame() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let request = json!({"t": "plan_show", "id": "r1", "plan": "pay"});
+    let frames = serve_line_after_upgrade(&mut rig, &install, true, request);
+    assert_one_exec_of(&spawn, &install);
+    assert!(!kinds(&frames).contains(&"error"), "{frames:?}");
+}
+
+#[test]
+fn cockpit_serve_execs_replaced_binary_on_snapshot_pane_store_too_new_and_embeds_no_error() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let frames = serve_line_after_upgrade(&mut rig, &install, true, json!({"t": "refresh"}));
+    assert_one_exec_of(&spawn, &install);
+    assert_eq!(kinds(&frames), ["hello", "snapshot"], "{frames:?}");
+    assert!(
+        !frames[1].to_string().contains("store_too_new"),
+        "{frames:?}"
+    );
+}
