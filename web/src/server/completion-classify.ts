@@ -1,4 +1,4 @@
-import type { Completion, CompletionLabel, CompletionTone, SessionState } from "../protocol/domain.ts";
+import type { Completion, CompletionScore, CompletionLabel, CompletionTone, SessionState } from "../protocol/domain.ts";
 import type { Disposable as SchedulerHandle, Scheduler } from "../protocol/runtime.ts";
 import type { ChildBoundary } from "./plugin.ts";
 
@@ -58,7 +58,15 @@ export function mapAnswer(answer: unknown): Completion | null {
   const score = Math.min(100, Math.max(0, Math.round(x * 100)));
   const tone: CompletionTone =
     label === "safe_to_archive" ? (score >= 80 ? "done" : "decision") : label === "open_work" ? (score >= 40 ? "decision" : "blocked") : "decision";
-  return { label, text: `${LABEL_TEXT[label]} · ${score}%`, score, tone };
+  const others: CompletionScore[] = [];
+  for (const l of COMPLETION_LABELS) {
+    if (l.name === label) continue;
+    const q = num(probs[l.name]);
+    if (q !== undefined) others.push({ label: l.name, score: Math.min(100, Math.max(0, Math.round(q * 100))) });
+  }
+  others.sort((x, y) => y.score - x.score);
+  const base = { label, text: `${LABEL_TEXT[label]} · ${score}%`, score, tone };
+  return others.length > 0 ? { ...base, others } : base;
 }
 
 export interface CompletionClassifier { classify(p: CompletionPayload): Promise<Completion | null> }

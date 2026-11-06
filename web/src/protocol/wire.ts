@@ -1,5 +1,5 @@
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
-import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
+import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type CompletionScore, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
 import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
 
 
@@ -169,7 +169,16 @@ function parseCompletion(v: unknown): Completion | null {
   if (typeof text !== "string") throw refuse("session.completion: text must be a string", "text");
   if (typeof score !== "number" || !Number.isFinite(score)) throw refuse("session.completion: score must be a finite number", "score");
   if (typeof tone !== "string" || !COMPLETION_TONES.includes(tone)) throw refuse("session.completion: unknown tone", "tone");
-  return { label, text, score, tone } as Completion;
+  const base = { label, text, score, tone } as Completion;
+  if (v["others"] === undefined) return base;
+  const raw = v["others"];
+  if (!Array.isArray(raw)) throw refuse("session.completion: others must be an array", "others");
+  const others = raw.map((o: unknown) => {
+    if (!isObj(o) || typeof o["label"] !== "string" || !COMPLETION_LABELS.includes(o["label"]) || typeof o["score"] !== "number" || !Number.isFinite(o["score"]))
+      throw refuse("session.completion: others entries must be {label, score}", "others");
+    return { label: o["label"], score: o["score"] } as CompletionScore;
+  });
+  return { ...base, others };
 }
 
 /** Parses an untrusted server message; only session.completion is parsed here, the rest is refused. */
