@@ -18,6 +18,8 @@ pub mod models;
 pub mod slack;
 
 #[cfg(test)]
+mod github_poll_tests;
+#[cfg(test)]
 mod github_tests;
 #[cfg(test)]
 mod github_write_tests;

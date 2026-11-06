@@ -698,7 +698,16 @@ fn post(rig: &Rig, repo: &str, number: u64, age: u64) -> Value {
            "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false})
 }
 
+/// The old `run/team-review.json` seed, left to the swr-slack Workflow's migration of these tests.
+#[allow(dead_code)]
 fn write_cache(h: &Home, posts: &[Value]) {
+    let path = h.home.run_dir().join("team-review.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, json!({"version": 1, "polled_at": "t", "channel": "C02JU6C2Z1D", "read": 10, "posts": posts}).to_string()).unwrap();
+}
+
+/// The posts as `swr_slack_posts` rows.
+fn write_posts(h: &Home, posts: &[Value]) {
     crate::inbox::swr_fixture::posts(&mut store(&h.home), posts).unwrap();
 }
 
@@ -750,7 +759,7 @@ fn gh_calls(rig: &Rig) -> usize {
 fn a_post_inside_the_window_opens_a_review_item() {
     let rig = rig();
     let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/win-in", 1, 3600)]);
+    write_posts(&h, &[post(&rig, "acme/win-in", 1, 3600)]);
     seed_pr(&h, "acme/win-in", 1, None, &[]);
     assert_eq!(
         review_items(&rig, &h, &mut store(&h.home)),
@@ -763,7 +772,7 @@ fn a_post_inside_the_window_opens_a_review_item() {
 fn a_post_the_clock_has_aged_past_the_window_opens_nothing() {
     let rig = rig();
     let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/win-out", 2, 3600)]);
+    write_posts(&h, &[post(&rig, "acme/win-out", 2, 3600)]);
     seed_pr(&h, "acme/win-out", 2, None, &[]);
     // The window is a week: eight days later the same post is outside it.
     rig.clock.advance(SECS(8 * 24 * 3600));
@@ -796,7 +805,7 @@ fn open_review_items(s: &mut Store) -> usize {
 fn e8_closes_open_review_at_the_next_tick_when_the_cache_turns_approved() {
     let rig = rig();
     let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/e8-approved", 5, 3600)]);
+    write_posts(&h, &[post(&rig, "acme/e8-approved", 5, 3600)]);
     seed_pr(&h, "acme/e8-approved", 5, None, &[]);
     let mut s = store(&h.home);
     tick(&rig, &h, &mut s);
@@ -821,7 +830,7 @@ fn tick_after_refused_claim(
 ) -> (Vec<String>, usize) {
     let rig = rig();
     let h = home(TEAM);
-    write_cache(&h, &[post(&rig, repo, number, 3600)]);
+    write_posts(&h, &[post(&rig, repo, number, 3600)]);
     seed_pr(&h, repo, number, None, &[]);
     let mut s = store(&h.home);
     tick(&rig, &h, &mut s);

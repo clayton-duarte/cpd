@@ -133,7 +133,8 @@ impl GithubSource {
     /// One claimed mutation, through the Runner (swr-github.md §9).
     pub(super) fn run_one(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
         let outcome = self.run_op(cx, m);
-        if outcome == ExecOutcome::Done {
+        // An auto-merge asks for the poll itself, only when it was enabled (not when the repo lacks auto-merge).
+        if outcome == ExecOutcome::Done && m.op_kind != "auto_merge" {
             // A write on GitHub asks E5 for a poll at once (decision pro-d394).
             crate::pr::request_poll_now_in(cx.home);
         }
@@ -193,6 +194,7 @@ impl GithubSource {
                 match auto_merge::attempt(runner, cwd, repo, number) {
                     Outcome::Enabled => {
                         settle(cx, "enabled");
+                        crate::pr::request_poll_now_in(cx.home);
                         ExecOutcome::Done
                     }
                     Outcome::NotAllowed => {
