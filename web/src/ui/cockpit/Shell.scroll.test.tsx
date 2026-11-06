@@ -24,9 +24,9 @@ vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} 
 
 const slots = { tree: <i>t</i>, plan: <i id="p">p</i>, chat: <i>c</i>, inbox: <i>i</i> };
 
-it("the plan pane wraps its content in a ScrollArea", () => {
+it("the plan pane does not wrap its content in a ScrollArea of its own", () => {
   const m = mount(<Shell {...slots} />);
-  expect(m.container.querySelector('section[aria-label="Plan pane"] [data-slot="scroll-area"] #p')).not.toBeNull();
+  expect(m.container.querySelector('section[aria-label="Plan pane"] [data-slot="scroll-area"] #p')).toBeNull();
   m.unmount();
 });
 

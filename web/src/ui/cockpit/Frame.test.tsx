@@ -108,7 +108,7 @@ it("Shell renders only the columns group and the status footer", () => {
   expect(shell.firstElementChild?.getAttribute("data-part")).toBe("columns-group");
   expect(shell.lastElementChild?.tagName).toBe("FOOTER");
   expect(shell.lastElementChild?.textContent).toBe("S");
-  expect(shell.querySelector('[data-column="center"]')!.children.length).toBe(2);
+  expect(shell.querySelector('[data-column="center"]')!.children.length).toBe(1);
   expect(shellParts(c)).toEqual(["columns-group", "FOOTER"]);
   mounted?.unmount();
   const c2 = show(<AnyShell {...panes} />);

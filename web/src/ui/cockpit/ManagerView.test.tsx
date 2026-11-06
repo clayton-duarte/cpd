@@ -173,7 +173,7 @@ it("ManagerView never scrolls horizontally", () => {
   const section = q(container, "[data-manager-view]")!;
   expect(section).not.toBeNull();
   expect(section.classList.contains("min-w-0")).toBe(true);
-  expect(section.classList.contains("overflow-x-hidden")).toBe(true);
+  expect(section.classList.contains("overflow-hidden")).toBe(true);
   const r = row(container, "a");
   expect(r.classList.contains("min-w-0")).toBe(true);
   expect(q(r, '[role="button"]')!.classList.contains("overflow-hidden") || r.classList.contains("overflow-x-hidden")).toBe(true);

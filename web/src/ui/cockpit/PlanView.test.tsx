@@ -171,7 +171,7 @@ it("PlanView keeps the review and escalation badges in the header actions", () =
 it("PlanView body is a plan-body section below the header", () => {
   const m = mount(<PlanView plan={plan} onAction={vi.fn()} />);
   const section = m.container.querySelector<HTMLElement>('section[aria-label="Plan p1"]')!;
-  for (const c of ["flex", "min-w-0", "flex-col", "overflow-x-hidden"]) expect(section.classList.contains(c)).toBe(true);
+  for (const c of ["flex", "min-w-0", "flex-col", "overflow-hidden"]) expect(section.classList.contains(c)).toBe(true);
   const body = section.querySelector<HTMLElement>('div[data-part="plan-body"]')!;
   expect(body).not.toBeNull();
   for (const c of ["flex", "flex-col", "gap-2.5", "px-4", "py-2.5"]) expect(body.classList.contains(c)).toBe(true);

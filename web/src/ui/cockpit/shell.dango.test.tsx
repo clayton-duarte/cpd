@@ -235,7 +235,7 @@ it("shell keeps its landmarks and data hooks without a cockpit header", () => {
     "Status bar",
   ]);
   const center = root?.querySelector('div[data-column="center"]');
-  expect(center?.children).toHaveLength(2);
+  expect(center?.children).toHaveLength(1);
   expect(center?.getAttribute("data-part")).toBe("center-frame");
   expect(center?.querySelector('section[aria-label="Plan pane"] #p')).not.toBeNull();
   expect(center?.querySelector('main[aria-label="Chat"] #c')).not.toBeNull();
