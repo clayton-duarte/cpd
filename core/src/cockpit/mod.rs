@@ -138,7 +138,7 @@ struct InboxCli {
 }
 
 /// The four panes: what the list commands print (same functions), read through `env`.
-fn panes(env: &mut Env) -> Value {
+fn panes(env: &mut Env) -> Result<Value, CpdError> {
     let crate::context::Command::List(_) = ContextCli::parse_from(["cpd", "list"]).command else {
         unreachable!("`list` parses to List")
     };
@@ -153,12 +153,12 @@ fn panes(env: &mut Env) -> Value {
     else {
         unreachable!("`list` parses to List")
     };
-    json!({
+    Ok(json!({
         "context": printed(crate::context::list::list_in(env)),
         "plan": printed(crate::plan::list::list_in(env, plan)),
         "session": printed(crate::session::row::list_in(env, session)),
         "inbox": printed(crate::inbox::cmd::list_in(env, inbox)),
-    })
+    }))
 }
 
 fn plan_show(env: &mut Env, id: String, plan: &str) -> Frame {
@@ -321,7 +321,7 @@ fn serve_frames(
             seq += 1;
             emit!(Frame::Snapshot {
                 seq,
-                panes: panes(env)
+                panes: panes(env)?
             });
         }};
     }
