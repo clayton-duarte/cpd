@@ -132,6 +132,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `base_not_found` | 4 | `workflow add`, `workflow edit` (§9.4): the base branch does not exist; `pr open` (§9.1): the base branch of a stacked Workflow, its base Workflow's Lead Branch, is not on the remote (never for a `merged` base Workflow: that Workflow is unstacked first, hs-d301); `details` `{workflow, base, base_workflow}` (hs-d324). Not returned by an `open` or `update` Job's submit: the merge of that Job finds it (contract §7.4 step 6) and ends the Attempt `failed` / `gate_error` with it as the detail |
 | `base_conflict` | 3 | `pr open` (§9.1, contract §7.6 step 1) found that the gated commit conflicts with `origin/<base>`, freshly fetched (`git merge-tree`); `details` is `{workflow, base, base_sha, sha, files, next}`, `files` the conflicted paths, `next` the commands the Lead runs, as written (hs-d490; it replaces hs-d329's `base_behind`, retired: a base that merely moved ahead refuses nothing). The merge of an `open` or `update` Job finds the same conflict at its step 6 (contract §7.4), not at submit: the Attempt ends `failed` / `merge_conflict` with the files in its detail |
 | `workflow_not_open` | 3 | `pr reply` (§9.8a) and `pr rerun` (§9.8c) found the Workflow not `open`; `details` is `{workflow, status}` (pro-d68, pro-d155) |
+| `approval_required` | 3 | `pr reply` (§9.8a), `pr post` (§9.8b) or `pr repost` (§9.8b2) ran with `CPD_SESSION` set and non-empty, the policy requires the User's approval (`pr.feedback.reply = bots_only` and the item is not a bot review thread, or `pr.post.require_approval` true) and the Session holds no live approval for that action (§9.8d, pro-d451); `details` `{workflow, to, kind: "reply"}` for a reply, `{workflow, kind: "post"}` for a post or repost; nothing is posted, sent or written |
 | `feedback_not_found` | 3 | `pr reply` (§9.8a): `--to` is the `id` of no item in the Workflow's stored list; `details` is `{workflow, to, open: [ids]}`; nothing is posted (pro-d68) |
 | `no_failed_run` | 3 | `pr rerun` (§9.8c) found no GitHub Actions workflow run of the Workflow's head commit failed; `details` is `{workflow, head_sha, runs: [{id, name, status, conclusion}]}`; nothing is re-run (pro-d155) |
 | `pr_not_closed` | 3 | `workflow cancel` (§9.6) found the `open` Workflow's pull request not stored `closed`; `details` is `{workflow, number, url, state}`, the stored row's `state` (`open` or `merged`) (hs-d329) |
@@ -261,6 +262,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context owner` (§3.14) | Manager, Lead | no | no |
 | `cpd host approve` (§9.17) | | no | yes |
 | `cpd host repair` (§9.17) | Manager | no | no |
+| `cpd pr approve` (§9.8d, internal) | Lead | no | yes |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
@@ -2832,7 +2834,7 @@ Idempotent: yes (a read).
 cpd pr reply --workflow <key> --to <item-id> (--body <text> | --body-file <path>) [--plan <id>]
 ```
 
-Answers one feedback item (contract §2.2 "Feedback item"; pro-d68, Plan fb-path). **Callers:** Lead; not cockpit, not internal (§2). The Lead fixes each open item or decides not to and answers it either way, saying what it did or why not. It **never resolves a thread** (no flag, no `resolveReviewThread`): the reviewer does.
+Answers one feedback item (contract §2.2 "Feedback item"; pro-d68, Plan fb-path). **Callers:** Lead; not cockpit, not internal (§2). **Approval (pro-d451):** when `$CPD_SESSION` is set and non-empty and the resolved policy has `pr.feedback.reply = bots_only` (contract §8.3), a reply to any item except a bot review thread (`item.bot` true and `kind` `thread`) is refused `approval_required` unless the Session holds a live approval for that Workflow and item (§9.8d). Replies to bot threads, every reply under `pr.feedback.reply = all` (the default) and every call without `$CPD_SESSION` are unchanged. The Lead fixes each open item or decides not to and answers it either way, saying what it did or why not. It **never resolves a thread** (no flag, no `resolveReviewThread`): the reviewer does.
 
 | Flag | Meaning |
 |---|---|
@@ -2846,9 +2848,10 @@ Answers one feedback item (contract §2.2 "Feedback item"; pro-d68, Plan fb-path
 | `--body-file` unreadable | `file_unreadable` | 2 |
 | the Workflow is not `open` (`details` `{workflow, status}`) | `workflow_not_open` | 3 |
 | `--to` is the `id` of no item in the Workflow's stored list (`details` `{workflow, to, open: [ids]}`); nothing is posted | `feedback_not_found` | 3 |
+| `$CPD_SESSION` is set, `pr.feedback.reply = bots_only`, the item is not a bot review thread and the Session holds no live approval for the Workflow and item (§9.8d); checked after `feedback_not_found` (it needs the item) and before the `gh` call (`details` `{workflow, to, kind: "reply"}`); nothing is posted | `approval_required` | 3 |
 | the `gh` call fails (§1.3) | `gh_failed` | 1 |
 
-Effects: **gh**, one `gh api graphql` call, as the User's own GitHub login. For an item of kind `thread`: `addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: <id>, body})`. For kind `comment` or `review`: `addComment(input: {subjectId: <the pull request's node id>, body})`, the body prefixed by `Re: <item url>` and a blank line. **Every posted body ends with a blank line and the marker `<!-- cpd:reply -->`** (contract §2.2), so the next poll sees the answer and the item leaves the list within one poll. It writes nothing in the store and appends no Event.
+Effects: **gh**, one `gh api graphql` call, as the User's own GitHub login. For an item of kind `thread`: `addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: <id>, body})`. For kind `comment` or `review`: `addComment(input: {subjectId: <the pull request's node id>, body})`, the body prefixed by `Re: <item url>` and a blank line. **Every posted body ends with a blank line and the marker `<!-- cpd:reply -->`** (contract §2.2), so the next poll sees the answer and the item leaves the list within one poll. It writes nothing in the store and appends no Event. When an approval was needed (above), the reply **consumes** it, removing its file, only after the `gh` call succeeded; a refused or failed reply leaves it for the 10 minutes it lives.
 
 Output: `{"ok": true, "replied": {"workflow", "to", "url"}}`, `url` the posted comment's.
 
@@ -2866,7 +2869,7 @@ Idempotent: no (every run posts a comment).
 cpd pr post [--workflow <key>] [--plan <id>]
 ```
 
-Posts a Workflow's pull request to Slack for review, so an agent never calls Slack tools by hand (pro-d64, pro-d65). **Callers:** Lead; not cockpit, not internal (§2). The Lead asks the User and posts only on the User's yes. A Workflow may be posted only once: a second attempt is refused `already_posted` once its `pr_posts` row exists. A post that fails writes nothing and may be run again; a post whose outcome is unknown is confirmed later by the engine's Slack poll of the team channel, never by `pr post` itself (Order and unknown outcomes, below). It reads the stored `pull_requests` row of the Workflow (the poll keeps it, every `watch.pr_poll_seconds`; `cpd pr poll` makes it fresh). Its only GitHub calls are the one read of check 8, before the Slack send, and the auto-merge mutation after the send (Auto-merge, below). The cockpit's Inbox menu runs it too (**Post** on a `ready for user review` `pr-ready` row, §13.2), at once with no confirm popup, through the cockpit's command runner; a failure opens the error dialog titled `Post Pull Request`.
+Posts a Workflow's pull request to Slack for review, so an agent never calls Slack tools by hand (pro-d64, pro-d65). **Callers:** Lead; not cockpit, not internal (§2). The Lead asks the User and posts only on the User's yes. **Approval (pro-d451):** when `$CPD_SESSION` is set and non-empty and the resolved policy has `pr.post.require_approval` true, the command is refused `approval_required` (exit 3, `details` `{workflow, kind: "post"}`) unless the Session holds a live approval of kind `post` for the Workflow (§9.8d); this check runs before every check below and before any of their side effects, and the approval is consumed only after the send succeeded and the `pr_posts` row was written. Without `$CPD_SESSION`, or with `pr.post.require_approval` false (the default), nothing changes. A Workflow may be posted only once: a second attempt is refused `already_posted` once its `pr_posts` row exists. A post that fails writes nothing and may be run again; a post whose outcome is unknown is confirmed later by the engine's Slack poll of the team channel, never by `pr post` itself (Order and unknown outcomes, below). It reads the stored `pull_requests` row of the Workflow (the poll keeps it, every `watch.pr_poll_seconds`; `cpd pr poll` makes it fresh). Its only GitHub calls are the one read of check 8, before the Slack send, and the auto-merge mutation after the send (Auto-merge, below). The cockpit's Inbox menu runs it too (**Post** on a `ready for user review` `pr-ready` row, §13.2), at once with no confirm popup, through the cockpit's command runner, which runs without `$CPD_SESSION`, so it is never asked for an approval and stays one click; a failure opens the error dialog titled `Post Pull Request`.
 
 | Flag | Meaning |
 |---|---|
@@ -2885,6 +2888,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 
 | Refusal | Exit | Details |
 |---|---|---|
+| `approval_required` | 3 | `{workflow, kind: "post"}`: `$CPD_SESSION` set, `pr.post.require_approval` true, no live approval (§9.8d); refused before checks 1 to 8 |
 | `workflow_not_open` | 3 | `{workflow, status}` |
 | `already_posted` | 3 | `{workflow, channel, ts, link, posted_at}` |
 | `policy_invalid` | 1 | `{key: "pr.post.*", …}` as contract §8.3 |
@@ -2926,7 +2930,7 @@ Idempotent: no (every run tries to post).
 cpd pr repost [--workflow <key>] [--plan <id>]
 ```
 
-Sends ONE reminder in the Slack thread of a Workflow's post (pro-d386, pro-d388; Plan pr-post-bump). **Callers:** none; the cockpit only (the Inbox menu's **RePost** on a `review overdue` row, §13.2; the table of §2 lists no Lead caller). **Nothing runs it automatically**: no engine Step calls it (E23 is retired, contract §3.7). It does not check that the post is overdue: the menu shows the action only then, and a repost by hand is allowed.
+Sends ONE reminder in the Slack thread of a Workflow's post (pro-d386, pro-d388; Plan pr-post-bump). **Callers:** none; the cockpit only (the Inbox menu's **RePost** on a `review overdue` row, §13.2; the table of §2 lists no Lead caller). **Nothing runs it automatically**: no engine Step calls it (E23 is retired, contract §3.7). It does not check that the post is overdue: the menu shows the action only then, and a repost by hand is allowed. **Approval (pro-d451):** exactly as `pr post` (§9.8b): when `$CPD_SESSION` is set and non-empty and `pr.post.require_approval` is true, `pr repost` is refused `approval_required` (exit 3, `details` `{workflow, kind: "post"}`) unless the Session holds a live approval of kind `post` for the Workflow, checked before the checks below and before the helper call; the approval is consumed only after the reminder was sent. The cockpit's RePost runs without `$CPD_SESSION` and stays one click.
 
 | Flag | Meaning |
 |---|---|
@@ -2944,6 +2948,7 @@ Then ONE call of the helper through the `Runner` port, built with `slack::call(&
 
 | Refusal | Exit | Details |
 |---|---|---|
+| `approval_required` | 3 | `{workflow, kind: "post"}`: as §9.8b |
 | `workflow_not_open` | 3 | `{workflow, status}` |
 | `post_not_found` | 3 | `{workflow}`: the Workflow has no post (§21.7 lists its other use) |
 | `slack_auth`, `slack_not_configured` | 3 | as §9.8b |
@@ -2955,6 +2960,39 @@ Effects: **Slack**, one thread reply as above. On success, in one write transact
 Output: `{"ok":true,"plan":<id>,"workflow":<key>,"post":{"channel":"C…","ts":<the first post's ts>},"message":"Bibbidi-bobbidi-bump!","last_posted_at":<time>}`.
 
 Idempotent: no (every run sends one reply).
+
+### 9.8d `pr approve`
+
+**Internal** (§1.1; as `host approve`, §9.11). Callers: Lead (the adapter's pi tool `cpd_external_approve` runs it after the User's Allow once; an agent does not run it by hand). Not cockpit (§2).
+
+```
+cpd pr approve --kind reply|post --workflow <key> [--to <item-id>] [--plan <id>]
+```
+
+Records the User's one-shot approval (pro-d451) of one guarded action by the calling Session. It needs `$CPD_SESSION`, else `usage`. The approval is one JSON file `$CPD_HOME/run/pr/approve/<uuid>.json` (directory mode 0700, file mode 0600, written atomically by a temp file and rename; contract §3.7 layout) holding `{session, kind, plan, workflow, to, at}`, `to` absent for `post`. It is **bound** to the calling Session (`$CPD_SESSION`), the `kind`, the Workflow and, for `reply`, the item id: another Session, kind, Workflow or item does not match it. It **lives 10 minutes** from `at`, checked when read; an expired file is ignored. It is **one-shot**: the guarded command removes the file only after its action succeeded (`pr reply` after the `gh` call, `pr post` and `pr repost` after the send), so a refused or failed action leaves it. Kind `post` approves one `pr post` **or** one `pr repost` of that Workflow, whichever consumes it first. Approvals of one Session and key may coexist; each is consumed once.
+
+| Flag | Meaning |
+|---|---|
+| `--kind reply\|post` | the action approved: `pr reply` (§9.8a) or `pr post` / `pr repost` (§9.8b, §9.8b2) |
+| `--workflow <key>` | the Workflow, selected by §1.3's rule |
+| `--to <item-id>` | `reply` only: the feedback item's `id` (§9.8a); required for `reply`, refused for `post` |
+| `--plan <id>` | the Plan (default `$CPD_PLAN`; `plan_required` without one) |
+
+| Failure | Code | Exit |
+|---|---|---|
+| `$CPD_SESSION` unset or empty | `usage` | 2 |
+| `--kind` not `reply` or `post`, `--to` missing for `reply`, or `--to` given for `post` | `usage` | 2 |
+| the Workflow is not one of the Plan's | `workflow_not_found` | 4 |
+
+`agent_forbidden` is not used: the adapter's guard, not the command, keeps an agent from approving for itself (§15). Effects: writes the approval file; nothing in the store, no Event, no `gh` or Slack call.
+
+Output: `{"ok": true, "approved": {"kind", "workflow", "to", "expires_at"}}`, `to` null for `post`, `expires_at` 10 minutes after `at`.
+
+```json
+{"ok": true, "approved": {"kind": "reply", "workflow": "ui", "to": "PRRT_kwDO…", "expires_at": "2026-11-06T20:50:24.968Z"}}
+```
+
+Idempotent: no (every run writes a new file).
 
 ### 9.8c `pr rerun`
 
