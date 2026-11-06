@@ -461,7 +461,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         }
         if ["dependencies", "workflow_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
-            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) and `pr-archived` (pro-d392) are additive, so they
+            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) `pr-archived` (pro-d392) and `swr` are additive, so they
             // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
             let added_by_additive = [
                 "updated_at",
@@ -469,6 +469,8 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                 "base_ref",
                 "default_branch",
                 "archived",
+                "head_oid",
+                "gh_updated_at",
             ];
             for column in columns
                 .iter()
