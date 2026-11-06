@@ -6,6 +6,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::atomic::write_atomic;
+use crate::clock::Clock;
 use crate::embedding::{Codes, run_helper};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -77,6 +78,11 @@ impl PiClassifier {
             agent_dir,
             home: home.clone(),
         }
+    }
+
+    /// The clock of the endpoint-health records (swr-classifier.md §4). Stub: not used yet.
+    pub fn with_clock(self, _clock: Arc<dyn Clock>) -> PiClassifier {
+        self
     }
 
     fn marker(&self) -> PathBuf {
@@ -172,3 +178,7 @@ impl ClassifierPort for PiClassifier {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "classifier_swr_tests.rs"]
+mod classifier_swr_tests;

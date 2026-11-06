@@ -5,6 +5,7 @@ pub mod cache;
 pub mod cmd;
 pub mod endpoint;
 pub mod gc;
+pub mod health;
 pub mod outbox;
 pub mod overlay;
 pub mod source;
@@ -17,6 +18,8 @@ mod cache_tests;
 mod endpoint_tests;
 #[cfg(test)]
 mod gc_tests;
+#[cfg(test)]
+mod health_tests;
 #[cfg(test)]
 mod outbox_tests;
 #[cfg(test)]

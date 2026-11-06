@@ -111,6 +111,7 @@ mod secret_op;
 mod spec;
 mod swr_badge;
 mod swr_cmd;
+mod swr_health;
 mod worker_runner;
 mod worker_runner_durable;
 mod worker_runner_report;

@@ -31,6 +31,29 @@ pub enum Command {
     /// The Lead completion badge (classifier doc §3)
     #[command(subcommand)]
     Badge(BadgeCommand),
+    /// Endpoint health of a system (classifier doc §3.3)
+    #[command(subcommand)]
+    Health(HealthCommand),
+}
+
+/// The `swr health` commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum HealthCommand {
+    /// Record one call result on an endpoint
+    Record(HealthRecordArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HealthRecordArgs {
+    /// classifier, github, slack or jira
+    pub system: String,
+    /// The endpoint of the system
+    pub endpoint: String,
+    /// ok or error
+    pub result: String,
+    /// The error text, required with `error`
+    #[arg(long, value_name = "text")]
+    pub text: Option<String>,
 }
 
 /// The `swr badge` commands.
@@ -166,6 +189,7 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Endpoints => endpoints(store),
         Command::Mutation(MutationCommand::Show(a)) => mutation_show(store, id_of(&a)?),
         Command::Mutation(MutationCommand::List(a)) => mutation_list(store, a.status.as_deref()),
+        Command::Health(HealthCommand::Record(_)) => todo!("cpd swr health record"),
         Command::Badge(BadgeCommand::Get(a)) => {
             let badge = badge::get(store, &a.session_id)?;
             Ok(Output::success(
