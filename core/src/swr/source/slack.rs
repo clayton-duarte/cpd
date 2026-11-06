@@ -122,14 +122,56 @@ impl Source for Slack {
     }
 
     fn execute(&self, _cx: &mut Cx<'_>, _m: &Mutation) -> ExecOutcome {
-        // Reactions, posts and reposts are the outbox Job's (swr-slack.md §4); nothing enqueues them yet.
-        ExecOutcome::Failed {
-            error: "not implemented".into(),
-        }
+        todo!(
+            "swr-slack.md §4.3: run slack-react.ts / slack-post.ts through the Runner and map the answer"
+        )
     }
     fn coalesce(&self, _op_kind: &str) -> Coalesce {
         Coalesce::LatestWins
     }
+}
+
+/// What an enqueueing Slack write returns (swr-slack.md §4.2, A6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Queued {
+    pub queued: bool,
+    pub mutation_id: i64,
+}
+
+/// A message's reactions as the User sees them: the stored counts with the active `reaction` mutations laid over (§4.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlaid {
+    pub reactions: std::collections::BTreeMap<String, i64>,
+    pub eyes_me: Option<bool>,
+}
+
+/// Enqueues the `reaction` op of (`channel`, `ts`, `emoji`) on `slack:channel:<channel>`, deduped on those three (§4.2).
+pub fn react(
+    _store: &mut crate::store::Store,
+    _now: OffsetDateTime,
+    _channel: &str,
+    _ts: &str,
+    _emoji: &str,
+) -> Result<Queued, CpdError> {
+    todo!("swr-slack.md §4.2: enqueue the reaction with Coalesce::Dedupe and the overlay patch")
+}
+
+/// The message (`channel`, `ts`) with the overlay of its active mutations; `None` when the channel holds no such row.
+pub fn overlaid(
+    _store: &mut crate::store::Store,
+    _channel: &str,
+    _ts: &str,
+) -> Result<Option<Overlaid>, CpdError> {
+    todo!("swr-slack.md §4.4: the stored counts plus the active reaction mutations")
+}
+
+/// Whether Workflow `workflow` of Plan `plan` has an active `post` mutation: the overlay shows it as posting (§5.1).
+pub fn posting(
+    _store: &mut crate::store::Store,
+    _plan: &str,
+    _workflow: &str,
+) -> Result<bool, CpdError> {
+    todo!("swr-slack.md §5.1: the pr_posts overlay of an active post mutation")
 }
 
 /// A failed read: the query and the endpoint record it, no row is written or deleted (swr.md §16).

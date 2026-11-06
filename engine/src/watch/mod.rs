@@ -119,6 +119,8 @@ mod swr;
 #[cfg(test)]
 mod swr_slack_tests;
 #[cfg(test)]
+mod swr_slack_write_tests;
+#[cfg(test)]
 mod swr_tests;
 #[cfg(test)]
 mod testkit;
