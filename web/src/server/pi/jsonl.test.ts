@@ -234,4 +234,16 @@ describe("pi jsonl normalisation", () => {
     const tools = normalizeText(text).items as ToolItem[];
     expect(tools.map((t) => t.diff)).toEqual(["--- a\n+++ b\n+x", "-a\n+b", undefined]);
   });
+
+  it("assistant errorMessage renders as an Error text block and is counted", () => {
+    const errorMessage = "Error reading stream: stream idle timeout: no data received within configured window";
+    const expected = [{ type: "text", text: "Error: "+"Error reading stream: stream idle timeout: no data received within configured window" }];
+    for (const [i, content] of [[{ type: "thinking", thinking: "", thinkingSignature: "sig" }], []].entries()) {
+      const l = assistantMsg("e" + i, content, { stopReason: "error", errorMessage });
+      const { added } = createNormalizer().push(l, { offset: 0 });
+      expect(added).toHaveLength(1);
+      expect(added[0]).toMatchObject({ kind: "assistant", blocks: expected });
+      expect(countItems(parseLine(l, { offset: 0 }))).toBe(1);
+    }
+  });
 });

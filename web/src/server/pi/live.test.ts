@@ -274,4 +274,18 @@ describe("live source", () => {
     conn(s).feed({ t: "tool_start", toolCallId: "c1", toolName: "read", args: {} });
     expect(s.out).toEqual([{ type: "session.append", sessionId: "s1", items: [running("c1", "read", {})] }]);
   });
+
+  it("message end with errorMessage keeps the live item with an Error text block", () => {
+    const s = begun();
+    conn(s).feed(start(600));
+    conn(s).feed({ t: "message_end", message: { role: "assistant", timestamp: 600, content: [], stopReason: "error", errorMessage: "Error reading stream: stream idle timeout: no data received within configured window" } });
+    expect(s.out.slice(1)).toEqual([
+      { type: "session.append", sessionId: "s1", items: [{ kind: "assistant", id: "live:600", blocks: [], streaming: true }] },
+      {
+        type: "session.update",
+        sessionId: "s1",
+        items: [{ kind: "assistant", id: "live:600", blocks: [{ type: "text", text: "Error: "+"Error reading stream: stream idle timeout: no data received within configured window" }], streaming: false }],
+      },
+    ]);
+  });
 });
