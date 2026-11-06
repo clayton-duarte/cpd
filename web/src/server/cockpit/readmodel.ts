@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import type {
   AttemptView, CockpitAction, ContextNode, ContextTreeModel, CurationRecord, InboxModel, InboxRow, InboxRowAction, JobView, PlanCounts, PlanNode,
-  PlanViewModel, SessionNode, Urgency, WorkflowView,
+  PlanViewModel, PlanWorkflowSummary, SessionNode, Urgency, WorkflowView,
 } from "../../protocol/cockpit.ts";
 import { WebError, type SessionRole, type SessionState } from "../../protocol/domain.ts";
 import type { CockpitPane } from "../../protocol/wire.ts";
@@ -12,7 +12,7 @@ type Obj = Readonly<Record<string, unknown>>;
 type StrOrNull = string | null;
 
 export interface RawContext { id: string; title: string; archived_at: StrOrNull; records: number; open_questions: number }
-export interface RawPlan { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; created_at: string; counts: PlanCounts; lead_session: StrOrNull }
+export interface RawPlan { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; created_at: string; counts: PlanCounts; lead_session: StrOrNull; workflows?: readonly PlanWorkflowSummary[] }
 export interface RawSession {
   id: string; runner: "pi" | "durable"; role: SessionRole; state: SessionState; context: string; plan: StrOrNull; plan_lead: boolean;
   archived_at: StrOrNull; file: StrOrNull; tier: StrOrNull; title: StrOrNull; cwd: StrOrNull; key: StrOrNull; name: StrOrNull;

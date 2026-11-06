@@ -544,3 +544,23 @@ fn a_pr_with_an_open_pull_request_is_not_flagged_in_plan_show() {
     assert_eq!(show["workflows"][0]["closed_unmerged"], json!(false));
     assert_eq!(show["workflows"][0]["pull_request"]["state"], json!("open"));
 }
+
+#[test]
+fn workflow_pr_posted_is_false_before_a_post() {
+    let fx = fx("dispatch");
+    fx.pr("api", "open", &[]);
+    let show = fx.show();
+    assert_eq!(show["workflows"][0]["pr"]["posted"], json!(false));
+}
+
+#[test]
+fn workflow_pr_posted_is_true_after_a_post() {
+    let fx = fx("dispatch");
+    fx.pr("api", "open", &[]);
+    fx.env.sql(
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at)
+         VALUES ('pay-1', 'api', 'C1', '1.2', 'https://slack/x', '2000-01-01T00:00:04.000Z');",
+    );
+    let show = fx.show();
+    assert_eq!(show["workflows"][0]["pr"]["posted"], json!(true));
+}
