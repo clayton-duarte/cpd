@@ -429,7 +429,7 @@ function TreeSection(props: {
           {props.action}
         </div>
         <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea data-part="tree-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
             <SidebarGroupContent className="px-2">{props.children}</SidebarGroupContent>
           </ScrollArea>
         </CollapsibleContent>

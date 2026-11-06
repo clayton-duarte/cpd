@@ -1,8 +1,9 @@
+import { ExternalLinkIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
-import { ScrollArea, ScrollBar } from "../components/scroll-area.tsx";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { CpdFlowCanvas } from "./FlowCanvas.tsx";
 import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
@@ -161,7 +162,7 @@ const wfToneClass: Readonly<Record<Tone, string>> = {
   blocked: "", landing: "", focus: "", unread: "",
 };
 
-function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a: CockpitAction): void; onRetryJob: ((k: string, w: string) => void) | undefined }): ReactElement {
+function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a: CockpitAction): void; onRetryJob: ((k: string, w: string) => void) | undefined; postableWorkflows: ReadonlySet<string> | undefined }): ReactElement {
   const { plan, wf } = props;
   const layout = layoutDag(wf, plan.jobs);
   const failed = layout.nodes.filter((n) => {
@@ -169,6 +170,9 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
     return p.kind === "known" && p.value === "failed";
   }).length;
   const tone = wfTone(wf.status);
+  const pr = wf.pr;
+  const canPost = pr !== null && pr.posted !== true && pr.state !== "merged" && wf.status !== "merged" &&
+    (props.postableWorkflows === undefined || props.postableWorkflows.has(wf.key) || props.postableWorkflows.has(pr.url) || props.postableWorkflows.has(`#${pr.number}`));
   return (
     <section data-workflow={wf.key} aria-label={`Workflow ${wf.key}`} data-status={wf.status} className="rounded-[9px] border border-border bg-card">
       <header data-part="wf-header" className="flex h-[34px] flex-wrap items-center gap-2.5 border-b border-border px-3">
@@ -179,16 +183,21 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
         <span className="flex-1" />
         {wf.pr !== null ? (
           <p data-part="pr" className="flex items-center gap-2 font-mono text-[11.5px]">
-            <a href={wf.pr.url} className="text-status-focus-bright underline-offset-2 hover:underline">{`#${wf.pr.number} ${wf.pr.state ?? ""}`.trim()}</a>
-            <Button type="button" variant="outline" size="xs" data-action="post-pr"
-              onClick={() => props.onAction({ kind: "pr.post", planId: plan.planId, workflow: wf.key })}>
-              Post PR
-            </Button>
+            <a href={wf.pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
+              {`#${wf.pr.number} ${wf.pr.state ?? ""}`.trim()}
+              <ExternalLinkIcon aria-hidden="true" className="size-3" />
+            </a>
+            {canPost ? (
+              <Button type="button" variant="outline" size="xs" data-action="post-pr"
+                onClick={() => props.onAction({ kind: "pr.post", planId: plan.planId, workflow: wf.key })}>
+                Post PR
+              </Button>
+            ) : null}
           </p>
         ) : null}
       </header>
       <ScrollArea data-part="dag-body" className="w-full">
-      <div className="p-3">
+      <div className="w-fit p-3">
         {layout.nodes.length === 0 ? (
           <p data-part="no-jobs" className="text-[11.5px] text-muted-foreground">No jobs</p>
         ) : (
@@ -210,7 +219,6 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
           </div>
         )}
       </div>
-      <ScrollBar orientation="horizontal" />
       </ScrollArea>
     </section>
   );
@@ -224,10 +232,10 @@ function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): 
       <p data-part="review-pr-repo" className="font-mono text-[11.5px] text-muted-foreground">{pr.repo}</p>
       <p data-part="review-pr-title" className="text-foreground">{pr.title}</p>
       <p data-part="pr" className="font-mono text-[11.5px]">
-        <a href={pr.url} target="_blank" rel="noopener noreferrer" className="text-status-focus-bright underline-offset-2 hover:underline">
+        <a href={pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
           {`#${pr.number}${pr.state === null ? "" : ` ${pr.state}`}`}
+          <ExternalLinkIcon aria-hidden="true" className="size-3" />
         </a>
-        <span aria-hidden="true"> 󱆭</span>
       </p>
     </section>
   );
@@ -254,7 +262,7 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
       </div>
       {explore.length > 0 ? <ExploreStrip jobs={explore} /> : null}
       {plan.workflows.map((wf) => (
-        <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} />
+        <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} postableWorkflows={props.postableWorkflows} />
       ))}
       {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
       {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
