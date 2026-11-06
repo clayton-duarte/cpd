@@ -23,6 +23,26 @@ describe("buildClassifierRequest", () => {
 const ok = (label: string, extra: Record<string, unknown> = {}) => ({ ok: true, label, model: "llama.cpp/kev-4b", ...extra });
 
 describe("mapAnswer", () => {
+  it("mapAnswer lists the other labels' probabilities sorted high to low", () => {
+    const probabilities = { safe_to_archive: 0.46, unanswered_ask: 0.24, open_work: 0.1, unrecorded_decision: 0.11, unescalated_issue: 0.09 };
+    const r = mapAnswer(ok("open_work", { probabilities }));
+    expect(r?.others).toEqual([
+      { label: "safe_to_archive", score: 46 },
+      { label: "unanswered_ask", score: 24 },
+      { label: "unrecorded_decision", score: 11 },
+      { label: "unescalated_issue", score: 9 },
+    ]);
+    expect(r).toMatchObject({ label: "open_work", text: "Open work · 46%", score: 46, tone: "decision" });
+  });
+  it("mapAnswer omits others when the answer has no probabilities", () => {
+    const a = mapAnswer(ok("safe_to_archive", { confidence: 0.8 }));
+    expect(a).not.toBeNull();
+    expect("others" in a!).toBe(false);
+    expect(mapAnswer(ok("open_work", { probabilities: { safe_to_archive: 0.5, unanswered_ask: "x" } }))?.others).toEqual([{ label: "safe_to_archive", score: 50 }]);
+    const b = mapAnswer(ok("safe_to_archive", { probabilities: { safe_to_archive: "x", open_work: null } }));
+    expect(b).not.toBeNull();
+    expect("others" in b!).toBe(false);
+  });
   it("mapAnswer maps safe_to_archive with probabilities", () => {
     expect(mapAnswer(ok("safe_to_archive", { probabilities: { safe_to_archive: 0.93 } }))).toEqual({ label: "safe_to_archive", text: "Safe to archive · 93%", score: 93, tone: "done" });
   });
