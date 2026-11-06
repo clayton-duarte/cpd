@@ -1019,3 +1019,120 @@ it("Archive section rows ignore the Manager auto-collapse", () => {
   expect(stateOf(m.container, "c1", "[data-part=tree-section][data-section=contexts]")).toBe("closed");
   m.unmount();
 });
+
+// Selection auto-expand and scroll (pro-d81)
+const scrollOpts = { block: "nearest", inline: "nearest" };
+const sectionOpen = (c: ParentNode, name: string) => header(c, name)?.getAttribute("aria-expanded");
+const archivedTree = (): ContextTreeModel => ({ cursor: 1, contexts: [...tree.contexts, ctx("gone", "2026-01-06", { state: "idle", attention: null }, { archived: true })] });
+
+function stubScroll() {
+  const scroll = vi.fn();
+  const frames: FrameRequestCallback[] = [];
+  Object.defineProperty(Element.prototype, "scrollIntoView", { value: scroll, configurable: true, writable: true });
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+  return { scroll, flush: () => act(() => frames.splice(0).forEach((cb) => cb(0))) };
+}
+afterEach(() => {
+  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+});
+
+it("selecting a Plan Lead in a collapsed Context expands that Context", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:ctx:c1": "0" }));
+  const m = remountable(treeSel(null));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(treeSel("s-lead"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.unmount();
+});
+
+it("selecting a fork in a collapsed Context expands that Context", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:ctx:c1": "0" }));
+  const m = remountable(treeSel(null));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(treeSel("s-cfork"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasFork(m.container)).toBe(true);
+  m.unmount();
+});
+
+it("selecting a session when the Contexts section is collapsed opens the section", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:contexts": "0" }));
+  const m = remountable(treeSel(null));
+  expect(sectionOpen(m.container, "Contexts")).toBe("false");
+  m.render(treeSel("s-lead"));
+  expect(sectionOpen(m.container, "Contexts")).toBe("true");
+  expect(q(m.container, '[data-plan="p1"] button[aria-current="true"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("selecting an archived session opens the Archive section", () => {
+  const t = archivedTree();
+  const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
+  const m = remountable(el(null));
+  expect(sectionOpen(m.container, "Archive")).toBe("false");
+  m.render(el("m-gone"));
+  expect(sectionOpen(m.container, "Archive")).toBe("true");
+  expect(q(m.container, '[data-archived] [data-context="gone"] [aria-current="true"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("selecting a Manager keeps its own Context collapsed", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:contexts": "0", "cpd-ui:collapse:ctx:c1": "0" }));
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-mgr"));
+  expect(sectionOpen(m.container, "Contexts")).toBe("true");
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  expect(hasPlan(m.container, "p1")).toBe(false);
+  expect(store.getItem("cpd-ui:collapse:ctx:c1")).toBe("0");
+  m.unmount();
+});
+
+it("a changed selectedPlanId expands the Context holding that Plan", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:ctx:c1": "0" }));
+  const el = (planId: string | null) => <ContextTree {...props({ selectedPlanId: planId })} />;
+  const m = remountable(el(null));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(el("p1"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.unmount();
+});
+
+it("a selection change scrolls the current row into view with block nearest and inline nearest", () => {
+  const { scroll } = stubScroll();
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-lead"));
+  const current = q(m.container, '[aria-current="true"]');
+  expect(current).not.toBeNull();
+  expect(scroll).toHaveBeenCalledWith(scrollOpts);
+  expect(scroll.mock.contexts).toContain(current);
+  m.unmount();
+});
+
+it("the current row is scrolled again on the next animation frame", () => {
+  const { scroll, flush } = stubScroll();
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-lead"));
+  const before = scroll.mock.calls.length;
+  expect(before).toBeGreaterThan(0);
+  flush();
+  expect(scroll.mock.calls.length).toBe(before + 1);
+  expect(scroll).toHaveBeenLastCalledWith(scrollOpts);
+  m.unmount();
+});
+
+it("no selection scrolls nothing", () => {
+  const { scroll, flush } = stubScroll();
+  const m = remountable(treeSel(null));
+  flush();
+  expect(scroll).not.toHaveBeenCalled();
+  m.render(treeSel("s-lead"));
+  flush();
+  const after = scroll.mock.calls.length;
+  expect(after).toBeGreaterThan(0);
+  m.render(treeSel(null));
+  flush();
+  expect(scroll.mock.calls.length).toBe(after);
+  m.unmount();
+});
