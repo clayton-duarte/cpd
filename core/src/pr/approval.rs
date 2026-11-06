@@ -12,13 +12,18 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use serde_json::json;
+
 use super::Env;
 use super::workflow_policy;
+use crate::args::{PlanArg, WorkflowArg};
 use crate::clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host_repair_approval::{APPROVAL_LIFETIME, write_private};
 use crate::ids::{PlanId, SessionId, WorkflowKey};
+use crate::output::Output;
+use crate::ports::Ports;
 
 /// What an approval lets the Session do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -73,7 +78,7 @@ pub fn agent_session() -> Option<String> {
 }
 
 /// Writes `approval` and returns when it expires.
-pub fn approve(home: &CpdHome, approval: &Approval) -> Result<OffsetDateTime, CpdError> {
+pub fn write(home: &CpdHome, approval: &Approval) -> Result<OffsetDateTime, CpdError> {
     let at = OffsetDateTime::parse(&approval.at, &Rfc3339).expect("`at` is written by cpd");
     let bytes = serde_json::to_vec(approval).expect("an approval serializes");
     write_private(
@@ -202,4 +207,60 @@ pub(super) fn post_guard(
 /// `at` as the approval holds it.
 pub fn stamp(at: OffsetDateTime) -> String {
     clock::timestamp(at)
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ApproveArgs {
+    /// What is approved: one `reply` to the item --to, or one `post` or `repost`
+    #[arg(long, value_enum)]
+    kind: Kind,
+    /// The Workflow the approval is for
+    #[arg(long, value_name = "key")]
+    workflow: WorkflowKey,
+    /// The id of the item a `reply` is for (required for reply, refused for post)
+    #[arg(long, value_name = "item-id")]
+    to: Option<String>,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+fn usage(message: &str) -> CpdError {
+    CpdError::new(ErrorCode::Usage, message)
+}
+
+/// `pr approve`.
+pub(super) fn approve(ports: &Ports, args: ApproveArgs) -> Result<Output, CpdError> {
+    let Some(session) = agent_session() else {
+        return Err(usage(
+            "pr approve needs $CPD_SESSION: it approves for the calling Session.",
+        ));
+    };
+    match (args.kind, &args.to) {
+        (Kind::Reply, None) => return Err(usage("--kind reply needs --to <item-id>.")),
+        (Kind::Post, Some(_)) => return Err(usage("--kind post takes no --to.")),
+        _ => {}
+    }
+    let id = args.plan.require()?.clone();
+    let mut env = Env::open_with(ports)?;
+    let plan = env.plan(&id)?;
+    let key = plan
+        .select(&WorkflowArg {
+            workflow: Some(args.workflow),
+        })?
+        .key
+        .clone();
+    let at = env.ports.clock.utc();
+    let held = Approval {
+        session,
+        kind: args.kind,
+        plan: id.to_string(),
+        workflow: key.to_string(),
+        to: args.to.clone(),
+        at: stamp(at),
+    };
+    let expires = write(&env.home, &held)?;
+    Ok(Output::success(json!({"approved": {
+        "kind": args.kind.as_str(), "workflow": key, "to": args.to,
+        "expires_at": stamp(expires),
+    }})))
 }

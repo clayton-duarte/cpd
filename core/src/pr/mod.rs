@@ -49,7 +49,6 @@ mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
 pub(crate) use gh::{Adoptable, adoptable, describe_pr, retitle_pr};
-mod approve;
 mod merge;
 pub mod merge_method;
 pub(crate) mod open;
@@ -123,7 +122,7 @@ pub enum Command {
     Merge(merge::MergeArgs),
     /// Record the User's approval for one agent reply, post or repost (adapter)
     #[command(hide = true)]
-    Approve(approve::ApproveArgs),
+    Approve(approval::ApproveArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -193,7 +192,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Post(args) => post::post(ports, args),
         Command::Repost(args) => repost::repost(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
-        Command::Approve(args) => approve::approve(ports, args),
+        Command::Approve(args) => approval::approve(ports, args),
     }
 }
 
