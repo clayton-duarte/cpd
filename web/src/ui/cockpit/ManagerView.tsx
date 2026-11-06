@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils.ts";
 import { STOPPED, compareOrderKey, createdOf, leadOf } from "../../state/archiveNav.ts";
 import { Badge } from "../components/badge.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
+import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Empty, EmptyHeader, EmptyTitle } from "../components/empty.tsx";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "../components/hover-card.tsx";
 import { Dot } from "./ContextTree.tsx";
@@ -249,10 +250,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
       data-manager-view={context.id}
       className="flex min-w-0 flex-col overflow-x-hidden"
     >
-      <header
-        data-part="manager-header"
-        className="sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2.5 border-b border-border bg-background px-4 pr-16"
-      >
+      <TopPaneHeader dataPart="manager-header">
         <h2
           data-part="manager-key"
           title={context.title}
@@ -263,8 +261,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
         <span data-part="manager-counters" className="min-w-0 truncate font-mono text-meta text-muted-foreground">
           {`${activePlans.length} active · ${donePlans.length} done · ${context.records} records`}
         </span>
-        <span className="flex-1" />
-      </header>
+      </TopPaneHeader>
 
       <div data-part="manager-body" className="flex min-w-0 flex-col gap-2 px-4 py-2.5">
         {activePlans.length === 0 && donePlans.length === 0 ? (

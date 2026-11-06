@@ -320,7 +320,17 @@ export function App(props: AppProps): ReactElement {
           </ErrorBoundary>
         ) : (
           <ErrorBoundary name="PlanView" {...crash}>
-            <MemoPlan plan={visiblePlan} {...(postableWorkflows !== null ? { postableWorkflows } : {})} onAction={onAction} />
+            <MemoPlan
+              plan={visiblePlan}
+              {...(postableWorkflows !== null ? { postableWorkflows } : {})}
+              onAction={onAction}
+              {...(visiblePlan === null ? {} : { onSelectManager: () => {
+                const ctx = cockpit.tree?.contexts.find((c) => c.id === visiblePlan.contextId);
+                const mgr = ctx?.sessions.find((x) => x.ref.role === "manager" && !x.archived);
+                void connection.selectPlan(null);
+                if (mgr !== undefined) onSelectSession(mgr.ref.id);
+              } })}
+            />
           </ErrorBoundary>
         )
       }
