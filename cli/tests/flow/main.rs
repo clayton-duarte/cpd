@@ -85,6 +85,7 @@ mod plan_render_waiting;
 mod plan_review_summary;
 mod plan_show;
 mod policy;
+mod policy_approval;
 mod policy_excused_labels;
 mod policy_fallback;
 mod policy_human_gated;
