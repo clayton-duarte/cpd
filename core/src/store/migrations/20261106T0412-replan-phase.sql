@@ -22,19 +22,18 @@ CREATE TABLE plans_new (
   archived_at   TEXT,
   outline       TEXT CHECK (outline IS NULL OR (json_valid(outline) AND json_type(outline) = 'object')),
   deleted_at    TEXT,
+  pr_subject    TEXT,
+  changes_requested_at TEXT,
   reviewed_repo   TEXT CHECK (reviewed_repo IS NULL OR reviewed_repo LIKE '_%/_%'),
   reviewed_number INTEGER CHECK (reviewed_number IS NULL OR reviewed_number >= 1),
   reviewed_title  TEXT,
-  pr_subject    TEXT,
-  changes_requested_at TEXT,
-  CHECK (phase <> 'grounding' OR locked_at IS NULL),
-  CHECK (phase NOT IN ('dispatch', 'deploy', 'done') OR locked_at IS NOT NULL),
+  CHECK ((phase = 'grounding' AND locked_at IS NULL) OR (phase IN ('dispatch', 'deploy', 'done') AND locked_at IS NOT NULL) OR phase = 'plan'),
   CHECK ((phase = 'done') = (done_at IS NOT NULL))
 ) STRICT;
 INSERT INTO plans_new (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline,
-                       deleted_at, reviewed_repo, reviewed_number, reviewed_title, pr_subject, changes_requested_at)
+                       deleted_at, pr_subject, changes_requested_at, reviewed_repo, reviewed_number, reviewed_title)
   SELECT id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline,
-         deleted_at, reviewed_repo, reviewed_number, reviewed_title, pr_subject, changes_requested_at
+         deleted_at, pr_subject, changes_requested_at, reviewed_repo, reviewed_number, reviewed_title
   FROM plans;
 DROP TABLE plans;
 ALTER TABLE plans_new RENAME TO plans;

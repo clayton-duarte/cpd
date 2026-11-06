@@ -2404,7 +2404,7 @@ BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 -- migration `pr-restack` (§3.8 "Stacked Workflows" step 10): a third, the restack of a `waiting` PR: its `base` may change to the Lead Branch of a PR of its Plan and repo (the need it drops is deleted in the same transaction, `workflow_needs_no_delete`)
 -- pro-d379 (§3.8 step 10, commands.md §9.5): the EXISTS conditions are dropped, so a `waiting`, `dispatch` or `open` PR's `base` may change whenever its identity (plan, key, repo, lead_branch) is unchanged. Which base `workflow edit` may set (a restack of a `waiting` PR onto a Workflow, or a retarget of a `waiting` or `dispatch` PR to a plain branch) is the command's check, not the trigger's
 CREATE TRIGGER workflows_locked BEFORE UPDATE OF plan, key, repo, base, lead_branch ON workflows
-WHEN (SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')
+WHEN (SELECT locked_at FROM plans WHERE id = OLD.plan) IS NOT NULL
  AND NOT (OLD.status IN ('waiting', 'dispatch', 'open')
           AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key AND NEW.repo IS OLD.repo AND NEW.lead_branch IS OLD.lead_branch
           AND NEW.base IS NOT OLD.base)
@@ -2422,7 +2422,7 @@ BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;
 CREATE UNIQUE INDEX workflows_head_ref_live ON workflows (repo, head_ref) WHERE head_ref IS NOT NULL AND status IN ('waiting', 'dispatch', 'open');
 
 CREATE TRIGGER workflow_needs_locked BEFORE INSERT ON workflow_needs
-WHEN (SELECT phase FROM plans WHERE id = NEW.plan) NOT IN ('grounding', 'plan')
+WHEN (SELECT locked_at FROM plans WHERE id = NEW.plan) IS NOT NULL
  AND (SELECT created_txn FROM workflows WHERE plan = NEW.plan AND key = NEW.workflow) <> cpd_txn()
 BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;
 
