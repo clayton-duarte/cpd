@@ -1,10 +1,12 @@
 // The classifier helper: reads `{state,question,labels}` on stdin, asks pi's classifier `llama.cpp/kev-4b`, prints one
-// JSON line. `pi/test/classify.test.ts` pins it.
+// JSON line. `pi/test/classify.test.ts` pins it. `piRuntime` registers pi's built-in `llama.cpp` provider (offline refresh);
+// `installCurlFallback` makes fetch fall back to /usr/bin/curl on darwin when macOS Local Network privacy gives EHOSTUNREACH.
 //
 //   node pi/lib/classify.ts  (request on stdin; pi's Node; the engine's environment)
 
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PROVIDER = "llama.cpp";
@@ -131,22 +133,83 @@ export interface PiRuntimeIo {
 }
 export type CurlSpawner = (args: string[], opts: { input?: Uint8Array; signal?: AbortSignal }) => Promise<Uint8Array>;
 
-export function createFetchWithCurlFallback(_deps: { fetch: typeof fetch; curl: CurlSpawner; platform: string }): typeof fetch {
-  throw new Error("not implemented");
+function isHostUnreachable(e: unknown): boolean {
+  for (let cur: unknown = e, i = 0; cur !== undefined && cur !== null && i < 8; i++) {
+    const c = cur as { code?: unknown; cause?: unknown };
+    if (c.code === "EHOSTUNREACH" || c.code === "ENETUNREACH") return true;
+    cur = c.cause;
+  }
+  return false;
+}
+
+function parseCurlResponse(out: Uint8Array): Response {
+  let buf = Buffer.from(out);
+  let head = "";
+  for (;;) {
+    const end = buf.indexOf("\r\n\r\n");
+    if (end < 0) throw new Error("curl returned no HTTP header block");
+    head = buf.subarray(0, end).toString("latin1");
+    buf = buf.subarray(end + 4);
+    if (!/^HTTP\/\S+ 1\d\d\b/.test(head)) break;
+  }
+  const [statusLine, ...lines] = head.split("\r\n");
+  const m = /^HTTP\/\S+ (\d{3})(?: (.*))?$/.exec(statusLine!);
+  if (!m) throw new Error("curl returned a malformed status line");
+  const headers = new Headers();
+  for (const line of lines) {
+    const i = line.indexOf(":");
+    if (i > 0) headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim());
+  }
+  return new Response(buf, { status: Number(m[1]), statusText: m[2] ?? "", headers });
+}
+
+/** A fetch that, on darwin, retries via `/usr/bin/curl` when fetch fails EHOSTUNREACH/ENETUNREACH (macOS Local Network privacy blocks Node, not Apple-signed curl). */
+export function createFetchWithCurlFallback(deps: { fetch: typeof fetch; curl: CurlSpawner; platform: string }): typeof fetch {
+  return async (input, init) => {
+    const req = new Request(input, init);
+    try {
+      return await deps.fetch(req.clone());
+    } catch (e) {
+      if (deps.platform !== "darwin" || !isHostUnreachable(e)) throw e;
+      const body = req.body ? new Uint8Array(await req.arrayBuffer()) : undefined;
+      const args = ["-sS", "-i", "-X", req.method];
+      for (const [k, v] of req.headers) args.push("-H", `${k}: ${v}`);
+      if (body) args.push("--data-binary", "@-");
+      args.push(req.url);
+      let out: Uint8Array;
+      try {
+        out = await deps.curl(args, { input: body, signal: req.signal });
+      } catch {
+        throw e;
+      }
+      return parseCurlResponse(out);
+    }
+  };
 }
 
 export function installCurlFallback(): void {
-  throw new Error("not implemented");
+  const curl: CurlSpawner = (args, opts) =>
+    new Promise((resolve, reject) => {
+      const child = execFile("/usr/bin/curl", args, { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, signal: opts.signal }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(opts.input);
+    });
+  globalThis.fetch = createFetchWithCurlFallback({ fetch: globalThis.fetch, curl, platform: process.platform });
 }
 
-export async function piRuntime(env: NodeJS.ProcessEnv, io?: PiRuntimeIo): Promise<ClassifyRuntime> {
-  if (io) throw new Error("not implemented");
+const defaultIo: PiRuntimeIo = { readText: (path) => readFileSync(path, "utf8"), importModule: (href) => import(href) };
+
+export async function piRuntime(env: NodeJS.ProcessEnv, io: PiRuntimeIo = defaultIo): Promise<ClassifyRuntime> {
   const agentDir = env.PI_CODING_AGENT_DIR;
   if (!agentDir) throw new Error("PI_CODING_AGENT_DIR is not set: it names the agent directory of the pi release.");
-  const piVersion = readFileSync(join(agentDir, "install", "current-version"), "utf8").split("\n")[0]!.trim();
+  const piVersion = io.readText(join(agentDir, "install", "current-version")).split("\n")[0]!.trim();
   const entry = join(agentDir, "install", "releases", piVersion, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
-  const pi = await import(pathToFileURL(entry).href);
-  return pi.ModelRuntime.create({ allowModelNetwork: false });
+  const pi = await io.importModule(pathToFileURL(entry).href);
+  const llama = await io.importModule(pathToFileURL(join(dirname(entry), "extensions", "llama", "provider.js")).href);
+  const rt = await pi.ModelRuntime.create({ allowModelNetwork: false });
+  rt.registerNativeProvider(llama.createLlamaProvider().provider);
+  await rt.refresh({ providers: [PROVIDER], allowNetwork: false });
+  return rt;
 }
 
 async function readStdin(): Promise<string> {
@@ -158,6 +221,7 @@ async function readStdin(): Promise<string> {
 if (import.meta.main) {
   let status: number;
   try {
+    installCurlFallback();
     status = await main({ rt: await piRuntime(process.env), stdin: await readStdin(), stdout: process.stdout, stderr: process.stderr, timeoutMs: 3000, timeoutSignal: (ms) => AbortSignal.timeout(ms) });
   } catch (e) {
     process.stdout.write(JSON.stringify({ ok: false, error: { code: "classifier_unreachable", message: `The helper failed: ${messageOf(e)}`, details: {} } }) + "\n");
