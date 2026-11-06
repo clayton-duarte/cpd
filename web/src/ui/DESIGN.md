@@ -1130,7 +1130,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 |---|---|---|
 | pro-d48 fonts | Roboto and Roboto Mono bundled; `--font-sans`, `--font-mono`, `--font-display`, `--font-heading` | 2b (already on main) |
 | pro-d49 tier filter | seven-item ToggleGroup, right-aligned, selection rules | DESIGN-panes 2.4 |
-| pro-d50 columns and gap | `gap-8` title to filters; popover collapse; defaults 20 / 50 / 30; double-click resets; Reset layout | 3c, 3g, DESIGN-panes 2.4, 4.2 |
+| pro-d50 columns and gap | `gap-8` title to filters (for the Inbox header superseded by pro-d85, 3i); popover collapse; defaults 20 / 50 / 30; double-click resets; Reset layout | 3c, 3g, DESIGN-panes 2.4, 4.2 |
 | pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions columns | DESIGN-panes 2.5 |
 | pro-d52 full-height columns | media and actions are full-height columns | DESIGN-panes 2.5 |
 | pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | DESIGN-panes 2.6, 2.7, 4.8; CONTRACT 11.2 |
