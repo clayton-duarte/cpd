@@ -1,4 +1,4 @@
-import { DollarSignIcon, LayoutDashboardIcon, ListTreeIcon, ScrollTextIcon, SettingsIcon } from "lucide-react";
+import { BookOpenIcon, DollarSignIcon, LayoutDashboardIcon, ListTreeIcon, ScrollTextIcon, SettingsIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import type { StatusModel as WireStatus } from "../../protocol/cockpit.ts";
 import type { Runner, SessionState, Stat } from "../../protocol/domain.ts";
@@ -44,6 +44,7 @@ export interface StatusBarProps {
   readonly costsOn?: boolean;
   readonly onReset?: () => void;
   readonly onLegend?: () => void;
+  readonly onDocs?: () => void;
   readonly onDocs?: () => void;
   readonly onLogs?: () => void;
   readonly onCosts?: () => void;
@@ -100,10 +101,11 @@ function SessionPills(props: Pick<StatusBarProps, "runner" | "state" | "version"
 }
 
 export function StatusBar(props: StatusBarProps): ReactElement {
-  const { status, costsOn = false, onReset, onLegend, onLogs, onCosts, onSettings } = props;
+  const { status, costsOn = false, onReset, onLegend, onDocs, onLogs, onCosts, onSettings } = props;
   const buttons = [
     { label: "Reset layout", icon: <LayoutDashboardIcon />, click: onReset, part: "reset-layout" },
     { label: "Legend", icon: <ListTreeIcon />, click: onLegend, part: "legend" },
+    { label: "Documentation", icon: <BookOpenIcon />, click: onDocs, part: "docs" },
     { label: "Logs", icon: <ScrollTextIcon />, click: onLogs, part: "logs" },
     { label: "Costs", icon: <DollarSignIcon />, click: onCosts, part: "costs" },
     { label: "Settings", icon: <SettingsIcon />, click: onSettings, part: "settings" },
