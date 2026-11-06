@@ -8,12 +8,14 @@ import { formatCost } from "../../server/cockpit/cost.ts";
 import { dotDisplay, sessionDisplay } from "../dango-status.ts";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/context-menu.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
+import { Button } from "../components/button.tsx";
+import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Input } from "../components/input.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { Separator } from "../components/separator.tsx";
 import {
-  Sidebar, SidebarContent, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel,
+  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
 } from "../components/sidebar.tsx";
 import { clearDraft } from "../composer/drafts.ts";
@@ -423,13 +425,11 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
 }
 
 function TreeSection(props: {
-  section: "contexts" | "archive";
+  section: "archive";
   label: string;
   open: boolean;
   onOpenChange(open: boolean): void;
-  action?: ReactNode;
   children: ReactNode;
-  headerDataPart?: string;
   groupAttrs?: Record<string, string | boolean>;
 }): ReactElement {
   return (
@@ -442,19 +442,15 @@ function TreeSection(props: {
     >
       <SidebarGroup className={cn("flex flex-col overflow-hidden px-0 py-1", props.open ? "min-h-0 flex-1" : "shrink-0")} {...props.groupAttrs}>
         <div className="relative shrink-0 px-2">
-          <SidebarGroupLabel asChild data-part={props.headerDataPart}>
+          <SidebarGroupLabel asChild>
             <CollapsibleTrigger
               type="button"
-              className={cn(
-                "w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                props.action !== undefined && "pr-7",
-              )}
+              className="w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <span>{props.label}</span>
               {props.open ? <MinusIcon className="ml-auto" /> : <PlusIcon className="ml-auto" />}
             </CollapsibleTrigger>
           </SidebarGroupLabel>
-          {props.action}
         </div>
         <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ScrollArea data-part="tree-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
@@ -495,7 +491,6 @@ export function ContextTree(props: {
   const taken = (tree?.contexts ?? []).flatMap((c) => c.plans.map((p) => p.id));
   const menu: MenuApi | undefined = onAction === undefined ? undefined : { act: onAction, ask: setPrompt, taken };
   const handlers = menu === undefined ? rest : { ...rest, menu };
-  const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);
 
   const all = tree === null ? [] : tree.contexts;
@@ -514,11 +509,9 @@ export function ContextTree(props: {
   const holds = (c: ContextNode, plansOnly: boolean): boolean =>
     sessionId !== null && ((!plansOnly && c.sessions.some((s) => s.ref.id === sessionId)) || c.plans.some((p) => p.sessions.some((s) => s.ref.id === sessionId)));
   const inArchive = archived.some((c) => holds(c, !c.archived));
-  const inLive = !inArchive && projectContexts.some((c) => holds(c, false));
   useEffect(() => {
     if (inArchive && !archivedOpen) setArchivedOpen(true);
-    if (inLive && !contextsOpen) setContextsOpen(true);
-  }, [inArchive, inLive, archivedOpen, contextsOpen, setArchivedOpen, setContextsOpen]);
+  }, [inArchive, archivedOpen, setArchivedOpen]);
 
   const sidebarRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -537,28 +530,41 @@ export function ContextTree(props: {
   return (
     <Sidebar ref={sidebarRef} collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
       <SidebarContent className="flex h-full min-h-0 flex-col gap-0 overflow-hidden">
-        <TreeSection
-          section="contexts"
-          label="Contexts"
-          open={contextsOpen}
-          onOpenChange={setContextsOpen}
-          headerDataPart="tree-header"
-          action={
+        <TopPaneHeader
+          dataPart="tree-header"
+          hasOverlayControls={false}
+          actions={
             onNewContext === undefined ? undefined : (
-              <SidebarGroupAction type="button" data-action="new-context" aria-label="New context" onClick={onNewContext} className="top-1 right-3 z-10">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                data-action="new-context"
+                aria-label="New context"
+                onClick={onNewContext}
+                className="size-[26px] rounded-[5px] text-fg-strong"
+              >
                 <PlusIcon size={14} aria-hidden="true" />
-              </SidebarGroupAction>
+              </Button>
             )
           }
         >
-          {tree === null ? (
-            <p data-part="loading" className="px-2 text-fg-dim">Loading contexts…</p>
-          ) : all.length === 0 ? (
-            <p data-part="empty" className="px-2 text-fg-dim">No contexts</p>
-          ) : (
-            <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
-          )}
-        </TreeSection>
+          <span data-part="phi" aria-hidden="true" className="-translate-y-[1px] select-none font-display text-[20px] font-bold leading-none text-fg-strong">φ</span>
+          <span className="sr-only">Contexts</span>
+        </TopPaneHeader>
+        <div data-part="tree-section" data-section="contexts" data-state="open" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ScrollArea data-part="tree-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
+            <SidebarGroupContent className="px-2 py-1.5">
+              {tree === null ? (
+                <p data-part="loading" className="px-2 text-fg-dim">Loading contexts…</p>
+              ) : all.length === 0 ? (
+                <p data-part="empty" className="px-2 text-fg-dim">No contexts</p>
+              ) : (
+                <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
+              )}
+            </SidebarGroupContent>
+          </ScrollArea>
+        </div>
         {archived.length > 0 ? <Separator className="shrink-0" /> : null}
         {archived.length > 0 ? (
           <TreeSection section="archive" label="Archive" open={archivedOpen} onOpenChange={setArchivedOpen} groupAttrs={{ "data-archived": true }}>

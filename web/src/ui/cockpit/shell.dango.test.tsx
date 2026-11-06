@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { expect, it, vi } from "vitest";
+import { useContext } from "react";
 import { mount } from "../../testing/render.tsx";
-import { Header } from "./Header.tsx";
-import { Shell } from "./Shell.tsx";
+import { PlanCollapseContext, Shell } from "./Shell.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 
 // react-resizable-panels is an external dependency and jsdom has no layout: a plain double
@@ -64,55 +64,22 @@ function click(el: Element | null): void {
   });
 }
 
-function shell() {
-  return mount(
-    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} header={<Header />} status={<i>s</i>} />,
+// A plan child that renders what TopPaneHeader renders from the context: the collapse button.
+function PlanProbe() {
+  const ctl = useContext(PlanCollapseContext);
+  if (ctl === null) return <i id="p">plan</i>;
+  return (
+    <div data-part="plan-controls" role="group" aria-label="Plan pane controls">
+      <button type="button" data-action="plan-collapse" aria-label={ctl.collapsed ? "Expand plan view" : "Collapse plan view"} onClick={ctl.toggle} />
+    </div>
   );
 }
 
-it("header shows the phi mark, breadcrumb, jump trigger and engine indicator", () => {
-  const onOpenSearch = vi.fn();
-  const m = mount(<Header location={{ context: "Context One", plan: "Plan One" }} engine={true} onOpenSearch={onOpenSearch} />);
-  const c = m.container;
-  expect(c.querySelector('[data-part="phi"]')?.textContent).toBe("φ");
-  expect(c.querySelector("[data-emblem]")?.textContent).toBe("C-P-D");
-  const nav = c.querySelector('nav[aria-label="Location"][data-part="breadcrumb"]');
-  expect(nav?.querySelector('[data-part="breadcrumb-context"]')?.textContent).toBe("Context One");
-  expect(nav?.querySelector('[data-part="breadcrumb-plan"]')?.textContent).toBe("Plan One");
-  const search = c.querySelector('button[data-part="search"]');
-  expect(search?.textContent).toContain("Jump to context, plan, job, PR…");
-  expect(search?.textContent).toContain("⌘K");
-  click(search);
-  expect(onOpenSearch).toHaveBeenCalledTimes(1);
-  const engine = c.querySelector('[data-part="engine"]');
-  expect(engine?.getAttribute("data-state")).toBe("running");
-  expect(engine?.textContent).toContain("engine");
-  expect(engine?.textContent).toContain("running");
-  m.unmount();
-  const stopped = mount(<Header engine={false} />);
-  expect(stopped.container.querySelector('[data-part="engine"]')?.getAttribute("data-state")).toBe("stopped");
-  expect(stopped.container.querySelector('[data-part="engine"]')?.textContent).toContain("not running");
-  expect(stopped.container.querySelector('button[data-part="search"]')).toBeNull();
-  stopped.unmount();
-  const unknown = mount(<Header engine={null} />);
-  expect(unknown.container.querySelector('[data-part="engine"]')?.getAttribute("data-state")).toBe("unknown");
-  expect(unknown.container.querySelector('[data-part="engine"]')?.textContent).toContain("unknown");
-  unknown.unmount();
-});
-
-// Title kept from the Job; DESIGN.md 3a: no location means no breadcrumb, a null plan means the context alone.
-it("header breadcrumb falls back when no plan is selected", () => {
-  const none = mount(<Header location={null} engine={null} />);
-  expect(none.container.querySelector('[data-part="phi"]')).not.toBeNull();
-  expect(none.container.querySelector('[data-part="breadcrumb"]')).toBeNull();
-  none.unmount();
-  const noPlan = mount(<Header location={{ context: "Context One", plan: null }} />);
-  const nav = noPlan.container.querySelector('nav[data-part="breadcrumb"]');
-  expect(nav?.querySelector('[data-part="breadcrumb-context"]')?.textContent).toBe("Context One");
-  expect(nav?.querySelector('[data-part="breadcrumb-plan"]')).toBeNull();
-  expect(nav?.textContent).not.toContain("/");
-  noPlan.unmount();
-});
+function shell() {
+  return mount(
+    <Shell tree={<i id="t">tree</i>} plan={<PlanProbe />} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} />,
+  );
+}
 
 // Title kept from the Job; the bar is the TUI's: five icon buttons, then the session pills until the machine status arrives.
 it("status bar shows reset layout, legend, logs and the runner pill", () => {
@@ -167,12 +134,55 @@ it("plan pane can be collapsed and expanded", () => {
   expect(center?.getAttribute("data-plan-state")).toBe("collapsed");
   const section = c.querySelector('section[aria-label="Plan pane"]');
   expect(section?.getAttribute("data-state")).toBe("collapsed");
-  expect(section?.hasAttribute("inert")).toBe(true);
+  expect(section?.hasAttribute("inert")).toBe(false);
   expect(c.querySelector('main[aria-label="Chat"]')?.getAttribute("data-state")).toBe("open");
   click(c.querySelector('button[aria-label="Expand plan view"]'));
   expect(center?.getAttribute("data-plan-state")).toBe("open");
   expect(c.querySelector('section[aria-label="Plan pane"]')?.hasAttribute("inert")).toBe(false);
   expect(c.querySelector('button[aria-label="Collapse plan view"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("Shell provides PlanCollapseContext whose toggle collapses and expands the plan pane", () => {
+  const seen: Array<boolean | null> = [];
+  function Spy() {
+    const ctl = useContext(PlanCollapseContext);
+    seen.push(ctl === null ? null : ctl.collapsed);
+    return <button id="tg" onClick={ctl?.toggle} />;
+  }
+  const m = mount(<Shell tree={<i>t</i>} plan={<Spy />} chat={<i>c</i>} inbox={<i>i</i>} />);
+  const c = m.container;
+  const center = c.querySelector('[data-column="center"]');
+  expect(seen[seen.length - 1]).toBe(false);
+  click(c.querySelector("#tg"));
+  expect(seen[seen.length - 1]).toBe(true);
+  expect(center?.getAttribute("data-plan-state")).toBe("collapsed");
+  click(c.querySelector("#tg"));
+  expect(seen[seen.length - 1]).toBe(false);
+  expect(center?.getAttribute("data-plan-state")).toBe("open");
+  m.unmount();
+});
+
+it("Shell renders no plan controls or ScrollArea of its own around the plan", () => {
+  const m = mount(<Shell tree={<i>t</i>} plan={<i id="p">plan</i>} chat={<i>c</i>} inbox={<i>i</i>} />);
+  const c = m.container;
+  expect(c.querySelector('[data-part="plan-controls"]')).toBeNull();
+  expect(c.querySelector('button[data-action="plan-collapse"]')).toBeNull();
+  const section = c.querySelector('section[aria-label="Plan pane"]');
+  expect(section?.querySelector("[data-slot=scroll-area]")).toBeNull();
+  expect(section?.querySelector('[data-part="plan-scroll"]')).toBeNull();
+  expect(section?.firstElementChild?.id).toBe("p");
+  m.unmount();
+});
+
+it("the Plan pane is a flex column that is not inert when collapsed", () => {
+  const m = shell();
+  const c = m.container;
+  const section = () => c.querySelector('section[aria-label="Plan pane"]');
+  for (const k of ["flex", "h-full", "min-h-0", "flex-col", "overflow-hidden"]) expect(section()?.classList.contains(k)).toBe(true);
+  click(c.querySelector('button[data-action="plan-collapse"]'));
+  expect(section()?.getAttribute("data-state")).toBe("collapsed");
+  expect(section()?.hasAttribute("inert")).toBe(false);
   m.unmount();
 });
 
@@ -211,23 +221,27 @@ it("plan split exposes a keyboard operable separator", () => {
   m.unmount();
 });
 
-it("shell keeps its landmarks and data hooks", () => {
-  const m = shell();
+it("shell keeps its landmarks and data hooks without a cockpit header", () => {
+  // A legacy `header` slot is passed through a loose spread: the removed slot must render nothing.
+  const legacy = { header: <b data-emblem>C-P-D</b> };
+  const m = mount(
+    <Shell tree={<i id="t">tree</i>} plan={<i id="p">plan</i>} chat={<i id="c">chat</i>} inbox={<i id="i">inbox</i>} status={<i>s</i>} {...legacy} />,
+  );
   const c = m.container;
   const root = c.querySelector("div[data-shell]");
   expect(root).not.toBeNull();
   expect([...(root?.children ?? [])].map((e) => e.getAttribute("aria-label") ?? e.getAttribute("data-part"))).toEqual([
-    "Cockpit header",
     "columns-group",
     "Status bar",
   ]);
   const center = root?.querySelector('div[data-column="center"]');
-  expect(center?.children).toHaveLength(2);
+  expect(center?.children).toHaveLength(1);
   expect(center?.getAttribute("data-part")).toBe("center-frame");
   expect(center?.querySelector('section[aria-label="Plan pane"] #p')).not.toBeNull();
   expect(center?.querySelector('main[aria-label="Chat"] #c')).not.toBeNull();
   expect(root?.querySelector('aside[aria-label="Context tree column"] #t')).not.toBeNull();
   expect(root?.querySelector('aside[aria-label="Inbox column"] #i')).not.toBeNull();
-  expect(root?.querySelector('header[aria-label="Cockpit header"] [data-emblem]')?.textContent).toBe("C-P-D");
+  expect(root?.querySelector('header[aria-label="Cockpit header"]')).toBeNull();
+  expect(root?.querySelector("[data-emblem]")).toBeNull();
   m.unmount();
 });

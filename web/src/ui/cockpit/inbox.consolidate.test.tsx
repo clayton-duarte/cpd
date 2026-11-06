@@ -68,7 +68,8 @@ it("inbox tier filter lists all, blocker, delivery, decision, support, notice an
   const group = m.container.querySelector('[data-slot="toggle-group"]');
   expect(group?.getAttribute("data-part")).toBe("inbox-filters");
   expect(group?.getAttribute("aria-label")).toBe("Filter inbox by tier");
-  expect(group?.className).toContain("ml-auto");
+  expect(m.container.querySelector("[data-part=inbox-header]")?.lastElementChild).toBe(group);
+  expect(group?.className).not.toContain("ml-auto");
   const names = Array.from(group?.querySelectorAll('[data-slot="toggle-group-item"]') ?? []);
   expect(names.map((b) => b.getAttribute("data-tier-filter"))).toEqual(["all", ...TIERS]);
   // each item reads `<label> <count>`: the label span, then the count span (font-mono text-[10px] opacity-80)

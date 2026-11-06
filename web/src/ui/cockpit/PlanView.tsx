@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
+import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { CpdFlowCanvas } from "./FlowCanvas.tsx";
 import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
 
@@ -244,6 +245,7 @@ function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): 
 export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void;
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
   postableWorkflows?: ReadonlySet<string>;
+  onSelectManager?: () => void;
 }): ReactElement {
   const { plan, onAction } = props;
   if (plan === null) {
@@ -251,21 +253,38 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
   }
   const explore = plan.jobs.filter((j) => j.workflow === null);
   return (
-    <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex flex-col gap-2.5 px-4 pb-3">
-      <div data-part="title-row" className="flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16">
-        <h2 title={plan.title} className="max-w-full min-w-0 truncate font-mono text-[14px] font-semibold text-fg-strong">{plan.title}</h2>
-        <span data-part="plan-key" className="font-mono text-meta text-fg-dim">{plan.planId}</span>
+    <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
+      <TopPaneHeader
+        dataPart="title-row"
+        actions={
+          <>
+            {plan.review !== null ? <p data-part="review" className="font-mono text-meta text-muted-foreground">{`Review ${plan.review.id}: ${plan.review.status}`}</p> : null}
+            {plan.openEscalations > 0 ? <p data-part="escalations" className="font-mono text-meta text-status-blocked">{`Escalations: ${plan.openEscalations}`}</p> : null}
+          </>
+        }
+      >
+        {props.onSelectManager !== undefined ? (
+          <button type="button" data-action="select-manager" onClick={props.onSelectManager}
+            className="shrink-0 font-mono text-[14px] font-semibold text-fg-strong hover:underline">
+            {plan.contextId}
+          </button>
+        ) : (
+          <span data-part="manager-key" className="shrink-0 font-mono text-[14px] font-semibold text-fg-strong">{plan.contextId}</span>
+        )}
+        <span aria-hidden="true" className="text-fg-dim">/</span>
+        <h2 data-part="plan-key" title={plan.title} className="min-w-0 truncate font-mono text-[14px] font-semibold text-fg-strong">{plan.planId}</h2>
         <Stepper phase={plan.phase} />
-        <span className="flex-1" />
-        {plan.review !== null ? <p data-part="review" className="font-mono text-meta text-muted-foreground">{`Review ${plan.review.id}: ${plan.review.status}`}</p> : null}
-        {plan.openEscalations > 0 ? <p data-part="escalations" className="font-mono text-meta text-status-blocked">{`Escalations: ${plan.openEscalations}`}</p> : null}
+      </TopPaneHeader>
+      <ScrollArea data-part="plan-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
+      <div data-part="plan-body" className="flex flex-col gap-2.5 px-4 py-2.5">
+        {explore.length > 0 ? <ExploreStrip jobs={explore} /> : null}
+        {plan.workflows.map((wf) => (
+          <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} postableWorkflows={props.postableWorkflows} />
+        ))}
+        {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
+        {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
       </div>
-      {explore.length > 0 ? <ExploreStrip jobs={explore} /> : null}
-      {plan.workflows.map((wf) => (
-        <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} postableWorkflows={props.postableWorkflows} />
-      ))}
-      {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
-      {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
+      </ScrollArea>
     </section>
   );
 }

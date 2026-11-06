@@ -368,18 +368,6 @@ it("a selected tier with no rows shows the up-to-date message", () => {
   m.unmount();
 });
 
-it("the title and the filters share one header row with the group right-aligned", () => {
-  const m = render(mixed());
-  const header = m.container.querySelector('[data-part="inbox-header"]');
-  const group = m.container.querySelector('[data-part="inbox-filters"]');
-  for (const c of ["flex", "h-8", "items-center", "justify-between"]) expect(header?.className).toContain(c);
-  expect(header?.className).not.toContain("flex-wrap");
-  expect(group?.parentElement).toBe(header);
-  expect(group?.className).toContain("ml-auto");
-  expect(group?.className).not.toContain("w-full");
-  m.unmount();
-});
-
 it("the filter items use the outline variant with a tier text colour and no fill", () => {
   const m = render(mixed());
   for (const n of ["all", ...TIER_NAMES]) {
@@ -392,21 +380,68 @@ it("the filter items use the outline variant with a tier text colour and no fill
   m.unmount();
 });
 
-it("the Inbox title shows no count", () => {
-  const m = render(mixed());
-  const header = m.container.querySelector('[data-part="inbox-header"]');
-  expect(header?.querySelector("h2")?.textContent).toBe("Inbox");
-  expect(Array.from(header?.children ?? []).map((e) => e.tagName)).toEqual(["H2", "DIV"]);
-  m.unmount();
-});
-
 const trigger = (c: Element) => c.querySelector<HTMLElement>('[data-part="inbox-filters-trigger"]');
 const sampleRows = () => [row(1, "blocked", "a", { urgency: "red" }), row(2, "x", "b", { urgency: "yellow" }), row(3, "x", "c", { urgency: "yellow" })];
 
-it("the header keeps a 2rem gap between the title and the filters", () => {
-  const m = render([]);
-  expect(m.container.querySelector('[data-part="inbox-header"]')?.className).toContain("gap-8");
-  m.unmount();
+const hdr = (c: Element) => c.querySelector<HTMLElement>('[data-part="inbox-header"]');
+const label = (h: Element | null) => Array.from(h?.querySelectorAll("*") ?? []).find((e) => e.textContent === "INBOX" && e.children.length === 0);
+
+it("Inbox header is a TopPaneHeader with an uppercase INBOX label and only the filters in the action slot", () => {
+  const m = render(mixed());
+  try {
+    const h = hdr(m.container);
+    expect(h?.tagName).toBe("HEADER");
+    const kids = Array.from(h?.children ?? []);
+    expect(kids).toHaveLength(3);
+    expect(kids[0]?.textContent).toBe("INBOX");
+    expect(kids[1]?.className).toContain("flex-1");
+    expect(kids[2]).toBe(m.container.querySelector('[data-part="inbox-filters"]'));
+    expect(h?.classList.contains("pr-12")).toBe(false);
+  } finally {
+    m.unmount();
+  }
+});
+
+it("Inbox header is h-11 like the other column headers", () => {
+  const m = render(mixed());
+  try {
+    const h = hdr(m.container);
+    for (const c of ["flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
+      expect(h?.classList.contains(c)).toBe(true);
+    }
+    for (const c of ["sticky", "top-0", "z-10", "h-8"]) expect(h?.classList.contains(c)).toBe(false);
+  } finally {
+    m.unmount();
+  }
+});
+
+it("Inbox INBOX label uses font-mono text-[14px] font-semibold uppercase text-fg-strong", () => {
+  const m = render(mixed());
+  try {
+    const l = label(hdr(m.container));
+    expect(l).toBeDefined();
+    for (const c of ["font-mono", "text-[14px]", "font-semibold", "uppercase", "text-fg-strong"]) {
+      expect(l?.classList.contains(c)).toBe(true);
+    }
+  } finally {
+    m.unmount();
+  }
+});
+
+it("Inbox filters collapse into the Popover inside the header action slot when narrow", () => {
+  stubLayout(200, 300);
+  const m = render(sampleRows());
+  try {
+    const h = hdr(m.container);
+    const kids = Array.from(h?.children ?? []);
+    expect(h?.tagName).toBe("HEADER");
+    expect(kids).toHaveLength(3);
+    expect(kids[0]?.textContent).toBe("INBOX");
+    expect(kids[2]).toBe(trigger(m.container));
+    expect(m.container.querySelector('[data-part="inbox-filters"]')).toBeNull();
+  } finally {
+    m.unmount();
+  }
 });
 
 it("wide enough: the filters render inline as a horizontal toggle group and no popover trigger", () => {
@@ -471,7 +506,7 @@ it("the measuring clone is hidden from assistive tech and holds no filter hooks"
   const clone = m.container.querySelector('[aria-hidden="true"].invisible');
   expect(clone).not.toBeNull();
   expect(clone?.querySelector("button, [data-tier-filter], [data-part]")).toBeNull();
-  expect(clone?.textContent).toContain("Inbox");
+  expect(clone?.textContent?.toLowerCase()).toContain("inbox");
   expect(clone?.textContent).toContain("unread0");
   expect(m.container.querySelectorAll('[data-tier-filter="blocker"]')).toHaveLength(1);
   m.unmount();
