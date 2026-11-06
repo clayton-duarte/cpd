@@ -12,8 +12,6 @@ use super::posts::{self, PostRecord};
 use super::{Env, workflow_policy};
 use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
-#[cfg(test)]
-use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::swr::source::slack;
@@ -24,17 +22,6 @@ pub struct PostArgs {
     workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
-}
-
-/// Test constructor of the arguments: Workflow `key` of Plan `plan`.
-#[cfg(test)]
-pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
-    PostArgs {
-        workflow: WorkflowArg {
-            workflow: Some(key),
-        },
-        plan: PlanArg { plan: Some(plan) },
-    }
 }
 
 pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {

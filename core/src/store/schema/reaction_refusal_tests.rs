@@ -148,7 +148,7 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
         "the rows matching a post by channel, ts and emoji are linked; the others stay unlinked"
     );
     drop(store);
-    let mut again = Store::open(&home, 5000).unwrap();
+    let mut again = crate::store::tests::open_named(&home, &upto).unwrap();
     assert_eq!(
         rows(&mut again),
         expected,
