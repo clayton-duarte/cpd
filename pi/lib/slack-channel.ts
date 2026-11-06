@@ -232,7 +232,7 @@ export function parseInput(text: string): Input {
     throw new Refusal("usage", "stdin is not JSON: expected {version: 1, known: [], terminal: []}.");
   }
   if (v === null || typeof v !== "object" || v.version !== 1 || !Array.isArray(v.known) || !Array.isArray(v.terminal)) {
-    throw new Refusal("usage", "stdin must be {version: 1, known: [...], terminal: [...]}.");
+    throw new Refusal("usage", "stdin must be an object with version 1 and the arrays known and terminal.");
   }
   return v as Input;
 }
