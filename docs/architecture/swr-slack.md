@@ -157,7 +157,7 @@ Canonical `vars_json`: keys sorted, no spaces (swr.md §8 `Dedupe`). Active key 
 
 | `op_kind` | `vars_json` | Coalesce | Patch (the overlay on `swr_slack_posts`, `pr_posts`) | `execute` (the helper, through `Runner`) |
 |---|---|---|---|---|
-| `reaction` | `{"channel","emoji","ts"}`, and `plan`, `workflow` for a merge reaction | `Dedupe` on `(channel, ts, emoji)`: an active mutation with the same `vars_json` is returned, nothing written | the message's `reactions` +1 for `emoji`; `eyes_me` = 1 when `emoji` is `eyes` and the claim is the User's | `slack-react.ts --channel --ts --emoji` (§4.3) |
+| `reaction` | `{"channel","emoji","ts"}`, and `plan`, `workflow` for a merge reaction | `Dedupe` on `(channel, ts, emoji)`: an active mutation with the same `vars_json` is returned, nothing written | the message's `reactions` +1 for `emoji`; `eyes_me` = 1 when `emoji` is `eyes` (the User's own claim) | `slack-react.ts --channel --ts --emoji` (§4.3) |
 | `post` | `{"channel","number","plan","repo","text","workflow"}` (`text` rendered at enqueue) | **none**: a post is never superseded or deduped. The one guard is `pr post`'s `already_posted` (§5.1), checked in the enqueue's own transaction | `pr_posts` of the Workflow: state `pending`, no `ts` yet | `slack-post.ts --channel` with `text` on stdin (§21.10) |
 | `repost` | `{"channel","plan","text","thread_ts","workflow"}` | **none**: each `pr repost` is one reminder (commands §9.8b2) | none | `slack-post.ts --channel --thread-ts --reply-broadcast true`, stdin `Bibbidi-bobbidi-bump!` |
 
@@ -198,7 +198,7 @@ Reactions in use today, all `reaction` ops:
 2. insert the `post` mutation with its `vars_json`, and the Workflow's `pr_posts` overlay.
 3. return `{ok, plan, workflow, queued: true, mutation_id, message}`. The `pr_posts` row does not exist until the send answers.
 
-When E24 completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Then it enqueues the `auto_merge` mutation (§6.3) when the policy allows it.
+When E24 completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Then it enqueues the `auto_merge` mutation (§6.3); the repo gate of §6.2 is in its executor.
 
 `pr repost` (commands §9.8b2) checks 1 and 2 as today and enqueues `repost`. Its `last_posted_at` is set on completion, as today.
 
@@ -235,7 +235,9 @@ Nothing is queued when:
 
 ### 6.3 The `auto_merge` mutation
 
-`pr post` (after its send) and E11 both enqueue `auto_merge` through the same function. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues. Until the github cutover the existing E18 path runs it, so the rule needs no flag.
+`pr post` (after its send) and E11 both enqueue `auto_merge` through the same function. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues.
+
+**Ordering.** The Slack cutover must not enqueue `auto_merge` before the github Workflow's `auto_merge` executor is live: a mutation with no executor stays `pending` forever. Until then, E11 and `pr post` keep writing `pr_posts.auto_merge` `pending`, which E18 runs as today (`engine/src/watch/auto_merge.rs`), and they do not do both. The github cutover retires that column and E18 together (swr.md §15).
 
 ## 7. Unverified
 
