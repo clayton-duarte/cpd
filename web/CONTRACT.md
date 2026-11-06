@@ -1933,7 +1933,7 @@ Normative for `web/src/server/pi/live.ts` (new), `web/src/server/pi/backend.ts`,
 
 ### 12.3 Frame-to-wire table
 
-Terms. `T` is the `message.timestamp` of the **open** message. The open message is set by a `message_start` of an assistant message or by the `inflight` message. A `delta` frame carries no timestamp, so it belongs to the open message. `blockIndex` counts the text and thinking blocks of the open message; toolCall content is not a block (`domain.ts:53`). `result.text` is the text blocks of `content` joined with `"\n"` (`domain.ts:60`, `jsonl.ts` `textOf`).
+Terms. `T` is the `message.timestamp` of the **open** message. The open message is set by a `message_start` of an assistant message or by the `inflight` message. A `delta` frame carries no timestamp, so it belongs to the open message. `blockIndex` counts the text and thinking blocks of the open message that are in `inflight` content or have received a `session.delta`; toolCall content is not a block (`domain.ts:53`). A block that streamed no delta has no index until its first delta, so an empty block that streams nothing takes no index. `counter` is the next unused block index of the open message: it starts at the block count of `inflight` content (0 after `message_start`). `result.text` is the text blocks of `content` joined with `"\n"` (`domain.ts:60`, `jsonl.ts` `textOf`).
 
 | Frame | Condition | Wire message(s) | Effect on the open message |
 |---|---|---|---|
@@ -1946,9 +1946,9 @@ Terms. `T` is the `message.timestamp` of the **open** message. The open message 
 | `message_start` | role assistant, T not committed | `session.append` `AssistantItem` `live:T`, `streaming: true`, `blocks: []`, `model` when present | open = T; counter = 0 |
 | `message_start` | role assistant, T committed | none | open = T; its frames are ignored |
 | `message_start` | role `user` or `toolResult` | none (L5) | none |
-| `delta` | kind `text` or `thinking`, phase `start` | none | the block index of `index` = counter; counter + 1 |
-| `delta` | kind `text` or `thinking`, phase `delta` | `session.delta` `{itemId: live:T, blockIndex, blockType: kind, text: delta}` | none |
-| `delta` | kind `text` or `thinking`, phase `end` | none | none |
+| `delta` | kind `text` or `thinking`, phase `start` | none | none: no block index is allocated |
+| `delta` | kind `text` or `thinking`, phase `delta`, `delta` a string | `session.delta` `{itemId: live:T, blockIndex, blockType: kind, text: delta}` | a content index not yet mapped is mapped to counter, then counter + 1; a mapped index reuses its blockIndex. The `session.delta` carries that blockIndex, which equals the client's blocks.length at that moment, so it creates the block (line 508) |
+| `delta` | kind `text` or `thinking`, phase `end` | none | none: no block index is allocated |
 | `delta` | kind `toolcall`, any phase | none | none |
 | `tool_start` | | `session.append` `ToolItem` `tool:<toolCallId>`: `status` running, `name` = `toolName`, `args`, `callId` | the name and args are kept for the later updates |
 | `tool_update` | | `session.update` `ToolItem` with the kept name and args, `result` `{text, isError: false}`, `status` running | none |
