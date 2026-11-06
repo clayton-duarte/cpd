@@ -4,8 +4,10 @@ import { readStatus, type StatusDeps } from "./status.ts";
 const SEP = "\u{f0798}";
 interface Sources { version?: string; incident?: string; config?: string; workers?: string; preview?: string; install?: string }
 
-function deps(s: Sources): StatusDeps {
+function deps(s: Sources, env: Record<string, string> = {}, drift: StatusDeps["drift"] = async () => { throw new Error("drift must not be read"); }): StatusDeps {
   return {
+    env,
+    drift,
     async cpd(argv) {
       const a = argv.join(" ");
       if (a.includes("--version") && s.version !== undefined) return s.version;
@@ -56,8 +58,26 @@ describe("status", () => {
   });
   it("status reports nulls when a source is missing", async () => {
     const st = await readStatus(deps({}));
-    expect(st).toEqual({ runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false });
+    expect(st).toEqual({ runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false, mode: "production", drift: null });
     const partial = await readStatus(deps({ version: '{"ok":true,"version":"1.2.3-dev"}' }));
-    expect(partial).toEqual({ runner: null, preview: null, incident: null, workers: null, version: "1.2.3-dev", hostAlert: false });
+    expect(partial).toEqual({ runner: null, preview: null, incident: null, workers: null, version: "1.2.3-dev", hostAlert: false, mode: "production", drift: null });
+  });
+  it("readStatus reports production mode and no drift by default", async () => {
+    let reads = 0;
+    const drift: StatusDeps["drift"] = async () => (reads += 1, { count: 1, oldestAt: null, stale: false });
+    const st = await readStatus(deps({}, { CPD_CHECKOUT: "/w" }, drift));
+    expect(st.mode).toBe("production");
+    expect(st.drift).toBeNull();
+    expect(reads).toBe(0);
+    await expect(readStatus(deps({}, { CPD_MODE: "staging" }, drift))).rejects.toThrow('CPD_MODE must be production or preview, got "staging"');
+  });
+  it("readStatus reports preview mode with the drift summary of the checkout", async () => {
+    const roots: string[] = [];
+    const summary = { count: 2, oldestAt: "2026-11-05T10:00:00.000Z", stale: true };
+    const drift: StatusDeps["drift"] = async (root) => (roots.push(root), { ...summary, entries: [{ kind: "dirty", ref: "a.ts", at: summary.oldestAt }] } as typeof summary);
+    const st = await readStatus(deps({}, { CPD_MODE: "preview", CPD_CHECKOUT: "/w" }, drift));
+    expect(roots).toEqual(["/w"]);
+    expect(st.mode).toBe("preview");
+    expect(st.drift).toEqual(summary);
   });
 });

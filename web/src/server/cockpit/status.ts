@@ -2,7 +2,10 @@ export interface StatusDeps {
   cpd(argv: readonly string[]): Promise<string>;
   tmux(argv: readonly string[]): Promise<string>;
   readFile(path: string): Promise<string | null>;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  drift(root: string): Promise<DriftSummary>;
 }
+export interface DriftSummary { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean }
 export interface Status {
   readonly runner: string | null;
   readonly preview: string | null;
@@ -10,6 +13,8 @@ export interface Status {
   readonly workers: { readonly queued: number; readonly waiting: number; readonly tenants: number; readonly limit: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
+  readonly mode: "production" | "preview";
+  readonly drift: DriftSummary | null;
 }
 
 const obj = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
@@ -39,5 +44,5 @@ export async function readStatus(deps: StatusDeps): Promise<Status> {
     tmuxOpt("@cpd_preview"),
     attempt(async () => { const t = await deps.readFile(`${home}/run/cpd-install.json`); return t === null ? null : json(t); }),
   ]);
-  return { runner, preview, incident, workers, version, hostAlert: install?.["status"] === "skipped" };
+  return { runner, preview, incident, workers, version, hostAlert: install?.["status"] === "skipped", mode: "production", drift: null };
 }
