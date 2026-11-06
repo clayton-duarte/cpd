@@ -52,7 +52,9 @@ it("ContextTree section scroll area is tree-scroll and keeps its content at pane
   const m = mount(
     <ContextTree tree={tree} selectedSessionId={null} selectedPlanId={null} onSelectSession={vi.fn()} onSelectPlan={vi.fn()} />,
   );
-  expectPane(m.container.querySelector("[data-slot=scroll-area]"), "tree-scroll");
+  const area = m.container.querySelector("[data-slot=scroll-area]");
+  expectPane(area, "tree-scroll");
+  expect(area?.closest('[data-part="tree-header"]')).toBeNull();
   m.unmount();
 });
 
