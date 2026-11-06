@@ -1,7 +1,7 @@
 import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CockpitAction, ContextNode, ContextTreeModel, PlanCounts, PlanNode, SessionDot, SessionNode } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { formatCost } from "../../server/cockpit/cost.ts";
@@ -338,6 +338,20 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   const forks = context.sessions.filter(isFork);
   const hasChildren = plans.length > 0 || forks.length > 0;
   const current = manager !== undefined && props.selectedSessionId === manager.ref.id;
+  // pro-d78: a selected Manager collapses its Context row transiently (never persisted)
+  const [overrideWhileCurrent, setOverrideWhileCurrent] = useState<boolean | null>(null);
+  const prevCurrent = useRef(current);
+  useEffect(() => {
+    if (prevCurrent.current === current) return;
+    prevCurrent.current = current;
+    setOverrideWhileCurrent(null);
+    if (!current && !props.allPlans && !open) setOpen(true);
+  }, [current, open, props.allPlans, setOpen]);
+  const effectiveOpen = !props.allPlans && current ? (overrideWhileCurrent ?? false) : open;
+  const handleOpenChange = (next: boolean): void => {
+    if (!props.allPlans && current) setOverrideWhileCurrent(next);
+    else setOpen(next);
+  };
   const api = props.menu;
   const permanent = isPermanent(context.id);
   const archivedRow = props.allPlans && context.archived;
@@ -352,7 +366,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   // in the Archive section a live Context only holds archived Plans: its own row has no menu
   const rowApi = props.allPlans && !context.archived ? undefined : api;
   return (
-    <Collapsible open={open} onOpenChange={setOpen} asChild>
+    <Collapsible open={effectiveOpen} onOpenChange={handleOpenChange} asChild>
       <SidebarMenuItem role="treeitem" data-context={context.id}>
         <RowMenu api={rowApi} kind={permanent ? "permanent" : archivedRow ? "archived" : "context"} items={items}>
         <SidebarMenuButton
@@ -373,8 +387,8 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
         {hasChildren ? (
           <>
             <CollapsibleTrigger asChild>
-              <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={open ? "open" : "closed"}>
-                {open ? <MinusIcon /> : <PlusIcon />}
+              <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
+                {effectiveOpen ? <MinusIcon /> : <PlusIcon />}
               </SidebarMenuAction>
             </CollapsibleTrigger>
             <CollapsibleContent>
