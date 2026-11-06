@@ -235,6 +235,7 @@ function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): 
 
 export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void;
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
+  postableWorkflows?: ReadonlySet<string>;
 }): ReactElement {
   const { plan, onAction } = props;
   if (plan === null) {
