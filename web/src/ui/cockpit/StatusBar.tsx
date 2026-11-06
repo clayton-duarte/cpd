@@ -44,6 +44,7 @@ export interface StatusBarProps {
   readonly costsOn?: boolean;
   readonly onReset?: () => void;
   readonly onLegend?: () => void;
+  readonly onDocs?: () => void;
   readonly onLogs?: () => void;
   readonly onCosts?: () => void;
   readonly onSettings?: () => void;
