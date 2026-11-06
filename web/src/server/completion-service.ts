@@ -2,11 +2,12 @@ import type { Completion, SessionRef, TranscriptItem } from "../protocol/domain.
 import type { PlanViewModel } from "../protocol/cockpit.ts";
 import type { SessionServerMessage } from "../protocol/wire.ts";
 import type { CompletionClassifier } from "./completion-classify.ts";
+import type { CompletionStore } from "./completion-store.ts";
 import { buildPayload } from "./completion-payload.ts";
 
 export interface CompletionTracker { observe(m: SessionServerMessage): void; dispose(): void }
 
-export function createCompletionService(deps: { classifier: CompletionClassifier; planOf: (ref: SessionRef) => Promise<PlanViewModel | null> }): { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker } {
+export function createCompletionService(deps: { classifier: CompletionClassifier; planOf: (ref: SessionRef) => Promise<PlanViewModel | null>; store?: CompletionStore }): { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker } {
   const cache = new Map<string, Completion>();
   const last = new Map<string, Completion>();
   const inflight = new Map<string, Promise<Completion | null>>();
@@ -30,10 +31,18 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
           return;
         }
         if (plan === null || disposed) return;
-        const key = `${ref.id}|${snapshot[snapshot.length - 1]?.id}|${plan.cursor}`;
+        const entryId = String(snapshot[snapshot.length - 1]?.id);
+        const key = `${ref.id}|${entryId}|${plan.cursor}`;
+        let stored: Awaited<ReturnType<CompletionStore["get"]>> = null;
+        try {
+          stored = (await deps.store?.get(ref.id)) ?? null;
+        } catch {
+          stored = null;
+        }
         let result: Completion | null;
         const hit = cache.get(key);
-        if (hit !== undefined) result = hit;
+        if (stored !== null && stored.entryId === entryId) result = stored.completion;
+        else if (hit !== undefined) result = hit;
         else {
           let p = inflight.get(key);
           if (p === undefined) {
@@ -41,10 +50,13 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
             inflight.set(key, p);
             void p.then((c) => {
               inflight.delete(key);
-              if (c !== null) cache.set(key, c);
+              if (c !== null) {
+                cache.set(key, c);
+                void deps.store?.put(ref.id, entryId, c).catch(() => undefined);
+              }
             });
           }
-          result = await p;
+          result = (await p) ?? stored?.completion ?? null;
         }
         if (result === null) return;
         last.set(ref.id, result);

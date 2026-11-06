@@ -78,6 +78,8 @@ export function registerQuestionGuard(host: Host): void {
         if (model === undefined) return;
         const out = await classify(ctx as ModelCtx, r, model, candidate.text);
         if (host.run !== r) return;
+        if (out.reached !== undefined) await recordHealth(host, r, out.reached);
+        if (host.run !== r) return;
         if (out.reached === true) r.classifierDown = false;
         else if (out.reached === false && !r.classifierDown) {
           r.classifierDown = true;
@@ -92,6 +94,16 @@ export function registerQuestionGuard(host: Host): void {
       }
     })();
   });
+}
+
+/** Records the classifier call on `swr_endpoints('ollama.lab')`; a failed record never fails the guard. */
+async function recordHealth(host: Host, r: Run, reached: boolean): Promise<void> {
+  try {
+    const tail = reached ? ["ok"] : ["error", "--text", "ollama.lab is unreachable"];
+    await host.call(["swr", "health", "record", "classifier", "ollama.lab", ...tail]);
+  } catch (e) {
+    r.log(`question guard: cpd swr health record failed: ${toCpdError(e).message}`);
+  }
 }
 
 /** Q5: `cpd config`, read now; on unless `experimental.turn_question_guard` is false. A failed read does nothing. */
