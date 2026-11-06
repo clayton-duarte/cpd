@@ -109,11 +109,16 @@ fn failed(error: impl Into<String>) -> ExecOutcome {
 }
 
 fn retry(e: &CpdError) -> ExecOutcome {
+    // Transient (swr-github.md §7.1): the call's own deadline, or an HTTP 5xx as `gh` prints it.
     let transient = e
         .details()
         .get("transient")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || e.details()
+            .get("stderr")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("HTTP 5"));
     if transient {
         ExecOutcome::Retry { after: RETRY }
     } else {

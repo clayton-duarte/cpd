@@ -1,6 +1,7 @@
-//! `pr post`'s squash auto-merge (commands.md §9.8b): after the Slack send and the `pr_posts` insert, one read query and the
-//! GraphQL mutation `enablePullRequestAutoMerge` (never `gh pr merge`). Its outcome never undoes or fails the post.
-//! `gh` and the Slack helper are the repo's fakes; every `gh` call is recorded.
+//! `pr post`'s auto-merge (commands.md §9.8b, swr-github.md §9): after the Slack send and the `pr_posts` insert the command checks
+//! the cached repo settings and queues an `auto_merge` mutation; the drain makes the GraphQL read and the mutation
+//! `enablePullRequestAutoMerge` (never `gh pr merge`) and settles `pr_posts.auto_merge`. Its outcome never undoes or fails the
+//! post. `gh` and the Slack helper are the repo's fakes; every `gh` call is recorded.
 
 use std::fs;
 
@@ -91,100 +92,56 @@ fn mutations(pay: &Pay) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
-    let pay = post();
+/// The `auto_merge` mutations on the outbox: `(target_key, status)`.
+fn queued(pay: &Pay) -> Vec<(String, String)> {
+    pay.store()
+        .read(|c| {
+            let mut s = c.prepare("SELECT target_key, status FROM swr_mutations WHERE op_kind = 'auto_merge' ORDER BY id")?;
+            let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .unwrap()
+}
 
-    let out = post_cmd(&pay).ok();
-
-    let calls = gh(&pay);
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert!(
-        calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"),
-        "the read query first: {calls:?}"
-    );
-    for field in [
-        "squashMergeAllowed",
-        "mergeCommitAllowed",
-        "rebaseMergeAllowed",
-    ] {
-        assert!(
-            calls[0].contains(field),
-            "the read query asks {field}: {calls:?}"
-        );
+/// Runs the queued mutations through the source, as the engine's drain does: the outcomes.
+fn drain(pay: &Pay) -> Vec<cpd_core::swr::source::ExecOutcome> {
+    use cpd_core::config::Config;
+    use cpd_core::home::CpdHome;
+    use cpd_core::swr::outbox;
+    use cpd_core::swr::source::github::GithubSource;
+    use cpd_core::swr::source::{Cx, Source};
+    let home = CpdHome::resolve(Some(pay.fx.env.cpd_home().into()), None).unwrap();
+    let mut store = pay.store();
+    let config = Config::load(&home).unwrap();
+    let now = cpd_core::clock::Clock::utc(&*pay.fx.fakes.ports.clock);
+    let mut out = Vec::new();
+    while let Some(m) = outbox::claim_next(&mut store, now, "github").unwrap() {
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &pay.fx.fakes.ports,
+            home: &home,
+            config: &config,
+        };
+        out.push(GithubSource::default().execute(&mut cx, &m));
     }
-    assert!(
-        calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"),
-        "then the mutation: {calls:?}"
-    );
-    assert_eq!(
-        out["auto_merge"],
-        json!({"state": "enabled", "reason": null})
-    );
-    let (state, at) = row(&pay).expect("the post row");
-    assert_eq!(state, "enabled");
-    assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
-    assert_eq!(pay.fx.calls("node").len(), 1);
+    out
 }
 
-#[test]
-fn uses_the_graphql_mutation_and_never_gh_pr_merge() {
-    let pay = post();
-
-    post_cmd(&pay).ok();
-
-    let calls: Vec<Vec<String>> = pay
-        .fx
-        .calls("gh")
-        .into_iter()
-        .map(|call| call.args)
-        .collect();
-    assert!(
-        calls
-            .iter()
-            .any(|a| a.join(" ").contains("enablePullRequestAutoMerge")),
-        "the mutation is sent: {calls:?}"
-    );
-    assert!(
-        calls
-            .iter()
-            .all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]),
-        "only `gh api graphql`: {calls:?}"
-    );
-    assert!(
-        calls
-            .iter()
-            .all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))),
-        "never `gh pr merge`: {calls:?}"
-    );
-}
-
-#[test]
-fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
-    let pay = post();
-    pay.gh.auto.lock().unwrap().allowed = false;
-
-    let out = post_cmd(&pay).ok();
-
-    assert_eq!(out["auto_merge"]["state"], "not_allowed");
-    let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"),
-        "{out}"
-    );
-    assert!(mutations(&pay).is_empty(), "nothing is requested");
-    assert_eq!(row(&pay), Some(("none".to_owned(), None)));
-    assert_eq!(pay.fx.calls("node").len(), 1);
-    assert_eq!(events(&pay, "error"), 0, "no error Event");
-}
-
-fn stack(pay: &Pay) {
+/// The cached settings of `acme/pay`: auto-merge allowed, and the methods the repo allows; the fake GitHub says the same.
+fn repo(pay: &Pay, auto: bool, squash: bool, merge: bool, rebase: bool) {
     sql(
         pay,
-        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'base', '/nowhere', 'main', 'dispatch', 'cpd/pay/base', '/nowhere-base', cpd_txn(), 't', 't');
-         UPDATE workflows SET base = 'cpd/pay/base' WHERE plan = 'pay' AND key = 'repo';",
+        &format!(
+            "UPDATE swr_repos SET auto_merge_allowed = {}, squash_merge_allowed = {}, merge_commit_allowed = {}, rebase_merge_allowed = {}
+              WHERE repo = 'acme/pay';",
+            i32::from(auto),
+            i32::from(squash),
+            i32::from(merge),
+            i32::from(rebase)
+        ),
     );
+    let mut github = pay.gh.auto.lock().unwrap();
+    (github.allowed, github.squash, github.merge, github.rebase) = (auto, squash, merge, rebase);
 }
 
 fn events(pay: &Pay, kind: &str) -> i64 {
@@ -199,46 +156,90 @@ fn events(pay: &Pay, kind: &str) -> i64 {
         .unwrap()
 }
 
-fn methods(pay: &Pay, squash: bool, merge: bool, rebase: bool) {
-    let mut auto = pay.gh.auto.lock().unwrap();
-    auto.squash = squash;
-    auto.merge = merge;
-    auto.rebase = rebase;
+fn stack(pay: &Pay) {
+    sql(
+        pay,
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'base', '/nowhere', 'main', 'dispatch', 'cpd/pay/base', '/nowhere-base', cpd_txn(), 't', 't');
+         UPDATE workflows SET base = 'cpd/pay/base' WHERE plan = 'pay' AND key = 'repo';",
+    );
 }
 
 #[test]
-fn a_repo_that_allows_only_rebase_enables_rebase_auto_merge() {
+fn queues_the_auto_merge_of_an_unstacked_pr_after_posting_and_the_drain_enables_it() {
     let pay = post();
-    methods(&pay, false, false, true);
 
     let out = post_cmd(&pay).ok();
 
-    let sent = mutations(&pay);
-    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
+    assert_eq!(out["auto_merge"]["state"], "queued", "{out}");
+    assert!(gh(&pay).is_empty(), "the command calls no GitHub: {:?}", gh(&pay));
+    assert_eq!(queued(&pay), [("github:pr:acme/pay#812".to_owned(), "pending".to_owned())]);
+    assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
+    assert_eq!(pay.fx.calls("node").len(), 1);
+
+    assert_eq!(drain(&pay), [cpd_core::swr::source::ExecOutcome::Done]);
+    let calls = gh(&pay);
+    assert_eq!(calls.len(), 2, "{calls:?}");
     assert!(
-        sent[0].contains("REBASE") && !sent[0].contains("SQUASH"),
-        "{sent:?}"
+        calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"),
+        "the read query first: {calls:?}"
     );
-    assert_eq!(out["auto_merge"]["state"], "enabled");
+    assert!(
+        calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"),
+        "then the mutation: {calls:?}"
+    );
+    let (state, at) = row(&pay).expect("the post row");
+    assert_eq!(state, "enabled");
+    assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
 }
 
 #[test]
-fn a_repo_that_allows_merge_commit_and_rebase_enables_merge_auto_merge() {
+fn the_drain_uses_the_graphql_mutation_and_never_gh_pr_merge() {
     let pay = post();
-    methods(&pay, false, true, true);
-
     post_cmd(&pay).ok();
+    drain(&pay);
 
-    let sent = mutations(&pay);
-    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
+    let calls: Vec<Vec<String>> = pay.fx.calls("gh").into_iter().map(|call| call.args).collect();
+    assert!(calls.iter().any(|a| a.join(" ").contains("enablePullRequestAutoMerge")), "{calls:?}");
+    assert!(calls.iter().all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]), "only `gh api graphql`: {calls:?}");
     assert!(
-        sent[0].contains("MERGE") && !sent[0].contains("SQUASH") && !sent[0].contains("REBASE"),
-        "{sent:?}"
+        calls.iter().all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))),
+        "never `gh pr merge`: {calls:?}"
     );
 }
 
 #[test]
-fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
+fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
+    let pay = post();
+    repo(&pay, false, true, false, false);
+
+    let out = post_cmd(&pay).ok();
+
+    assert_eq!(out["auto_merge"]["state"], "not_allowed");
+    let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"), "{out}");
+    assert!(queued(&pay).is_empty(), "nothing is queued");
+    assert_eq!(row(&pay), Some(("none".to_owned(), None)));
+    assert_eq!(pay.fx.calls("node").len(), 1);
+    assert_eq!(events(&pay, "error"), 0, "no error Event");
+}
+
+#[test]
+fn a_repo_that_allows_only_rebase_or_merge_commit_enables_that_method() {
+    for ((squash, merge, rebase), want) in [((false, false, true), "REBASE"), ((false, true, true), "MERGE")] {
+        let pay = post();
+        repo(&pay, true, squash, merge, rebase);
+        post_cmd(&pay).ok();
+        drain(&pay);
+        let sent = mutations(&pay);
+        assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
+        assert!(sent[0].contains(want) && !sent[0].contains("SQUASH"), "{sent:?}");
+        assert_eq!(row(&pay).map(|r| r.0), Some("enabled".to_owned()));
+    }
+}
+
+#[test]
+fn a_stacked_pr_is_deferred_with_no_mutation() {
     let pay = post();
     stack(&pay);
 
@@ -246,28 +247,28 @@ fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
 
     assert_eq!(out["auto_merge"]["state"], "deferred");
     assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
-    assert!(mutations(&pay).is_empty());
+    assert!(gh(&pay).is_empty());
+    assert!(queued(&pay).is_empty());
 }
 
 #[test]
 fn a_stacked_pr_on_a_repo_without_auto_merge_says_not_allowed_and_stores_none() {
     let pay = post();
     stack(&pay);
-    pay.gh.auto.lock().unwrap().allowed = false;
+    repo(&pay, false, true, false, false);
 
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "not_allowed");
     assert_eq!(row(&pay), Some(("none".to_owned(), None)));
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
-    assert!(mutations(&pay).is_empty());
+    assert!(gh(&pay).is_empty());
+    assert!(queued(&pay).is_empty());
 }
 
 #[test]
 fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
     let pay = post();
-    methods(&pay, false, false, false);
+    repo(&pay, true, false, false, false);
 
     let run = post_cmd(&pay);
 
@@ -276,43 +277,42 @@ fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
         error["details"],
         json!({"repo": "acme/pay", "number": 812, "squash": false, "merge": false, "rebase": false})
     );
-    assert!(
-        error["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("acme/pay")),
-        "{error}"
-    );
+    assert!(error["message"].as_str().is_some_and(|m| m.contains("acme/pay")), "{error}");
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None);
 }
 
 #[test]
-fn a_failing_read_refuses_gh_failed_before_the_send() {
+fn repo_settings_the_poll_has_not_read_refuse_before_the_send_and_ask_for_them() {
     let pay = post();
-    pay.gh_fails("gh: HTTP 502");
+    sql(&pay, "DELETE FROM swr_repos;");
 
-    refused(&post_cmd(&pay), "gh_failed", 1);
+    refused(&post_cmd(&pay), "item_not_found", 4);
 
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None);
+    assert_eq!(
+        pay.store()
+            .read(|c| Ok(c.query_row("SELECT invalidated FROM swr_queries WHERE key = 'github:repo:acme/pay'", [], |r| r.get::<_, i64>(0))?))
+            .unwrap(),
+        1,
+        "the next pass reads the settings"
+    );
 }
 
 #[test]
-fn a_github_refusal_of_the_mutation_is_stored_refused_and_reported() {
+fn a_github_refusal_in_the_drain_is_stored_refused_and_never_retried() {
     let pay = post();
     pay.gh.auto.lock().unwrap().refuse = Some("Pull request is in clean status".to_owned());
+    post_cmd(&pay).ok();
 
-    let out = post_cmd(&pay).ok();
+    let outcomes = drain(&pay);
 
-    assert_eq!(out["auto_merge"]["state"], "refused");
     assert!(
-        out["auto_merge"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Pull request is in clean status"),
-        "{out}"
+        matches!(&outcomes[..], [cpd_core::swr::source::ExecOutcome::Failed { error }] if error.contains("Pull request is in clean status")),
+        "{outcomes:?}"
     );
     let (state, at) = row(&pay).expect("the post row");
     assert_eq!(state, "refused");
@@ -321,20 +321,15 @@ fn a_github_refusal_of_the_mutation_is_stored_refused_and_reported() {
 }
 
 #[test]
-fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands() {
+fn a_gh_failure_of_the_mutation_is_retried_and_the_post_stands() {
     let pay = post();
     pay.gh.auto.lock().unwrap().fail_mutation = true;
+    post_cmd(&pay).ok();
 
-    let out = post_cmd(&pay).ok();
+    let outcomes = drain(&pay);
 
-    assert_eq!(out["auto_merge"]["state"], "failed");
-    assert!(
-        out["auto_merge"]["reason"]
-            .as_str()
-            .is_some_and(|r| !r.is_empty()),
-        "{out}"
-    );
-    assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
+    assert!(matches!(&outcomes[..], [cpd_core::swr::source::ExecOutcome::Retry { .. }]), "{outcomes:?}");
+    assert_eq!(row(&pay).map(|r| r.0), Some("pending".to_owned()), "a failed call settles nothing");
     assert_eq!(pay.fx.calls("node").len(), 1, "the Slack message was sent");
     assert_eq!(posts(&pay), 1);
 }
@@ -343,28 +338,24 @@ fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands()
 fn an_already_enabled_request_counts_as_enabled_without_a_second_mutation() {
     let pay = post();
     pay.gh.auto.lock().unwrap().already = true;
+    post_cmd(&pay).ok();
 
-    let out = post_cmd(&pay).ok();
+    drain(&pay);
 
-    assert_eq!(out["auto_merge"]["state"], "enabled");
     assert!(mutations(&pay).is_empty(), "{:?}", gh(&pay));
     assert_eq!(row(&pay).map(|r| r.0), Some("enabled".to_owned()));
 }
 
 #[test]
-fn a_failed_slack_send_makes_only_the_read_call_and_writes_no_row() {
+fn a_failed_slack_send_queues_nothing_and_writes_no_row() {
     let pay = post_with_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
     refused(&post_cmd(&pay), "slack_auth", 3);
 
-    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
-    assert!(mutations(&pay).is_empty());
+    assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
+    assert!(queued(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
-    assert_eq!(
-        row(&pay),
-        None,
-        "no pr_posts row, auto_merge column included"
-    );
+    assert_eq!(row(&pay), None, "no pr_posts row, auto_merge column included");
 }
 
 #[test]
@@ -372,14 +363,11 @@ fn auto_merge_adds_no_readiness_check_of_its_own() {
     let pay = post();
     let out = post_cmd(&pay).ok();
     assert_eq!(out["ok"], true);
-    assert_eq!(out["auto_merge"]["state"], "enabled");
+    assert_eq!(out["auto_merge"]["state"], "queued");
     drop(pay);
 
     let unready = post();
-    sql(
-        &unready,
-        "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;",
-    );
+    sql(&unready, "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;");
     let error = refused(&post_cmd(&unready), "pr_not_ready", 3);
     assert_eq!(error["details"]["reasons"], json!(["checks_failed"]));
     assert!(gh(&unready).is_empty(), "{:?}", gh(&unready));
