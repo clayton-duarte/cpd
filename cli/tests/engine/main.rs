@@ -20,7 +20,6 @@ mod watch_own_post;
 mod watch_parked;
 mod watch_parked_inbox;
 mod watch_permanent;
-mod watch_react;
 mod watch_resources;
 mod watch_review_archive;
 mod watch_sleep;
