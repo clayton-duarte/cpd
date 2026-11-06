@@ -238,28 +238,22 @@ pub fn status(post: &Post, workflow: &GhPr, me: &str, bots: &[String]) -> Status
 // ---- the cache ---------------------------------------------------------------------------------------------------
 
 /// The state of each of `refs` as a reader of the cache sees it (the effective row of `swr::github`, its detail for the
-/// reviews and the head's checks), and the User's login (`swr_viewer`). `None` when the viewer is not known yet: "unknown",
-/// not "empty", so the open items stay. A pull request with no row is `None` in the map.
-pub fn lookup_from_store(
-    store: &mut Store,
-    refs: &[(String, u64)],
-) -> Result<Option<Lookup>, CpdError> {
+/// reviews and the head's checks), and the User's login (`swr_viewer`; empty until the pass has read it, when no pull request
+/// is the User's own). A pull request with no row is `None` in the map.
+pub fn lookup_from_store(store: &mut Store, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
     store.read(|conn| {
-        let Some(me) = conn
+        let me = conn
             .query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| {
                 r.get::<_, String>(0)
             })
             .optional()?
-            .filter(|l| !l.is_empty())
-        else {
-            return Ok(None);
-        };
+            .unwrap_or_default();
         let mut workflows = BTreeMap::new();
         for (repo, number) in refs {
             let found = crate::swr::github::effective_in(conn, repo, *number as i64)?;
             workflows.insert((repo.clone(), *number), found.map(|e| gh_pr(&e, &me)));
         }
-        Ok(Some(Lookup { me, workflows }))
+        Ok(Lookup { me, workflows })
     })
 }
 
@@ -293,7 +287,7 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
             "closed" => GhState::Closed,
             _ => GhState::Merged,
         },
-        author: if e.row.authored { me.to_owned() } else { String::new() },
+        author: if e.row.authored && !me.is_empty() { me.to_owned() } else { "someone".to_owned() },
         decision: match e.review_decision.as_str() {
             "approved" => Some("APPROVED".to_owned()),
             "changes_requested" => Some("CHANGES_REQUESTED".to_owned()),

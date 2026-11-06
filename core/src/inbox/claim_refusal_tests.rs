@@ -178,12 +178,11 @@ fn a_refused_claim_with_no_team_cache_is_post_not_found_and_changes_no_row() {
 }
 
 #[test]
-fn a_refused_claim_before_the_pass_has_stored_the_viewer_is_gh_failed_and_leaves_the_row_open() {
+fn a_refused_claim_of_a_pull_request_the_cache_does_not_hold_closes_the_row_as_not_found() {
     let (_d, _h, mut store, ports) = with_cache(gh(Reply::ok("{}")));
-    let before = snapshot(&mut store);
-    refused(run(&ports, &["claim", "1"]), ErrorCode::GhFailed);
-    assert_eq!(snapshot(&mut store), before);
-    assert_eq!(closed_at(&mut store), None);
+    let e = refused(run(&ports, &["claim", "1"]), ErrorCode::NotClaimable);
+    assert_eq!(e.details()["reason"], "not-found");
+    assert!(closed_at(&mut store).is_some());
 }
 
 #[test]

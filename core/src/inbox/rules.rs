@@ -612,10 +612,7 @@ fn review_requested(
             refs.push((repo.clone(), *number));
         }
     }
-    let lookup = match team::lookup_from_store(store, &refs)? {
-        Some(lookup) => lookup,
-        None => return kept_review_items(store),
-    };
+    let lookup = team::lookup_from_store(store, &refs)?;
     super::review_plan::finish_closed(store, &lookup)?;
     if posts.is_empty() {
         return Ok(Vec::new());

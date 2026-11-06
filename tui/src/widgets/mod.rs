@@ -174,8 +174,7 @@ pub fn prepare_with(
     let snooze_end = read::snooze_end_at(&mut store, Some(&now))?;
     let (inbox, engine_running) = read::inbox_at(&mut store, Some(&now))?;
     // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
-    let open = read::open_pulls(&mut store)?;
-    let merging = crate::merge::marker::live_with(ports, &home, &open);
+    let merging = crate::merge::in_flight(&mut store)?;
     // the reads after them run on the reader thread, with a store of its own
     let reader = pace::Owned::new(
         home.clone(),
@@ -567,7 +566,8 @@ fn show<B: Backend>(
                             let pull = inbox::Pull::from_subject(&item.subject)
                                 .map(|p| p.to_string())
                                 .filter(|_| matches!(entry, InboxEntry::Post | InboxEntry::Merge));
-                            if let Some(pull) = &pull {
+                            // Only a Post hides its row in memory: a Merge is hidden by the overlay of its queued mutation.
+                            if let Some(pull) = pull.as_ref().filter(|_| matches!(entry, InboxEntry::Post)) {
                                 posting.insert(pull.clone());
                             }
                             match entry {
@@ -763,11 +763,9 @@ fn show<B: Backend>(
                 clock::timestamp(ports.clock.utc()),
             );
             let force = kind.force;
-            let ports = ports.clone();
             reads.request(move || {
                 pace::Owned::read(&shared, |store, last| {
-                    let open = read::open_pulls(store)?;
-                    let live = crate::merge::marker::live_with(&ports, &home, &open);
+                    let live = crate::merge::in_flight(store)?;
                     let mark = read::inbox_mark(store)?;
                     let engine = model::engine_running(&home)?;
                     let fresh = if last.as_ref() != Some(&mark)

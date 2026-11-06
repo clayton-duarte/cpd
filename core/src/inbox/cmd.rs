@@ -589,13 +589,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
             |r| r.get(0),
         )?)
     })?;
-    let lookup = team::lookup_from_store(&mut env.store, &[(repo.to_owned(), number)])?
-        .ok_or_else(|| {
-            CpdError::new(
-                ErrorCode::GhFailed,
-                "The viewer's login is not in the cache yet: the poll has not read GitHub.",
-            )
-        })?;
+    let lookup = team::lookup_from_store(&mut env.store, &[(repo.to_owned(), number)])?;
     let found = lookup
         .workflows
         .get(&(repo.to_owned(), number))
