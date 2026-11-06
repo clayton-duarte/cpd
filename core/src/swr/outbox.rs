@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, Row, params};
 use super::cache::{parse, system};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 
 /// A write to enqueue (swr.md §8).
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +128,16 @@ pub fn enqueue(
     op: Op,
     coalesce: Coalesce,
 ) -> Result<i64, CpdError> {
+    store.write("swr enqueue", |tx| enqueue_tx(tx, now, op, coalesce))
+}
+
+/// [`enqueue`] inside the caller's transaction.
+pub fn enqueue_tx(
+    tx: &WriteTxn<'_>,
+    now: OffsetDateTime,
+    op: Op,
+    coalesce: Coalesce,
+) -> Result<i64, CpdError> {
     let rank = match &coalesce {
         Coalesce::Forward(r) => Some(*r),
         _ => None,
@@ -136,57 +146,55 @@ pub fn enqueue(
     let vars = op.vars.to_string();
     let patch = op.patch.map(|p| p.to_string());
     let (system, key, kind) = (op.system, op.target_key, op.op_kind);
-    store.write("swr enqueue", |tx| {
-        let same = "system = ?1 AND target_key = ?2 AND op_kind = ?3";
-        let mut status = "pending";
-        match &coalesce {
-            Coalesce::LatestWins => {
-                tx.execute(
-                    &format!("UPDATE swr_mutations SET status = 'superseded' WHERE {same} AND status = 'pending'"),
-                    params![system, key, kind],
-                )?;
-            }
-            Coalesce::Forward(rank) => {
-                let mut stmt = tx.prepare(&format!(
-                    "SELECT id, context_json FROM swr_mutations WHERE {same} AND status = 'pending'"
-                ))?;
-                let pending = stmt
-                    .query_map(params![system, key, kind], |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                if pending.iter().any(|(_, c)| rank_of(c.as_deref()) >= *rank) {
-                    status = "superseded";
-                } else {
-                    for (id, _) in pending {
-                        tx.execute(
-                            "UPDATE swr_mutations SET status = 'superseded' WHERE id = ?1",
-                            [id],
-                        )?;
-                    }
-                }
-            }
-            Coalesce::Dedupe(canonical) => {
-                let existing = tx
-                    .query_row(
-                        &format!("SELECT id FROM swr_mutations WHERE {same} AND vars_json = ?4
-                           AND status IN ('pending', 'in_flight', 'revalidating') ORDER BY id LIMIT 1"),
-                        params![system, key, kind, canonical],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .optional()?;
-                if let Some(id) = existing {
-                    return Ok(id);
+    let same = "system = ?1 AND target_key = ?2 AND op_kind = ?3";
+    let mut status = "pending";
+    match &coalesce {
+        Coalesce::LatestWins => {
+            tx.execute(
+                &format!("UPDATE swr_mutations SET status = 'superseded' WHERE {same} AND status = 'pending'"),
+                params![system, key, kind],
+            )?;
+        }
+        Coalesce::Forward(rank) => {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT id, context_json FROM swr_mutations WHERE {same} AND status = 'pending'"
+            ))?;
+            let pending = stmt
+                .query_map(params![system, key, kind], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            if pending.iter().any(|(_, c)| rank_of(c.as_deref()) >= *rank) {
+                status = "superseded";
+            } else {
+                for (id, _) in pending {
+                    tx.execute(
+                        "UPDATE swr_mutations SET status = 'superseded' WHERE id = ?1",
+                        [id],
+                    )?;
                 }
             }
         }
-        tx.execute(
-            "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, patch_json, status, submitted_at, context_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![system, key, kind, vars, patch, status, timestamp(now), context],
-        )?;
-        Ok::<i64, CpdError>(tx.last_insert_rowid())
-    })
+        Coalesce::Dedupe(canonical) => {
+            let existing = tx
+                .query_row(
+                    &format!("SELECT id FROM swr_mutations WHERE {same} AND vars_json = ?4
+                       AND status IN ('pending', 'in_flight', 'revalidating') ORDER BY id LIMIT 1"),
+                    params![system, key, kind, canonical],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                return Ok(id);
+            }
+        }
+    }
+    tx.execute(
+        "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, patch_json, status, submitted_at, context_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![system, key, kind, vars, patch, status, timestamp(now), context],
+    )?;
+    Ok(tx.last_insert_rowid())
 }
 
 /// Take the oldest due `pending` row of `system`: `in_flight`, `started_at`, `attempt_count` + 1.
@@ -201,7 +209,7 @@ pub fn claim_next(
         let id = tx
             .query_row(
                 "SELECT m.id FROM swr_mutations m
-                 WHERE m.system = ?1 AND m.status = 'pending'
+                 WHERE m.system = ?1 AND m.status = 'pending' AND m.target_key IS NOT NULL
                    AND (m.next_attempt_at IS NULL OR m.next_attempt_at <= ?2)
                    AND NOT EXISTS (SELECT 1 FROM swr_mutations f WHERE f.system = m.system
                      AND f.target_key = m.target_key AND f.op_kind = m.op_kind AND f.status = 'in_flight')
