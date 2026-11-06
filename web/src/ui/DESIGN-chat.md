@@ -74,20 +74,21 @@ export function ChatHeader(props: ChatHeaderProps): JSX.Element;
 
 ### 1.2 Behaviour
 
-- The title is `title ?? sessionKey`. The title is the only text of the header, except the completion badge of 1.4 when it is shown.
+- The title is `title ?? sessionKey`. The title is the only text of the header, except the completion badge of 1.4 when it is shown; the badge sits in the same row, after the title and aligned right (pro-d437).
 - `document.title` (KEPT, unchanged): `sessionKey` when `title === null`, else `` `${sessionKey} · ${title}` ``; restored on unmount; effect deps `[sessionKey, title]`.
 - No breadcrumb, no key sub-line, no run status, no buttons.
 
 ### 1.3 DOM
 
 ```
-header   flex flex-wrap items-center gap-3 border-b px-4 py-2
-└─ div[data-part="heading"]   min-w-0 flex-1
-    ├─ Badge[data-part="completion-badge"]   only for role "lead" with a non-null completion (1.4); absent otherwise
-    └─ h1[data-part="title"]   m-0 truncate text-title font-semibold text-fg-strong      text = title ?? sessionKey
+header   flex items-center gap-3 border-b px-4 py-2
+├─ div[data-part="heading"]   min-w-0 flex-1
+│   └─ h1[data-part="title"]   m-0 truncate text-title font-semibold text-fg-strong      text = title ?? sessionKey
+└─ Badge[data-part="completion-badge"]   LAST child of the header, a sibling after the heading div (not inside it); only for role "lead" with a non-null completion (1.4); absent otherwise
 ```
 
 - `h1[data-part="title"]` is the only heading. Its text is the title, or the session key when there is no title (the `h1` is not a separate key line any more).
+- **Row (pro-d437).** The title and the completion badge share one row: the title on the left (the heading takes the free width, `flex-1 min-w-0`, and the title truncates), the badge on the right (`shrink-0`, last child of the header). The header is one row and never wraps. No `ml-auto`: the heading's `flex-1` pushes the badge right.
 - **Resolution:** the Phase 2 `h1[data-part="key"]` sub-line, `span[data-part="run-status"]` and the Thinking/Tools `div[data-part="toggles"]` are removed; their KEPT hooks are retired (4).
 
 ---
@@ -98,7 +99,7 @@ header   flex flex-wrap items-center gap-3 border-b px-4 py-2
 - **Element.** `<Badge data-part="completion-badge" tone={completion.tone} title={`kev-4b verdict: ${labelText}, archive-safety ${completion.score}%`}>{completion.text}</Badge>`, where `Badge` is the part of `components/badge.tsx` (DESIGN.md 2f; `tone` gives `outline` plus the tone classes). The tone is `completion.tone` (`done`, `decision` or `blocked`). No new Tone and no new CSS (pro-d424).
 - **Text.** `completion.text` verbatim, `<label> · <score>%`. `labelText` is the label text of CONTRACT 3.10 for `completion.label` (for example `Safe to archive`, `Unescalated bug`).
 - **Tooltip.** The native `title` attribute, not the Tooltip part. Example: `kev-4b verdict: Safe to archive, archive-safety 92%`.
-- **Placement.** The first child of `div[data-part="heading"]`, before `h1[data-part="title"]`. Placement is DOM order only; the heading keeps its classes.
+- **Placement (pro-d437, supersedes the pro-d422 placement).** Same row as the title, aligned right, after the heading: the badge is the header's last child, a sibling after `div[data-part="heading"]` and not inside it. The heading keeps its classes; the badge's `shrink-0` keeps the badge whole while the title truncates.
 - **Not interactive.** No button, no click action, no `data-action`.
 - **Absence.** A null `completion` renders nothing; it is not an error. The badge never blocks the header, the title, attach or submission.
 
@@ -537,5 +538,6 @@ Data absent from `web/src/protocol/**` and the store; each element is omitted (o
 | pro-d59 | no session-key stamp on assistant messages | 2.4 |
 | pro-d60 | ChatHeader shows only the title; `ask_user_question` interactive for pi (DESIGN-compose 4, CONTRACT 6.5) | 1 |
 | pro-d61 | consecutive thoughts and tools form one collapsed Chain of Thought row with a step count and a time; user and echoed messages show image thumbnails | 2.3.1, 2.4.2, 2.7 |
+| pro-d437 | the completion badge shares the title's row: title on the left, badge on the right as the header's last child, one row that never wraps; supersedes the pro-d422 placement ('before the title') | 1.2, 1.3, 1.4 |
 
 ---
