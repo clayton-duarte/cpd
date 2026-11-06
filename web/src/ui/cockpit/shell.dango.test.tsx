@@ -137,7 +137,7 @@ it("status bar shows reset layout, legend, logs and the runner pill", () => {
   expect(state?.textContent).toBe("State: idle");
   expect(state?.getAttribute("data-tone")).toBe("neutral");
   expect(state?.getAttribute("data-glyph")).toBe("idle");
-  expect(c.querySelector('[data-part="version"]')?.textContent).toBe("cpd: 0.21.102");
+  expect(c.querySelector('[data-part="version"]')?.textContent).toBe("0.21.102");
   m.unmount();
   const bare = mount(<StatusBar runner={null} state={null} version={null} />);
   expect(bare.container.querySelector('[data-part="runner"]')?.textContent).toBe("Runner: none");

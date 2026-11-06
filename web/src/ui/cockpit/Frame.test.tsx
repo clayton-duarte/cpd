@@ -92,15 +92,15 @@ const shellParts = (c: HTMLElement) => Array.from(c.querySelector("[data-shell]"
 });
 
 it("StatusBar shows the runner pill and version, without State", () => {
-  const status = { runner: "pi", preview: null, incident: null, workers: null, version: "0.21.102", hostAlert: false } as const;
+  const status = { runner: "pi", preview: null, incident: null, workers: null, version: "0.21.102", hostAlert: false, mode: "production", drift: null } as const;
   const c = show(<StatusBar status={status} costsOn={false} onReset={() => {}} onLegend={() => {}} onLogs={() => {}} onCosts={() => {}} onSettings={() => {}} />);
   expect(c.querySelector('[data-part="runner"]')?.textContent).toBe("pi");
   expect(c.querySelector('[data-part="state"]')).toBeNull();
-  expect(c.querySelector('[data-part="version"]')?.textContent).toBe("cpd: 0.21.102");
+  expect(c.querySelector('[data-part="version"]')?.textContent).toBe("0.21.102");
 });
 
 it("StatusBar omits runner and version while unknown", () => {
-  const status = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false } as const;
+  const status = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false, mode: "production", drift: null } as const;
   const c = show(<StatusBar status={status} costsOn={false} onReset={() => {}} onLegend={() => {}} onLogs={() => {}} onCosts={() => {}} onSettings={() => {}} />);
   expect(c.querySelector('[data-part="runner"]')).toBeNull();
   expect(c.querySelector('[data-part="version"]')).toBeNull();
