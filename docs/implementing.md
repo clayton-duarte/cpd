@@ -49,6 +49,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | `pill` | pill-spec-data | none | §6.1.1 (hs-d598) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
+| `app` | cpd-app-launch (Plan) | `app` (commands.md §14.4a); install's Electron step (§14.4 step 7a) | |
 
 `attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
 

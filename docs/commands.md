@@ -293,6 +293,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
+| `cpd app` (§14.4a) | none | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -4785,6 +4786,10 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 Every refusal (steps 1 to 4a, nothing replaced), failure (steps 5 and 6) and failed follow-up (step 7) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+
+### 14.4a `app`
+
+(skeleton: Plan cpd-app-launch, decision pro-d431; filled in the next commit)
 
 ### 14.5 `models`
 
