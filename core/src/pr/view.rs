@@ -1,23 +1,23 @@
 //! `pr view` (commands.md §9.8, contract §7.6): the checks, reviews and comments
-//! of one Workflow's pull request, which the poller does not store. Read-only: no
-//! write transaction, no Event.
+//! of one Workflow's pull request, which the poller does not store. 
 
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::gh;
-use super::status::{Approval, ChecksSummary, PrState, ReviewDecision};
-use super::{Args, Env, workflow_policy};
-use crate::error::CpdError;
+use super::{Args, Env};
+use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
+use crate::swr::github::effective_in;
 
 const COMMAND: &str = "pr view";
 
-fn login(user: &Option<gh::Login>) -> Option<&str> {
-    user.as_ref().map(|u| u.login.as_str())
+fn login(node: &Value) -> Value {
+    node["author"]["login"].clone()
 }
 
+/// `pr view` reads the cache (swr-github.md §6): the effective row and the hydrated detail of the pull request. It never calls
+/// GitHub; a pull request the poll has not hydrated yet prints no checks, reviews or comments.
 pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
@@ -31,22 +31,24 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         .as_ref()
         .expect("an open or merged Workflow has its pull request (workflows CHECK)")
         .number;
-    let lead = workflow.lead(&id)?;
-
-    let policy = workflow_policy(&mut env, &id, &workflow.key)?;
-    let view = gh::view(&*env.ports.runner, lead, number)?;
-    let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
-
-    let state = PrState::of_graphql(&view.state)?;
-    let summary = ChecksSummary::of(
-        view.checks.as_deref().unwrap_or_default(),
-        &policy.pr.human_gated_contexts,
-        &policy.pr.required_checks,
-    );
-    let checks: Vec<Value> = view
-        .checks
+    let row = workflow
+        .pull_request
+        .expect("an open or merged Workflow has its pull_request row (workflows CHECK)");
+    let raw = env
+        .store
+        .read(|conn| crate::pr::pulls::load(conn, row))?;
+    let effective = env
+        .store
+        .read(|conn| effective_in(conn, &raw.repo, raw.number))?
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::ItemNotFound,
+                format!("{}#{} is not in the cache.", raw.repo, raw.number),
+            )
+        })?;
+    let detail = effective.detail.clone().unwrap_or(Value::Null);
+    let checks: Vec<Value> = super::swr_read::checks_of_detail(&detail)
         .iter()
-        .flatten()
         .filter_map(|c| {
             let name = c.name.clone().or_else(|| c.context.clone())?;
             let conclusion = c
@@ -62,40 +64,25 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
             Some(check)
         })
         .collect();
-    let approvals: Vec<Approval> = view
-        .reviews
+    let nodes = |v: &Value| v["nodes"].as_array().cloned().unwrap_or_default();
+    let reviews: Vec<Value> = nodes(&detail["latestReviews"])
         .iter()
-        .filter(|r| r.state == "APPROVED")
-        .filter_map(|r| r.author.as_ref())
-        .map(|a| Approval {
-            login: a.login.clone(),
-            bot_type: false,
+        .map(|r| json!({"id": r["id"], "author": login(r), "state": r["state"], "body": r["body"]}))
+        .collect();
+    let comments: Vec<Value> = nodes(&detail["comments"])
+        .iter()
+        .map(|c| json!({"id": c["id"], "author": login(c), "body": c["body"]}))
+        .collect();
+    let inline_comments: Vec<Value> = nodes(&detail["reviewThreads"])
+        .iter()
+        .flat_map(|t| {
+            nodes(&t["comments"])
+                .into_iter()
+                .map(|c| json!({"id": c["id"], "author": login(&c), "path": t["path"], "body": c["body"]}))
+                .collect::<Vec<_>>()
         })
         .collect();
-    let reviews: Vec<Value> = view
-        .reviews
-        .iter()
-        .map(
-            |r| json!({"id": r.id.0, "author": login(&r.author), "state": r.state, "body": r.body}),
-        )
-        .collect();
-    let comments: Vec<Value> = view
-        .comments
-        .iter()
-        .map(|c| json!({"id": c.id.0, "author": login(&c.author), "body": c.body}))
-        .collect();
-    let inline_comments: Vec<Value> = inline
-        .iter()
-        .map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body}))
-        .collect();
-
-    let row = workflow
-        .pull_request
-        .expect("an open or merged Workflow has its pull_request row (workflows CHECK)");
-    let feedback = env
-        .store
-        .read(|conn| crate::pr::pulls::load(conn, row))?
-        .feedback;
+    let feedback = effective.feedback.clone();
     let post = env.store.read(|conn| {
         let Some(p) = super::posts::find(conn, id.as_str(), workflow.key.as_str())? else { return Ok(None) };
         // The queue row of the Workflow's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
@@ -111,8 +98,8 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
-            "key": workflow.key, "number": number, "url": view.url, "title": view.title, "jira": workflow.jira, "state": state.as_str(),
-            "review_decision": ReviewDecision::of_reviews(view.review_decision.as_deref(), &approvals, &env.config.inbox.bot_reviewers).as_str(), "checks": summary.as_str(),
+            "key": workflow.key, "number": number, "url": effective.row.url, "title": effective.title, "jira": workflow.jira, "state": effective.state,
+            "review_decision": effective.review_decision, "checks": effective.checks, "head_oid": effective.head_oid, "overlay": effective.overlay,
         },
         "checks": checks,
         "reviews": reviews,

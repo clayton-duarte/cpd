@@ -27,28 +27,6 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 /// timeout of its own and GitHub cuts at 10 s.
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A review or comment id. GitHub's GraphQL ids (`gh pr view`) are strings and
-/// its REST ids (`gh api`) are integers: both become one string.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(from = "RawId")]
-pub struct Id(pub String);
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawId {
-    Text(String),
-    Number(u64),
-}
-
-impl From<RawId> for Id {
-    fn from(raw: RawId) -> Id {
-        Id(match raw {
-            RawId::Text(s) => s,
-            RawId::Number(n) => n.to_string(),
-        })
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Login {
     pub login: String,
@@ -71,46 +49,6 @@ pub struct Check {
     /// A CheckRun's `startedAt`, a StatusContext's `startedAt` (`gh pr view`) or `createdAt` (GraphQL); RFC 3339 UTC.
     #[serde(rename = "startedAt", default)]
     pub started_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Review {
-    pub id: Id,
-    pub author: Option<Login>,
-    pub state: String,
-    pub body: Option<String>,
-}
-
-/// A conversation comment of `gh pr view`.
-#[derive(Debug, Deserialize)]
-pub struct Comment {
-    pub id: Id,
-    pub author: Option<Login>,
-    pub body: Option<String>,
-}
-
-/// An inline review comment of `gh api …/pulls/<n>/comments`.
-#[derive(Debug, Deserialize)]
-pub struct InlineComment {
-    pub id: Id,
-    pub user: Option<Login>,
-    pub path: Option<String>,
-    pub body: Option<String>,
-}
-
-/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url`.
-#[derive(Debug, Deserialize)]
-pub struct View {
-    pub state: String,
-    #[serde(rename = "statusCheckRollup")]
-    pub checks: Option<Vec<Check>>,
-    pub reviews: Vec<Review>,
-    pub comments: Vec<Comment>,
-    pub title: String,
-    pub url: String,
-    /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or empty.
-    #[serde(rename = "reviewDecision")]
-    pub review_decision: Option<String>,
 }
 
 /// A Workflow as `gh` names it.
@@ -403,64 +341,6 @@ pub fn create_pr(
     }
 }
 
-pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdError> {
-    let n = number.to_string();
-    let args = [
-        "pr",
-        "view",
-        &n,
-        "--json",
-        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url",
-    ];
-    parse(&args, &run_on(runner, cwd, &args)?)
-}
-
-/// A GitHub Actions workflow run of `gh run list --json databaseId,name,status,conclusion`; `conclusion` is empty until it concludes.
-#[derive(Debug, Deserialize)]
-pub struct WorkflowRun {
-    #[serde(rename = "databaseId")]
-    pub id: i64,
-    pub name: String,
-    pub status: String,
-    #[serde(default, deserialize_with = "empty_if_null")]
-    pub conclusion: String,
-}
-
-fn empty_if_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
-}
-
-/// `gh pr view <number> --json headRefOid`, through the runner: the head commit of the pull request, read fresh from GitHub.
-pub fn head_commit(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<String, CpdError> {
-    #[derive(Deserialize)]
-    struct Head {
-        #[serde(rename = "headRefOid")]
-        oid: String,
-    }
-    let n = number.to_string();
-    let args = ["pr", "view", &n, "--json", "headRefOid"];
-    parse::<Head>(&args, &run_on(runner, cwd, &args)?).map(|h| h.oid)
-}
-
-/// `gh run list --commit <sha> --json databaseId,name,status,conclusion --limit 100`: the GitHub Actions workflow runs of a commit.
-pub fn workflow_runs(
-    runner: &dyn Runner,
-    cwd: &Path,
-    sha: &str,
-) -> Result<Vec<WorkflowRun>, CpdError> {
-    let args = [
-        "run",
-        "list",
-        "--commit",
-        sha,
-        "--json",
-        "databaseId,name,status,conclusion",
-        "--limit",
-        "100",
-    ];
-    parse(&args, &run_on(runner, cwd, &args)?)
-}
-
 /// `gh run rerun <id> --failed`: re-runs only the failed jobs of a GitHub Actions workflow run.
 pub fn rerun_failed(runner: &dyn Runner, cwd: &Path, id: i64) -> Result<(), CpdError> {
     let n = id.to_string();
@@ -548,97 +428,6 @@ pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<()
             &stderr,
         )),
     }
-}
-
-/// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title,mergedAt`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
-#[derive(Debug, Deserialize)]
-pub struct MergeView {
-    /// `OPEN`, `CLOSED` or `MERGED`.
-    pub state: String,
-    /// GitHub's word: `CLEAN`, `BLOCKED`, `DIRTY`…
-    #[serde(rename = "mergeStateStatus")]
-    pub merge_state: String,
-    #[serde(rename = "headRefOid")]
-    pub head: String,
-    /// GitHub's merge time, when it is merged.
-    #[serde(rename = "mergedAt", default)]
-    pub merged_at: Option<String>,
-}
-
-/// The pull request `number` of `repo`, read fresh from GitHub.
-pub fn view_for_merge(
-    runner: &dyn Runner,
-    cwd: &Path,
-    repo: &str,
-    number: i64,
-) -> Result<MergeView, CpdError> {
-    let n = number.to_string();
-    let args = [
-        "pr",
-        "view",
-        &n,
-        "--repo",
-        repo,
-        "--json",
-        "state,mergeStateStatus,headRefOid,title,mergedAt",
-    ];
-    parse(&args, &run_on(runner, cwd, &args)?)
-}
-
-/// `gh pr view <n> --repo <repo> --json statusCheckRollup`: the checks of the head, for `pr merge` when the repo policy requires some.
-pub fn checks_for_merge(
-    runner: &dyn Runner,
-    cwd: &Path,
-    repo: &str,
-    number: i64,
-) -> Result<Vec<Check>, CpdError> {
-    #[derive(Deserialize)]
-    struct Rollup {
-        #[serde(rename = "statusCheckRollup")]
-        checks: Option<Vec<Check>>,
-    }
-    let n = number.to_string();
-    let args = [
-        "pr",
-        "view",
-        &n,
-        "--repo",
-        repo,
-        "--json",
-        "statusCheckRollup",
-    ];
-    parse::<Rollup>(&args, &run_on(runner, cwd, &args)?).map(|r| r.checks.unwrap_or_default())
-}
-
-/// `gh repo view <repo> --json deleteBranchOnMerge`: whether the repo deletes a merged branch itself.
-pub fn delete_branch_on_merge(
-    runner: &dyn Runner,
-    cwd: &Path,
-    repo: &str,
-) -> Result<bool, CpdError> {
-    #[derive(Deserialize)]
-    struct Setting {
-        #[serde(rename = "deleteBranchOnMerge")]
-        on: bool,
-    }
-    let args = ["repo", "view", repo, "--json", "deleteBranchOnMerge"];
-    parse::<Setting>(&args, &run_on(runner, cwd, &args)?).map(|s| s.on)
-}
-
-/// `gh repo view <repo> --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`: the methods the repo allows.
-pub fn merge_methods(
-    runner: &dyn Runner,
-    cwd: &Path,
-    repo: &str,
-) -> Result<MergeMethods, CpdError> {
-    let args = [
-        "repo",
-        "view",
-        repo,
-        "--json",
-        "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed",
-    ];
-    parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
@@ -785,32 +574,6 @@ pub fn pull_head(runner: &dyn Runner, repo: &str, number: &str) -> Result<String
     let args = ["api", endpoint.as_str()];
     let stdout = run_on(runner, Path::new("."), &args)?;
     Ok(parse::<Pull>(&args, &stdout)?.head.sha)
-}
-
-/// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
-/// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
-/// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
-pub fn inline_comments(
-    runner: &dyn Runner,
-    cwd: &Path,
-    number: i64,
-) -> Result<Vec<InlineComment>, CpdError> {
-    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
-    let args = ["api", endpoint.as_str(), "--paginate"];
-    let stdout = run_on(runner, cwd, &args)?;
-    let mut comments = Vec::new();
-    for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
-        comments.extend(page.map_err(|e| {
-            failed(
-                &args,
-                format!("gh api printed unexpected JSON: {e}."),
-                Some(0),
-                "",
-            )
-            .with("stdout", tail(&stdout, TAIL_LINES))
-        })?);
-    }
-    Ok(comments)
 }
 
 // The poller (contract §7.6, commands.md §9.2): one search, one lookup.
@@ -2796,6 +2559,28 @@ mod tests {
             Some(("Some-Org_1", "repo.name-2"))
         );
     }
+}
+
+/// The checks of the head commit of a hydrated pull request (`swr_pr_detail.detail_json`, the `Heavy` selection).
+pub fn checks_of_detail(detail: &Value) -> Vec<Check> {
+    let text = |n: &Value, k: &str| n.get(k).and_then(Value::as_str).map(str::to_owned);
+    detail["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|n| Check {
+            name: text(n, "name"),
+            context: text(n, "context"),
+            conclusion: text(n, "conclusion"),
+            state: text(n, "state"),
+            url: text(n, "detailsUrl").or_else(|| text(n, "targetUrl")),
+            workflow: n["checkSuite"]["workflowRun"]["workflow"]["name"]
+                .as_str()
+                .map(str::to_owned),
+            started_at: text(n, "startedAt").or_else(|| text(n, "createdAt")),
+        })
+        .collect()
 }
 
 /// What one pass of the single GraphQL read needs beyond the fixed part (swr-github.md §3.1): the rows chosen before the call.

@@ -1,42 +1,21 @@
 //! The team review rule of the Inbox kind `review-requested` (contract §2.2 "The team review rule", hs-d320; commands.md
-//! §21.5): the posts E11 cached in `run/team-review.json`, the GitHub state of their pull requests, and hermes' own
-//! classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`, `refresh.py` `build`). Only
-//! `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`] turn it into items.
-//!
-//! GitHub is read here, not in E11 (E11 calls no GitHub): one `gh api graphql` call for every primary post of the
-//! window, memoised ([`GITHUB_TTL`]) so the five-second E8 tick does not repeat it.
+//! §21.5): the posts of the team channel (`swr_slack_posts`), the GitHub state of their pull requests (`swr::github`'s
+//! effective rows), and hermes' own classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`,
+//! `refresh.py` `build`). Only `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`]
+//! turn it into items. Nothing here calls GitHub or reads a file: the single pass and E11 wrote the rows.
 
 use std::collections::BTreeMap;
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
-use crate::ports::Ports;
+use crate::error::CpdError;
+use crate::store::Store;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
-
-/// How long a GitHub answer is reused while the posts are the same. E8 runs every tick and the posts change at E11's
-/// 30-minute cadence; thirty seconds keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
-pub const GITHUB_TTL: Duration = Duration::from_secs(30);
-
-/// The deadline of the GitHub call (the pull request poll's, `pr::gh::POLL_TIMEOUT`).
-const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
-
-/// `run/team-review.json` as E11 wrote it (commands.md §21.5).
-#[derive(Debug, Deserialize)]
-pub struct Cache {
-    pub version: u32,
-    /// The Slack channel id the posts were read from.
-    pub channel: String,
-    pub posts: Vec<Post>,
-}
 
 /// A post as the helper printed it (commands.md §21.6, `pi/lib/slack-parse.ts` `Post`).
 #[derive(Clone, Debug, Deserialize)]
@@ -63,42 +42,65 @@ pub struct Claim {
     pub reason: String,
 }
 
-/// The cache, `None` when there is no file (E11 has not run: "unknown", not "empty"). A file that cannot be read or
-/// parsed, or whose `version` is not 1, is `store_failed`.
-pub fn read_cache(home: &CpdHome) -> Result<Option<Cache>, CpdError> {
-    let path = home.run_dir().join("team-review.json");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(bad(&path, format!("Cannot read {}: {e}.", path.display()))),
-    };
-    let cache: Cache = serde_json::from_str(&text).map_err(|e| {
-        bad(
-            &path,
-            format!("{} is not a team review cache: {e}.", path.display()),
-        )
+/// The posts of the window, as `swr_slack_posts` holds them: every post of a pull request, posted at or after `cutoff` (Unix seconds).
+pub fn posts_in(conn: &Connection, cutoff: f64) -> Result<Vec<Post>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT repo, number, ts, reactions_json, eyes_me, claim, thread_tags_me FROM swr_slack_posts
+          WHERE repo IS NOT NULL AND number IS NOT NULL AND inactive_at IS NULL ORDER BY ts",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<bool>>(4)?,
+            r.get::<_, Option<String>>(5)?,
+            r.get::<_, Option<bool>>(6)?,
+        ))
     })?;
-    if cache.version != 1 {
-        return Err(bad(
-            &path,
-            format!("{} has version {}, not 1.", path.display(), cache.version),
-        ));
+    let mut out = Vec::new();
+    for row in rows {
+        let (repo, number, ts_raw, reactions, eyes_me, claim, tags) = row?;
+        let Ok(ts) = ts_raw.parse::<f64>() else {
+            continue;
+        };
+        if ts < cutoff || number < 0 {
+            continue;
+        }
+        let reactions = reactions
+            .and_then(|j| serde_json::from_str::<Vec<Value>>(&j).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::String(name) => Some(name),
+                other => other["name"].as_str().map(str::to_owned),
+            })
+            .collect();
+        out.push(Post {
+            repo,
+            number: number as u64,
+            ts,
+            ts_raw,
+            primary: true,
+            reactions,
+            claim: claim.filter(|c| !c.is_empty()).map(|c| Claim {
+                kind: c.clone(),
+                reason: c,
+            }),
+            eyes_me,
+            thread_tags_me: tags.unwrap_or(false),
+        });
     }
-    Ok(Some(cache))
+    Ok(out)
 }
 
-impl Cache {
-    /// The primary post of pull request `repo#number`: the newest by `ts`.
-    pub fn primary_post(&self, repo: &str, number: u64) -> Option<&Post> {
-        self.posts
-            .iter()
-            .filter(|p| p.primary && p.repo == repo && p.number == number)
-            .max_by(|a, b| a.ts.total_cmp(&b.ts))
-    }
-}
-
-fn bad(path: &std::path::Path, message: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, message).with("path", path.display().to_string())
+/// The primary post of pull request `repo#number`: the newest by `ts`.
+pub fn primary_post(conn: &Connection, repo: &str, number: u64) -> Result<Option<Post>, CpdError> {
+    Ok(posts_in(conn, 0.0)?
+        .into_iter()
+        .filter(|p| p.repo == repo && p.number == number)
+        .max_by(|a, b| a.ts.total_cmp(&b.ts)))
 }
 
 /// A pull request's GitHub state, the fields hermes' `classify` reads.
@@ -233,197 +235,74 @@ pub fn status(post: &Post, workflow: &GhPr, me: &str, bots: &[String]) -> Status
     status
 }
 
-// ---- GitHub ------------------------------------------------------------------------------------------------------
+// ---- the cache ---------------------------------------------------------------------------------------------------
 
-/// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
-fn repo_parts(repo: &str) -> Option<(&str, &str)> {
-    let part = |p: &str| {
-        !p.is_empty()
-            && p.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-    };
-    repo.split_once('/')
-        .filter(|(owner, name)| part(owner) && part(name))
-}
-
-fn gh_failed(message: String, stderr: &str) -> CpdError {
-    CpdError::new(ErrorCode::GhFailed, message).with(
-        "stderr",
-        stderr
-            .lines()
-            .rev()
-            .take(20)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
-/// The one `gh api graphql` call: `viewer { login }` and one alias `p<i>` per pull request, 15 s at most. A pull
-/// request that GitHub cannot find (or whose repo is no `owner/name`) is `None`; any other error of the call, or
-/// an answer without `data`, is `gh_failed`, never "no pull requests". An empty `refs` makes no call.
-pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
-    github_lookup_with(&*Ports::current().runner, home, refs)
-}
-
-/// [`github_lookup`] on `runner`.
-pub fn github_lookup_with(
-    runner: &dyn Runner,
-    home: &CpdHome,
+/// The state of each of `refs` as a reader of the cache sees it (the effective row of `swr::github`, its detail for the
+/// reviews and the head's checks), and the User's login (`swr_viewer`). `None` when the viewer is not known yet: "unknown",
+/// not "empty", so the open items stay. A pull request with no row is `None` in the map.
+pub fn lookup_from_store(
+    store: &mut Store,
     refs: &[(String, u64)],
-) -> Result<Lookup, CpdError> {
-    let mut query = String::from("query { viewer { login }");
-    for (i, (repo, number)) in refs.iter().enumerate() {
-        let Some((owner, name)) = repo_parts(repo) else {
-            continue;
+) -> Result<Option<Lookup>, CpdError> {
+    store.read(|conn| {
+        let Some(me) = conn
+            .query_row("SELECT login FROM swr_viewer WHERE id = 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .filter(|l| !l.is_empty())
+        else {
+            return Ok(None);
         };
-        query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision headRefOid commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ state }} }} }} }} author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} commit {{ oid }} }} }} }} }}"
-        ));
-    }
-    query.push_str(" }");
-    let mut cmd = Command::new("gh");
-    cmd.args(["api", "graphql", "-f", &format!("query={query}")])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("NO_COLOR", "1")
-        .current_dir(home.root())
-        .stdin(std::process::Stdio::null());
-    let out = match runner.output(&mut cmd, "gh", GITHUB_DEADLINE) {
-        Ok(out) => out,
-        Err(Failed::Io(e)) => {
-            return Err(gh_failed(format!("Cannot run gh: {e}."), &e.to_string()));
+        let mut workflows = BTreeMap::new();
+        for (repo, number) in refs {
+            let found = crate::swr::github::effective_in(conn, repo, *number as i64)?;
+            workflows.insert((repo.clone(), *number), found.map(|e| gh_pr(&e, &me)));
         }
-        Err(Failed::Timeout(e)) => return Err(e),
-    };
-    // `gh` exits 1 when an alias is NOT_FOUND, with data: the stdout decides, whatever the exit.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let reply: Value = serde_json::from_str(&stdout).map_err(|e| {
-        gh_failed(
-            format!("gh api graphql printed unexpected JSON: {e}."),
-            &stderr,
-        )
-    })?;
-    parse_lookup(&reply, refs).map_err(|message| gh_failed(message, &stderr))
+        Ok(Some(Lookup { me, workflows }))
+    })
 }
 
-/// The reply of [`github_lookup`]; `Err` is the message of its `gh_failed`.
-pub fn parse_lookup(reply: &Value, refs: &[(String, u64)]) -> Result<Lookup, String> {
-    let errors = reply["errors"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    if let Some(other) = errors
-        .iter()
-        .find(|e| e["type"].as_str() != Some("NOT_FOUND"))
-    {
-        return Err(format!(
-            "gh api graphql answered with errors: {}",
-            other["message"].as_str().unwrap_or("(no message)")
-        ));
-    }
-    let data = reply["data"]
-        .as_object()
-        .ok_or("gh api graphql answered without data.")?;
-    let me = data["viewer"]["login"]
-        .as_str()
-        .filter(|l| !l.is_empty())
-        .ok_or("gh api graphql answered without viewer.login.")?
-        .to_owned();
-    let mut workflows = BTreeMap::new();
-    for (i, key) in refs.iter().enumerate() {
-        let raw = &data
-            .get(&format!("p{i}"))
-            .map_or(&Value::Null, |v| &v["pullRequest"]);
-        let workflow = if raw.is_null() {
-            None
-        } else {
-            Some(parse_pr(raw)?)
-        };
-        workflows.insert(key.clone(), workflow);
-    }
-    Ok(Lookup { me, workflows })
-}
-
-fn parse_pr(raw: &Value) -> Result<GhPr, String> {
-    let state = match raw["state"].as_str() {
-        Some("OPEN") => GhState::Open,
-        Some("MERGED") => GhState::Merged,
-        Some("CLOSED") => GhState::Closed,
-        other => {
-            return Err(format!(
-                "gh api graphql answered a pull request state {other:?}."
-            ));
-        }
-    };
-    let login = |v: &Value| v["author"]["login"].as_str().unwrap_or_default().to_owned();
-    let reviews = raw["latestReviews"]["nodes"]
-        .as_array()
+fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
+    let detail = e.detail.as_ref();
+    let reviews = detail
+        .and_then(|d| d["latestReviews"]["nodes"].as_array())
         .map(Vec::as_slice)
         .unwrap_or_default()
         .iter()
         .map(|r| Review {
-            author: login(r),
+            author: r["author"]["login"].as_str().unwrap_or_default().to_owned(),
             state: r["state"].as_str().unwrap_or_default().to_owned(),
             commit_oid: r["commit"]["oid"].as_str().map(str::to_owned),
         })
         .collect();
-    Ok(GhPr {
-        title: raw["title"]
-            .as_str()
-            .ok_or("gh api graphql answered a pull request without title.")?
-            .to_owned(),
-        draft: raw["isDraft"]
-            .as_bool()
-            .ok_or("gh api graphql answered a pull request without isDraft.")?,
-        state,
-        author: login(raw),
-        decision: raw["reviewDecision"].as_str().map(str::to_owned),
+    let checks_state = detail
+        .and_then(|d| d["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str())
+        .map(str::to_owned)
+        .or_else(|| match e.checks.as_str() {
+            "passed" => Some("SUCCESS".to_owned()),
+            "failed" => Some("FAILURE".to_owned()),
+            "pending" => Some("PENDING".to_owned()),
+            _ => None,
+        });
+    GhPr {
+        title: e.title.clone(),
+        draft: e.row.draft,
+        state: match e.state.as_str() {
+            "open" => GhState::Open,
+            "closed" => GhState::Closed,
+            _ => GhState::Merged,
+        },
+        author: if e.row.authored { me.to_owned() } else { String::new() },
+        decision: match e.review_decision.as_str() {
+            "approved" => Some("APPROVED".to_owned()),
+            "changes_requested" => Some("CHANGES_REQUESTED".to_owned()),
+            "required" => Some("REVIEW_REQUIRED".to_owned()),
+            _ => None,
+        },
         reviews,
-        head_oid: raw["headRefOid"].as_str().map(str::to_owned),
-        checks_state: raw["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]
-            .as_str()
-            .map(str::to_owned),
-    })
-}
-
-/// The last GitHub answer and when it came, so E8's tick does not ask again for the same posts within [`GITHUB_TTL`].
-/// A failure is held as well: a broken `gh` is asked again after the same time, not every tick.
-/// The posted pull requests asked, when, and the answer.
-type Held = (
-    Vec<(String, u64)>,
-    String,
-    Instant,
-    Result<Lookup, CpdError>,
-);
-
-#[derive(Default)]
-pub struct Memo {
-    held: Option<Held>,
-}
-
-impl Memo {
-    /// The held answer when `refs` are the same and it is younger than [`GITHUB_TTL`] and the store's
-    /// invalidation `token` is unchanged, else `fetch`'s.
-    pub fn get(
-        &mut self,
-        refs: &[(String, u64)],
-        token: &str,
-        now: Instant,
-        fetch: impl FnOnce(&[(String, u64)]) -> Result<Lookup, CpdError>,
-    ) -> Result<Lookup, CpdError> {
-        if let Some((held, held_token, at, answer)) = &self.held
-            && held == refs
-            && held_token == token
-            && now.saturating_duration_since(*at) < GITHUB_TTL
-        {
-            return answer.clone();
-        }
-        let answer = fetch(refs);
-        self.held = Some((refs.to_vec(), token.to_owned(), now, answer.clone()));
-        answer
+        head_oid: e.head_oid.clone(),
+        checks_state,
     }
 }
 

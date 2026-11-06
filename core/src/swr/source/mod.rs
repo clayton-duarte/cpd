@@ -12,6 +12,7 @@ use crate::ports::Ports;
 use crate::store::Store;
 
 pub mod github;
+pub mod github_write;
 pub mod jira;
 pub mod models;
 pub mod slack;

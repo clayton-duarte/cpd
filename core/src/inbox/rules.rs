@@ -4,7 +4,6 @@
 //! [`super::model::reconcile`] opens and closes the items. A stuck Job is no Inbox
 //! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -13,7 +12,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::model::{Condition, Kind, Urgency, open_items};
 use super::models;
-use super::team::{self, GhPr, Lookup, Memo, Post, Status};
+use super::team::{self, GhPr, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -35,18 +34,11 @@ const PLAN_REVIEW: &str = "φ: plan review";
 /// The `state_label` prefix of a Verdict dialog (pi adapter): the item is `<who> verdict\n<option>` (Row 1, Row 2).
 const VERDICT_PREFIX: &str = "verdict: ";
 
-/// The call that asks GitHub for the state of the posted pull requests.
-type GithubLookup<'a> = &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>;
-
-/// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
-/// the GitHub state of the posted pull requests, one call for all of them.
+/// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers`. The posts
+/// and the GitHub state of their pull requests are read from SQLite.
 pub struct Team<'a> {
     pub bot_reviewers: &'a [String],
-    pub github: GithubLookup<'a>,
 }
-
-/// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
-static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
 /// Every condition of the kinds, in the order of the kinds. The engine's own errors go to the Manager (hs-d314); a stalled
 /// `durable` Attempt is an `error` Event, not an item. There is no `job-stuck` (hs-d318: a
@@ -57,43 +49,15 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
     conditions_on(&Ports::current(), store, home)
 }
 
-/// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and
-/// `ports.runner` runs `gh`.
+/// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window.
 pub fn conditions_on(
     ports: &Ports,
     store: &mut Store,
     home: &CpdHome,
 ) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
-    // Any other process closing, dismissing or claiming a review-requested row changes this, so the memo misses.
-    // Not COUNT/MAX(id): E8's own opening of an item would otherwise miss the memo on its next tick.
-    let token = store.read(|conn| {
-        Ok(conn.query_row(
-            "SELECT MAX(closed_at), MAX(dismissed_at), MAX(claimed_at) \
-             FROM inbox_items WHERE kind = 'review-requested'",
-            [],
-            |row| {
-                Ok(format!(
-                    "{:?}",
-                    (
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    )
-                ))
-            },
-        )?)
-    })?;
-    let mut github = |refs: &[(String, u64)]| {
-        let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
-        held.get_or_insert_with(Memo::default)
-            .get(refs, &token, ports.clock.now(), |refs| {
-                team::github_lookup_with(&*ports.runner, home, refs)
-            })
-    };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team {
         bot_reviewers: &config.inbox.bot_reviewers,
-        github: &mut github,
     });
     conditions_with(
         store,
@@ -123,97 +87,65 @@ pub fn conditions_with(
     all.extend(store.read(|conn| super::pr::conditions(conn, home, now))?);
     all.extend(store.read(super::pr::closed_conditions)?);
     all.extend(store.read(|conn| curate(conn, floor))?);
-    all.extend(review_requested(store, home, now, team)?);
+    all.extend(review_requested(store, now, team)?);
     all.extend(models_changed(store, home, now)?);
-    all.extend(deploys(store, home)?);
+    all.extend(deploys(store)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
 }
 
-/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
-/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
-/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
-fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    #[derive(serde::Deserialize)]
-    struct Cache {
-        version: u32,
-        runs: Vec<Run>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Run {
-        repo: String,
-        run_id: u64,
-        environment: String,
-        title: String,
-        url: String,
-        created_at: String,
-    }
-    let path = home.run_dir().join("deploy-runs.json");
-    let read = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str::<Cache>(&text)
-            .map_err(|e| format!("{} is not a deploy cache: {e}.", path.display()))
-            .and_then(|c| {
-                if c.version == 1 {
-                    Ok(c)
-                } else {
-                    Err(format!(
-                        "{} has version {}, not 1.",
-                        path.display(),
-                        c.version
-                    ))
-                }
-            }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => Err(format!("Cannot read {}: {e}.", path.display())),
-    };
-    match read {
-        Ok(cache) => Ok(cache
-            .runs
-            .into_iter()
-            .map(|r| Condition {
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per active row of `swr_deploys` (swr-github.md §8), except a run whose
+/// approval is queued or not yet proven (the overlay `approving`: the item closes at once).
+fn deploys(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT repo, run_id, run_json, pending_json FROM swr_deploys WHERE inactive_at IS NULL
+              ORDER BY json_extract(run_json, '$.created_at'), run_id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::new();
+        for (repo, run_id, run, pending) in rows {
+            if crate::swr::github::deploy_approving(conn, &repo, run_id)? {
+                continue;
+            }
+            let run: serde_json::Value = serde_json::from_str(&run).unwrap_or_default();
+            let mut names: Vec<String> = pending
+                .and_then(|p| serde_json::from_str::<Vec<serde_json::Value>>(&p).ok())
+                .unwrap_or_default()
+                .iter()
+                .filter(|p| p["current_user_can_approve"].as_bool() == Some(true))
+                .filter_map(|p| p["environment"]["name"].as_str().map(str::to_owned))
+                .collect();
+            names.sort();
+            let text = |k: &str| run[k].as_str().unwrap_or_default().to_owned();
+            out.push(Condition {
                 kind: Kind::Deploy,
                 urgency: Urgency::Yellow,
-                subject: format!("deploy:{}#{}", r.repo, r.run_id),
-                label: format!("{} deploy {}\n{}", r.repo, r.environment, r.title),
-                url: Some(r.url),
+                subject: format!("deploy:{repo}#{run_id}"),
+                label: format!("{repo} deploy {}\n{}", names.join(", "), text("display_title")),
+                url: Some(text("html_url")),
                 context: None,
                 plan: None,
                 job: None,
                 session: None,
                 record: None,
                 event: None,
-                opened_at: Some(r.created_at),
-                head_oid: None,
-                reviewed_oid: None,
-            })
-            .collect()),
-        Err(message) => {
-            let mut out: Vec<Condition> = store
-                .read(open_items)?
-                .iter()
-                .filter(|i| i.kind == Kind::Deploy)
-                .map(Condition::from)
-                .collect();
-            out.push(Condition {
-                kind: Kind::EngineError,
-                urgency: Urgency::Red,
-                subject: format!("error:E8/deploy-runs/{}", ErrorCode::StoreFailed.as_str()),
-                label: format!("deploy runs: {}", ErrorCode::StoreFailed.as_str()),
-                url: None,
-                context: None,
-                plan: None,
-                job: None,
-                session: None,
-                record: None,
-                event: None,
-                opened_at: None,
+                opened_at: Some(text("created_at")),
                 head_oid: None,
                 reviewed_oid: None,
             });
-            let _ = message;
-            Ok(out)
         }
-    }
+        Ok(out)
+    })
 }
 
 /// `drafts-parked` (contract §2.2 "Inbox item", hs-d731, hs-d733): a live Plan whose `parked_drafts` is not empty, whose Lead was
@@ -661,24 +593,15 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
 fn review_requested(
     store: &mut Store,
-    home: &CpdHome,
     now: OffsetDateTime,
     team: Option<Team<'_>>,
 ) -> Result<Vec<Condition>, CpdError> {
     let Some(team) = team else {
         return Ok(Vec::new());
     };
-    let cache = match team::read_cache(home) {
-        Ok(Some(cache)) => cache,
-        Ok(None) => return kept_review_items(store),
-        Err(_) => return kept_review_items(store),
-    };
     let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
-    let posts: Vec<&Post> = cache
-        .posts
-        .iter()
-        .filter(|p| p.primary && p.ts >= cutoff)
-        .collect();
+    let posts: Vec<Post> = store.read(|conn| team::posts_in(conn, cutoff))?;
+    let posts: Vec<&Post> = posts.iter().collect();
     let plans = super::review_plan::open_plan_refs(store)?;
     if posts.is_empty() && plans.is_empty() {
         return Ok(Vec::new());
@@ -689,9 +612,9 @@ fn review_requested(
             refs.push((repo.clone(), *number));
         }
     }
-    let lookup = match (team.github)(&refs) {
-        Ok(lookup) => lookup,
-        Err(_) => return kept_review_items(store),
+    let lookup = match team::lookup_from_store(store, &refs)? {
+        Some(lookup) => lookup,
+        None => return kept_review_items(store),
     };
     super::review_plan::finish_closed(store, &lookup)?;
     if posts.is_empty() {
@@ -707,6 +630,15 @@ fn review_requested(
         return kept_review_items(store);
     }
     let settled = settled_review_subjects(store)?;
+    let requested: std::collections::HashSet<(String, u64)> = store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT repo, number FROM pull_requests WHERE review_requested = 1 AND state = 'open'",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    })?;
     Ok(posts
         .into_iter()
         .filter(|post| {
@@ -718,11 +650,14 @@ fn review_requested(
         })
         .filter_map(|post| {
             let workflow = read(post)?;
-            matches!(
-                team::status(post, workflow, &lookup.me, team.bot_reviewers),
-                Status::NeedsReview(_)
-            )
-            .then_some((post, workflow))
+            // A pull request nobody has asked the User to review yet opens nothing, whatever the channel says: the
+            // reasons that name the User's own part (a claim, a follow-up, a tag) need no request.
+            match team::status(post, workflow, &lookup.me, team.bot_reviewers) {
+                Status::NeedsReview(reason) => (!matches!(reason, team::NO_REVIEW | team::AI_ONLY)
+                    || requested.contains(&(post.repo.clone(), post.number)))
+                .then_some((post, workflow)),
+                _ => None,
+            }
         })
         .map(|(post, workflow)| {
             let name = post

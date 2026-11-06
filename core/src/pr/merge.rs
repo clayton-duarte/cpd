@@ -1,26 +1,22 @@
-//! `pr merge` (commands.md §9.10): merge, with a method the repo allows, one pull request on GitHub, after
-//! re-reading it. It needs no Plan and no Context. It stores the merge (hs-d526) from its
-//! own success or from a precheck that reads MERGED, as the poll would: one transaction.
+//! `pr merge` (commands.md §9.10, swr-github.md §9): queue the merge of one pull request, with a method the repo allows, after
+//! checking its cached state. It needs no Plan and no Context.
 
 use std::fmt;
-use std::path::Path;
 use std::str::FromStr;
 
 use serde_json::json;
 
-use super::gh;
 use super::poll;
-use super::pulls;
-use super::status::{MergeState, Required, required_states};
+use super::status::{Required, required_states};
+use super::swr_read::checks_of_detail;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::runner::Runner;
-use crate::ids::{PlanId, WorkflowKey};
-use crate::inbox::model::close_pr_ready;
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::Store;
-use crate::store::WriteTxn;
+use crate::swr::cache;
+use crate::swr::github::effective_pr;
+use crate::swr::source::github_write::{enqueue, merge_method, queued, target_of};
 
 /// `<owner>/<repo>#<n>`: `owner` and `repo` non-empty, with no `/` or `#`; `n` a positive integer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,76 +68,96 @@ pub struct MergeArgs {
     pull: PullRef,
 }
 
+/// `pr merge` queues the merge (swr-github.md §9): it checks the effective state of the cached pull request, then enqueues a
+/// `merge` mutation whose overlay `merging` closes the `pr-ready` item at once. The engine drains it; nothing here calls GitHub.
+/// The Workflow's merge, the unstack of what depends on it and the `pr-merged` Event happen when the poll reads `MERGED`.
 pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> {
-    let runner = &*ports.runner;
     let PullRef { repo, number } = args.pull;
-    // `--repo` names the repository: any directory will do.
-    let cwd = Path::new(".");
-    let view = gh::view_for_merge(runner, cwd, &repo, number)?;
-    if view.state == "MERGED" {
-        store_merge(&repo, number, view.merged_at.as_deref())?;
-    }
-    if view.state != "OPEN" || view.merge_state != "CLEAN" {
-        store_refused_state(&repo, number, &view.merge_state)?;
+    let home = CpdHome::from_env()?;
+    let mut store = Store::open(&home, STORE_BUSY_MS)?;
+    let now = ports.clock.utc();
+    let Some(e) = effective_pr(&mut store, &repo, number)? else {
+        return Err(CpdError::new(
+            ErrorCode::ItemNotFound,
+            format!("{repo}#{number} is not in the cache: the poll has not read it yet."),
+        )
+        .with("repo", repo.as_str())
+        .with("number", number));
+    };
+    if !matches!(e.state.as_str(), "open" | "merging") || e.row.merge_state != "clean" {
         return Err(CpdError::new(
             ErrorCode::MergeNotClean,
             format!(
-                "{repo}#{number} is {} and {}: only an OPEN pull request that is CLEAN is merged.",
-                view.state, view.merge_state
+                "{repo}#{number} is {} and {}: only an open pull request that is clean is merged.",
+                e.state, e.row.merge_state
             ),
         )
         .with("repo", repo.as_str())
         .with("number", number)
-        .with("state", view.state)
-        .with("merge_state", view.merge_state));
+        .with("state", e.state.as_str())
+        .with("merge_state", e.row.merge_state.as_str()));
     }
-    refuse_unless_required_passed(runner, cwd, &repo, number)?;
-    let methods = gh::merge_methods(runner, cwd, &repo)?;
-    let Some(method) = methods.choose() else {
+    refuse_unless_required_passed(&home, &repo, number, e.detail.as_ref())?;
+    let method = match merge_method(&mut store, &repo)? {
+        Some(Ok(method)) => method,
+        Some(Err(methods)) => {
+            return Err(CpdError::new(
+                ErrorCode::NoMergeMethod,
+                format!("{repo} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{number}. Allow one in the repo's settings."),
+            )
+            .with("repo", repo.as_str())
+            .with("number", number)
+            .with("squash", methods.squash)
+            .with("merge", methods.merge)
+            .with("rebase", methods.rebase));
+        }
+        None => {
+            cache::invalidate(&mut store, &format!("github:repo:{repo}"))?;
+            return Err(CpdError::new(
+                ErrorCode::ItemNotFound,
+                format!("The settings of {repo} are not in the cache yet: the next poll reads them; try again then."),
+            )
+            .with("repo", repo.as_str()));
+        }
+    };
+    let Some(head) = e.head_oid.clone() else {
         return Err(CpdError::new(
-            ErrorCode::NoMergeMethod,
-            format!("{repo} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{number}. Allow one in the repo's settings."),
+            ErrorCode::ItemNotFound,
+            format!("{repo}#{number} has no head commit in the cache yet: the poll has not read it."),
         )
         .with("repo", repo.as_str())
-        .with("number", number)
-        .with("squash", methods.squash)
-        .with("merge", methods.merge)
-        .with("rebase", methods.rebase));
+        .with("number", number));
     };
-    gh::merge_pr(runner, cwd, &repo, number, method, &view.head)?;
-    super::request_poll_now();
-    // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
-    let stored = match gh::view_for_merge(runner, cwd, &repo, number) {
-        Ok(read) if read.state == "MERGED" => {
-            store_merge(&repo, number, read.merged_at.as_deref())?;
-            true
-        }
-        _ => false,
-    };
-    let warnings: Vec<serde_json::Value> = match gh::delete_branch_on_merge(runner, cwd, &repo) {
-        Ok(true) => vec![],
-        Ok(false) => vec![json!({"code": "auto_delete_off", "text": format!(
-            "{repo} has delete_branch_on_merge off: the merged branch stays on GitHub and a pull request stacked on it is not repointed to the base. Turn the setting on in the repo's settings."
-        )})],
-        Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
-    };
-    Ok(Output::success(
-        json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings}),
-    ))
+    let id = enqueue(
+        &mut store,
+        now,
+        &target_of(&repo, number),
+        "merge",
+        json!({"expected_head_oid": head, "method": method.as_str()}),
+        Some(json!({"state": "merging"})),
+    )?;
+    queued(
+        &mut store,
+        &repo,
+        number,
+        id,
+        json!({"repo": repo, "number": number, "method": method.as_str()}),
+    )
 }
 
-/// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head.
+/// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head,
+/// read from the cached detail of the pull request.
 fn refuse_unless_required_passed(
-    runner: &dyn Runner,
-    cwd: &Path,
+    home: &CpdHome,
     repo: &str,
     number: i64,
+    detail: Option<&serde_json::Value>,
 ) -> Result<(), CpdError> {
-    let required = poll::repo_required(&CpdHome::from_env()?, repo)?;
+    let required = poll::repo_required(home, repo)?;
     if required.is_empty() {
         return Ok(());
     }
-    let checks = gh::checks_for_merge(runner, cwd, repo, number)?;
+    let checks = detail.map(checks_of_detail).unwrap_or_default();
     let states = required_states(&checks, &required);
     let named = |wanted: Required| {
         states
@@ -169,66 +185,7 @@ fn refuse_unless_required_passed(
     .with("failed", failed))
 }
 
-/// The `merge_state` a refused merge read, stored on the open `pull_requests` row (one transaction, no GitHub call), so
-/// the Inbox row relabels itself from it at the next reconcile. A word the table does not allow is not stored.
-fn store_refused_state(repo: &str, number: i64, merge_state: &str) -> Result<(), CpdError> {
-    let Ok(state) = MergeState::of_graphql(merge_state) else {
-        return Ok(());
-    };
-    let mut store = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)?;
-    store.write("pr merge", |tx| {
-        tx.execute(
-            "UPDATE pull_requests SET merge_state = ?1, changed_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE repo = ?2 AND number = ?3 AND state = 'open' AND merge_state != ?1",
-            rusqlite::params![state.as_str(), repo, number],
-        )?;
-        Ok(())
-    })
-}
-
 const STORE_BUSY_MS: u64 = 5000;
-
-/// The merge of `repo#number`, in one transaction: its `pull_requests` row (when stored and not merged yet) `merged` at
-/// GitHub's time, else the transaction's; the `prs` row that points to it, merged as the poll does; its open `pr-ready` item.
-fn store_merge(repo: &str, number: i64, merged_at: Option<&str>) -> Result<(), CpdError> {
-    // The store alone, not `Env`: `pr merge` needs no config (the default of `timeouts.store_busy_ms`).
-    let mut store = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)?;
-    store.write("pr merge", |tx| store_merge_in(tx, repo, number, merged_at))
-}
-
-fn store_merge_in(
-    tx: &WriteTxn<'_>,
-    repo: &str,
-    number: i64,
-    merged_at: Option<&str>,
-) -> Result<(), CpdError> {
-    let Some(row) = pulls::find(tx, repo, number)? else {
-        return Ok(());
-    };
-    if row.state == "merged" {
-        return Ok(());
-    }
-    tx.execute(
-        "UPDATE pull_requests SET state = 'merged', merged_at = coalesce(?1, (SELECT at FROM txns WHERE id = cpd_txn())),
-                changed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?2",
-        rusqlite::params![merged_at, row.id],
-    )?;
-    let after = pulls::load(tx, row.id)?;
-    let owners: Vec<(String, String)> = {
-        let mut stmt = tx.prepare(
-            "SELECT plan, key FROM workflows WHERE pull_request = ?1 AND status = 'open'",
-        )?;
-        stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?
-    };
-    for (plan, key) in owners {
-        let (plan, key): (PlanId, WorkflowKey) = (plan.parse()?, key.parse()?);
-        poll::merge(tx, &plan, &key, &after)?;
-        poll::unstack_stacked_on(tx, &plan, &key)?;
-    }
-    crate::incident::end_if_until_workflow_merged(tx)?;
-    close_pr_ready(tx, repo, number)
-}
 
 #[cfg(test)]
 mod tests {

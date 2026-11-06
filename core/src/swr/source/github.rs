@@ -473,12 +473,10 @@ impl Source for GithubSource {
     ) -> Result<(), CpdError> {
         self.pass(cx, poll_started_at)
     }
-    fn execute(&self, _cx: &mut Cx<'_>, _m: &Mutation) -> ExecOutcome {
-        ExecOutcome::Failed {
-            error: "github writes are not on the outbox yet".into(),
-        }
+    fn execute(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
+        self.run_one(cx, m)
     }
-    fn coalesce(&self, _op_kind: &str) -> Coalesce {
-        Coalesce::LatestWins
+    fn coalesce(&self, op_kind: &str) -> Coalesce {
+        super::github_write::coalesce_of(op_kind)
     }
 }

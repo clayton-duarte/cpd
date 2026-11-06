@@ -336,7 +336,12 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     report_unresolved(env, &unresolved)?;
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
-    deploys::read(&*env.ports.runner, &env.home, &crate::clock::now())?;
+    deploys::read_into_store(
+        &*env.ports.runner,
+        &mut env.store,
+        &env.home,
+        env.ports.clock.utc(),
+    )?;
 
     let printed_prs = match &selected {
         Some(id) => {
