@@ -191,6 +191,8 @@ fn jira_drain(
         )?;
         if code == ErrorCode::JiraAuth.as_str() || code == ErrorCode::JiraNotConfigured.as_str() {
             machine.push(failure(code, rest.to_owned(), json!({"id": m.id})));
+            // This Event is the report of the outage: the endpoint's own (`swr_endpoint_down`) would repeat it.
+            endpoint::due_report(cx.store, "jira", now)?;
         }
     }
     jira::mark_inactive(cx.store, now)

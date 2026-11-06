@@ -529,8 +529,10 @@ fn clear_cloud_id(store: &mut Store) -> Result<(), CpdError> {
 /// What `execute` reports for an error: `<code>: <message>`, or `jira_refused: <reason>`.
 fn failed(e: &CpdError) -> ExecOutcome {
     let error = if e.code() == ErrorCode::JiraRefused {
-        let reason = e.details()["reason"]
-            .as_str()
+        let reason = e
+            .details()
+            .get("reason")
+            .and_then(|r| r.as_str())
             .unwrap_or("unknown")
             .to_owned();
         format!("jira_refused: {reason}")
@@ -637,7 +639,11 @@ impl Jira {
                 Ok(ExecOutcome::Done)
             }
             Err(e) => {
-                let reason = e.details()["reason"].as_str().map(str::to_owned);
+                let reason = e
+                    .details()
+                    .get("reason")
+                    .and_then(|r| r.as_str())
+                    .map(str::to_owned);
                 match e.code() {
                     ErrorCode::JiraRefused => endpoint::record_ok(cx.store, "jira", now)?,
                     ErrorCode::JiraAuth | ErrorCode::JiraNotConfigured => endpoint::record_failure(
