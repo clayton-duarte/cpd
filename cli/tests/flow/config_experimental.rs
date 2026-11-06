@@ -13,11 +13,11 @@ fn text(fx: &Fx) -> String {
 }
 
 fn defaults() -> Value {
-    json!({"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true})
+    json!({"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true, "durable_leads": false})
 }
 
 #[test]
-fn config_experimental_prints_the_four_flags() {
+fn config_experimental_prints_every_flag() {
     let fx = Fx::new();
     fx.env.write_config(MINIMAL);
     let out = fx.cpd(&["config", "experimental"]).ok();
@@ -55,7 +55,7 @@ fn config_experimental_off_keeps_comments_and_other_keys() {
         .ok();
     assert_eq!(
         out["experimental"],
-        json!({"durable_workers": true, "write_curation": false, "failure_triage": false, "turn_question_guard": true}),
+        json!({"durable_workers": true, "write_curation": false, "failure_triage": false, "turn_question_guard": true, "durable_leads": false}),
         "{out}"
     );
     assert_eq!(

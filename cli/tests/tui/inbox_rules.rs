@@ -162,6 +162,8 @@ fn no_engine_error_item_opens_and_one_an_older_engine_opened_closes() {
         record: None,
         event: Some(event),
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     };
     let at = "2026-01-01T00:00:00.000Z";
     assert_eq!(
@@ -231,7 +233,7 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
             (Kind::PrReady, Urgency::Red, "shop#1 conflict\nT"),
             (Kind::PrReady, Urgency::Red, "shop#2 changes requested\nT"),
             (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge\nT"),
-            (Kind::PrReady, Urgency::Cyan, "shop#5 waiting\nT"),
+            (Kind::PrReady, Urgency::White, "shop#5 waiting\nT"),
         ],
         "every authored pull request has one row named by its state; a blocked merge state (5, #2385) is only waiting (hs-d481); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );

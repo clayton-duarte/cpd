@@ -58,24 +58,24 @@ fn row(merge_state: &str, kind: &str, status: &str) -> (Urgency, String) {
     (c.urgency, status)
 }
 
-fn cyan_updating(kind: &str, status: &str) {
+fn white_updating(kind: &str, status: &str) {
     assert_eq!(
         row("clean", kind, status),
-        (Urgency::Cyan, "updating".to_owned()),
+        (Urgency::White, "updating".to_owned()),
         "{kind} {status}"
     );
 }
 
 #[test]
-fn a_clean_pr_with_a_live_update_job_is_a_cyan_updating_row_not_ready_to_merge() {
-    cyan_updating("update", "queued");
-    cyan_updating("update", "running");
+fn a_clean_pr_with_a_live_update_job_is_a_white_updating_row_not_ready_to_merge() {
+    white_updating("update", "queued");
+    white_updating("update", "running");
 }
 
 #[test]
-fn a_clean_pr_with_a_live_fix_job_is_a_cyan_updating_row_not_ready_to_merge() {
-    cyan_updating("work", "queued");
-    cyan_updating("work", "running");
+fn a_clean_pr_with_a_live_fix_job_is_a_white_updating_row_not_ready_to_merge() {
+    white_updating("work", "queued");
+    white_updating("work", "running");
 }
 
 #[test]
@@ -83,5 +83,5 @@ fn a_stored_blocked_merge_state_is_not_a_ready_to_merge_row() {
     // GitHub refused a merge as blocked while an update Job runs: the stored state relabels the row, never yellow ready.
     let (urgency, status) = row("blocked", "update", "running");
     assert_ne!(status, "ready to merge");
-    assert_eq!((urgency, status.as_str()), (Urgency::Cyan, "updating"));
+    assert_eq!((urgency, status.as_str()), (Urgency::White, "updating"));
 }

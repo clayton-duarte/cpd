@@ -676,3 +676,51 @@ fn a_refused_submit_finishes_no_plan() {
     assert_eq!(phase(&fx, PLAN), "grounding");
     assert_eq!(any_plan_done(&fx), 0);
 }
+
+// --- pro-d416: REQUEST_CHANGES keeps the codereview Plan open (a re-review may follow); APPROVE still finishes it.
+
+fn changes_requested(fx: &Fx) -> bool {
+    fx.env.read(|c| {
+        c.query_row(
+            "SELECT changes_requested_at IS NOT NULL FROM plans WHERE id = 'r-pay-812'",
+            [],
+            |r| r.get(0),
+        )
+    })
+}
+
+fn request_changes_reply() -> Reply {
+    Reply::ok(
+        &json!({"id": 4242, "html_url": REVIEW_URL, "state": "CHANGES_REQUESTED"}).to_string(),
+    )
+}
+
+#[test]
+fn review_submit_request_changes_keeps_codereview_plan_in_grounding() {
+    let fx = fixture(head(), request_changes_reply());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "REQUEST_CHANGES", &file, Some(SLACK)).ok();
+    assert_eq!(phase(&fx, PLAN), "grounding");
+    assert_eq!(any_plan_done(&fx), 0, "no plan-done Event");
+}
+
+#[test]
+fn review_submit_request_changes_sets_changes_requested_at() {
+    let fx = fixture(head(), request_changes_reply());
+    seed_plans(&fx);
+    assert!(!changes_requested(&fx), "the fixture: not set yet");
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "REQUEST_CHANGES", &file, None).ok();
+    assert!(changes_requested(&fx), "changes_requested_at is set");
+}
+
+#[test]
+fn review_submit_approve_finishes_codereview_plan() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, None).ok();
+    assert_eq!(phase(&fx, PLAN), "done");
+    assert_eq!(plan_done_events(&fx, PLAN).len(), 1);
+}

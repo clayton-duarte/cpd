@@ -69,13 +69,13 @@ impl Status {
     #[must_use]
     pub fn urgency(self) -> Urgency {
         match self {
-            Status::Draft | Status::Stacked => Urgency::White,
+            Status::Draft | Status::Stacked => Urgency::Cyan,
             Status::Conflict | Status::Failing | Status::ChangesRequested => Urgency::Red,
             Status::Updating
             | Status::Fixing
             | Status::ChecksRunning
             | Status::InReview
-            | Status::Waiting => Urgency::Cyan,
+            | Status::Waiting => Urgency::White,
             Status::ReadyForReview | Status::ReadyToMerge => Urgency::Yellow,
         }
     }
@@ -266,6 +266,8 @@ pub fn conditions(
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -293,6 +295,8 @@ pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> 
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             }
         })
         .collect())
@@ -322,9 +326,9 @@ mod tests {
                 "waiting"
             ]
         );
-        assert_eq!(Status::Stacked.urgency(), Urgency::White);
+        assert_eq!(Status::Stacked.urgency(), Urgency::Cyan);
         assert_eq!(Status::Failing.urgency(), Urgency::Red);
-        assert_eq!(Status::Fixing.urgency(), Urgency::Cyan);
+        assert_eq!(Status::Fixing.urgency(), Urgency::White);
         assert_eq!(Status::ReadyForReview.urgency(), Urgency::Yellow);
     }
 
@@ -332,7 +336,7 @@ mod tests {
         Item {
             id: 1,
             kind,
-            urgency: Urgency::Cyan,
+            urgency: Urgency::White,
             subject: "pr:a/b#1".into(),
             label: label.into(),
             url: None,

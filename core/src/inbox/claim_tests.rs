@@ -58,6 +58,8 @@ fn reviews(
                 author: "ryan".to_owned(),
                 decision: None,
                 reviews: Vec::new(),
+                head_oid: None,
+                checks_state: None,
             };
             (("acme/pay".to_owned(), *n), Some(workflow))
         })

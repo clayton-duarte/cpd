@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { callCpd, CpdError } from "../lib/cpd.ts";
@@ -92,7 +91,7 @@ export function hostDeps(config: Config, models: HostModels): Deps {
 }
 
 // Only the process entry starts a host: a test imports `hostDeps`.
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (import.meta.main) {
   try {
     const config = parseConfig(process.argv.slice(2), process.env, process.cwd());
     const models = await ModelRuntime.create({ refreshOnCreate: false });

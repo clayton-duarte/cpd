@@ -59,6 +59,11 @@ fn select_all(store: &mut Store, t: &str, by: &str) -> String {
         store,
         &format!("SELECT name FROM pragma_table_info('{t}') ORDER BY cid"),
     );
+    // `host-restarts` (a later migration) adds `sessions.host_restarts` and `host_window_start`: not what these test.
+    let names: Vec<String> = names
+        .into_iter()
+        .filter(|n| !n.starts_with("host_"))
+        .collect();
     format!("SELECT {} FROM {t} ORDER BY {by}", names.join(", "))
 }
 

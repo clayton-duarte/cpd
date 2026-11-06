@@ -113,6 +113,10 @@ pub struct GhPr {
     pub decision: Option<String>,
     /// `latestReviews`: the last review of each reviewer.
     pub reviews: Vec<Review>,
+    /// `headRefOid`: the pull request's head commit.
+    pub head_oid: Option<String>,
+    /// The state of the head commit's `statusCheckRollup`: `SUCCESS`, `PENDING`, `FAILURE`, ...
+    pub checks_state: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +130,8 @@ pub enum GhState {
 pub struct Review {
     pub author: String,
     pub state: String,
+    /// `commit { oid }`: the commit the review was made on.
+    pub commit_oid: Option<String>,
 }
 
 /// What one GitHub call answered: the User's login (`ME`) and each pull request, `None` for one it cannot read.
@@ -151,6 +157,7 @@ pub enum Status {
 pub const NO_REVIEW: &str = "no review yet";
 pub const AI_ONLY: &str = "AI review only";
 pub const CLAIMED_BY_ME: &str = "you claimed this — approve or request changes";
+pub const FOLLOW_UP: &str = "changes you requested were pushed — review again";
 pub const TAGGED: &str = "you were tagged in the thread";
 
 /// `classify.classify`: the status from GitHub alone. `me` is the User's GitHub login, `bots` `inbox.bot_reviewers`.
@@ -163,6 +170,9 @@ pub fn classify(workflow: &GhPr, me: &str, bots: &[String]) -> Status {
     }
     if workflow.state != GhState::Open {
         return Status::Done;
+    }
+    if followup_oids(workflow, me).is_some() {
+        return Status::NeedsReview(FOLLOW_UP);
     }
     match workflow.decision.as_deref() {
         Some("APPROVED") => return Status::Done,
@@ -183,11 +193,33 @@ pub fn classify(workflow: &GhPr, me: &str, bots: &[String]) -> Status {
     Status::NeedsReview(NO_REVIEW)
 }
 
+/// The follow-up condition: an open pull request whose head moved past the commit of the User's latest review, a
+/// CHANGES_REQUESTED, with the head's checks exactly `SUCCESS`. The head and the reviewed commit.
+pub fn followup_oids<'a>(workflow: &'a GhPr, me: &str) -> Option<(&'a str, &'a str)> {
+    if workflow.draft
+        || workflow.state != GhState::Open
+        || workflow.checks_state.as_deref() != Some("SUCCESS")
+    {
+        return None;
+    }
+    let reviewed = workflow
+        .reviews
+        .iter()
+        .find(|r| r.author == me && r.state == "CHANGES_REQUESTED")?
+        .commit_oid
+        .as_deref()?;
+    let head = workflow.head_oid.as_deref()?;
+    (head != reviewed).then_some((head, reviewed))
+}
+
 /// `classify` and then the Slack overrides of `refresh.build`: a claim in Slack makes `NEEDS_REVIEW` `IN_REVIEW`,
 /// unless the User's own `:eyes:` is the only claim; a mention of the User in the thread makes `IN_REVIEW` or
 /// `NEEDS_REVIEW` `NEEDS_REVIEW` again.
 pub fn status(post: &Post, workflow: &GhPr, me: &str, bots: &[String]) -> Status {
     let mut status = classify(workflow, me, bots);
+    if status == Status::NeedsReview(FOLLOW_UP) {
+        return status;
+    }
     if matches!(status, Status::NeedsReview(_)) && post.claim.is_some() {
         status = if post.eyes_me == Some(true) && !post.reactions.is_empty() {
             Status::NeedsReview(CLAIMED_BY_ME)
@@ -248,7 +280,7 @@ pub fn github_lookup_with(
             continue;
         };
         query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} }} }} }} }}"
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision headRefOid commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ state }} }} }} }} author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} commit {{ oid }} }} }} }} }}"
         ));
     }
     query.push_str(" }");
@@ -335,6 +367,7 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         .map(|r| Review {
             author: login(r),
             state: r["state"].as_str().unwrap_or_default().to_owned(),
+            commit_oid: r["commit"]["oid"].as_str().map(str::to_owned),
         })
         .collect();
     Ok(GhPr {
@@ -349,6 +382,10 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         author: login(raw),
         decision: raw["reviewDecision"].as_str().map(str::to_owned),
         reviews,
+        head_oid: raw["headRefOid"].as_str().map(str::to_owned),
+        checks_state: raw["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]
+            .as_str()
+            .map(str::to_owned),
     })
 }
 
@@ -413,6 +450,8 @@ mod tests {
             author: "ryan".to_owned(),
             decision: None,
             reviews: Vec::new(),
+            head_oid: None,
+            checks_state: None,
         }
     }
 
@@ -420,6 +459,7 @@ mod tests {
         Review {
             author: author.to_owned(),
             state: state.to_owned(),
+            commit_oid: None,
         }
     }
 

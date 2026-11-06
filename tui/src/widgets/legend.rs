@@ -344,11 +344,11 @@ pub(crate) fn sections() -> Vec<Section> {
             ),
             tier(
                 Urgency::Cyan,
-                "cyan, an unread reply; also an in-progress pull-request row",
+                "cyan, an unread reply; also a draft or stacked pull-request row",
             ),
             tier(
                 Urgency::White,
-                "white, a cpd notice: curation, nothing blocks; also a change in the models a provider offers; also a draft or stacked pull-request row",
+                "white, a cpd notice: curation, nothing blocks; also a change in the models a provider offers; also an in-progress pull-request row",
             ),
             vec![
                 Line::from(Span::styled(
@@ -1149,9 +1149,9 @@ mod tests {
                 "\u{F0368}",
                 "blue, external support: a review asked of you",
                 "\u{F06F1}",
-                "cyan, an unread reply; also an in-progress pull-request row",
+                "cyan, an unread reply; also a draft or stacked pull-request row",
                 "\u{F0366}",
-                "white, a cpd notice: curation, nothing blocks; also a change in the models a provider offers; also a draft or stacked pull-request row",
+                "white, a cpd notice: curation, nothing blocks; also a change in the models a provider offers; also an in-progress pull-request row",
                 "\u{F116E}",
                 "a record to retire",
                 "\u{F15A9}",

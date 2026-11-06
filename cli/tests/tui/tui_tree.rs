@@ -167,6 +167,8 @@ fn condition(
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     }
 }
 
