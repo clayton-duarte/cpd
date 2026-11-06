@@ -187,6 +187,16 @@ fn untouched(rig: &Rig) -> Vec<String> {
     all
 }
 
+/// `after` limited to the rows of what `before` lists: the draft a lock or an approval queues is new, not restarted.
+fn same_as(before: &[String], after: Vec<String>) -> Vec<String> {
+    let id = |row: &str| row.split('|').next().unwrap_or_default().to_owned();
+    let known: Vec<String> = before.iter().map(|r| id(r)).collect();
+    after
+        .into_iter()
+        .filter(|r| known.contains(&id(r)))
+        .collect()
+}
+
 /// An approved review of the current drafts.
 fn approve_current(rig: &Rig) {
     let mut store = Store::open(&rig.home, 5000).unwrap();
@@ -231,7 +241,7 @@ fn plan_lock_on_a_replanned_plan_returns_it_to_dispatch_without_restarting_workf
         "the approved draft is queued"
     );
     assert_eq!(
-        untouched(&rig),
+        same_as(&before, untouched(&rig)),
         before,
         "started Workflows and their Jobs are left as they are"
     );
@@ -257,8 +267,12 @@ fn plan_lock_on_a_replanned_plan_without_drafts_needs_no_review() {
     // Every Workflow merged and every Job final: the lock settles the Plan, which ends done (A4, A6).
     let rig = replanned(false);
     rig.sql(
-        "UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND status IN ('queued', 'running');
-         UPDATE workflows SET status = 'merged', merged_at = 't' WHERE key IN ('api', 'side');",
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND status = 'queued';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND status = 'running';
+         PRAGMA ignore_check_constraints = ON;
+         UPDATE workflows SET status = 'open' WHERE key IN ('api', 'side');
+         UPDATE workflows SET status = 'merged', merged_at = 't', pr_number = 7, pr_url = 'u', pr_opened_at = 't' WHERE key IN ('api', 'side');
+         PRAGMA ignore_check_constraints = OFF;",
     );
     fields(plan_cmd(&rig, &["lock", "--plan", "pay"]));
     let row = plan_row(&rig);
@@ -313,13 +327,39 @@ fn approving_drafts_on_a_replanned_plan_queues_them_and_returns_it_to_dispatch()
         ["plan>dispatch"],
         "one plan-phase Event"
     );
-    assert_eq!(untouched(&rig), before);
+    assert_eq!(same_as(&before, untouched(&rig)), before);
 }
 
 #[test]
 fn workflow_add_on_a_replanned_plan_returns_it_to_dispatch() {
     let rig = replanned(false);
-    // `--jobs` needs the model catalog, which needs pi and node: the docs template's stub drafts stand in.
+    // After the lock an appended Workflow lays its template out as decided work (pro-d404): `--jobs` gives it.
+    let jobs = rig.home.root().join("jobs.json");
+    std::fs::write(
+        &jobs,
+        r#"{"docs": {"tier": "S2", "spec": {"goal": "g", "context": "c", "touches": ["docs/a.md"], "acceptance": ["b"], "out_of_scope": []}}}"#,
+    )
+    .unwrap();
+    let jobs = jobs.display().to_string();
+    // The model catalog: a `pi` install laid out in a temp dir (on PATH), `node` a scripted reply.
+    let agent = rig.home.root().join("agent");
+    let release = agent.join("install/releases/1.0.0/node_modules/@earendil-works");
+    for entry in ["pi-coding-agent", "pi-ai"] {
+        std::fs::create_dir_all(release.join(entry).join("dist")).unwrap();
+        std::fs::write(release.join(entry).join("dist/index.js"), "").unwrap();
+    }
+    std::fs::write(agent.join("install/current-version"), "1.0.0\n").unwrap();
+    std::fs::create_dir_all(agent.join("bin")).unwrap();
+    let pi = agent.join("bin/pi");
+    std::fs::write(&pi, "").unwrap();
+    std::fs::set_permissions(&pi, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH");
+    unsafe { std::env::set_var("PATH", agent.join("bin")) };
+    (*rig.fakes.runner).clone().on(
+        "node",
+        |_| true,
+        Reply::ok(r#"{"O":["off","low","medium","high"],"S":["off","low","medium","high"],"H":["off","low","medium","high"],"G":["off"]}"#),
+    );
     let repo = rig.repo.dir().display().to_string();
     let base = [
         "add",
@@ -342,7 +382,7 @@ fn workflow_add_on_a_replanned_plan_returns_it_to_dispatch() {
 
     let before = untouched(&rig);
     let mut with_needs = base.to_vec();
-    with_needs.extend(["--needs", "old"]);
+    with_needs.extend(["--needs", "old", "--jobs", jobs.as_str()]);
     let out = fields(workflow_cmd(&rig, &with_needs));
     assert_eq!(out["workflow"]["appended"], true, "{out}");
     assert_eq!(plan_row(&rig), format!("dispatch|{LOCKED}|1"));
@@ -361,6 +401,10 @@ fn workflow_add_on_a_replanned_plan_returns_it_to_dispatch() {
         ["dispatch"],
         "the started Workflow is left as it is"
     );
+    match path {
+        Some(path) => unsafe { std::env::set_var("PATH", path) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
 }
 
 #[test]

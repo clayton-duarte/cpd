@@ -672,7 +672,16 @@ pub fn markdown(
 ) -> String {
     let locked = !matches!(phase, "grounding" | "plan");
     markdown_locked(
-        heading, context, phase, locked, workflows, jobs, overlaps, worker_tier, display, lint,
+        heading,
+        context,
+        phase,
+        locked,
+        workflows,
+        jobs,
+        overlaps,
+        worker_tier,
+        display,
+        lint,
     )
 }
 

@@ -98,10 +98,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    if !relock {
-        if let Some(e) = lint::workflow_empty(&id, &workflows, &jobs) {
-            return Err(e);
-        }
+    if !relock && let Some(e) = lint::workflow_empty(&id, &workflows, &jobs) {
+        return Err(e);
     }
     if let Some(e) = lint::dependency_cycle(&id, &jobs) {
         return Err(e);

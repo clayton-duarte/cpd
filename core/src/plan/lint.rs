@@ -143,6 +143,8 @@ impl Finding {
 pub struct Input<'a> {
     pub plan: &'a PlanId,
     pub phase: Phase,
+    /// Whether the Plan was locked: a re-planned Plan is in phase `plan` and locked (pro-d433).
+    pub locked: bool,
     pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
@@ -160,11 +162,17 @@ impl<'a> Input<'a> {
         Input {
             plan,
             phase,
+            locked: !matches!(phase, Phase::Grounding | Phase::Plan),
             workflows,
             jobs,
             outline,
             advice: &[],
         }
+    }
+
+    /// `locked` of the Plan row, which a phase alone does not say.
+    pub fn with_locked(self, locked: bool) -> Self {
+        Input { locked, ..self }
     }
 
     pub fn with_advice(self, advice: &'a [crate::plan::tier_advice::Advice]) -> Self {
@@ -273,7 +281,7 @@ fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
 }
 
 fn workflow_empty_rule(i: &Input) -> Vec<Finding> {
-    if i.phase != Phase::Plan {
+    if i.phase != Phase::Plan || i.locked {
         return Vec::new();
     }
     one(
