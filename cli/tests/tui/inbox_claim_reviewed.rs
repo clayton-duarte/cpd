@@ -1,11 +1,9 @@
 //! The reviewed PR of a review Plan (commands.md §21.7 "The reviewed PR", contract §2.2 Plan `reviewed_pr`): `inbox
 //! claim` stores it, `plan show` prints it. Mocks only: `Fx::with_ports`, `fake_gh`, the fake cockpit.
 
-use crate::inbox::{Fixture, T0, condition};
-use cpd_core::host::runner::Reply;
+use crate::inbox::{Fixture, condition};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
-use std::fs;
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
 const SUBJECT: &str = "pr:acme/pay#812";
@@ -26,7 +24,7 @@ fn sql(fx: &mut Fixture, statements: &str) {
 /// in the team cache and the fake cockpit up. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(GH));
+    crate::inbox_claim::seed(&fx, "acme/pay", 812, GH);
     let socket = fx.fx.env.tmux_socket();
     fx.fx.env.write_config(&format!(
         "version = 1\nmachine = \"m1\"\nlead_tier = \"S4\"\nlead_runner = \"pi\"\n[tmux]\nsocket = \"{socket}\"\n"
@@ -38,12 +36,10 @@ fn claimable() -> (Fixture, i64) {
          VALUES ('mgr-rc', 'manager', 'codereview', NULL, NULL, 'codereview-manager', '/sessions/mgr-rc.jsonl', '/repo', 'O4', NULL, 'idle', NULL,
                  '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);",
     );
-    let path = fx.fx.env.cpd_home().join("run/team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let post = json!({"repo": "acme/pay", "number": 812, "ts": 1_700_000_000.0, "ts_raw": "1700000000.000100", "author": "Ryan Case",
-                      "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": T0, "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    fx.fx.env.sql(
+        "INSERT INTO swr_slack_posts (channel, ts, repo, number, author_is_me, reply_count, reactions_json, eyes_me, claim, thread_tags_me, fetched_at)
+           VALUES ('C02JU6C2Z1D', '1700000000.000100', 'acme/pay', 812, 0, 0, '[]', NULL, NULL, 0, 't');",
+    );
     let mut all = vec![
         condition(Kind::JobStuck, Urgency::Red, "stuck", "ctx1"),
         condition(Kind::Dialog, Urgency::White, "dialog", "ctx1"),
@@ -82,8 +78,9 @@ fn shown(fx: &Fixture, plan: &str) -> Value {
 
 fn pull_request(state: &str) -> String {
     format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, '{state}', 'none', 'none', 't', NULL, 't');"
+        "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored, review_requested)
+         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, '{state}', 'none', 'none', 't', NULL, 't', 0, 1);"
     )
 }
 
@@ -121,6 +118,7 @@ fn reviewed_pr_state_follows_the_pull_requests_row() {
         shown(&fx, PLAN)["reviewed_pr"].is_object(),
         "claimed Plan has a reviewed_pr"
     );
+    sql(&mut fx, "DELETE FROM swr_pr_detail WHERE number = 812; DELETE FROM pull_requests WHERE number = 812;");
     assert_eq!(state(&fx), Value::Null, "no row, no state");
     sql(&mut fx, &pull_request("open"));
     assert_eq!(state(&fx), json!("open"));
