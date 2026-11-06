@@ -709,7 +709,13 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     let lead_branch = workflow_branch(&plan, &wanted.key);
                     let key = &wanted.key;
                     if matches!(phase, Phase::Deploy | Phase::Done) {
-                        reopen(tx, &plan, phase.as_str(), &format!("Workflow {key} was added"))?;
+                        reopen(
+                            tx,
+                            &plan,
+                            phase.as_str(),
+                            "dispatch",
+                            &format!("Workflow {key} was added"),
+                        )?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
                     let stubs = insert_stubs(tx, &home, &plan, &wanted, appended, worker_tier)?;
@@ -1343,17 +1349,19 @@ pub(super) fn insert_needs(
     Ok(())
 }
 
-/// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
+/// The Plan goes from `from` to `to` (D1: `deploy`|`done` -> `dispatch`; pro-d429: explore add -> `plan`): the phase is compared and set
+/// (`locked_at` kept, `done_at` cleared), then
 /// `plan-phase` is appended (before `workflow-added`).
 pub(crate) fn reopen(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     from: &str,
+    to: &str,
     reason: &str,
 ) -> Result<(), CpdError> {
     let moved = tx.execute(
-        "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2",
-        [plan.as_str(), from],
+        "UPDATE plans SET phase = ?3, done_at = NULL WHERE id = ?1 AND phase = ?2",
+        [plan.as_str(), from, to],
     )?;
     if moved == 0 {
         return Err(CpdError::new(
@@ -1365,11 +1373,8 @@ pub(crate) fn reopen(
         )
         .with("plan", plan.as_str()));
     }
-    let text = format!("Plan {plan} is back in dispatch: {reason}.");
-    append(
-        tx,
-        NewEvent::plan_phase(text, from, "dispatch").plan(plan.clone()),
-    )?;
+    let text = format!("Plan {plan} is back in {to}: {reason}.");
+    append(tx, NewEvent::plan_phase(text, from, to).plan(plan.clone()))?;
     Ok(())
 }
 

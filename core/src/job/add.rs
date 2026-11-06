@@ -127,9 +127,9 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                 Decision::Insert(job) => {
                     if matches!(job.kind.as_str(), "scout" | "research") {
                         let phase = plan_phase(tx, &plan)?;
-                        if phase == "done" {
+                        if matches!(phase.as_str(), "dispatch" | "deploy" | "done") {
                             let reason = format!("explore Job {} was added", job.key);
-                            crate::workflow::add::reopen(tx, &plan, &phase, &reason)?;
+                            crate::workflow::add::reopen(tx, &plan, &phase, "plan", &reason)?;
                         }
                     }
                     insert(tx, &plan, &job)?;
