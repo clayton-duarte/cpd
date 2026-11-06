@@ -96,9 +96,9 @@ Cursor is `#ecaec7` (`--sakura-bright`) and selection is `#5a504a` (`--line`) (r
 |---|---|---|
 | `[data-shell] { display:grid; grid-template-columns: 20rem 1fr 22rem; grid-template-rows: auto minmax(0, 1fr) auto; height:100vh; overflow:hidden; gap:.5rem }` | **kept, columns and gap changed** | `grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; overflow: hidden; gap: 0`. The three columns are no longer grid tracks: they are the panels of the resizable group `cpd-columns` (3c), which is the one grid child in row 2. Same selector; `display`, `height`, `overflow`, `grid-template-rows` values are exactly the ones test 1 pins, so test 1 is unchanged. Widths are the boards' 272px (tree) and 340px (inbox). |
 | `[data-shell] > * { min-height: 0 }` | **kept** | pinned by test 1 |
-| `[data-shell] > aside { grid-row:2; overflow-y:auto; min-width:0 }` | **replaced** | `[data-shell] aside { height: 100%; overflow-y: auto; min-width: 0 }`. The asides are inside the tree and inbox Panels (3c), not direct children of `[data-shell]`; the descendant selector matches them. Tree and inbox scroll independently. |
+| `[data-shell] > aside { grid-row:2; overflow-y:auto; min-width:0 }` | **replaced** | `[data-shell] aside { height: 100%; overflow: hidden; min-width: 0 }` (pro-d69, A9, A10). The asides are inside the tree and inbox Panels (3c), not direct children of `[data-shell]`; the descendant selector matches them. The asides clip and never scroll themselves; their content scrolls through `ScrollArea` (3c, Scrolling). |
 | `[data-column] { grid-row:2; overflow:auto; min-width:0; display:flex; flex-direction:column }` | **kept** except `grid-row` and `overflow`: `height: 100%; overflow: hidden; min-width: 0; display: flex; flex-direction: column` (the split panels scroll, not the column; the column fills its Panel) | `[data-column="center"] { min-height: 0 }` kept (test 3) |
-| `[aria-label="Plan pane"] { max-height:30%; overflow-y:auto; flex:none }` | **replaced** | the resizable plan Panel (3c). Its scrolling is `[data-part="plan-panel"] { overflow-y: auto; min-height: 0 }`. The `max-height` is replaced by the Panel `maxSize="80%"`. Test 3 changes: the `declsMatching(/plan/i)` check keeps `overflow-y: auto` and drops the `max-height` assertion (owned by `ui-impl-shell`). |
+| `[aria-label="Plan pane"] { max-height:30%; overflow-y:auto; flex:none }` | **replaced** | the resizable plan Panel (3c). Its clip is `[data-part="plan-panel"] { overflow: hidden; min-height: 0 }` (pro-d69, A10); the Plan content scrolls through `ScrollArea` inside its section (3c, Scrolling). The `max-height` is replaced by the Panel `maxSize="80%"`. Test 3 changes: the `declsMatching(/plan/i)` check asserts `overflow: hidden` (A10) and drops the `max-height` assertion (owned by `ui-impl-shell`). |
 | `[data-column] > main { flex:1; min-height:0; overflow:auto }` | **removed** | `main[aria-label="Chat"]` is inside the chat Panel and fills it with `h-full min-h-0` utilities |
 | `[data-chat-dropzone] {...}`, `[data-part="transcript"] {...}` | **kept verbatim** | pinned by test 2 and the transcript virtualization contract |
 | `[role="log"] {...}`, `[data-action="jump-to-bottom"] {...}` | **removed** (pro-d55) | the transcript is a shadcn `MessageScroller` (DESIGN-chat 2.8): its viewport and its `MessageScrollerButton` (`data-action="jump-to-bottom"`) position and style themselves |
@@ -657,9 +657,9 @@ div[data-part="status-bar"]                                flex h-full w-full it
 6. Pulse
 7. PR Checks
 
-The body scrolls (`scroll-area.tsx`). Keys: `↑` `↓` and `j` `k` move one row; `PgUp` `PgDn` move a page; `End` and `G` go to the end. Any other key closes the dialog (`Esc` included). The mouse wheel scrolls.
+The sections scroll through `ScrollArea` (`components/scroll-area.tsx`, pro-d69; 3c, Scrolling). Keys: `↑` `↓` and `j` `k` move one row; `PgUp` `PgDn` move a page; `End` and `G` go to the end. Any other key closes the dialog (`Esc` included). The mouse wheel scrolls.
 
-**Logs dialog** (`LogsDialog`, `data-part="logs-dialog"`). The event log: the latest 500 Events, oldest first. One line per Event: `HH:MM:SS` (24-hour, the browser's local time), one space, then the Event's `text`, or its `kind` when `text` is empty; the line is cut to the row width with `…`. Rows of kind `error` are red (`text-status-blocked`). An empty log shows `none yet` in `text-fg-dim`.
+**Logs dialog** (`LogsDialog`, `data-part="logs-dialog"`). The event log: the latest 500 Events, oldest first. One line per Event: `HH:MM:SS` (24-hour, the browser's local time), one space, then the Event's `text`, or its `kind` when `text` is empty; the line is cut to the row width with `…`. Rows of kind `error` are red (`text-status-blocked`). An empty log shows `none yet` in `text-fg-dim`. The rows scroll through a height-limited `ScrollArea` (`[&>[data-slot=scroll-area-viewport]]:max-h-[60vh]`, pro-d69; 3c, Scrolling).
 
 - Follow: while the view is at the bottom, new Events scroll in. Scrolled up, the lines stay where they are; new Events are added to the list and shown once the view is at the bottom again. `End` or `G` go to the bottom and follow.
 - Keys: `↑` `↓` `j` `k`, `PgUp` `PgDn`, `End` `G` scroll as in the Legend; `Esc` closes (Dialog).
@@ -753,7 +753,7 @@ div[data-shell]                                                   grid, one colu
 │   │   └─ div[data-column="center"][data-part="center-frame"][data-plan-state="open|collapsed|zoomed"]   relative flex h-full min-h-0 flex-col
 │   │       ├─ ResizablePanelGroup id="cpd-center" data-part="center-group" orientation="vertical"   h-full min-h-0 flex-1   (renders a div)
 │   │       │   ├─ ResizablePanel id="plan" data-part="plan-panel" panelRef={planRef}   defaultSize 40% · minSize 20% · maxSize 80% · collapsible · collapsedSize 44px
-│   │       │   │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   {plan}   inert while collapsed
+│   │       │   │   └─ section[aria-label="Plan pane"][data-state="open|collapsed|zoomed"]   `ScrollArea` wraps {plan}   inert while collapsed (pro-d69)
 │   │       │   ├─ ResizableHandle id="split" data-part="split-handle" withHandle aria-label="Resize plan view and chat"
 │   │       │   └─ ResizablePanel id="chat" data-part="chat-panel" panelRef={chatRef}   defaultSize 60% · minSize 20% · collapsible · collapsedSize 0%
 │   │       │       └─ main[aria-label="Chat"][data-state="open|zoomed"]   h-full min-h-0   {chat}   inert while zoomed
@@ -762,7 +762,7 @@ div[data-shell]                                                   grid, one colu
 │   │           └─ button[type="button"][data-action="plan-zoom"][aria-pressed]   26x26
 │   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
 │   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 30% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
-│       └─ aside[aria-label="Inbox column"]   h-full overflow-y-auto      {inbox}   (DESIGN-panes 2)
+│       └─ aside[aria-label="Inbox column"]   h-full overflow-hidden      {inbox}   (DESIGN-panes 2)
 └─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (row 3)
 ```
 
@@ -803,7 +803,17 @@ Handle semantics come from the library, not written by cpd: `role="separator"`, 
 
 **Columns (pro-d50).** The defaults are the Context tree at 20% of the row width (12% to 40%), the centre at 50% (min 30%), the Inbox at 30% (14% to 45%). The tree and inbox panels collapse when dragged below their minimum (library behaviour, `collapsedSize="0%"`). The handles resize; sizes are not persisted.
 
-**Double-click resets (pro-d50).** A double-click on `split-left` resets the tree panel to 20% (`treeRef.current?.resize("20%")`); a double-click on `split-right` resets the Inbox panel to 30% (`inboxRef.current?.resize("30%")`). Neither resets the centre. The inner `split` handle has no override here (library default; unverified). Tests mock `react-resizable-panels` and assert the call, not pixels. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently (`overflow-y: auto` on both asides and on the plan panel; the transcript `[role="log"]` scrolls itself).
+**Double-click resets (pro-d50).** A double-click on `split-left` resets the tree panel to 20% (`treeRef.current?.resize("20%")`); a double-click on `split-right` resets the Inbox panel to 30% (`inboxRef.current?.resize("30%")`). Neither resets the centre. The inner `split` handle has no override here (library default; unverified). Tests mock `react-resizable-panels` and assert the call, not pixels. The asides fill their panels (`[data-shell] aside`, 2a). Tree, plan panel, chat and inbox scroll independently: the asides and the plan panel clip (`overflow: hidden`, pro-d69 A9, A10) and their content scrolls inside them through `ScrollArea` (see Scrolling below); the transcript `[role="log"]` scrolls itself.
+
+**Scrolling (pro-d69).** Every scrollable area uses the shadcn `ScrollArea` and `ScrollBar` from `web/src/ui/components/scroll-area.tsx`, never a raw `overflow-y-auto` or `overflow-x-auto`. `ScrollArea` takes the Radix Root props, has no orientation prop and always renders one vertical `ScrollBar`; a horizontal scroller adds `<ScrollBar orientation="horizontal" />`. A height-limited scroller puts its limit on the viewport: `className="[&>[data-slot=scroll-area-viewport]]:max-h-64"`. The Documentation dialog (`DocsDialog.tsx`) is the model. The asides and the plan panel clip and never scroll themselves. The scrolling areas are:
+- Plan pane: the content of `section[aria-label="Plan pane"]` is wrapped in `ScrollArea` (`Shell.tsx`).
+- Inbox: the list (DESIGN-panes 2.2) and the curate dialog's checklist (DESIGN-panes 2.6).
+- Logs: the rows (3g), with the 60vh limit on the viewport.
+- Legend: the sections (3g).
+- WorkflowCard: `dag-body` (DESIGN-panes 1e) is a `ScrollArea` with a horizontal `ScrollBar`.
+- Context tree: the Sidebar section bodies (3d).
+
+Exceptions are the shadcn primitives' own scrolling: `components/dialog.tsx` is unchanged (A11), so every dialog keeps its scroll, and the select, dropdown menu and message scroller primitives scroll by their own design.
 
 Built: the double-click resets above, and `Reset layout` (3g, values from pro-d50). Not built: persisted panel sizes, narrow-screen drawers.
 
@@ -902,7 +912,7 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Plan button: `onSelectPlan(plan.id)`, then `onSelectSession(lead.ref.id)` where `lead` is the session of `plan.sessions` whose `ref.id === plan.leadSessionId`. **Assumption:** with no such Lead only `onSelectPlan(plan.id)` is called.
 - Fork button: `onSelectSession(ref.id)`.
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
-- Scrolling: the column `aside` scrolls (`overflow-y: auto`); the `tree-header` is sticky.
+- Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is sticky.
 
 Not built: Active/Standing sections, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
 
@@ -1084,7 +1094,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d60 header and ChatHeader | ChatHeader title only; Header `Breadcrumb` crumbs; `ask_user_question` interactive for pi | 3a; DESIGN-panes 4.1; DESIGN-chat 1; CONTRACT 11.4 |
 | pro-d61 chat items | Chain of Thought grouping; image thumbnails on optimistic and echoed user messages | DESIGN-chat 2.3.1, 2.4.2, 2.7; CONTRACT 11.3 |
 | pro-d62 live micro-interactions | collapsible height animations; Chain of Thought opens while busy and collapses when the turn ends; synthetic `Thinking…` step; step and message entry animations; transcript auto-scroll rules | 5.1, 5.2 |
-| pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; empty state `Select a lead to see plans`; header `min-h-11`, title truncates | 5.3 |
+| pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; the empty state is the flowchart (pro-d68, 5.3); header `min-h-11`, title truncates | 5.3 |
 | pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
@@ -1130,10 +1140,10 @@ Records: pro-d62 (User approved the live changes in the running preview; this se
 - **The Plan shown is the selected Lead's.** `activeLeadPlanId` is the id of the Plan (PlanNode in the Context tree) that holds the active session. It is `null` when no session is selected, and when the session has no Plan (a Manager, or a Context session outside any Plan).
 - **`selectedPlanId` follows it.** While the tree is live, the restore has run and a session is selected, `App` calls `connection.selectPlan(activeLeadPlanId)` whenever it differs from `selectedPlanId`. `selectedPlanId` is `string | null` (`web/src/ui/state/selection.ts`, `PersistedSelection.planId`), so `null` is saved and loaded. `ContextTree` receives `selectedPlanId={activeLeadPlanId}`.
 - **`visiblePlan`.** The Plan pane (`MemoPlan`) and the Header `location` use `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
-- **Empty state.** When `plan === null`, `PlanView` renders `Empty[data-empty]` (`className="h-full border-none py-6 text-muted-foreground"`) with `EmptyHeader` and `EmptyTitle` (`text-sm font-normal text-muted-foreground`) reading exactly `Select a lead to see plans`. This replaces `p[data-empty]` "No plan selected". A Manager or no selected session therefore shows it.
+- **Empty state (pro-d68).** When `plan === null`, `PlanView` renders `CpdFlowCanvas` (`web/src/ui/cockpit/FlowCanvas.tsx`; root `div[data-part="flow-canvas"]`): the Plan flowchart that the Documentation dialog shows (`DocsDialog.tsx`, its flowchart tab), with its step cards collapsed at start. A Manager or no selected session therefore shows it.
 - **Header.** `div[data-part="title-row"]` is `flex min-h-11 flex-wrap items-center gap-x-3.5 gap-y-1.5 py-2 pr-16`: `min-h-11` (44 px minimum, the row grows when it wraps) replaces the fixed `h-11`. The title `h2` is `max-w-full min-w-0 truncate` with `title={plan.title}` as its native tooltip. `plan-key`, `review` and `escalations` are `shrink-0`.
 
-**Tests this section changes.** `cockpit/PlanView.test.tsx` expects the empty text `Select a lead to see plans` (was `No plan selected`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.
+**Tests this section changes.** `cockpit/PlanView.test.tsx` and `AppPlanFollow.test.tsx` expect `[data-part="flow-canvas"]` when `plan` is null. `app.css.test.ts` pins `overflow: hidden` on `[data-shell] aside` and `[data-part="plan-panel"]` (pro-d69, A10). The pro-d69 scroll tests assert `data-slot` markup, never scrollbars: `Shell.test.tsx` and `shell.consolidate.test.tsx` (the Plan pane content is a `[data-slot="scroll-area"]`; the Inbox aside is `overflow-hidden`), `Inbox.test.tsx` (the list is a `[data-slot="scroll-area"]`), `StatusDialogs.test.tsx` (the Legend sections and the Logs rows), `PlanView.test.tsx` (`dag-body` is a `[data-slot="scroll-area"]` with a horizontal `ScrollBar`). `chat/WorkingCue.test.tsx` pins the removed `working-cue` element; its pins are updated to the live step of 5.2.
 
 ### 5.4 Trace rows (pro-d66)
 

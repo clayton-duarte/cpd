@@ -30,9 +30,13 @@ Module-private helpers (not exported): `Stepper`, `ExploreStrip`, `WorkflowCard`
 `plan === null`:
 
 ```
-p[data-empty]   text exactly "No plan selected"     KEPT (PlanView.test 3); className grid h-full place-items-center text-muted-foreground
+CpdFlowCanvas   (cockpit/FlowCanvas.tsx, pro-d68)   root div[data-part="flow-canvas"]   flex flex-col gap-2
+├─ Button[data-part="expand-all"]   "Expand all" / "Collapse all" (all step cards open or closed)
+└─ div   relative pr-28
+    ├─ svg[data-part="dag-edges"][aria-hidden="true"]   the step edges
+    └─ ul   one li[data-step] per Plan flowchart step (FLOW_STEPS), a collapsible card, closed at start
 ```
-No `section` element is rendered in that case (KEPT: `querySelector("section")` is null).
+No `section` element is rendered in that case (KEPT: `querySelector("section")` is null). The Plan pane's content (this outline) is wrapped in a `ScrollArea` by Shell (DESIGN 3c, pro-d69); the outline's own elements do not scroll.
 
 `plan !== null`:
 
@@ -118,7 +122,7 @@ section[data-workflow]
 │   ├─ span[data-part="wf-failed"]   only when failed > 0; text `{n} failed`   font-mono text-meta text-status-blocked-bright (board #ffa796)
 │   ├─ span.flex-1
 │   └─ p[data-part="pr"]   only when wf.pr !== null  (1f)
-└─ div[data-part="dag-body"]   overflow-x-auto p-3          (12px padding)
+└─ ScrollArea[data-part="dag-body"]   horizontal ScrollBar; the content keeps its p-3 (12px padding)   (pro-d69)
     └─ div[data-part="dag-canvas"]   relative   style: width {W}px; height {H}px   (1e-ii)
         ├─ svg[data-part="dag-edges"][aria-hidden="true"]   absolute left-0 top-0 pointer-events-none   width={W} height={H} viewBox="0 0 {W} {H}" fill="none"
         │   └─ path[data-edge="{from}>{to}"][data-state="done|pending"] ×(one per edge)   stroke-width 1.5
@@ -136,7 +140,7 @@ Constants: `NODE_W = 148`, `NODE_H = 46`, `GAP_X = 28` (connector column), `GAP_
 1. Nodes = the workflow's jobs, in `wf.jobKeys` order. `needs` entries that are not in `wf.jobKeys` (other workflow, unknown, e.g. `job-0`) create **no** edge and no node.
 2. `col(job)` = 0 when it has no in-workflow needs, else `1 + max(col(need))`. A dependency cycle **throws** `workflow {wf.key} has a dependency cycle at {key}`.
 3. `row(job)` = the index of the job among the jobs of its column, in `wf.jobKeys` order (0-based).
-4. `ncols = max(col) + 1`; `colSize(c)` = jobs in column c; `H = max_c (colSize(c)·46 + (colSize(c) − 1)·8)`; `W = ncols·148 + (ncols − 1)·28`. Empty workflow (`jobKeys` empty): `W = 0`, `H = 0`, and `div[data-part="dag-body"]` renders a `p[data-part="no-jobs"]` "No jobs" (`text-muted-foreground text-[11.5px]`) instead of the canvas.
+4. `ncols = max(col) + 1`; `colSize(c)` = jobs in column c; `H = max_c (colSize(c)·46 + (colSize(c) − 1)·8)`; `W = ncols·148 + (ncols − 1)·28`. Empty workflow (`jobKeys` empty): `W = 0`, `H = 0`, and `dag-body` (the ScrollArea) renders a `p[data-part="no-jobs"]` "No jobs" (`text-muted-foreground text-[11.5px]`) instead of the canvas.
 5. Each column is vertically centred: `top(job) = (H − h_c)/2 + row·54` where `h_c = colSize(c)·46 + (colSize(c) − 1)·8`; `left(job) = col·176`. Applied as inline `style={{ left, top }}` on the `li`. `cy(job) = top + 23`.
    Check against the board: fork column of 2 → H = 100; the single node before it has top 27 (`cy = 50`); fork nodes `top` 0 and 54 (`cy` 23 and 77); matches the board's 28×100 connectors `M1 50 … 25 23` and `… 25 77`.
 6. **Edges**: for every job `t` and every in-workflow need `s` (in `wf.jobKeys` order of `t`, then order of `t.needs`), one path `data-edge="{s}>{t}"`. Let `sx = left(s) + 148` (right side of the source), `tx = left(t)` (left side of the target), `ys = cy(s)`, `yt = cy(t)`. The gutter after the source column spans `sx … sx+28`.
@@ -199,14 +203,14 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 
 | State | Rendering |
 |---|---|
-| `plan === null` | 1b empty `p[data-empty]` |
+| `plan === null` | 1b `CpdFlowCanvas` flowchart (pro-d68) |
 | plan, no workflows, no explore jobs, no `reviewedPr` | title row + `p[data-part="no-work"]` "No workflows yet" |
 | plan, `reviewedPr` set, no workflows | title row + the Review PR card (1i); no `no-work` note, whatever the explore jobs |
 | plan, workflows only | no explore strip |
 | plan, explore only | strip, no cards, no `no-work` |
 | workflow with zero jobs | header + `p[data-part="no-jobs"]` "No jobs" |
 | job status not in the closed union | `jobDisplay` neutral idle ring, label = raw text, `data-status` = raw |
-| long DAG | `dag-body` scrolls horizontally (`overflow-x-auto`); the canvas keeps its fixed `W`×`H` |
+| long DAG | `dag-body` scrolls horizontally through `ScrollArea` with a horizontal `ScrollBar` (pro-d69); the canvas keeps its fixed `W`×`H` |
 
 No keyboard behaviour: nothing in the Plan View except `Post PR` and `Retry ▸` is interactive; both are native buttons (Tab, Enter, Space).
 
@@ -287,13 +291,14 @@ aside[aria-label="Inbox"]
 │   ├─ h2   "Inbox"        shrink-0; text-meta font-semibold uppercase tracking-[.08em] text-muted-foreground
 │   └─ the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (ml-auto shrink-0), or the collapsed trigger (2.4.2)
 ├─ p[data-empty]     only when the filtered list is empty; text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
-└─ ItemGroup   min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5     (only when filtered rows exist)
-    └─ InboxItemRow ×filtered rows, in `inbox.rows` order (2.5)
+└─ ScrollArea   min-h-0 flex-1 (pro-d69; the list scrolls here, the aside clips)     (only when filtered rows exist)
+    └─ ItemGroup   gap-2 px-2.5 py-1.5
+        └─ InboxItemRow ×filtered rows, in `inbox.rows` order (2.5)
 Dialog (2.6): the curate checklist, closed unless a curate-retire row was clicked.
 ```
 
 - The Phase 2 `div[data-part="rows"]`, the `total` span and the `Inbox (n)` textContent are gone. The header carries no count beside the title; the counts are on the filter items (2.4).
-- The list scrolls itself (`overflow-y-auto`). The TUI's `▲ n more` / `▼ n more` cues are not built (2.9).
+- The list scrolls through `ScrollArea` (pro-d69); the aside clips (`overflow: hidden`). The TUI's `▲ n more` / `▼ n more` cues are not built (2.9).
 
 ### 2.3. Right-click menu
 
@@ -386,7 +391,7 @@ Item[role=button][variant=outline][size=sm]   (the preview renders a role=button
 
 - **Select both.** `selectRowSession`: `onSelectPlan(row.planId)` when `planId !== null`, then `onSelectSession(row.sessionId)` when `sessionId !== null`. The read model resolves a missing `sessionId` (`readmodel.ts`, `resolveSessionId`): the row's own session; else the Plan's `lead_session`; else the live Lead of the Plan (`plan_lead`, not archived); else, for `question` and `curate-retire` rows, the live Manager of the Context (role `manager`, no Plan). Null when none of these exists, and the click then selects nothing.
 - **Links.** A row is linked when `row.url !== null` and its kind is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`. The linked title `a` and the item-link icon `a` open `row.url` in a new tab and stop the click from reaching the row (`stopPropagation`), so they do not also select.
-- **Curate dialog.** `Dialog` (`dialog.tsx`), title `Retire records of <contextId>` (or `Retire records` without a contextId), description `Checked records will be retired; unchecked records will be kept.` Opening it checks every record. Each record is a `label` with a checkbox, the record id and `— <detail>`, and its `text`. With no records: `No pending records to retire.` Footer: `Cancel` (closes) and `Confirm`.
+- **Curate dialog.** `Dialog` (`dialog.tsx`), title `Retire records of <contextId>` (or `Retire records` without a contextId), description `Checked records will be retired; unchecked records will be kept.` Opening it checks every record. Each record is a `label` with a checkbox, the record id and `— <detail>`, and its `text`. With no records: `No pending records to retire.` Footer: `Cancel` (closes) and `Confirm`. The checklist scrolls through `ScrollArea` (pro-d69); `components/dialog.tsx` is unchanged (A11).
 - **Confirm**: with a `contextId`, `approve` = the checked record ids joined by `,`, `reject` = the unchecked ids joined by `,`; when either is non-empty it dispatches `context.retire {contextId, approve, reject}`; when both are empty and `row.id >= 0` it dispatches `inbox.dismiss`. Then it closes. Confirm is not tracked in `pendingActionIds`.
 - **Records.** `InboxRow.curation` holds the records of `cpd context curation --context=<id> --limit=10` (CONTRACT 5.3): `{ id, text, detail }`, `detail` = `reason` and `target` joined by a space.
 
