@@ -66,7 +66,7 @@ function props(over: Partial<Parameters<typeof ContextTree>[0]> = {}) {
   return { tree, selectedSessionId: null, selectedPlanId: null, onSelectSession: vi.fn(), onSelectPlan: vi.fn(), ...over };
 }
 
-// Title kept from the Job; DESIGN.md 3d: no Active/Standing sections or cost (no source field). Pins the glyphs and counters.
+// Title kept from the Job; DESIGN.md 3d: no Active section, standing Contexts merged into Contexts (pro-d79), or cost (no source field). Pins the glyphs and counters.
 it("context tree renders sections glyphs and counters", () => {
   const onNewContext = vi.fn();
   const m = mount(<ContextTree {...props({ onNewContext })} />);
