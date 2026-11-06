@@ -8,7 +8,7 @@ import { validatePackage } from "../lib/reload.ts";
 import { openConversation } from "../durable-worker/harness.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { guardSocket, listenOn } from "./net.ts";
-import { parseConfig } from "./config.ts";
+import { parseConfig, type Config } from "./config.ts";
 import { runHost, type Deps } from "./run.ts";
 
 const exec = (command: string, args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) =>
@@ -20,13 +20,48 @@ const exec = (command: string, args: string[], options: { timeout?: number; sign
     });
   });
 
-try {
-  const config = parseConfig(process.argv.slice(2), process.env, process.cwd());
-  const models = await ModelRuntime.create({ refreshOnCreate: false });
-  const deps: Deps = {
+/** The slice of pi's ModelRuntime the host deps use (tests give a fake: no network, no model). */
+export type HostModels = Pick<ModelRuntime, "getAvailable"> & {
+  getModelOfType(type: "classifier", providerId: string, modelId: string): unknown;
+  classify(model: unknown, context: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
+};
+
+/** The question guard's classifier: the probability the text asks the user, or undefined when the classifier is unreachable (lib/question-guard.ts). */
+async function classifyText(models: HostModels, text: string): Promise<number | undefined> {
+  try {
+    const model = models.getModelOfType("classifier", "llama.cpp", "kev-4b");
+    const res = (await models.classify(
+      model,
+      {
+        state: { message: text.slice(-2000) },
+        questions: {
+          asking_user: {
+            type: "bool",
+            instructions: "Does this assistant message ask the human user a question or ask for a decision/confirmation before proceeding?",
+            criteria: {
+              true: "The assistant is asking the user a question, offering choices, or waiting for user confirmation/input.",
+              false: "The assistant is only reporting status, summarizing completed work, or rhetorical/quoted question marks.",
+            },
+          },
+        },
+      },
+      { signal: AbortSignal.timeout(1500) },
+    )) as { stopReason?: string; answers?: { asking_user?: { type?: string; probability?: unknown } } };
+    const a = res.answers?.asking_user;
+    return res.stopReason === "stop" && a?.type === "bool" && typeof a.probability === "number" ? a.probability : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `Deps` of the host process. */
+export function hostDeps(config: Config, models: HostModels): Deps {
+  const real = models as unknown as ModelRuntime;
+  return {
+    classify: (text) => classifyText(models, text),
     cpd: (args) => callCpd(exec as never, [...args], { timeoutMs: 30_000 }),
     resolveModel: (pattern) => {
-      const r = resolveCliModel({ cliModel: pattern, modelRuntime: models });
+      const r = resolveCliModel({ cliModel: pattern, modelRuntime: real });
       if (r.error !== undefined || r.model === undefined) throw new CpdError("usage", `unusable model ${pattern}: ${r.error ?? "not found"}`);
       return { provider: r.model.provider, modelId: r.model.id, ...(r.thinkingLevel === undefined ? {} : { thinkingLevel: r.thinkingLevel }) };
     },
@@ -40,7 +75,7 @@ try {
       })),
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     validatePackage: (dir) => validatePackage(dir),
-    open: (o) => openConversation(models as never, o),
+    open: (o) => openConversation(real as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
     guard: guardSocket,
     listen: listenOn,
@@ -53,11 +88,19 @@ try {
     now: () => new Date(),
     log: (line) => console.error(line),
   };
-  process.exit(await runHost(config, deps));
-} catch (e) {
-  if (e instanceof CpdError && e.code === "usage") {
-    console.error(`${e.code}: ${e.message}`);
-    process.exit(2);
+}
+
+// Only the process entry starts a host: a test imports `hostDeps`.
+if (import.meta.main) {
+  try {
+    const config = parseConfig(process.argv.slice(2), process.env, process.cwd());
+    const models = await ModelRuntime.create({ refreshOnCreate: false });
+    process.exit(await runHost(config, hostDeps(config, models as never)));
+  } catch (e) {
+    if (e instanceof CpdError && e.code === "usage") {
+      console.error(`${e.code}: ${e.message}`);
+      process.exit(2);
+    }
+    throw e;
   }
-  throw e;
 }

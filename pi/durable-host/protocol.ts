@@ -76,6 +76,8 @@ export type UiRequestBase = {
   created_at: number;
   expires_at?: number;
   tool_call_id?: string;
+  /** True on a secret or host approval request (purpose `secret_approve` or `host_approve`): the client renders it as an approval. */
+  approval?: boolean;
   replayed?: boolean;
 };
 

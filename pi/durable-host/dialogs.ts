@@ -53,6 +53,7 @@ export function createDialogs(port: DialogPort): Dialogs {
       created_at,
       ...(opts?.ms === undefined ? {} : { expires_at: created_at + opts.ms }),
       ...(opts?.toolCallId === undefined ? {} : { tool_call_id: opts.toolCallId }),
+      ...(purpose === "secret_approve" || purpose === "host_approve" ? { approval: true } : {}),
     } as Live);
     port.stateChanged();
     return { id, promise, outcome: () => outcome };

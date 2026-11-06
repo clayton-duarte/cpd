@@ -386,3 +386,33 @@ test("the host passes compactionPolicy to the harness settings", { timeout: 20_0
   assert.ok(compaction !== undefined, "open receives settings.compaction");
   assert.equal(typeof compaction, "object");
 });
+
+// D2: a Tier switch on a busy durable Lead is answered `host_busy` (the footer keeps the old Tier until the host applies it).
+const RETIERED = { model: "anthropic/opus", thinking: "low" };
+
+test("a tier switch while a turn runs is answered host_busy", { timeout: 20_000 }, async () => {
+  await withHost({ sessionOver: RETIERED }, async (r) => {
+    const hooks = await r.up();
+    const client = await r.attach();
+    client.send({ type: "submit", req: "r1", text: "hello", when_busy: "followUp" });
+    await r.until(() => r.submitted.length >= 1);
+    hooks.onLine(line(400, "session-retiered"));
+    const failed = await r.until(() => r.calls.find((c) => c[0] === "session" && c[1] === "switch-failed"));
+    assert.deepEqual(failed, ["session", "switch-failed", "--code", "host_busy", "--message", failed[5], "--session", CONFIG.session]);
+    assert.ok(typeof failed[5] === "string" && failed[5].length > 0, "switch-failed carries a message");
+    assert.ok(!r.order.includes("configure"), "a busy host configures nothing");
+    assert.ok(!r.calls.some((c) => c[1] === "switched"), "a busy host does not report switched");
+  });
+});
+
+test("a tier switch while idle is applied", { timeout: 20_000 }, async () => {
+  await withHost({ sessionOver: RETIERED }, async (r) => {
+    const hooks = await r.up();
+    await r.drain();
+    hooks.onLine(line(401, "session-retiered"));
+    const switched = await r.until(() => r.calls.find((c) => c[0] === "session" && c[1] === "switched"));
+    assert.deepEqual(switched, ["session", "switched", "--session", CONFIG.session]);
+    assert.ok(r.order.includes("configure"), "an idle host configures the conversation");
+    assert.ok(!r.calls.some((c) => c[1] === "switch-failed"), "no switch-failed");
+  });
+});
