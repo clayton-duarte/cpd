@@ -12,17 +12,29 @@ use cpd_core::host::chat_slot;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::close_lead;
 
-/// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
-/// undismissed Inbox item (snoozed or not), and no Job of the Plan is `failed`. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
-/// Both queries alias the Session `s` and its Plan `p`, and bind no parameter.
-pub(super) const LEAD_FINISHED: &str = "
-       p.phase = 'done'
+/// What must hold of a Lead's Plan besides its phase: nothing of it is live or open (see [`LEAD_FINISHED`]).
+macro_rules! nothing_open {
+    () => {
+        "
        AND NOT EXISTS (SELECT 1 FROM workflows r WHERE r.plan = p.id AND (r.status NOT IN ('merged', 'cancelled')
                                                   OR r.status = 'cancelled' AND EXISTS (SELECT 1 FROM pull_requests q WHERE q.id = r.pull_request AND q.state = 'open')))
        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running', 'failed'))
        AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
        AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')
-       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL)";
+       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL)"
+    };
+}
+
+/// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
+/// undismissed Inbox item (snoozed or not), and no Job of the Plan is `failed`. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
+/// Both queries alias the Session `s` and its Plan `p`, and bind no parameter.
+pub(super) const LEAD_FINISHED: &str = concat!("\n       p.phase = 'done'", nothing_open!());
+
+/// pro-d416 (A2): E13 also sleeps the Lead of an open `codereview` Plan that awaits changes (E14 does not archive it).
+const LEAD_AWAITING_CHANGES: &str = concat!(
+    "\n       (p.phase = 'done' OR p.context = 'codereview' AND p.phase = 'grounding' AND p.changes_requested_at IS NOT NULL)",
+    nothing_open!()
+);
 
 /// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
 /// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is
@@ -32,14 +44,14 @@ fn ready_sql() -> String {
         "SELECT s.id, s.context, s.plan FROM sessions s LEFT JOIN plans p ON p.id = s.plan
  WHERE s.role IN ('lead', 'manager') AND s.archived_at IS NULL AND s.asleep_at IS NULL
    AND CASE s.role
-     WHEN 'lead' THEN {LEAD_FINISHED}
+     WHEN 'lead' THEN {LEAD_AWAITING_CHANGES}
      ELSE EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase = 'done')
        AND NOT EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase <> 'done' AND q.archived_at IS NULL)
        AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
                           AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))
      END
    AND max(
-         CASE s.role WHEN 'lead' THEN coalesce(p.done_at, '')
+         CASE s.role WHEN 'lead' THEN coalesce(p.done_at, p.changes_requested_at, '')
                      ELSE coalesce((SELECT max(q.done_at) FROM plans q WHERE q.context = s.context AND q.phase = 'done'), '') END,
          s.state_at,
          coalesce((SELECT max(i.closed_at) FROM inbox_items i WHERE i.session = s.id), '')) <= ?2

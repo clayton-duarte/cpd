@@ -236,6 +236,51 @@ describe("optimistic merge", () => {
   });
 });
 
+describe("optimistic merge race", () => {
+  const prRow = (id: number, subject: string): InboxModel["rows"][number] => ({
+    id, kind: "pr-ready", label: "ready to merge", urgency: "normal", contextId: null, planId: "p1", jobKey: null, sessionId: null,
+    url: null, subject, workflow: null, openedAt: "t", ageSeconds: 0, actions: [],
+  } as unknown as InboxModel["rows"][number]);
+  const rows = [prRow(1, "pr:acme/api#3"), prRow(2, "pr:acme/api#4")];
+  const at = (cursor: number, list: InboxModel["rows"]): InboxModel => ({ ...inbox, rows: list, openCount: list.length, cursor });
+  const loaded = (): AppState => run(initialState, server({ type: "cockpit.snapshot", tree: tree(1), plan, inbox: at(1, rows) }));
+  const merge = (actionId: string): StoreAction => ({ type: "actionOptimistic", actionId, action: { kind: "pr.merge", planId: "p1", pull: "acme/api#3" } });
+  const patch = (data: InboxModel): StoreAction => server({ type: "cockpit.patch", pane: "inbox", data });
+  const ids = (s: AppState): number[] => (s.cockpit.inbox?.rows ?? []).map((r) => r.id);
+  const changed = (n: number): InboxModel["rows"] => [rows[0]!, { ...rows[1]!, label: `l${n}` }];
+
+  it("patch_keeps_optimistic_merge_row_hidden", () => {
+    let s = run(loaded(), merge("a1"));
+    for (const n of [2, 3]) {
+      s = run(s, patch(at(n, changed(n))));
+      expect(ids(s)).toEqual([2]);
+      expect(s.cockpit.inbox?.rows[0]?.label).toBe(`l${n}`);
+    }
+  });
+
+  it("snapshot_keeps_optimistic_merge_row_hidden", () => {
+    const s = run(loaded(), merge("a1"), server({ type: "cockpit.snapshot", tree: tree(2), plan, inbox: at(2, changed(2)) }));
+    expect(ids(s)).toEqual([2]);
+    expect(s.cockpit.inbox?.rows[0]?.label).toBe("l2");
+  });
+
+  it("duplicate_merge_failure_keeps_row_gone", () => {
+    const stale = at(1, rows);
+    const gone = at(2, [rows[1]!]); // a later inbox patch removed the merged row
+    const entry = { before: stale, after: gone, subject: "pr:acme/api#3" };
+    const optimistic = { c1: entry, c2: entry } as unknown as AppState["optimistic"];
+    const base: AppState = { ...loaded(), optimistic, pendingActionIds: ["c1", "c2"], cockpit: { ...loaded().cockpit, inbox: gone } };
+    const failed = run(base, server({ type: "action.result", actionId: "c2", ok: false, error: err }));
+    expect(ids(failed)).toEqual([2]);
+  });
+
+  it("stale_inbox_patch_is_ignored", () => {
+    const s = run(loaded(), patch(at(5, [rows[1]!])));
+    const after = run(s, patch(at(3, rows)));
+    expect(after.cockpit.inbox).toEqual(s.cockpit.inbox);
+  });
+});
+
 describe("archive navigation", () => {
   const counts = { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 };
   const sess = (id: string, role: "manager" | "lead", contextId: string, planId: string | null, archived = false): SessionNode => ({

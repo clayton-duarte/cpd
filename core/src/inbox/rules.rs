@@ -183,6 +183,8 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 record: None,
                 event: None,
                 opened_at: Some(r.created_at),
+                head_oid: None,
+                reviewed_oid: None,
             })
             .collect()),
         Err(message) => {
@@ -205,6 +207,8 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             });
             let _ = message;
             Ok(out)
@@ -253,6 +257,8 @@ fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -387,6 +393,8 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
         record: None,
         event: seat.event,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     }
 }
 
@@ -436,10 +444,12 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
 /// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
-/// Session's, as is) when there is one: Row 2.
+/// Session's, as is) when there is one: Row 2. A reply turn already dismissed in a closed `unread` item never reopens
+/// (pro-d425): a reload or a non-reply turn returns the session to `idle` on the same reply Event, and only a newer reply turn opens a fresh item.
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!(
-        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)"
+        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0) \
+         AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.kind = 'unread' AND i.session = s.id AND i.closed_at IS NOT NULL AND i.dismissed_at IS NOT NULL AND COALESCE(i.event, 0) >= {LATEST_IDLE})"
     );
     Ok(seats(conn, LATEST_IDLE, &filter)?
         .into_iter()
@@ -487,6 +497,8 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: None,
+                reviewed_oid: None,
             });
         }
     }
@@ -530,6 +542,8 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -665,14 +679,24 @@ fn review_requested(
         .iter()
         .filter(|p| p.primary && p.ts >= cutoff)
         .collect();
-    if posts.is_empty() {
+    let plans = super::review_plan::open_plan_refs(store)?;
+    if posts.is_empty() && plans.is_empty() {
         return Ok(Vec::new());
     }
-    let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let mut refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    for (_, repo, number) in &plans {
+        if !refs.contains(&(repo.clone(), *number)) {
+            refs.push((repo.clone(), *number));
+        }
+    }
     let lookup = match (team.github)(&refs) {
         Ok(lookup) => lookup,
         Err(_) => return kept_review_items(store),
     };
+    super::review_plan::finish_closed(store, &lookup)?;
+    if posts.is_empty() {
+        return Ok(Vec::new());
+    }
     let read = |p: &Post| -> Option<&GhPr> {
         lookup
             .workflows
@@ -685,7 +709,13 @@ fn review_requested(
     let settled = settled_review_subjects(store)?;
     Ok(posts
         .into_iter()
-        .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
+        .filter(|post| {
+            let subject = format!("pr:{}#{}", post.repo, post.number);
+            match read(post).and_then(|w| team::followup_oids(w, &lookup.me)) {
+                Some((head, _)) => !settled.heads.contains(&(subject, head.to_owned())),
+                None => !settled.subjects.contains(&subject),
+            }
+        })
         .filter_map(|post| {
             let workflow = read(post)?;
             matches!(
@@ -699,6 +729,7 @@ fn review_requested(
                 .repo
                 .split_once('/')
                 .map_or(post.repo.as_str(), |(_, name)| name);
+            let followup = team::followup_oids(workflow, &lookup.me);
             Condition {
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
@@ -715,6 +746,8 @@ fn review_requested(
                 record: None,
                 event: None,
                 opened_at: None,
+                head_oid: workflow.head_oid.clone(),
+                reviewed_oid: followup.map(|(_, reviewed)| reviewed.to_owned()),
             }
         })
         .collect())
@@ -722,16 +755,32 @@ fn review_requested(
 
 /// The subjects of the `review-requested` items, open or closed, that a dismissal or a claim settled for good (C1): closed items
 /// are kept, so the history is the memory.
-fn settled_review_subjects(
-    store: &mut Store,
-) -> Result<std::collections::HashSet<String>, CpdError> {
+fn settled_review_subjects(store: &mut Store) -> Result<Settled, CpdError> {
     store.read(|c| {
         let mut stmt = c.prepare(
-            "SELECT DISTINCT subject FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
+            "SELECT subject, head_oid FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
         )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<Result<_, _>>().map_err(CpdError::from)
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut settled = Settled::default();
+        for row in rows {
+            let (subject, head) = row?;
+            if let Some(head) = head {
+                settled.heads.insert((subject.clone(), head));
+            }
+            settled.subjects.insert(subject);
+        }
+        Ok(settled)
     })
+}
+
+/// What settled `review-requested` subjects: an initial item is suppressed by any of `subjects`, a follow-up item
+/// only by a settled item of its subject at the current head (`heads`).
+#[derive(Default)]
+struct Settled {
+    subjects: std::collections::HashSet<String>,
+    heads: std::collections::HashSet<(String, String)>,
 }
 
 /// The open `review-requested` items as conditions (nothing changes), so a transient failure does not close them.
@@ -797,6 +846,8 @@ fn models_changed(
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         });
     }
     Ok(out)
@@ -1182,6 +1233,86 @@ mod tests {
         assert!(
             f.of(Kind::Unread).is_empty(),
             "stopped -> idle is a reload even when it says reply"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_reply_turn_never_reopens_as_unread_across_a_reload_or_a_non_reply_turn() {
+        const AT: &str = "2026-01-01T01:00:00.000Z";
+        fn run(f: &mut Fixture) {
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            reconcile(&mut f.store, &found, AT).unwrap();
+        }
+        fn rows(f: &mut Fixture, filter: &str) -> i64 {
+            f.store
+                .read(|c| {
+                    Ok(c.query_row(
+                        &format!("SELECT COUNT(*) FROM inbox_items WHERE kind = 'unread' {filter}"),
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .unwrap()
+        }
+        let mut f = fixture("dispatch");
+        let first = f.reply("l-pay");
+        run(&mut f);
+        assert_eq!(rows(&mut f, "AND closed_at IS NULL"), 1, "one open unread");
+        // The WebUI read flow: `cpd inbox dismiss`, no session-moved to chat.
+        f.store
+            .write("dismiss", |tx| {
+                tx.execute(
+                    "UPDATE inbox_items SET dismissed_at = ?1 WHERE kind = 'unread'",
+                    [AT],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        run(&mut f);
+        assert_eq!(
+            rows(&mut f, "AND closed_at IS NULL AND dismissed_at IS NOT NULL"),
+            1,
+            "the row stays open and dismissed"
+        );
+        for (mid, why) in [("stopped", "a reload"), ("working", "a non-reply turn")] {
+            f.state("l-pay", mid, None);
+            run(&mut f);
+            f.state("l-pay", "idle", None);
+            run(&mut f);
+            assert_eq!(
+                rows(&mut f, "AND closed_at IS NULL"),
+                0,
+                "{why} opens no new unread"
+            );
+            assert!(
+                f.of(Kind::Unread).is_empty(),
+                "{why} leaves no unread condition"
+            );
+            assert_eq!(
+                rows(&mut f, ""),
+                1,
+                "{why}: still the one closed, dismissed row"
+            );
+        }
+        f.state("l-pay", "working", None);
+        let second = f.reply("l-pay");
+        run(&mut f);
+        assert_ne!(first, second);
+        let open = f
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT event, dismissed_at IS NULL FROM inbox_items \
+                     WHERE kind = 'unread' AND closed_at IS NULL",
+                    [],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            open,
+            (second, true),
+            "a new reply turn opens a fresh unread"
         );
     }
 
@@ -1878,6 +2009,8 @@ mod tests {
             author: "ryan".to_owned(),
             decision: None,
             reviews: Vec::new(),
+            head_oid: None,
+            checks_state: None,
         }
     }
 
@@ -1886,6 +2019,7 @@ mod tests {
             reviews: vec![Review {
                 author: login.to_owned(),
                 state: "COMMENTED".to_owned(),
+                commit_oid: None,
             }],
             ..open_pr()
         }

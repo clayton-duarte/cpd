@@ -517,6 +517,14 @@ fn stale_reason(pr: &team::GhPr, status: team::Status) -> Option<&'static str> {
     }
 }
 
+/// The live Plan a claim reuses and what its Lead is told.
+struct Reused {
+    plan: PlanId,
+    lead: SessionId,
+    reviewed_oid: Option<String>,
+    head_oid: Option<String>,
+}
+
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     claim_in(ports, Env::open_with(ports)?, args)
 }
@@ -644,13 +652,21 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
     let brief: Text = brief_text.parse()?;
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
-    let (lead_tier, lead_runner) = (env.config.lead_tier.to_string(), env.config.lead_runner);
+    let (lead_tier, lead_runner) = (
+        env.config.lead_tier.to_string(),
+        env.config.new_lead_runner(),
+    );
     let lead = SessionId::new_v4();
-    let (item, plan) = env.store.write("inbox claim", |tx| {
+    let (item, plan, reused) = env.store.write("inbox claim", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute(
             "UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1",
             params![item.id, claimed],
+        )?;
+        let (head_oid, reviewed_oid): (Option<String>, Option<String>) = tx.query_row(
+            "SELECT head_oid, reviewed_oid FROM inbox_items WHERE id = ?1",
+            [item.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let event = NewEvent::inbox_claimed(
             format!(
@@ -662,6 +678,37 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         );
         events::append(tx, scoped(event, &item))?;
         crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
+        // A live codereview Plan of this PR is reused (pro-d416 A5): its Lead re-reviews, no second Plan is spawned.
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT id, lead_session FROM plans WHERE context = 'codereview' AND archived_at IS NULL
+                   AND deleted_at IS NULL AND phase = 'grounding' AND pr_subject = ?1
+                 ORDER BY created_at, id LIMIT 1",
+                [&item.subject],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((plan, lead)) = existing {
+            tx.execute(
+                "UPDATE inbox_items SET head_oid = ?2 WHERE id = ?1",
+                params![item.id, head_oid],
+            )?;
+            tx.execute(
+                "UPDATE plans SET changes_requested_at = NULL WHERE id = ?1",
+                [&plan],
+            )?;
+            let reused = Reused {
+                plan: PlanId::parse(&plan)?,
+                lead: SessionId::parse(&lead)?,
+                reviewed_oid,
+                head_oid,
+            };
+            return Ok((
+                model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?,
+                reused.plan.clone(),
+                Some(reused),
+            ));
+        }
         // The first free id, archived and deleted Plans counted: chosen in this transaction.
         let mut attempt = 1;
         let plan = loop {
@@ -694,14 +741,48 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
             },
         )?;
         tx.execute(
+            "UPDATE plans SET pr_subject = ?2 WHERE id = ?1",
+            params![plan.as_str(), item.subject],
+        )?;
+        tx.execute(
             "UPDATE plans SET reviewed_repo = ?2, reviewed_number = ?3, reviewed_title = ?4 WHERE id = ?1",
             params![plan.as_str(), repo, i64::try_from(number).unwrap_or(i64::MAX), pr_title],
         )?;
         Ok((
             model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?,
             plan,
+            None,
         ))
     })?;
+    if let Some(reused) = reused {
+        let text = format!(
+            "re-review requested: {url}\nSlack post: {channel}/{ts_raw}\nreviewed_oid: {reviewed}\nhead_oid: {head}\n\
+             Please re-review {reviewed}..{head} against your prior REQUEST_CHANGES review.",
+            url = review_plan::Brief {
+                repo,
+                number,
+                channel: &channel,
+                ts_raw: &ts_raw,
+                home: ""
+            }
+            .url(),
+            reviewed = reused.reviewed_oid.as_deref().unwrap_or("unknown"),
+            head = reused.head_oid.as_deref().unwrap_or("unknown"),
+        );
+        Ports::scope(ports, || {
+            crate::session::send::deliver(&mut env, &reused.lead, &None, &text, None)
+        })
+        .map_err(|e| {
+            e.with("plan", reused.plan.as_str())
+                .with("lead", reused.lead.as_str())
+        })?;
+        return Ok(Output::success(json!({
+            "item": item_json(&item, now)?,
+            "plan": reused.plan.as_str(),
+            "lead": reused.lead.as_str(),
+            "manager": manager.as_str(),
+        })));
+    }
     let creation = Creation {
         id: &plan,
         context: &context,
@@ -768,6 +849,8 @@ mod tests {
             record: None,
             event: None,
             opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
         }
     }
 

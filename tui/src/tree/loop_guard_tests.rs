@@ -38,6 +38,8 @@ fn tripped(kind: Kind) -> Env {
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     };
     reconcile(env.store(), &[item], "2026-01-03T00:00:00.000Z").expect("the store holds the item");
     env

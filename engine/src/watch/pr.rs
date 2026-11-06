@@ -73,6 +73,8 @@ pub(super) fn start(engine: &mut Engine) {
         return;
     }
     engine.paused_until = None;
+    // A request written during this poll is served by the next one (contract §3.7).
+    cpd_core::pr::clear_poll_now_in(&engine.home);
     let root = engine.home.root().to_path_buf();
     let ports = engine.ports.clone();
     engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || {

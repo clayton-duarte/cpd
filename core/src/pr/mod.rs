@@ -166,8 +166,13 @@ pub fn request_poll_now() {
 /// Removes the request [`request_poll_now`] wrote; the poll calls it as it starts to read GitHub.
 pub(crate) fn consume_poll_now() {
     if let Ok(home) = crate::home::CpdHome::from_env() {
-        let _ = std::fs::remove_file(home.run_dir().join(POLL_NOW));
+        clear_poll_now_in(&home);
     }
+}
+
+/// [`consume_poll_now`] for a caller that holds the home (the engine: E5 removes the request as it starts the poll).
+pub fn clear_poll_now_in(home: &crate::home::CpdHome) {
+    let _ = std::fs::remove_file(home.run_dir().join(POLL_NOW));
 }
 
 /// [`request_poll_now`] for a caller that holds the home (the engine).

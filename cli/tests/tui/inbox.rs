@@ -50,6 +50,8 @@ pub(crate) fn condition(kind: Kind, urgency: Urgency, subject: &str, context: &s
         record: None,
         event: None,
         opened_at: None,
+        head_oid: None,
+        reviewed_oid: None,
     }
 }
 

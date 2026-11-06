@@ -34,6 +34,8 @@ fn dump(store: &mut Store, table: &str) -> Vec<String> {
         .read(|c| {
             let columns: Vec<String> = table_columns(c, table)?
                 .into_iter()
+                // `host-restarts` (a later migration) adds `sessions.host_restarts` and `host_window_start`.
+                .filter(|(name, _)| !name.starts_with("host_"))
                 .map(|(name, _)| format!("\"{name}\""))
                 .collect();
             let mut s = c.prepare(&format!(

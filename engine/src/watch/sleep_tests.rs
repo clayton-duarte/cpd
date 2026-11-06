@@ -65,3 +65,38 @@ fn a_plans_own_open_pr_workflow_keeps_its_lead_awake() {
         "the Plan's own open pull request keeps its Lead awake"
     );
 }
+
+/// pro-d416 (A2): a codereview Plan in `grounding` whose Lead is idle since long ago, `changes_requested_at` as given
+/// (SQL: a quoted time or `NULL`).
+fn codereview_rig(changes_requested_at: &str) -> Fx {
+    let mut fx = Fx::new("");
+    let long_ago = ago(24 * 60);
+    fx.fixture(&format!(
+        "INSERT OR IGNORE INTO contexts (id, title, owner, created_at, created_on) VALUES ('codereview', 'Code review', 'acme', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+           VALUES ('lead1', 'lead', 'codereview', 'r-pay-1', 'Lead', '/', 'O3', 'idle', '{long_ago}', 't', 'durable');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, changes_requested_at)
+           VALUES ('r-pay-1', 'codereview', 'Review', 'grounding', 'lead1', 't', {changes_requested_at});"
+    ));
+    fx
+}
+
+#[test]
+fn sleep_picks_changes_requested_codereview_plan_with_idle_lead() {
+    let mut fx = codereview_rig(&format!("'{}'", ago(24 * 60)));
+    sleep::run(&mut fx.engine);
+    assert!(
+        asleep(&mut fx),
+        "a grounding codereview Plan that awaits changes lets its idle Lead sleep"
+    );
+}
+
+#[test]
+fn sleep_ignores_grounding_codereview_plan_without_changes_requested() {
+    let mut fx = codereview_rig("NULL");
+    sleep::run(&mut fx.engine);
+    assert!(
+        !asleep(&mut fx),
+        "an open codereview Plan with no requested changes keeps its Lead awake"
+    );
+}
