@@ -19,3 +19,11 @@ it("unmount is idempotent", () => {
   m.unmount();
   expect(() => m.unmount()).not.toThrow();
 });
+
+it("mount makes getAnimations available to Base UI", () => {
+  const m = mount(<p id="x">hello</p>);
+  const el = document.getElementById("x");
+  expect(typeof el?.getAnimations).toBe("function");
+  expect(el?.getAnimations()).toEqual([]);
+  m.unmount();
+});

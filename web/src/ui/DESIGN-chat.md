@@ -10,7 +10,7 @@ Sources read: the boards' chat zone (`Main.dc.html` lines 257 to 402, via `sc-ma
 
 **File boundary (pro-n15) and no backend change (A6), as written for Phase 2.** For pro-d48 to pro-d61 the boundary is widened by the protocol and store changes listed in CONTRACT section 11 (pending `at`, `images` on pending rows, the echoed image bytes); no other `web/src/protocol/**`, `web/src/state/**` or `web/src/server/**` change is a chat contract. `web/src/ui/chat/virtual.ts` and `rows.ts` are unchanged in behaviour. A design element whose data the protocol or the store does not carry renders only when an optional prop is passed, or is omitted, never faked; each is listed under **Not wired** (section 5).
 
-**Shadcn parts (pro-d55).** The chat is built from shadcn parts in `web/src/ui/components/` (2f): `MessageScroller` family (the transcript), `Message` and `Bubble` (every message), `Trace` and `TraceCollapsible` (the Chain of Thought, the tool rows, the tool groups, the thinking blocks), `Marker` (cpd folds, compaction, the working marker), `CodeBlock` (tool output, edit diffs, fenced code), `Attachment` (non-image attachments), `Tooltip` (the Copy action), `Empty`, `Spinner` and `Button` (`Load earlier`, the header-less controls). **Resolution:** the Phase 2 native `details`/`summary` blocks are replaced by these parts; the Phase 2 hooks they carried are kept on the part's root (section 4).
+**Shadcn parts (pro-d55).** The chat is built from shadcn parts in `web/src/ui/components/` (2f): `ScrollArea` (the transcript's scroll element, 2.2, pro-d72) and the `MessageScroller` family (the transcript), `Message` and `Bubble` (every message), `Trace` and `TraceCollapsible` (the Chain of Thought, the tool rows, the tool groups, the thinking blocks), `Marker` (cpd folds, compaction, the working marker), `CodeBlock` (tool output, edit diffs, fenced code), `Attachment` (non-image attachments), `Tooltip` (the Copy action), `Empty`, `Spinner` and `Button` (`Load earlier`, the header-less controls). **Resolution:** the Phase 2 native `details`/`summary` blocks are replaced by these parts; the Phase 2 hooks they carried are kept on the part's root (section 4).
 
 ---
 
@@ -133,20 +133,21 @@ export interface TranscriptProps {
 MessageScrollerProvider  threshold 160 px, scrollToEndOnMount            (2.8.1)
 ├─ TranscriptAutoScroll  renders nothing                                  (2.8.1)
 └─ MessageScroller[data-part="transcript"]   flex min-h-0 flex-1 flex-col overflow-hidden
-    ├─ MessageScrollerViewport[aria-label="Conversation transcript"][data-part="viewport"]   flex-1 overflow-x-hidden px-4 py-4
-    │   └─ MessageScrollerContent   mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3
-    │       ├─ div.flex.justify-center.py-1  (only if hasEarlier)
-    │       │   └─ Button[type=button][variant=outline][size=sm][data-action="load-earlier"]  "Load earlier"  ("Loading…" while loadingEarlier; disabled)
-    │       ├─ Empty[data-empty]  (only when there are no rows, no queued and no pending)  my-12 border-none py-12 text-muted-foreground
-    │       │   ├─ EmptyHeader › EmptyMedia[variant="icon"] › MessageSquareIcon
-    │       │   ├─ EmptyTitle        "No messages yet"
-    │       │   └─ EmptyDescription  "Send a message below to start the conversation."
-    │       ├─ MessageScrollerItem[data-row={row.key}] ×rows, in `groupRows` order   flex w-full min-w-0 flex-col
-    │       │   └─ div   user row: ml-auto w-full max-w-[85%]; other rows: mr-auto w-full max-w-[85%]; min-w-0 overflow-hidden
-    │       │       └─ RowBody (2.3 to 2.5, 3.x)
-    │       └─ ul[aria-label="Queued messages"]  (only when queued or pending is non-empty)   m-0 ml-auto flex w-full max-w-[85%] flex-col gap-2 p-0
-    │           ├─ li[data-queued={clientSubmissionId}] ×queued      (2.6)
-    │           └─ li[data-pending={state}] ×pending                (2.7)
+    ├─ ScrollArea   the `ScrollArea` wrapper (DESIGN.md 3c, pro-d72): `min-h-0 flex-1`; its vertical `ScrollBar`
+    │   └─ MessageScrollerViewport[aria-label="Conversation transcript"][data-part="viewport"][data-slot="scroll-area-viewport"]  (the ScrollArea Viewport `render`s this element, pro-d72; composition unverified until a render test)   flex-1 overflow-x-hidden px-4 py-4
+    │       └─ MessageScrollerContent   mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-3
+    │           ├─ div.flex.justify-center.py-1  (only if hasEarlier)
+    │           │   └─ Button[type=button][variant=outline][size=sm][data-action="load-earlier"]  "Load earlier"  ("Loading…" while loadingEarlier; disabled)
+    │           ├─ Empty[data-empty]  (only when there are no rows, no queued and no pending)  my-12 border-none py-12 text-muted-foreground
+    │           │   ├─ EmptyHeader › EmptyMedia[variant="icon"] › MessageSquareIcon
+    │           │   ├─ EmptyTitle        "No messages yet"
+    │           │   └─ EmptyDescription  "Send a message below to start the conversation."
+    │           ├─ MessageScrollerItem[data-row={row.key}] ×rows, in `groupRows` order   flex w-full min-w-0 flex-col
+    │           │   └─ div   user row: ml-auto w-full max-w-[85%]; other rows: mr-auto w-full max-w-[85%]; min-w-0 overflow-hidden
+    │           │       └─ RowBody (2.3 to 2.5, 3.x)
+    │           └─ ul[aria-label="Queued messages"]  (only when queued or pending is non-empty)   m-0 ml-auto flex w-full max-w-[85%] flex-col gap-2 p-0
+    │               ├─ li[data-queued={clientSubmissionId}] ×queued      (2.6)
+    │               └─ li[data-pending={state}] ×pending                (2.7)
     └─ MessageScrollerButton[data-action="jump-to-bottom"]   shadcn secondary icon-sm, direction end (2.8)
 ```
 

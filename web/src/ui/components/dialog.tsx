@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
+import { ScrollArea } from "./scroll-area.tsx"
 import { cn } from "../../lib/utils.ts"
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -29,12 +30,14 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid max-h-[85vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-3 overflow-y-auto rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-none sm:max-w-lg",
+          "fixed top-1/2 left-1/2 z-50 grid max-h-[85vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-3 overflow-hidden rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-none sm:max-w-lg",
           className
         )}
         {...props}
       >
-        {children}
+        <ScrollArea className="max-h-[calc(85vh-2rem)] [&>[data-slot=scroll-area-viewport]]:max-h-[calc(85vh-2rem)]">
+          <div className="grid gap-3">{children}</div>
+        </ScrollArea>
       </DialogPrimitive.Content>
     </DialogPortal>
   )

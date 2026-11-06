@@ -46,6 +46,8 @@ import {
   MessageScrollerViewport,
   useMessageScroller,
 } from "../components/message-scroller.tsx";
+import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
+import { ScrollAreaRoot, ScrollBar } from "../components/scroll-area.tsx";
 import { Spinner } from "../components/spinner.tsx";
 import {
   Trace,
@@ -592,11 +594,16 @@ export function Transcript(props: TranscriptProps): JSX.Element {
         data-part="transcript"
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        <MessageScrollerViewport
-          ref={viewportRef}
-          aria-label="Conversation transcript"
-          data-part="viewport"
-          className="flex-1 overflow-x-hidden px-4 py-4"
+        <ScrollAreaRoot className="min-h-0 flex-1">
+        <ScrollAreaPrimitive.Viewport
+          render={
+            <MessageScrollerViewport
+              ref={viewportRef}
+              aria-label="Conversation transcript"
+              data-part="viewport"
+              className="flex-1 overflow-x-hidden px-4 py-4"
+            />
+          }
         >
           <MessageScrollerContent
             ref={contentRef}
@@ -785,7 +792,9 @@ export function Transcript(props: TranscriptProps): JSX.Element {
               </MessageScrollerItem>
             ) : null}
           </MessageScrollerContent>
-        </MessageScrollerViewport>
+        </ScrollAreaPrimitive.Viewport>
+        <ScrollBar />
+        </ScrollAreaRoot>
         <MessageScrollerButton
           data-action="jump-to-bottom"
           onClick={() => {

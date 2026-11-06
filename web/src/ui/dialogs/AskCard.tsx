@@ -7,6 +7,7 @@ import type {
 } from "../../protocol/domain.ts";
 import { Markdown } from "../chat/Markdown.tsx";
 import { Button } from "../components/button.tsx";
+import { ScrollArea, ScrollBar } from "../components/scroll-area.tsx";
 import {
   Questionnaire,
   QuestionnaireActions,
@@ -143,7 +144,8 @@ export function AskCard(props: {
   }));
 
   return (
-    <div className="mx-4 mb-3 max-h-[min(70vh,560px)] shrink-0 overflow-y-auto rounded-2xl border bg-card p-5">
+    <ScrollArea className="mx-4 mb-3 shrink-0 rounded-2xl border bg-card [&>[data-slot=scroll-area-viewport]]:max-h-[min(70vh,560px)]">
+    <div className="p-5">
       <Questionnaire
         aria-label="Questions"
         data-dialog="ask_user_question"
@@ -271,14 +273,15 @@ export function AskCard(props: {
                         {focusedLabel ?? ""}
                       </span>
                     </div>
-                    <div
+                    <ScrollArea
                       data-part="preview"
-                      className="min-h-0 flex-1 overflow-auto text-xs"
+                      className="min-h-0 flex-1 text-xs"
                     >
                       {preview === undefined ? null : (
                         <Markdown text={preview} />
                       )}
-                    </div>
+                      <ScrollBar orientation="horizontal" />
+                    </ScrollArea>
                   </div>
                 ) : null}
               </div>
@@ -304,5 +307,6 @@ export function AskCard(props: {
         </QuestionnaireActions>
       </Questionnaire>
     </div>
+    </ScrollArea>
   );
 }

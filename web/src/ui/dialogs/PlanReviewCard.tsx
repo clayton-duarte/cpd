@@ -14,6 +14,7 @@ import {
   ItemMedia,
   ItemTitle,
 } from "../components/item.tsx";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { Spinner } from "../components/spinner.tsx";
 import { Textarea } from "../components/textarea.tsx";
 import { glyphClass } from "../dango-status.ts";
@@ -274,9 +275,10 @@ export function PlanReviewCard(props: {
                     ))}
                   </nav>
                 ) : null}
+                <ScrollArea className="min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]]:max-h-60">
                 <div
                   data-part="body"
-                  className="flex max-h-60 min-w-0 flex-1 flex-col gap-4 overflow-y-auto"
+                  className="flex flex-col gap-4"
                 >
                   <div data-part="outline" id={`${dialog.id}-outline`}>
                     {hasOthers ? <h4 className={LABEL}>Outline</h4> : null}
@@ -411,6 +413,7 @@ export function PlanReviewCard(props: {
                     </div>
                   ) : null}
                 </div>
+                </ScrollArea>
               </div>
             ) : null}
             {asking && !readOnly ? (
