@@ -110,13 +110,14 @@ const turnOf = (m: Obj): number | undefined =>
 const blocksOf = (content: unknown): Obj[] => (Array.isArray(content) ? content.filter(isObj) : []);
 const hasChatBlocks = (content: unknown): boolean =>
   blocksOf(content).some((b) => b.type === "text" || b.type === "thinking");
+const hasErrorMessage = (m: Obj): boolean => typeof m.errorMessage === "string" && m.errorMessage !== "";
 
 export function countItems(entry: JsonlEntry): number {
   if (entry.type === "message" && isObj(entry.message)) {
     const m = entry.message;
     if (m.role === "user") return 1;
     if (m.role === "assistant") {
-      return (hasChatBlocks(m.content) ? 1 : 0) + blocksOf(m.content).filter((b) => b.type === "toolCall").length;
+      return (hasChatBlocks(m.content) || hasErrorMessage(m) ? 1 : 0) + blocksOf(m.content).filter((b) => b.type === "toolCall").length;
     }
     return 0;
   }
@@ -243,8 +244,9 @@ export function createNormalizer(): PiNormalizer {
           const blocks: AssistantBlock[] = [];
           for (const b of blocksOf(m.content)) {
             if (b.type === "text" && typeof b.text === "string") blocks.push({ type: "text", text: b.text });
-            else if (b.type === "thinking" && typeof b.thinking === "string") blocks.push({ type: "thinking", text: b.thinking });
+            else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking !== "") blocks.push({ type: "thinking", text: b.thinking });
           }
+          if (hasErrorMessage(m)) blocks.push({ type: "text", text: "Error: " + (m.errorMessage as string) });
           if (blocks.length > 0) {
             r.added.push({ kind: "assistant", id: `a:${id}`, ...stamp, blocks, streaming: false, ...(str(m.model) === undefined ? {} : { model: m.model as string }) });
           }
