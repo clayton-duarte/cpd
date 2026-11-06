@@ -2,15 +2,14 @@
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
-use super::cache::{self, Outcome, Read};
+use super::Outcome;
 use super::helper::Helper;
 use super::safe_name;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::output::Output;
+use crate::swr::source::models as rows;
 
 /// The `models` commands (commands.md §14.5).
 #[derive(clap::Subcommand, Debug)]
@@ -36,11 +35,11 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 }
 
 fn refresh() -> Result<Output, CpdError> {
-    let env = Env::open()?;
+    let mut env = Env::open()?;
     let answer = Helper::new(&env.config, &env.home)?.run()?;
-    let applied = cache::apply(&env.home, &env.config.timeouts, &answer)?;
-    let lists: Vec<Value> = applied
-        .outcomes
+    let now = env.ports.clock.utc();
+    let outcomes = rows::apply_answer(&mut env.store, &answer, now)?;
+    let lists: Vec<Value> = outcomes
         .iter()
         .map(|o| match o {
             Outcome::Written(w) => json!({"provider": w.provider, "polled_at": w.polled_at, "count": w.count, "changes": w.changes}),
@@ -48,7 +47,7 @@ fn refresh() -> Result<Output, CpdError> {
         })
         .collect();
     // The good ones are written; the command then fails with the first failure's code.
-    let first = applied.outcomes.iter().find_map(|o| match o {
+    let first = outcomes.iter().find_map(|o| match o {
         Outcome::Failed(f) => Some(f),
         Outcome::Written(_) => None,
     });
@@ -69,34 +68,11 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
             ),
         ));
     }
-    let home = CpdHome::from_env()?;
+    let mut env = Env::open()?;
     let now = OffsetDateTime::now_utc();
-    let (mut lists, mut warnings) = (Vec::new(), Vec::new());
-    for read in cache::read_all(&home)? {
-        match read {
-            Read::Good(file) if args.provider.as_ref().is_none_or(|p| *p == file.provider) => {
-                let polled = OffsetDateTime::parse(&file.polled_at, &Rfc3339)
-                    .expect("a good file's polled_at parses");
-                lists.push(json!({
-                    "provider": file.provider,
-                    "polled_at": file.polled_at,
-                    "age_seconds": (now - polled).whole_seconds().max(0),
-                    "pi_version": file.pi_version,
-                    "auth": file.source.auth,
-                    "count": file.ids.len(),
-                    "ids": file.ids,
-                    "changes": file.changes,
-                }));
-            }
-            Read::Unparseable { provider, path }
-                if args.provider.as_ref().is_none_or(|p| *p == provider) =>
-            {
-                warnings.push(json!({"provider": provider, "file": path.display().to_string(), "code": "models_unparseable"}));
-            }
-            _ => {}
-        }
-    }
-    Ok(Output::success(
-        json!({"providers": lists, "warnings": warnings}),
-    ))
+    Ok(Output::success(rows::show(
+        &mut env.store,
+        args.provider.as_deref(),
+        now,
+    )?))
 }
