@@ -188,3 +188,24 @@ fn incident_mode_holds_the_drain_until_it_ends() {
 
     assert_eq!(reacts.lock().unwrap().len(), 1, "the next tick drains it");
 }
+
+/// The old E17 `nothing_runs_and_nothing_is_reported_when_nothing_is_queued`, for E24: with no mutation queued, the drain
+/// sends no reaction and raises no error.
+#[test]
+fn nothing_is_sent_or_reported_when_nothing_is_queued() {
+    let (mut fx, _fakes, reacts) = fx();
+    fx.engine
+        .store
+        .write("empty outbox", |tx| {
+            Ok(tx.execute_batch("DELETE FROM swr_mutations")?)
+        })
+        .unwrap();
+
+    swr::run(&mut fx.engine);
+
+    assert!(reacts.lock().unwrap().is_empty(), "no reaction is sent");
+    assert!(
+        fx.events("error").is_empty(),
+        "nothing is reported for an empty outbox"
+    );
+}
