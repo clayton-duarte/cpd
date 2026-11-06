@@ -170,7 +170,8 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
         "a post with no reaction queues no row"
     );
     assert_eq!(
-        none.env.query::<i64>("SELECT count(*) FROM slack_reactions"),
+        none.env
+            .query::<i64>("SELECT count(*) FROM slack_reactions"),
         0,
         "the retired queue table is never written"
     );

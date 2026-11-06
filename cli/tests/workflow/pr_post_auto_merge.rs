@@ -103,7 +103,10 @@ fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["queued"], true, "{out}");
-    assert!(out.get("auto_merge").is_none(), "no auto-merge at enqueue: {out}");
+    assert!(
+        out.get("auto_merge").is_none(),
+        "no auto-merge at enqueue: {out}"
+    );
     let calls = gh(&pay);
     assert_eq!(calls.len(), 1, "only the read: {calls:?}");
     assert!(
