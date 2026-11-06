@@ -441,7 +441,7 @@ cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGC
 
 `scripts/install-cpd.sh` is the bootstrap and nothing more: cpd does not exist yet when it runs. It runs `CPD_COMMIT=$(git rev-parse --short HEAD) scripts/cargo.sh build --release --locked -p cpd` ("The version string" below), then `exec target/release/cpd install --root <checkout>` (`target` is `$CARGO_TARGET_DIR` when set). A failed build stops the script and installs nothing. `scripts/check-portable.sh` keeps guarding the script (contract §6.1); it keeps no `python3`, `find`, `readlink`, tmux or `kill` call.
 
-Everything else is `cpd install --root <checkout>` (commands.md §14.4; `cli/src/install.rs` over `cpd_core`), written in Rust over `Ports` (`Runner` for `git`, the built and the installed `cpd`, `tmux` and `scripts/tag-version.sh`; `Spawn::alive` for a scratch directory's pid; std `fs` for files; `cpd_core::lock` for the engine lock). The steps, in order; a step that fails before step 5 replaces nothing and exits 1:
+Everything else is `cpd install --root <checkout>` (commands.md §14.4; `cli/src/install.rs` over `cpd_core`), written in Rust over `Ports` (`Runner` for `git`, the built and the installed `cpd`, `tmux`, `scripts/tag-version.sh` and, in the Electron step, `pnpm` and `plutil`; `Spawn::alive` for a scratch directory's pid and for the Electron pid; std `fs` for files; `cpd_core::lock` for the engine lock). The steps, in order; a step that fails before step 5 replaces nothing and exits 1:
 
 1. **Preflight.** The adapter path `<link>` (`<share>/pi`, `<share>` = `<dir of the installed binary>/../share/cpd`) is absent, a symlink or a directory; anything else: `cpd install refused: <link> is neither a symlink nor a directory`. (`python3` is no longer a requirement: the message `python3 is required for the atomic adapter swap` is gone with the dependency.)
 2. **The migration check** (the branch check, contract §3.7). `git -C <root> fetch --quiet origin main` through the `Runner`; a failed fetch refuses (`cannot fetch origin/main to check that this build's migrations are on it`). For each file of `core/src/store/migrations/` in the checkout, `git cat-file -e origin/main:<path>` and `git show origin/main:<path>` must exist and equal the file; the names that do not are listed: `cpd install refused: this build carries migration <names> that is not on origin/main, and a preview would apply it to <CPD_HOME>/cpd.db before the PR merges. Merge main into this branch, or wait until the PR merges, then install again.` The script has already built the binary when this runs, so the check no longer precedes the build; it still precedes every replacement, and nothing installed changes (the old script refused before it built; the tests keep their names, "refused before building" now means before replacing).
@@ -452,6 +452,7 @@ Everything else is `cpd install --root <checkout>` (commands.md §14.4; `cli/src
 6. **The adapter swap** ("The adapter swap" below), then the verify and the cleanup.
 7. `installed <dest>/cpd and <link>` on stderr.
 8. **The follow-ups** on the new binary (`<dest>/cpd`, through the `Runner`; "The install's engine order" below): `cpd config`, `cpd watch --check`, `cpd tui --respawn`, `cpd watch --mark-restart`, `tmux -u … kill-window -t =<work>:watch`, `cpd watch --ensure`, and the check that an engine holds `locks/watch.lock` (`cpd_core::lock`, a non-blocking probe of the lock file; `python3` and `flock` are gone).
+8a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; commands.md §14.4 step 7a, `cpd app` below). After the follow-ups, before the tag, with `<root>` the checkout: `pnpm --dir <root> install --frozen-lockfile` through the `Runner` (10 minutes); `app::ensure(ports, &app, true)` (builds `web/dist-electron` always, then the `chmod` and, on macOS, the `plutil` steps); `app::write_root(home, root)`; then, unless `<preview_dir>/web-state` exists (a preview is on: stderr says so and Electron is left alone), SIGUSR1 to the pid of `<cpd_home>/run/preview-health.json` when `Spawn::alive` reports it. Each failure prints `cpd install follow-up failed: electron <a|b|c|d>: <text>`, skips the rest of the step and goes on to the tag; the exit is 1 (step 10). The steps live in `core/src/app/`; the install's `steps` (`core/src/install/mod.rs`) call them after the follow-ups.
 9. **The tag.** `scripts/tag-version.sh` through the `Runner`, once, after the follow-ups (docs/versioning.md "Tags"). A non-zero exit prints its stderr under `tag-version:` as a warning and does not change the install's exit; a refused or failed install (any step above) never reaches it.
 10. **The exit.** 1 when any `cpd install follow-up failed` line was printed, else 0 (the output is human text on stderr, as the script's was; commands.md §14.4).
 
@@ -535,6 +536,45 @@ hs-d463 (incident: mac-pro's first sync install after #169 killed `cpd-work:watc
 - Rust: `Tmux::argv`/`Tmux::command` and `host::tmux::client(program)` in `core/src/host/tmux.rs` are the only place that spawns tmux; `installed_version`, `doctor`'s tmux check and `exec_attach` go through them.
 - Shell: one function per script holds the only `tmux -u` line: `tmux_cmd` in `preview-tui.sh` (`install-cpd.sh` calls no tmux: `cpd install` does, through `host::tmux::client`).
 - **The guards:** `scripts/check-portable.sh` refuses a bare `tmux` ("The portability check", the row below); a Rust test refuses a tmux spawn outside `core/src/host/tmux.rs`; a Rust test with a fake `tmux` that records its argv requires `-u` first in the call of every `Tmux` method, of `installed_version`, of `doctor` and of `exec_attach`, under `LANG=C`, `LC_ALL=C` and an empty locale; a Rust test runs `list-panes -a -F` through `Tmux` against a real tmux with `env_clear` plus `PATH` (and with `LC_ALL=C`), and requires the panes to parse. The last is the defect itself: it fails today on tmux 3.8, where a client without a UTF-8 locale prints the formats' tabs as `_`, and passes with `-u`.
+
+## `cpd app`
+
+Plan cpd-app-launch, decision pro-d431. `cpd app` (commands.md §14.4a) and install's Electron step (step 8a above) share one area, `core/src/app/`, and the CLI handler `cli/src/app.rs` (the `Args` struct and `run`, as `cli/src/install.rs`; a root `Command::App` variant, its dispatch arm and its `cli/src/interface.rs` row). The area uses `Ports` and std only; it depends on no other area.
+
+**The names the tests use** (`core/src/app/mod.rs`):
+
+```rust
+pub struct App { pub root: PathBuf, pub home: PathBuf, pub cpd_home: PathBuf, pub preview_dir: PathBuf, pub macos: bool }
+pub fn read_root(home: &Path) -> Result<PathBuf, CpdError>                       // app-root; app_not_installed when missing
+pub fn write_root(home: &Path, root: &Path) -> Result<(), CpdError>              // install step 8a, c
+pub fn ensure(ports: &Ports, app: &App, rebuild: bool) -> Result<(), CpdError>   // rebuild = true: install always builds
+pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError>              // plain cpd app
+pub fn preview(ports: &Ports, app: &App, step: Preview) -> Result<String, CpdError> // --preview, --reload, --off: the script's text
+pub fn status(ports: &Ports, app: &App) -> Result<Status, CpdError>              // --status
+pub enum Preview { On(Option<PathBuf>), Reload(Option<PathBuf>), Off }
+pub struct Launch { pub action: LaunchAction, pub pid: u32 }                    // LaunchAction::{Launched, Reloaded}
+pub struct Status { pub output: String, pub electron: Option<Electron> }        // Electron { pid, running }
+```
+
+The return types are the JSON of commands.md §14.4a; `cli/src/app.rs` only maps them to `Output`.
+
+**`App` is built once at the CLI edge**, like the other Install fields: `root` is `read_root(home)` for `cpd app`, and the install builds its own `App` with `root` = `--root`; `home` is `$HOME`; `cpd_home` is `$CPD_HOME`, else `<home>/.cpd`; `preview_dir` is `$CPD_PREVIEW_DIR`, else `<home>/.cache/cpd-preview`; `macos` is `cfg!(target_os = "macos")`. The core reads no environment and no `cfg!`: a test sets `macos` and the directories itself.
+
+**The files** (no other file is read):
+- `<home>/.local/share/cpd/app-root`: one line, the absolute checkout path, with a newline. Written only by install step 8a (`write_root`: a temporary file in the same directory, then `rename`); read by `read_root`. Missing: `app_not_installed`, exit 1, the message says to run `scripts/install-cpd.sh`. `~/.local/share/cpd/web` is not used.
+- `<cpd_home>/run/preview-health.json`: read for its `pid` field only. It is written by the Electron main process on every launch (`web/src/electron/main.ts`, docs/ui-preview.md, "Health file and crash log"). A missing file or a missing `pid` is "no Electron" (`electron: null` in `--status`); a file that does not parse is `internal` (exit 1), never a guess.
+- `<cpd_home>/run/app.log`: stdout and stderr of an Electron that `launch` started.
+- `<preview_dir>/web-state`: its presence means a web preview is on (install step 8a, d); written by `preview-web.sh on`.
+
+**The steps, and the port each uses:**
+- **Ensure** (`ensure`). Builds `<root>/web/dist-electron/main.js` with `pnpm --dir <root> --filter cpd-web-client run build:electron` through `ports.runner` (10 minutes), only when the file is missing or `rebuild` is true. Then, always: the execute bits of each `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper` that exists (std `fs`, mode `| 0o111`, no process); on macOS, `plutil -replace CFBundleName -string CPD` and the same for `CFBundleDisplayName` on `node_modules/electron/dist/Electron.app/Contents/Info.plist` (`ports.runner`, cwd `<root>/web`). These are the steps of the `electron` script of `web/package.json`, and the script keeps them.
+- **Launch or reload** (`launch`). Ensure (`rebuild` false). The health pid, when `Spawn::alive` reports it: `Spawn::signal(pid, SIGUSR1)`, action `Reloaded`. Otherwise `Spawn::spawn` of `<root>/web/node_modules/.bin/electron .`, cwd `<root>/web`, in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, not awaited; action `Launched`. A dead health pid is "not running".
+- **Preview** (`preview`). `ports.runner` runs `sh <root>/scripts/preview-web.sh on|reload|off [<worktree>]` with a 15-minute deadline; the returned text is stdout and stderr. A non-zero exit is `spawn_failed` with `details` `{argv, exit, stdout, stderr}`; a deadline is `tool_timeout`.
+- **Status** (`status`). The `status` subcommand of the script through `ports.runner`, as above, then the health pid as in launch, read only: no ensure.
+
+SIGUSR1 makes the running main process reload the WebUI in place (docs/ui-preview.md, "Electron app"). Nothing here starts a process that waits, and nothing sleeps.
+
+**Tests** (the tests Job; in-process on `Fakes`, the policy of `docs/implementing.md` "Tests"): a `Runner` route for `pnpm`, `plutil` and `sh`; a `Spawn` fake for `spawn`, `alive` and `signal`; a temporary `HOME` and `CPD_HOME`; `App.macos` set by the test. No test starts Electron, runs pnpm or runs `preview-web.sh` for real (policy [tests]).
 
 ## The portability check
 

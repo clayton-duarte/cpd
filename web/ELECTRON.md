@@ -4,17 +4,19 @@ The Electron app is a standalone Electron desktop app in `web/` with two views o
 
 ## Run
 
-Run the app from the repository root:
+Launch the app with `cpd app`:
 
 ```sh
-pnpm --filter cpd-web-client run electron
+cpd app
 ```
 
-The script runs `build:electron`, then makes node-pty's `spawn-helper` executable. node-pty 1.1.0 ships it with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. It then launches Electron. Electron downloads its binary lazily on the first launch, so the first run needs network access.
+`cpd app` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `app_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
+
+These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. Electron downloads its binary lazily on the first launch, so the first run needs network access. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
 
 Prerequisites:
 
-- `pnpm install` has been run in the repository root.
+- `cpd install --root <checkout>` has run for the checkout you launch (it runs `pnpm install --frozen-lockfile` there).
 - `cpd` and `tmux` are installed and on the PATH. The pty runs `cpd tui --attach` in your home directory with your login-shell PATH.
 - Maple Mono is installed on the system. It is not bundled; without it the terminal falls back to the generic monospace font.
 
