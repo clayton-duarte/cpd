@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ReactElement } from "react";
 import { cn } from "../../lib/utils.ts";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/dialog.tsx";
 
 export interface LogEvent {
@@ -32,14 +33,14 @@ function Rows({ events }: { events: readonly LogEvent[] }): ReactElement {
   }, [events]);
   if (events.length === 0) return <p className="font-mono text-meta text-fg-dim">none yet</p>;
   return (
-    <div
-      data-part="log-rows"
-      className="max-h-[60vh] overflow-y-auto font-mono text-meta"
-      onScroll={(e) => {
-        const el = e.currentTarget;
+    <ScrollArea
+      className="[&>[data-slot=scroll-area-viewport]]:max-h-[60vh]"
+      onScrollCapture={(e) => {
+        const el = e.target as HTMLElement;
         follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 2;
       }}
     >
+    <div data-part="log-rows" className="font-mono text-meta">
       {events.map((e) => (
         <div key={e.id} data-part="log-row" className={cn("whitespace-pre-wrap", toneClass(e))}>
           <span data-part="log-time" className="text-fg-dim">{clock(e.at)}</span>
@@ -48,6 +49,7 @@ function Rows({ events }: { events: readonly LogEvent[] }): ReactElement {
       ))}
       <div ref={end} />
     </div>
+    </ScrollArea>
   );
 }
 

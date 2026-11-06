@@ -60,6 +60,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "../components/popover.tsx";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
 import {
   age,
@@ -708,7 +709,8 @@ export function Inbox(props: {
           up to date, drink some water
         </p>
       ) : (
-        <ItemGroup className="min-h-0 flex-1 gap-2 overflow-y-auto px-2.5 py-1.5">
+        <ScrollArea className="min-h-0 flex-1">
+        <ItemGroup className="gap-2 px-2.5 py-1.5">
           {filteredRows.map((row) => (
             <InboxItemRow
               key={row.id}
@@ -724,6 +726,7 @@ export function Inbox(props: {
             />
           ))}
         </ItemGroup>
+        </ScrollArea>
       )}
       <Dialog
         open={curateRow !== null}
@@ -731,7 +734,7 @@ export function Inbox(props: {
           if (!open) setCurateRow(null);
         }}
       >
-        <DialogContent>
+        <DialogContent className="overflow-hidden">
           <DialogHeader>
             <DialogTitle>
               {curateRow?.contextId
@@ -742,7 +745,8 @@ export function Inbox(props: {
               Checked records will be retired; unchecked records will be kept.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex max-h-64 flex-col gap-2 overflow-y-auto py-1">
+          <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-64">
+          <div className="flex flex-col gap-2 py-1">
             {(curateRow?.curation ?? []).length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No pending records to retire.
@@ -780,6 +784,7 @@ export function Inbox(props: {
               })
             )}
           </div>
+          </ScrollArea>
           <DialogFooter>
             <Button
               type="button"
