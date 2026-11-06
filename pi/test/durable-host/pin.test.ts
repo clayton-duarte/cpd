@@ -14,7 +14,7 @@ test("package.json pins the earendil-works packages at 1.5.0", () => {
   for (const name of ["chord", "pi-coding-agent", "pi-ai", "pi-codemode", "pi-durable"]) {
     assert.equal(pkg.dependencies[`@earendil-works/${name}`], "1.5.0", name);
   }
-  assert.equal(pkg.devDependencies["@earendil-works/pi-tui"], "^1.5.0");
+  assert.equal(pkg.dependencies["@earendil-works/pi-tui"], "^1.5.0");
 });
 
 test("the host's PI_DURABLE equals the pi-durable pin of package.json", () => {

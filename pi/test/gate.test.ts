@@ -51,13 +51,13 @@ test("the CI workflow runs the stages of verify:steps, in order, as named steps"
 
 test("package.json pins pnpm and the repository carries a pnpm lockfile and no npm lockfile", () => {
   const root = join(fileURLToPath(import.meta.url), "..", "..", "..");
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { packageManager: string; devDependencies: Record<string, string> };
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { packageManager: string; dependencies: Record<string, string>; devDependencies: Record<string, string> };
   assert.match(pkg.packageManager, /^pnpm@\d+\.\d+\.\d+$/);
   assert.equal(existsSync(join(root, "pnpm-lock.yaml")), true);
   assert.equal(existsSync(join(root, "pnpm-workspace.yaml")), true);
   assert.equal(existsSync(join(root, "package-lock.json")), false);
   assert.ok("chalk" in pkg.devDependencies);
-  assert.ok("typebox" in pkg.devDependencies);
+  assert.ok("typebox" in pkg.dependencies);
   const ws = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
   assert.match(ws, /^allowBuilds:/m);
   assert.doesNotMatch(ws, /set this to true or false/);
