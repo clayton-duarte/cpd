@@ -20,8 +20,8 @@ use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::ids::{OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::policy::{PolicyKey, policy_dir, repo_path, resolve};
-use crate::pr::posts::{self, PostRecord};
 use crate::pr::jira_sync;
+use crate::pr::posts::{self, PostRecord};
 use crate::swr::outbox::{self, Coalesce, Mutation, Op};
 use crate::swr::{cache, endpoint};
 
@@ -176,9 +176,7 @@ pub struct Overlaid {
 
 /// This transaction's time, the `submitted_at` of a write made inside a caller's transaction.
 fn txn_at(tx: &crate::store::WriteTxn<'_>) -> Result<String, CpdError> {
-    Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| {
-        r.get(0)
-    })?)
+    Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?)
 }
 
 /// Inserts a `pending` mutation of `op_kind` on the channel query; with `dedupe` an active one with the same `vars` is returned
@@ -471,10 +469,7 @@ fn requeue_parked(cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<(), CpdError> 
     for (plan, workflow, channel, ts, emoji) in parked {
         let home = cx.home.clone();
         // A policy that does not resolve is reported where the policy is used; nothing is re-queued for it.
-        let Ok(resolved) = cx
-            .store
-            .read(|c| policy_emoji(c, &home, &plan, &workflow))
-        else {
+        let Ok(resolved) = cx.store.read(|c| policy_emoji(c, &home, &plan, &workflow)) else {
             continue;
         };
         if resolved.emoji.is_empty() || resolved.emoji == emoji {
@@ -658,8 +653,12 @@ fn send_failed(e: &CpdError) -> ExecOutcome {
 
 fn execute_post(cx: &mut Cx<'_>, vars: &Value) -> ExecOutcome {
     let text = |name: &str| vars[name].as_str().unwrap_or_default().to_owned();
-    let (channel, plan, workflow, message) =
-        (text("channel"), text("plan"), text("workflow"), text("text"));
+    let (channel, plan, workflow, message) = (
+        text("channel"),
+        text("plan"),
+        text("workflow"),
+        text("text"),
+    );
     let sent = crate::slack::call(
         cx.config,
         "slack-post.ts",

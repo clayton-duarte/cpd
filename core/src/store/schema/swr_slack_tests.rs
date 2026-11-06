@@ -13,7 +13,10 @@ fn open_reactions_move_to_the_outbox_and_the_queue_is_emptied() {
         .copied()
         .take_while(|n| !n.name.ends_with("-swr-slack"))
         .collect();
-    assert!(earlier.len() < NAMED.len(), "swr-slack is a built-in migration");
+    assert!(
+        earlier.len() < NAMED.len(),
+        "swr-slack is a built-in migration"
+    );
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
     store
         .write("fixture", |tx| {
