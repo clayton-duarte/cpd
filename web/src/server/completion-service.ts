@@ -8,6 +8,7 @@ export interface CompletionTracker { observe(m: SessionServerMessage): void; dis
 
 export function createCompletionService(deps: { classifier: CompletionClassifier; planOf: (ref: SessionRef) => Promise<PlanViewModel | null> }): { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker } {
   const cache = new Map<string, Completion>();
+  const last = new Map<string, Completion>();
   const inflight = new Map<string, Promise<Completion | null>>();
   return {
     track(ref, send) {
@@ -15,6 +16,8 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
       let dialogs = new Set<string>();
       let busy = false;
       let disposed = false;
+      const replay = ref.role === "lead" ? last.get(ref.id) : undefined;
+      if (replay !== undefined) send({ type: "session.completion", sessionId: ref.id, completion: replay });
 
       const compute = async (): Promise<void> => {
         if (ref.role !== "lead" || items.length === 0) return;
@@ -43,6 +46,8 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
           }
           result = await p;
         }
+        if (result === null) return;
+        last.set(ref.id, result);
         if (!disposed) send({ type: "session.completion", sessionId: ref.id, completion: result });
       };
       const schedule = (): void => { void compute().catch(() => undefined); };
