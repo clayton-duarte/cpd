@@ -22,6 +22,7 @@ import { barStatus, StatusBar } from "./cockpit/StatusBar.tsx";
 import { resetLayout } from "./cockpit/layout.ts";
 import type { LayoutPanels } from "./cockpit/layout.ts";
 import type { SettingsChanges } from "../protocol/cockpit.ts";
+import { DocsDialog } from "./dialogs/DocsDialog.tsx";
 import { LegendDialog } from "./dialogs/LegendDialog.tsx";
 import { LogsDialog } from "./dialogs/LogsDialog.tsx";
 import { SettingsDialog } from "./dialogs/SettingsDialog.tsx";
@@ -61,6 +62,7 @@ export function App(props: AppProps): ReactElement {
   const activeError = lastError ?? cockpit.error;
   const panelsRef = useRef<LayoutPanels | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -77,6 +79,7 @@ export function App(props: AppProps): ReactElement {
   }, [cockpit.costs, cockpit.tree]);
   const onReset = useCallback(() => { if (panelsRef.current !== null) resetLayout(panelsRef.current); }, []);
   const onLegend = useCallback(() => setLegendOpen(true), []);
+  const onDocs = useCallback(() => setDocsOpen(true), []);
   const onLogs = useCallback(() => { connection.readLogs(); setLogsOpen(true); }, [connection]);
   const onSettings = useCallback(() => { connection.readSettings(); setSettingsOpen(true); }, [connection]);
   const onCosts = useCallback(() => setCostsOn((on) => !on), []);
@@ -274,6 +277,7 @@ export function App(props: AppProps): ReactElement {
           costsOn={costsOn}
           onReset={onReset}
           onLegend={onLegend}
+          onDocs={onDocs}
           onLogs={onLogs}
           onCosts={onCosts}
           onSettings={onSettings}
@@ -311,6 +315,7 @@ export function App(props: AppProps): ReactElement {
       }
     />
     <LegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />
+    <DocsDialog open={docsOpen} onClose={() => setDocsOpen(false)} />
     <LogsDialog open={logsOpen} onClose={() => setLogsOpen(false)} events={cockpit.logs ?? []} />
     <SettingsDialog
       open={settingsOpen}
