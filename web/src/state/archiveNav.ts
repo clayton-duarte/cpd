@@ -37,10 +37,10 @@ export const livePlans = (c: ContextNode): PlanNode[] =>
     .filter((p) => !p.archived)
     .sort((a, b) => compareOrderKey(leadOf(a)?.dot ?? STOPPED, createdOf(a), leadOf(b)?.dot ?? STOPPED, createdOf(b)));
 
-/** Live non-standing Contexts in the order the tree shows them. */
+/** Live Contexts, standing ones included, in the order the tree shows them. */
 export const liveProjectContexts = (tree: ContextTreeModel): ContextNode[] =>
   tree.contexts
-    .filter((c) => !c.archived && !isPermanent(c.id))
+    .filter((c) => !c.archived)
     .sort((a, b) => compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
 
 export interface Selection { readonly sessionId: string; readonly planId: string | null }

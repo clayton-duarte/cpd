@@ -18,7 +18,7 @@ import {
 } from "../components/sidebar.tsx";
 import { clearDraft } from "../composer/drafts.ts";
 import { usePersistedBoolean } from "./persisted.ts";
-import { PERMANENT_IDS, STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
+import { STOPPED, compareOrderKey, createdOf, isPermanent, leadOf, managerOf } from "../../state/archiveNav.ts";
 
 const COUNTERS = [
   ["draft", "text-status-decision"],
@@ -380,7 +380,12 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
           className={hasChildren ? "pr-7" : undefined}
         >
           <Dot dot={manager === undefined ? STOPPED : manager.dot} archived={props.allPlans || context.archived} />
-          <span data-part="context-id" title={context.title} className="min-w-0 flex-1 truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span data-part="context-id" title={context.title} className="truncate font-mono text-key font-semibold text-fg-strong">{context.id}</span>
+            {permanent ? (
+              <span data-part="phi" aria-hidden="true" className="-translate-y-[1px] shrink-0 select-none font-display text-[14px] font-bold leading-none text-fg-strong">φ</span>
+            ) : null}
+          </span>
           <RowCost on={props.costsOn} value={props.costs?.contexts[context.id]} />
         </SidebarMenuButton>
         </RowMenu>
@@ -409,7 +414,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
 }
 
 function TreeSection(props: {
-  section: "contexts" | "standing" | "archive";
+  section: "contexts" | "archive";
   label: string;
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -482,24 +487,18 @@ export function ContextTree(props: {
   const menu: MenuApi | undefined = onAction === undefined ? undefined : { act: onAction, ask: setPrompt, taken };
   const handlers = menu === undefined ? rest : { ...rest, menu };
   const [contextsOpen, setContextsOpen] = usePersistedBoolean("section:contexts", true);
-  const [standingOpen, setStandingOpen] = usePersistedBoolean("section:standing", true);
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);
 
   const all = tree === null ? [] : tree.contexts;
   const projectContexts = all
-    .filter((c) => !c.archived && !isPermanent(c.id))
+    .filter((c) => !c.archived)
     .sort((a, b) => compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
-  const standing = PERMANENT_IDS.map((id) => all.find((c) => c.id === id)).filter(
-    (c): c is ContextNode => c !== undefined,
-  );
   const archived: ContextNode[] = [
     ...all.filter((c) => c.archived && !isPermanent(c.id)),
     ...all
       .filter((c) => !c.archived && c.plans.some((p) => p.archived))
       .map((c) => ({ ...c, plans: c.plans.filter((p) => p.archived) })),
   ];
-
-  const showStanding = standing.length > 0 || archived.length > 0;
 
   return (
     <Sidebar collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
@@ -526,12 +525,6 @@ export function ContextTree(props: {
             <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
           )}
         </TreeSection>
-        {showStanding ? <Separator className="shrink-0" /> : null}
-        {showStanding ? (
-          <TreeSection section="standing" label="Standing" open={standingOpen} onOpenChange={setStandingOpen} groupAttrs={{ "data-standing": true }}>
-            <ContextList contexts={standing} allPlans={false} {...handlers} />
-          </TreeSection>
-        ) : null}
         {archived.length > 0 ? <Separator className="shrink-0" /> : null}
         {archived.length > 0 ? (
           <TreeSection section="archive" label="Archive" open={archivedOpen} onOpenChange={setArchivedOpen} groupAttrs={{ "data-archived": true }}>
