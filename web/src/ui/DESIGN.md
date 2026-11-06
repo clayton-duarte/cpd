@@ -1,6 +1,6 @@
 # Dango v3 + shadcn/ui: design contract (foundation and cockpit shell)
 
-Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/` (`cpd-web-client`). This file is the contract for the foundation (Tailwind wiring, tokens, fonts, glyphs, `dango-status.ts`, `cn`, shadcn parts, typeset) and the cockpit shell (Header, Context Tree, Status Bar, Shell split, `App.tsx` wiring). The plan view and inbox are in `DESIGN-panes.md`, the transcript, folds and tool rows in `DESIGN-chat.md`, the composer, footer and cards in `DESIGN-compose.md`. Tests are written from this document alone, the implementation from the tests and this document.
+Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/` (`cpd-web-client`). This file is the contract for the foundation (Tailwind wiring, tokens, fonts, glyphs, `dango-status.ts`, `cn`, shadcn parts, typeset) and the cockpit shell (Context Tree, Status Bar, Shell split, `App.tsx` wiring; the Header bar is removed, 3a). The plan view and inbox are in `DESIGN-panes.md`, the transcript, folds and tool rows in `DESIGN-chat.md`, the composer, footer and cards in `DESIGN-compose.md`. Tests are written from this document alone, the implementation from the tests and this document.
 
 Sources: the design handoff (`HANDOFF.md`, `COMPONENTS.md`, `app/globals.css`, `lib/dango-status.ts`) and the boards (`Main.dc.html` and the others). Records: pro-d16, pro-d18, pro-d19, pro-d21, pro-n11 to pro-n15. Accepted assumptions A1 to A6 are restated where they bind.
 
@@ -94,7 +94,7 @@ Cursor is `#ecaec7` (`--sakura-bright`) and selection is `#5a504a` (`--line`) (r
 
 | Existing rule (today) | Fate | Replaced by / reason |
 |---|---|---|
-| `[data-shell] { display:grid; grid-template-columns: 20rem 1fr 22rem; grid-template-rows: auto minmax(0, 1fr) auto; height:100vh; overflow:hidden; gap:.5rem }` | **kept, columns and gap changed** | `grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; overflow: hidden; gap: 0`. The three columns are no longer grid tracks: they are the panels of the resizable group `cpd-columns` (3c), which is the one grid child in row 2. Same selector; `display`, `height`, `overflow`, `grid-template-rows` values are exactly the ones test 1 pins, so test 1 is unchanged. Widths are the boards' 272px (tree) and 340px (inbox). |
+| `[data-shell] { display:flex; flex-direction:column; height:100vh; overflow:hidden }` | **replaced by flex (pro-d87)**; the Phase 2 grid rule is gone | No grid, no tracks, no gap (pro-d87, A2). The columns group `cpd-columns` (3c) is the first child and takes the free height (`min-h-0 flex-1`); the Status Bar footer is the last child. The three columns are the panels of that group, not grid tracks. Widths are the boards' 272px (tree) and 340px (inbox). |
 | `[data-shell] > * { min-height: 0 }` | **kept** | pinned by test 1 |
 | `[data-shell] > aside { grid-row:2; overflow-y:auto; min-width:0 }` | **replaced** | `[data-shell] aside { height: 100%; overflow: hidden; min-width: 0 }` (pro-d69, A9, A10). The asides are inside the tree and inbox Panels (3c), not direct children of `[data-shell]`; the descendant selector matches them. The asides clip and never scroll themselves; their content scrolls through `ScrollArea` (3c, Scrolling). |
 | `[data-column] { grid-row:2; overflow:auto; min-width:0; display:flex; flex-direction:column }` | **kept** except `grid-row` and `overflow`: `height: 100%; overflow: hidden; min-width: 0; display: flex; flex-direction: column` (the split panels scroll, not the column; the column fills its Panel) | `[data-column="center"] { min-height: 0 }` kept (test 3) |
@@ -106,7 +106,7 @@ Cursor is `#ecaec7` (`--sakura-bright`) and selection is `#5a504a` (`--line`) (r
 | `[data-diff="add"] { background:#e6ffed }`, `[data-diff="remove"] { background:#ffeef0 }` | **removed** | light-mode hex on a dark UI. The `data-diff` attributes are KEPT on `CodeBlockLine`; the tone utilities are in `DESIGN-chat.md` 3.6 (`bg-status-done/[0.11]`, `bg-status-blocked/10`). |
 | `[data-side-by-side] { display:grid; grid-template-columns:1fr 1fr; gap:.5rem }` | **replaced (defect fix)** | Known defect: `AskCard` emits `data-layout="side-by-side"` (CONTRACT 1500), but the rule styles `[data-side-by-side]`, which matches nothing, so the two-column layout never applied. The selector becomes `[data-layout="side-by-side"]`; the final layout is in `DESIGN-compose.md`. |
 | `button:disabled, textarea:disabled, select:disabled { opacity:.5; cursor:not-allowed }` | **kept** | |
-| `[data-shell] > header { grid-row:1; grid-column:1 / -1 }`, `[data-shell] > footer { grid-row:3; grid-column:1 / -1 }` | **kept** | |
+| `[data-shell] > footer { flex-shrink: 0 }` | **changed (pro-d87)**; `[data-shell] > header` **removed** | The `[data-shell] > header` rule and the `grid-row` / `grid-column` rules go with the Header bar and the grid (pro-d87, A2). The footer no longer takes a grid row; it does not shrink. |
 
 Not built (CSS that stays): there is no responsive layout. The board's `@media (max-width: 980px)` stacking and the `Sheet` drawers of COMPONENTS §2 are not built; below 980px the shell scrolls nothing and clips. Panel sizes are not persisted across reloads (3c).
 
@@ -469,7 +469,7 @@ Written by hand (A2) from `https://ui.shadcn.com/r/styles/radix-rhea/<name>.json
 | `message-scroller.tsx` | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton`, `useMessageScroller`, `useMessageScrollerScrollable`, `useMessageScrollerVisibility` | built on `@shadcn/react/message-scroller` (namespace `Provider`, `Root`, `Viewport`, `Content`, `Item`, `Button`). Props that matter: provider `autoScroll`, `defaultScrollPosition: "start" \| "end" \| "last-anchor"`, `scrollEdgeThreshold`; viewport `preserveScrollOnPrepend`; item `messageId`, `scrollAnchor`; button `direction: "start" \| "end"`. The file is provided for `DESIGN-chat.md`; the Phase 2 `Transcript` windowing and sticky auto-scroll (`data-row-key`, `data-at-bottom`) are **not** replaced by it. | registry `message-scroller` (uses `./button.tsx`, `ArrowDownIcon`) |
 | `questionnaire.tsx` | `Questionnaire`, `QuestionnaireActions`, `QuestionnaireChoice`, `QuestionnaireChoiceDescription`, `QuestionnaireChoices`, `QuestionnaireDescription`, `QuestionnaireError`, `QuestionnaireInput`, `QuestionnaireItem`, `QuestionnaireNext`, `QuestionnairePrevious`, `QuestionnaireProgress`, `QuestionnaireSkip`, `QuestionnaireSubmit`, `QuestionnaireTitle` | built on `@shadcn/react/questionnaire`; `shortcuts: "letters" \| "numbers"`; item `multiple`. | registry `questionnaire` (uses `./button.tsx`, `CheckIcon`) |
 | `alert.tsx` | `Alert`, `AlertTitle`, `AlertDescription` | `variant`: `default`, `destructive` (cva); `data-slot` `alert`. Used by the cockpit error toast in `App.tsx` (DESIGN-panes 4.8). | shadcn/ui `alert`, hand-written (pro-d55) |
-| `breadcrumb.tsx` | `Breadcrumb`, `BreadcrumbList`, `BreadcrumbItem`, `BreadcrumbLink` (`render` prop), `BreadcrumbPage`, `BreadcrumbSeparator`, `BreadcrumbEllipsis` | `nav` root, `ol` list, `li` item; `BreadcrumbLink` renders through `render`; `BreadcrumbPage` is the current crumb (`aria-current="page"`). Used by the Header (DESIGN-panes 4.1). | shadcn/ui `breadcrumb`, hand-written (pro-d60) |
+| `breadcrumb.tsx` | `Breadcrumb`, `BreadcrumbList`, `BreadcrumbItem`, `BreadcrumbLink` (`render` prop), `BreadcrumbPage`, `BreadcrumbSeparator`, `BreadcrumbEllipsis` | `nav` root, `ol` list, `li` item; `BreadcrumbLink` renders through `render`; `BreadcrumbPage` is the current crumb (`aria-current="page"`). Its only cockpit user, the Header, is removed by pro-d87 (DESIGN-panes 4.1); pinned by its own tests. | shadcn/ui `breadcrumb`, hand-written (pro-d60) |
 | `code-block.tsx` | `CodeBlock`, `CodeBlockHeader`, `CodeBlockTitle`, `CodeBlockActions`, `CodeBlockCopyButton`, `CodeBlockContent`, `CodeBlockLine`, `CodeBlockFooter` | `CodeBlockLine` carries `data-diff` and a `variant`; imports the `Button` part. Used for tool output and edit diffs (DESIGN-chat 3.6). | shadcn/ui `code-block`, hand-written (pro-d55) |
 | `dropdown-menu.tsx` | `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioGroup`, `DropdownMenuRadioItem`, `DropdownMenuLabel`, `DropdownMenuSeparator`, `DropdownMenuShortcut`, `DropdownMenuGroup`, `DropdownMenuPortal`, `DropdownMenuSub`, `DropdownMenuSubTrigger`, `DropdownMenuSubContent` | over the `DropdownMenu` primitive of `radix-ui` (already a dependency). Used by the TierSelector's model and Tier menus (DESIGN-compose 2). | shadcn/ui `dropdown-menu`, hand-written (pro-d55) |
 | `empty.tsx` | `Empty`, `EmptyHeader`, `EmptyMedia` (`variant="icon"`), `EmptyTitle`, `EmptyDescription`, `EmptyContent` | plain `div`/`p` parts. The transcript's empty state (DESIGN-chat 2.2). | shadcn/ui `empty`, hand-written (pro-d55) |
@@ -536,66 +536,19 @@ The class is added to the composer's `InputGroup` (DESIGN-compose 1.2) **only wh
 
 ## 3. Cockpit shell
 
-Files: `web/src/ui/cockpit/Header.tsx`, `StatusBar.tsx`, `ContextTree.tsx`, `Shell.tsx`, `web/src/ui/App.tsx`. All imports relative. Tests: `shell.dango.test.tsx`, `tree.dango.test.tsx` (new) and the updated Phase 2 tests (`App.test.tsx`, `AppMemo.test.tsx`, `Frame.test.tsx`, `Shell.test.tsx`, `ContextTree.test.tsx`, `app.css.test.ts`).
+Files: `web/src/ui/cockpit/StatusBar.tsx`, `ContextTree.tsx`, `Shell.tsx`, `web/src/ui/App.tsx` (`Header.tsx` is deleted, 3a). All imports relative. Tests: `shell.dango.test.tsx`, `tree.dango.test.tsx` (new) and the updated Phase 2 tests (`App.test.tsx`, `AppMemo.test.tsx`, `Frame.test.tsx`, `Shell.test.tsx`, `ContextTree.test.tsx`, `app.css.test.ts`).
 
-Layout, outside in: `div[data-shell]` is a CSS grid with one column `minmax(0,1fr)` and 3 rows `auto | minmax(0,1fr) | auto`, `height: 100vh`, `overflow: hidden`, no gap, background `bg-background`, text `text-foreground text-body font-sans`. Header spans the top (row 1, 44px), Status Bar the bottom (row 3, 30px). Row 2 is one horizontal resizable group, `cpd-columns`, with three panels: the Context tree (20%), the centre (58%) and the Inbox (22%), separated by two resizable handles. The centre panel holds a vertical resizable group, `cpd-center`, with the Plan over the chat. The page never scrolls; each column scrolls on its own.
+Layout, outside in: `div[data-shell]` is a flex column (`display: flex; flex-direction: column`), `height: 100vh`, `overflow: hidden`, no gap, background `bg-background`, text `text-foreground text-body font-sans`. The top row is one horizontal resizable group, `cpd-columns` (`min-h-0 flex-1`), with three panels: the Context tree (20%), the centre (58%) and the Inbox (22%), separated by two resizable handles. Each column opens with its `TopPaneHeader` (3i); together the three headers are the unified top row of the cockpit (pro-d87: there is no full-width Header bar, 3a). The Status Bar is the bottom row (30px). The centre panel holds a vertical resizable group, `cpd-center`, with the Plan over the chat. The page never scrolls; each column scrolls on its own.
 
-### 3a. Header (44px)
+### 3a. Header bar (removed by pro-d87)
 
-File `web/src/ui/cockpit/Header.tsx`.
+The full-width Header bar is removed (pro-d87). Its φ home link (`[data-emblem]` text `C-P-D`), its `Location` breadcrumb and its engine pill go with it: no file renders them, `Shell` has no `header` slot, and `App` builds no crumbs. The Shell's top row is the three column `TopPaneHeader`s (3i), which form the unified top row of the cockpit. The φ mark stays in the Context tree header (3d).
 
-```ts
-export interface HeaderProps {
-  /** The breadcrumb crumbs, built by `App` (DESIGN-panes 4.1). When passed, `location` is ignored. */
-  readonly crumbs?: readonly BreadcrumbCrumb[];
-  /** Fallback when `crumbs` is absent: Context and Plan of the Plan pane (from `cockpit.plan`). null/absent: no breadcrumb. */
-  readonly location?: { readonly context: string; readonly plan: string | null } | null;
-  /** `inbox.engineRunning`; null before the first snapshot. Absent is treated as null. */
-  readonly engine?: boolean | null;
-  /** Command palette (⌘K). Absent: the search button is not rendered (Not wired). */
-  readonly onOpenSearch?: () => void;
-}
-export function Header(props: HeaderProps): ReactElement;
-```
-
-`<Header />` with no props must render (the Phase 2 call).
-
-DOM (the surrounding `header[aria-label="Cockpit header"]` is written by `Shell`, KEPT):
-
-```
-div[data-part="header-bar"]                                  flex h-full items-center gap-4 px-[14px] border-b border-border
-├─ a[data-part="home"][href="#"][aria-label="cpd home"]      flex items-center no-underline
-│   ├─ span[data-emblem].sr-only      text "C-P-D"            KEPT: the hook and the exact text (Frame.test 1)
-│   └─ span[data-part="phi"][aria-hidden="true"]  text "φ"   font-display font-bold text-[28px] leading-none text-fg-strong
-├─ nav[aria-label="Location"][data-part="breadcrumb"]        shadcn Breadcrumb (2f); font-mono text-xs; only when there is at least one crumb (DESIGN-panes 4.1)
-│   └─ ol  BreadcrumbList; one li per crumb, a BreadcrumbSeparator "/" between items
-│       ├─ li > span[data-part="breadcrumb-host"]     {host}     text-muted-foreground      (a button when the crumb has onClick)
-│       ├─ li > span[data-part="breadcrumb-group"]    standing | contexts | archive   text-muted-foreground
-│       ├─ li > span[data-part="breadcrumb-context"]  {Manager crumb}    a button when it has onClick
-│       ├─ li > span[data-part="breadcrumb-plan"]     {Lead crumb}       a button when it has onClick
-│       └─ li > span[data-part="breadcrumb-worker"]   {Worker crumb}     a button when it has onClick
-    The last crumb is the current page: `BreadcrumbPage` (`aria-current="page"`, `font-medium text-fg-strong`).
-├─ span.flex-1
-├─ button[data-part="search"][type="button"]                 only when onOpenSearch is passed
-│     flex items-center gap-2.5 w-[420px] max-w-[40vw] h-7 px-2.5 rounded-[7px] border border-input bg-card text-muted-foreground text-[12.5px]
-│   ├─ svg (lucide SearchIcon) size 14, aria-hidden
-│   ├─ span.flex-1  "Jump to context, plan, job, PR…"            (U+2026)
-│   └─ kbd.font-mono  "⌘K"     text-meta text-muted-foreground border border-edge rounded-[4px] px-[5px]
-├─ span.flex-1                                               (second spacer only when the search button is rendered)
-└─ span[data-part="engine"][data-state="running|stopped|unknown"]   flex items-center gap-[7px] text-[12px] text-muted-foreground
-    ├─ span[aria-hidden="true"]  className={glyphClass[g]}   g: running → done, stopped → blocked, unknown → idle
-    ├─ span.font-mono  "engine"
-    └─ span.text-fg-dim  "running" | "not running" | "unknown"
-```
-
-- The search button has no `aria-label`; its accessible name is its text `Jump to context, plan, job, PR…`. Click and `⌘K` / `Ctrl+K` (a `keydown` listener on `document` while the Header is mounted, `metaKey || ctrlKey` and `key === "k"`, `preventDefault()`) both call `onOpenSearch`; the listener is registered only when `onOpenSearch` is passed.
-- Engine copy is exactly `engine` + `running` | `not running` | `unknown`; `data-state` is `running` when `engine === true`, `stopped` when `false`, `unknown` otherwise. The board's `connected · pi + durable` is replaced: the data is `InboxModel.engineRunning` only. `not running` is the Phase 2 inbox phrase (`Engine is not running`).
-- **Resolution:** the φ colour is `#f3ead9` (`text-fg-strong`), as the board renders it; COMPONENTS §9 says Shiro (`#aba3af`) and is overruled. **Resolution:** Phase 2 pins `[data-emblem]` text `C-P-D`; the φ is drawn by a separate aria-hidden span so that text stays exact.
-- Not wired: command palette (`onOpenSearch` is not passed by `App`, so no search button), the engine pill's `pi + durable` detail. The breadcrumb crumbs are built and clickable (DESIGN-panes 4.1).
+Known loss (pro-d87, A3): the engine running/stopped pill and the breadcrumb navigation are not rebuilt. The breadcrumb contract of DESIGN-panes 4.1 is superseded. The search button and `⌘K` (never wired) leave with the bar. `web/src/ui/components/breadcrumb.tsx` stays as an upstream primitive (2f), with no cockpit user.
 
 ### 3b. Status Bar (30px)
 
-Files: `web/src/ui/cockpit/StatusBar.tsx` (the bar), `web/src/ui/cockpit/LegendDialog.tsx`, `web/src/ui/cockpit/LogsDialog.tsx`, `web/src/ui/cockpit/AgentTiersDialog.tsx` (the three popups). Records: **pro-d40** and the User's answers. The bar **mirrors the TUI status bar** (`core/src/host/tmux.rs:476-520`, the cockpit's tmux status line) and its popups, one element per row of the table below, left to right. The slim header stays (3a). The Phase 2 `State:` segment leaves the bar: it is not one of the TUI status-bar elements. The cockpit name and the engine state are not in the bar either.
+Files: `web/src/ui/cockpit/StatusBar.tsx` (the bar), `web/src/ui/cockpit/LegendDialog.tsx`, `web/src/ui/cockpit/LogsDialog.tsx`, `web/src/ui/cockpit/AgentTiersDialog.tsx` (the three popups). Records: **pro-d40** and the User's answers. The bar **mirrors the TUI status bar** (`core/src/host/tmux.rs:476-520`, the cockpit's tmux status line) and its popups, one element per row of the table below, left to right. The Phase 2 `State:` segment leaves the bar: it is not one of the TUI status-bar elements. The cockpit name and the engine state are not in the bar either.
 
 The web draws the TUI's pills as coloured text on `bg-surface-sunken`: the TUI's caps and reversed blocks are tmux drawing, not data. Buttons are shadcn/ui `Button` (`ghost`), dialogs are shadcn/ui `Dialog` (2f), all on the Dango tokens (2b). The TUI's `━` joins are not drawn; the gap between elements separates them. Icons are lucide icons of the same meaning as the TUI glyphs (named in the table); the lucide names are checked at implementation.
 
@@ -735,18 +688,17 @@ File `web/src/ui/cockpit/Shell.tsx`. The resizable parts are `web/src/ui/compone
 ```ts
 export function Shell(props: {
   tree: ReactNode; plan: ReactNode; chat: ReactNode; inbox: ReactNode;   // KEPT
-  header?: ReactNode; status?: ReactNode;                                 // KEPT
+  status?: ReactNode;                                                     // KEPT
 }): ReactElement;
 ```
 
 **Every resizable split in the Shell is a shadcn/ui resizable group** (`ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle` with `withHandle`, `usePanelRef`), over `react-resizable-panels` 4.15.3 (pro-d41). There are two groups. The outer horizontal group `cpd-columns` holds the three columns (Context tree, centre, Inbox). The inner vertical group `cpd-center` sits in the centre column and holds the Plan over the chat. No other split is drawn with a bespoke Separator.
 
-DOM. Children of `div[data-shell]`, in order: `header[aria-label="Cockpit header"]` (only when `header !== undefined`), the columns group (row 2), `footer[aria-label="Status bar"]` (only when `status !== undefined`). The three columns are **not** direct children of `div[data-shell]`: they are the panels of the columns group.
+DOM. Children of `div[data-shell]`, in order: the columns group (the top row), `footer[aria-label="Status bar"]` (only when `status !== undefined`). The `header` prop and its slot are removed (pro-d87, A1). The three columns are **not** direct children of `div[data-shell]`: they are the panels of the columns group.
 
 ```
-div[data-shell]                                                   grid, one column (2a)
-├─ header[aria-label="Cockpit header"]     bg-background           (row 1)
-├─ ResizablePanelGroup id="cpd-columns" data-part="columns-group" orientation="horizontal"   min-h-0 flex-1   (row 2; renders a div)
+div[data-shell]                                                   flex column (2a)
+├─ ResizablePanelGroup id="cpd-columns" data-part="columns-group" orientation="horizontal"   min-h-0 flex-1   (top row; renders a div)
 │   ├─ ResizablePanel id="tree" data-part="tree-panel"            defaultSize 20% · minSize 12% · maxSize 40% · collapsible · collapsedSize 0%
 │   │   └─ aside[aria-label="Context tree column"]   h-full overflow-hidden      {tree}   (Sidebar, 3d)
 │   ├─ ResizableHandle id="split-left" data-part="split-left" withHandle aria-label="Resize context tree and center"
@@ -763,7 +715,7 @@ div[data-shell]                                                   grid, one colu
 │   ├─ ResizableHandle id="split-right" data-part="split-right" withHandle aria-label="Resize center and inbox"
 │   └─ ResizablePanel id="inbox" data-part="inbox-panel"          defaultSize 30% · minSize 14% · maxSize 45% · collapsible · collapsedSize 0%
 │       └─ aside[aria-label="Inbox column"]   h-full overflow-hidden      {inbox}   (DESIGN-panes 2)
-└─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (row 3)
+└─ footer[aria-label="Status bar"]   flex items-center border-t border-border bg-surface-sunken   (bottom; shrink-0)
 ```
 
 `div[data-column="center"]` (the centre panel's child, a plain `div`, KEPT hook) has exactly **2** children, the centre group and the controls. The Phase 2 descendant selectors `div[data-column="center"] section[aria-label="Plan pane"] #p` and `div[data-column="center"] main[aria-label="Chat"] #c` still match. The plan controls are Shell-owned: the board puts them in the plan title row, but the Plan view is another contract; the plan title row is a `TopPaneHeader` with `pr-12` (48px), which keeps the right side free for them (3i).
@@ -929,9 +881,6 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 
 ```tsx
 <Shell
-  header={<Header
-    location={cockpit.plan === null ? null : { context: cockpit.plan.contextId, plan: cockpit.plan.planId }}
-    engine={cockpit.inbox === null ? null : cockpit.inbox.engineRunning} />}
   status={<StatusBar status={cockpit.status} costsOn={costsOn} onToggleCosts={toggleCosts} />}
   tree={…KEPT…} plan={…KEPT…} chat={…KEPT…} inbox={…KEPT…} />
 ```
@@ -940,7 +889,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 - **Plan pane (pro-d70, pro-d75).** `visiblePlan !== null` renders `ErrorBoundary name="PlanView"` around `MemoPlan`, with `postableWorkflows` when the Inbox is loaded (DESIGN-panes 1f). Otherwise `ErrorBoundary name="ManagerView"` renders `MemoManager` (DESIGN-panes 1j) with `context` = the Context whose own `sessions`, or whose Plans' `sessions`, hold the selected session (`session?.id ?? selectedSessionId`), or `null` (then `CpdFlowCanvas`), and with `onSelectPlan` and `onSelectSession` as `App`'s handlers. `PlanView` gets `onSelectManager` (pro-d84, A5): it finds the Context's live Manager (its `manager` session that is not archived), calls `onSelectPlan(null)`, then `onSelectSession(manager.ref.id)` when there is one. The manager key of the title row (DESIGN-panes 1) calls it.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
 - `cockpit.status` is the status snapshot the server sends (3b, Data sources). The Status Bar's buttons, dialogs and the reset of 3c are wired inside the bar and `Shell`; `App` passes the snapshot and the costs flag only. `costsOn` is `App` state (`useState(false)`), never stored (3b).
-- Not built in `App`: `onOpenSearch`, `onNewContext`; the Header's `location` shows only when a Plan is loaded in the Plan pane (`cockpit.plan`), the breadcrumb is built from the tree and the selection (DESIGN-panes 4.1), so a Manager-only selection has crumbs too.
+- Not built in `App`: `onOpenSearch`, `onNewContext`. `App` builds no breadcrumb crumbs and passes no `header` (pro-d87, A1); the engine pill and the breadcrumb navigation are a known loss, not rebuilt (3a).
 
 ### 3f. Phase 2 tests this section changes (owner `ui-impl-shell`)
 
@@ -948,7 +897,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 |---|---|
 | `Frame.test.tsx` 1 | none (`[data-emblem]` text `C-P-D`, now `sr-only`) |
 | `Frame.test.tsx` 2, 3, 6 | **changed** by 3b (pro-d40): the tests that read `[data-part="runner"]`, `[data-part="state"]` and `[data-part="version"]` change. The `State:` segment is removed, so its assertions go; `Runner: <x>` becomes `<x>` and is absent when unknown; `cpd: unknown` becomes absent. The `state` prop of `StatusBar` is removed. |
-| `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are `header`, the columns group (no `aria-label`) and `footer`; the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
+| `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are the columns group (no `aria-label`) and `footer` (pro-d87: no `header`); the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
 | `Shell.test.tsx` | none (descendant selectors still match) |
 | `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager row is the Context button (its dot and selection); a Context row has no `data-part="counters"`; a Plan row's counts are `data-count` spans in the keys `draft, queued, running, merging, failed, merged`, separated by one space (`planned`, `active`, `done` and ` · ` are gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
 | `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of a Plan row is its non-zero buckets separated by one space; the selected Manager is the Context button; the Context row has no counts; the `Archived (1)` summary and `button[data-action="new-context"]` are KEPT |
@@ -1077,7 +1026,7 @@ Status: contract for the web Job that implements it. No reducer or `App` code do
 
 **Archived rows the User opens (A2).** An archived row opened on purpose from the Archive section (3d) keeps the selection. Only a live-to-archived transition navigates. A selection that is already archived when the client first sees it (a fresh load, a restore from `sessionStorage`) does not navigate either; the disabled Composer below covers it.
 
-**Composer disabled on an archived selection.** When the selected session, the selected Plan or the active Context (the Context the breadcrumb shows, 3e) is archived, the Composer's textarea, attach button and Send button are `disabled`, and the textarea placeholder reads exactly:
+**Composer disabled on an archived selection.** When the selected session, the selected Plan or the active Context (the Context of the selected session; the Header breadcrumb that showed it is removed, DESIGN-panes 4.1) is archived, the Composer's textarea, attach button and Send button are `disabled`, and the textarea placeholder reads exactly:
 
     Session is archived - unarchive to send messages
 
@@ -1146,6 +1095,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; the empty state is the flowchart (pro-d68, 5.3) when no Context is selected, a selected Manager shows ManagerView (pro-d70, 3e); header `min-h-11`, title truncates | 5.3 |
 | pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
 | pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New context; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
+| pro-d87 header bar removed | the full-width Header bar (φ link, Location breadcrumb, engine pill) and the Shell `header` slot are removed; the three column `TopPaneHeader`s form the top row; the engine pill and breadcrumb navigation are a known loss, not rebuilt | 2a, 3a, 3c, 3e; DESIGN-panes 4.1 (superseded) |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
 
@@ -1189,7 +1139,7 @@ Records: pro-d62 (User approved the live changes in the running preview; this se
 
 - **The Plan shown is the selected Lead's.** `activeLeadPlanId` is the id of the Plan (PlanNode in the Context tree) that holds the active session. It is `null` when no session is selected, and when the session has no Plan (a Manager, or a Context session outside any Plan).
 - **`selectedPlanId` follows it.** While the tree is live, the restore has run and a session is selected, `App` calls `connection.selectPlan(activeLeadPlanId)` whenever it differs from `selectedPlanId`. `selectedPlanId` is `string | null` (`web/src/ui/state/selection.ts`, `PersistedSelection.planId`), so `null` is saved and loaded. `ContextTree` receives `selectedPlanId={activeLeadPlanId}`.
-- **`visiblePlan`.** The Plan pane (`MemoPlan`) and the Header `location` use `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
+- **`visiblePlan`.** The Plan pane (`MemoPlan`) uses `visiblePlan`: the loaded `cockpit.plan` when its `planId === activeLeadPlanId`, otherwise `null`. A Plan loaded for another Lead never shows.
 - **Empty state (pro-d68).** When `plan === null`, `PlanView` renders `CpdFlowCanvas` (`web/src/ui/cockpit/FlowCanvas.tsx`; root `div[data-part="flow-canvas"]`): the Plan flowchart that the Documentation dialog shows (`DocsDialog.tsx`, its flowchart tab), with its step cards collapsed at start. With no selected session, or a session in no Context, the Plan pane shows it through ManagerView (3e). A selected Manager shows ManagerView, not the flowchart (pro-d70, DESIGN-panes 1j).
 - **Header.** `div[data-part="title-row"]` is the shared `TopPaneHeader` (3i): `h-11` (44 px), no wrap, `pr-12`. It supersedes the wrapping `min-h-11` row of pro-d65. Its left content is the manager key, `/`, and `h2[data-part="plan-key"]` with the Plan id (`title={plan.title}` as its native tooltip; the key truncates), then the phase Stepper. The Review and Escalations badges are in its `actions` slot (DESIGN-panes 1).
 

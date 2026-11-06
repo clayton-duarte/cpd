@@ -510,7 +510,7 @@ Inbox: rows are listed in `inbox.rows` order with no groups; the `all` filter co
 
 ## 4. Cockpit amendments pro-d48..pro-d61 (consolidate-docs)
 
-The contract of each item below is stated in full in the section it names. This section is the index for the cockpit decisions and the one place the Header's breadcrumb is specified.
+The contract of each item below is stated in full in the section it names. This section is the index for the cockpit decisions. The Header's breadcrumb (4.1) is superseded by pro-d87.
 
 | Decision | Contract | Section |
 |---|---|---|
@@ -520,9 +520,11 @@ The contract of each item below is stated in full in the section it names. This 
 | pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions | 2.5 |
 | pro-d52 columns | full-height media and actions columns; age and primary button at the bottom | 2.5 |
 | pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | 2.6, 2.7, 4.8 |
-| pro-d60 breadcrumb | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
+| pro-d60 breadcrumb (superseded by pro-d87) | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
 
-### 4.1 Header breadcrumb (pro-d60)
+### 4.1 Header breadcrumb (pro-d60), superseded by pro-d87
+
+**Superseded by pro-d87.** The Header bar that held these crumbs is removed (DESIGN.md 3a), so no crumb is shown and `App` builds none. The breadcrumb navigation is a known loss (A3) and is not rebuilt. The text below is the pro-d60 contract as written, kept as the record; it is not current.
 
 `App.tsx` builds the crumbs (`useMemo`) and passes them to `Header` as `crumbs` (DESIGN.md 3a). Each crumb is `{ part, label, onClick? }`, `part` one of `host`, `group`, `manager`, `lead`, `worker`. The crumbs are a shadcn `Breadcrumb` (2f) in the header, `aria-label="Location"`, `data-part="breadcrumb"`, `font-mono text-xs`, separated by `/`.
 
@@ -556,7 +558,7 @@ pro-d81: when `selectedSessionId` or `selectedPlanId` changes, whatever the sour
 
 ### 4.4 Fonts and tokens (pro-d48)
 
-Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark, the Header's φ and the fold markers use `font-display`, which is the sans family.
+Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark and the fold markers use `font-display`, which is the sans family.
 
 ### 4.5 Inbox (pro-d49 to pro-d53)
 
