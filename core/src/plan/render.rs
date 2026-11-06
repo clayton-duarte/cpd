@@ -657,11 +657,41 @@ pub enum Heading<'a> {
 /// `overlaps` are those of [`super::overlap::find`]; `worker_tier` is the config key of that name, the Tier of the
 /// placeholder `open` Job of a Workflow that has not started (§4.5, hs-d497). Pure: the same Workflows, Jobs
 /// and overlaps give the same text.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
 pub fn markdown(
     heading: &Heading,
     context: &str,
     phase: &str,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+    overlaps: &[Overlap],
+    worker_tier: &str,
+    display: &Display,
+    lint: &[Finding],
+) -> String {
+    let locked = !matches!(phase, "grounding" | "plan");
+    markdown_locked(
+        heading,
+        context,
+        phase,
+        locked,
+        workflows,
+        jobs,
+        overlaps,
+        worker_tier,
+        display,
+        lint,
+    )
+}
+
+/// [`markdown`] of a Plan whose `locked` is given: a re-planned Plan is in phase `plan` and locked (pro-d433).
+#[allow(clippy::too_many_arguments)]
+pub fn markdown_locked(
+    heading: &Heading,
+    context: &str,
+    phase: &str,
+    locked: bool,
     workflows: &[WorkflowRow],
     jobs: &[Job],
     overlaps: &[Overlap],
@@ -684,7 +714,7 @@ pub fn markdown(
         format!("Context: `{context}` · Phase: `{phase}`"),
         String::new(),
     ]);
-    let later = !matches!(phase, "grounding" | "plan");
+    let later = locked;
     if later {
         out.extend([
             "This review covers the Jobs marked **under review**, the draft Jobs only; the Jobs marked Locked are shown as context and are not for approval.".to_owned(),

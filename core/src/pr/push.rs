@@ -10,7 +10,6 @@ use super::{Args, Env, gate, hide_untracked, illegal_phase, require_clean_lead, 
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
-use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::policy::Gate;
 
@@ -106,7 +105,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 /// been locked is `illegal_phase`. A `dispatch` Workflow is started but not yet open: it has a Lead
 /// worktree and Lead Branch, so pre-open pushes are allowed (hs-d801).
 fn require_pushable<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
-    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
+    if plan.plan.locked_at.is_none() {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let workflow = plan.select(&args.workflow)?;

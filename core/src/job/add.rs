@@ -56,7 +56,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 }
 
 /// [`add`] on an open `env`: what a test hands in.
-pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
+pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
@@ -127,9 +127,9 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                 Decision::Insert(job) => {
                     if matches!(job.kind.as_str(), "scout" | "research") {
                         let phase = plan_phase(tx, &plan)?;
-                        if phase == "done" {
+                        if matches!(phase.as_str(), "dispatch" | "deploy" | "done") {
                             let reason = format!("explore Job {} was added", job.key);
-                            crate::workflow::add::reopen(tx, &plan, &phase, &reason)?;
+                            crate::workflow::add::reopen(tx, &plan, &phase, "plan", &reason)?;
                         }
                     }
                     insert(tx, &plan, &job)?;
@@ -249,7 +249,8 @@ fn decide(
     );
     needs.sort();
     needs.dedup();
-    let appended = phase != "plan";
+    // After the lock, a re-planned Plan (phase plan, `locked_at` kept) included (pro-d433).
+    let appended = crate::plan::is_locked(conn, plan)?;
     // In phase `plan` every Job is a draft; after it, only with `--draft`.
     let draft = !appended || wanted.draft;
     let mut job = Job {

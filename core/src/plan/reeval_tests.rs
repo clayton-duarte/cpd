@@ -332,3 +332,14 @@ text = \"\"
 [instructions]
 text = \"\"
 ";
+
+#[test]
+fn cancelling_the_last_job_settles_a_dispatch_plan_to_done_without_illegal_transition() {
+    let rig = held();
+    rig.sql("UPDATE plans SET phase = 'dispatch' WHERE id = 'pay'");
+    job(&rig, "api-fix", "work", "failed");
+
+    cancel(&rig, "api-fix");
+
+    assert_eq!(state(&rig), done_once());
+}

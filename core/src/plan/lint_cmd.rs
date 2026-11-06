@@ -35,6 +35,7 @@ pub(super) fn find(
         jobs,
         plan.outline.as_ref(),
     )
+    .with_locked(plan.locked_at.is_some())
     .with_advice(&advice)))
 }
 

@@ -565,6 +565,15 @@ pub fn record(
     if waiting > 0 {
         return Ok(Some(Phase::Dispatch));
     }
+    // A re-planned Plan (phase plan, locked) stays in `plan`: only `dispatch` moves on to `deploy` (pro-d433).
+    let phase: String = tx.query_row(
+        "SELECT phase FROM plans WHERE id = ?1",
+        [id.as_str()],
+        |r| r.get(0),
+    )?;
+    if phase == "plan" {
+        return Ok(Some(Phase::Plan));
+    }
     let moved = tx.execute(
         "UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'",
         [id.as_str()],
@@ -741,7 +750,7 @@ enum Step {
 /// `cancelled` are `illegal_transition`. A Plan that has not been locked is
 /// `illegal_phase`.
 fn require_dispatch(plan: &PlanWorkflows, args: &Args) -> Result<Step, CpdError> {
-    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
+    if plan.plan.locked_at.is_none() {
         return Err(illegal_phase(plan, COMMAND, "dispatch"));
     }
     let workflow = plan.select(&args.workflow)?;

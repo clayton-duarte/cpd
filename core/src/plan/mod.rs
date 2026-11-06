@@ -56,6 +56,8 @@ mod rename;
 mod render;
 #[cfg(test)]
 mod render_all_jobs_tests;
+#[cfg(test)]
+mod replan_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
@@ -263,6 +265,20 @@ pub struct DeleteArgs {
     /// Delete: without it the command deletes nothing and prints what would go
     #[arg(long)]
     yes: bool,
+}
+
+/// Whether the Plan has been locked (pro-d433): `locked_at` is set. A re-planned Plan is in phase `plan` and still locked, so every
+/// rule of "before the lock" keys on this, not on the phase. A Plan that is not found is not locked.
+pub(crate) fn is_locked(conn: &rusqlite::Connection, plan: &PlanId) -> Result<bool, CpdError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT locked_at IS NOT NULL FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {

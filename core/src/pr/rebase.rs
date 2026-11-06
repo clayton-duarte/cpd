@@ -24,7 +24,6 @@ use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
-use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::policy::Policy;
 use crate::ports::Ports;
@@ -896,7 +895,7 @@ fn require_open<'a>(
     plan: &'a PlanWorkflows,
     args: &Args,
 ) -> Result<&'a WorkflowRow, CpdError> {
-    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
+    if plan.plan.locked_at.is_none() {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let workflow = plan.select(&args.workflow)?;

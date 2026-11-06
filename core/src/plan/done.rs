@@ -11,8 +11,8 @@ use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::open::merged_workflows;
 use crate::store::WriteTxn;
 
-/// In the caller's transaction: when the Plan is in `dispatch` or `deploy`, every non-cancelled Workflow is `merged` (one at least) and
-/// no Job is non-final, the Plan is `done` with `done_at`, one `plan-done` Event, and its pending plan reviews superseded. When the
+/// In the caller's transaction: when the Plan is in `dispatch` or `deploy` (never `plan`), every non-cancelled Workflow is `merged` (one at least) and
+/// no Job is non-final, the Plan steps dispatch -> deploy (no Event) and is `done` with `done_at`, one `plan-done` Event, and its pending plan reviews superseded. When the
 /// Workflows are merged but a Job is non-final, the Plan is (moved to) `deploy`, `done_at` NULL, no Event. Idempotent: a Plan already
 /// `done` is left alone. `just` names the Workflow this call merged and the time `gh` reported for it: that time, not the
 /// transaction time, is its `merged_at` in the Event. Whether the Plan became `done` in this call.
@@ -36,17 +36,17 @@ pub(crate) fn settle_done(
     if !all_merged {
         return Ok(false);
     }
+    tx.execute(
+        "UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'",
+        [plan.as_str()],
+    )?;
     if blocked {
-        tx.execute(
-            "UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'",
-            [plan.as_str()],
-        )?;
         return Ok(false);
     }
     crate::plan::close_reviews(tx, plan, &crate::plan::Closing::Done)?;
     tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-          WHERE id = ?1 AND phase IN ('dispatch', 'deploy')",
+          WHERE id = ?1 AND phase = 'deploy'",
         [plan.as_str()],
     )?;
     let text = format!(

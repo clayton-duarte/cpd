@@ -264,7 +264,7 @@ fn decide(
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
     let phase = plan_phase(conn, plan)?;
-    let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
+    let locked = crate::plan::is_locked(conn, plan)?;
     let mut needing: Vec<String> = workflows
         .iter()
         .filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str()))

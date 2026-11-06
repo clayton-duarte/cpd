@@ -141,20 +141,27 @@ fn worker_env_of_an_explore_attempt_has_cpd_job_kind() {
 }
 
 #[test]
-fn a_new_attempt_removes_the_stale_artefact() {
+fn a_retry_attempt_keeps_the_artefact_of_a_failed_attempt() {
     let mut rig = Rig::new();
     rig.add_job("look", "scout", "H2");
     let first = rig.start("look");
-    let stale = rig.write_artefact("look", "# An earlier Attempt's findings\n");
+    let kept = rig.write_artefact("look", "# An earlier Attempt's findings\n");
     let other = rig.write_artefact("other", "# Another Job's findings\n");
-    // Attempt 1 failed; attempt 2 is the retry the starter wrote.
+    // Attempt 1 ended without a submit; attempt 2 is the retry the starter wrote.
     let dir = explore_dir(&rig.env.home);
     rig.sql(&format!(
-        "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE plan = 'pay' AND id = '{first}';
+        "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'no_submit', ended_at = 't' WHERE plan = 'pay' AND id = '{first}';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'look-a2', 'look', 2, 'H3', 'ladder', 'starting', 'cpd/pay--look-a2', '{}', 't');",
         dir.display()
     ));
+    assert_eq!(
+        rig.one::<String>("SELECT cause FROM attempts WHERE id = 'look-a1'"),
+        "no_submit"
+    );
+    let before = std::fs::read(&kept).unwrap();
+    assert!(!before.is_empty(), "a1 left a non-empty artefact");
+    let other_before = std::fs::read(&other).unwrap();
     let second = AttemptId::parse("look-a2").unwrap();
     let attempt = target(&mut rig.env, &second);
     let home = rig.env.home.clone();
@@ -164,13 +171,45 @@ fn a_new_attempt_removes_the_stale_artefact() {
             prepare(&rig.fakes.ports, &home, &attempt)
         });
         assert!(result.is_ok(), "pass {pass}: {result:?}");
-        assert!(
-            !stale.exists(),
-            "pass {pass}: the stale artefact of the Job is deleted"
+        assert_eq!(artefact(&home, "look"), kept);
+        assert_eq!(
+            std::fs::read(&kept).ok().as_deref(),
+            Some(before.as_slice()),
+            "pass {pass}: the artefact of the failed Attempt is byte-identical"
         );
-        assert!(other.exists(), "pass {pass}: another Job's artefact stays");
-        assert_eq!(artefact(&home, "look"), stale);
+        assert_eq!(
+            std::fs::read(&other).ok().as_deref(),
+            Some(other_before.as_slice()),
+            "pass {pass}: another Job's artefact stays"
+        );
     }
+}
+
+#[test]
+fn preparing_the_first_attempt_creates_the_directory_and_removes_nothing() {
+    let mut rig = Rig::new();
+    rig.add_job("look", "scout", "H2");
+    let id = rig.start("look");
+    let dir = explore_dir(&rig.env.home);
+    let _ = std::fs::remove_dir_all(&dir);
+    let attempt = target(&mut rig.env, &id);
+    let home = rig.env.home.clone();
+
+    let result = Ports::scope(&rig.fakes.ports, || {
+        prepare(&rig.fakes.ports, &home, &attempt)
+    });
+    assert_eq!(result.as_ref().ok(), Some(&dir), "{result:?}");
+    assert!(dir.is_dir(), "the explore directory is created");
+    let entries = std::fs::read_dir(&dir).unwrap().count();
+    assert_eq!(entries, 0, "no file is created when none existed");
+
+    // A file already there is not removed either (the first Attempt's prepare is the same call).
+    let present = rig.write_artefact("look", "# Findings\n");
+    let again = Ports::scope(&rig.fakes.ports, || {
+        prepare(&rig.fakes.ports, &home, &attempt)
+    });
+    assert!(again.is_ok(), "{again:?}");
+    assert!(present.exists(), "no file is removed");
 }
 
 #[test]
