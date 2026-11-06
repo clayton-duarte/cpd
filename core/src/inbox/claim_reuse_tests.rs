@@ -206,11 +206,14 @@ fn claim_of_reused_plan_marks_item_claimed_with_head_oid() {
 fn claim_of_reused_plan_queues_eyes_reaction() {
     let mut w = world(Existing::Live, "pi");
     claim(&mut w);
+    // The eyes reaction is a `reaction` mutation of the outbox, keyed by (channel, ts, emoji) (swr-slack.md 4.2).
     assert_eq!(
         count(
             &mut w,
             &format!(
-                "SELECT count(*) FROM slack_reactions WHERE channel = '{CHANNEL}' AND ts = '{TS_RAW}' AND emoji = 'eyes'"
+                "SELECT count(*) FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' AND status = 'pending'
+                   AND json_extract(vars_json, '$.channel') = '{CHANNEL}' AND json_extract(vars_json, '$.ts') = '{TS_RAW}'
+                   AND json_extract(vars_json, '$.emoji') = 'eyes'"
             )
         ),
         1

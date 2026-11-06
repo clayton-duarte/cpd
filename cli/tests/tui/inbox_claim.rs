@@ -267,27 +267,22 @@ fn list_counts_and_names_a_claimed_item_with_all() {
     );
 }
 
-/// `(channel, ts, emoji)` of every `slack_reactions` row, oldest first, plus the first row's `reacted_at`. Empty while
-/// the table does not exist; any other error panics.
+/// `(channel, ts, emoji)` of every Slack reaction mutation on the outbox, oldest first, plus its `reacted_at` (the completion
+/// time once it is done). Empty while the outbox has no such mutation.
 fn queued_rows(fx: &Fixture) -> Vec<(String, String, String, Option<String>)> {
     let home = cpd_core::home::CpdHome::resolve(Some(fx.fx.env.cpd_home().into()), None).unwrap();
-    let result = cpd_core::store::Store::open(&home, 5000)
+    cpd_core::store::Store::open(&home, 5000)
         .unwrap()
         .read(|c| {
-            let rows = c
-                .prepare("SELECT channel, ts, emoji, reacted_at FROM slack_reactions ORDER BY id")
-                .and_then(|mut s| {
-                    s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                        .collect::<Result<Vec<_>, _>>()
-                });
-            Ok(rows)
+            let mut s = c.prepare(
+                "SELECT json_extract(vars_json, '$.channel'), json_extract(vars_json, '$.ts'), json_extract(vars_json, '$.emoji'),
+                        IIF(status IN ('revalidating', 'done'), completed_at, NULL)
+                   FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' ORDER BY id",
+            )?;
+            Ok(s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<Result<Vec<_>, _>>()?)
         })
-        .unwrap();
-    match result {
-        Ok(rows) => rows,
-        Err(e) if e.to_string().contains("no such table") => Vec::new(),
-        Err(e) => panic!("{e}"),
-    }
+        .unwrap()
 }
 
 fn queued(fx: &Fixture) -> Vec<(String, String, String)> {
