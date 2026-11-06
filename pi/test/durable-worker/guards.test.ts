@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { reasonText as electronReason } from "../../lib/electronguard.ts";
 import { reasonText as hostReason } from "../../lib/hostapprove.ts";
 import { reasonText as mainReason } from "../../lib/mainguard.ts";
 import { reasonText as secretReason } from "../../lib/secretguard.ts";
@@ -80,4 +81,10 @@ test("workerVerdict gives the reason text of the guard that matched", (t) => {
   assert.ok(reasons[1]?.includes("1Password"), String(reasons[1]));
   assert.ok(reasons[2]?.includes("cpd_host_approve"), String(reasons[2]));
   assert.ok(reasons[3]?.includes("the full suite is the Gate's"), String(reasons[3]));
+});
+
+test("workerVerdict blocks a raw electron invocation in bash", (t) => {
+  const x = fixtures(t);
+  const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") };
+  assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: "npx electron" } }, where), { block: electronReason("npx electron") });
 });

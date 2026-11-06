@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CpdError } from "../lib/cpd.ts";
-import { failedJobReminderText, lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT, unaddressedFailedJobs } from "../lib/reminder.ts";
+import { failedJobReminderText, failingWorkflowReminderText, lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT, unaddressedFailedJobs, unaddressedFailingWorkflows } from "../lib/reminder.ts";
 import { Fixture, ID, planShow, shown, waitFor } from "./fake.ts";
 
 test("every phrase of the list makes a message talk of future work, in any case", () => {
@@ -294,4 +294,100 @@ test("a Manager and a Worker get no failed-Job reminder", async (t) => {
     await f.quiet();
     assert.deepEqual(failedSent(f), [], String(over.role));
   }
+});
+
+// ---- the failing-Workflow reminder (§15.8) ----
+
+const wf = (key: string, jobs: string[], pull_request: unknown, status = "open") => ({ key, status, jobs, pull_request });
+const pr = (checks: string, mergeable = "mergeable") => ({ checks, mergeable });
+const wfShow = (workflows: unknown[], jobs: unknown[] = []) => planShow({ workflows, jobs });
+const keysOf = (show: Record<string, unknown>) => unaddressedFailingWorkflows(show).map((w) => w.key);
+const FAILING = "cpd reminder: Workflow(s) a, b have a failing or conflicting pull request and no Job queued or running for it. Every Workflow PR must pass CI on its own: queue a fix Job now (cpd job add <k> --title \"<title>\" --tier <T> --spec <file> --workflow <key>), retry (cpd job retry <k> --tier <T>), or ask_user_question when the choice is the User's, in this turn. Never leave it waiting on another Workflow.";
+const failingSent = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-reminder" && (s.message.details as { rule?: string } | undefined)?.rule === "failing-workflow-disposition");
+
+test("unaddressedFailingWorkflows lists open Workflows with failed checks or a conflict and no queued or running Job", () => {
+  const show = wfShow(
+    [wf("b", ["jb"], pr("failed")), wf("a", ["ja"], pr("passed", "conflicting")), wf("c", ["jc"], pr("failed", "conflicting")), wf("ok", ["jo"], pr("passed"))],
+    [job("jb", "merged"), job("ja", "failed"), job("jc", "cancelled"), job("jo", "merged")],
+  );
+  assert.deepEqual(keysOf(show), ["a", "b", "c"], "sorted by key");
+  assert.deepEqual(keysOf(wfShow([wf("x", [], pr("failed"))])), ["x"]);
+  assert.deepEqual(keysOf(wfShow([wf("x", ["j"], pr("pending", "conflicting"))], [job("j", "merged")])), ["x"]);
+});
+
+test("unaddressedFailingWorkflows skips a Workflow with a queued or running Job, no pull request, passed checks or a non-open status", () => {
+  const show = wfShow(
+    [
+      wf("queued", ["jq"], pr("failed")),
+      wf("running", ["jr"], pr("passed", "conflicting")),
+      wf("nopr", [], null),
+      wf("absent", [], undefined),
+      wf("green", [], pr("passed", "mergeable")),
+      wf("closed", [], pr("failed"), "merged"),
+      wf("hit", ["jm"], pr("failed")),
+    ],
+    [job("jq", "queued"), job("jr", "running"), job("jm", "merged"), job("other", "queued")],
+  );
+  assert.deepEqual(keysOf(show), ["hit"]);
+});
+
+test("unaddressedFailingWorkflows refuses a show whose workflows or jobs is not a list", () => {
+  const bad = (show: Record<string, unknown>) => assert.throws(() => unaddressedFailingWorkflows(show), (e) => e instanceof CpdError && e.code === "bad_output");
+  bad({ jobs: [] });
+  bad({ workflows: "x", jobs: [] });
+  bad({ workflows: [] });
+  bad({ workflows: [], jobs: "x" });
+  bad({ workflows: [{ key: "a", status: "open", jobs: "x", pull_request: pr("failed") }], jobs: [] });
+  bad({ workflows: [{ key: "a", status: "open", jobs: [1], pull_request: pr("failed") }], jobs: [] });
+});
+
+test("failingWorkflowReminderText names the keys and the ways to act", () => {
+  assert.equal(failingWorkflowReminderText(["a", "b"]), FAILING);
+});
+
+test("a Lead run ending with a failing Workflow and no Job sends one failing-Workflow reminder that starts a turn", async (t) => {
+  const f = await started({}, wfShow([wf("b", [], pr("failed")), wf("a", [], pr("passed", "conflicting"))]));
+  t.after(() => f.close());
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  const sent = failingSent(f);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.message.display, false);
+  assert.equal(sent[0]!.message.content, FAILING);
+  assert.deepEqual(sent[0]!.message.details, { rule: "failing-workflow-disposition", workflows: ["a", "b"] });
+  assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
+test("the failing-Workflow reminder is sent again only when the set of Workflows changes", async (t) => {
+  const f = await started({}, wfShow([wf("a", [], pr("failed"))]));
+  t.after(() => f.close());
+  const end = async () => {
+    await f.pi.fire("agent_end", ended("Done."));
+    await f.quiet();
+  };
+  await end();
+  await end();
+  assert.equal(failingSent(f).length, 1, "same set: once");
+  f.respond("plan-show", wfShow([wf("a", [], pr("failed")), wf("b", [], pr("passed", "conflicting"))]));
+  await end();
+  assert.equal(failingSent(f).length, 2, "the set grew");
+  f.respond("plan-show", wfShow([wf("a", [], pr("passed"))]));
+  await end();
+  assert.equal(failingSent(f).length, 2, "nothing failing");
+  f.respond("plan-show", wfShow([wf("a", [], pr("failed"))]));
+  await end();
+  assert.equal(failingSent(f).length, 3, "failing again after the set emptied");
+});
+
+test("no failing-Workflow reminder while the Lead is blocked on a dialog", async (t) => {
+  const f = await started({}, wfShow([wf("a", [], pr("failed"))]));
+  t.after(() => f.close());
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.deepEqual(failingSent(f), [], "blocked: nothing sent");
+  await f.pi.fire("ui_prompt_end");
+  await f.pi.fire("agent_end", ended("Done."));
+  await f.quiet();
+  assert.equal(failingSent(f).length, 1, "not marked reminded while blocked");
 });
