@@ -8,6 +8,7 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
+import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import type { CrashReport } from "../electron/health.ts";
 import { activeLeadPlanId as leadPlanIdOf, loadSelection, saveSelection, visiblePlan as visiblePlanOf } from "./state/selection.ts";
@@ -267,6 +268,19 @@ export function App(props: AppProps): ReactElement {
           <CircleAlertIcon className="size-4" />
           <AlertTitle>{activeError.code}</AlertTitle>
           <AlertDescription>{activeError.message}</AlertDescription>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-part="error-toast-report"
+            className="mt-2"
+            onClick={() => {
+              onAction({ kind: "error.report", target: routeErrorTarget(activeError), code: activeError.code, message: activeError.message });
+              onDismissError();
+            }}
+          >
+            {`Send to ${routeErrorTarget(activeError)}`}
+          </Button>
           <Button
             type="button"
             variant="ghost"

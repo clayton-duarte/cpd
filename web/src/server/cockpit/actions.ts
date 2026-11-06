@@ -18,7 +18,8 @@ export function actionArgs(action: CockpitAction): readonly string[] {
       if (action.pull === undefined || action.pull === "") throw new Error("pr.merge needs the stored pull request: runAction resolves it");
       return ["pr", "merge", action.pull];
     }
-    case "error.report": throw new Error("not implemented");
+    case "error.report":
+      return ["session", "send", `${action.target}:manager`, "--unblocks", `WebUI error toast (${action.code})`, "--", `Error toast reported from WebUI:\n- code: ${action.code}\n- message: ${action.message}`];
     case "engine.start": return ["watch", "--ensure"];
     case "context.retire": {
       const args = ["context", "retire", `--context=${action.contextId}`];
