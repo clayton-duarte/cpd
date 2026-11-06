@@ -11,11 +11,14 @@ use super::driver::PR_URL;
 use super::driver::add_job_in;
 use super::driver_open::{Live, live, open_live, submit};
 
-/// The queue as `[plan, pr, target, pending, unparked]` rows, oldest first; it fails at run time while the table is missing.
+/// The `jira` transitions of the outbox as `[plan, workflow, target, pending, unparked]` rows, oldest first; a superseded row
+/// (the Forward rule collapsed it into a pending one) is not shown.
 fn queue(live: &Live) -> Value {
     let json: String = live.value(
-        "SELECT coalesce(json_group_array(json_array(plan, pr, target, settled_at IS NULL, refused_at IS NULL)), '[]')
-           FROM (SELECT plan, pr, target, settled_at, refused_at FROM jira_transitions ORDER BY id)",
+        "SELECT coalesce(json_group_array(json_array(plan, workflow, target, pending, unparked)), '[]')
+           FROM (SELECT json_extract(context_json, '$.plan') AS plan, json_extract(context_json, '$.workflow') AS workflow,
+                        json_extract(vars_json, '$.target') AS target, status = 'pending' AS pending, status <> 'failed' AS unparked
+                   FROM swr_mutations WHERE system = 'jira' AND status <> 'superseded' ORDER BY id)",
     );
     serde_json::from_str(&json).unwrap()
 }
@@ -85,6 +88,6 @@ fn an_open_job_that_finds_the_pull_request_already_merged_queues_done() {
         live.value::<String>("SELECT status FROM workflows WHERE key = 'repo'"),
         "merged"
     );
-    let done: Value = serde_json::from_str(&live.value::<String>("SELECT coalesce(json_group_array(json_array(plan, pr, target, settled_at IS NULL)), '[]') FROM jira_transitions WHERE target = 'done'")).unwrap();
+    let done: Value = serde_json::from_str(&live.value::<String>("SELECT coalesce(json_group_array(json_array(json_extract(context_json, '$.plan'), json_extract(context_json, '$.workflow'), json_extract(vars_json, '$.target'), status = 'pending')), '[]') FROM swr_mutations WHERE system = 'jira' AND json_extract(vars_json, '$.target') = 'done'")).unwrap();
     assert_eq!(done, json!([["pay", "repo", "done", 1]]));
 }

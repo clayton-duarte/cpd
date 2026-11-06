@@ -1,32 +1,30 @@
-//! The Jira helper's seam (commands.md §21.11): [`call`] builds the process that runs `pi/lib/jira-transition.ts` on pi's own
-//! MCP client, [`answer`] reads the one JSON line it prints. Used by engine step E19.
+//! The Jira helper's seam (docs/architecture/swr-jira.md §3.4): [`helper`] builds the process that runs
+//! `pi/lib/jira-transition.ts` on pi's own MCP client, [`stdin`] is its request, [`answer`] reads the one JSON line it
+//! prints. Used by the `jira` source of E24.
 
 use std::process::Output;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::runner::Call;
 use crate::policy::{McpServer, load_machine};
-use crate::pr::jira_sync::Target;
 
-/// The three status names of the policy (`pr.jira.*`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Names {
-    pub in_progress: String,
-    pub in_review: String,
-    pub done: String,
-}
+/// The helper's deadline: above its 30 s per Jira call.
+pub const DEADLINE: Duration = Duration::from_secs(120);
 
-/// One transition to ask of the helper.
+/// One transition to ask of the helper (swr-jira.md §3.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub ticket: String,
-    pub target: Target,
-    pub names: Names,
+    pub target: String,
+    /// The cached site id, or `None` to have the helper resolve it.
+    pub cloud_id: Option<String>,
+    pub target_name: String,
+    pub later_names: Vec<String>,
     pub estimate_fields: Vec<String>,
 }
 
@@ -37,6 +35,17 @@ pub enum Done {
     Unchanged,
 }
 
+/// An `ok` answer (swr-jira.md §3.3): the facts of the one read, after the move when there was one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    pub done: Done,
+    pub cloud_id: String,
+    pub summary: String,
+    pub status_name: String,
+    pub status_category: String,
+    pub estimates: Value,
+}
+
 const HELPER_CODES: [ErrorCode; 5] = [
     ErrorCode::JiraAuth,
     ErrorCode::JiraNotConfigured,
@@ -45,55 +54,84 @@ const HELPER_CODES: [ErrorCode; 5] = [
     ErrorCode::JiraHelperFailed,
 ];
 
-/// The `Call` of the helper for `request`, with the machine policy's server `atlassian`.
-pub fn call(
-    config: &Config,
-    home: &CpdHome,
-    request: &Request,
-    deadline: Duration,
-) -> Result<Call, CpdError> {
+/// The machine policy's server `atlassian` (core/src/jira.rs:55-82 of the old seam).
+pub fn server(home: &CpdHome) -> Result<McpServer, CpdError> {
     let machine = load_machine(home)?;
-    let Some(server) = machine.servers.get("atlassian") else {
-        return Err(CpdError::new(
+    machine.servers.get("atlassian").cloned().ok_or_else(|| {
+        CpdError::new(
             ErrorCode::JiraNotConfigured,
             "No Atlassian MCP server is configured: add [mcp.servers.atlassian] to policy/host.toml.",
-        ));
-    };
-    crate::slack::call(
-        config,
-        "jira-transition.ts",
-        &[],
-        Some(stdin(server, request)),
-        deadline,
-    )
+        )
+    })
+}
+
+/// The `Call` of the helper, with no stdin yet.
+pub fn helper(config: &Config) -> Result<Call, CpdError> {
+    crate::slack::call(config, "jira-transition.ts", &[], None, DEADLINE)
 }
 
 /// The helper's stdin: the request as one JSON object.
-fn stdin(server: &McpServer, request: &Request) -> Vec<u8> {
-    let names = &request.names;
+pub fn stdin(server: &McpServer, request: &Request) -> Vec<u8> {
     let value = json!({
         "server": server,
+        "cloud_id": request.cloud_id,
         "ticket": request.ticket,
-        "target": request.target.as_str(),
-        "names": {"in_progress": names.in_progress, "in_review": names.in_review, "done": names.done},
+        "target": request.target,
+        "target_name": request.target_name,
+        "later_names": request.later_names,
         "estimate_fields": request.estimate_fields,
     });
     serde_json::to_vec(&value).expect("a JSON value serializes")
 }
 
-/// The helper's `ok:true` as [`Done`], or its `ok:false` as a `CpdError` (an unknown code is `jira_helper_failed` with
-/// `details.code`); no JSON line is `spawn_failed`.
-pub fn answer(out: &Output, argv: &[String]) -> Result<Done, CpdError> {
-    let value = crate::slack::answer_with(out, argv, &HELPER_CODES, ErrorCode::JiraHelperFailed)?;
-    match value["outcome"].as_str() {
-        Some("moved") => Ok(Done::Moved),
-        Some("unchanged") => Ok(Done::Unchanged),
-        other => Err(CpdError::new(
+fn text(value: &Value, key: &str) -> Result<String, CpdError> {
+    value[key].as_str().map(str::to_owned).ok_or_else(|| {
+        CpdError::new(
             ErrorCode::JiraHelperFailed,
-            format!("The Jira helper answered an unknown outcome {other:?}."),
+            format!("The Jira helper's answer has no `{key}`."),
         )
-        .with("code", "outcome")),
-    }
+        .with("code", "shape")
+    })
+}
+
+/// The helper's `ok:true` as an [`Answer`], or its `ok:false` as a `CpdError` (an unknown code is `jira_helper_failed`
+/// with `details.code`); no JSON line is `spawn_failed`.
+pub fn answer(out: &Output, argv: &[String]) -> Result<Answer, CpdError> {
+    let value = crate::slack::answer_with(out, argv, &HELPER_CODES, ErrorCode::JiraHelperFailed)?;
+    let done = match value["outcome"].as_str() {
+        Some("moved") => Done::Moved,
+        Some("unchanged") => Done::Unchanged,
+        other => {
+            return Err(CpdError::new(
+                ErrorCode::JiraHelperFailed,
+                format!("The Jira helper answered an unknown outcome {other:?}."),
+            )
+            .with("code", "outcome"));
+        }
+    };
+    let (status_name, status_category) = match done {
+        Done::Moved => (
+            text(&value, "to")?,
+            if value["target"] == "done" {
+                "done"
+            } else {
+                "indeterminate"
+            }
+            .to_owned(),
+        ),
+        Done::Unchanged => (
+            text(&value, "status_name")?,
+            text(&value, "status_category")?,
+        ),
+    };
+    Ok(Answer {
+        done,
+        cloud_id: text(&value, "cloud_id")?,
+        summary: text(&value, "summary")?,
+        status_name,
+        status_category,
+        estimates: value.get("estimates").cloned().unwrap_or_else(|| json!({})),
+    })
 }
 
 #[cfg(test)]
@@ -118,12 +156,10 @@ mod tests {
     fn request() -> Request {
         Request {
             ticket: "A-1".into(),
-            target: Target::InReview,
-            names: Names {
-                in_progress: "".into(),
-                in_review: "In Review".into(),
-                done: "Done".into(),
-            },
+            target: "in_review".into(),
+            cloud_id: None,
+            target_name: "In Review".into(),
+            later_names: vec!["Done".into()],
             estimate_fields: vec!["customfield_10016".into()],
         }
     }
@@ -142,7 +178,7 @@ mod tests {
         assert_eq!(
             value,
             json!({"server": {"url": "https://x/mcp"}, "ticket": "A-1", "target": "in_review",
-                   "names": {"in_progress": "", "in_review": "In Review", "done": "Done"}, "estimate_fields": ["customfield_10016"]})
+                   "cloud_id": null, "target_name": "In Review", "later_names": ["Done"], "estimate_fields": ["customfield_10016"]})
         );
     }
 
@@ -150,13 +186,7 @@ mod tests {
     fn a_missing_atlassian_server_is_jira_not_configured() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
-        let config = Config::parse(
-            "version = 1\nmachine = \"test\"\n",
-            std::path::Path::new("config.toml"),
-        )
-        .unwrap()
-        .0;
-        let error = call(&config, &home, &request(), Duration::from_secs(1)).unwrap_err();
+        let error = server(&home).unwrap_err();
         assert_eq!(error.code(), ErrorCode::JiraNotConfigured);
         assert!(error.message().contains("[mcp.servers.atlassian]"));
     }
@@ -183,12 +213,24 @@ mod tests {
     }
 
     #[test]
-    fn ok_lines_are_done() {
-        let moved =
-            r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","from":"a","to":"b"}"#;
-        let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","status":"b","why":"at_target"}"#;
-        assert_eq!(answer(&output(0, moved), &[]).unwrap(), Done::Moved);
-        assert_eq!(answer(&output(0, same), &[]).unwrap(), Done::Unchanged);
+    fn ok_lines_are_answers() {
+        let moved = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","cloud_id":"c","from":"a","to":"Done","summary":"s","estimates":{}}"#;
+        let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","cloud_id":"c","status_name":"b","status_category":"indeterminate","why":"at_target","summary":"s","estimates":{"customfield_1":null}}"#;
+        let moved = answer(&output(0, moved), &[]).unwrap();
+        assert_eq!(
+            (
+                moved.done,
+                moved.status_name.as_str(),
+                moved.status_category.as_str()
+            ),
+            (Done::Moved, "Done", "done")
+        );
+        let same = answer(&output(0, same), &[]).unwrap();
+        assert_eq!(
+            (same.done, same.status_name.as_str(), same.cloud_id.as_str()),
+            (Done::Unchanged, "b", "c")
+        );
+        assert_eq!(same.estimates, json!({"customfield_1": null}));
     }
 
     #[test]

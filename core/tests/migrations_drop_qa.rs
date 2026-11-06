@@ -26,7 +26,8 @@ fn raw(home: &CpdHome) -> Connection {
 }
 
 /// The migrations that sort after `MIGRATION` (`rewind` removes every one of them from the list), with the table each
-/// one changes and the statement that undoes its schema change (all are additive).
+/// one changes and the statement that undoes its schema change (all are additive but `jira-swr`, which dropped
+/// `jira_transitions`: its undo recreates the table empty, so the migration can run again).
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
     (
@@ -56,6 +57,10 @@ const LATER: &[(&str, &str)] = &[
     (
         "record_topics",
         "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
+    ),
+    (
+        "jira_transitions",
+        "CREATE TABLE jira_transitions (id INTEGER PRIMARY KEY, plan TEXT NOT NULL, pr TEXT NOT NULL, target TEXT NOT NULL CHECK (target IN ('in_progress','in_review','done')), queued_at TEXT NOT NULL, settled_at TEXT, outcome TEXT CHECK (outcome IN ('moved','unchanged','skipped')), refused_at TEXT, refusal TEXT, refused_with TEXT, UNIQUE (plan, pr, target), FOREIGN KEY (plan, pr) REFERENCES workflows(plan, key), CHECK ((settled_at IS NULL) = (outcome IS NULL)), CHECK ((refused_at IS NULL) = (refusal IS NULL) AND (refused_at IS NULL) = (refused_with IS NULL)), CHECK (settled_at IS NULL OR refused_at IS NULL)) STRICT",
     ),
 ];
 

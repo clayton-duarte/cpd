@@ -1,9 +1,9 @@
-// The Jira transition helper of engine step E19.
+// The Jira transition helper of the `jira` source of engine step E24 (docs/architecture/swr-jira.md §3).
 //
 //   node pi/lib/jira-transition.ts --coding-agent <…/pi-coding-agent/dist/index.js>   (request JSON on stdin)
 //
 // Moves one ticket through the Atlassian MCP on pi's own MCP client; prints one JSON line.
-// For target `done` with a non-empty `estimate_fields`, it first writes 1 into each of those fields that reads null (one edit), then moves.
+// One getJiraIssue read per run; for target `done` it writes 1 into each estimate field that reads null (one edit), then moves.
 import { loadPi, parseArgs, resultText, Refusal as SlackRefusal } from "./slack-channel.ts";
 
 export const CALL_TIMEOUT_MS = 30_000;
@@ -39,14 +39,22 @@ export type Request = {
   server: Record<string, unknown>;
   ticket: string;
   target: "in_progress" | "in_review" | "done";
-  names: { in_progress: string; in_review: string; done: string };
+  /** The cached site id, or null to resolve it with getAccessibleAtlassianResources. */
+  cloud_id: string | null;
+  /** The policy name of the target. */
+  target_name: string;
+  /** The names of the targets of higher rank, in rank order. */
+  later_names: string[];
   /** Custom field ids (`customfield_N`, distinct); written as 1 when empty before a Done move. `[]` writes nothing. */
   estimate_fields: string[];
+  /** The old request's names of all three targets: never read (swr-jira.md §3.1 drops it); the type keeps it so a caller that still builds one compiles. */
+  names?: { in_progress: string; in_review: string; done: string };
 };
 
+type Facts = { cloud_id: string; summary: string; estimates: Record<string, unknown> };
 export type Result =
-  | { ticket: string; target: string; outcome: "moved"; from: string; to: string }
-  | { ticket: string; target: string; outcome: "unchanged"; status: string; why: "at_target" | "done_category" | "past_target" };
+  | ({ ticket: string; target: string; outcome: "moved"; from: string; to: string } & Facts)
+  | ({ ticket: string; target: string; outcome: "unchanged"; status_name: string; status_category: string; why: "at_target" | "done_category" | "past_target" } & Facts);
 
 const authRefusal = (details: Record<string, unknown> = {}) => new Refusal("jira_auth", AUTH_MESSAGE, details);
 
@@ -83,20 +91,7 @@ const unexpected = (name: string) => new Refusal("jira_failed", `${name} answere
 const ESTIMATE_FIELD = /^customfield_[0-9]+$/;
 const str = (v: unknown): v is string => typeof v === "string" && v !== "";
 
-/** Writes 1 into each estimate field that reads null; absent keys and any other value are left alone. */
-async function writeEstimate(call: CallTool, cloudId: string, ticket: string, fields: string[]): Promise<void> {
-  const issue = await tool(call, "getJiraIssue", { cloudId, issueIdOrKey: ticket, fields });
-  if (typeof issue !== "object" || issue === null) throw unexpected("getJiraIssue");
-  const have = issue.fields ?? {};
-  const empty = fields.filter((f) => have[f] === null);
-  if (empty.length === 0) return;
-  await tool(call, "editJiraIssue", { cloudId, issueIdOrKey: ticket, fields: Object.fromEntries(empty.map((f) => [f, 1])) }, false, false);
-}
-
-export async function transition(call: CallTool, request: Request): Promise<Result> {
-  const { ticket, target, names } = request;
-  const want = names[target];
-
+async function resolveSite(call: CallTool, ticket: string): Promise<string> {
   const resources = await tool(call, "getAccessibleAtlassianResources", {});
   if (!Array.isArray(resources)) throw unexpected("getAccessibleAtlassianResources");
   const sites = resources.filter((r: any) => Array.isArray(r?.scopes) && r.scopes.includes("read:jira-work") && r.scopes.includes("write:jira-work"));
@@ -105,16 +100,30 @@ export async function transition(call: CallTool, request: Request): Promise<Resu
   if (ids.length > 1) throw new Refusal("jira_refused", `The Atlassian account has ${ids.length} Jira sites; cannot tell which one holds ${ticket}.`, { reason: "site_ambiguous", sites: ids });
   const cloudId = ids[0];
   if (!str(cloudId)) throw unexpected("getAccessibleAtlassianResources");
+  return cloudId;
+}
 
-  const issue = await tool(call, "getJiraIssue", { cloudId, issueIdOrKey: ticket, fields: ["status"] }, true);
+export async function transition(call: CallTool, request: Request): Promise<Result> {
+  const { ticket, target } = request;
+  const want = request.target_name;
+
+  const cloudId = request.cloud_id ?? (await resolveSite(call, ticket));
+
+  // The one read: status, summary and the estimate fields.
+  const issue = await tool(call, "getJiraIssue", { cloudId, issueIdOrKey: ticket, fields: ["status", "summary", ...request.estimate_fields] }, true);
   const status = issue?.fields?.status?.name;
   if (!str(status)) throw unexpected("getJiraIssue");
   const category = issue.fields.status.statusCategory?.key;
-  const later = TARGETS.slice(TARGETS.indexOf(target) + 1).map((t) => names[t]).filter((n) => n !== "");
-  const unchanged = (why: "at_target" | "done_category" | "past_target"): Result => ({ ticket, target, outcome: "unchanged", status, why });
+  const summary = typeof issue.fields.summary === "string" ? issue.fields.summary : "";
+  const have = issue.fields ?? {};
+  const estimates: Record<string, unknown> = {};
+  for (const f of request.estimate_fields) if (f in have) estimates[f] = have[f];
+  const facts = { cloud_id: cloudId, summary, estimates };
+  const category_ = typeof category === "string" ? category : "";
+  const unchanged = (why: "at_target" | "done_category" | "past_target"): Result => ({ ticket, target, outcome: "unchanged", cloud_id: cloudId, status_name: status, status_category: category_, why, summary, estimates });
   if (status === want) return unchanged("at_target");
   if (category === "done") return unchanged("done_category");
-  if (later.includes(status)) return unchanged("past_target");
+  if (request.later_names.includes(status)) return unchanged("past_target");
 
   const listed = await tool(call, "getTransitionsForJiraIssue", { cloudId, issueIdOrKey: ticket });
   if (!Array.isArray(listed?.transitions)) throw unexpected("getTransitionsForJiraIssue");
@@ -122,11 +131,17 @@ export async function transition(call: CallTool, request: Request): Promise<Resu
   if (!chosen) throw new Refusal("jira_refused", `${ticket} has no transition to "${want}" from "${status}".`, { reason: "no_transition" });
   if (!str(String(chosen.id ?? ""))) throw unexpected("getTransitionsForJiraIssue");
 
-  if (target === "done" && request.estimate_fields.length > 0) await writeEstimate(call, cloudId, ticket, request.estimate_fields);
+  if (target === "done") {
+    const empty = request.estimate_fields.filter((f) => have[f] === null);
+    if (empty.length > 0) {
+      await tool(call, "editJiraIssue", { cloudId, issueIdOrKey: ticket, fields: Object.fromEntries(empty.map((f) => [f, 1])) }, false, false);
+      for (const f of empty) estimates[f] = 1;
+    }
+  }
 
   const done = await tool(call, "transitionJiraIssue", { cloudId, issueIdOrKey: ticket, transition: { id: String(chosen.id) } });
   if (done?.success !== true || !str(done.statusName)) throw unexpected("transitionJiraIssue");
-  return { ticket, target, outcome: "moved", from: status, to: done.statusName };
+  return { ticket, target, outcome: "moved", from: status, to: done.statusName, ...facts };
 }
 
 /** The request on stdin, validated: anything else is `usage`. */
@@ -141,12 +156,13 @@ function parseRequest(stdin: string): Request {
   if (typeof r !== "object" || r === null) throw bad("not an object");
   if (typeof r.ticket !== "string" || !/^[A-Z][A-Z0-9]+-[0-9]+$/.test(r.ticket)) throw bad("ticket");
   if (!TARGETS.includes(r.target)) throw bad("target");
-  if (typeof r.names !== "object" || r.names === null || TARGETS.some((t) => typeof r.names[t] !== "string")) throw bad("names");
-  if (r.names[r.target] === "") throw bad("names[target] is empty");
+  if (r.cloud_id !== null && !(typeof r.cloud_id === "string" && r.cloud_id !== "")) throw bad("cloud_id");
+  if (typeof r.target_name !== "string" || r.target_name === "") throw bad("target_name");
+  if (!Array.isArray(r.later_names) || r.later_names.some((n: unknown) => typeof n !== "string" || n === "")) throw bad("later_names");
   if (typeof r.server !== "object" || r.server === null || typeof r.server.url !== "string" || !r.server.url) throw bad("server.url");
   const ef = r.estimate_fields;
   if (!Array.isArray(ef) || ef.some((f: unknown) => typeof f !== "string" || !ESTIMATE_FIELD.test(f)) || new Set(ef).size !== ef.length) throw bad("estimate_fields");
-  return { server: r.server, ticket: r.ticket, target: r.target, names: { in_progress: r.names.in_progress, in_review: r.names.in_review, done: r.names.done }, estimate_fields: ef };
+  return { server: r.server, ticket: r.ticket, target: r.target, cloud_id: r.cloud_id, target_name: r.target_name, later_names: r.later_names, estimate_fields: ef };
 }
 
 /** The `atlassian` connection of pi, built from the request's server (never from mcp.json). */

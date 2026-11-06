@@ -31,8 +31,8 @@ use cpd_core::host::runner::Runner;
 use cpd_core::ids::{OwnerLogin, RepoName};
 use cpd_core::policy::{PolicyKey, resolve};
 use cpd_core::ports::Ports;
+use cpd_core::pr::posts;
 use cpd_core::pr::posts::PostRecord;
-use cpd_core::pr::{jira_sync, posts};
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -302,7 +302,12 @@ fn confirm_own_posts(engine: &mut Engine, answer: &Value) -> Result<usize, Failu
                 };
                 let new = posts::insert(tx, &plan, &key, &record)?;
                 if new {
-                    jira_sync::queue(tx, &plan, &key, jira_sync::Target::InReview)?;
+                    cpd_core::swr::source::jira::enqueue_for_workflow(
+                        tx,
+                        &plan,
+                        &key,
+                        "in_review",
+                    )?;
                 }
                 Ok(new)
             })
