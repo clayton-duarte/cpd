@@ -414,7 +414,7 @@ it("a regular Context row shows no phi", () => {
     expect(row?.querySelector('span[data-part="context-id"]'), id).not.toBeNull();
     expect(row?.querySelector('[data-part="phi"]'), id).toBeNull();
   }
-  expect(m.container.querySelectorAll('[data-part="phi"]'), "one phi per standing row").toHaveLength(3);
+  expect(m.container.querySelectorAll('[data-context] [data-part="phi"]'), "one phi per standing row").toHaveLength(3);
   m.unmount();
 });
 
