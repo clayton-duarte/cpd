@@ -349,7 +349,7 @@ fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
     );
     assert_eq!(
         api["pr"],
-        json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"})
+        json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z", "posted": false})
     );
     assert_eq!(api["pull_request"], pull_request());
     assert_eq!(
