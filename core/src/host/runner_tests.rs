@@ -372,3 +372,32 @@ fn a_route_reply_that_takes_the_deadline_is_a_timeout() {
     assert!(matches!(run(&runner, "tmux", &[]), Err(Failed::Timeout(_))));
     assert_eq!(clock.elapsed(), DEADLINE);
 }
+
+/// A handler that answers `text` on stdout.
+struct Says(&'static str);
+
+impl Handler for Says {
+    fn handle(&self, _call: &Call) -> Reply {
+        Reply::ok(self.0)
+    }
+}
+
+#[test]
+fn a_second_route_for_the_same_program_replaces_the_first_and_rules_still_win() {
+    let (runner, _clock) = fake();
+    let runner = runner
+        .route("gh", Arc::new(Says("one")))
+        .route("tmux", Arc::new(Says("tmux")))
+        .route("gh", Arc::new(Says("two")));
+    let said = |program: &str| {
+        String::from_utf8(run(&runner, program, &[]).unwrap().stdout).unwrap()
+    };
+    assert_eq!(said("gh"), "two", "the later route wins");
+    assert_eq!(said("tmux"), "tmux", "a route for another program is kept");
+    let runner = runner.on("gh", any, Reply::ok("rule"));
+    assert_eq!(
+        String::from_utf8(run(&runner, "gh", &[]).unwrap().stdout).unwrap(),
+        "rule",
+        "a rule still wins over a route"
+    );
+}

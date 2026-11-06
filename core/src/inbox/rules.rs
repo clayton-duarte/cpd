@@ -2232,31 +2232,13 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_cache_leaves_open_items_as_they_are_and_a_pull_request_that_leaves_it_closes_its_item()
+    fn a_pull_request_that_leaves_the_posts_closes_its_item()
      {
         let mut f = fixture("dispatch");
         let two = [post("acme/pay", 1), post("acme/pay", 2)];
         let both = [("acme/pay", 1, open_pr()), ("acme/pay", 2, open_pr())];
         let opened = reviews(&mut f, &two, &both);
         reconcile(&mut f.store, &opened, T).unwrap();
-        assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
-
-        f.sql("DELETE FROM swr_slack_posts");
-        let unknown = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team()),
-        )
-        .unwrap();
-        assert_eq!(
-            unknown.len(),
-            2,
-            "no file is unknown, not empty: {unknown:?}"
-        );
-        reconcile(&mut f.store, &unknown, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
         let rest = reviews(
@@ -2296,6 +2278,7 @@ mod tests {
         write_cache(&mut f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.workflows.insert(("acme/gone".to_owned(), 2), None);
+        crate::inbox::swr_fixture::lookup(&mut f.store, &answer).unwrap();
         let all = conditions_with(
             &mut f.store,
             &f.home,

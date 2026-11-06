@@ -55,14 +55,12 @@ impl Handler for Helper {
     }
 }
 
-/// Every repo allows squash only and no auto-merge: the one `gh` read of `pr post`.
+/// `gh` answers an empty object: `pr post` reads the cached repo settings, so no test depends on it.
 struct Gh;
 
 impl Handler for Gh {
     fn handle(&self, _call: &Call) -> Reply {
-        Reply::ok(
-            r#"{"data":{"repository":{"autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false,"pullRequest":{"id":"PR_1","autoMergeRequest":null}}}}"#,
-        )
+        Reply::ok("{}")
     }
 }
 
@@ -118,7 +116,10 @@ fn fixture(replies: &[&'static str], lookup: &'static str) -> Fx {
     std::fs::write(policy.join("pay.toml"), "").unwrap();
     rig.sql(
         "UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]', merge_state = 'clean'
-           WHERE number = 801;",
+           WHERE number = 801;
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
+                                rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 0, 1, 0, 0, 1, 't');",
     );
     // SAFETY: tests of this module run one per process (nextest); the variables point at this test's own temp dir.
     unsafe {

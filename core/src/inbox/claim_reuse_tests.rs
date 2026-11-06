@@ -13,7 +13,7 @@ use crate::clock::ManualClock;
 use crate::env::Env;
 use crate::home::CpdHome;
 use crate::host::Tmux;
-use crate::host::runner::{FakeRunner, Reply};
+use crate::host::runner::FakeRunner;
 use crate::host::spawn::FakeSpawn;
 use crate::output::Output;
 use crate::ports::Ports;
@@ -43,15 +43,28 @@ struct World {
     home: CpdHome,
 }
 
-/// The viewer's latest review, CHANGES_REQUESTED at `S_REV`, on a PR whose head is `S_HEAD`: a follow-up.
-fn graphql() -> String {
-    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": {
-        "title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": "CHANGES_REQUESTED",
-        "headRefOid": S_HEAD,
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}, "author": {"login": "ryan"},
-        "latestReviews": {"nodes": [{"state": "CHANGES_REQUESTED", "author": {"login": "clayton-duarte"},
-                                      "commit": {"oid": S_REV}}]}}}}})
-    .to_string()
+/// The pass's rows: the viewer's latest review CHANGES_REQUESTED at `S_REV`, on a PR whose head is `S_HEAD`: a follow-up.
+fn seed(store: &mut Store) {
+    use super::team::{GhPr, GhState, Lookup, Review};
+    let pr = GhPr {
+        title: "Add retries".to_owned(),
+        draft: false,
+        state: GhState::Open,
+        author: "ryan".to_owned(),
+        decision: Some("CHANGES_REQUESTED".to_owned()),
+        reviews: vec![Review {
+            author: "clayton-duarte".to_owned(),
+            state: "CHANGES_REQUESTED".to_owned(),
+            commit_oid: Some(S_REV.to_owned()),
+        }],
+        head_oid: Some(S_HEAD.to_owned()),
+        checks_state: Some("SUCCESS".to_owned()),
+    };
+    let lookup = Lookup {
+        me: "clayton-duarte".to_owned(),
+        workflows: [(("acme/pay".to_owned(), 5), Some(pr))].into(),
+    };
+    super::swr_fixture::lookup(store, &lookup).unwrap();
 }
 
 /// Item 1 (review-requested, head `S_HEAD`, reviewed `S_REV`), the team cache, the Context `codereview` with an idle
@@ -83,12 +96,10 @@ fn world(existing: Existing, runner_kind: &str) -> World {
         reviewed_oid: Some(S_REV.into()),
     };
     reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z").unwrap();
-    let path = home.run_dir().join("team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": TS_RAW,
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": CHANNEL, "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    super::swr_fixture::posts(&mut store, &[post]).unwrap();
+    seed(&mut store);
     let (phase, archived, done) = match existing {
         Existing::Done => ("done", "NULL", "'t'"),
         Existing::Archived => ("grounding", "'t'", "NULL"),
@@ -121,7 +132,7 @@ fn world(existing: Existing, runner_kind: &str) -> World {
             ))?)
         })
         .unwrap();
-    let runner = FakeRunner::with_tmux().on("gh", |_| true, Reply::ok(&graphql()));
+    let runner = FakeRunner::with_tmux();
     let ports = Ports {
         clock: Arc::new(ManualClock::new()),
         runner: Arc::new(runner.clone()),

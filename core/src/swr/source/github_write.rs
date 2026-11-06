@@ -124,6 +124,15 @@ fn retry(e: &CpdError) -> ExecOutcome {
 impl GithubSource {
     /// One claimed mutation, through the Runner (swr-github.md §9).
     pub(super) fn run_one(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
+        let outcome = self.run_op(cx, m);
+        if outcome == ExecOutcome::Done {
+            // A write on GitHub asks E5 for a poll at once (decision pro-d394).
+            crate::pr::request_poll_now_in(cx.home);
+        }
+        outcome
+    }
+
+    fn run_op(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
         let Some((kind, repo, number)) = target(&m.target_key) else {
             return failed(format!("{:?} is not a github target.", m.target_key));
         };
