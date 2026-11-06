@@ -119,7 +119,10 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Answer, CpdError> {
             }
             .to_owned(),
         ),
-        Done::Unchanged => (text(&value, "status_name")?, text(&value, "status_category")?),
+        Done::Unchanged => (
+            text(&value, "status_name")?,
+            text(&value, "status_category")?,
+        ),
     };
     Ok(Answer {
         done,
@@ -127,10 +130,7 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Answer, CpdError> {
         summary: text(&value, "summary")?,
         status_name,
         status_category,
-        estimates: value
-            .get("estimates")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
+        estimates: value.get("estimates").cloned().unwrap_or_else(|| json!({})),
     })
 }
 
@@ -218,7 +218,11 @@ mod tests {
         let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","cloud_id":"c","status_name":"b","status_category":"indeterminate","why":"at_target","summary":"s","estimates":{"customfield_1":null}}"#;
         let moved = answer(&output(0, moved), &[]).unwrap();
         assert_eq!(
-            (moved.done, moved.status_name.as_str(), moved.status_category.as_str()),
+            (
+                moved.done,
+                moved.status_name.as_str(),
+                moved.status_category.as_str()
+            ),
             (Done::Moved, "Done", "done")
         );
         let same = answer(&output(0, same), &[]).unwrap();

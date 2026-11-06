@@ -47,6 +47,8 @@ export type Request = {
   later_names: string[];
   /** Custom field ids (`customfield_N`, distinct); written as 1 when empty before a Done move. `[]` writes nothing. */
   estimate_fields: string[];
+  /** The old request's names of all three targets: never read (swr-jira.md §3.1 drops it); the type keeps it so a caller that still builds one compiles. */
+  names?: { in_progress: string; in_review: string; done: string };
 };
 
 type Facts = { cloud_id: string; summary: string; estimates: Record<string, unknown> };

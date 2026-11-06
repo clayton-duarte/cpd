@@ -195,7 +195,12 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let stored = env.store.write("pr post", |tx| {
         let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
         if new {
-            crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "in_review")?;
+            crate::swr::source::jira::enqueue_for_workflow(
+                tx,
+                id.as_str(),
+                key.as_str(),
+                "in_review",
+            )?;
         }
         Ok(new)
     });

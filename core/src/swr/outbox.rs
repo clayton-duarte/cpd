@@ -178,8 +178,10 @@ pub fn enqueue_tx(
         Coalesce::Dedupe(canonical) => {
             let existing = tx
                 .query_row(
-                    &format!("SELECT id FROM swr_mutations WHERE {same} AND vars_json = ?4
-                       AND status IN ('pending', 'in_flight', 'revalidating') ORDER BY id LIMIT 1"),
+                    &format!(
+                        "SELECT id FROM swr_mutations WHERE {same} AND vars_json = ?4
+                       AND status IN ('pending', 'in_flight', 'revalidating') ORDER BY id LIMIT 1"
+                    ),
                     params![system, key, kind, canonical],
                     |r| r.get::<_, i64>(0),
                 )

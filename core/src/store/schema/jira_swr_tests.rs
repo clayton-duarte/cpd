@@ -60,7 +60,14 @@ fn before() -> (tempfile::TempDir, CpdHome) {
     (dir, home)
 }
 
-type Row = (Option<String>, String, String, Option<String>, String, Option<String>);
+type Row = (
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
 #[test]
 fn a_database_before_jira_swr_keeps_its_open_transitions_as_outbox_rows_and_loses_the_table() {
@@ -99,8 +106,22 @@ fn a_database_before_jira_swr_keeps_its_open_transitions_as_outbox_rows_and_lose
     assert_eq!(
         rows,
         vec![
-            (key("ABC-1"), "in_progress".into(), "superseded".into(), None, "a".into(), None),
-            (key("ABC-1"), "in_review".into(), "pending".into(), None, "a".into(), None),
+            (
+                key("ABC-1"),
+                "in_progress".into(),
+                "superseded".into(),
+                None,
+                "a".into(),
+                None
+            ),
+            (
+                key("ABC-1"),
+                "in_review".into(),
+                "pending".into(),
+                None,
+                "a".into(),
+                None
+            ),
             (
                 key("ABC-3"),
                 "done".into(),
@@ -109,7 +130,14 @@ fn a_database_before_jira_swr_keeps_its_open_transitions_as_outbox_rows_and_lose
                 "c".into(),
                 Some("no_transition".into())
             ),
-            (None, "in_progress".into(), "pending".into(), None, "b".into(), None),
+            (
+                None,
+                "in_progress".into(),
+                "pending".into(),
+                None,
+                "b".into(),
+                None
+            ),
         ],
         "the settled row is not copied; the ticketless one waits with no key; the lower pending rank is superseded"
     );

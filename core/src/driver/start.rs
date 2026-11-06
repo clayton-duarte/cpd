@@ -677,7 +677,12 @@ fn insert(
         |r| r.get(0),
     )?;
     if let Some(workflow) = workflow {
-        crate::swr::source::jira::enqueue_for_workflow(tx, plan.as_str(), &workflow, "in_progress")?;
+        crate::swr::source::jira::enqueue_for_workflow(
+            tx,
+            plan.as_str(),
+            &workflow,
+            "in_progress",
+        )?;
     }
     let attempt = &next.attempt;
     let text = format!(

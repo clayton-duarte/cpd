@@ -19,8 +19,8 @@ use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
     SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
-    inbox, janitor, liveness, models, open, parked, permanent, pr, react, restart, schedule,
-    sleep, swr, team, titles, wake, workers,
+    inbox, janitor, liveness, models, open, parked, permanent, pr, react, restart, schedule, sleep,
+    swr, team, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};

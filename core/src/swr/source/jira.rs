@@ -75,9 +75,8 @@ pub fn enqueue_transition_tx(
     context: Value,
 ) -> Result<i64, CpdError> {
     let rank = rank(target).ok_or_else(|| unknown_target(target))?;
-    let patch = status_name.map(
-        |name| json!({"status_name": name, "status_category": category_of(target)}),
-    );
+    let patch = status_name
+        .map(|name| json!({"status_name": name, "status_category": category_of(target)}));
     outbox::enqueue_tx(
         tx,
         now,
@@ -156,8 +155,9 @@ pub fn enqueue_for_workflow(
     Ok(())
 }
 
-/// A ticket was set on the Workflow (swr-jira.md §7): each of its ticketless `pending` rows is enqueued again under the
-/// ticket, in rank order, with the Forward rule, and the ticketless rows are `superseded`.
+/// A ticket was set on the Workflow (swr-jira.md §7): each of its `pending` rows that has no ticket, or another one, is
+/// enqueued again under the ticket, in rank order, with the Forward rule, and the old rows are `superseded`. Today's
+/// queue reads the Workflow's ticket when a row runs, so a row follows a changed ticket as well.
 pub fn adopt_ticket(
     tx: &WriteTxn<'_>,
     plan: &str,
@@ -167,12 +167,12 @@ pub fn adopt_ticket(
     let now = txn_time(tx)?;
     let mut stmt = tx.prepare(
         "SELECT id, json_extract(vars_json, '$.target') FROM swr_mutations
-         WHERE system = 'jira' AND target_key IS NULL AND status = 'pending'
+         WHERE system = 'jira' AND status = 'pending' AND (target_key IS NULL OR target_key <> ?3)
            AND json_extract(context_json, '$.plan') = ?1 AND json_extract(context_json, '$.workflow') = ?2
          ORDER BY json_extract(vars_json, '$.rank'), id",
     )?;
     let rows = stmt
-        .query_map([plan, workflow], |r| {
+        .query_map([plan, workflow, &key_of(ticket)], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -203,11 +203,7 @@ fn txn_time(tx: &WriteTxn<'_>) -> Result<OffsetDateTime, CpdError> {
 }
 
 /// The skip rule on the cached row (swr-jira.md §5): `true` when the row exists and is not behind.
-pub fn skips_on_cache(
-    store: &mut Store,
-    ticket: &str,
-    wanted: &Wanted,
-) -> Result<bool, CpdError> {
+pub fn skips_on_cache(store: &mut Store, ticket: &str, wanted: &Wanted) -> Result<bool, CpdError> {
     let row: Option<(String, String)> = store.read(|c| {
         Ok(c.query_row(
             "SELECT status_name, status_category FROM swr_jira_issues WHERE ticket = ?1",
@@ -217,9 +213,7 @@ pub fn skips_on_cache(
         .optional()?)
     })?;
     Ok(row.is_some_and(|(name, category)| {
-        name == wanted.target_name
-            || category == "done"
-            || wanted.later_names.iter().any(|n| *n == name)
+        name == wanted.target_name || category == "done" || wanted.later_names.contains(&name)
     }))
 }
 
@@ -301,7 +295,12 @@ pub fn target_name(
 
 /// The `plan`, `workflow` and `target` of a row.
 fn ids_of(m: &Mutation) -> Result<(String, String, String), CpdError> {
-    let bad = |what: &str| CpdError::new(ErrorCode::Internal, format!("A Jira transition has bad {what}."));
+    let bad = |what: &str| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("A Jira transition has bad {what}."),
+        )
+    };
     let context: Value = serde_json::from_str(m.context_json.as_deref().unwrap_or("{}"))
         .map_err(|_| bad("context"))?;
     let vars: Value = serde_json::from_str(&m.vars_json).map_err(|_| bad("vars"))?;
@@ -530,7 +529,10 @@ fn clear_cloud_id(store: &mut Store) -> Result<(), CpdError> {
 /// What `execute` reports for an error: `<code>: <message>`, or `jira_refused: <reason>`.
 fn failed(e: &CpdError) -> ExecOutcome {
     let error = if e.code() == ErrorCode::JiraRefused {
-        let reason = e.details()["reason"].as_str().unwrap_or("unknown").to_owned();
+        let reason = e.details()["reason"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_owned();
         format!("jira_refused: {reason}")
     } else {
         format!("{}: {}", e.code().as_str(), e.message())

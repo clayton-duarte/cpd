@@ -182,11 +182,16 @@ fn jira_drain(
             jira::park_refused(cx.store, &m, now, super::SOURCE, rest, &name)?;
             continue;
         }
-        outbox::fail(cx.store, m.id, now, &error, Retry::After(cx.config.watch.error_repeat()))?;
+        outbox::fail(
+            cx.store,
+            m.id,
+            now,
+            &error,
+            Retry::After(cx.config.watch.error_repeat()),
+        )?;
         if code == ErrorCode::JiraAuth.as_str() || code == ErrorCode::JiraNotConfigured.as_str() {
             machine.push(failure(code, rest.to_owned(), json!({"id": m.id})));
         }
     }
     jira::mark_inactive(cx.store, now)
 }
-

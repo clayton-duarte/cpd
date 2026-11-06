@@ -568,7 +568,9 @@ fn deleting_a_plan_deletes_its_jira_transitions() {
     world(&fx, "other");
     let row = |plan: &str| {
         format!(
-            "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('{plan}', 'api', 'in_review', 't')"
+            "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at, context_json)
+             VALUES ('jira', 'jira:issue:ABC-1', 'transition', '{{\"ticket\":\"ABC-1\",\"target\":\"in_review\",\"rank\":2}}', 'pending', 't',
+                     json_object('plan', '{plan}', 'workflow', 'api'))"
         )
     };
     fixture(&fx, &format!("{}; {};", row("pay"), row("other")));
@@ -579,14 +581,14 @@ fn deleting_a_plan_deletes_its_jira_transitions() {
     assert_eq!(
         count(
             &fx,
-            "SELECT count(*) FROM jira_transitions WHERE plan = 'pay'"
+            "SELECT count(*) FROM swr_mutations WHERE system = 'jira' AND json_extract(context_json, '$.plan') = 'pay'"
         ),
         0
     );
     assert_eq!(
         count(
             &fx,
-            "SELECT count(*) FROM jira_transitions WHERE plan = 'other'"
+            "SELECT count(*) FROM swr_mutations WHERE system = 'jira' AND json_extract(context_json, '$.plan') = 'other'"
         ),
         1,
         "another Plan's row stays"
