@@ -91,7 +91,15 @@ fn adopted_after(setup: &str, queued: &str, times: usize) -> Vec<String> {
     store
         .write("fixture", |tx| {
             if setup == WAITING {
-                tx.execute_batch(&format!("{}{PR}", FIXTURE.replace("'dispatch', 'cpd/pay/api', '/nowhere/api'", "'waiting', 'cpd/pay/api', NULL").replace(", cpd_txn(), 't', 't');", ", cpd_txn(), 't', NULL);")))?;
+                tx.execute_batch(&format!(
+                    "{}{PR}",
+                    FIXTURE
+                        .replace(
+                            "'dispatch', 'cpd/pay/api', '/nowhere/api'",
+                            "'waiting', 'cpd/pay/api', NULL"
+                        )
+                        .replace(", cpd_txn(), 't', 't');", ", cpd_txn(), 't', NULL);")
+                ))?;
             } else {
                 tx.execute_batch(&format!("{FIXTURE}{PR}{setup}"))?;
             }
@@ -100,7 +108,9 @@ fn adopted_after(setup: &str, queued: &str, times: usize) -> Vec<String> {
         .unwrap();
     if !queued.is_empty() {
         store
-            .write("queued", |tx| jira::enqueue_for_workflow(tx, "pay", "api", queued))
+            .write("queued", |tx| {
+                jira::enqueue_for_workflow(tx, "pay", "api", queued)
+            })
             .unwrap();
     }
     for _ in 0..times {

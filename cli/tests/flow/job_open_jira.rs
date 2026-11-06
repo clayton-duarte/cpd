@@ -4,9 +4,9 @@
 
 use crate::common;
 
+use super::driver::PR_URL;
 use super::driver_desc_gate::{CLEAR_JIRA, refused_open_merge};
 use super::driver_open::{Live, open_live, open_pr_live, submit_only};
-use super::driver::PR_URL;
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
@@ -196,7 +196,11 @@ fn an_open_job_merge_of_an_already_merged_pr_leaves_only_done_pending() {
 
     assert_eq!(live.pr_row().0, "merged");
     let rows = jira_rows(&live);
-    assert_eq!(pending(&live), json!([["jira:issue:ABC-1", "done"]]), "{rows}");
+    assert_eq!(
+        pending(&live),
+        json!([["jira:issue:ABC-1", "done"]]),
+        "{rows}"
+    );
     assert!(
         rows.as_array().unwrap().iter().any(|r| r[1] == "in_review"),
         "the open queued in_review before the merge's done: {rows}"
