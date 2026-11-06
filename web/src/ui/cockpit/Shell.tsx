@@ -103,7 +103,7 @@ export function Shell(props: {
                 onResize={sync}
               >
                 <section aria-label="Plan pane" data-state={mode} {...(collapsed ? { inert: true } : {})}>
-                  <ScrollArea className="h-full w-full">{props.plan}</ScrollArea>
+                  <ScrollArea data-part="plan-scroll" className="h-full w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">{props.plan}</ScrollArea>
                 </section>
               </ResizablePanel>
               <ResizableHandle

@@ -10,7 +10,7 @@ Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`, amended by the a
 
 `web/src/ui/ChatPane.tsx` keeps its props `{ view: SessionView; connection: Connection; reader: FileReaderBoundary }` and the `div[data-chat-dropzone]` with its `onDragOver` (`preventDefault` when files are dragged) and `onDrop` (`preventDefault`, then `composer.current?.addFiles(filesFromDrop(e.dataTransfer))`), pinned by `App.test` "dropping an image sends it as an attachment".
 
-Child order inside the dropzone, top to bottom: `ChatHeader` (DESIGN-chat 1), `Transcript` (DESIGN-chat 2), the dialog card (`AskCard` for `ask_user_question`, else `PlanReviewCard`, when `view.dialog !== null`; `readOnly = !dialog.interactive`), the `Footer` context card (3), and the `Composer` (1). The main `main[aria-label="Chat"]` is `flex flex-col`; `Transcript` is the only `flex-1 min-h-0` child.
+Child order inside the dropzone, top to bottom: `ChatHeader` (DESIGN-chat 1), `Transcript` (DESIGN-chat 2), then either the dialog card or the `Composer` (1): the dialog card (`AskCard` for `ask_user_question`, else `PlanReviewCard`; `readOnly = !dialog.interactive`) REPLACES the `Composer` while `view.dialog !== null`, and the `Composer` is shown only when it is null (pro-d82). The main `main[aria-label="Chat"]` is `flex flex-col`; `Transcript` is the only `flex-1 min-h-0` child.
 
 What ChatPane passes (source field → prop):
 

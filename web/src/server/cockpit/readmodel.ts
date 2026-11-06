@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import type {
   AttemptView, CockpitAction, ContextNode, ContextTreeModel, CurationRecord, InboxModel, InboxRow, InboxRowAction, JobView, PlanCounts, PlanNode,
-  PlanViewModel, SessionNode, Urgency, WorkflowView,
+  PlanViewModel, PlanWorkflowSummary, SessionNode, Urgency, WorkflowView,
 } from "../../protocol/cockpit.ts";
 import { WebError, type SessionRole, type SessionState } from "../../protocol/domain.ts";
 import type { CockpitPane } from "../../protocol/wire.ts";
@@ -12,7 +12,7 @@ type Obj = Readonly<Record<string, unknown>>;
 type StrOrNull = string | null;
 
 export interface RawContext { id: string; title: string; archived_at: StrOrNull; records: number; open_questions: number }
-export interface RawPlan { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; created_at: string; counts: PlanCounts; lead_session: StrOrNull }
+export interface RawPlan { id: string; context: string; title: string; phase: string; archived_at: StrOrNull; created_at: string; counts: PlanCounts; lead_session: StrOrNull; workflows?: readonly PlanWorkflowSummary[] }
 export interface RawSession {
   id: string; runner: "pi" | "durable"; role: SessionRole; state: SessionState; context: string; plan: StrOrNull; plan_lead: boolean;
   archived_at: StrOrNull; file: StrOrNull; tier: StrOrNull; title: StrOrNull; cwd: StrOrNull; key: StrOrNull; name: StrOrNull;
@@ -90,9 +90,29 @@ export function parsePlanList(reply: Reply): RawPlan[] {
   cursorOf(reply, c);
   return arr(reply, "plans", c).map((v) => {
     const o = obj(v, c, "plans[]");
+    const rawWfs = Array.isArray(o["workflows"]) ? (o["workflows"] as unknown[]) : [];
+    const workflows: PlanWorkflowSummary[] = rawWfs.map((w) => {
+      const wo = obj(w, c, "plans[].workflows[]");
+      const prObj = wo["pr"] === null || wo["pr"] === undefined ? null : obj(wo["pr"], c, "pr");
+      const pullObj = wo["pull_request"] === null || wo["pull_request"] === undefined ? null : obj(wo["pull_request"], c, "pull_request");
+      const opt = (src: Obj | null, f: string): StrOrNull => (src !== null && typeof src[f] === "string" ? (src[f] as string) : null);
+      return {
+        key: str(wo, "key", c),
+        status: str(wo, "status", c),
+        repo: strN(wo, "repo", c) ?? "",
+        pr: prObj === null ? null : {
+          number: num(prObj, "number", c),
+          url: typeof prObj["url"] === "string" ? prObj["url"] : "",
+          state: opt(pullObj, "state"),
+          checks: opt(pullObj, "checks"),
+          mergeable: opt(pullObj, "mergeable"),
+        },
+      };
+    });
     return {
       id: str(o, "id", c), context: str(o, "context", c), title: str(o, "title", c), phase: str(o, "phase", c),
       archived_at: strN(o, "archived_at", c), created_at: str(o, "created_at", c), counts: counts(o, c), lead_session: strN(o, "lead_session", c),
+      workflows,
     };
   });
 }
@@ -215,7 +235,7 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
       c.node = { ...c.node, createdAt: p.created_at };
     }
     c.plans.set(p.id, {
-      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null, createdAt: p.created_at },
+      node: { id: p.id, contextId: p.context, title: p.title, phase: p.phase, archived: p.archived_at !== null, counts: p.counts, leadSessionId: null, createdAt: p.created_at, ...(p.workflows !== undefined ? { workflows: p.workflows } : {}) },
       sessions: [],
     });
   }
@@ -282,7 +302,7 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
     return {
       key: str(w, "key", c), title: str(w, "title", c), repo: strN(w, "repo", c) ?? "", base: strN(w, "base", c) ?? "", status: str(w, "status", c),
       needs: strList(w, "needs"), jobKeys: strList(w, "jobs"),
-      pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable") },
+      pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable"), ...(typeof prObj["posted"] === "boolean" ? { posted: prObj["posted"] } : {}) },
     };
   });
   const jobs: JobView[] = raw.jobs.map((j) => {

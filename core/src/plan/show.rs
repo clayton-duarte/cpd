@@ -74,6 +74,10 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
                 }
                 None => Value::Null,
             };
+            if value["pr"].is_object() {
+                value["pr"]["posted"] =
+                    json!(crate::pr::posts::find(conn, plan.as_str(), &key)?.is_some());
+            }
             value["needs"] = json!(needs.remove(&key).unwrap_or_default());
             Ok(value)
         })

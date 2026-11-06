@@ -19,6 +19,10 @@ export interface SessionNode {
   readonly dot: SessionDot;
   readonly createdAt?: string;
 }
+export interface PlanWorkflowSummary {
+  readonly key: string; readonly status: string; readonly repo: string;
+  readonly pr: { readonly number: number; readonly url: string; readonly state: string | null; readonly checks: string | null; readonly mergeable: string | null } | null;
+}
 export interface PlanNode {
   readonly id: string;
   readonly contextId: string;
@@ -29,6 +33,7 @@ export interface PlanNode {
   readonly leadSessionId: string | null;
   readonly sessions: readonly SessionNode[]; // the Plan's sessions: the Lead first, then Workers in `session list` order
   readonly createdAt?: string;
+  readonly workflows?: readonly PlanWorkflowSummary[];
 }
 export interface ContextNode {
   readonly id: string;
@@ -62,7 +67,7 @@ export interface WorkflowView {
   readonly status: string; // open|merged|cancelled|waiting|...
   readonly needs: readonly string[];
   readonly jobKeys: readonly string[]; // `jobs` of the Workflow row (keys), in source order
-  readonly pr: { readonly number: number; readonly url: string; readonly state: string | null; readonly checks: string | null; readonly mergeable: string | null } | null; // from `pr` + `pull_request` (state, checks, mergeable)
+  readonly pr: { readonly number: number; readonly url: string; readonly state: string | null; readonly checks: string | null; readonly mergeable: string | null; readonly posted?: boolean } | null; // from `pr` + `pull_request` (state, checks, mergeable)
 }
 export interface PlanViewModel {
   readonly planId: string; readonly contextId: string; readonly title: string; readonly phase: string;

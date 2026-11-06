@@ -333,16 +333,16 @@ describe("archive navigation", () => {
     expect(where(run(at(live, "lead-p1", "p1"), patch(after)))).toEqual(["mgr-a", null]);
   });
 
-  it("tree update archiving the selected Context selects the next live non-standing Context Manager", () => {
+  it("tree update archiving the selected Context selects the next live Context Manager in tree order", () => {
     const live = model([ctx("cpd", []), ctx("a", []), ctx("b", [])]);
     const after = model([ctx("cpd", []), ctx("a", [], true), ctx("b", [])]);
-    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-b", null]);
+    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-cpd", null]);
   });
 
-  it("tree update archiving the last non-standing Context selects the cpd Manager", () => {
-    const live = model([ctx("cpd", []), ctx("host", []), ctx("a", [])]);
-    const after = model([ctx("cpd", []), ctx("host", []), ctx("a", [], true)]);
-    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-cpd", null]);
+  it("tree update archiving a Context before a standing one selects the standing Manager", () => {
+    const live = model([ctx("a", []), ctx("host", []), ctx("b", [])]);
+    const after = model([ctx("a", [], true), ctx("host", []), ctx("b", [])]);
+    expect(where(run(at(live, "mgr-a", null), patch(after)))).toEqual(["mgr-host", null]);
   });
 
   it("opening an archived row keeps the selection", () => {
