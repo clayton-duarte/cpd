@@ -2424,7 +2424,7 @@ Idempotent: yes, as stated.
 cpd pr poll [--plan <id>]
 ```
 
-The pull request poller (hs-d96, D8; contract §7.6): one poll of **all of the User's open pull requests**. Run by engine E5 every `pr_poll_seconds` as a subprocess, without `--plan` (§3.7), and at once when a cpd action has requested one (`run/pr-poll-now`, contract §1.4); also by a Lead, right after `pr open` or whenever it needs the current status (D12).
+The pull request poller (hs-d96, D8; contract §7.6): one poll of **all of the User's open pull requests**. Run by engine E5 every `pr_poll_seconds` as a subprocess, without `--plan` (§3.7), and at once when a cpd action has requested one (`run/pr-poll-now`, contract §1.4); also by a Lead, right after `pr open` or whenever it needs the current status (D12). The poll removes `run/pr-poll-now` right before it reads GitHub, so a by-hand poll serves a pending request too (contract §3.7 E5).
 
 | Flag | Meaning |
 |---|---|
