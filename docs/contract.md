@@ -1809,6 +1809,8 @@ CREATE TABLE pull_requests (
   base_ref        TEXT,                                           -- migration `pr-base` (pro-d118, A1-A5, section 4.5): the base branch from GitHub; used to determine if ready to merge (section 2.2 Pull request)
   default_branch  TEXT,                                           -- migration `pr-base`: the default branch from GitHub; used to determine if ready to merge
   archived        INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),          -- migration `20261105T1521-pr-archived` (pro-d392): 1 when the repository is archived on GitHub
+  head_oid        TEXT,                                           -- migration `swr` (docs/architecture/swr.md §3): the head commit of the pull request, from the poll
+  gh_updated_at   TEXT,                                           -- migration `swr`: GitHub's updatedAt of the pull request at the last read
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
@@ -2527,7 +2529,7 @@ BEGIN SELECT RAISE(ABORT, 'append_only: events'); END;
 
 `events` are not copied into `history`: the table is itself append-only and carries its `txn`. The delete exception makes it the one table whose deleted rows leave no copy: the Events of a deleted Plan are gone, and the `plan-deleted` Event (§5.2) is what remains of them.
 
-**The SWR tables** (Plan `external-sync-arch`, Job `swr-core`; design and column meanings in `docs/architecture/swr.md` §3). **Not built yet:** they arrive in one additive migration `<YYYYMMDDTHHMM>-swr` (accepted assumption A1), which also adds columns to `pull_requests` (named by that Job; `swr.md` §18). They are data tables: no history triggers and no `history_tables` row, like `jira_transitions`. `swr_mutations` is the one outbox for every external write (`swr.md` §8).
+**The SWR tables** (Plan `external-sync-arch`, Job `swr-core`; design and column meanings in `docs/architecture/swr.md` §3). They arrive in one additive migration `20261106T1659-swr` (accepted assumption A1), which also adds the columns `head_oid` and `gh_updated_at` to `pull_requests` (shown in its DDL above; `swr.md` §18). They are data tables: no history triggers and no `history_tables` row, like `jira_transitions`. `swr_mutations` is the one outbox for every external write (`swr.md` §8).
 
 ```sql
 CREATE TABLE swr_queries (
