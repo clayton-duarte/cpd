@@ -647,3 +647,214 @@ fn slack_claim_eyes_reaction_goes_through_the_outbox() {
         "nothing is written to the retired slack_reactions queue"
     );
 }
+
+const OK_REACT: &str = r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":false}"#;
+const ALREADY_REACTED: &str = r#"{"ok":true,"channel":"C0TEAM001","ts":"1760951522.011300","emoji":"eyes","already":true}"#;
+
+/// The owner's policy text naming `emoji` as the merge reaction (none when `None`).
+fn owner_policy(emoji: Option<&str>) -> String {
+    let reaction = emoji.map_or(String::new(), |e| format!("merged_reaction = \"{e}\"\n"));
+    format!("[pr.post]\nenabled = true\nchannel = \"C0POLICY1\"\n{reaction}")
+}
+
+impl Fx {
+    /// Plan `pay` with Workflow `repo` (Context owner `acme`, its open pull request), its post on `CHANNEL`/`TS` with the
+    /// merge reaction `git-merge`, and the owner's policy file `policy/acme/owner.toml` with `policy` as its text.
+    fn merge_fixture(&mut self, policy: &str) {
+        self.sql(&format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored)
+               VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay', 0, 'open', 'none', 'none', 't', 't', 'clean', 1);
+             INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
+             INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                    pr_number, pr_url, pr_opened_at, pull_request)
+               VALUES ('pay', 'repo', '/r', 'main', 'repo', 'open', 'cpd/pay/repo', '/w', cpd_txn(), 't', 't',
+                       812, 'https://github.com/acme/pay/pull/812', 't', (SELECT id FROM pull_requests WHERE number = 812));
+             INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
+               VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1', 't', 'git-merge', NULL);"
+        ));
+        let dir = crate::policy::policy_dir(&self.home).join("acme");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("owner.toml"), policy).unwrap();
+    }
+
+    /// The merge reaction of Workflow `repo`, enqueued the way the merge does (`react_merge_in`).
+    fn enqueue_merge(&mut self) {
+        self.store
+            .write("merge", |tx| slack::react_merge_in(tx, "pay", "repo").map_err(Into::into))
+            .unwrap();
+    }
+
+    /// `due` of the Slack Source as E24 calls it.
+    fn due(&mut self) -> Vec<String> {
+        let now = self.now();
+        let mut cx = Cx {
+            store: &mut self.store,
+            ports: &self.fakes.ports,
+            home: &self.home,
+            config: &self.config,
+        };
+        Slack.due(&mut cx, now).unwrap()
+    }
+}
+
+/// The argv of the one helper run, as a pair test.
+fn helper_args(fx: &Fx) -> Vec<String> {
+    let calls = fx.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "one helper run");
+    calls[0].args.clone()
+}
+
+#[test]
+fn slack_queued_reaction_is_sent_and_done() {
+    let mut fx = fx((0, OK_REACT));
+    let now = fx.now();
+    slack::react(&mut fx.store, now, CHANNEL, TS, "eyes").unwrap();
+
+    assert_eq!(fx.execute(), ExecOutcome::Done, "the helper placed it");
+    let args = helper_args(&fx);
+    let pair = |name: &str, value: &str| args.windows(2).any(|w| w[0] == name && w[1] == value);
+    assert!(
+        args.iter().any(|a| a.ends_with("slack-react.ts"))
+            && pair("--channel", CHANNEL)
+            && pair("--ts", TS)
+            && pair("--emoji", "eyes"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn slack_already_reacted_answer_counts_as_done() {
+    let mut fx = fx((0, ALREADY_REACTED));
+    let now = fx.now();
+    slack::react(&mut fx.store, now, CHANNEL, TS, "eyes").unwrap();
+
+    assert_eq!(
+        fx.execute(),
+        ExecOutcome::Done,
+        "a reaction that is already there is done"
+    );
+}
+
+#[test]
+fn slack_merge_reaction_places_the_emoji_the_policy_names_at_execute() {
+    let mut fx = fx((0, OK_REACT));
+    fx.merge_fixture(&owner_policy(Some("rocket")));
+    fx.enqueue_merge();
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+    let args = helper_args(&fx);
+    assert!(
+        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "rocket"),
+        "the emoji is the policy's now, not the queued git-merge: {args:?}"
+    );
+}
+
+#[test]
+fn slack_merge_reaction_whose_policy_names_no_emoji_is_failed_policy_empty() {
+    let mut fx = fx((0, OK_REACT));
+    fx.merge_fixture(&owner_policy(None));
+    fx.enqueue_merge();
+
+    assert_eq!(
+        fx.execute(),
+        ExecOutcome::Failed {
+            error: "policy_empty".into()
+        },
+        "a policy that names no emoji parks the reaction"
+    );
+    assert!(
+        fx.calls.lock().unwrap().is_empty(),
+        "no helper run for an empty policy"
+    );
+    assert_eq!(
+        fx.count("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%policy_empty%'"),
+        1,
+        "one error Event naming the policy"
+    );
+}
+
+#[test]
+fn slack_merge_reaction_whose_policy_does_not_resolve_sends_the_queued_emoji() {
+    let mut fx = fx((0, OK_REACT));
+    fx.merge_fixture("[pr.post\nthis is not toml");
+    fx.enqueue_merge();
+
+    assert_eq!(
+        fx.execute(),
+        ExecOutcome::Done,
+        "a policy that does not resolve leaves the queued emoji standing"
+    );
+    let args = helper_args(&fx);
+    assert!(
+        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "git-merge"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn slack_parked_merge_reaction_is_requeued_when_the_policy_names_another_emoji() {
+    let mut fx = fx((0, OK_REACT));
+    fx.merge_fixture(&owner_policy(Some("rocket")));
+    fx.enqueue_merge();
+    fx.sql("UPDATE swr_mutations SET status = 'failed', error = 'invalid_name' WHERE op_kind = 'reaction';");
+
+    // `due` also asks for the channel query (never fetched); the parked row is requeued alongside it.
+    fx.due();
+    let reopened: Vec<String> = fx
+        .mutations()
+        .into_iter()
+        .filter(|(op, _, _, status)| op == "reaction" && status == "pending")
+        .map(|(_, _, vars, _)| vars)
+        .collect();
+    assert_eq!(reopened.len(), 1, "one new pending row: {:?}", fx.mutations());
+    assert!(reopened[0].contains("\"emoji\":\"rocket\""), "{}", reopened[0]);
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+    let args = helper_args(&fx);
+    assert!(
+        args.windows(2).any(|w| w[0] == "--emoji" && w[1] == "rocket"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn slack_refused_reaction_without_a_plan_raises_an_error_naming_no_policy() {
+    let mut fx = fx((3, REFUSED));
+    let now = fx.now();
+    slack::react(&mut fx.store, now, CHANNEL, TS, "nope").unwrap();
+
+    assert_eq!(
+        fx.execute(),
+        ExecOutcome::Failed {
+            error: "invalid_name".into()
+        }
+    );
+    assert_eq!(
+        fx.count("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%slack_refused%' AND data LIKE '%policy%'"),
+        0,
+        "a reaction with no Plan names no policy file"
+    );
+}
+
+#[test]
+fn slack_refused_merge_reaction_names_its_emoji_and_policy_file() {
+    let mut fx = fx((3, REFUSED));
+    fx.merge_fixture(&owner_policy(Some("git-merge")));
+    fx.enqueue_merge();
+
+    assert_eq!(
+        fx.execute(),
+        ExecOutcome::Failed {
+            error: "invalid_name".into()
+        }
+    );
+    assert_eq!(
+        fx.count("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%slack_refused%' AND data LIKE '%git-merge%' AND data LIKE '%owner.toml%'"),
+        1,
+        "one error Event naming the emoji and the policy file to fix"
+    );
+}
