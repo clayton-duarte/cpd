@@ -28,7 +28,7 @@ it("the legend dialog sections scroll with a ScrollArea", () => {
   show(<LegendDialog open onClose={vi.fn()} />);
   const dialog = document.body.querySelector('[data-part="legend-dialog"]');
   expect(dialog).not.toBeNull();
-  const area = dialog?.querySelector('[data-slot="scroll-area"]');
+  const area = dialog?.querySelector("h3")?.closest('[data-slot="scroll-area"]');
   expect(area).not.toBeNull();
   const h3s = Array.from(dialog?.querySelectorAll("h3") ?? []);
   expect(h3s.length).toBeGreaterThan(0);
