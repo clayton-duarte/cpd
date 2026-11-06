@@ -186,7 +186,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "6807f48d80b8f4563735dcb9245546f140ccdbed53994f0e70e9866cfb5214c8";
+pub const SCHEMA_HASH: &str = "d4c432082f98f6529f68f5ae578a27eda610fb5a16247ff8631fd7b03c5feb2d";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -1120,3 +1120,47 @@ mod workflow_rename_tests;
 mod workflow_reopen_tests;
 #[cfg(test)]
 mod working_pr_tests;
+
+/// The migration for the persisted host crash-restart bound (pro-d430 D3): `sessions.host_restarts` and
+/// `sessions.host_window_start`, on a store created by the previous schema.
+#[cfg(test)]
+mod host_bound_tests {
+    use super::*;
+
+    #[test]
+    fn host_bound_migration_adds_the_columns_with_zero_and_null_defaults() {
+        let (_dir, home) = crate::store::tests::tmp_home();
+        let earlier: Vec<Named> = NAMED
+            .iter()
+            .copied()
+            .take_while(|n| !n.name.ends_with("-host-restarts"))
+            .collect();
+        assert!(
+            earlier.len() < NAMED.len(),
+            "the migration `host-restarts` exists"
+        );
+        let mut old = crate::store::tests::open_named(&home, &earlier).unwrap();
+        old.write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c1', 'C', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('l1', 'manager', 'c1', NULL, 'm', '/r', 'O2', 'stopped', 't', 't');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        drop(old);
+        let mut store = crate::store::Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none());
+        let row: (i64, Option<String>) = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT host_restarts, host_window_start FROM sessions WHERE id = 'l1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(row, (0, None));
+    }
+}

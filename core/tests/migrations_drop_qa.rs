@@ -46,6 +46,10 @@ const LATER: &[(&str, &str)] = &[
         "ALTER TABLE pr_posts DROP COLUMN last_posted_at",
     ),
     (
+        "sessions",
+        "ALTER TABLE sessions DROP COLUMN host_restarts; ALTER TABLE sessions DROP COLUMN host_window_start",
+    ),
+    (
         "record_topics",
         "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
     ),
@@ -79,7 +83,7 @@ fn rewind(conn: &Connection) {
             .collect();
         for trigger in triggers {
             // Hand-written and owned by the migrations (§4.5 K4), they name none of the added columns: reconcile does not recreate them.
-            // The hand-written `plans` triggers likewise: none names a `reviewed_*` column (`plan-reviewed-pr`).
+            // The hand-written `plans` triggers likewise: none names a `reviewed_*` column (`plan-reviewed-pr`); nor does a `sessions_working_pr_*` one name `host_restarts` or `host_window_start`.
             if matches!(
                 trigger.as_str(),
                 "pull_requests_hist_del"
@@ -87,6 +91,9 @@ fn rewind(conn: &Connection) {
                     | "plans_phase"
                     | "plans_deleted_once"
                     | "plans_done_no_pending_review"
+                    | "sessions_working_pr_new"
+                    | "sessions_working_pr_valid"
+                    | "sessions_working_pr_clear"
             ) {
                 continue;
             }

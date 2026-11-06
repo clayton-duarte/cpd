@@ -50,6 +50,7 @@ fn dump(store: &mut Store) -> String {
                     .filter(|n| {
                         !["archived", "pr_subject", "changes_requested_at"].contains(&n.as_str())
                             && !n.starts_with("reviewed_")
+                            && !n.starts_with("host_")
                     })
                     .collect())
             })

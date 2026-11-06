@@ -452,3 +452,108 @@ fn fresh_idle_host_is_not_restarted() {
     assert_eq!(terms(&spawn), 0);
     assert_eq!(spawn.launches().len(), 1);
 }
+
+/// An engine restart: the in-memory host state is lost, the live host is adopted again from its pid file.
+fn restart_engine(fx: &mut Fx, spawn: &FakeSpawn) {
+    fx.engine.hosts = hosts::State::default();
+    spawn.set_cmdline(
+        one_host(spawn, "lead1"),
+        "node /pi/durable-host/main.ts --session lead1",
+    );
+    hosts::run(&mut fx.engine);
+}
+
+/// The live host of `lead1` dies and one tick runs.
+fn die_and_tick(fx: &mut Fx, spawn: &FakeSpawn) {
+    spawn.exit(one_host(spawn, "lead1"), 1);
+    hosts::run(&mut fx.engine);
+}
+
+fn label(fx: &mut Fx) -> Option<String> {
+    fx.query("SELECT state_label FROM sessions WHERE id = 'lead1'")
+}
+
+#[test]
+fn the_restart_count_survives_an_engine_restart() {
+    let (mut fx, spawn, _clock) = live_fx();
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    hosts::run(&mut fx.engine);
+    die_and_tick(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    assert_eq!(spawn.launches().len(), 3, "two restarts so far");
+
+    restart_engine(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    assert_eq!(spawn.launches().len(), 4, "the third restart is allowed");
+    die_and_tick(&mut fx, &spawn);
+
+    assert_eq!(
+        spawn.launches().len(),
+        4,
+        "the fourth death in the window latches, the engine restart did not reset the count: {:?}",
+        spawn.launches()
+    );
+    assert_eq!(label(&mut fx).as_deref(), Some("host crash loop"));
+}
+
+#[test]
+fn a_latched_host_stays_latched_after_an_engine_restart() {
+    let (mut fx, spawn, _clock) = live_fx();
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    hosts::run(&mut fx.engine);
+    for _ in 0..3 {
+        die_and_tick(&mut fx, &spawn);
+    }
+    assert_eq!(spawn.launches().len(), 4);
+
+    restart_engine(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    assert_eq!(
+        spawn.launches().len(),
+        4,
+        "a host adopted after the engine restart dies into the latch: {:?}",
+        spawn.launches()
+    );
+    assert_eq!(label(&mut fx).as_deref(), Some("host crash loop"));
+
+    fx.engine.hosts = hosts::State::default();
+    hosts::run(&mut fx.engine);
+    assert_eq!(spawn.launches().len(), 4, "still latched: no new host");
+    assert_eq!(label(&mut fx).as_deref(), Some("host crash loop"));
+    assert_eq!(
+        fx.count("session-state"),
+        1,
+        "{:?}",
+        fx.events("session-state")
+    );
+}
+
+#[test]
+fn restarts_older_than_the_window_do_not_count_after_an_engine_restart() {
+    let (mut fx, spawn, clock) = live_fx();
+    add_lead(&mut fx, "lead1", "durable", "/", None);
+    hosts::run(&mut fx.engine);
+    die_and_tick(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    let stored: i64 = fx.query("SELECT host_restarts FROM sessions WHERE id = 'lead1'");
+    assert_eq!(stored, 2, "the count is stored in the database");
+
+    clock.advance(Duration::from_secs(11 * 60));
+    restart_engine(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    assert_eq!(
+        spawn.launches().len(),
+        4,
+        "the old restarts left the window"
+    );
+    let stored: i64 = fx.query("SELECT host_restarts FROM sessions WHERE id = 'lead1'");
+    assert_eq!(stored, 1, "a fresh window holds one restart");
+    die_and_tick(&mut fx, &spawn);
+    die_and_tick(&mut fx, &spawn);
+    assert_eq!(
+        spawn.launches().len(),
+        6,
+        "three restarts in the new window"
+    );
+    assert_eq!(label(&mut fx), None);
+}

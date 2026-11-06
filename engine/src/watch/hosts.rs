@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::SOURCE;
 use super::engine::Engine;
@@ -52,29 +53,57 @@ struct Host {
     /// the host's life, so the flock lives with the host's own inherited descriptor (contract §6.19, Q14).
     #[allow(dead_code)]
     lock: Option<File>,
-    /// Restarts inside the current window.
-    count: u32,
-    /// When the current window started.
-    window_start: Option<OffsetDateTime>,
 }
 
 impl State {
     fn pid(&self, session: &SessionId) -> Option<Pid> {
         self.hosts.get(session).map(|host| host.pid)
     }
+}
 
-    fn bound(&self, session: &SessionId) -> Option<(u32, Option<OffsetDateTime>)> {
-        self.hosts
-            .get(session)
-            .map(|host| (host.count, host.window_start))
-    }
+/// The stored restart bound of a Session: the count in the window and when the window started (pro-d430).
+fn bound(
+    engine: &mut Engine,
+    session: &SessionId,
+) -> Result<(u32, Option<OffsetDateTime>), CpdError> {
+    let (count, start): (u32, Option<String>) = engine.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT host_restarts, host_window_start FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    })?;
+    let start = start
+        .map(|text| OffsetDateTime::parse(&text, &Rfc3339))
+        .transpose()
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("The stored restart window of Session {session} is invalid: {e}."),
+            )
+        })?;
+    Ok((count, start))
+}
 
-    fn set_bound(&mut self, session: &SessionId, count: u32, window_start: Option<OffsetDateTime>) {
-        if let Some(host) = self.hosts.get_mut(session) {
-            host.count = count;
-            host.window_start = window_start;
-        }
-    }
+fn set_bound(
+    engine: &mut Engine,
+    session: &SessionId,
+    count: u32,
+    window_start: OffsetDateTime,
+) -> Result<(), CpdError> {
+    let text = window_start.format(&Rfc3339).map_err(|e| {
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Cannot format the restart window of Session {session}: {e}."),
+        )
+    })?;
+    engine.store.write(SOURCE, |tx| {
+        tx.execute(
+            "UPDATE sessions SET host_restarts = ?1, host_window_start = ?2 WHERE id = ?3",
+            rusqlite::params![count, text, session.as_str()],
+        )?;
+        Ok(())
+    })
 }
 
 /// `$CPD_HOME/run/host/`, the directory of the lock, the pid file, the log and the socket (§6.14, §6.19).
@@ -240,15 +269,10 @@ fn due_one(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
         return restart(engine, due);
     }
     if let Some(pid) = live_pid_file(engine, &due.id) {
-        engine.hosts.hosts.insert(
-            due.id.clone(),
-            Host {
-                pid,
-                lock: None,
-                count: 0,
-                window_start: Some(engine.ports.clock.utc()),
-            },
-        );
+        engine
+            .hosts
+            .hosts
+            .insert(due.id.clone(), Host { pid, lock: None });
         if stale_idle(engine, &due.id) {
             return reload(engine, &due.id);
         }
@@ -270,21 +294,18 @@ fn live_pid_file(engine: &mut Engine, session: &SessionId) -> Option<Pid> {
 /// The death of a Session's host: reset the window, restart while the bound allows it, else latch (contract §6.19).
 fn restart(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
     let now = engine.ports.clock.utc();
-    let (mut count, mut window_start) = engine.hosts.bound(&due.id).unwrap_or((0, None));
+    let (mut count, mut window_start) = bound(engine, &due.id)?;
     if window_start.is_none_or(|start| now - start >= WINDOW) {
         window_start = Some(now);
         count = 0;
     }
+    engine.hosts.hosts.remove(&due.id);
     if count >= MAX_RESTARTS {
-        engine.hosts.hosts.remove(&due.id);
         return latch(engine, due);
     }
-    engine.hosts.hosts.remove(&due.id);
+    set_bound(engine, &due.id, count + 1, window_start.unwrap_or(now))?;
     match start(engine, &due.id) {
-        Ok(_) => {
-            engine.hosts.set_bound(&due.id, count + 1, window_start);
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(e) if e.code() == ErrorCode::HostRunning => Ok(()),
         Err(e) => Err(e),
     }
@@ -374,8 +395,6 @@ pub(super) fn start(engine: &mut Engine, session: &SessionId) -> Result<(Pid, Fi
         Host {
             pid,
             lock: Some(held),
-            count: 0,
-            window_start: None,
         },
     );
     Ok((pid, file))

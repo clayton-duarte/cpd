@@ -54,10 +54,10 @@ fn select_all(store: &mut Store, t: &str, by: &str) -> String {
         store,
         &format!("SELECT name FROM pragma_table_info('{t}') ORDER BY cid"),
     );
-    // `codereview-followup` (a later migration) adds `plans.pr_subject` and `plans.changes_requested_at`.
+    // `codereview-followup` and `host-restarts` (later migrations) add `plans.pr_subject`, `plans.changes_requested_at`, `sessions.host_restarts` and `host_window_start`: not what these test.
     let names: Vec<String> = names
         .into_iter()
-        .filter(|n| n != "pr_subject" && n != "changes_requested_at")
+        .filter(|n| !n.starts_with("host_") && n != "pr_subject" && n != "changes_requested_at")
         .collect();
     format!("SELECT {} FROM {t} ORDER BY {by}", names.join(", "))
 }
@@ -211,53 +211,57 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(11).map(|n| n.name),
+        NAMED.iter().rev().nth(12).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived` and `plan-reviewed-pr` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr` and `host-restarts` come after it"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(10).map(|n| n.name),
+        NAMED.iter().rev().nth(11).map(|n| n.name),
         Some("20261103T1100-workflow-reopen")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(9).map(|n| n.name),
+        NAMED.iter().rev().nth(10).map(|n| n.name),
         Some("20261103T1200-context-reads")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(8).map(|n| n.name),
+        NAMED.iter().rev().nth(9).map(|n| n.name),
         Some("20261103T2150-context-supersedes-list")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(7).map(|n| n.name),
+        NAMED.iter().rev().nth(8).map(|n| n.name),
         Some("20261103T2200-drop-question-answer")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(6).map(|n| n.name),
+        NAMED.iter().rev().nth(7).map(|n| n.name),
         Some("20261104T1445-bump-last-posted-at")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(5).map(|n| n.name),
+        NAMED.iter().rev().nth(6).map(|n| n.name),
         Some("20261104T1555-record-topics")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(4).map(|n| n.name),
+        NAMED.iter().rev().nth(5).map(|n| n.name),
         Some("20261104T1600-workflow-base-retarget")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(3).map(|n| n.name),
+        NAMED.iter().rev().nth(4).map(|n| n.name),
         Some("20261104T1601-finish-legacy-review-plans")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(2).map(|n| n.name),
+        NAMED.iter().rev().nth(3).map(|n| n.name),
         Some("20261105T1400-codereview-followup")
     );
     assert_eq!(
-        NAMED.iter().rev().nth(1).map(|n| n.name),
+        NAMED.iter().rev().nth(2).map(|n| n.name),
         Some("20261105T1521-pr-archived")
     );
     assert_eq!(
-        NAMED.iter().next_back().map(|n| n.name),
+        NAMED.iter().rev().nth(1).map(|n| n.name),
         Some("20261105T1600-plan-reviewed-pr")
+    );
+    assert_eq!(
+        NAMED.iter().next_back().map(|n| n.name),
+        Some("20261105T1700-host-restarts")
     );
 }
 
