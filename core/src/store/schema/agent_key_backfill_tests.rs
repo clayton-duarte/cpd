@@ -213,7 +213,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     assert_eq!(
         NAMED.iter().rev().nth(15).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr`, `host-restarts`, `replan-phase`, `swr` and `swr-slack` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr`, `host-restarts`, `replan-phase`, `swr`, `jira-swr` and `swr-slack` come after it"
     );
     assert_eq!(
         NAMED.iter().rev().nth(14).map(|n| n.name),
@@ -273,7 +273,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261106T1812-swr-slack")
+        Some("20261106T1830-swr-slack")
     );
 }
 

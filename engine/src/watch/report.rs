@@ -24,10 +24,9 @@ use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::repeat::{self, Recent, Same};
 use cpd_core::events::{self, NewEvent};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId, WorkflowKey};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
-use cpd_core::pr::jira_sync::Target;
 use cpd_core::session::tell_managers;
 use cpd_core::store::Store;
 
@@ -54,7 +53,6 @@ pub(super) enum Step {
     E15,
     E16,
     E18,
-    E19,
     E20,
     E22,
     E24,
@@ -81,7 +79,6 @@ impl fmt::Display for Step {
             Step::E15 => "E15 (model discovery)",
             Step::E16 => "E16 (janitor)",
             Step::E18 => "E18 (auto-merge requests)",
-            Step::E19 => "E19 (Jira transitions)",
             Step::E20 => "E20 (parked drafts)",
             Step::E22 => "E22 (Permanent Contexts)",
             Step::E24 => "E24 (SWR)",
@@ -102,8 +99,6 @@ pub(super) enum About {
     /// A Session's retitle run (E10): the Inbox scope and the command are the Session's, but the
     /// `error` Event sets no Session, so no Lead gets a turn for it (contract §3.7 E10).
     TitleRun(SessionId),
-    /// One E19 queue row (Plan, Workflow, target): scoped to the Plan, deduped per row (contract §3.7 E19).
-    Move(PlanId, WorkflowKey, Target),
 }
 
 impl About {
@@ -114,9 +109,6 @@ impl About {
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
-            About::Move(p, workflow, t) => {
-                format!("the {} move of Workflow {workflow} of Plan {p}", t.as_str())
-            }
         }
     }
 
@@ -129,7 +121,7 @@ impl About {
     fn see(&self) -> String {
         match self {
             About::Machine => "cpd doctor".to_owned(),
-            About::Plan(p) | About::Move(p, ..) => format!("cpd plan show --plan {p}"),
+            About::Plan(p) => format!("cpd plan show --plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("cpd session show {s}"),
             About::Job(p, j) => format!("cpd job show {j} --plan {p}"),
             About::Attempt(p, a) => format!("cpd attempt show {a} --plan {p}"),
@@ -146,7 +138,7 @@ impl About {
         );
         match self {
             About::Machine | About::TitleRun(_) => event,
-            About::Plan(p) | About::Move(p, ..) => event.plan(p.clone()),
+            About::Plan(p) => event.plan(p.clone()),
             About::Session(s) => event.session(s.clone()),
             About::Job(p, j) => event.plan(p.clone()).job(j.clone()),
             About::Attempt(p, a) => event
@@ -489,32 +481,6 @@ mod tests {
         let event = about.event("x".to_owned(), &failure("title_failed"));
         assert_eq!(
             format!("{event:?}").matches("session: None").count(),
-            1,
-            "{event:?}"
-        );
-    }
-
-    /// An E19 row failure is keyed per row: its lead names the Workflow and the target; the Event is scoped to the Plan.
-    #[test]
-    fn a_move_failure_is_per_row_and_plan_scoped() {
-        let plan = PlanId::parse("plan-a").unwrap();
-        let about = About::Move(
-            plan.clone(),
-            WorkflowKey::parse("pr1").unwrap(),
-            Target::InReview,
-        );
-        assert_eq!(about.see(), "cpd plan show --plan plan-a");
-        assert!(about.lead(Step::E19).contains(&format!(
-            "the {} move of Workflow pr1 of Plan plan-a",
-            Target::InReview.as_str()
-        )));
-        assert_ne!(
-            about,
-            About::Move(plan, WorkflowKey::parse("pr2").unwrap(), Target::InReview)
-        );
-        let event = about.event("x".to_owned(), &failure("jira_failed"));
-        assert_eq!(
-            format!("{event:?}").matches("plan: Some").count(),
             1,
             "{event:?}"
         );

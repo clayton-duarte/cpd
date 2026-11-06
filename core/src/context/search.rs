@@ -374,7 +374,7 @@ fn semantic(input: &SemanticInput<'_>, visible: &[String]) -> Result<Semantic, C
         return Ok(Semantic::None);
     }
     let started = input.clock.now();
-    let embedded = bifrost_embedder(input.config, input.runner)
+    let embedded = bifrost_embedder(input.home, input.config, input.runner)
         .and_then(|embedder| embedder.embed(input.query, DIMS));
     let embed_ms = input
         .clock

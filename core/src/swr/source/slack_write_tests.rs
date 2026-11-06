@@ -710,9 +710,7 @@ impl Fx {
     /// The merge reaction of Workflow `repo`, enqueued the way the merge does (`react_merge_in`).
     fn enqueue_merge(&mut self) {
         self.store
-            .write("merge", |tx| {
-                slack::react_merge_in(tx, "pay", "repo").map_err(Into::into)
-            })
+            .write("merge", |tx| slack::react_merge_in(tx, "pay", "repo"))
             .unwrap();
     }
 
@@ -1107,9 +1105,7 @@ fn slack_repost_sends_the_broadcast_and_moves_last_posted_at_each_time() {
     assert!(after_first.as_str() > REPOST_FIRST, "{after_first}");
 
     // E24 completes a sent mutation before it claims the next one of the same channel.
-    let first_id: i64 = fx
-        .count("SELECT min(id) FROM swr_mutations WHERE op_kind = 'repost'")
-        .into();
+    let first_id = fx.count("SELECT min(id) FROM swr_mutations WHERE op_kind = 'repost'");
     let now = fx.rig.fakes.ports.clock.utc();
     outbox::complete(&mut fx.store(), first_id, now).unwrap();
 

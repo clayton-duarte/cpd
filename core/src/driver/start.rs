@@ -677,11 +677,11 @@ fn insert(
         |r| r.get(0),
     )?;
     if let Some(workflow) = workflow {
-        crate::pr::jira_sync::queue(
+        crate::swr::source::jira::enqueue_for_workflow(
             tx,
             plan.as_str(),
             &workflow,
-            crate::pr::jira_sync::Target::InProgress,
+            "in_progress",
         )?;
     }
     let attempt = &next.attempt;

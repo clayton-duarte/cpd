@@ -162,6 +162,11 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd swr mutation` | The mutation outbox (§32.5, §32.6) | | |
 | `cpd swr mutation show` | One mutation (§32.5) | | |
 | `cpd swr mutation list` | The mutations, filtered by status (§32.6) | | |
+| `cpd swr badge` | The Lead completion badge (classifier doc §3) | | |
+| `cpd swr badge get` | Print a Session's stored badge, or null | | |
+| `cpd swr badge put` | Store a Session's badge | | |
+| `cpd swr health` | Endpoint health of a system (classifier doc §3.3) | | |
+| `cpd swr health record` | Record one call result on an endpoint | | |
 | `cpd preset` | The tier presets and their machine switch (commands.md §14.6) | | |
 | `cpd preset list` | Print the presets (§14.6) | Manager, Lead | |
 | `cpd preset show` | Print a preset and the current host model (§14.6) | Manager, Lead | |

@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::cache;
+use super::badge::{self, Classification};
+use super::{cache, endpoint};
+use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
@@ -26,6 +28,71 @@ pub enum Command {
     /// The mutation outbox (§32.5, §32.6)
     #[command(subcommand)]
     Mutation(MutationCommand),
+    /// The Lead completion badge (classifier doc §3)
+    #[command(subcommand)]
+    Badge(BadgeCommand),
+    /// Endpoint health of a system (classifier doc §3.3)
+    #[command(subcommand)]
+    Health(HealthCommand),
+}
+
+/// The `swr health` commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum HealthCommand {
+    /// Record one call result on an endpoint
+    Record(HealthRecordArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HealthRecordArgs {
+    /// classifier, github, slack or jira
+    pub system: String,
+    /// The endpoint of the system
+    pub endpoint: String,
+    /// ok or error
+    pub result: String,
+    /// The error text, required with `error`
+    #[arg(long, value_name = "text")]
+    pub text: Option<String>,
+}
+
+/// The `swr badge` commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum BadgeCommand {
+    /// Print a Session's stored badge, or null
+    Get(BadgeGetArgs),
+    /// Store a Session's badge
+    Put(BadgePutArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BadgeGetArgs {
+    /// The Session id
+    pub session_id: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BadgePutArgs {
+    /// The Session id
+    pub session_id: String,
+    /// The Session's last transcript item id at classify time
+    #[arg(long, value_name = "id")]
+    pub entry: String,
+    /// A completion label
+    #[arg(long, value_name = "label")]
+    pub label: String,
+    /// An integer from 0 to 100
+    #[arg(long, value_name = "n")]
+    pub score: i64,
+    /// The badge text
+    #[arg(long, value_name = "text")]
+    pub text: String,
+    /// done, decision or blocked
+    #[arg(long, value_name = "tone")]
+    pub tone: String,
+    /// A JSON array of {label, score}
+    #[arg(long, value_name = "json")]
+    pub others: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,6 +166,18 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
                 STATUSES.join(", ")
             )));
         }
+        Command::Health(HealthCommand::Record(a)) => check_health(a)?,
+        Command::Badge(BadgeCommand::Put(a)) => {
+            check_label(&a.label)?;
+            check_score(a.score)?;
+            if a.entry.is_empty() || a.text.is_empty() || a.session_id.is_empty() {
+                return Err(usage("--entry and --text are non-empty.".into()));
+            }
+            if !TONES.contains(&a.tone.as_str()) {
+                return Err(usage(format!("--tone is one of {}.", TONES.join(", "))));
+            }
+            others_of(a.others.as_deref())?;
+        }
         _ => {}
     }
     let mut env = Env::open_with(ports)?;
@@ -111,7 +190,132 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Endpoints => endpoints(store),
         Command::Mutation(MutationCommand::Show(a)) => mutation_show(store, id_of(&a)?),
         Command::Mutation(MutationCommand::List(a)) => mutation_list(store, a.status.as_deref()),
+        Command::Health(HealthCommand::Record(a)) => health_record(store, now, &a),
+        Command::Badge(BadgeCommand::Get(a)) => {
+            let badge = badge::get(store, &a.session_id)?;
+            Ok(Output::success(
+                json!({"badge": badge.map(|b| badge_json(&b))}),
+            ))
+        }
+        Command::Badge(BadgeCommand::Put(a)) => {
+            let others = others_of(a.others.as_deref())?;
+            let c = Classification {
+                entry_id: a.entry,
+                label: a.label,
+                score: a.score,
+                text: a.text,
+                tone: a.tone,
+                others,
+            };
+            let put = badge::put(store, now, &a.session_id, &c)?;
+            Ok(Output::success(json!({
+                "session_id": a.session_id,
+                "entry_id": c.entry_id,
+                "changed": put.changed,
+                "synced_at": timestamp(put.synced_at),
+            })))
+        }
     }
+}
+
+fn check_health(a: &HealthRecordArgs) -> Result<(), CpdError> {
+    let pairs: [(&str, &[&str]); 4] = [
+        ("github", &["github"]),
+        ("slack", &["slack"]),
+        ("jira", &["jira"]),
+        ("classifier", &["ollama.lab", "bifrost"]),
+    ];
+    let known = pairs
+        .iter()
+        .any(|(s, e)| *s == a.system && e.contains(&a.endpoint.as_str()));
+    if !known {
+        return Err(usage(
+            "<system> and <endpoint> are github github, slack slack, jira jira, or classifier ollama.lab|bifrost."
+                .into(),
+        ));
+    }
+    match (a.result.as_str(), a.text.as_deref()) {
+        ("ok", None) => Ok(()),
+        ("ok", Some(_)) => Err(usage("--text is refused with ok.".into())),
+        ("error", Some(t)) if !t.trim().is_empty() => Ok(()),
+        ("error", _) => Err(usage("--text is required and non-empty with error.".into())),
+        _ => Err(usage("<result> is ok or error.".into())),
+    }
+}
+
+fn health_record(
+    store: &mut Store,
+    now: OffsetDateTime,
+    a: &HealthRecordArgs,
+) -> Result<Output, CpdError> {
+    if a.result == "ok" {
+        endpoint::record_ok(store, &a.endpoint, now)?;
+    } else {
+        let text = a.text.as_deref().unwrap_or_default();
+        endpoint::record_failure(store, &a.endpoint, now, text, endpoint::Kind::Transient)?;
+    }
+    let row = endpoint::get(store, &a.endpoint)?.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::Internal,
+            "The endpoint row is missing.".to_owned(),
+        )
+    })?;
+    Ok(Output::success(json!({
+        "system": a.system, "endpoint": a.endpoint,
+        "status": row.status, "error_count": row.error_count,
+        "failing_since": row.failing_since.map(timestamp),
+    })))
+}
+
+const LABELS: [&str; 5] = [
+    "safe_to_archive",
+    "unanswered_ask",
+    "open_work",
+    "unrecorded_decision",
+    "unescalated_issue",
+];
+const TONES: [&str; 3] = ["done", "decision", "blocked"];
+
+fn badge_json(b: &badge::Badge) -> Value {
+    let c = &b.classification;
+    let mut v = json!({
+        "session_id": b.session_id, "entry_id": c.entry_id, "label": c.label, "score": c.score,
+        "text": c.text, "tone": c.tone, "synced_at": timestamp(b.synced_at),
+    });
+    if let Some(o) = &c.others {
+        v["others"] = o.clone();
+    }
+    v
+}
+
+fn check_score(n: i64) -> Result<(), CpdError> {
+    if (0..=100).contains(&n) {
+        Ok(())
+    } else {
+        Err(usage("A score is an integer from 0 to 100.".into()))
+    }
+}
+
+fn check_label(label: &str) -> Result<(), CpdError> {
+    if LABELS.contains(&label) {
+        Ok(())
+    } else {
+        Err(usage(format!("A label is one of {}.", LABELS.join(", "))))
+    }
+}
+
+fn others_of(text: Option<&str>) -> Result<Option<Value>, CpdError> {
+    let Some(text) = text else { return Ok(None) };
+    let bad = || usage("--others is a non-empty JSON array of {label, score}.".into());
+    let value: Value = serde_json::from_str(text).map_err(|_| bad())?;
+    let items = value.as_array().filter(|a| !a.is_empty()).ok_or_else(bad)?;
+    for item in items {
+        let label = item.get("label").and_then(Value::as_str).ok_or_else(bad)?;
+        let score = item.get("score").and_then(Value::as_i64).ok_or_else(bad)?;
+        check_label(label)?;
+        check_score(score)?;
+    }
+    Ok(Some(value))
 }
 
 fn check_key(key: &str) -> Result<(), CpdError> {

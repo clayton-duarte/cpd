@@ -14,7 +14,6 @@ mod watch_durable;
 mod watch_host_alert;
 mod watch_inbox_models;
 mod watch_inbox_overdue;
-mod watch_jira;
 mod watch_models;
 mod watch_own_post;
 mod watch_parked;

@@ -20,7 +20,6 @@ use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::ids::{OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::policy::{PolicyKey, policy_dir, repo_path, resolve};
-use crate::pr::jira_sync;
 use crate::pr::posts::{self, PostRecord};
 use crate::swr::outbox::{self, Coalesce, Mutation, Op};
 use crate::swr::{cache, endpoint};
@@ -696,7 +695,7 @@ fn execute_post(cx: &mut Cx<'_>, vars: &Value) -> ExecOutcome {
     };
     let stored = cx.store.write("swr slack post", |tx| {
         if posts::insert(tx, &plan, &workflow, &record)? {
-            jira_sync::queue(tx, &plan, &workflow, jira_sync::Target::InReview)?;
+            super::jira::enqueue_for_workflow(tx, &plan, &workflow, "in_review")?;
         }
         Ok(())
     });
@@ -984,7 +983,7 @@ fn confirm_own_posts(
                 ],
             )?;
             if rows == 1 {
-                jira_sync::queue(tx, &plan, &key, jira_sync::Target::InReview)?;
+                super::jira::enqueue_for_workflow(tx, &plan, &key, "in_review")?;
             }
             Ok(rows == 1)
         })?;
