@@ -80,8 +80,7 @@ export type Input = { version: 1; known: Known[]; terminal: string[] };
  * caller never replaces its last good copy with what looks like a quiet channel), parses it, then reads every distinct
  * post's thread and the `:eyes:` reactors of the claimed ones, each failing soft as in hermes.
  */
-// TODO(swr-slack implementation): `_input` is not read yet, so no skip rule (§3.4) applies and every thread and reaction is read.
-export async function readTeamChannel(call: CallTool, channel: string, me: string, now: Date, _input: Input = { version: 1, known: [], terminal: [] }): Promise<Read> {
+export async function readTeamChannel(call: CallTool, channel: string, me: string, now: Date, input: Input = { version: 1, known: [], terminal: [] }): Promise<Read> {
   const text = await call("slack_read_channel", { channel_id: channel, limit: MSG_LIMIT }, CHANNEL_TIMEOUT_MS);
   if (!text.trim()) throw new Refusal("slack_failed", "slack_read_channel returned no text content.");
   const transcript = unwrap(text);
@@ -99,24 +98,53 @@ export async function readTeamChannel(call: CallTool, channel: string, me: strin
       return fallback;
     }
   };
-  const threadTs = [...new Set(posts.map((p) => p.ts_raw))];
+  // The skip rules of docs/architecture/swr-slack.md §3.4, per message (`ts_raw`).
+  const terminal = new Set(input.terminal);
+  const knownOf = (p: Post): Known | undefined => input.known.find((k) => k.ts === p.ts_raw && k.repo === p.repo && k.number === p.number);
+  const byTs = new Map<string, Post[]>();
+  for (const p of posts) byTs.set(p.ts_raw, [...(byTs.get(p.ts_raw) ?? []), p]);
+  const group = (ts: string) => {
+    const rows = byTs.get(ts)!;
+    const known = rows.map(knownOf).filter((k): k is Known => k !== undefined);
+    const mine = known.some((k) => k.author_is_me);
+    const allTerminal = rows.every((p) => terminal.has(`${p.repo}#${p.number}`));
+    return { rows, known, mine, allTerminal };
+  };
+  const threadTs = [...byTs.keys()].filter((ts) => {
+    const g = group(ts);
+    if (g.mine || g.allTerminal) return false; // T1, T2
+    if (g.known.length === 0) return true; // T3
+    const p = g.rows[0]!;
+    if (g.known.some((k) => k.reply_count !== p.reply_count || k.latest_reply !== p.latest_reply)) return true; // T4
+    return g.known.some((k) => k.thread_tags_me === null); // T5; T6 otherwise
+  });
   const tagged = new Map<string, boolean>();
   await pool(threadTs, PARALLEL, async (ts) => {
     const replies = await soft(() => call("slack_read_thread", { channel_id: channel, message_ts: ts }, SIDE_TIMEOUT_MS), "");
     tagged.set(ts, mentionsMe(replies, me));
   });
-  const eyesTs = [...new Set(posts.filter((p) => p.claim !== null && p.reactions.includes("eyes")).map((p) => p.ts_raw))];
+  const eyesTs = [...byTs.keys()].filter((ts) => {
+    const g = group(ts);
+    const p = g.rows[0]!;
+    if (g.mine || g.allTerminal) return false; // E1
+    if (p.claim === null || (p.reactions.eyes ?? 0) < 1) return false; // E2
+    return g.known.length === 0 || g.known.some((k) => (k.reactions.eyes ?? 0) !== p.reactions.eyes || k.eyes_me === null); // E3; E4 otherwise
+  });
   const mine = new Map<string, boolean | null>();
   await pool(eyesTs, PARALLEL, async (ts) => {
     const raw = await soft(() => call("slack_get_reactions", { channel_id: channel, message_ts: ts }, SIDE_TIMEOUT_MS), "");
     mine.set(ts, claimedByMe(reactionUsers(raw, "eyes"), me));
   });
   for (const post of posts) {
-    post.thread_tags_me = tagged.get(post.ts_raw) ?? false;
-    post.eyes_me = mine.get(post.ts_raw) ?? null;
+    const k = knownOf(post) ?? group(post.ts_raw).known[0];
+    // A value read this pass wins; a skipped one is the known value echoed; neither is null (never invented).
+    post.thread_tags_me = tagged.has(post.ts_raw) ? tagged.get(post.ts_raw)! : (k?.thread_tags_me ?? null);
+    post.eyes_me = mine.has(post.ts_raw) ? mine.get(post.ts_raw)! : isEligible(post) ? (k?.eyes_me ?? null) : null;
   }
   return { read, posts };
 }
+
+const isEligible = (p: Post): boolean => p.claim !== null && (p.reactions.eyes ?? 0) >= 1;
 
 /** The four names of pi's own modules the helper uses, and where (docs/research/team-review.md §5). Not pi's public API. */
 export const PI_MODULES = {
@@ -193,19 +221,35 @@ export function parseArgs(argv: string[], names: readonly string[], optional: re
   return out;
 }
 
+/** The stdin (§3.2): one JSON value with `version` 1; anything else is `usage` and nothing is read from Slack. */
+export function parseInput(text: string): Input {
+  // No stdin at all is a cold start: nothing known (a caller that has state always sends it).
+  if (!text.trim()) return { version: 1, known: [], terminal: [] };
+  let v: any;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    throw new Refusal("usage", "stdin is not JSON: expected {version: 1, known: [], terminal: []}.");
+  }
+  if (v === null || typeof v !== "object" || v.version !== 1 || !Array.isArray(v.known) || !Array.isArray(v.terminal)) {
+    throw new Refusal("usage", "stdin must be {version: 1, known: [...], terminal: [...]}.");
+  }
+  return v as Input;
+}
+
 /** The helper: the JSON value to print and the exit status. Never throws. */
-// TODO(swr-slack implementation): `_stdin` (the text of the helper's stdin, §3.2) is not parsed yet.
-export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, now = new Date(), _stdin = ""): Promise<{ value: unknown; exit: number }> {
+export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, now = new Date(), stdin = ""): Promise<{ value: unknown; exit: number }> {
   let close: (() => Promise<void>) | undefined;
   try {
     const args = parseArgs(argv, ["coding-agent", "channel", "me"]);
+    const input = parseInput(stdin);
     if (!/^C[A-Z0-9]+$/.test(args.channel!)) throw new Refusal("usage", `--channel ${JSON.stringify(args.channel)} is not a Slack channel id.`);
     if (!/^U[A-Z0-9]+$/.test(args.me!)) throw new Refusal("usage", `--me ${JSON.stringify(args.me)} is not a Slack user id.`);
     const agentDir = env.PI_CODING_AGENT_DIR;
     if (!agentDir) throw new Refusal("usage", "PI_CODING_AGENT_DIR is not set: it names the agent directory of the pi release.");
     const connection = await connect(args["coding-agent"]!, agentDir, cwd);
     close = connection.close;
-    const { read, posts } = await readTeamChannel(connection.call, args.channel!, args.me!, now);
+    const { read, posts } = await readTeamChannel(connection.call, args.channel!, args.me!, now, input);
     return { value: { ok: true, channel: args.channel, read, posts }, exit: 0 };
   } catch (e) {
     const refusal = e instanceof Refusal ? e : new Refusal("slack_helper_failed", `The helper failed: ${(e as Error).message}`, { message: (e as Error).message });
@@ -218,7 +262,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, 
 
 // Node's `import.meta.main` is true through the adapter symlink (docs/implementing.md, 'Scripts run through the adapter link')
 if (import.meta.main) {
-  const { value, exit } = await main(process.argv.slice(2), process.env, process.cwd());
+  const stdin = await new Promise<string>((resolve) => {
+    let text = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (text += c));
+    process.stdin.on("end", () => resolve(text));
+  });
+  const { value, exit } = await main(process.argv.slice(2), process.env, process.cwd(), new Date(), stdin);
   // pi's modules may leave timers behind: leave once the answer is flushed.
   process.stdout.write(JSON.stringify(value) + "\n", () => process.exit(exit));
 }

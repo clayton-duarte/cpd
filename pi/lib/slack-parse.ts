@@ -29,12 +29,19 @@ export type Post = {
   author_id: string;
   /** The post is about this PR, as opposed to merely mentioning it: the first PR URL of the post. */
   primary: boolean;
-  reactions: string[];
+  /** Whether the author is the User (`author_id` equals `me`). */
+  author_is_me: boolean;
+  /** `{name: count}` of the message's `Reactions:` line. */
+  reactions: Record<string, number>;
+  /** `n` of the message's `Thread: n replies (latest: …)` line; null when the line is absent (no thread). */
+  reply_count: number | null;
+  /** The latest reply's time exactly as the line prints it (local zone, e.g. EDT): compared for equality, never parsed. */
+  latest_reply: string | null;
   claim: Claim | null;
   /** Whether the User's own `:eyes:` is the only claim; null when unread or unattributable. Filled by the reader. */
   eyes_me: boolean | null;
-  /** Whether the post's thread mentions the User. Filled by the reader. */
-  thread_tags_me: boolean;
+  /** Whether the post's thread mentions the User; null when never read. Filled by the reader. */
+  thread_tags_me: boolean | null;
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -95,6 +102,24 @@ export function parseReactions(block: string): string[] {
   return [...names];
 }
 
+/** The counts of `Reactions: eyes (1), github-check-mark (2)`; a name with no `(n)` counts 1. */
+export function parseReactionCounts(block: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [, line] of block.matchAll(REACTION_RE)) {
+    for (const part of line!.split(",")) {
+      const m = /^\s*(\S+?)(?: \((\d+)\))?\s*$/.exec(part);
+      if (m) counts[m[1]!] = m[2] === undefined ? 1 : Number(m[2]);
+    }
+  }
+  return counts;
+}
+
+/** The `Thread: <n> replies (latest: YYYY-MM-DD HH:MM:SS EDT)` line: `n` and the time text verbatim; both null without the line. */
+export function parseThread(block: string): { reply_count: number | null; latest_reply: string | null } {
+  const m = /^Thread: (\d+) replies(?: \(latest: ([^)]*)\))?\s*$/m.exec(block);
+  return m ? { reply_count: Number(m[1]), latest_reply: m[2] ?? null } : { reply_count: null, latest_reply: null };
+}
+
 const mentioned = (text: string): Set<string> => new Set([...text.matchAll(MENTION_RE)].map((m) => m[1]!));
 
 /** `classify.mentions_me`: whether `text` names `me` in a real mention (an app signing its own post is not one). */
@@ -137,11 +162,13 @@ export function parseMessages(text: string, cutoff: number, me: string): Post[] 
         ts_raw: tsRaw,
         author,
         author_id,
+        author_is_me: author_id === me,
         primary: primary !== undefined && repo === primary[0] && number === primary[1],
-        reactions: parseReactions(block),
+        reactions: parseReactionCounts(block),
+        ...parseThread(block),
         claim,
         eyes_me: null,
-        thread_tags_me: false,
+        thread_tags_me: null,
       });
     }
   }

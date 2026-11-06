@@ -2,7 +2,7 @@
 // (the automation footer, `Reactions:`, co-tagged mentions, claims) and `test_backfill_slack_ts.py` (`FIXTURE_TRANSCRIPT`).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { claimedByMe, countMessages, extractPrs, mentionsMe, parseMessages, parseReactions, reactionUsers, slackClaim, unescapeTranscript, unwrap } from "../lib/slack-parse.ts";
+import { claimedByMe, countMessages, extractPrs, mentionsMe, parseMessages, parseReactionCounts, parseReactions, parseThread, reactionUsers, slackClaim, unescapeTranscript, unwrap } from "../lib/slack-parse.ts";
 
 const ME = "U04DB4MTUMR";
 
@@ -91,16 +91,16 @@ test("parseMessages: window, one row per PR, the newest posting wins, the primar
   const by = (n: number) => stacked.find((p) => p.number === n)!;
   assert.deepEqual([by(3653).primary, by(3627).primary], [true, false], "the post is about 3653; 3627 is only mentioned");
   assert.equal(by(3653).ts_raw, by(3627).ts_raw, "both share the message's ts");
-  assert.deepEqual(by(3653).reactions, ["eyes"]);
+  assert.deepEqual(by(3653).reactions, { eyes: 1 });
   assert.deepEqual(by(3653).claim, { kind: "claimed", reason: "claimed with :eyes: in Slack" });
   assert.equal(by(3653).eyes_me, null);
-  assert.equal(by(3653).thread_tags_me, false);
+  assert.equal(by(3653).thread_tags_me, null);
 });
 
 test("a bump by someone with no reaction re-opens a PR an older :eyes: had claimed (the winning post's claim rides along)", () => {
   const posts = parseMessages(transcript, 1790000000, ME);
   assert.equal(posts[0]!.claim, null);
-  assert.deepEqual(posts[0]!.reactions, []);
+  assert.deepEqual(posts[0]!.reactions, {});
 });
 
 test("ts_raw is Slack's string, kept exact", () => {
@@ -139,4 +139,14 @@ test("reactionUsers reads :eyes: by Slack user id, through the envelope, and cla
   assert.equal(claimedByMe([], ME), null, "unattributable");
   assert.deepEqual(reactionUsers(":eyes: \u00d7 1 \u2014 Wes (U01HPPJ6DQT)", "eyes"), [{ name: "Wes", id: "U01HPPJ6DQT" }], "raw text without an envelope");
   assert.deepEqual(reactionUsers("nothing", "eyes"), []);
+});
+
+test("parseReactionCounts reads the counts of the Reactions line", () => {
+  assert.deepEqual(parseReactionCounts("x\nReactions: eyes (2), github-check-mark (1)\n"), { eyes: 2, "github-check-mark": 1 });
+  assert.deepEqual(parseReactionCounts("no reactions here"), {});
+});
+
+test("parseThread reads reply_count and the latest reply verbatim (a local-zone string); no line is no thread", () => {
+  assert.deepEqual(parseThread(automation), { reply_count: 1, latest_reply: "2026-09-08 16:54:34 EDT" });
+  assert.deepEqual(parseThread("Message TS: 1.1\nplain\n"), { reply_count: null, latest_reply: null });
 });
