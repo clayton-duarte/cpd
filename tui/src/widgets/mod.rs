@@ -566,8 +566,9 @@ fn show<B: Backend>(
                             let pull = inbox::Pull::from_subject(&item.subject)
                                 .map(|p| p.to_string())
                                 .filter(|_| matches!(entry, InboxEntry::Post | InboxEntry::Merge));
-                            // Only a Post hides its row in memory: a Merge is hidden by the overlay of its queued mutation.
-                            if let Some(pull) = pull.as_ref().filter(|_| matches!(entry, InboxEntry::Post)) {
+                            // The row is hidden in memory only until the command ends (the queued mutation's overlay then hides
+                            // a Merge; the `post` op of the slack datasource will do it for a Post).
+                            if let Some(pull) = &pull {
                                 posting.insert(pull.clone());
                             }
                             match entry {
