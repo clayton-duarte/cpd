@@ -81,6 +81,8 @@ struct State {
     remaining: i64,
     reset: OffsetDateTime,
     fail: Option<Reply>,
+    /// The search nodes carry no heavy fields (real GitHub sends none unless `...Heavy` was selected there).
+    light_only: bool,
 }
 
 struct World(Mutex<State>);
@@ -136,10 +138,19 @@ impl Handler for World {
             json!({"remaining": st.remaining, "resetAt": timestamp(st.reset), "cost": 1}),
         );
         for (alias, list) in [("authored", &st.authored), ("reviews", &st.reviews)] {
+            let nodes: Vec<Value> = list
+                .iter()
+                .map(|p| {
+                    let mut node = p.node();
+                    if st.light_only {
+                        node.as_object_mut().unwrap().remove("comments");
+                    }
+                    node
+                })
+                .collect();
             data.insert(
                 alias.into(),
-                json!({"pageInfo": {"hasNextPage": false, "endCursor": null},
-                       "nodes": list.iter().map(Pr::node).collect::<Vec<_>>()}),
+                json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}),
             );
         }
         for (i, repo, number) in pr_aliases(query) {
@@ -191,6 +202,7 @@ impl Rig {
             remaining: 4000,
             reset: t0 + Duration::from_secs(3600),
             fail: None,
+            light_only: false,
         })));
         let _ = (*fakes.runner).clone().route("gh", world.clone());
         Rig {
@@ -342,19 +354,20 @@ fn gh_poll_selects_heavy_fields_only_for_moved_or_unhydrated_prs() {
         "{q}"
     );
 
-    // The pass: 1 unchanged, 2 head moved, 3 updatedAt moved, 4 unhydrated.
+    // The pass: the cached header of 1 equals its detail; 2's head moved, 3's updatedAt moved (both since the last hydrate);
+    // 4 has no detail. Known before the call, whatever the search says.
     let mut rig = Rig::new();
-    let stored = [pr(1), pr(2), pr(3), pr(4)];
-    for p in &stored {
+    let (one, mut two, mut three, four) = (pr(1), pr(2), pr(3), pr(4));
+    let (detail_two, detail_three) = (two.clone(), three.clone());
+    two.oid = "b2";
+    three.updated = "U2";
+    for p in [&one, &two, &three, &four] {
         rig.seed(p, true);
     }
-    for p in &stored[..3] {
+    for p in [&one, &detail_two, &detail_three] {
         rig.seed_detail(p);
     }
-    let mut moved = stored.to_vec();
-    moved[1].oid = "b2";
-    moved[2].updated = "U2";
-    rig.state().authored = moved;
+    rig.state().authored = vec![one, two, three, four];
     rig.pass(0).unwrap();
     let queries = rig.graphql();
     assert_eq!(queries.len(), 1);
@@ -366,6 +379,47 @@ fn gh_poll_selects_heavy_fields_only_for_moved_or_unhydrated_prs() {
     for n in [2, 3, 4] {
         assert!(mentions(q, n), "PR {n} is heavy-selected: {q}");
     }
+}
+
+#[test]
+fn gh_poll_hydrates_a_moved_pr_on_the_next_pass() {
+    let mut rig = Rig::new();
+    let stored = pr(1);
+    rig.seed(&stored, true);
+    rig.seed_detail(&stored);
+    let mut moved = pr(1);
+    moved.oid = "b2";
+    rig.state().light_only = true;
+    rig.state().authored = vec![moved.clone()];
+    rig.state().world.insert(("acme/pay".into(), 1), moved);
+
+    rig.pass(0).unwrap();
+    assert!(!mentions(&rig.graphql()[0], 1), "pass 1 sends no heavy");
+    assert_eq!(
+        rig.text("SELECT head_oid FROM pull_requests WHERE number = 1"),
+        Some("b2".into()),
+        "the light fields wrote the new header"
+    );
+    assert_eq!(
+        rig.text("SELECT head_oid FROM swr_pr_detail WHERE number = 1"),
+        Some("a1".into()),
+        "the detail is still old"
+    );
+
+    rig.pass(10).unwrap();
+    assert!(mentions(&rig.graphql()[1], 1), "pass 2 sends heavy for it");
+    assert_eq!(
+        rig.text("SELECT head_oid FROM swr_pr_detail WHERE number = 1"),
+        Some("b2".into())
+    );
+    assert_ne!(
+        rig.text("SELECT hydrated_at FROM swr_pr_detail WHERE number = 1"),
+        Some("t".into())
+    );
+
+    rig.pass(20).unwrap();
+    assert!(!mentions(&rig.graphql()[2], 1), "pass 3 sends none");
+    assert_eq!(rig.graphql().len(), 3);
 }
 
 #[test]
@@ -482,14 +536,10 @@ fn gh_poll_caches_viewer_and_repo_metadata_for_24h() {
     rig.state().authored = vec![pr(1)];
     rig.pass(0).unwrap();
     assert!(
-        rig.graphql()[0].contains("m0: repository"),
-        "the first pass reads the repo metadata"
+        !rig.graphql()[0].contains("m0: repository"),
+        "a repo seen for the first time is read in the next pass"
     );
     assert_eq!(rig.text("SELECT login FROM swr_viewer"), Some("ada".into()));
-    assert_eq!(
-        rig.text("SELECT default_branch FROM swr_repos WHERE repo = 'acme/pay'"),
-        Some("main".into())
-    );
     let viewer = cache::get(&mut rig.store, "github:viewer")
         .unwrap()
         .expect("viewer key");
@@ -498,14 +548,24 @@ fn gh_poll_caches_viewer_and_repo_metadata_for_24h() {
         Some(rig.t0 + Duration::from_secs(24 * 3600))
     );
 
+    rig.pass(10).unwrap();
+    assert!(
+        rig.graphql()[1].contains("m0: repository"),
+        "the second pass reads the repo metadata"
+    );
+    assert_eq!(
+        rig.text("SELECT default_branch FROM swr_repos WHERE repo = 'acme/pay'"),
+        Some("main".into())
+    );
+
     rig.pass(23 * 3600).unwrap();
     assert!(
-        !rig.graphql()[1].contains("m0: repository"),
+        !rig.graphql()[2].contains("m0: repository"),
         "cached at 23 h"
     );
     rig.pass(25 * 3600).unwrap();
     assert!(
-        rig.graphql()[2].contains("m0: repository"),
+        rig.graphql()[3].contains("m0: repository"),
         "read again after 24 h"
     );
 }

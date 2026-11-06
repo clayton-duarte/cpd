@@ -644,6 +644,16 @@ pub fn merge_methods(
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
 /// deletion of the branch (contract §7.2 "The recorded head").
 pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
+    head_ref_oid_on(&*Ports::current().runner, cwd, repo, number)
+}
+
+/// [`head_ref_oid`] on an explicit `runner`, never the ambient `Ports` (swr-github.md §7.3).
+pub fn head_ref_oid_on(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<String, CpdError> {
     #[derive(Deserialize)]
     struct Head {
         #[serde(rename = "headRefOid")]
@@ -651,7 +661,7 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
     }
     let n = number.to_string();
     let args = ["pr", "view", &n, "--repo", repo, "--json", "headRefOid"];
-    parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
+    parse::<Head>(&args, &run_on(runner, cwd, &args)?).map(|h| h.oid)
 }
 
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
@@ -2789,10 +2799,10 @@ mod tests {
 }
 
 /// What one pass of the single GraphQL read needs beyond the fixed part (swr-github.md §3.1): the rows chosen before the call.
-#[allow(dead_code)] // a stub until swr-github calls it
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PollPlan {
-    /// `(owner/name, number)` of the listed pull requests whose `Heavy` selection is sent: `updatedAt` or `headRefOid` moved, or unhydrated.
+    /// `(owner/name, number)` of the pull requests whose `Heavy` selection is sent: the cached header differs from the last
+    /// hydrate (`updatedAt` or `headRefOid`), or there is no detail. One `p<i>` alias each, first.
     pub heavy: Vec<(String, i64)>,
     /// `(owner/name, number)` of the absent or first-seen pull requests: one `p<i>` alias each (`viewerDidAuthor`, no `Heavy`).
     pub absent: Vec<(String, i64)>,
@@ -2800,20 +2810,256 @@ pub struct PollPlan {
     pub meta: Vec<String>,
 }
 
-/// The one read document of a pass (swr-github.md §3.1). Stub: swr-github implements it.
-#[allow(dead_code)] // a stub until swr-github calls it
-pub fn build_poll_query(_plan: &PollPlan) -> String {
-    todo!("swr-github: build_poll_query")
+const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
+
+const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } }";
+
+/// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
+/// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.
+pub fn build_poll_query(plan: &PollPlan) -> String {
+    let search = |alias: &str, q: &str| {
+        format!(
+            " {alias}: search(type: ISSUE, query: \"{q}\", first: 100) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ ...Light }} }} }}"
+        )
+    };
+    let mut query = String::from("query { viewer { login } rateLimit { remaining resetAt cost }");
+    query.push_str(&search(
+        "authored",
+        "is:pr is:open author:@me archived:false sort:created-asc",
+    ));
+    query.push_str(&search(
+        "reviews",
+        "is:pr is:open review-requested:@me archived:false sort:created-asc",
+    ));
+    let aliased = plan
+        .heavy
+        .iter()
+        .map(|p| (p, " ...Heavy"))
+        .chain(plan.absent.iter().map(|p| (p, "")));
+    for (i, ((repo, number), heavy)) in aliased.enumerate() {
+        let (owner, name) = repo_parts(repo).unwrap_or_default();
+        query.push_str(&format!(
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ ...Light{heavy} viewerDidAuthor viewerLatestReviewRequest {{ id }} }} }}"
+        ));
+    }
+    for (i, repo) in plan.meta.iter().enumerate() {
+        let (owner, name) = repo_parts(repo).unwrap_or_default();
+        query.push_str(&format!(
+            " m{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ defaultBranchRef {{ name }} isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge }}"
+        ));
+    }
+    query.push_str(" } ");
+    query.push_str(LIGHT);
+    query.push(' ');
+    query.push_str(HEAVY);
+    query
 }
 
-/// [`head_ref_oid`] on an explicit `runner`, never the ambient `Ports` (swr-github.md §7.3). Stub: the implementation gives
-/// `head_ref_oid` this signature and removes this one.
-#[allow(dead_code)] // a stub until swr-github calls it
-pub fn head_ref_oid_on(
-    _runner: &dyn Runner,
-    _cwd: &Path,
-    _repo: &str,
-    _number: i64,
-) -> Result<String, CpdError> {
-    todo!("swr-github: head_ref_oid takes a runner")
+/// One pull request of the single read: the header, its head commit, the heavy part when the node carried it.
+#[derive(Clone, Debug)]
+pub struct PollNode {
+    pub listed: Listed,
+    pub head_oid: String,
+    /// The heavy fields as GitHub answered them; `Some` only when the node carried `comments` (the heavy marker).
+    pub heavy: Option<Value>,
+}
+
+/// A repository's metadata (`m<i>`).
+#[derive(Clone, Debug, Default)]
+pub struct RepoMeta {
+    pub default_branch: Option<String>,
+    pub is_archived: bool,
+    pub auto_merge_allowed: bool,
+    pub squash_merge_allowed: bool,
+    pub merge_commit_allowed: bool,
+    pub rebase_merge_allowed: bool,
+    pub delete_branch_on_merge: bool,
+}
+
+/// What the document answered.
+#[derive(Clone, Debug)]
+pub struct PollRead {
+    pub viewer: String,
+    pub remaining: i64,
+    pub reset_at: String,
+    pub authored: Vec<PollNode>,
+    pub reviews: Vec<PollNode>,
+    /// The `p<i>` aliases in document order (`None`: GitHub cannot find it).
+    pub aliases: Vec<Option<PollNode>>,
+    pub metas: Vec<Option<RepoMeta>>,
+}
+
+impl PollNode {
+    /// Whether GitHub says the pull request is open.
+    pub fn is_open(&self) -> bool {
+        self.listed.pr.state == PrState::Open
+    }
+}
+
+fn poll_node(
+    reply: &Reply,
+    v: Value,
+    bots: &[String],
+    excused_labels: &[String],
+) -> Result<PollNode, CpdError> {
+    let head_oid = v
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| reply.fail("gh api graphql answered a pull request without headRefOid.".into()))?
+        .to_owned();
+    let raw: RawPr = serde_json::from_value(v.clone())
+        .map_err(|e| reply.fail(format!("gh api graphql answered a malformed pull request: {e}.")))?;
+    let mut pr = reply.polled(raw, bots)?;
+    let labels: Vec<&str> = v["labels"]["nodes"]
+        .as_array()
+        .map(|n| n.iter().filter_map(|l| l["name"].as_str()).collect())
+        .unwrap_or_default();
+    let contexts = v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+        .as_array();
+    if let Some(nodes) = contexts.filter(|n| !n.is_empty()) {
+        let excused = labels
+            .iter()
+            .any(|l| excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
+        let mut checks = Vec::new();
+        for n in nodes {
+            let raw: RawCheck = serde_json::from_value(n.clone())
+                .map_err(|e| reply.fail(format!("gh api graphql answered a malformed check: {e}.")))?;
+            let check = Check::from(raw);
+            // pro-d447: a PR carrying an excused label has its failing `danger` check excused.
+            if excused && check.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("danger")) {
+                continue;
+            }
+            checks.push(check);
+        }
+        pr.checks = ChecksSummary::of(&checks, &[], &[]);
+    }
+    let mut membership = Membership::default();
+    if let Some(did) = v.get("viewerDidAuthor").and_then(Value::as_bool) {
+        membership = Membership {
+            authored: did,
+            review_requested: v
+                .get("viewerLatestReviewRequest")
+                .is_some_and(|r| !r.is_null()),
+        };
+        if pr.state != PrState::Open {
+            membership = Membership::default();
+        }
+    }
+    if let Some(archived) = v["repository"]["isArchived"].as_bool() {
+        pr.archived = archived;
+    }
+    let heavy = v.get("comments").map(|_| {
+        json!({
+            "latestReviews": v["latestReviews"], "reviewThreads": v["reviewThreads"],
+            "comments": v["comments"], "commits": v["commits"], "labels": v["labels"],
+        })
+    });
+    Ok(PollNode {
+        listed: Listed { pr, membership },
+        head_oid,
+        heavy,
+    })
+}
+
+fn parse_poll(
+    reply: &Reply,
+    aliases: usize,
+    metas: usize,
+    bots: &[String],
+    excused_labels: &[String],
+) -> Result<PollRead, CpdError> {
+    let (data, errors): (Value, _) = reply.envelope()?;
+    if let Some(other) = errors
+        .iter()
+        .find(|e| e.kind.as_deref() != Some("NOT_FOUND"))
+    {
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            other.message.as_deref().unwrap_or("(no message)")
+        )));
+    }
+    let missing = |what: &str| reply.fail(format!("gh api graphql answered without {what}."));
+    let viewer = data["viewer"]["login"]
+        .as_str()
+        .ok_or_else(|| missing("viewer"))?
+        .to_owned();
+    let remaining = data["rateLimit"]["remaining"]
+        .as_i64()
+        .ok_or_else(|| missing("rateLimit"))?;
+    let reset_at = data["rateLimit"]["resetAt"]
+        .as_str()
+        .ok_or_else(|| missing("rateLimit.resetAt"))?
+        .to_owned();
+    let search = |alias: &str| -> Result<Vec<PollNode>, CpdError> {
+        data[alias]["nodes"]
+            .as_array()
+            .ok_or_else(|| missing(alias))?
+            .iter()
+            .map(|n| poll_node(reply, n.clone(), bots, excused_labels))
+            .collect()
+    };
+    let (authored, reviews) = (search("authored")?, search("reviews")?);
+    let mut found = Vec::with_capacity(aliases);
+    for i in 0..aliases {
+        let alias = format!("p{i}");
+        let slot = data.get(&alias).ok_or_else(|| missing(&alias))?;
+        found.push(match slot.get("pullRequest").filter(|p| !p.is_null()) {
+            Some(p) => Some(poll_node(reply, p.clone(), bots, excused_labels)?),
+            None => None,
+        });
+    }
+    let mut meta = Vec::with_capacity(metas);
+    for i in 0..metas {
+        let alias = format!("m{i}");
+        let m = data.get(&alias).ok_or_else(|| missing(&alias))?;
+        meta.push(if m.is_null() {
+            None
+        } else {
+            let flag = |k: &str| m[k].as_bool().ok_or_else(|| missing(&format!("{alias}.{k}")));
+            Some(RepoMeta {
+                default_branch: m["defaultBranchRef"]["name"].as_str().map(str::to_owned),
+                is_archived: flag("isArchived")?,
+                auto_merge_allowed: flag("autoMergeAllowed")?,
+                squash_merge_allowed: flag("squashMergeAllowed")?,
+                merge_commit_allowed: flag("mergeCommitAllowed")?,
+                rebase_merge_allowed: flag("rebaseMergeAllowed")?,
+                delete_branch_on_merge: flag("deleteBranchOnMerge")?,
+            })
+        });
+    }
+    Ok(PollRead {
+        viewer,
+        remaining,
+        reset_at,
+        authored,
+        reviews,
+        aliases: found,
+        metas: meta,
+    })
+}
+
+/// The one call of a pass: `plan`'s document through `runner`. Failures carry `details.call` `poll`, `transient`, `reason` and,
+/// when GitHub's rate limit is spent, `rate_limited`.
+pub fn poll_once(
+    runner: &dyn Runner,
+    cwd: &Path,
+    plan: &PollPlan,
+    bots: &[String],
+    excused_labels: &[String],
+) -> Result<PollRead, CpdError> {
+    let call = || {
+        let (args, out) = graphql(runner, cwd, &build_poll_query(plan))?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        parse_poll(
+            &Reply {
+                args: &refs,
+                out: &out,
+            },
+            plan.heavy.len() + plan.absent.len(),
+            plan.meta.len(),
+            bots,
+            excused_labels,
+        )
+    };
+    call().map_err(|e| polled_call("poll", e))
 }

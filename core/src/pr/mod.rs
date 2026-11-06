@@ -61,6 +61,7 @@ pub mod posts;
 pub mod pulls;
 mod push;
 pub mod reactions;
+pub mod swr_read;
 pub(crate) mod rebase;
 mod reply;
 mod repost;
