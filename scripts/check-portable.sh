@@ -15,7 +15,7 @@ set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # What a Mac runs (dotfiles' install and sync, bare cpd, a Worker or Lead there, the Gate there).
-covered="install-cpd.sh pi-check.sh pi-check-pty.py check-portable.sh check-migrations-frozen.sh cargo.sh pnpm-fresh.sh new-migration.sh preview-tui.sh preview-web.sh preview-watchdog.mjs repin.sh sync-version.sh tag-version.sh test-changed tests.sh tripwire/tmux"
+covered="install-cpd.sh pi-check.sh pi-check-pty.py check-portable.sh check-migrations-frozen.sh cargo.sh pnpm-fresh.sh new-migration.sh preview-tui.sh preview-web.sh preview-watchdog.mjs preview-drift.mjs repin.sh sync-version.sh tag-version.sh test-changed tests.sh tripwire/tmux"
 
 # Linux-only, not covered, each with its reason; a script in neither list fails.
 linux_only="prune-worktrees.sh: a one-time cleanup run on hs
