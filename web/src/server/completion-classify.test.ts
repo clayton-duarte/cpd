@@ -50,19 +50,19 @@ describe("mapAnswer", () => {
     expect(mapAnswer(ok("safe_to_archive", { probabilities: { safe_to_archive: 0.6 } }))).toEqual({ label: "safe_to_archive", text: "Safe to archive · 60%", score: 60, tone: "decision" });
   });
   it("mapAnswer maps unanswered_ask", () => {
-    expect(mapAnswer(ok("unanswered_ask", { probabilities: { safe_to_archive: 0.2 } }))).toEqual({ label: "unanswered_ask", text: "Unanswered ask · 20%", score: 20, tone: "decision" });
+    expect(mapAnswer(ok("unanswered_ask", { probabilities: { safe_to_archive: 0.2 } }))).toEqual({ label: "unanswered_ask", text: "Unanswered ask · 20%", score: 20, tone: "decision", others: [{ label: "safe_to_archive", score: 20 }] });
   });
   it("mapAnswer maps open_work below 40 to blocked", () => {
-    expect(mapAnswer(ok("open_work", { probabilities: { safe_to_archive: 0.1 } }))).toEqual({ label: "open_work", text: "Open work · 10%", score: 10, tone: "blocked" });
+    expect(mapAnswer(ok("open_work", { probabilities: { safe_to_archive: 0.1 } }))).toEqual({ label: "open_work", text: "Open work · 10%", score: 10, tone: "blocked", others: [{ label: "safe_to_archive", score: 10 }] });
   });
   it("mapAnswer maps open_work at 40 or more to decision", () => {
-    expect(mapAnswer(ok("open_work", { probabilities: { safe_to_archive: 0.4 } }))).toEqual({ label: "open_work", text: "Open work · 40%", score: 40, tone: "decision" });
+    expect(mapAnswer(ok("open_work", { probabilities: { safe_to_archive: 0.4 } }))).toEqual({ label: "open_work", text: "Open work · 40%", score: 40, tone: "decision", others: [{ label: "safe_to_archive", score: 40 }] });
   });
   it("mapAnswer maps unrecorded_decision", () => {
-    expect(mapAnswer(ok("unrecorded_decision", { probabilities: { safe_to_archive: 0.3 } }))).toEqual({ label: "unrecorded_decision", text: "Unrecorded decision · 30%", score: 30, tone: "decision" });
+    expect(mapAnswer(ok("unrecorded_decision", { probabilities: { safe_to_archive: 0.3 } }))).toEqual({ label: "unrecorded_decision", text: "Unrecorded decision · 30%", score: 30, tone: "decision", others: [{ label: "safe_to_archive", score: 30 }] });
   });
   it("mapAnswer maps unescalated_issue", () => {
-    expect(mapAnswer(ok("unescalated_issue", { probabilities: { safe_to_archive: 0.15 } }))).toEqual({ label: "unescalated_issue", text: "Unescalated bug · 15%", score: 15, tone: "decision" });
+    expect(mapAnswer(ok("unescalated_issue", { probabilities: { safe_to_archive: 0.15 } }))).toEqual({ label: "unescalated_issue", text: "Unescalated bug · 15%", score: 15, tone: "decision", others: [{ label: "safe_to_archive", score: 15 }] });
   });
   it("mapAnswer falls back to confidence without probabilities", () => {
     expect(mapAnswer(ok("unanswered_ask", { confidence: 0.7 }))?.score).toBe(30);
