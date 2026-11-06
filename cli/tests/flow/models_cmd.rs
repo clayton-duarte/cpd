@@ -1,11 +1,10 @@
-//! `cpd models refresh` and `cpd models show [--provider <p>]` (commands.md §14.4; contract §3.7 E14, §1.4): `refresh` runs
-//! the helper `pi/lib/models-list.ts` now and writes `run/models-<provider>.json`; `show` prints the cached lists and runs
+//! `cpd models refresh` and `cpd models show [--provider <p>]` (commands.md §14.5; contract §3.7 E15, §4.4): `refresh` runs
+//! the helper `pi/lib/models-list.ts` now and writes the `swr_models` rows; `show` prints the cached lists and runs
 //! nothing. The helper is a fake `node` on `PATH` (the real one is tested in `pi/test/models-list.test.ts`).
 
 use crate::common::{Run, TestEnv, refused};
 
 use std::fs;
-use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -68,30 +67,45 @@ impl Fx {
         .unwrap();
     }
 
-    fn path(&self, provider: &str) -> PathBuf {
-        self.env
-            .cpd_home()
-            .join(format!("run/models-{provider}.json"))
-    }
-
+    /// The row of `provider` as one value: its catalog, `polled_at`, `changes` and `last_error`.
     fn file(&self, provider: &str) -> Option<Value> {
-        serde_json::from_str(&fs::read_to_string(self.path(provider)).ok()?).ok()
+        let (catalog, changes, polled, error): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = self.env.read(|c| {
+            c.query_row(
+                "SELECT catalog_json, changes_json, polled_at, last_error FROM swr_models WHERE provider = ?1",
+                [provider],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok((None, None, None, None)),
+                e => Err(e),
+            })
+        });
+        let mut file: Value = serde_json::from_str(&catalog?).ok()?;
+        file["polled_at"] = json!(polled);
+        file["changes"] = changes.map_or(Value::Null, |c| serde_json::from_str(&c).unwrap());
+        file["last_error"] = json!(error);
+        Some(file)
     }
 
-    /// A cached file of an earlier run, `polled_at` `ago` seconds ago.
+    /// A row of an earlier run, `polled_at` `ago` seconds ago.
     fn cache(&self, provider: &str, ago: i64, auth: &str, ids: &[&str], changes: Option<Value>) {
         let polled_at = (OffsetDateTime::now_utc() - time::Duration::seconds(ago))
             .format(&Rfc3339)
             .unwrap();
-        let mut file = json!({
-            "version": 1, "provider": provider, "polled_at": polled_at, "pi_version": "1.2.0",
+        let catalog = json!({
+            "pi_version": "1.2.0",
             "source": {"kind": if auth == "custom" { "openai-models" } else { "copilot-available" }, "auth": auth, "base": if auth == "custom" { json!(BASE) } else { Value::Null }},
             "ids": ids
         });
-        if let Some(changes) = changes {
-            file["changes"] = changes;
-        }
-        fs::write(self.path(provider), file.to_string()).unwrap();
+        let changes = changes.map_or("NULL".to_owned(), |c| format!("'{c}'"));
+        self.env.sql(&format!(
+            "INSERT OR REPLACE INTO swr_models (provider, catalog_json, changes_json, polled_at) VALUES ('{provider}', '{catalog}', {changes}, '{polled_at}');"
+        ));
     }
 
     fn cpd(&self, args: &[&str]) -> Run {
@@ -152,11 +166,8 @@ fn refresh_runs_the_helper_now_writes_the_files_and_prints_provider_polled_at_co
         json!({"kind": "copilot-available", "auth": "oauth", "base": null})
     );
     assert!(
-        !fx.env
-            .cpd_home()
-            .join("run/models-bifrost.json.tmp")
-            .exists(),
-        "written by rename"
+        !fx.env.cpd_home().join("run/models-bifrost.json").exists(),
+        "no file"
     );
 
     // The helper took no argument and the caller's environment; the key is in no argument, output or file.
@@ -172,11 +183,7 @@ fn refresh_runs_the_helper_now_writes_the_files_and_prints_provider_polled_at_co
             .any(|l| l == format!("BIFROST_TEST_KEY={KEY}"))
     );
     assert!(!run.stdout.contains(KEY) && !run.stderr.contains(KEY));
-    assert!(
-        !fs::read_to_string(fx.path("bifrost"))
-            .unwrap()
-            .contains(KEY)
-    );
+    assert!(!fx.file("bifrost").unwrap().to_string().contains(KEY));
 }
 
 #[test]
@@ -186,7 +193,7 @@ fn refresh_writes_the_good_providers_then_fails_with_the_failing_ones_code() {
         json!({"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["gpt-5.6-sol"]}),
     ]));
     fx.cache("bifrost", 3600, "custom", &["m-a"], None);
-    let before = fs::read_to_string(fx.path("bifrost")).unwrap();
+    let before = fx.file("bifrost").unwrap()["ids"].clone();
 
     let run = fx.cpd(&["models", "refresh"]);
     let error = refused(&run, "models_unauthorized", 1);
@@ -200,10 +207,13 @@ fn refresh_writes_the_good_providers_then_fails_with_the_failing_ones_code() {
         json!(["gpt-5.6-sol"]),
         "the good one is written"
     );
-    assert_eq!(
-        fs::read_to_string(fx.path("bifrost")).unwrap(),
-        before,
-        "the failing one keeps its file"
+    let kept = fx.file("bifrost").unwrap();
+    assert_eq!(kept["ids"], before, "the failing one keeps its row");
+    assert!(
+        kept["last_error"]
+            .as_str()
+            .unwrap()
+            .starts_with("models_unauthorized: ")
     );
     assert!(!run.stdout.contains(KEY) && !run.stderr.contains(KEY));
 }
@@ -260,10 +270,6 @@ fn show_prints_the_cached_lists_with_their_age_and_runs_no_helper() {
     assert_eq!(out["warnings"], json!([]));
 
     assert_eq!(fx.env.calls("node").len(), 0, "show runs no helper");
-    assert!(
-        !fx.env.cpd_home().join("locks/models.lock").exists(),
-        "and takes no lock"
-    );
 }
 
 #[test]
@@ -283,7 +289,7 @@ fn show_with_provider_prints_only_that_one() {
     assert_eq!(
         none["providers"],
         json!([]),
-        "a provider with no file is an empty result, not an error"
+        "a provider with no row is an empty result, not an error"
     );
 
     let run = fx.cpd(&["models", "show", "--provider", "../x"]);
@@ -291,32 +297,12 @@ fn show_with_provider_prints_only_that_one() {
 }
 
 #[test]
-fn show_with_no_file_says_so_with_an_empty_result_not_an_error() {
+fn show_with_no_row_says_so_with_an_empty_result_not_an_error() {
     let fx = Fx::new(&answer(vec![]));
     let out = fx.cpd(&["models", "show"]).ok();
     assert_eq!(out["providers"], json!([]));
     assert_eq!(out["warnings"], json!([]));
     assert_eq!(fx.env.calls("node").len(), 0);
-}
-
-#[test]
-fn show_skips_a_file_it_cannot_parse_and_names_it_in_the_warnings() {
-    let fx = Fx::new(&answer(vec![]));
-    fx.cache("github-copilot", 100, "oauth", &["a"], None);
-    fs::write(fx.path("bifrost"), "{not json").unwrap();
-
-    let out = fx.cpd(&["models", "show"]).ok();
-    assert_eq!(out["providers"].as_array().unwrap().len(), 1, "{out}");
-    let warnings = out["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 1, "{out}");
-    assert_eq!(warnings[0]["provider"], "bifrost");
-    assert_eq!(warnings[0]["code"], "models_unparseable");
-    assert!(
-        warnings[0]["file"]
-            .as_str()
-            .unwrap()
-            .ends_with("models-bifrost.json")
-    );
 }
 
 #[test]
@@ -351,7 +337,7 @@ fn two_concurrent_refresh_runs_never_interleave_their_diffs() {
     one.ok();
     two.ok();
 
-    // Whoever wrote last diffed against what the other had written, not against the file both started from.
+    // Whoever wrote last diffed against what the other had written, not against the row both started from.
     let file = fx.file("bifrost").unwrap();
     let (appeared, went_away) = if file["ids"] == json!(["a", "b"]) {
         (json!(["b"]), json!(["c"]))

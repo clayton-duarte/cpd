@@ -271,7 +271,7 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 10, "§4.4 changed shape"); // `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`
+    assert_eq!(blocks.len(), 11, "§4.4 changed shape"); // `swr` added the block of the SWR tables; `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`
     assert!(
         blocks[2].contains("CREATE TRIGGER escalations_hist_ins"),
         "block 3 is the generated example"
@@ -340,7 +340,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        33,
+        46, // 33 and the 13 tables of `swr`
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {
@@ -461,7 +461,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         }
         if ["dependencies", "workflow_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
-            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) and `pr-archived` (pro-d392) are additive, so they
+            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) `pr-archived` (pro-d392) and `swr` are additive, so they
             // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
             let added_by_additive = [
                 "updated_at",
@@ -469,6 +469,8 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                 "base_ref",
                 "default_branch",
                 "archived",
+                "head_oid",
+                "gh_updated_at",
             ];
             for column in columns
                 .iter()

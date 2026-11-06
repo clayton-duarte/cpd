@@ -6,7 +6,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::gh;
-use super::status::{Approval, ChecksSummary, PrState, ReviewDecision};
+use super::status::{self, Approval, ChecksSummary, PrState, ReviewDecision};
 use super::{Args, Env, workflow_policy};
 use crate::error::CpdError;
 use crate::output::Output;
@@ -42,6 +42,14 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         view.checks.as_deref().unwrap_or_default(),
         &policy.pr.human_gated_contexts,
         &policy.pr.required_checks,
+        status::policy_hold(
+            &view
+                .labels
+                .iter()
+                .map(|l| l.name.clone())
+                .collect::<Vec<_>>(),
+            &policy.pr.excused_labels,
+        ),
     );
     let checks: Vec<Value> = view
         .checks

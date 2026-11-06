@@ -27,6 +27,7 @@ use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
+use crate::swr::source::models as source_models;
 
 /// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
@@ -124,7 +125,7 @@ pub fn conditions_with(
     all.extend(store.read(super::pr::closed_conditions)?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, now, team)?);
-    all.extend(models_changed(store, home, now)?);
+    all.extend(models_changed(store, now)?);
     all.extend(deploys(store, home)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
@@ -792,51 +793,27 @@ fn kept_review_items(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
         .collect())
 }
 
-/// `models-changed`: each provider file whose `changes.at` is within [`models::WINDOW`] and whose announced part is not empty.
-/// A provider with no readable file (missing, not `version` 1) keeps its open items as they are.
-fn models_changed(
-    store: &mut Store,
-    home: &CpdHome,
-    now: OffsetDateTime,
-) -> Result<Vec<Condition>, CpdError> {
-    let reads = crate::models::read_all(home)?;
-    let readable: Vec<&str> = reads
-        .iter()
-        .filter_map(|r| match r {
-            crate::models::Read::Good(f) => Some(f.provider.as_str()),
-            crate::models::Read::Unparseable { .. } => None,
-        })
-        .collect();
+/// `models-changed`: each `swr_models` row whose `changes_json.at` is within [`models::WINDOW`] and whose announced part is
+/// not empty. A provider with no row keeps its open items as they are.
+fn models_changed(store: &mut Store, now: OffsetDateTime) -> Result<Vec<Condition>, CpdError> {
+    let known = source_models::providers(store)?;
     let mut out: Vec<Condition> = store
         .read(open_items)?
         .iter()
         .filter(|i| i.kind == Kind::ModelsChanged)
         .filter(|i| {
             models::parse_subject(&i.subject)
-                .is_some_and(|(provider, _)| !readable.contains(&provider))
+                .is_some_and(|(provider, _)| !known.iter().any(|k| k == provider))
         })
         .map(Condition::from)
         .collect();
-    let cutoff = now - models::WINDOW;
-    for read in &reads {
-        let crate::models::Read::Good(file) = read else {
-            continue;
-        };
-        let Some(changes) = &file.changes else {
-            continue;
-        };
-        if !OffsetDateTime::parse(&changes.at, &Rfc3339).is_ok_and(|at| at >= cutoff) {
-            continue;
-        }
-        let (new, gone) = models::announced(&file.provider, changes);
-        if new.is_empty() && gone.is_empty() {
-            continue;
-        }
+    for (provider, changes) in source_models::changed(store, now)? {
+        let (new, gone) = models::announced(&provider, &changes);
         out.push(Condition {
             kind: Kind::ModelsChanged,
             urgency: Urgency::White,
-            subject: models::subject(&file.provider, &changes.at),
-            label: models::label(&file.provider, new.len(), gone.len()),
+            subject: models::subject(&provider, &changes.at),
+            label: models::label(&provider, new.len(), gone.len()),
             url: None,
             context: None,
             plan: None,

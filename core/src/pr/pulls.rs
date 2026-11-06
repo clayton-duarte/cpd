@@ -449,10 +449,6 @@ pub(super) struct PostFacts {
     pub posted: bool,
 }
 
-/// What `attention` needs of the checks: whether the Workflow carries one of the owner's `pr.excused_labels` (pro-d216).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Excused(pub bool);
-
 impl Reason {
     /// As `pr-feedback`'s `reasons` lists it.
     pub(super) fn as_str(self) -> &'static str {
@@ -478,7 +474,6 @@ pub(super) fn attention(
     checks_policy: Checks,
     new: &[&Item],
     post: PostFacts,
-    excused: Excused,
 ) -> Vec<Reason> {
     let (checks, review, state) = match before {
         Some(b) => (
@@ -489,8 +484,7 @@ pub(super) fn attention(
         None => ("none", "none", "open"),
     };
     let mut reasons = Vec::new();
-    if checks_policy == Checks::Any && !excused.0 && after.checks == "failed" && checks != "failed"
-    {
+    if checks_policy == Checks::Any && after.checks == "failed" && checks != "failed" {
         reasons.push(Reason::ChecksFailed);
     }
     if after.review_decision == "changes_requested" && review != "changes_requested" {
@@ -538,7 +532,6 @@ mod tests {
     use super::*;
     use crate::policy::Checks;
 
-    const NOT: Excused = Excused(false);
     const OFF: PostFacts = PostFacts {
         enabled: false,
         posted: false,
@@ -546,7 +539,7 @@ mod tests {
 
     /// `super::attention` with `pr.feedback.checks` `any`, cpd's default.
     fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
-        super::attention(before, after, Checks::Any, &[], OFF, NOT)
+        super::attention(before, after, Checks::Any, &[], OFF)
     }
     use crate::home::CpdHome;
     use crate::store::Store;
@@ -617,8 +610,7 @@ mod tests {
                 &row("open", "none", "failed"),
                 Checks::None,
                 &[],
-                OFF,
-                NOT
+                OFF
             ),
             []
         );
@@ -628,8 +620,7 @@ mod tests {
                 &row("open", "none", "failed"),
                 Checks::Any,
                 &[],
-                OFF,
-                NOT
+                OFF
             ),
             [Reason::ChecksFailed]
         );
@@ -639,34 +630,8 @@ mod tests {
             Checks::None,
             &[],
             OFF,
-            NOT,
         );
         assert_eq!(all, [Reason::ChangesRequested, Reason::Closed]);
-    }
-
-    #[test]
-    fn an_excused_pr_raises_no_checks_failed_and_every_other_reason_stays() {
-        let open = row("open", "none", "none");
-        assert_eq!(
-            super::attention(
-                Some(&open),
-                &row("open", "none", "failed"),
-                Checks::Any,
-                &[],
-                OFF,
-                Excused(true)
-            ),
-            []
-        );
-        let rest = super::attention(
-            Some(&open),
-            &row("closed", "changes_requested", "failed"),
-            Checks::Any,
-            &[],
-            OFF,
-            Excused(true),
-        );
-        assert_eq!(rest, [Reason::ChangesRequested, Reason::Closed]);
     }
 
     #[test]
@@ -728,7 +693,7 @@ mod tests {
         after: &PullRequest,
         post: PostFacts,
     ) -> Vec<Reason> {
-        super::attention(before, after, Checks::Any, &[], post, NOT)
+        super::attention(before, after, Checks::Any, &[], post)
     }
 
     fn bot_item() -> Item {

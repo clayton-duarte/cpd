@@ -20,6 +20,9 @@ mod slack_tests;
 #[cfg(test)]
 mod slack_write_tests;
 
+#[cfg(test)]
+mod models_tests;
+
 /// A query key `<system>:<kind>:<id>` (swr.md §4).
 pub type QueryKey = String;
 

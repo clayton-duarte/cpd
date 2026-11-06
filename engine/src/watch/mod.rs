@@ -116,6 +116,8 @@ mod stacked_ready_tests;
 mod stuck_explore_tests;
 mod swr;
 #[cfg(test)]
+mod swr_models_tests;
+#[cfg(test)]
 mod swr_slack_tests;
 #[cfg(test)]
 mod swr_slack_write_tests;
