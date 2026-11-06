@@ -62,10 +62,19 @@ pub enum Checks {
     None,
 }
 
+/// `pr.feedback.reply`: which feedback items an agent may answer with `cpd pr reply` (pro-d451).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    All,
+    BotsOnly,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Feedback {
     pub checks: Checks,
+    pub reply: Reply,
 }
 
 /// `[pr.post]`: posting a Workflow for review (contract §8.3).
@@ -73,6 +82,7 @@ pub struct Feedback {
 #[serde(deny_unknown_fields)]
 pub struct Post {
     pub enabled: bool,
+    pub require_approval: bool,
     pub channel: String,
     pub template: String,
     pub merged_reaction: String,
@@ -121,6 +131,7 @@ pub struct Text {
 #[serde(deny_unknown_fields)]
 pub struct FeedbackSet {
     pub checks: Option<Checks>,
+    pub reply: Option<Reply>,
 }
 
 /// What a scope file's `[pr.post]` table sets: a left-out key is `None`.
@@ -128,6 +139,7 @@ pub struct FeedbackSet {
 #[serde(deny_unknown_fields)]
 pub struct PostSet {
     pub enabled: Option<bool>,
+    pub require_approval: Option<bool>,
     pub channel: Option<String>,
     pub template: Option<String>,
     pub merged_reaction: Option<String>,
@@ -435,7 +447,9 @@ pub trait Set {
 pub const MERGE: &str = "merge";
 pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
+pub const FEEDBACK_REPLY: &str = "pr.feedback.reply";
 pub const POST_ENABLED: &str = "pr.post.enabled";
+pub const POST_REQUIRE_APPROVAL: &str = "pr.post.require_approval";
 pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
@@ -480,11 +494,17 @@ impl Set for PrSet {
     /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
     fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
+        let reply = self.feedback.as_ref().and_then(|f| f.reply);
         let post = self.post.as_ref();
         let jira = self.jira.as_ref();
         let left_out = left_out([
             (FEEDBACK_CHECKS, checks.is_none()),
+            (FEEDBACK_REPLY, reply.is_none()),
             (POST_ENABLED, post.and_then(|p| p.enabled).is_none()),
+            (
+                POST_REQUIRE_APPROVAL,
+                post.and_then(|p| p.require_approval).is_none(),
+            ),
             (
                 POST_CHANNEL,
                 post.and_then(|p| p.channel.as_ref()).is_none(),
@@ -518,9 +538,13 @@ impl Set for PrSet {
         let value = Pr {
             feedback: Feedback {
                 checks: checks.unwrap_or(base.feedback.checks),
+                reply: reply.unwrap_or(base.feedback.reply),
             },
             post: Post {
                 enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
+                require_approval: post
+                    .and_then(|p| p.require_approval)
+                    .unwrap_or(base.post.require_approval),
                 channel: pick(post.and_then(|p| p.channel.clone()), &base.post.channel),
                 template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
                 merged_reaction: pick(
@@ -560,11 +584,13 @@ impl Set for PrSet {
         Some(Pr {
             feedback: Feedback {
                 checks: self.feedback.as_ref()?.checks?,
+                reply: self.feedback.as_ref()?.reply?,
             },
             post: {
                 let p = self.post.as_ref()?;
                 Post {
                     enabled: p.enabled?,
+                    require_approval: p.require_approval?,
                     channel: p.channel.clone()?,
                     template: p.template.clone()?,
                     merged_reaction: p.merged_reaction.clone()?,
