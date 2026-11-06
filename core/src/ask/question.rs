@@ -16,7 +16,10 @@ use crate::store::WriteTxn;
 const COMMAND: &str = "ask";
 
 /// Why the Worker Session is `waiting` while it waits (commands.md §8.1): for its Lead, not for the User (hs-d303).
-const LABEL: &str = "φ: question to the Lead";
+pub(crate) const LABEL: &str = "φ: question to the Lead";
+
+/// Why a Lead Session is `waiting` on a Worker's question (hs-d303).
+pub(crate) const WORKER_QUESTION_LABEL: &str = "φ: Worker question";
 
 /// How often `ask` reads its row (§8.1).
 const POLL: Duration = Duration::from_millis(500);

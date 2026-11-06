@@ -119,9 +119,9 @@ pub fn is_overdue(item: &Item) -> bool {
 /// What the table reads of a pull request besides its row.
 struct Facts<'a> {
     row: &'a PullRequest,
-    /// The owner's Lead works, or the owner's Workflow has a live `update` or `work` Job.
+    /// The owner's Lead is `working` or `waiting`, or the owner's Workflow has a live Job of any kind.
     handled: bool,
-    /// The owner's Workflow has a queued or running `update` or `work` Job (the Job half of `handled`).
+    /// The owner's Workflow has a queued or running Job of any kind (the Job half of `handled`).
     live: bool,
     owned: bool,
     posted: bool,
@@ -187,7 +187,7 @@ pub fn conditions(
         .collect();
     let mut stmt = conn.prepare(&format!(
         "SELECT {}, {}, o.plan, o.key, p.context, p.lead_session,
-                COALESCE(s.state = 'working', 0) OR {live},
+                COALESCE(s.state IN ('working', 'waiting'), 0) OR {live},
                 EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key),
                 {},
                 {live}
@@ -203,7 +203,7 @@ pub fn conditions(
         pulls::ready_to_merge_sql("r"),
         posts::overdue_sql("r", "o", "?1"),
         live = "EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.workflow = o.key
-                                AND j.kind IN ('update', 'work') AND j.status IN ('queued', 'running'))",
+                                AND j.status IN ('queued', 'running'))",
     ))?;
     let width = pulls::COLUMNS.split(", ").count();
     let mut rows = stmt.query([&due_before])?;

@@ -106,8 +106,8 @@ impl Fx {
         };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                               fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
-             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested});"
+                               fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at, tests, test_files)
+             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested}, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END, CASE WHEN '{kind}' = 'test' THEN '[\"t\"]' END);"
         ));
     }
 
@@ -217,7 +217,7 @@ fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested(
 type JobKindStatus<'a> = (&'a str, &'a str);
 
 #[test]
-fn an_owned_broken_pr_is_white_while_its_lead_works_or_an_update_or_work_job_is_live() {
+fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live() {
     let broken = [
         (
             "mergeable = 'conflicting', merge_state = 'dirty'",
@@ -236,40 +236,66 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_an_update_or_work_job_is_
         ),
     ];
     // (Lead working, a Job of (kind, status), handled)
-    let cases: [(bool, Option<JobKindStatus>, bool); 10] = [
-        (true, None, true),
-        (false, Some(("update", "queued")), true),
-        (false, Some(("update", "running")), true),
-        (false, Some(("work", "running")), true),
-        (false, Some(("work", "queued")), true),
-        (false, Some(("update", "merged")), false),
-        (false, Some(("update", "failed")), false),
-        (false, Some(("update", "cancelled")), false),
-        (false, Some(("docs", "queued")), false),
-        (false, Some(("impl", "queued")), false),
-    ];
+    let mut cases: Vec<(bool, Option<JobKindStatus>, bool)> = vec![(true, None, true)];
+    for kind in ["docs", "test", "impl", "verify", "work", "open", "update"] {
+        for status in ["queued", "running"] {
+            cases.push((false, Some((kind, status)), true));
+        }
+        for status in ["merged", "failed", "cancelled"] {
+            cases.push((false, Some((kind, status)), false));
+        }
+    }
+    // One store for every case (workflows are append-only): each case gets its own PR number
+    // and Workflow, and only that PR's row is read.
+    let mut f = fixture();
+    let mut next = 0;
+    let mut reset = |f: &mut Fx, set: &str, owned: bool, working: bool| -> i64 {
+        next += 1;
+        f.sql(&format!(
+            "UPDATE sessions SET state = '{}' WHERE id = 'l-pay'",
+            if working { "working" } else { "idle" }
+        ));
+        f.workflow(next, set);
+        if owned {
+            f.own("pay", next);
+        }
+        next
+    };
     for (set, red, white) in broken {
-        for (working, job, handled) in cases {
-            let mut f = fixture();
-            f.workflow(1, set);
-            f.own("pay", 1);
-            if !working {
-                f.idle();
-            }
+        for &(working, job, handled) in &cases {
+            let n = reset(&mut f, set, true, working);
             if let Some((kind, status)) = job {
-                f.job(1, "j1", kind, status);
+                f.job(n, &format!("j{n}"), kind, status);
             }
             let expected = if handled { (White, white) } else { (Red, red) };
-            is(&mut f, 1, expected.0, expected.1);
+            is(&mut f, n, expected.0, expected.1);
         }
+        let n = reset(&mut f, set, true, false);
+        is(&mut f, n, Red, red);
+        let n = reset(&mut f, set, false, true);
+        is(&mut f, n, Red, red); // unowned
+    }
+}
+
+#[test]
+fn an_owned_broken_pr_is_white_while_its_lead_waits() {
+    let broken = [
+        (
+            "mergeable = 'conflicting', merge_state = 'dirty'",
+            "updating",
+        ),
+        ("checks = 'failed', merge_state = 'blocked'", "fixing"),
+        (
+            "review_decision = 'changes_requested', merge_state = 'blocked'",
+            "fixing",
+        ),
+    ];
+    for (set, white) in broken {
         let mut f = fixture();
         f.workflow(1, set);
         f.own("pay", 1);
-        f.idle();
-        is(&mut f, 1, Red, red);
-        let mut f = fixture();
-        f.workflow(1, set);
-        is(&mut f, 1, Red, red); // unowned
+        f.sql("UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'l-pay'");
+        is(&mut f, 1, White, white);
     }
 }
 

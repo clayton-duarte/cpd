@@ -115,6 +115,18 @@ pub(super) fn set_reply(
             already: true,
         });
     }
+    if to == State::Blocked
+        && matches!(
+            label,
+            Some(crate::ask::question::LABEL | crate::ask::question::WORKER_QUESTION_LABEL)
+        )
+    {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "These labels are agent waits, not the User's: the state is `waiting`, never `blocked` (contract §3.6, hs-d303).",
+        )
+        .with("label", label.unwrap_or_default()));
+    }
     if !legal(read.state, to) {
         return Err(illegal(id, read.state, to));
     }

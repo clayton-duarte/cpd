@@ -15,6 +15,8 @@
 //! - `reload`: when it restarts pi (reload on install, adapter watchdog);
 //! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
+#[cfg(test)]
+mod agent_label_tests;
 mod archive;
 pub mod delta;
 #[cfg(test)]

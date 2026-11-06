@@ -3231,6 +3231,7 @@ How the pi adapter reports its agent state (§3.6, D4). `--session <id>` takes a
 | Precondition | Code | Exit |
 |---|---|---|
 | the transition is in §3.6's table | `illegal_transition` | 3 |
+| `blocked` with the label `φ: Worker question` or `φ: question to the Lead` (both are agent waits, `waiting` only: contract §3.6, pro-d427) | `usage` | 2 |
 
 Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6), so it opens no `replied` Item. No tmux.
 
