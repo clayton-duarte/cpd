@@ -57,6 +57,8 @@ mod snooze_refusal_tests;
 #[cfg(test)]
 pub(crate) mod swr_fixture;
 #[cfg(test)]
+mod team_tests;
+#[cfg(test)]
 mod tier_tests;
 #[cfg(test)]
 mod unread_rows_tests;

@@ -22,18 +22,24 @@ use crate::swr::{cache, endpoint};
 
 /// One pull request as GitHub has it.
 #[derive(Clone)]
-struct Pr {
-    repo: &'static str,
-    number: i64,
-    state: &'static str,
-    oid: &'static str,
-    updated: &'static str,
-    labels: Vec<&'static str>,
+pub(super) struct Pr {
+    pub(super) repo: &'static str,
+    pub(super) number: i64,
+    pub(super) state: &'static str,
+    pub(super) oid: &'static str,
+    pub(super) updated: &'static str,
+    pub(super) labels: Vec<&'static str>,
     /// `(name, conclusion)` of the head's check runs; the rollup is FAILURE when any is not SUCCESS.
-    checks: Vec<(&'static str, &'static str)>,
+    pub(super) checks: Vec<(&'static str, &'static str)>,
+    /// `(context, state)` of the head's status contexts (a failing one fails the rollup too).
+    pub(super) contexts: Vec<(&'static str, &'static str)>,
+    /// GitHub's `author { login }`.
+    pub(super) author: &'static str,
+    /// `(login, state, commit oid)` of `latestReviews`.
+    pub(super) reviews: Vec<(&'static str, &'static str, &'static str)>,
 }
 
-fn pr(number: i64) -> Pr {
+pub(super) fn pr(number: i64) -> Pr {
     Pr {
         repo: "acme/pay",
         number,
@@ -42,18 +48,32 @@ fn pr(number: i64) -> Pr {
         updated: "U1",
         labels: vec![],
         checks: vec![("build", "SUCCESS")],
+        contexts: vec![],
+        author: "ada",
+        reviews: vec![],
     }
 }
 
 impl Pr {
-    fn node(&self) -> Value {
-        let failed = self.checks.iter().any(|(_, c)| *c != "SUCCESS");
-        let runs: Vec<Value> = self
+    pub(super) fn node(&self) -> Value {
+        let failed = self.checks.iter().any(|(_, c)| *c != "SUCCESS")
+            || self.contexts.iter().any(|(_, st)| *st != "SUCCESS");
+        let mut runs: Vec<Value> = self
             .checks
             .iter()
             .map(|(n, c)| {
                 json!({"__typename":"CheckRun","name":n,"conclusion":c,"status":"COMPLETED","detailsUrl":null,
                 "checkSuite":{"workflowRun":{"databaseId":9,"workflow":{"name":"ci"}}}})
+            })
+            .collect();
+        runs.extend(self.contexts.iter().map(
+            |(c, st)| json!({"__typename":"StatusContext","context":c,"state":st,"targetUrl":null}),
+        ));
+        let reviews: Vec<Value> = self
+            .reviews
+            .iter()
+            .map(|(login, state, oid)| {
+                json!({"state": state, "author": {"__typename": "User", "login": login}, "commit": {"oid": oid}})
             })
             .collect();
         json!({
@@ -62,30 +82,30 @@ impl Pr {
             "headRefOid": self.oid, "updatedAt": self.updated, "title": format!("PR {}", self.number),
             "url": format!("https://github.com/{}/pull/{}", self.repo, self.number), "createdAt": "2026-10-01T00:00:00Z",
             "mergedAt": (self.state == "MERGED").then_some("2026-10-02T00:00:00Z"),
-            "author": {"login": "ada"}, "repository": {"nameWithOwner": self.repo},
+            "author": {"login": self.author}, "repository": {"nameWithOwner": self.repo},
             "labels": {"nodes": self.labels.iter().map(|l| json!({"name": l})).collect::<Vec<_>>()},
             "autoMergeRequest": null,
             "commits": {"nodes": [{"commit": {"oid": self.oid,
                 "statusCheckRollup": {"state": if failed {"FAILURE"} else {"SUCCESS"}, "contexts": {"nodes": runs}}}}]},
-            "latestOpinionatedReviews": {"nodes": []}, "latestReviews": {"nodes": []},
+            "latestOpinionatedReviews": {"nodes": []}, "latestReviews": {"nodes": reviews},
             "reviewThreads": {"nodes": []}, "comments": {"nodes": []},
         })
     }
 }
 
 /// What GitHub answers: the two searches, the pull requests an alias can read, the rate limit, a failure.
-struct State {
-    authored: Vec<Pr>,
-    reviews: Vec<Pr>,
-    world: BTreeMap<(String, i64), Pr>,
-    remaining: i64,
-    reset: OffsetDateTime,
-    fail: Option<Reply>,
+pub(super) struct State {
+    pub(super) authored: Vec<Pr>,
+    pub(super) reviews: Vec<Pr>,
+    pub(super) world: BTreeMap<(String, i64), Pr>,
+    pub(super) remaining: i64,
+    pub(super) reset: OffsetDateTime,
+    pub(super) fail: Option<Reply>,
     /// The search nodes carry no heavy fields (real GitHub sends none unless `...Heavy` was selected there).
-    light_only: bool,
+    pub(super) light_only: bool,
 }
 
-struct World(Mutex<State>);
+pub(super) struct World(pub(super) Mutex<State>);
 
 /// The text between `from` and the next `"` after the first `from` in `q` at or after `at`.
 fn quoted(q: &str, from: &str, at: usize) -> Option<(String, usize)> {
@@ -144,6 +164,11 @@ impl Handler for World {
                     let mut node = p.node();
                     if st.light_only {
                         node.as_object_mut().unwrap().remove("comments");
+                        // Real GitHub's Light selection has no check contexts either.
+                        node["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("contexts");
                     }
                     node
                 })
@@ -174,19 +199,19 @@ impl Handler for World {
     }
 }
 
-struct Rig {
-    _dir: tempfile::TempDir,
-    home: CpdHome,
-    store: Store,
-    config: Config,
-    fakes: Fakes,
-    world: Arc<World>,
-    source: GithubSource,
-    t0: OffsetDateTime,
+pub(super) struct Rig {
+    pub(super) _dir: tempfile::TempDir,
+    pub(super) home: CpdHome,
+    pub(super) store: Store,
+    pub(super) config: Config,
+    pub(super) fakes: Fakes,
+    pub(super) world: Arc<World>,
+    pub(super) source: GithubSource,
+    pub(super) t0: OffsetDateTime,
 }
 
 impl Rig {
-    fn new() -> Rig {
+    pub(super) fn new() -> Rig {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
         std::fs::create_dir_all(home.root()).unwrap();
@@ -217,12 +242,12 @@ impl Rig {
         }
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+    pub(super) fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.world.0.lock().unwrap()
     }
 
     /// One pass `secs` after `t0`.
-    fn pass(&mut self, secs: u64) -> Result<(), crate::error::CpdError> {
+    pub(super) fn pass(&mut self, secs: u64) -> Result<(), crate::error::CpdError> {
         let now = self.t0 + Duration::from_secs(secs);
         let mut cx = Cx {
             store: &mut self.store,
@@ -233,7 +258,7 @@ impl Rig {
         self.source.pass(&mut cx, now)
     }
 
-    fn graphql(&self) -> Vec<String> {
+    pub(super) fn graphql(&self) -> Vec<String> {
         self.fakes
             .runner
             .calls()
@@ -252,7 +277,7 @@ impl Rig {
             .collect()
     }
 
-    fn sql(&mut self, sql: &str) {
+    pub(super) fn sql(&mut self, sql: &str) {
         let sql = sql.to_owned();
         self.store
             .write("test seed", move |tx| {
@@ -263,7 +288,7 @@ impl Rig {
     }
 
     /// A stored pull request of `acme/pay`.
-    fn seed(&mut self, p: &Pr, authored: bool) {
+    pub(super) fn seed(&mut self, p: &Pr, authored: bool) {
         let merged = if p.state == "MERGED" { "'m'" } else { "NULL" };
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at,
@@ -279,7 +304,7 @@ impl Rig {
         ));
     }
 
-    fn seed_detail(&mut self, p: &Pr) {
+    pub(super) fn seed_detail(&mut self, p: &Pr) {
         self.sql(&format!(
             "INSERT INTO swr_pr_detail (repo, number, head_oid, updated_at, hydrated_at, detail_json, detail_hash)
              VALUES ('{}', {}, '{}', '{}', 't', '{{}}', 'h')",
@@ -287,26 +312,26 @@ impl Rig {
         ));
     }
 
-    fn text(&mut self, sql: &str) -> Option<String> {
+    pub(super) fn text(&mut self, sql: &str) -> Option<String> {
         self.store
             .read(|c| Ok(c.query_row(sql, [], |r| r.get::<_, Option<String>>(0))?))
             .unwrap()
     }
 
-    fn int(&mut self, sql: &str) -> i64 {
+    pub(super) fn int(&mut self, sql: &str) -> i64 {
         self.store
             .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
             .unwrap()
     }
 
-    fn pr_state(&mut self, n: i64) -> Option<String> {
+    pub(super) fn pr_state(&mut self, n: i64) -> Option<String> {
         self.text(&format!(
             "SELECT state FROM pull_requests WHERE number = {n}"
         ))
     }
 }
 
-fn mentions(query: &str, number: i64) -> bool {
+pub(super) fn mentions(query: &str, number: i64) -> bool {
     query.contains(&format!("pullRequest(number: {number})"))
 }
 
