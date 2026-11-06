@@ -299,7 +299,7 @@ fn the_covered_scripts_of_the_repository_pass() {
     let run = run_check(&Path::new(SCRIPTS).join("check-portable.sh"), &root, &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert!(
-        run.all().contains("check-portable: ok (17 files, "),
+        run.all().contains("check-portable: ok (18 files, "),
         "{}",
         run.all()
     );
@@ -316,7 +316,7 @@ fn a_script_in_neither_list_fails_so_a_new_script_cannot_skip_the_decision() {
         before.stderr
     );
     assert!(
-        before.all().contains("check-portable: ok (17 files, "),
+        before.all().contains("check-portable: ok (18 files, "),
         "{}",
         before.all()
     );
@@ -355,7 +355,7 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     let run = run_check(&script, dir.path(), &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert!(
-        run.all().contains("check-portable: ok (17 files, "),
+        run.all().contains("check-portable: ok (18 files, "),
         "{}",
         run.all()
     );
