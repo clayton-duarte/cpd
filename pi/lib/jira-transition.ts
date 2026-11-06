@@ -40,6 +40,12 @@ export type Request = {
   ticket: string;
   target: "in_progress" | "in_review" | "done";
   names: { in_progress: string; in_review: string; done: string };
+  /** swr-jira.md §3.1 (not yet used): the cached site id, or null to resolve it. */
+  cloud_id?: string | null;
+  /** swr-jira.md §3.1 (not yet used): the policy name of the target. */
+  target_name?: string;
+  /** swr-jira.md §3.1 (not yet used): the names of the targets of higher rank, in rank order. */
+  later_names?: string[];
   /** Custom field ids (`customfield_N`, distinct); written as 1 when empty before a Done move. `[]` writes nothing. */
   estimate_fields: string[];
 };

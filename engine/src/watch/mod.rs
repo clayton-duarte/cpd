@@ -118,6 +118,8 @@ mod stacked_ready_tests;
 mod stuck_explore_tests;
 mod swr;
 #[cfg(test)]
+mod swr_jira_tests;
+#[cfg(test)]
 mod swr_tests;
 pub mod team;
 #[cfg(test)]
