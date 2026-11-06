@@ -1,6 +1,6 @@
-//! `pr.excused_labels` (contract §7.6 step 3b, §8.3): while the pull request carries a listed label (ASCII
-//! case-insensitive), a transition to `failed` raises no `checks_failed`; the stored `checks` stays `failed`. In-process
-//! over a mocked `gh`: no real GitHub.
+//! `pr.excused_labels` (contract §7.6 step 3b, §8.3, pro-d447): while the pull request carries a listed label (ASCII
+//! case-insensitive), a failing check named `danger` counts as passed in the stored `checks`; any other check is
+//! unaffected. In-process over a mocked `gh`: no real GitHub.
 
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
@@ -43,52 +43,20 @@ fn fx_under(policy: &str, search: String, labels: &[&str]) -> Poll {
 }
 
 #[test]
-fn an_excused_label_stops_the_checks_failed_wake_and_the_checks_stay_failed() {
-    let fx = fx_with(pay("OPEN", None, Some("FAILURE")), &["No Merges on Friday"]);
-
-    fx.poll();
-
-    assert_eq!(
-        reads(&fx).len(),
-        1,
-        "the policy is valid and the failed rollup is confirmed by one checks read"
-    );
-    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
-    assert_eq!(checks_of_row(&fx), "failed");
-}
-
-#[test]
 fn an_excused_label_matches_without_regard_to_case() {
     let fx = fx_with(pay("OPEN", None, Some("FAILURE")), &["dont merge"]);
 
     fx.poll();
 
+    assert_eq!(checks_of_row(&fx), "passed");
+
     assert_eq!(
         reads(&fx).len(),
         1,
         "the policy is valid and the failed rollup is confirmed by one checks read"
     );
     assert_eq!(feedback_data(&fx), Vec::<Value>::new());
-    assert_eq!(checks_of_row(&fx), "failed");
-}
-
-#[test]
-fn removing_the_excused_label_while_checks_stay_failed_wakes_nobody() {
-    let fx = fx_with(pay("OPEN", None, Some("FAILURE")), &["No Merges on Friday"]);
-    fx.poll();
-    assert_eq!(
-        reads(&fx).len(),
-        1,
-        "the policy is valid and the failed rollup is confirmed by one checks read"
-    );
-    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
-
-    read_says(&fx, labelled(&[]));
-    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
-    fx.poll();
-
-    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
-    assert_eq!(checks_of_row(&fx), "failed");
+    assert_eq!(checks_of_row(&fx), "passed");
 }
 
 #[test]
@@ -161,4 +129,108 @@ fn no_label_still_wakes_the_lead() {
     let events = feedback_data(&fx);
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["reasons"], json!(["checks_failed"]));
+}
+
+/// An owned PR (812) under `POLICY` carrying `labels`, whose failed rollup is confirmed by `nodes`.
+fn fx_checks(nodes: Vec<Value>, labels: &[&str]) -> Poll {
+    let fx = poll_fx("deploy");
+    fx.env.owner_policy("acme", POLICY);
+    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
+    read_says(
+        &fx,
+        answer(vec![with_labels(contexts(nodes, None), labels)]),
+    );
+    fx
+}
+
+const HOLD: &[&str] = &["No Merges on Friday"];
+
+#[test]
+fn an_excused_label_with_only_danger_failing_stores_passed_and_wakes_nobody() {
+    let fx = fx_checks(failing(), HOLD);
+
+    fx.poll();
+
+    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
+    assert_eq!(checks_of_row(&fx), "passed");
+}
+
+#[test]
+fn an_excused_label_with_other_checks_running_stores_pending() {
+    let mut nodes = failing();
+    nodes.push(run("ci/slow", "IN_PROGRESS", None));
+    let fx = fx_checks(nodes, HOLD);
+
+    fx.poll();
+
+    assert_eq!(checks_of_row(&fx), "pending");
+    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
+}
+
+#[test]
+fn an_excused_label_with_a_failing_test_check_stores_failed_and_wakes_the_lead() {
+    let mut nodes = failing();
+    nodes.push(run("ci/test", "COMPLETED", Some("FAILURE")));
+    let fx = fx_checks(nodes, HOLD);
+
+    fx.poll();
+
+    let events = feedback_data(&fx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["reasons"], json!(["checks_failed"]));
+    assert_eq!(checks_of_row(&fx), "failed");
+}
+
+#[test]
+fn a_real_failure_after_an_excused_danger_failure_wakes_the_lead() {
+    let fx = fx_checks(failing(), HOLD);
+    fx.poll();
+    assert_eq!(checks_of_row(&fx), "passed");
+    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
+
+    let mut nodes = failing();
+    nodes.push(run("ci/test", "COMPLETED", Some("FAILURE")));
+    read_says(&fx, answer(vec![with_labels(contexts(nodes, None), HOLD)]));
+    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
+    fx.poll();
+
+    assert_eq!(checks_of_row(&fx), "failed");
+    let events = feedback_data(&fx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["reasons"], json!(["checks_failed"]));
+}
+
+#[test]
+fn removing_the_excused_label_while_danger_fails_wakes_the_lead() {
+    let fx = fx_checks(failing(), HOLD);
+    fx.poll();
+    assert_eq!(checks_of_row(&fx), "passed");
+    assert_eq!(feedback_data(&fx), Vec::<Value>::new());
+
+    read_says(&fx, labelled(&[]));
+    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
+    fx.poll();
+
+    assert_eq!(checks_of_row(&fx), "failed");
+    let events = feedback_data(&fx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["reasons"], json!(["checks_failed"]));
+}
+
+#[test]
+fn a_policy_with_excused_labels_reads_the_checks_of_a_failed_rollup_even_without_feedback_any() {
+    let fx = fx_under(
+        "[pr]\nexcused_labels = [\"No Merges on Friday\"]\n",
+        pay("OPEN", None, Some("FAILURE")),
+        HOLD,
+    );
+
+    fx.poll();
+
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the failed rollup is confirmed by a read"
+    );
+    assert_eq!(checks_of_row(&fx), "passed");
 }

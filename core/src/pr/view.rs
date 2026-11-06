@@ -42,6 +42,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         view.checks.as_deref().unwrap_or_default(),
         &policy.pr.human_gated_contexts,
         &policy.pr.required_checks,
+        false,
     );
     let checks: Vec<Value> = view
         .checks

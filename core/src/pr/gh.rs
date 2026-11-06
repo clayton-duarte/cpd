@@ -111,6 +111,17 @@ pub struct View {
     /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or empty.
     #[serde(rename = "reviewDecision")]
     pub review_decision: Option<String>,
+    /// The pull request's labels (`--json labels`).
+    #[serde(default)]
+    #[allow(dead_code)] // stub: read by the implementation of the check-level excuse
+    pub labels: Vec<LabelNode>,
+}
+
+/// One label of `gh pr view --json labels`.
+#[derive(Debug, Deserialize)]
+pub struct LabelNode {
+    #[allow(dead_code)] // stub: read by the implementation of the check-level excuse
+    pub name: String,
 }
 
 /// A Workflow as `gh` names it.

@@ -266,7 +266,8 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
             .iter()
             .position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number)
         {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
+            listed.pr.checks =
+                ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1, false);
         }
     }
 

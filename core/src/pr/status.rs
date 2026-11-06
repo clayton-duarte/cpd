@@ -149,7 +149,12 @@ impl ChecksSummary {
     /// final, a StatusContext when its state is PENDING or EXPECTED; a PENDING StatusContext named in `human_gated` counts as
     /// passed only when a CheckRun exists and none is pending; no checks is `none`. A name in `required` that is missing from `checks` or
     /// not final makes it `pending` (a failure still wins).
-    pub fn of(checks: &[Check], human_gated: &[String], required: &[String]) -> ChecksSummary {
+    pub fn of(
+        checks: &[Check],
+        human_gated: &[String],
+        required: &[String],
+        _policy_hold: bool,
+    ) -> ChecksSummary {
         let mut runs = 0;
         let mut run_pending = false;
         let mut failed = false;
@@ -388,6 +393,9 @@ impl MergeState {
 }
 
 #[cfg(test)]
+#[path = "status_excused_tests.rs"]
+mod status_excused_tests;
+#[cfg(test)]
 #[path = "status_required_tests.rs"]
 mod status_required_tests;
 
@@ -420,7 +428,7 @@ mod tests {
     }
 
     fn summary(checks: &[Check]) -> ChecksSummary {
-        ChecksSummary::of(checks, &[], &[])
+        ChecksSummary::of(checks, &[], &[], false)
     }
 
     const T1: &str = "2026-10-30T01:00:00Z";
@@ -454,7 +462,7 @@ mod tests {
     #[test]
     fn required_check_follows_its_newest_run() {
         let req = vec!["gate".to_owned()];
-        let of = |checks: &[Check]| ChecksSummary::of(checks, &[], &req);
+        let of = |checks: &[Check]| ChecksSummary::of(checks, &[], &req, false);
         assert_eq!(
             of(&[
                 run(Some("w"), "gate", "FAILURE", Some(T1)),
