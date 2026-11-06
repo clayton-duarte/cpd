@@ -27,6 +27,7 @@ pub struct Pid(pub u32);
 pub enum Signal {
     Term,
     Kill,
+    Usr1,
 }
 
 /// What to start: the program, its argv, its environment and how it is detached.
@@ -233,6 +234,7 @@ impl Spawn for ProcessSpawn {
         let s = match s {
             Signal::Term => signal::Signal::SIGTERM,
             Signal::Kill => signal::Signal::SIGKILL,
+            Signal::Usr1 => signal::Signal::SIGUSR1,
         };
         kill(pid, s).map_err(io::Error::from)
     }
@@ -631,6 +633,7 @@ impl Spawn for FakeSpawn {
         let number = match s {
             Signal::Term => signal::Signal::SIGTERM,
             Signal::Kill => signal::Signal::SIGKILL,
+            Signal::Usr1 => signal::Signal::SIGUSR1,
         } as i32;
         match table.pids.get_mut(&p) {
             Some(fate) => {

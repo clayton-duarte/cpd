@@ -21,6 +21,20 @@
     },
     "required": []
   },
+  "app": {
+    "flags": {
+      "--help": false,
+      "--off": false,
+      "--preview": false,
+      "--reload": false,
+      "--status": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
   "ask": {
     "flags": {
       "--help": false,

@@ -317,6 +317,8 @@ impl Rig {
         let install = Install {
             root: root.join("repos/install-clone"),
             target_dir,
+            preview_dir: home.join(".cache/cpd-preview"),
+            macos: false,
             home,
             cpd_home: CpdHome::resolve(Some(OsString::from(cpd_home)), None).unwrap(),
             pid: 4242,
