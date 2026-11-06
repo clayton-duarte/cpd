@@ -208,23 +208,20 @@ Created now and **unused** until a later Plan polls issues (accepted assumption 
 
 ### 3.9 `swr_slack_posts`
 
-One row per Slack message that announces a pull request in the team channel.
+One row per **(Slack message, pull request)** that a message of the team channel links. The key is `(channel, ts, repo, number)`: a message can link two pull requests, and the match rule of contract §2.2 counts any link. The full DDL, the helper's contract and the skip rules are in [swr-slack.md](swr-slack.md) §2 to §3, which amends this table.
 
-| Column | Type and constraint | Meaning |
-|---|---|---|
-| `channel` | TEXT, PRIMARY KEY (`channel`, `ts`) | the Slack channel id |
-| `ts` | TEXT, PRIMARY KEY (`channel`, `ts`) | the message timestamp |
-| `repo` | TEXT | the pull request's `owner/name` |
-| `number` | INTEGER | the pull request number |
-| `author_is_me` | INTEGER | 1 when the User posted it |
-| `reply_count` | INTEGER | the thread's replies |
-| `latest_reply` | TEXT | the time of the latest reply |
-| `reactions_json` | TEXT | the reactions on the message |
-| `eyes_me` | INTEGER | 1 when the User's `:eyes:` is on it (a claim) |
-| `claim` | TEXT | who claimed it |
-| `thread_tags_me` | INTEGER | 1 when the thread tags the User |
-| `fetched_at` | TEXT | when it was read |
-| `inactive_at` | TEXT | when no observer needs it |
+| Column | Meaning |
+|---|---|
+| `channel`, `ts`, `repo`, `number` | the key: the channel id, the message's exact `ts`, the pull request's `owner/name` and number |
+| `primary_pr` | 1 for the first pull request link of the message (E8 reads only these) |
+| `author_id`, `author` | the poster's Slack user id and display name |
+| `author_is_me` | 1 when the User posted it |
+| `reply_count`, `latest_reply` | the thread's replies and the time of the latest reply |
+| `reactions_json` | the reactions of the message, as counts: `{"eyes": 2}` |
+| `claim_json` | the claim object (`swr-slack.md` §3.3), NULL when none |
+| `eyes_me`, `thread_tags_me` | 1 when the User's `:eyes:` is on it, 1 when the thread tags the User; NULL until read |
+| `fetched_at` | when it was read |
+| `inactive_at` | when the channel's answer no longer holds the message |
 
 It replaces `run/team-review.json` (§15).
 
@@ -479,7 +476,7 @@ No `swr` command reads upstream. A write command is `cpd`'s `enqueue` (A6), whic
 | Source (`system`) | File in `core/src/swr/source/` | Design page (created by its Workflow) | Tables | Endpoints | Query key examples | Mutation `op_kind`s |
 |---|---|---|---|---|---|---|
 | `github` | `github.rs` | `docs/architecture/swr-github.md` | `swr_queries`, `swr_repos`, `swr_viewer`, `swr_pr_detail`, `swr_deploys`, `gh_issues`, and the raw `pull_requests` | `github` | `github:pr:owner/repo#12`, `github:repo:owner/repo` | `merge`, `auto_merge` |
-| `slack` | `slack.rs` | `docs/architecture/swr-slack.md` | `swr_slack_posts` | `slack` | `slack:channel:C123` | `reaction` (dedupe on `(channel, ts, emoji)`), `post` |
+| `slack` | `slack.rs` | `docs/architecture/swr-slack.md` | `swr_slack_posts` | `slack` | `slack:channel:C123` (every Slack mutation's `target_key` is this key, swr-slack.md §4.1) | `reaction` (dedupe on `(channel, ts, emoji)`), `post`, `repost` |
 | `jira` | `jira.rs` | `docs/architecture/swr-jira.md` | `swr_jira_issues`, `swr_atlassian` | `jira` | `jira:issue:EEC-1` | `transition` (`Forward`: `in_progress` < `in_review` < `done`) |
 | `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` | the provider's endpoint, named by its Workflow | `models:provider:openai` | none |
 | `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` | `ollama.lab`, `bifrost` | `classifier:badge:<session id>` (the form the classifier Workflow confirms) | none |
