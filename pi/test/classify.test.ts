@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { main, type ClassifyDeps } from "../lib/classify.ts";
+import { createFetchWithCurlFallback, main, piRuntime, type ClassifyDeps, type CurlSpawner, type PiRuntimeIo } from "../lib/classify.ts";
 
 const NEVER = new AbortController().signal;
 const MODEL = { id: "kev-4b", provider: "llama.cpp", type: "classifier" };
@@ -118,4 +118,157 @@ test("classify refuses a malformed stdin request", async () => {
     assert.equal(answerOf(r.out).error?.code, "classifier_bad_reply", stdin);
     assert.equal(r.contexts.length, 0, "classify is not called");
   }
+});
+
+// ---- piRuntime ----
+
+const PROVIDER_OBJ = { id: "llama.cpp" };
+function fakeIo(agentDir = "/agent") {
+  const calls: string[] = [];
+  const hrefs: string[] = [];
+  let registered = false;
+  let refreshed = false;
+  const rt = {
+    getModelOfType: () => (registered && refreshed ? MODEL : undefined),
+    classify: async () => ({}),
+    registerNativeProvider: (p: unknown) => {
+      assert.equal(p, PROVIDER_OBJ);
+      registered = true;
+      calls.push("register");
+    },
+    refresh: async (o: unknown) => {
+      assert.deepEqual(o, { providers: ["llama.cpp"], allowNetwork: false });
+      refreshed = true;
+      calls.push("refresh");
+    },
+  };
+  const io: PiRuntimeIo = {
+    readText: (path) => {
+      assert.equal(path, `${agentDir}/install/current-version`);
+      return "1.3.0\n";
+    },
+    importModule: async (href) => {
+      hrefs.push(href);
+      if (hrefs.length === 1) {
+        return {
+          ModelRuntime: {
+            create: async (opts: unknown) => {
+              assert.deepEqual(opts, { allowModelNetwork: false });
+              calls.push("create");
+              return rt;
+            },
+          },
+        };
+      }
+      return { createLlamaProvider: () => ({ provider: PROVIDER_OBJ }) };
+    },
+  };
+  return { io, calls, hrefs };
+}
+
+test("piRuntime registers the llama.cpp provider and refreshes it offline before returning", async () => {
+  const { io, calls } = fakeIo();
+  const rt = await piRuntime({ PI_CODING_AGENT_DIR: "/agent" }, io);
+  assert.ok(rt.getModelOfType("classifier", "llama.cpp", "kev-4b"));
+  assert.deepEqual(calls, ["create", "register", "refresh"]);
+});
+
+test("piRuntime imports the llama provider from dist/extensions/llama of the pi release", async () => {
+  const { io, hrefs } = fakeIo();
+  await piRuntime({ PI_CODING_AGENT_DIR: "/agent" }, io);
+  assert.equal(hrefs[1], "file:///agent/install/releases/1.3.0/node_modules/@earendil-works/pi-coding-agent/dist/extensions/llama/provider.js");
+});
+
+test("piRuntime fails loud when PI_CODING_AGENT_DIR is unset", async () => {
+  const { io } = fakeIo();
+  await assert.rejects(piRuntime({}, io), /PI_CODING_AGENT_DIR/);
+});
+
+// ---- fetch fallback ----
+
+const enc = (t: string) => new TextEncoder().encode(t);
+const unreachable = (code: string, depth = 1) => {
+  let cause: object = { code };
+  for (let i = 1; i < depth; i++) cause = { cause };
+  return Object.assign(new TypeError("fetch failed"), { cause });
+};
+function harness(opts: { err?: unknown; stdout?: string; curlFails?: boolean; platform?: string; response?: Response }) {
+  const curlCalls: { args: string[]; opts: { input?: Uint8Array; signal?: AbortSignal } }[] = [];
+  const fakeFetch = (async () => {
+    if (opts.response) return opts.response;
+    throw opts.err;
+  }) as unknown as typeof fetch;
+  const curl: CurlSpawner = async (args, o) => {
+    curlCalls.push({ args, opts: o });
+    if (opts.curlFails) throw new Error("curl exit 7");
+    return enc(opts.stdout ?? "");
+  };
+  const f = createFetchWithCurlFallback({ fetch: fakeFetch, curl, platform: opts.platform ?? "darwin" });
+  return { f, curlCalls };
+}
+const OK200 = 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{"ok":true}';
+
+test("fetch falls back to curl on EHOSTUNREACH on darwin and returns the parsed response", async () => {
+  const { f, curlCalls } = harness({ err: unreachable("EHOSTUNREACH"), stdout: OK200 });
+  const res = await f("http://ollama.lab/v1/x");
+  assert.deepEqual(await res.json(), { ok: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/json");
+  assert.equal(curlCalls.length, 1);
+});
+
+test("fetch fallback passes method, headers, body and the abort signal to curl", async () => {
+  const { f, curlCalls } = harness({ err: unreachable("EHOSTUNREACH"), stdout: OK200 });
+  const controller = new AbortController();
+  await f("http://ollama.lab/v1/x", { method: "POST", headers: { "content-type": "application/json" }, body: '{"a":1}', signal: controller.signal });
+  assert.equal(curlCalls.length, 1);
+  const c = curlCalls[0]!;
+  assert.deepEqual(c.args, ["-sS", "-i", "-X", "POST", "-H", "content-type: application/json", "--data-binary", "@-", "http://ollama.lab/v1/x"]);
+  assert.equal(new TextDecoder().decode(c.opts.input), '{"a":1}');
+  assert.equal(c.opts.signal?.aborted, false);
+  controller.abort();
+  assert.equal(c.opts.signal?.aborted, true);
+});
+
+test("fetch fallback also falls back on ENETUNREACH nested in the cause chain", async () => {
+  const { f, curlCalls } = harness({ err: unreachable("ENETUNREACH", 2), stdout: OK200 });
+  const res = await f("http://ollama.lab/v1/x");
+  assert.equal(res.status, 200);
+  assert.equal(curlCalls.length, 1);
+});
+
+test("fetch fallback skips curl and rethrows the original error off darwin", async () => {
+  const err = unreachable("EHOSTUNREACH");
+  const { f, curlCalls } = harness({ err, platform: "linux" });
+  await assert.rejects(f("http://ollama.lab/v1/x"), (e) => e === err);
+  assert.equal(curlCalls.length, 0);
+});
+
+test("fetch fallback rethrows other errors without curl", async () => {
+  const err = unreachable("ECONNREFUSED");
+  const { f, curlCalls } = harness({ err });
+  await assert.rejects(f("http://ollama.lab/v1/x"), (e) => e === err);
+  assert.equal(curlCalls.length, 0);
+});
+
+test("fetch fallback rethrows the original fetch error when curl fails", async () => {
+  const err = unreachable("EHOSTUNREACH");
+  const { f } = harness({ err, curlFails: true });
+  await assert.rejects(f("http://ollama.lab/v1/x"), (e) => e === err);
+});
+
+test("fetch fallback returns the real response untouched when fetch succeeds", async () => {
+  const response = new Response("hi");
+  const { f, curlCalls } = harness({ response });
+  assert.equal(await f("http://ollama.lab/v1/x"), response);
+  assert.equal(curlCalls.length, 0);
+});
+
+test("fetch fallback skips interim 100 Continue blocks and keeps the last status", async () => {
+  const { f } = harness({ err: unreachable("EHOSTUNREACH"), stdout: "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 404 Not Found\r\nx-a: b\r\n\r\nnope" });
+  const res = await f("http://ollama.lab/v1/x");
+  assert.equal(res.status, 404);
+  assert.equal(res.statusText, "Not Found");
+  assert.equal(res.headers.get("x-a"), "b");
+  assert.equal(await res.text(), "nope");
 });

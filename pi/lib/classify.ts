@@ -125,7 +125,22 @@ export async function main(deps: ClassifyDeps): Promise<number> {
 }
 
 /** pi's `ModelRuntime`, for the release of `PI_CODING_AGENT_DIR` (as `pi/lib/models-list.ts`). */
-async function piRuntime(env: NodeJS.ProcessEnv): Promise<ClassifyRuntime> {
+export interface PiRuntimeIo {
+  readText(path: string): string;
+  importModule(href: string): Promise<any>;
+}
+export type CurlSpawner = (args: string[], opts: { input?: Uint8Array; signal?: AbortSignal }) => Promise<Uint8Array>;
+
+export function createFetchWithCurlFallback(_deps: { fetch: typeof fetch; curl: CurlSpawner; platform: string }): typeof fetch {
+  throw new Error("not implemented");
+}
+
+export function installCurlFallback(): void {
+  throw new Error("not implemented");
+}
+
+export async function piRuntime(env: NodeJS.ProcessEnv, io?: PiRuntimeIo): Promise<ClassifyRuntime> {
+  if (io) throw new Error("not implemented");
   const agentDir = env.PI_CODING_AGENT_DIR;
   if (!agentDir) throw new Error("PI_CODING_AGENT_DIR is not set: it names the agent directory of the pi release.");
   const piVersion = readFileSync(join(agentDir, "install", "current-version"), "utf8").split("\n")[0]!.trim();
