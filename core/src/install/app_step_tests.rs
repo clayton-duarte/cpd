@@ -61,6 +61,8 @@ impl Rig {
         }
         fs::create_dir_all(cpd_home.join("run")).unwrap();
         fs::write(root.join("pi/package.json"), "{}\n").unwrap();
+        fs::create_dir_all(root.join("web")).unwrap();
+        fs::write(root.join("web/package.json"), "{}\n").unwrap();
         let built = target_dir.join("release/cpd");
         fs::write(&built, "built cpd\n").unwrap();
         fs::set_permissions(&built, fs::Permissions::from_mode(0o700)).unwrap();
@@ -238,4 +240,18 @@ fn install_reports_a_failed_electron_build_and_exits_nonzero() {
     assert!(rig.install.home.join(".local/bin/cpd").is_file());
     assert!(!rig.app_root().exists());
     assert_eq!(rig.fakes.spawn.signals(), vec![]);
+}
+
+#[test]
+fn install_skips_the_electron_step_when_the_checkout_has_no_web_client() {
+    let rig = Rig::new(true);
+    fs::remove_dir_all(rig.install.root.join("web")).unwrap();
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 0, "{stderr}");
+    assert!(
+        stderr.contains("no web client in the checkout: electron step skipped"),
+        "{stderr}"
+    );
+    assert_eq!(rig.argv("pnpm"), Vec::<Vec<String>>::new());
+    assert!(!rig.app_root().exists());
 }

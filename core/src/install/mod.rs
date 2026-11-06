@@ -109,6 +109,10 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
         preview_dir: install.preview_dir.clone(),
         macos: install.macos,
     };
+    if !app.root.join("web/package.json").is_file() {
+        let _ = writeln!(err, "no web client in the checkout: electron step skipped");
+        return false;
+    }
     let mut fail = |part: &str, e: crate::error::CpdError| {
         let _ = writeln!(
             err,
