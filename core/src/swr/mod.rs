@@ -4,6 +4,7 @@ pub mod cache;
 pub mod cmd;
 pub mod endpoint;
 pub mod gc;
+pub mod github;
 pub mod outbox;
 pub mod overlay;
 pub mod source;

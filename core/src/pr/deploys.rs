@@ -113,6 +113,18 @@ pub(super) fn read(runner: &dyn Runner, home: &CpdHome, polled_at: &str) -> Resu
     failure.map_or(Ok(()), Err)
 }
 
+/// The delta read of `swr_deploys` (swr-github.md §8): the waiting runs of every declared workflow, filtered by
+/// `swr_viewer.login`, `pending_deployments` only for a run whose `(repo, run_id, updated_at)` is not stored; rows of runs that
+/// are no longer waiting, or whose pull request reads `closed` or `merged`, get `inactive_at` = `now`. A stub until the implementing Job.
+pub fn read_into_store(
+    _runner: &dyn Runner,
+    _store: &mut crate::store::Store,
+    _home: &CpdHome,
+    _now: time::OffsetDateTime,
+) -> Result<(), CpdError> {
+    todo!("pr::deploys::read_into_store")
+}
+
 /// The runs the file holds now; none when it is missing or is not that JSON (the next write replaces it).
 fn previous(path: &Path) -> Vec<Run> {
     let Ok(text) = std::fs::read_to_string(path) else {
