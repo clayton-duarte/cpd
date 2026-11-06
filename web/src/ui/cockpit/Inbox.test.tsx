@@ -402,14 +402,14 @@ it("Inbox header is a TopPaneHeader with an uppercase INBOX label and only the f
   }
 });
 
-it("Inbox header is h-11 and sticky like the other column headers", () => {
+it("Inbox header is h-11 like the other column headers", () => {
   const m = render(mixed());
   try {
     const h = hdr(m.container);
-    for (const c of ["sticky", "top-0", "z-10", "flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
+    for (const c of ["flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
       expect(h?.classList.contains(c)).toBe(true);
     }
-    expect(h?.classList.contains("h-8")).toBe(false);
+    for (const c of ["sticky", "top-0", "z-10", "h-8"]) expect(h?.classList.contains(c)).toBe(false);
   } finally {
     m.unmount();
   }

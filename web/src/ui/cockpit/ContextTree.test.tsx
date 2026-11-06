@@ -1141,12 +1141,14 @@ it("ContextTree header has no New context button without onNewContext", () => {
   m.unmount();
 });
 
-it("ContextTree header is h-11 and sticky like the other column headers", () => {
+it("ContextTree header is h-11 like the other column headers", () => {
   const m = mount(<ContextTree {...props({ onNewContext: vi.fn() })} />);
   const h = treeHeader(m.container);
-  for (const c of ["sticky", "top-0", "z-10", "flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
+  for (const c of ["flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
     expect(h?.classList.contains(c), c).toBe(true);
   }
+  expect(h?.classList.contains("sticky")).toBe(false);
+  for (const c of ["top-0", "z-10"]) expect(h?.classList.contains(c), c).toBe(false);
   m.unmount();
 });
 
