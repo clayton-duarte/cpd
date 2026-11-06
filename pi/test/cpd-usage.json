@@ -1636,6 +1636,17 @@
     },
     "required": []
   },
+  "swr health record": {
+    "flags": {
+      "--help": false,
+      "--text": true
+    },
+    "positionals": {
+      "max": 3,
+      "min": 3
+    },
+    "required": []
+  },
   "swr invalidate": {
     "flags": {
       "--help": false
