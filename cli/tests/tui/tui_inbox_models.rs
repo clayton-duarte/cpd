@@ -5,8 +5,6 @@
 
 use crate::common;
 
-use std::fs;
-
 use common::fx::Fx;
 use common::inbox::{
     World, click, condition, frame_with, gone, open, rows, seed, show, show_with, view_fx,
@@ -36,17 +34,17 @@ fn notice() -> Condition {
     }
 }
 
-/// The cache file of the provider, as E15 wrote it: `changes` at `at`.
+/// The `swr_models` row of the provider, as E15 wrote it: `changes` at `at`.
 fn cache(fx: &Fx, at: &str, appeared: &[&str], went_away: &[&str]) {
-    let file = json!({
-        "version": 1, "provider": "bifrost", "polled_at": at, "pi_version": "1.3.0",
+    let catalog = json!({
+        "pi_version": "1.3.0",
         "source": {"kind": "openai-models", "auth": "custom", "base": null},
-        "ids": ["anthropic/claude-sonnet-5"],
-        "changes": {"at": at, "appeared": appeared, "went_away": went_away}
+        "ids": ["anthropic/claude-sonnet-5"]
     });
-    let run = fx.env.cpd_home().join("run");
-    fs::create_dir_all(&run).unwrap();
-    fs::write(run.join("models-bifrost.json"), file.to_string()).unwrap();
+    let changes = json!({"at": at, "appeared": appeared, "went_away": went_away});
+    fx.env.sql(&format!(
+        "INSERT OR REPLACE INTO swr_models (provider, catalog_json, changes_json, polled_at) VALUES ('bifrost', '{catalog}', '{changes}', '{at}');"
+    ));
 }
 
 /// The store with the notice open (opened 330 s ago), the engine's lock held, a cockpit with a client, and the fake `cpd`.

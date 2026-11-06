@@ -178,14 +178,9 @@ pub fn models_body(
     at: &str,
 ) -> Result<String, cpd_core::error::CpdError> {
     use cpd_core::inbox::models::announced;
-    use cpd_core::models::Read;
-    let file = cpd_core::models::read_all(home)?
-        .into_iter()
-        .find_map(|r| match r {
-            Read::Good(f) if f.provider == provider => Some(f),
-            _ => None,
-        });
-    let Some(changes) = file.and_then(|f| f.changes).filter(|c| c.at == at) else {
+    let mut store = cpd_core::store::Store::open(home, 5000)?;
+    let changes = cpd_core::swr::source::models::changes_of(&mut store, provider)?;
+    let Some(changes) = changes.filter(|c| c.at == at) else {
         return Ok("changed again; the item closes at the next tick".to_owned());
     };
     let (new, gone) = announced(provider, &changes);

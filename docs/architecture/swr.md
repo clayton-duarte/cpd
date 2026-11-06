@@ -31,7 +31,7 @@ flowchart LR
   end
 
   DB[("cpd.db: swr_* tables")]
-  POLL["engine poller: E24 (E5 for github)"]
+  POLL["engine poller: E24 (E5 for github, E15 for models)"]
   SRC["Source trait: source/{github,slack,jira,models}.rs"]
   UP["upstream: gh, node helpers, Atlassian, providers"]
 
@@ -450,7 +450,7 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 
 ## 12. The engine step E24 and gc
 
-Step E24 (contract §4.7) runs every tick. It runs every source **except `github`**, which E5's own thread already runs through the same trait. For each source it:
+Step E24 (contract §4.7) runs every tick. It runs every source **except `github`** and **`models`**: E5's own thread runs `github` through the same trait, and E15 runs `models` through it (`swr-models.md` §1, §3). For each source it:
 
 1. skips the source while any of its endpoints is paused (`is_paused`);
 2. calls `fetch` for the keys `due` returns;
@@ -481,7 +481,7 @@ No `swr` command reads upstream. A write command is `cpd`'s `enqueue` (A6), whic
 | `github` | `github.rs` | `docs/architecture/swr-github.md` | `swr_queries`, `swr_repos`, `swr_viewer`, `swr_pr_detail`, `swr_deploys`, `gh_issues`, and the raw `pull_requests` | `github` | `github:pr:owner/repo#12`, `github:repo:owner/repo` | `merge`, `auto_merge` |
 | `slack` | `slack.rs` | `docs/architecture/swr-slack.md` | `swr_slack_posts` | `slack` | `slack:channel:C123` | `reaction` (dedupe on `(channel, ts, emoji)`), `post` |
 | `jira` | `jira.rs` | `docs/architecture/swr-jira.md` | `swr_jira_issues`, `swr_atlassian` | `jira` | `jira:issue:EEC-1` | `transition` (`Forward`: `in_progress` < `in_review` < `done`) |
-| `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` | the provider's endpoint, named by its Workflow | `models:provider:openai` | none |
+| `models` | `models.rs` | `docs/architecture/swr-models.md` | `swr_models` (no `swr_queries` row: `swr-models.md` §3.1) | one per provider: `github-copilot`, or the `host:port` of a custom `base` (`swr-models.md` §4) | `models:discovery` (the run) | none |
 | `classifier` (badge) | none in swr-core; the classifier Workflow adds its file | `docs/architecture/swr-classifier.md` | `swr_badges` | `ollama.lab`, `bifrost` | `classifier:badge:<session id>` (the form the classifier Workflow confirms) | none |
 
 Each Workflow writes its design page and nothing else of this one. Until a page exists, its row is the whole specification.
