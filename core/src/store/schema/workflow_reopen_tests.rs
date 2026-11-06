@@ -45,10 +45,18 @@ fn dump(store: &mut Store) -> String {
                 // `pr-archived` (a later migration) adds `pull_requests.archived`: not what this migration touches.
                 // `codereview-followup` (a later migration) adds `plans.pr_subject` and `plans.changes_requested_at`.
                 // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: likewise not touched.
+                // `swr` (a later migration) adds `pull_requests.head_oid` and `gh_updated_at`: likewise.
                 Ok(rows
                     .into_iter()
                     .filter(|n| {
-                        !["archived", "pr_subject", "changes_requested_at"].contains(&n.as_str())
+                        ![
+                            "archived",
+                            "pr_subject",
+                            "changes_requested_at",
+                            "head_oid",
+                            "gh_updated_at",
+                        ]
+                        .contains(&n.as_str())
                             && !n.starts_with("reviewed_")
                             && !n.starts_with("host_")
                     })
