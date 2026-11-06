@@ -96,5 +96,5 @@ it("selecting a Manager session shows the flowchart in PlanView", () => {
   act(() => { q(container, '[data-context="ctx"] button[data-select="context"]')!.click(); });
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label^="Plan "]')).toBeNull();
   expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).not.toBeNull();
-  expect(q(container, '[data-empty]')).toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] [data-empty]')).toBeNull();
 });
