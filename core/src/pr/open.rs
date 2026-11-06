@@ -528,6 +528,7 @@ pub fn record(
     if opened == 0 {
         return Ok(None);
     }
+    crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "in_review")?;
     if pulled.merged {
         let merged = tx.execute(
             "UPDATE workflows SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND key = ?2 AND status = 'open'",

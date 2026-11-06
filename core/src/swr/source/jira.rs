@@ -157,7 +157,9 @@ pub fn enqueue_for_workflow(
 
 /// A ticket was set on the Workflow (swr-jira.md §7): each of its `pending` rows that has no ticket, or another one, is
 /// enqueued again under the ticket, in rank order, with the Forward rule, and the old rows are `superseded`. Today's
-/// queue reads the Workflow's ticket when a row runs, so a row follows a changed ticket as well.
+/// queue reads the Workflow's ticket when a row runs, so a row follows a changed ticket as well. The target of the
+/// Workflow's current status is enqueued too (merged: `done`; open: `in_review`; dispatch with a started Job, one with an
+/// Attempt: `in_progress`; waiting, cancelled: none); the Forward rule makes an already-covered target a no-op.
 pub fn adopt_ticket(
     tx: &WriteTxn<'_>,
     plan: &str,
@@ -189,6 +191,37 @@ pub fn adopt_ticket(
         tx.execute(
             "UPDATE swr_mutations SET status = 'superseded' WHERE id = ?1",
             [id],
+        )?;
+    }
+    let status: Option<String> = tx
+        .query_row(
+            "SELECT status FROM workflows WHERE plan = ?1 AND key = ?2",
+            [plan, workflow],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let target = match status.as_deref() {
+        Some("merged") => Some("done"),
+        Some("open") => Some("in_review"),
+        Some("dispatch") => {
+            let started: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+                   WHERE j.plan = ?1 AND j.workflow = ?2)",
+                [plan, workflow],
+                |r| r.get(0),
+            )?;
+            started.then_some("in_progress")
+        }
+        _ => None,
+    };
+    if let Some(target) = target {
+        enqueue_transition_tx(
+            tx,
+            now,
+            ticket,
+            target,
+            None,
+            json!({"plan": plan, "workflow": workflow}),
         )?;
     }
     Ok(())
