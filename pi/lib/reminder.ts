@@ -101,10 +101,27 @@ export function unaddressedFailedJobs(show: Record<string, unknown>): { key: str
 export const failedJobReminderText = (keys: string[]): string =>
   `cpd reminder: failed Job(s) ${keys.join(", ")} still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason "<why>" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.`;
 
-/** STUB (red tests): the open Workflows whose pull request is failing or conflicting and that have no queued or running Job. */
-export function unaddressedFailingWorkflows(_show: Record<string, unknown>): { key: string }[] {
-  return [];
+/** The open Workflows of `cpd plan show` whose pull request has failed checks or a conflict and that have no queued or running Job, sorted by key. A shape that is not the documented one is an error. */
+export function unaddressedFailingWorkflows(show: Record<string, unknown>): { key: string }[] {
+  const workflows = show.workflows;
+  if (!Array.isArray(workflows)) throw new CpdError("bad_output", "cpd plan show: `workflows` is not a list");
+  const jobs = show.jobs;
+  if (!Array.isArray(jobs)) throw new CpdError("bad_output", "cpd plan show: `jobs` is not a list");
+  const active = new Set<string>();
+  for (const j of jobs) if (isObject(j) && typeof j.key === "string" && (j.status === "queued" || j.status === "running")) active.add(j.key);
+  const out: { key: string }[] = [];
+  for (const w of workflows) {
+    if (!isObject(w) || w.status !== "open") continue;
+    if (typeof w.key !== "string") throw new CpdError("bad_output", "cpd plan show: an open entry of `workflows` has no key");
+    if (!Array.isArray(w.jobs) || !w.jobs.every((k) => typeof k === "string")) throw new CpdError("bad_output", `cpd plan show: \`jobs\` of Workflow ${w.key} is not a list of keys`);
+    const pull = w.pull_request;
+    if (!isObject(pull) || (pull.checks !== "failed" && pull.mergeable !== "conflicting")) continue;
+    if ((w.jobs as string[]).some((k) => active.has(k))) continue;
+    out.push({ key: w.key });
+  }
+  return out.toSorted((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
 }
 
-/** STUB (red tests): the failing-Workflow reminder text. */
-export const failingWorkflowReminderText = (_keys: string[]): string => "";
+/** The failing-Workflow reminder text. */
+export const failingWorkflowReminderText = (keys: string[]): string =>
+  `cpd reminder: Workflow(s) ${keys.join(", ")} have a failing or conflicting pull request and no Job queued or running for it. Every Workflow PR must pass CI on its own: queue a fix Job now (cpd job add <k> --title "<title>" --tier <T> --spec <file> --workflow <key>), retry (cpd job retry <k> --tier <T>), or ask_user_question when the choice is the User's, in this turn. Never leave it waiting on another Workflow.`;

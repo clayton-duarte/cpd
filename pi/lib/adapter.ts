@@ -17,6 +17,7 @@ import { installHint } from "./hint.ts";
 import { installQuitMarker } from "./quit.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { electronBypass, reasonText as electronReasonText } from "./electronguard.ts";
 import { externalBlock } from "./externalguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { RENDERED_TYPES } from "./render.ts";
@@ -91,6 +92,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
       const secret = secretBypass((event.input as { command: string }).command);
       if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const electron = electronBypass((event.input as { command: string }).command);
+      if (electron !== undefined) return { block: true, reason: electronReasonText(electron) };
       const hostApprove = hostApproveBypass((event.input as { command: string }).command);
       if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }

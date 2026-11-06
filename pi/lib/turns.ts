@@ -2,7 +2,7 @@ import { toCpdError } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, Message } from "./pi.ts";
 import { FOLLOW_UP, send } from "./delivery.ts";
-import { failedJobReminderText, lastAssistantText, needsReminder, planKeys, unaddressedFailedJobs, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
+import { failedJobReminderText, failingWorkflowReminderText, unaddressedFailingWorkflows, lastAssistantText, needsReminder, planKeys, unaddressedFailedJobs, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import type { Run } from "./run.ts";
 import { closedPrLines, contextCursorFrom, contextUpdate, type ErrorEvent, leadUpdate, parseErrorEvents, parsePending, parsePlanEvents, parsePrOpened, parseRecordEvents, parseRecords, parseTaken, PLAN_KINDS } from "./updates.ts";
 
@@ -118,6 +118,16 @@ export function registerReminderCheck(host: Host): void {
           r.failedReminded = print;
           const keys = failed.map((f) => f.key);
           send(host, r, { customType: REMINDER_TYPE, content: failedJobReminderText(keys), display: false, details: { rule: "failed-job-disposition", jobs: keys } }, FOLLOW_UP(true));
+        }
+      }
+      const failing = unaddressedFailingWorkflows(show);
+      if (failing.length === 0) r.failingReminded = "";
+      else if (!r.facts.isBlocked()) {
+        const keys = failing.map((w) => w.key);
+        const print = keys.join(",");
+        if (print !== r.failingReminded) {
+          r.failingReminded = print;
+          send(host, r, { customType: REMINDER_TYPE, content: failingWorkflowReminderText(keys), display: false, details: { rule: "failing-workflow-disposition", workflows: keys } }, FOLLOW_UP(true));
         }
       }
       if (!due) return;
