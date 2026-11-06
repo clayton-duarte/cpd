@@ -47,7 +47,9 @@ const plan: PlanViewModel = {
 it("renders workflows with their jobs and statuses", () => {
   const onAction = vi.fn();
   const m = mount(<PlanView plan={plan} onAction={onAction} />);
-  expect(m.container.querySelector('section[aria-label="Plan p1"] h2')?.textContent).toContain("Web UI");
+  const key = m.container.querySelector('section[aria-label="Plan p1"] h2[data-part="plan-key"]');
+  expect(key?.getAttribute("title")).toBe("Web UI");
+  expect(key?.textContent).toBe("p1");
   expect(m.container.textContent).toContain("Review r1: approved");
   const wf = m.container.querySelector('section[data-workflow="wf-a"]');
   expect(wf?.textContent).toContain("main");
