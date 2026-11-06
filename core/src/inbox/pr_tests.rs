@@ -245,28 +245,35 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
             cases.push((false, Some((kind, status)), false));
         }
     }
+    // One store for every case (workflows are append-only): each case gets its own PR number
+    // and Workflow, and only that PR's row is read.
+    let mut f = fixture();
+    let mut next = 0;
+    let mut reset = |f: &mut Fx, set: &str, owned: bool, working: bool| -> i64 {
+        next += 1;
+        f.sql(&format!(
+            "UPDATE sessions SET state = '{}' WHERE id = 'l-pay'",
+            if working { "working" } else { "idle" }
+        ));
+        f.workflow(next, set);
+        if owned {
+            f.own("pay", next);
+        }
+        next
+    };
     for (set, red, white) in broken {
         for &(working, job, handled) in &cases {
-            let mut f = fixture();
-            f.workflow(1, set);
-            f.own("pay", 1);
-            if !working {
-                f.idle();
-            }
+            let n = reset(&mut f, set, true, working);
             if let Some((kind, status)) = job {
-                f.job(1, "j1", kind, status);
+                f.job(n, &format!("j{n}"), kind, status);
             }
             let expected = if handled { (White, white) } else { (Red, red) };
-            is(&mut f, 1, expected.0, expected.1);
+            is(&mut f, n, expected.0, expected.1);
         }
-        let mut f = fixture();
-        f.workflow(1, set);
-        f.own("pay", 1);
-        f.idle();
-        is(&mut f, 1, Red, red);
-        let mut f = fixture();
-        f.workflow(1, set);
-        is(&mut f, 1, Red, red); // unowned
+        let n = reset(&mut f, set, true, false);
+        is(&mut f, n, Red, red);
+        let n = reset(&mut f, set, false, true);
+        is(&mut f, n, Red, red); // unowned
     }
 }
 
