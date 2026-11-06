@@ -147,7 +147,7 @@ export interface AssistantItem {
   readonly kind: "assistant";
   readonly id: ItemId;
   readonly at?: string;
-  readonly blocks: readonly AssistantBlock[]; // order of the message `content`; toolCall blocks are NOT blocks (they are ToolItems). A message with no text or thinking block yields NO AssistantItem, only its ToolItems.
+  readonly blocks: readonly AssistantBlock[]; // order of the message `content`; toolCall blocks are NOT blocks (they are ToolItems). A `thinking` block whose `thinking` is "" is dropped (jsonl). A non-empty string `errorMessage` appends the text block `{ type: "text", text: "Error: " + errorMessage }` after the content blocks (pro-d435; jsonl, live `message_end`, durable `blocksOf`). A message with no text or thinking block and no non-empty `errorMessage` yields NO AssistantItem, only its ToolItems.
   readonly streaming: boolean; // true only while a durable run streams this message
   readonly model?: string; // message.model when present
 }
@@ -1162,7 +1162,7 @@ export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }
 **Live tail (`docs['pi.live']`; `live.d.ts` `LiveState`, verified by reading).** The live tail is the list of items that are not yet entries. It is recomputed from each new value; a live item is identified by its id `live:<n>`, `n` counting from 1 per attachment.
 
 - **L1 busy.** `busy` is `docs['pi.live'].run !== undefined` (live-check run: present while a run is open, absent after its end, verified).
-- **L2 message.** `M = docs['pi.live'].generation?.message` (AssistantMessage JSON). When `M` holds a `text` or `thinking` block and no live item exists, a live assistant item is created: id `live:<n>`, `streaming: true`, `blocks` = the `text` and `thinking` blocks of `M.content` in order (`text` block: its `text`; `thinking` block: its `thinking`), appended at the end of the tail. A message with no text or thinking block yields no live assistant item (as a `pi.assistant` entry does). Each `toolCall` block of `M.content` yields a running ToolItem `tool:<block.id>` (`name`, `args` = `block.arguments` when it is an object, else `{}`), created in `append`; its `args` is refreshed in `update` only while the item has no result. Argument appends (`arguments` or `partialJson` paths) are not read: the complete arguments arrive with the entry (**unverified**, O21).
+- **L2 message.** `M = docs['pi.live'].generation?.message` (AssistantMessage JSON). When `M` holds a `text` or `thinking` block, or a non-empty string `M.errorMessage`, and no live item exists, a live assistant item is created: id `live:<n>`, `streaming: true`, `blocks` = the `text` and `thinking` blocks of `M.content` in order (`text` block: its `text`; `thinking` block: its `thinking`), then, when `M.errorMessage` is a non-empty string, the text block `"Error: " + M.errorMessage`; appended at the end of the tail. A message with neither yields no live assistant item (as a `pi.assistant` entry does). Each `toolCall` block of `M.content` yields a running ToolItem `tool:<block.id>` (`name`, `args` = `block.arguments` when it is an object, else `{}`), created in `append`; its `args` is refreshed in `update` only while the item has no result. Argument appends (`arguments` or `partialJson` paths) are not read: the complete arguments arrive with the entry (**unverified**, O21).
 - **L3 finalise.** When `M` is absent and a live item exists, the item is finalised: `streaming: false`, `update`, and it leaves the live state (it stays in the tail as a plain item). This happens after L4 in the same batch.
 - **L4 entry replaces live.** A `pi.assistant` entry merged in this batch (step 5) takes the place of the live assistant item when one exists: its assistant item keeps the live id (`live:<n>`, not `a:<id>`), `streaming: false`, and goes to `update`; the entry's tool items take the ids `tool:<callId>` of the live tool items they match (`update` when present, else `append`). The live state is then cleared. Without a live item, the entry is normalised as an ordinary `pi.assistant` entry (`a:<id>`, `append`).
 - **L5 tool slots.** `docs['pi.live'].tools` (absent: `[]`) is read per slot by `callId`; a slot `status` outside `pending|running|done` is `protocol_error`.
@@ -1186,7 +1186,7 @@ export function dialogFromRequest(req: Extract<HostFrame, { type: "ui_request" }
 | kind | Result |
 |---|---|
 | `pi.user` | `UserItem` (`u:<id>`) from `model[0]` (`UserMessage`: `content` string, or `TextContent`/`ImageContent` blocks; text blocks joined with `"\n"`, image blocks → `TranscriptAttachment {kind:"image", mimeType, dataBase64}`) |
-| `pi.assistant` | `AssistantItem` (`a:<id>`, `streaming:false`, or the live id under L4) from `model[0]` (`AssistantMessage`): `text` → text block, `thinking` → thinking block (kept separate, in order), `toolCall` → a `ToolItem` (`tool:<callId>`, `args = arguments`, `status:"running"`, unless the item already has a result) appended right after the assistant item; `model` → `AssistantItem.model`. `usage` is read by the facts rules, not here. |
+| `pi.assistant` | `AssistantItem` (`a:<id>`, `streaming:false`, or the live id under L4) from `model[0]` (`AssistantMessage`): `text` → text block, `thinking` → thinking block (kept separate, in order), a non-empty string `errorMessage` → a final text block `"Error: " + errorMessage` (pro-d435), `toolCall` → a `ToolItem` (`tool:<callId>`, `args = arguments`, `status:"running"`, unless the item already has a result) appended right after the assistant item; `model` → `AssistantItem.model`. `usage` is read by the facts rules, not here. |
 | `pi.tool-result` | pairs by `callId` (rule T): `result {text, isError, durationMs}`, `status`, and `diff` from `details.patch ?? details.diff` for `name === "edit"` (strings only; O3) |
 | `pi.compaction` | `CompactionItem` (`c:<id>`), `summary` = text of `model[0]` |
 | `pi.system`, `pi.reset` | dropped |
@@ -1274,7 +1274,7 @@ export interface PushResult { added: TranscriptItem[]; updated: TranscriptItem[]
 export interface PiNormalizer { push(text: string, at: LinePosition): PushResult; readonly facts: JsonlFacts }
 export function createNormalizer(): PiNormalizer; // stateful: remembers tool calls (by callId), the last cpd_plan_review title, the cpd-plan-summary bodies by review id (`details.review`), pending ask_user_question calls and pending plan reviews
 export function normalizeText(text: string): { items: TranscriptItem[]; facts: JsonlFacts; openDialogs: Dialog[] }; // whole text, "\n"-separated lines numbered from 1; blank lines are skipped; applies `updated` into the item list by id
-export function countItems(entry: JsonlEntry): number; // items the entry adds in isolation: user/assistant(with text|thinking blocks)/tool calls/fold/compaction; toolResult, system, header and bookkeeping lines count 0
+export function countItems(entry: JsonlEntry): number; // items the entry adds in isolation: user/assistant (one item when it has a text or thinking block, or a non-empty string `errorMessage`, even when its content holds no non-empty text or thinking block; see pro-d435)/tool calls/fold/compaction; toolResult, system, header and bookkeeping lines count 0
 ```
 
 Line mapping (`type` of the entry; sample `scout-pi §1`):
@@ -1287,7 +1287,7 @@ Line mapping (`type` of the entry; sample `scout-pi §1`):
 | `thinking_level_change` | `facts.thinking = thinkingLevel`; `factsChanged` |
 | `message` role `system` | ignored (not a chat turn, scout-pi §1) |
 | `message` role `user` | `UserItem` `u:<id>` (`content` blocks as in 6.4: text joined `"\n"`, image blocks -> attachments; `[Attached image: <path>]` lines are split out, 11.3); `at` = `timestamp` (a number is converted to ISO) or the message's own `timestamp` |
-| `message` role `assistant` | `AssistantItem` `a:<id>` when it has a `text`/`thinking` block (blocks in order; `model`), then one `ToolItem` `tool:<toolCall.id>` per `toolCall` block (`args = arguments`, `status:"running"`) in `added`; `facts.lastRole/lastStopReason` |
+| `message` role `assistant` | `AssistantItem` `a:<id>` when it has a `text`/`thinking` block or a non-empty string `errorMessage` (blocks in order, empty `thinking` dropped, the `Error: <errorMessage>` text block last; `model`), then one `ToolItem` `tool:<toolCall.id>` per `toolCall` block (`args = arguments`, `status:"running"`) in `added`; `facts.lastRole/lastStopReason` |
 | `message` role `toolResult` | the `ToolItem` with `callId === toolCallId`: replaced with `result {text, isError, durationMs}`, `status`, and (`name === "edit"`) `diff = details.patch ?? details.diff` (strings only), listed in `updated`; when no call was seen by this normalizer -> `OrphanResultItem` `orphan:<toolCallId>` (`name = toolName`) in `added`. Resolves a pending `ask_user_question` dialog `call:<id>` (`dialogsResolved`) |
 | `custom_message` | fold per 3.3: `customType` in the four fold kinds and `display !== false` -> `FoldItem` `f:<id>` (`body` = `content` string or its text blocks; `details` as in 3.3); `display === false`, `cpd-first-message`, `cpd-reminder` and every other `customType` -> dropped. Line fields unverified in a real file (O1) |
 | `compaction` | `CompactionItem` `c:<id>` with `summary` (string) and `tokensBefore` (number, optional). Shape unverified (O2); a line without a string `summary` -> `malformed_line` |
@@ -1922,7 +1922,7 @@ Normative for `web/src/server/pi/live.ts` (new), `web/src/server/pi/backend.ts`,
 
 | Item | Id | Fields | Made by |
 |---|---|---|---|
-| live assistant | `live:<message.timestamp>` | `streaming` true while open, false after `message_end` when it has text or thinking; `model` = `message.model` when present | `message_start` (assistant), or the `inflight` message |
+| live assistant | `live:<message.timestamp>` | `streaming` true while open, false after `message_end` when it has text or thinking or a non-empty `errorMessage`; `model` = `message.model` when present | `message_start` (assistant), or the `inflight` message |
 | live tool | `tool:<toolCallId>` | the same id as the committed tool item of the call (`jsonl.ts:246`, `tool:<callId>`), so the committed item replaces it | `tool_start`, or an `inflight` tool |
 | committed assistant | `a:<entry id>` (`jsonl.ts:239`) | `streaming` false | the `.jsonl` tailer |
 | committed tool | `tool:<callId>` | | the `.jsonl` tailer |
@@ -1953,8 +1953,8 @@ Terms. `T` is the `message.timestamp` of the **open** message. The open message 
 | `tool_start` | | `session.append` `ToolItem` `tool:<toolCallId>`: `status` running, `name` = `toolName`, `args`, `callId` | the name and args are kept for the later updates |
 | `tool_update` | | `session.update` `ToolItem` with the kept name and args, `result` `{text, isError: false}`, `status` running | none |
 | `tool_end` | | `session.update` `ToolItem` with the kept name and args, `result` `{text, isError}`, `status` `done` (isError false) or `failed` (isError true) | none |
-| `message_end` | role assistant, T not committed, a text or thinking block in `message.content` | `session.update` `AssistantItem` `live:T`: `blocks` = the final text and thinking blocks, `streaming: false` | open cleared |
-| `message_end` | role assistant, T not committed, no text or thinking block | `session.remove` `live:T` (the rule of `domain.ts:53`) | open cleared |
+| `message_end` | role assistant, T not committed, a text or thinking block in `message.content`, or a non-empty string `message.errorMessage` | `session.update` `AssistantItem` `live:T`: `blocks` = the final text and thinking blocks, then the text block `"Error: " + errorMessage` when `errorMessage` is a non-empty string, `streaming: false` | open cleared |
+| `message_end` | role assistant, T not committed, no text or thinking block and no non-empty `message.errorMessage` | `session.remove` `live:T` (the rule of `domain.ts:53`) | open cleared |
 | `message_end` | role assistant, T committed | none | open cleared |
 | `message_end` | role `user` or `toolResult` | none | none |
 | `.jsonl` tailer | assistant line with T, committed | `session.remove` `live:T`, then `session.append` of `a:<entry id>` when the line yields an `AssistantItem` (12.4, rule 3) | none (committed) |
