@@ -241,7 +241,7 @@ fn settle_done_leaves_a_plan_in_phase_plan_alone() {
     let rig = merged_in("deploy");
     job(&rig, "api", "api-fix", "merged");
     // A re-planned Plan: phase plan, locked_at kept (pro-d433).
-    rig.sql("DROP TRIGGER plans_phase; UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
+    rig.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
     let before = full_state(&rig);
     assert_eq!(before.0, "plan");
 
