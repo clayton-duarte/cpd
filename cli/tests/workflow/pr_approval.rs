@@ -246,13 +246,14 @@ fn assert_approval_required(run: &Run, kind: &str, to: Option<&str>) {
 /// An agent's reply to `to` is refused and leaves everything as it was.
 fn assert_reply_refused(pay: &Pay, session: &str, to: &str) {
     let calls = pay.fx.calls("gh").len();
+    let posted = mutations(pay);
     let stored = feedback(pay);
 
     let run = reply(pay, session, to);
 
     assert_approval_required(&run, "reply", Some(to));
     assert_eq!(pay.fx.calls("gh").len(), calls, "no GitHub call for {to}");
-    assert!(mutations(pay).is_empty(), "nothing is posted for {to}");
+    assert_eq!(mutations(pay), posted, "nothing is posted for {to}");
     assert_eq!(feedback(pay), stored, "the stored list is unchanged");
 }
 
