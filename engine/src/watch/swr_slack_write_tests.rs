@@ -137,3 +137,54 @@ fn slack_refused_reaction_parks_with_one_error_event() {
         1
     );
 }
+
+/// The old E17 `incident_mode_holds_the_step`, for E24: incident mode holds the drain and the Slack fetch, so the queued
+/// reaction stays queued and no Slack call is made; the next tick after the incident ends drains it.
+#[test]
+fn incident_mode_holds_the_drain_until_it_ends() {
+    let (mut fx, _fakes, reacts) = fx();
+    fx.engine
+        .store
+        .write("incident on", |tx| {
+            Ok(tx.execute_batch(
+                "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, 't', 'mgr', 'why', cpd_txn())",
+            )?)
+        })
+        .unwrap();
+
+    swr::run(&mut fx.engine);
+
+    assert!(
+        reacts.lock().unwrap().is_empty(),
+        "no reaction is sent under incident mode"
+    );
+    let status: String = fx
+        .engine
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status FROM swr_mutations WHERE op_kind = 'reaction'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(status, "pending", "the reaction stays queued");
+    let queries: i64 = fx
+        .engine
+        .store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM swr_queries", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(queries, 0, "the Slack fetch is held too");
+    assert!(fx.events("error").is_empty(), "a hold raises no error");
+
+    fx.engine
+        .store
+        .write("incident end", |tx| {
+            Ok(tx.execute_batch("DELETE FROM incident")?)
+        })
+        .unwrap();
+    swr::run(&mut fx.engine);
+
+    assert_eq!(reacts.lock().unwrap().len(), 1, "the next tick drains it");
+}

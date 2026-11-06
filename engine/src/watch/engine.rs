@@ -318,13 +318,14 @@ impl Engine {
 }
 
 /// Whether incident mode holds `step` machine-wide (contract §3.7): E9 (Context curation), E10 (Session
-/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1, E2, E5,
-/// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
+/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E24 (the SWR
+/// outbox drain and the Slack fetch, which took over E17 and E11's reads) holds too; E1, E2, E5, E8, E12 and E13
+/// run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per Workflow ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
     if !matches!(
         step,
-        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E18 | Step::E19
+        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E18 | Step::E19 | Step::E24
     ) {
         return false;
     }

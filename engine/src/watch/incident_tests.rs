@@ -207,10 +207,11 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
         "E7 starts only the incident Plan's Workflow"
     );
 
-    // E9, E10 and E11 still hold machine-wide; the other steps run.
+    // E9, E10, E11 and E24 (the SWR drain and the Slack fetch) still hold machine-wide; the other steps run.
     assert!(engine::incident_holds(engine, Step::E9), "E9 holds");
     assert!(engine::incident_holds(engine, Step::E10), "E10 holds");
     assert!(engine::incident_holds(engine, Step::E11), "E11 holds");
+    assert!(engine::incident_holds(engine, Step::E24), "E24 holds");
     for step in [
         Step::E1,
         Step::E2,
