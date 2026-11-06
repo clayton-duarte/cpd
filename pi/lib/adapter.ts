@@ -17,6 +17,7 @@ import { installHint } from "./hint.ts";
 import { installQuitMarker } from "./quit.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { externalBlock } from "./externalguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -76,6 +77,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return { block: true, reason: looped };
     const role = host.run?.info.role;
+    if (host.run) {
+      const external = externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
+      if (external !== undefined) return { block: true, reason: external };
+    }
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });

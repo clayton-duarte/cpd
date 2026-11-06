@@ -7,6 +7,7 @@ import { normalizeQuestionParams } from "../ask-user-question/tool/normalize-par
 import { buildQuestionnaireResponse, buildToolResult } from "../ask-user-question/tool/response-envelope.ts";
 import { QuestionParamsSchema, type QuestionParams } from "../ask-user-question/tool/types.ts";
 import { validateQuestionnaire } from "../ask-user-question/tool/validate-questionnaire.ts";
+import { approvalTitle, approveArgv, APPROVED_TEXT, grantOf, KINDS, parseExternal } from "../lib/externalapprove.ts";
 import type * as held from "./held.ts";
 import type { Dialogs } from "./dialogs.ts";
 
@@ -110,6 +111,35 @@ export function registerHostTools(where: RegisterHostToolsWhere): Extension {
           if (choice !== "Allow once") return piResult("The User denied it. Do not try again.");
           await where.cpd(["host", "approve"]);
           return piResult("Approved: run cpd host repair now.");
+        },
+      }),
+      defineTool({
+        name: "cpd_external_approve",
+        replay: "unsafe",
+        callers: ["model"],
+        description:
+          "Ask the User to approve one external write: a PR reply (pr_reply: workflow, to, message), a PR post (pr_post: workflow) or a Slack send (slack_send: channel, message, thread_ts?). pr kinds: Plan Lead only; slack_send: Lead and Manager. One dialog; on Allow once, do the one action now.",
+        parameters: Type.Object(
+          {
+            kind: Type.Union(KINDS.map((k) => Type.Literal(k))),
+            workflow: Type.Optional(Type.String()),
+            to: Type.Optional(Type.String()),
+            channel: Type.Optional(Type.String()),
+            message: Type.Optional(Type.String()),
+            thread_ts: Type.Optional(Type.String()),
+            slack_tool: Type.Optional(Type.Union([Type.Literal("slack_send_message"), Type.Literal("slack_send_message_draft")])),
+            reason: Type.String({ maxLength: 200 }),
+          },
+          { additionalProperties: false },
+        ),
+        async execute(params) {
+          const a = parseExternal(params, where.role, where.role === "lead" && where.plan !== undefined);
+          if ("code" in a) return piResult(`${a.code}: ${a.message}`);
+          const choice = await where.dialogs.select(approvalTitle(where.name, a), ["Allow once", "Deny"], { purpose: "external_approve" });
+          if (choice !== "Allow once") return piResult("The User denied it. Do not try again.");
+          if (a.kind === "slack_send") grantOf(a);
+          else await where.cpd(approveArgv(a));
+          return piResult(APPROVED_TEXT);
         },
       }),
       // Replay-safe: the `plan-review` Event reopens the dialog after a restart (the pending entry survives); the tool itself opens no dialog.
