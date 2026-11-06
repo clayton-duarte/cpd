@@ -1137,3 +1137,48 @@ fn slack_repost_refused_for_a_sign_in_leaves_last_posted_at() {
         "last_posted_at does not move on a failed send"
     );
 }
+
+/// The send of a queued post queues the Jira `in_review` transition in the transaction that writes the `pr_posts` row
+/// (swr-slack.md 4: the Jira row is part of the send's completion, not of the enqueue).
+#[test]
+fn slack_post_send_queues_the_in_review_transition() {
+    let fx = post_fixture();
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+    assert_eq!(
+        fx.count("SELECT count(*) FROM jira_transitions"),
+        0,
+        "nothing is queued at enqueue"
+    );
+
+    assert_eq!(fx.execute(), ExecOutcome::Done);
+
+    assert_eq!(
+        fx.count("SELECT count(*) FROM jira_transitions WHERE plan = 'pay' AND pr = 'api' AND target = 'in_review'"),
+        1,
+        "the in_review row is queued with the pr_posts row"
+    );
+}
+
+/// The send of a queued post runs the Slack helper only: no Jira helper, no Atlassian server.
+#[test]
+fn slack_post_send_runs_only_the_slack_helper() {
+    let fx = post_fixture();
+    let ports = fx.rig.fakes.ports.clone();
+    pr(&ports, &["post", "--plan", "pay", "--workflow", "api"]).expect("queues the post");
+
+    fx.execute();
+
+    let scripts: Vec<String> = fx
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.args[0].rsplit('/').next().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        scripts,
+        ["slack-post.ts"],
+        "node sees only the Slack helper"
+    );
+}

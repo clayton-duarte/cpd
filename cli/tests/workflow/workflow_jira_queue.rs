@@ -58,16 +58,15 @@ fn merging_twice_queues_one_done_row() {
 #[test]
 fn a_post_queues_the_in_review_transition_and_a_refused_post_queues_nothing() {
     let pay = post(Setup::baseline());
-    pay.post_cmd().ok();
+    let out = pay.post_cmd().ok();
     let env = &pay.fx.env;
-    assert_eq!(queue(env), json!([row("pay", "repo", "in_review")]));
+    // The in_review row is written when the send completes, with the pr_posts row (core
+    // swr::source::slack_write_tests::slack_post_send_queues_the_in_review_transition): nothing is queued at enqueue.
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(queue(env), json!([]));
 
     common::refused(&pay.post_cmd(), "already_posted", 3);
-    assert_eq!(
-        queue(env),
-        json!([row("pay", "repo", "in_review")]),
-        "a repeated post queues nothing"
-    );
+    assert_eq!(queue(env), json!([]), "a repeated post queues nothing");
 
     drop(pay); // the harness holds a process-wide lock for a fixture's life
     let unready = post(Setup::baseline());
@@ -90,22 +89,10 @@ fn a_post_succeeds_without_the_atlassian_server_and_never_calls_the_jira_helper(
         "the machine policy names no Atlassian server"
     );
 
-    pay.post_cmd().ok();
+    let out = pay.post_cmd().ok();
 
-    let scripts: Vec<String> = pay
-        .fx
-        .calls("node")
-        .iter()
-        .map(|c| c.args[0].rsplit('/').next().unwrap().to_owned())
-        .collect();
-    assert_eq!(
-        scripts,
-        ["slack-post.ts"],
-        "node sees only the Slack helper"
-    );
-    assert_eq!(
-        queue(&pay.fx.env),
-        json!([row("pay", "repo", "in_review")]),
-        "the row is queued all the same"
-    );
+    // The send and its helper are the outbox's (core swr::source::slack_write_tests::slack_post_send_runs_only_the_slack_helper).
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(pay.fx.calls("node").is_empty(), "nothing is sent yet");
+    assert_eq!(queue(&pay.fx.env), json!([]), "the row waits for the send");
 }
