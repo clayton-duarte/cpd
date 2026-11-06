@@ -282,7 +282,7 @@ const MOVED: &str = r#"{"ok":true,"outcome":"moved","ticket":"EEC-1","target":"i
 
 /// Runs the claimed transition to `in_review` on a helper that answers `MOVED`; returns the rig, the outcome and the helper's calls.
 fn run_moved(rig: &mut Rig) -> (ExecOutcome, Vec<Call>, Mutation) {
-    run_reply(rig, Reply::ok(MOVED))
+    run_reply(rig, Reply::ok(MOVED_WITH_ACCOUNT))
 }
 
 /// `run_moved` with the helper's reply given.
@@ -432,6 +432,7 @@ fn jira_helper_makes_one_get_issue_call_with_fields() {
     assert_eq!(
         keys,
         [
+            "account_id",
             "cloud_id",
             "estimate_fields",
             "later_names",

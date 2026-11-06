@@ -464,7 +464,7 @@ fn settle(
     m: &Mutation,
     ticket: &str,
     answer: &jira::Answer,
-    resolved: bool,
+    cached: (Option<&str>, Option<&str>),
     now: OffsetDateTime,
 ) -> Result<(), CpdError> {
     let at = timestamp(now);
@@ -479,12 +479,16 @@ fn settle(
                estimates_json = excluded.estimates_json, synced_at = excluded.synced_at, inactive_at = NULL",
             params![ticket, answer.cloud_id, answer.summary, answer.status_name, answer.status_category, estimates, at],
         )?;
-        if resolved {
+        if cached.0.is_none() || cached.1.is_none() {
             tx.execute(
                 "INSERT INTO swr_atlassian (id, cloud_id, account_id, fetched_at) VALUES (1, ?1, ?2, ?3)
                  ON CONFLICT (id) DO UPDATE SET cloud_id = excluded.cloud_id, account_id = excluded.account_id,
                    fetched_at = excluded.fetched_at",
-                params![answer.cloud_id, answer.account_id, at],
+                params![
+                    cached.0.unwrap_or(&answer.cloud_id),
+                    cached.1.unwrap_or(&answer.account_id),
+                    at
+                ],
             )?;
         }
         tx.execute(
@@ -649,7 +653,7 @@ impl Jira {
                     m,
                     ticket,
                     &answer,
-                    cloud_id.is_none() || account_id.is_none(),
+                    (cloud_id.as_deref(), account_id.as_deref()),
                     now,
                 )?;
                 endpoint::record_ok(cx.store, "jira", now)?;
