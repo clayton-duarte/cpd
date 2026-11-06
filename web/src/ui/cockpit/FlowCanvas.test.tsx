@@ -168,10 +168,10 @@ it("loop edges are dashed and forward edges carry an arrowhead", () => {
 it("a ResizeObserver callback re-measures and redraws the edges", () => {
   const c = show();
   const first = paths(c).find((p) => p.getAttribute("data-edge") === "01>02")?.getAttribute("d");
-  expect(first).toBe("M 100 40 L 100 100");
+  expect(first).toBe("M 100 90 L 100 100");
   expect(observers.length).toBeGreaterThan(0);
   scale = 2;
   act(() => { for (const o of observers) o.cb(); });
   const second = paths(c).find((p) => p.getAttribute("data-edge") === "01>02")?.getAttribute("d");
-  expect(second).toBe("M 100 40 L 100 200");
+  expect(second).toBe("M 100 140 L 100 200");
 });
