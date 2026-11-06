@@ -9,6 +9,8 @@ use serde_json::json;
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use cpd_core::error::CpdError;
+use cpd_core::events::{self, NewEvent};
+use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::swr::outbox::{self, Retry};
 use cpd_core::swr::source::{self, Cx, ExecOutcome, Source};
 use cpd_core::swr::{endpoint, gc};
@@ -170,6 +172,7 @@ fn report_failed(engine: &mut Engine, failed: Vec<(outbox::Mutation, String)>) {
 /// The `github` outbox drain (swr-github.md §9), run by E5's step each tick: a write command only enqueues, this calls GitHub through
 /// the Runner. It does nothing while no mutation is due or the endpoint is paused.
 pub(super) fn drain_github(engine: &mut Engine) {
+    wake_review_leads(engine);
     let now = engine.ports.clock.utc();
     let due = engine.store.read(|c| {
         Ok(c.query_row(
@@ -205,12 +208,81 @@ pub(super) fn drain_github(engine: &mut Engine) {
 }
 
 /// Guarantee (b) of swr-github.md §10: wakes the Review Lead of every claimed pull request whose cached `head_oid` differs from the
-/// claimed one while its cached `checks` are `passed`, once per head (a `session-message` Event with `data.head_oid`).
-/// Stub: the implementing Job replaces it and calls it where a pass commits a header.
-#[allow(
-    dead_code,
-    reason = "a red-test stub until the wake Job calls it from the pass"
-)]
-pub(super) fn wake_review_leads(_engine: &mut Engine) {
-    todo!("the Review Lead wake on a new green head")
+/// claimed one while its cached `checks` are `passed`, once per head: the wake is a `session-message` Event (`from` null, `wake`
+/// true, `data.head_oid`) and the same transaction moves the item's `head_oid` to the woken head, so that head wakes no more.
+pub(super) fn wake_review_leads(engine: &mut Engine) {
+    if let Err(e) = wake(engine) {
+        engine.fail(Step::E24, About::Machine, Failure::from(&e));
+    }
+}
+
+/// One claimed review item whose pull request moved to a green head.
+struct Moved {
+    item: i64,
+    plan: String,
+    lead: String,
+    context: String,
+    url: String,
+    claimed: String,
+    head: String,
+}
+
+fn wake(engine: &mut Engine) -> Result<(), CpdError> {
+    let moved = engine.store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT i.id, pl.id, pl.lead_session, pl.context, p.url, i.head_oid, p.head_oid
+               FROM inbox_items i
+               JOIN plans pl ON pl.id = i.plan
+               JOIN pull_requests p ON p.repo = pl.reviewed_repo AND p.number = pl.reviewed_number
+              WHERE i.claimed_at IS NOT NULL AND i.closed_at IS NULL AND i.head_oid IS NOT NULL
+                AND pl.archived_at IS NULL AND pl.deleted_at IS NULL AND pl.lead_session IS NOT NULL
+                AND p.state = 'open' AND p.checks = 'passed'
+                AND p.head_oid IS NOT NULL AND p.head_oid <> i.head_oid
+              ORDER BY i.id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Moved {
+                    item: r.get(0)?,
+                    plan: r.get(1)?,
+                    lead: r.get(2)?,
+                    context: r.get(3)?,
+                    url: r.get(4)?,
+                    claimed: r.get(5)?,
+                    head: r.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
+    for m in moved {
+        engine.store.write(super::SOURCE, |tx| {
+            let moved = tx.execute(
+                "UPDATE inbox_items SET head_oid = ?2 WHERE id = ?1 AND head_oid <> ?2",
+                rusqlite::params![m.item, m.head],
+            )?;
+            if moved == 0 {
+                return Ok(());
+            }
+            let text = format!(
+                "re-review requested: {url}\nreviewed_oid: {claimed}\nhead_oid: {head}\n\
+                 The pull request moved and its checks are green. Please re-review {claimed}..{head}.",
+                url = m.url,
+                claimed = m.claimed,
+                head = m.head,
+            );
+            let preview: String = text.chars().take(120).collect();
+            let event = NewEvent::session_message_head(
+                format!("Message from the User: {preview}"),
+                &text,
+                &m.head,
+            )?
+            .plan(PlanId::parse(&m.plan)?)
+            .session(SessionId::parse(&m.lead)?)
+            .context(ContextId::parse(&m.context)?);
+            events::append(tx, event)?;
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
