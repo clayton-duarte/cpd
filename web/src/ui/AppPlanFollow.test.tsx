@@ -109,3 +109,16 @@ it("selecting a plan in ManagerView shows its PlanView and Lead", () => {
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
   expect(q(container, '[data-plan="plan"] button[data-select="plan"][aria-current="true"]')).not.toBeNull();
 });
+
+it("clicking the manager key in PlanView returns to ManagerView and the Manager chat", () => {
+  const { transport, container } = start();
+  act(() => { q(container, '[data-plan="plan"] button[data-select="plan"]')!.click(); });
+  act(() => transport.emitMessage({ ...snapshot, plan: loadedPlan }));
+  expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
+  const back = q(container, 'section[aria-label="Plan pane"] [data-part="title-row"] button[data-action="select-manager"]');
+  expect(back).not.toBeNull();
+  act(() => { back!.click(); });
+  expect(q(container, 'section[aria-label="Plan pane"] [data-manager-view="ctx"]')).not.toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).toBeNull();
+  expect(q(container, '[data-context="ctx"] button[data-select="context"][aria-current="true"]')).not.toBeNull();
+});

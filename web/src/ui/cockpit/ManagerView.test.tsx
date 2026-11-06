@@ -52,7 +52,7 @@ it("ManagerView renders the flowchart canvas when there is no context", () => {
   expect(q(container, '[data-part="flow-canvas"]')).not.toBeNull();
 });
 
-it("ManagerView shows a sticky h-11 header with the manager key and counters and no button", () => {
+it("ManagerView header is a TopPaneHeader with the manager key and counters", () => {
   const { container } = show(ctx([plan("a"), plan("b", { phase: "done" })]));
   const header = q(container, '[data-part="manager-header"]')!;
   expect(header).not.toBeNull();
@@ -62,6 +62,13 @@ it("ManagerView shows a sticky h-11 header with the manager key and counters and
   expect(q(header, '[data-part="manager-key"]')!.textContent).toBe("ctx");
   expect(q(header, '[data-part="manager-counters"]')!.textContent).toBe("1 active · 1 done · 4 records");
   expect(header.querySelector("button")).toBeNull();
+  expect(header.tagName).toBe("HEADER");
+  expect(header.classList.contains("pr-12")).toBe(true);
+  expect(header.classList.contains("pr-16")).toBe(false);
+  const kids = Array.from(header.children);
+  const spacer = kids.findIndex((k) => k.classList.contains("flex-1"));
+  expect(spacer).toBeGreaterThan(0);
+  expect(kids.slice(0, spacer).some((k) => k.getAttribute("data-part") === "manager-key")).toBe(true);
 });
 
 it("ManagerView orders each plan row as dot, key, title, PRs, phase, actor, counters", () => {
