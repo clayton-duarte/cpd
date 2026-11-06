@@ -2048,7 +2048,7 @@ Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7
 | `STREAM_RESTART_CAP_MS` | 10 000 ms | no restart waits longer |
 
 - The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
-- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off.
+- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off. A repeated `hello` on the same child is not a new child: it is an in-place restart (13.9), and it changes neither n nor the wait.
 - The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
 - Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
 
@@ -2058,7 +2058,7 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 
 | Frame (`t`) | Accepted shape | Effect on the cockpit |
 |---|---|---|
-| `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
+| `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). On a child that already said hello, it is an in-place restart (13.9): the stream stays ready. Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
 | `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. |
 | `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
 | `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
@@ -2069,6 +2069,7 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 ### 13.9 Failure rules
 
 - A child that exits while the stream is running is not ready. Its pending requests resolve `down` (13.6), the follow child starts (13.6), and a restart follows after the wait of 13.7. An exit caused by `stop()` is not a failure and emits nothing.
+- A second `hello` on the same child is not an exit: `cpd cockpit serve` exec'd in place when its executable was replaced (commands.md §11a, pro-d450). Its pending requests resolve `down` (13.6), the stream stays ready, and `onError` is not called. No follow child starts and no restart wait applies.
 - An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
 - A failed write to stdin means the child is gone: it is killed and handled as an exit.
 - A malformed frame never restarts the child (13.8).

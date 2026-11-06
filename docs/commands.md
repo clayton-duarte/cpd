@@ -3855,7 +3855,7 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 
 **Any other store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
 
-**Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. Each line:
+**Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. `cockpit serve` restarts in place the same way (§11a "Restart on a new install", pro-d450). Each line:
 
 ```json
 {"id": 48215, "at": "2026-10-14T21:41:02.114Z", "kind": "escalation", "context": "building-cpd", "plan": "cpd2", "job": "contract-commands", "attempt": "contract-commands-a1", "session": null, "text": "Worker contract-commands-a1 asks: … Answer: cpd answer contract-commands-a1-q1 \"<answer>\"", "data": {"escalation": "contract-commands-a1-q1", "question": "…"}}
@@ -3875,11 +3875,13 @@ No flags and no arguments; any argument is `usage` (exit 2). Callers: none. The 
 
 **Lifecycle.** It opens the store as `cpd events follow` does (§11.2: it waits out a migration in progress), once, as one Env (its store, home and ports). Every snapshot pane and every `plan_show` reply is read through that same open Env: `serve` never reads `$CPD_HOME` after start and never opens another store connection per snapshot (contract §5.5). It then writes `hello`, writes snapshot 1 and sets its cursor to the highest Event id, so no Event before the start is replayed: the first snapshot carries the state. It serves until stdin reaches end of file, then exits 0. The parent's death closes stdin, so the process never outlives its parent.
 
+**Restart on a new install** (pro-d450; hs-d140; §11.2 "Re-exec"). On each tick it checks its own executable path with the `(device, inode, mtime)` check of `core/src/host/exe.rs`, as `events follow` does between polls. When the executable was replaced, it execs the replacement in place as `<that path> cockpit serve`, with the same pid and pipes: the new process starts a fresh serve, says `hello` and writes snapshot 1 (`seq` starts at 1 again, and no Event is replayed). It does the same on a `store_too_new`, and writes no error frame then. A `store_too_new` while the executable is unchanged still ends serve with the error frame below.
+
 ### Frames out
 
 | `t` | When | Frame |
 |---|---|---|
-| `hello` | first, once | `{"t":"hello","protocol":1}` |
+| `hello` | first, once per process (also first in the process that restarts in place, above) | `{"t":"hello","protocol":1}` |
 | `snapshot` | after `hello`; after every batch of committed changes; on `refresh` | `{"t":"snapshot","seq":<n>,"panes":{"context":V,"plan":V,"session":V,"inbox":V}}` |
 | `event` | each newly committed Event, before the snapshot that follows it | `{"t":"event","event":E}` |
 | `plan_show` | the answer to a `plan_show` request | `{"t":"plan_show","id":"<request id>","value":V}` |
@@ -3916,7 +3918,7 @@ Each frame is one line, written and flushed when it is produced, in the order it
 | `plan_show` whose `id` or `plan` is missing or not a string | `usage` | `null` |
 | `plan_show` for which `cpd plan show --plan <id>` would print a failure value (`plan_not_found`, exit 4; `invalid_plan_id`, exit 2; a store code) | that value's code | the request's `id` |
 
-These keep the process serving. A **store error** that ends `cpd events follow` (§11.2: `store_too_new`, `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) ends this command too, the same way. Its last line is `{"t":"error","id":null,"error":{"code":"<code>","message":"<text>"}}` and it exits with that code's exit. A store that cannot be opened at the start ends it before `hello`, with the same last line.
+These keep the process serving. A **store error** that ends `cpd events follow` (§11.2: `store_too_new`, `migration_changed`, `migration_order`, `store_busy`, `store_failed`, …) ends this command too, the same way, except a `store_too_new` while the executable is replaced (restart above). `serve` does not track `PRAGMA schema_version`: each batch it flushes recomputes the store verdict (contract §4.5), so it ends at the first batch flushed after a migration it cannot read; `events follow` recomputes the verdict at its next poll after the schema changes. Its last line is `{"t":"error","id":null,"error":{"code":"<code>","message":"<text>"}}` and it exits with that code's exit. A store that cannot be opened at the start ends it before `hello`, with the same last line.
 
 | Exit | When | Codes |
 |---|---|---|
