@@ -64,7 +64,7 @@ exit 0"#,
         // Exits at once: no process outlives the test.
         env.fake(
             "node",
-            r#"echo "node $* CPD_ELECTRON_DEV_URL=$CPD_ELECTRON_DEV_URL" >> "${ORDER_LOG:?}"
+            r#"echo "node $* CPD_MODE=${CPD_MODE-unset} CPD_CHECKOUT=${CPD_CHECKOUT-unset} CPD_ELECTRON_DEV_URL=$CPD_ELECTRON_DEV_URL" >> "${ORDER_LOG:?}"
 [ -z "${NODE_FIFO:-}" ] || echo started > "$NODE_FIFO"
 exit 0"#,
         );
@@ -625,4 +625,46 @@ fn on_starts_the_watchdog_with_the_dev_url_in_its_environment() {
         node.ends_with("CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html"),
         "{node}"
     );
+}
+
+#[test]
+fn on_exports_the_preview_mode_and_checkout_to_the_dev_server() {
+    let p = Preview::new();
+    let out = p.on(&[("NO_WEB_WINDOW", "1")]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let news = p.tmux("new-window");
+    assert_eq!(news.len(), 1, "{news:?}");
+    let args = news[0].join(" ");
+    let wt = p.worktree.display();
+    assert!(args.contains("CPD_MODE=preview"), "{args}");
+    assert!(args.contains(&format!("CPD_CHECKOUT={wt}")), "{args}");
+}
+
+#[test]
+fn on_starts_the_watchdog_with_the_preview_mode_and_checkout_in_its_environment() {
+    let p = Preview::new();
+    let out = p.on_signalled();
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let order = p.order_with_node();
+    let node = order
+        .iter()
+        .find(|l| l.starts_with("node "))
+        .unwrap_or_else(|| panic!("watchdog not started: {order:?}"));
+    assert!(node.contains(" CPD_MODE=preview "), "{node}");
+    let wt = p.worktree.display();
+    assert!(node.contains(&format!(" CPD_CHECKOUT={wt} ")), "{node}");
+}
+
+#[test]
+fn off_serves_the_primary_checkout_in_production_without_a_checkout() {
+    let p = Preview::new();
+    assert_eq!(p.on(&[]).exit, 0);
+    let before = p.tmux("respawn-pane").len();
+    let out = p.run(&["off"], &[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    let respawns = p.tmux("respawn-pane");
+    let args = respawns[before].join(" ");
+    assert!(args.contains("CPD_MODE=production"), "{args}");
+    assert!(args.contains("-u CPD_CHECKOUT"), "{args}");
+    assert!(!args.contains("CPD_CHECKOUT="), "{args}");
 }

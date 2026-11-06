@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { connect } from "node:net";
-import { existsSync, promises as fsp, realpathSync, watch as fsWatch } from "node:fs";
+import { existsSync, statSync, promises as fsp, realpathSync, watch as fsWatch } from "node:fs";
 import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
 import type { Runner } from "../protocol/domain.ts";
 import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
@@ -15,6 +15,8 @@ import { readLogs } from "./cockpit/logs.ts";
 import { buildPlanView, createReadModel, parsePlanShow } from "./cockpit/readmodel.ts";
 import { readSettings, saveSettings } from "./cockpit/settings.ts";
 import { createCockpitStream, type StreamChild } from "./cockpit/stream.ts";
+import { readDrift } from "../electron/drift.ts";
+import type { UpdateExec } from "../electron/update/types.ts";
 import { readStatus } from "./cockpit/status.ts";
 import { connectHost, type SocketFactory } from "./durable/client.ts";
 import { createDurableBackend } from "./durable/backend.ts";
@@ -80,6 +82,14 @@ export interface Services {
   newConnection(send: (m: ServerMessage) => void): HubConnection;
 }
 
+const updateExec: UpdateExec = (cmd, args, opts) =>
+  new Promise((resolve) => {
+    execFile(cmd, args, { cwd: opts.cwd, env: opts.env, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const code = error === null ? 0 : typeof error.code === "number" ? error.code : 1;
+      resolve({ code, stdout, stderr: stderr || (error?.message ?? "") });
+    });
+  });
+
 /** Pure wiring of the modules; nothing is started. */
 export function createServices(b: PluginBoundaries): Services {
   const cpd = createCpd(b.cpdExec);
@@ -111,7 +121,7 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
     }
   };
   const extras: Extras = {
-    status: () => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null }),
+    status: () => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null, env: process.env, drift: (root) => readDrift({ exec: updateExec, mtimeMs: (path) => { try { return statSync(path).mtimeMs; } catch { return null; } }, now: Date.now }, root) }),
     costs: () => readCosts({ cpd: cpdText, readFile: b.readText, durableCost }),
     logs: () => readLogs({ cpd: cpdText }),
     settings: () => readSettings(cpd),

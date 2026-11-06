@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
-import { createWatchdog } from "./watchdog.ts";
+import { createWatchdog, productionEnv } from "./watchdog.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -47,6 +47,9 @@ function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error
     pidAlive: (_pid: number) => state.alive,
     signalReload: (pid: number) => {
       calls.push(`signal:${pid}`);
+    },
+    terminate: (pid: number) => {
+      calls.push(`terminate:${pid}`);
     },
     relaunch: async () => {
       calls.push("relaunch");
@@ -127,14 +130,14 @@ it("a candidate of a crashed epoch is never promoted", async () => {
   expect(s.calls).not.toContain("promote");
 });
 
-it("a crash past the debounce rolls back, signals SIGUSR1 and logs", async () => {
+it("rollback restores the last good build, terminates the live preview and relaunches in production", async () => {
   const s = setup();
   s.state.health = crashed(2);
   await s.wd.tick();
   expect(s.calls).toEqual(["capture"]);
   s.advance(1000);
   await s.wd.tick();
-  expect(s.calls).toEqual(["capture", "restore", "signal:100"]);
+  expect(s.calls).toEqual(["capture", "restore", "terminate:100", "relaunch"]);
   expect(s.logs[0]).toMatchObject({ event: "rollback", reloadEpoch: 2, pid: 100 });
   expect(typeof s.logs[0]?.reason).toBe("string");
 });
@@ -150,7 +153,7 @@ it("a crash that clears within the debounce does nothing", async () => {
   s.state.health = healthy(3, T0 + 500);
   await s.wd.tick();
   expect(s.calls).not.toContain("restore");
-  expect(s.calls).not.toContain("signal:100");
+  expect(s.calls).not.toContain("terminate:100");
   expect(s.logs).toEqual([]);
 });
 
@@ -163,7 +166,7 @@ it("loading past the grace period rolls back", async () => {
   expect(s.calls).toEqual(["capture"]);
   s.advance(1);
   await s.wd.tick();
-  expect(s.calls).toEqual(["capture", "restore", "signal:100"]);
+  expect(s.calls).toEqual(["capture", "restore", "terminate:100", "relaunch"]);
   expect(s.events()).toEqual(["rollback"]);
 });
 
@@ -180,13 +183,14 @@ it("loading that turns healthy within the grace period does nothing", async () =
   expect(s.logs).toEqual([]);
 });
 
-it("a dead pid without an exited status rolls back and relaunches", async () => {
+it("rollback relaunches without terminating when the preview pid is dead", async () => {
   const s = setup({ alive: false });
   s.state.health = healthy(2);
   await s.wd.tick();
   expect(s.calls).toEqual(["capture", "restore", "relaunch"]);
   expect(s.events()).toEqual(["rollback", "relaunch"]);
-  expect(s.calls).not.toContain("signal:100");
+  expect(s.logs[1]).toMatchObject({ event: "relaunch", mode: "production" });
+  expect(s.calls).not.toContain("terminate:100");
 });
 
 it("an exited status never rolls back", async () => {
@@ -227,7 +231,7 @@ it("a failed epoch after a rollback is not rolled back again", async () => {
   s.advance(1000);
   await s.wd.tick();
   expect(s.calls.filter((c) => c === "restore")).toHaveLength(1);
-  expect(s.calls.filter((c) => c === "signal:100")).toHaveLength(1);
+  expect(s.calls.filter((c) => c === "terminate:100")).toHaveLength(1);
   expect(s.logs.filter((l) => l.event === "rollback-skipped")).toHaveLength(1);
   expect(s.logs.find((l) => l.event === "rollback-skipped")?.reason).toBe("already rolled back");
 });
@@ -239,7 +243,7 @@ it("a restore failure is logged and the watchdog keeps ticking", async () => {
   s.advance(1000);
   await s.wd.tick();
   expect(s.events()).toContain("rollback-failed");
-  expect(s.calls).not.toContain("signal:100");
+  expect(s.calls).not.toContain("terminate:100");
   s.state.health = healthy(3, s.state.clock);
   s.advance(100);
   await expect(s.wd.tick()).resolves.toBeUndefined();
@@ -257,4 +261,15 @@ it("a malformed health file is logged once and ignored", async () => {
   await s.wd.tick();
   expect(s.logs).toHaveLength(2);
   expect(s.calls).toEqual([]);
+});
+
+it("productionEnv sets CPD_MODE to production and drops the dev URL", () => {
+  const env = productionEnv({ CPD_MODE: "preview", CPD_ELECTRON_DEV_URL: "http://localhost:5173/electron.html", HOME: "/h" });
+  expect(env.CPD_MODE).toBe("production");
+  expect("CPD_ELECTRON_DEV_URL" in env).toBe(false);
+});
+
+it("productionEnv keeps every other variable", () => {
+  const input = { CPD_CHECKOUT: "/wt", HOME: "/h", PATH: "/bin" };
+  expect(productionEnv({ ...input, CPD_ELECTRON_DEV_URL: "u" })).toEqual({ ...input, CPD_MODE: "production" });
 });

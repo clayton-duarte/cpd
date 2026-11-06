@@ -5,6 +5,7 @@ import { installCli, readInstalledSha } from './cli';
 import { createUpdater } from './controller';
 import { followMerges } from './follow';
 import type { SpawnFollow } from './follow';
+import { readPreviewMode } from '../preview-mode';
 import { whenApplicable } from './idle';
 import type { BootstrapStatus, UpdateExec, UpdateFs, UpdateState, UpdateTimers } from './types';
 
@@ -18,8 +19,9 @@ export async function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap
     deps.log('auto-update off: cpd checkout not found');
     return { bootstrap, stop: () => {} };
   }
+  const rebase = readPreviewMode(deps.env).mode === 'preview';
   const updater = createUpdater({
-    sync: () => syncCheckout(deps.exec, root),
+    sync: () => syncCheckout(deps.exec, root, { rebase }),
     headSha: async () => (await deps.exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim(),
     builtSha: () => readBuiltSha(deps.fs, root),
     cliSha: () => readInstalledSha(deps.fs, root),

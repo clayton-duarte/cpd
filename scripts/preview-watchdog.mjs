@@ -4,7 +4,7 @@ import { appendFile, cp, mkdir, open, readFile, rename, rm, stat } from "node:fs
 import { join } from "node:path";
 import { createRestorePoints } from "./restore-points.ts";
 import { parseHealth } from "./health.ts";
-import { createWatchdog } from "./watchdog.ts";
+import { createWatchdog, productionEnv } from "./watchdog.ts";
 
 const argv = process.argv.slice(2);
 const opts = {};
@@ -81,10 +81,40 @@ const watchdog = createWatchdog(
         return error.code === "EPERM";
       }
     },
-    signalReload: (pid) => process.kill(pid, "SIGUSR1"),
+    terminate: async (pid) => {
+      const gone = () => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch (error) {
+          return error.code === "ESRCH";
+        }
+      };
+      const wait = async (ms) => {
+        for (let waited = 0; waited < ms; waited += 100) {
+          if (gone()) return true;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return gone();
+      };
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch (error) {
+        if (error.code === "ESRCH") return;
+        throw error;
+      }
+      if (await wait(5000)) return;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code === "ESRCH") return;
+        throw error;
+      }
+      if (!(await wait(5000))) throw new Error(`pid ${pid} still alive after SIGKILL`);
+    },
     relaunch: async () => {
       const out = await open(watchdogLog, "a");
-      const child = spawn(relaunchCmd[0], relaunchCmd.slice(1), { cwd: opts.worktree, detached: true, stdio: ["ignore", out.fd, out.fd] });
+      const child = spawn(relaunchCmd[0], relaunchCmd.slice(1), { cwd: opts.worktree, env: productionEnv(process.env), detached: true, stdio: ["ignore", out.fd, out.fd] });
       child.unref();
       await out.close();
     },

@@ -346,7 +346,7 @@ The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (rend
 
 ### Overview
 
-The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, fast-forwards the checkout, builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
 
 Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
@@ -377,21 +377,22 @@ Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `
 
 ```ts
 export function resolveCheckout(deps: { env: Record<string, string | undefined>; bundleDir: string; fs: Pick<UpdateFs, 'exists'> }): string | null
-export type SyncResult = { kind: 'current'; sha: string } | { kind: 'updated'; from: string; to: string; lockfileChanged: boolean } | { kind: 'skipped'; reason: 'branch' | 'dirty' | 'fetch-failed' | 'diverged' };
-export function syncCheckout(exec: UpdateExec, root: string): Promise<SyncResult>
+export type SyncResult = { kind: 'current'; sha: string } | { kind: 'updated'; from: string; to: string; lockfileChanged: boolean } | { kind: 'skipped'; reason: 'fetch-failed' | 'diverged' | 'rebase-conflict' };
+export function syncCheckout(exec: UpdateExec, root: string, opts: { readonly rebase: boolean }): Promise<SyncResult>
 ```
 
 The root is `env.CPD_CHECKOUT`, else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns the root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`.
 
-`syncCheckout` fast-forwards only a clean checkout on branch `main` (A4). Every call is `exec('git', args, { cwd: root })`, and stdout is trimmed. The steps run in this order; each is skipped once an earlier step has returned:
+`syncCheckout` syncs a checkout to `origin/main` on any branch (A7). The steps run in this order; each returns once it has decided:
 
-1. `rev-parse --abbrev-ref HEAD` is not `main`: skipped, `branch`.
-2. `status --porcelain` is non-empty: skipped, `dirty`.
-3. `fetch origin` exits non-zero: skipped, `fetch-failed`.
-4. `rev-parse HEAD` and `rev-parse origin/main` are equal: `current` with that `sha`.
-5. `merge-base --is-ancestor HEAD origin/main` exits non-zero: skipped, `diverged`.
-6. `merge --ff-only origin/main` exits non-zero: skipped, `diverged`.
-7. `diff --name-only <from> <to>`: `updated`, with `lockfileChanged` true when the list contains `pnpm-lock.yaml`.
+1. `git fetch origin`; it exits non-zero: skipped, `fetch-failed`.
+2. HEAD and `origin/main` are equal: `current` with that `sha`.
+3. `git diff --name-only HEAD origin/main` lists the changed paths; `git status --porcelain --untracked-files=all` lists the dirty paths. Of the changed paths that are dirty and tracked, `git checkout HEAD -- <those paths>` runs (only when there are any). Of the changed paths that are untracked (`??`), `git clean -f -- <those paths>` runs (only when there are any). Other dirty paths are left alone.
+4. `git merge-base --is-ancestor HEAD origin/main` exits 0: `git merge --ff-only origin/main`; non-zero: skipped, `diverged`.
+5. Otherwise, with `opts.rebase`: `git rebase --autostash origin/main`; non-zero runs `git rebase --abort` and returns skipped, `rebase-conflict`. Without `opts.rebase`: skipped, `diverged`.
+6. `updated` is `{ kind: 'updated', from, to, lockfileChanged }`, with `lockfileChanged` true when the changed paths contain `pnpm-lock.yaml`.
+
+`start.ts` passes `{ rebase: readPreviewMode(deps.env).mode === 'preview' }`: production never rebases, preview rebases a checkout with local commits (contract: [docs/ui-preview.md](../docs/ui-preview.md#production-and-preview-modes), item 7 and A7).
 
 #### bundle.ts
 
@@ -506,7 +507,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 
 | Failure | What the User sees | Where the log is |
 |---|---|---|
-| Sync skipped (`branch`, `dirty`, `fetch-failed`, `diverged`) | Nothing in the cockpit. The menu item reads `Up to Date`. The app keeps the bundle it has. | The updater's `log` line with the reason. |
+| Sync skipped (`fetch-failed`, `diverged`, `rebase-conflict`) | Nothing in the cockpit. The menu item reads `Up to Date`. The app keeps the bundle it has. | The updater's `log` line with the reason. |
 | Build failed (`pnpm install` or `build:electron` exits non-zero) | The menu item reads `Update Failed (see log)`, disabled. The old bundle stays and the renderer is not reloaded. | The updater's `log` line: the failing command's stdout and stderr. The last line is the menu's message. |
 | CLI install failed (`cargo build`, the attempt count, or `install-cpd.sh` fails) | Nothing. A CLI failure never sets the error state, and the bundle update is unaffected. `target/.cli-installed-sha` is not written, so the next run retries. | The updater's `log` line: the failing command's output, or the counting error's message. |
 | Bootstrap failed: no checkout, `install-cpd.sh` exits non-zero, or `~/.local/bin/cpd` is still missing after exit 0 | The overlay `cpd command tool install failed`, with the error and the log path. | `~/.cpd/run/cli-bootstrap.log` holds the stdout and stderr of `install-cpd.sh`. The file is written only when the script exits non-zero, so with no checkout the overlay text is the only report. |

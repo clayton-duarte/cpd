@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
+import { readPreviewMode } from './preview-mode';
 import { boot, type BootDeps, type BootWindow } from './boot';
 
 function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void>; loadDevUrl?: BootDeps['loadDevUrl'] } = {}) {
@@ -63,15 +64,35 @@ describe('boot', () => {
     expect(s.log).not.toContain('startServices');
   });
   it('boot loads the dev URL when CPD_ELECTRON_DEV_URL is set', async () => {
-    const s = setup({ env: { CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
+    const s = setup({ env: { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
     await boot(s.deps);
     expect(s.log).toContain('loadDevUrl:http://localhost:5173/electron.html');
     expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
   });
+  it('boot loads the built renderer in production even when a dev URL is set', async () => {
+    const s = setup({ env: { CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
+    await boot(s.deps);
+    expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
+    expect(s.log.some((l) => l.startsWith('loadDevUrl:'))).toBe(false);
+  });
+  it('boot loads the dev URL in preview mode', async () => {
+    const s = setup({ env: { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
+    await boot(s.deps);
+    expect(s.log).toContain('loadDevUrl:http://localhost:5173/electron.html');
+    expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
+    // boot must take the mode from readPreviewMode(deps.env): a mode without a dev URL loads the file.
+    expect(readPreviewMode(s.deps.env)).toEqual({ mode: 'preview', checkout: '/w', devUrl: 'http://localhost:5173/electron.html' });
+  });
+  it('boot rejects a bad CPD_MODE before creating a window', async () => {
+    const s = setup({ env: { CPD_MODE: 'staging' } });
+    await expect(boot(s.deps)).rejects.toThrow('CPD_MODE must be production or preview, got "staging"');
+    expect(s.log).not.toContain('window');
+    expect(s.log).not.toContain('setName:CPD');
+  });
   // A failing dev URL must not exit Electron: the built renderer loads instead.
   it('boot loads the built renderer when the dev URL fails to load', async () => {
     const url = 'http://localhost:5173/electron.html';
-    const s = setup({ env: { CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
+    const s = setup({ env: { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await expect(boot(s.deps)).resolves.toBeUndefined();
@@ -82,7 +103,7 @@ describe('boot', () => {
   });
   it('boot logs the dev URL failure before loading the built renderer', async () => {
     const url = 'http://localhost:5173/electron.html';
-    const s = setup({ env: { CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
+    const s = setup({ env: { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: url }, loadDevUrl: async () => Promise.reject(new Error('ERR_CONNECTION_REFUSED')) });
     const spy = vi.spyOn(console, 'error').mockImplementation((...a) => void s.log.push(`error:${a.map(String).join(' ')}`));
     try {
       await boot(s.deps).catch(() => undefined);

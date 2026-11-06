@@ -48,6 +48,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
 - No visual design (pro-d16).
 - **Status bar, Phase 1 (pro-d18).** No cpd version reaches the web: `CockpitSnapshot` (6.3, 5) has no version field, so the StatusBar shows `cpd: unknown`. This is a stated limitation, not a wire change (unverified source, O19). The runner and state come from the selected session's `SessionNode.ref` in `cockpit.tree` (6.11), so a selected session absent from the tree (archived, or removed by a patch) shows `none`. The header and status bar show no other data: no host stats, workers summary or balloons (pro-d16, pro-d18).
+  **Superseded by docs/ui-preview.md, Production and preview modes (item 6):** the version does reach the web (`StatusModel.version`, from `cpd --version` in `status.ts`), so the `cpd: unknown` limitation above no longer holds. It is shown as a bare `ghost` Badge, and preview mode adds an `outline` Badge `preview` and a drift pill.
 
 ## 2. Module map (the fixed file layout; no other source path is written)
 
@@ -1454,9 +1455,9 @@ export function StatusBar(props: { runner: Runner | null; state: string | null; 
 
 **Header DOM (pro-d18).** `<span data-emblem>C-P-D</span>`. `Shell` supplies the `<header>` wrapper.
 
-**StatusBar DOM (pro-d18).** Three `<span>` children, in this order, with no wrapper (`Shell` supplies the `<footer>`): `<span data-part="runner">Runner: <runner|none></span>`, `<span data-part="state">State: <state|none></span>`, `<span data-part="version">cpd: <version|unknown></span>`. `version` shows its value only when it is `{state:"known"}`; `null` or `{state:"unknown"}` shows `unknown`. Phase 1 has no styling and no left/right split of pills (pro-d16, pro-d18).
+**StatusBar DOM (pro-d18).** Three `<span>` children, in this order, with no wrapper (`Shell` supplies the `<footer>`): `<span data-part="runner">Runner: <runner|none></span>`, `<span data-part="state">State: <state|none></span>`, `<span data-part="version">cpd: <version|unknown></span>`. `version` shows its value only when it is `{state:"known"}`; `null` or `{state:"unknown"}` shows `unknown`. Phase 1 has no styling and no left/right split of pills (pro-d16, pro-d18). **Superseded by docs/ui-preview.md, Production and preview modes (item 6):** the version is `<Badge variant="ghost" data-part="version">` with the bare version text, with no `cpd: ` prefix; preview mode adds `<Badge variant="outline" data-part="mode">preview</Badge>` after it and a `data-part="drift"` pill (`drift N`).
 
-**Behaviours to test (pro-d18).** Shell: with `header` and `status` given, `[data-shell]`'s first element child is the `header` and its last is `footer[aria-label="Status bar"]`, with the three panes between in order; with neither given the child list is the 3-pane list. Header: `[data-emblem]` text is `C-P-D`. StatusBar: runner `pi` shows `Runner: pi`, `null` shows `Runner: none` (likewise State); a known version `0.21.102` shows `cpd: 0.21.102`; `null` or unknown shows `cpd: unknown`.
+**Behaviours to test (pro-d18).** Shell: with `header` and `status` given, `[data-shell]`'s first element child is the `header` and its last is `footer[aria-label="Status bar"]`, with the three panes between in order; with neither given the child list is the 3-pane list. Header: `[data-emblem]` text is `C-P-D`. StatusBar: runner `pi` shows `Runner: pi`, `null` shows `Runner: none` (likewise State); a known version `0.21.102` shows `cpd: 0.21.102`; `null` or unknown shows `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** the known version shows its bare text (`0.21.102`), without the `cpd: ` prefix.
 
 ### 6.8 ui-chat `web/src/ui/chat/`
 
@@ -1621,7 +1622,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 3. Typing a message and pressing Enter sends `{type:"session.submit", sessionId, clientSubmissionId, text, images:[], whenBusy:"followUp"}`, except a text of exactly `/q` or `/quit`, which the hub intercepts instead (6.6).
 4. A `session.dialog` message renders the dialog card; answering it sends `{type:"dialog.respond", sessionId, dialogId, response}`.
 5. Dropping an image file on the chat slot adds the attachment (reader returns base64) and the next submit carries it as `images:[{mimeType, dataBase64}]`.
-6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`.
+6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** the version is shown bare when the snapshot carries it.
 
 ## 7. Error codes (typed, exhaustive)
 
@@ -1704,7 +1705,7 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O16 | Event kind names not written in `docs/commands.md` (the core `Kind` strings were not read) | 6.3 `panesFor` | scout-cockpit §2 |
 | O17 | Whether Vite calls the plugin `closeBundle` hook on dev-server close (the plugin also listens on `httpServer` `close`) | 6.6 `plugin.ts` | vite 8.3.5 not read |
 | O18 | Live output of `cpd events follow` (not run) and its `cursor_ahead` refusal on restart | 6.3 `events.ts` | scout-cockpit §2 |
-| O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown` | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
+| O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** `status.ts` reads it and `StatusModel.version` carries it | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
 | O20 | The `['a']` append paths of thinking blocks (`docs['pi.live'].generation.message.content[i].thinking`) are assumed from the pi-ai thinking block shape; the live run captured text only | 6.4 frames (deltas) | `live-check.md`; `@earendil-works/pi-ai/dist/types.d.ts` |
 | O21 | The `['a']` append paths of tool-call arguments in the live message (`content[i].arguments` or `content[i].partialJson`) and how a live ToolItem's `args` are completed before its entry arrives; the live run had no tool call | 6.4 frames (L2) | `live-check.md` |
 | O22 | The host `history` command on the wire: the newest page first without `before`, entries in descending id order, `next` opaque and absent on the last page | 6.4 intro, backend (cache and window, gap fill) | `docs/contract.md` §6.17 (read); `pi-durable/dist/harness/transcript.js` (read); not run |

@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import type { StatusModel as WireStatus } from "../../protocol/cockpit.ts";
 import type { Runner, SessionState, Stat } from "../../protocol/domain.ts";
 import { cn } from "../../lib/utils.ts";
+import { Badge } from "../components/badge.tsx";
 import { Button } from "../components/button.tsx";
 import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
 
@@ -15,6 +16,8 @@ export interface StatusModel {
   readonly workers: { readonly queued: number; readonly ready: number; readonly tenants: number; readonly concurrency: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
+  readonly mode: "production" | "preview";
+  readonly drift: { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean } | null;
 }
 
 /** `5m`, `2h 5m`, `3d`: the elapsed time since `startedAt`. */
@@ -35,6 +38,8 @@ export function barStatus(s: WireStatus, nowMs: number): StatusModel {
     workers: s.workers === null ? null : { queued: s.workers.queued, ready: s.workers.waiting, tenants: s.workers.tenants, concurrency: s.workers.limit },
     version: s.version,
     hostAlert: s.hostAlert,
+    mode: s.mode,
+    drift: s.drift,
   };
 }
 
@@ -64,13 +69,23 @@ function Pills({ status }: { status: StatusModel }): ReactElement {
       <span className="flex-1" />
       {status.incident === null ? null : <span data-part="incident" className={cn(PILL, "italic text-status-blocked-bright")}>{`Incident Mode: ${status.incident}`}</span>}
       {w === null ? null : <span data-part="workers" className={cn(PILL, "text-fg-dim")}>{`workers ${w.queued}·${w.ready}·${w.tenants}/${w.concurrency}`}</span>}
+      {status.drift === null || status.drift.count === 0 ? null : (
+        <Badge
+          data-part="drift"
+          variant="outline"
+          {...(status.drift.stale ? { "data-stale": "true" } : {})}
+          className={cn(PILL, status.drift.stale ? "text-mitarashi" : "text-fg-dim")}
+        >{`drift ${status.drift.count}`}</Badge>
+      )}
       {status.version === null ? null : (
-        <span
+        <Badge
           data-part="version"
+          variant="ghost"
           {...(status.hostAlert ? { "data-alert": "true" } : {})}
           className={cn(PILL, status.hostAlert ? "text-status-blocked" : "text-fg-dim")}
-        >{`cpd: ${status.version}`}</span>
+        >{status.version}</Badge>
       )}
+      {status.mode === "preview" ? <Badge data-part="mode" variant="outline" className={cn(PILL, "border-sakura text-sakura")}>preview</Badge> : null}
     </>
   );
 }
