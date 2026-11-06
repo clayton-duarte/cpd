@@ -3,6 +3,7 @@ import { useState, type ReactElement } from "react";
 import type { ContextNode, PlanNode, PlanWorkflowSummary } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { STOPPED, compareOrderKey, createdOf, leadOf } from "../../state/archiveNav.ts";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { Badge } from "../components/badge.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
@@ -248,7 +249,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
     <section
       aria-label={`Manager overview ${context.id}`}
       data-manager-view={context.id}
-      className="flex min-w-0 flex-col overflow-x-hidden"
+      className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden"
     >
       <TopPaneHeader dataPart="manager-header">
         <h2
@@ -263,6 +264,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
         </span>
       </TopPaneHeader>
 
+      <ScrollArea data-part="plan-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
       <div data-part="manager-body" className="flex min-w-0 flex-col gap-2 px-4 py-2.5">
         {activePlans.length === 0 && donePlans.length === 0 ? (
           <Empty data-empty className="border-none py-8 text-muted-foreground">
@@ -310,6 +312,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
           </>
         )}
       </div>
+      </ScrollArea>
     </section>
   );
 }

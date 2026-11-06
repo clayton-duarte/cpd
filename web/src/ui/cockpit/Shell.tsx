@@ -1,8 +1,5 @@
-import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import { createContext, useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useEffect, useMemo, useState } from "react";
 import type { MutableRefObject, ReactElement, ReactNode } from "react";
-import { Button } from "../components/button.tsx";
-import { ScrollArea } from "../components/scroll-area.tsx";
 import type { LayoutPanels } from "./layout.ts";
 import {
   ResizableHandle,
@@ -15,7 +12,6 @@ export interface PlanCollapseControl { readonly collapsed: boolean; readonly tog
 export const PlanCollapseContext = createContext<PlanCollapseControl | null>(null);
 
 type Mode = "open" | "collapsed" | "zoomed";
-const CTRL = "size-[26px] rounded-[5px] text-fg-strong";
 
 export function Shell(props: {
   tree: ReactNode;
@@ -45,6 +41,10 @@ export function Shell(props: {
     setMode(planCollapsed ? "collapsed" : chatCollapsed ? "zoomed" : "open");
   }, [planRef, chatRef]);
   const collapsed = mode === "collapsed";
+  const control = useMemo<PlanCollapseControl>(
+    () => ({ collapsed, toggle: () => (collapsed ? planRef.current?.expand() : planRef.current?.collapse()) }),
+    [collapsed, planRef],
+  );
   const zoomed = mode === "zoomed";
   return (
     <div data-shell className="bg-background font-sans text-body text-foreground">
@@ -99,8 +99,8 @@ export function Shell(props: {
                 collapsedSize="44px"
                 onResize={sync}
               >
-                <section aria-label="Plan pane" data-state={mode} {...(collapsed ? { inert: true } : {})}>
-                  <ScrollArea data-part="plan-scroll" className="h-full w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">{props.plan}</ScrollArea>
+                <section aria-label="Plan pane" data-state={mode} className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <PlanCollapseContext.Provider value={control}>{props.plan}</PlanCollapseContext.Provider>
                 </section>
               </ResizablePanel>
               <ResizableHandle
@@ -129,25 +129,6 @@ export function Shell(props: {
                 </main>
               </ResizablePanel>
             </ResizablePanelGroup>
-            <div
-              data-part="plan-controls"
-              role="group"
-              aria-label="Plan pane controls"
-              className="absolute right-4 top-[9px] z-10 flex gap-0.5"
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                data-action="plan-collapse"
-                className={CTRL}
-                aria-label={collapsed ? "Expand plan view" : "Collapse plan view"}
-                disabled={zoomed}
-                onClick={() => (collapsed ? planRef.current?.expand() : planRef.current?.collapse())}
-              >
-                {collapsed ? <ChevronDownIcon size={14} /> : <ChevronUpIcon size={14} />}
-              </Button>
-            </div>
           </div>
         </ResizablePanel>
         <ResizableHandle

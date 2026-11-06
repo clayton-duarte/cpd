@@ -253,7 +253,7 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
   }
   const explore = plan.jobs.filter((j) => j.workflow === null);
   return (
-    <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex min-w-0 flex-col overflow-x-hidden">
+    <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
       <TopPaneHeader
         dataPart="title-row"
         actions={
@@ -275,6 +275,7 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
         <h2 data-part="plan-key" title={plan.title} className="min-w-0 truncate font-mono text-[14px] font-semibold text-fg-strong">{plan.planId}</h2>
         <Stepper phase={plan.phase} />
       </TopPaneHeader>
+      <ScrollArea data-part="plan-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
       <div data-part="plan-body" className="flex flex-col gap-2.5 px-4 py-2.5">
         {explore.length > 0 ? <ExploreStrip jobs={explore} /> : null}
         {plan.workflows.map((wf) => (
@@ -283,6 +284,7 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
         {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
         {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
       </div>
+      </ScrollArea>
     </section>
   );
 }
