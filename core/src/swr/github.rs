@@ -153,3 +153,21 @@ pub fn deploy_approving(conn: &Connection, repo: &str, run_id: i64) -> Result<bo
         .filter_map(|p| serde_json::from_str::<Value>(p).ok())
         .any(|p| p.get("deploy").and_then(Value::as_str) == Some("approving")))
 }
+
+/// The effective text of `field` (`state`, `checks`, `review_decision`, `title`) of `repo#number`: `raw` with the patches of the
+/// active mutations applied, in order. For a reader that holds the raw value of its own join.
+pub fn effective_text(
+    conn: &Connection,
+    repo: &str,
+    number: i64,
+    field: &str,
+    raw: &str,
+) -> Result<String, CpdError> {
+    let mut value = raw.to_owned();
+    for (_, patch) in patches(&active_in(conn, repo, number)?) {
+        if let Some(v) = patch.get(field).and_then(Value::as_str) {
+            value = v.to_owned();
+        }
+    }
+    Ok(value)
+}
