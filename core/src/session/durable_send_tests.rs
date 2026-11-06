@@ -223,3 +223,18 @@ fn send_to_a_live_durable_session_leaves_its_state_label_alone() {
     cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
     assert_eq!(row(&mut w, LOOK), (None, Some("reviewing".to_owned())));
 }
+
+#[test]
+fn a_send_that_wakes_a_latched_session_resets_the_stored_restart_bound() {
+    let mut w = world();
+    fixture(
+        &mut w,
+        "UPDATE sessions SET asleep_at = 't', state_label = 'host crash loop', host_restarts = 3, host_window_start = 't' WHERE id = 'dlead';",
+    );
+    cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
+    let bound = row(
+        &mut w,
+        "SELECT CAST(host_restarts AS TEXT), host_window_start FROM sessions WHERE id = 'dlead'",
+    );
+    assert_eq!(bound, (Some("0".to_owned()), None));
+}
