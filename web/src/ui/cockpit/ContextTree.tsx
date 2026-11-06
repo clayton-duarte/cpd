@@ -338,6 +338,15 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   const forks = context.sessions.filter(isFork);
   const hasChildren = plans.length > 0 || forks.length > 0;
   const current = manager !== undefined && props.selectedSessionId === manager.ref.id;
+  const hasSelectedChild =
+    plans.some((p) => p.id === props.selectedPlanId || p.sessions.some((s) => s.ref.id === props.selectedSessionId)) ||
+    forks.some((s) => s.ref.id === props.selectedSessionId);
+  // pro-d81: a selection that newly lands inside this Context opens it (pro-d78 wins for the Manager row itself)
+  const prevHasSelectedChild = useRef(hasSelectedChild);
+  useEffect(() => {
+    if (!prevHasSelectedChild.current && hasSelectedChild && !open) setOpen(true);
+    prevHasSelectedChild.current = hasSelectedChild;
+  }, [hasSelectedChild, open, setOpen]);
   // pro-d78: a selected Manager collapses its Context row transiently (never persisted)
   const [overrideWhileCurrent, setOverrideWhileCurrent] = useState<boolean | null>(null);
   const prevCurrent = useRef(current);
@@ -493,6 +502,7 @@ export function ContextTree(props: {
   const projectContexts = all
     .filter((c) => !c.archived)
     .sort((a, b) => compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
+  const sessionId = props.selectedSessionId;
   const archived: ContextNode[] = [
     ...all.filter((c) => c.archived && !isPermanent(c.id)),
     ...all
@@ -500,8 +510,32 @@ export function ContextTree(props: {
       .map((c) => ({ ...c, plans: c.plans.filter((p) => p.archived) })),
   ];
 
+  // pro-d81: open the section holding the selected row, then scroll that row into view
+  const holds = (c: ContextNode, plansOnly: boolean): boolean =>
+    sessionId !== null && ((!plansOnly && c.sessions.some((s) => s.ref.id === sessionId)) || c.plans.some((p) => p.sessions.some((s) => s.ref.id === sessionId)));
+  const inArchive = archived.some((c) => holds(c, !c.archived));
+  const inLive = !inArchive && projectContexts.some((c) => holds(c, false));
+  useEffect(() => {
+    if (inArchive && !archivedOpen) setArchivedOpen(true);
+    if (inLive && !contextsOpen) setContextsOpen(true);
+  }, [inArchive, inLive, archivedOpen, contextsOpen, setArchivedOpen, setContextsOpen]);
+
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (props.selectedSessionId === null && props.selectedPlanId === null) return;
+    const scrollSelectedIntoView = (): void => {
+      const active = sidebarRef.current?.querySelector<HTMLElement>('[aria-current="true"]');
+      if (active !== null && active !== undefined && typeof active.scrollIntoView === "function") {
+        active.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    };
+    scrollSelectedIntoView();
+    const frame = requestAnimationFrame(scrollSelectedIntoView);
+    return () => cancelAnimationFrame(frame);
+  }, [props.selectedSessionId, props.selectedPlanId]);
+
   return (
-    <Sidebar collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
+    <Sidebar ref={sidebarRef} collapsible="none" aria-label="Context tree" className="h-full overflow-hidden bg-background">
       <SidebarContent className="flex h-full min-h-0 flex-col gap-0 overflow-hidden">
         <TreeSection
           section="contexts"

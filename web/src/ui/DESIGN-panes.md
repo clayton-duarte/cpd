@@ -549,6 +549,8 @@ The defaults (tree 20%, centre 50%, Inbox 30%), the double-click on `split-left`
 
 pro-d48..pro-d61 name no tree change. The tree is DESIGN.md 3d and 3g as they stand, with one later change, pro-d78 (transient, not persisted): when a Manager session is selected, the tree auto-collapses that Context's live Plans and forks (the Context row's `Collapsible`; the Archive is not affected). The User may toggle it by hand until the selection changes. Selecting any other agent expands it again. pro-d79 and pro-d80 change the tree too: standing Contexts are rows of the Contexts section, ordered and marked as DESIGN.md 3d states, and the tree has only the Contexts and Archive sections.
 
+pro-d81: when `selectedSessionId` or `selectedPlanId` changes, whatever the source (tree, Inbox, Manager view, jump command), the tree opens the section and Context holding the selected row if collapsed (through the persisted open flags; a selected Manager's own Context stays collapsed, pro-d78) and scrolls the `[aria-current="true"]` row into view with `scrollIntoView({ block: "nearest", inline: "nearest" })`, once at once and once on the next animation frame, only where the element has `scrollIntoView`.
+
 ### 4.4 Fonts and tokens (pro-d48)
 
 Roboto and Roboto Mono, with `--font-sans`, `--font-mono`, `--font-display` and `--font-heading` as in DESIGN.md 2b. The φ mark, the Header's φ and the fold markers use `font-display`, which is the sans family.
