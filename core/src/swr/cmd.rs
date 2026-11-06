@@ -7,6 +7,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::badge::{self, Classification};
 use super::cache;
+use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
@@ -142,6 +143,17 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
                 STATUSES.join(", ")
             )));
         }
+        Command::Badge(BadgeCommand::Put(a)) => {
+            check_label(&a.label)?;
+            check_score(a.score)?;
+            if a.entry.is_empty() || a.text.is_empty() || a.session_id.is_empty() {
+                return Err(usage("--entry and --text are non-empty.".into()));
+            }
+            if !TONES.contains(&a.tone.as_str()) {
+                return Err(usage(format!("--tone is one of {}.", TONES.join(", "))));
+            }
+            others_of(a.others.as_deref())?;
+        }
         _ => {}
     }
     let mut env = Env::open_with(ports)?;
@@ -155,23 +167,81 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Mutation(MutationCommand::Show(a)) => mutation_show(store, id_of(&a)?),
         Command::Mutation(MutationCommand::List(a)) => mutation_list(store, a.status.as_deref()),
         Command::Badge(BadgeCommand::Get(a)) => {
-            let found = badge::get(store, &a.session_id)?;
-            let _ = found;
-            todo!("swr badge get output")
+            let badge = badge::get(store, &a.session_id)?;
+            Ok(Output::success(
+                json!({"badge": badge.map(|b| badge_json(&b))}),
+            ))
         }
         Command::Badge(BadgeCommand::Put(a)) => {
+            let others = others_of(a.others.as_deref())?;
             let c = Classification {
                 entry_id: a.entry,
                 label: a.label,
                 score: a.score,
                 text: a.text,
                 tone: a.tone,
-                others: None,
+                others,
             };
-            let _ = badge::put(store, now, &a.session_id, &c)?;
-            todo!("swr badge put output")
+            let put = badge::put(store, now, &a.session_id, &c)?;
+            Ok(Output::success(json!({
+                "session_id": a.session_id,
+                "entry_id": c.entry_id,
+                "changed": put.changed,
+                "synced_at": timestamp(put.synced_at),
+            })))
         }
     }
+}
+
+const LABELS: [&str; 5] = [
+    "safe_to_archive",
+    "unanswered_ask",
+    "open_work",
+    "unrecorded_decision",
+    "unescalated_issue",
+];
+const TONES: [&str; 3] = ["done", "decision", "blocked"];
+
+fn badge_json(b: &badge::Badge) -> Value {
+    let c = &b.classification;
+    let mut v = json!({
+        "session_id": b.session_id, "entry_id": c.entry_id, "label": c.label, "score": c.score,
+        "text": c.text, "tone": c.tone, "synced_at": timestamp(b.synced_at),
+    });
+    if let Some(o) = &c.others {
+        v["others"] = o.clone();
+    }
+    v
+}
+
+fn check_score(n: i64) -> Result<(), CpdError> {
+    if (0..=100).contains(&n) {
+        Ok(())
+    } else {
+        Err(usage("A score is an integer from 0 to 100.".into()))
+    }
+}
+
+fn check_label(label: &str) -> Result<(), CpdError> {
+    if LABELS.contains(&label) {
+        Ok(())
+    } else {
+        Err(usage(format!("A label is one of {}.", LABELS.join(", "))))
+    }
+}
+
+fn others_of(text: Option<&str>) -> Result<Option<Value>, CpdError> {
+    let Some(text) = text else { return Ok(None) };
+    let bad = || usage("--others is a non-empty JSON array of {label, score}.".into());
+    let value: Value = serde_json::from_str(text).map_err(|_| bad())?;
+    let items = value.as_array().filter(|a| !a.is_empty()).ok_or_else(bad)?;
+    for item in items {
+        let label = item.get("label").and_then(Value::as_str).ok_or_else(bad)?;
+        let score = item.get("score").and_then(Value::as_i64).ok_or_else(bad)?;
+        check_label(label)?;
+        check_score(score)?;
+    }
+    Ok(Some(value))
 }
 
 fn check_key(key: &str) -> Result<(), CpdError> {
