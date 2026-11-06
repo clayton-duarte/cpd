@@ -119,6 +119,7 @@ export type CockpitAction =
   | { kind: "pr.repost"; planId: string; workflow?: string; pull?: string }
   | { kind: "pr.merge"; planId?: string; workflow?: string; pull?: string }
   | { kind: "engine.start" }
+  | { kind: "error.report"; target: "cpd" | "host"; code: string; message: string }
   | { kind: "context.retire"; contextId: string; approve: string; reject: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }

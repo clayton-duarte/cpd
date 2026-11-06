@@ -13,4 +13,8 @@ describe("parseCockpitAction", () => {
     expect(() => parseCockpitAction({ kind: "pr.post" })).toThrowError(expect.objectContaining({ code: "invalid_message" }));
     expect(() => parseCockpitAction({ kind: "pr.repost" })).toThrowError(expect.objectContaining({ code: "invalid_message" }));
   });
+  it("parseCockpitAction accepts error.report with target cpd", () => {
+    const a = { kind: "error.report", target: "cpd", code: "protocol_error", message: "bad" };
+    expect(parseCockpitAction(a)).toEqual(a);
+  });
 });

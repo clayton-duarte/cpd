@@ -18,6 +18,7 @@ export function actionArgs(action: CockpitAction): readonly string[] {
       if (action.pull === undefined || action.pull === "") throw new Error("pr.merge needs the stored pull request: runAction resolves it");
       return ["pr", "merge", action.pull];
     }
+    case "error.report": throw new Error("not implemented");
     case "engine.start": return ["watch", "--ensure"];
     case "context.retire": {
       const args = ["context", "retire", `--context=${action.contextId}`];
