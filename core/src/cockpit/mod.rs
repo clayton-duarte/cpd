@@ -269,14 +269,35 @@ pub fn serve(
     out: &mut dyn Write,
     changes: &mut dyn ChangeSource,
 ) -> Result<(), CpdError> {
-    match serve_frames(env, input, out, changes) {
+    let exe = match env.ports.spawn.self_exe() {
+        Ok(path) => Some(crate::host::exe::Exe::at(path)?),
+        Err(_) => None,
+    };
+    let replaced = || exe.as_ref().is_some_and(|exe| exe.replaced());
+    // A new install: serve again in this process; returns only when the exec failed.
+    let restart = |env: &Env| match &exe {
+        Some(exe) => events::exec_again(
+            &env.ports,
+            exe,
+            vec!["cockpit".to_owned(), "serve".to_owned()],
+        ),
+        None => unreachable!("a restart needs a replaced binary"),
+    };
+    match serve_frames(env, input, out, changes, &replaced) {
+        Ok(Done::Restart) => Err(restart(env)),
+        Ok(Done::Ended) => Ok(()),
+        Err(e) if e.code() == ErrorCode::StoreTooNew && replaced() => Err(restart(env)),
         Err(e) => {
             // The last line: the store error. A closed stdout makes this a no-op.
             let _ = send(out, &Frame::error(None, &e));
             Err(e)
         }
-        ok => ok,
     }
+}
+
+enum Done {
+    Ended,
+    Restart,
 }
 
 fn serve_frames(
@@ -284,13 +305,14 @@ fn serve_frames(
     input: &mut dyn Iterator<Item = Input>,
     out: &mut dyn Write,
     changes: &mut dyn ChangeSource,
-) -> Result<(), CpdError> {
+    replaced: &dyn Fn() -> bool,
+) -> Result<Done, CpdError> {
     let mut cursor = env.store.read(events::highest_id)?;
     let mut seq = 0u64;
     macro_rules! emit {
         ($frame:expr) => {
             if !send(out, &$frame)? {
-                return Ok(());
+                return Ok(Done::Ended);
             }
         };
     }
@@ -314,6 +336,9 @@ fn serve_frames(
                 Request::Answer(frame) => emit!(frame),
             },
             Input::Tick => {
+                if replaced() {
+                    return Ok(Done::Restart);
+                }
                 if let Some(age) = batch.as_mut() {
                     *age += 1;
                 }
@@ -332,7 +357,7 @@ fn serve_frames(
             }
         }
     }
-    Ok(())
+    Ok(Done::Ended)
 }
 
 /// The real [`ChangeSource`]: `PRAGMA data_version` on its own connection.

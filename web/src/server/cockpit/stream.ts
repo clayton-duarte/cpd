@@ -113,7 +113,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
       return;
     }
     switch (frame.t) {
-      case "hello": failures = 0; setReady(true); return;
+      case "hello": failures = 0; downAll(); setReady(true); return;
       case "snapshot": for (const cb of snapshotCbs) cb(frame.snapshot); return;
       case "event": for (const cb of eventCbs) cb(frame.event); return;
       case "plan_show": {

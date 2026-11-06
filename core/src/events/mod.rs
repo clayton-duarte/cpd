@@ -242,20 +242,25 @@ pub fn follow_loop(
                 .iter()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
-            let launch = Launch {
-                program: exe.path().display().to_string(),
-                args,
-                ..Launch::default()
-            };
-            let e = ports.spawn.exec(&launch);
-            return Err(CpdError::new(
-                ErrorCode::SpawnFailed,
-                format!("Cannot restart cpd from {}: {e}.", exe.path().display()),
-            )
-            .with("path", exe.path().display().to_string()));
+            return Err(exec_again(ports, exe, args));
         }
         ports.clock.sleep(poll);
     }
+}
+
+/// Execs `exe` with `args`; returns only on failure, as the error to report.
+pub(crate) fn exec_again(ports: &crate::ports::Ports, exe: &Exe, args: Vec<String>) -> CpdError {
+    let launch = Launch {
+        program: exe.path().display().to_string(),
+        args,
+        ..Launch::default()
+    };
+    let e = ports.spawn.exec(&launch);
+    CpdError::new(
+        ErrorCode::SpawnFailed,
+        format!("Cannot restart cpd from {}: {e}.", exe.path().display()),
+    )
+    .with("path", exe.path().display().to_string())
 }
 
 /// `args` (without the program name) with `--since` set to `cursor`: any `--since <id>` or `--since=<id>`
