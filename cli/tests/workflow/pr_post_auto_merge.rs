@@ -91,17 +91,27 @@ fn mutations(pay: &Pay) -> Vec<String> {
         .collect()
 }
 
+// `pr post` only validates and queues the post (swr-slack.md §5): the send, the `pr_posts` row and the auto-merge run in the
+// outbox and in E18. What this file keeps is what `pr post` does before the queue: its one read of the merge methods, the refusals
+// and that no GitHub mutation and no Slack send happen at enqueue. The send-time auto-merge assertions are the E18 tests of
+// cli/tests/engine/watch_auto_merge.rs, named per test in the commit that made this change.
+
 #[test]
 fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
     let pay = post();
 
     let out = post_cmd(&pay).ok();
 
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(
+        out.get("auto_merge").is_none(),
+        "no auto-merge at enqueue: {out}"
+    );
     let calls = gh(&pay);
-    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls.len(), 1, "only the read: {calls:?}");
     assert!(
         calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"),
-        "the read query first: {calls:?}"
+        "the read query: {calls:?}"
     );
     for field in [
         "squashMergeAllowed",
@@ -113,18 +123,9 @@ fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
             "the read query asks {field}: {calls:?}"
         );
     }
-    assert!(
-        calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"),
-        "then the mutation: {calls:?}"
-    );
-    assert_eq!(
-        out["auto_merge"],
-        json!({"state": "enabled", "reason": null})
-    );
-    let (state, at) = row(&pay).expect("the post row");
-    assert_eq!(state, "enabled");
-    assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
-    assert_eq!(pay.fx.calls("node").len(), 1);
+    assert!(mutations(&pay).is_empty(), "no mutation at enqueue");
+    assert_eq!(row(&pay), None, "no pr_posts row until the send answers");
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
 }
 
 #[test]
@@ -139,12 +140,6 @@ fn uses_the_graphql_mutation_and_never_gh_pr_merge() {
         .into_iter()
         .map(|call| call.args)
         .collect();
-    assert!(
-        calls
-            .iter()
-            .any(|a| a.join(" ").contains("enablePullRequestAutoMerge")),
-        "the mutation is sent: {calls:?}"
-    );
     assert!(
         calls
             .iter()
@@ -166,15 +161,10 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
 
     let out = post_cmd(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "not_allowed");
-    let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"),
-        "{out}"
-    );
+    assert_eq!(out["queued"], true, "{out}");
     assert!(mutations(&pay).is_empty(), "nothing is requested");
-    assert_eq!(row(&pay), Some(("none".to_owned(), None)));
-    assert_eq!(pay.fx.calls("node").len(), 1);
+    assert_eq!(row(&pay), None);
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent yet");
     assert_eq!(events(&pay, "error"), 0, "no error Event");
 }
 
@@ -213,13 +203,8 @@ fn a_repo_that_allows_only_rebase_enables_rebase_auto_merge() {
 
     let out = post_cmd(&pay).ok();
 
-    let sent = mutations(&pay);
-    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
-    assert!(
-        sent[0].contains("REBASE") && !sent[0].contains("SQUASH"),
-        "{sent:?}"
-    );
-    assert_eq!(out["auto_merge"]["state"], "enabled");
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(mutations(&pay).is_empty(), "{:?}", gh(&pay));
 }
 
 #[test]
@@ -227,14 +212,10 @@ fn a_repo_that_allows_merge_commit_and_rebase_enables_merge_auto_merge() {
     let pay = post();
     methods(&pay, false, true, true);
 
-    post_cmd(&pay).ok();
+    let out = post_cmd(&pay).ok();
 
-    let sent = mutations(&pay);
-    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
-    assert!(
-        sent[0].contains("MERGE") && !sent[0].contains("SQUASH") && !sent[0].contains("REBASE"),
-        "{sent:?}"
-    );
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(mutations(&pay).is_empty(), "{:?}", gh(&pay));
 }
 
 #[test]
@@ -244,8 +225,8 @@ fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
 
     let out = post_cmd(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "deferred");
-    assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(row(&pay), None);
     assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
 }
@@ -258,8 +239,8 @@ fn a_stacked_pr_on_a_repo_without_auto_merge_says_not_allowed_and_stores_none() 
 
     let out = post_cmd(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "not_allowed");
-    assert_eq!(row(&pay), Some(("none".to_owned(), None)));
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(row(&pay), None);
     assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
 }
@@ -306,18 +287,9 @@ fn a_github_refusal_of_the_mutation_is_stored_refused_and_reported() {
 
     let out = post_cmd(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "refused");
-    assert!(
-        out["auto_merge"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Pull request is in clean status"),
-        "{out}"
-    );
-    let (state, at) = row(&pay).expect("the post row");
-    assert_eq!(state, "refused");
-    assert!(at.is_some(), "auto_merge_at is set");
-    assert_eq!(mutations(&pay).len(), 1, "never retried");
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(row(&pay), None, "the refusal is stored when E18 runs");
+    assert!(mutations(&pay).is_empty(), "never at enqueue");
 }
 
 #[test]
@@ -327,36 +299,19 @@ fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands()
 
     let out = post_cmd(&pay).ok();
 
-    assert_eq!(out["auto_merge"]["state"], "failed");
-    assert!(
-        out["auto_merge"]["reason"]
-            .as_str()
-            .is_some_and(|r| !r.is_empty()),
-        "{out}"
-    );
-    assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
-    assert_eq!(pay.fx.calls("node").len(), 1, "the Slack message was sent");
-    assert_eq!(posts(&pay), 1);
-}
-
-#[test]
-fn an_already_enabled_request_counts_as_enabled_without_a_second_mutation() {
-    let pay = post();
-    pay.gh.auto.lock().unwrap().already = true;
-
-    let out = post_cmd(&pay).ok();
-
-    assert_eq!(out["auto_merge"]["state"], "enabled");
-    assert!(mutations(&pay).is_empty(), "{:?}", gh(&pay));
-    assert_eq!(row(&pay).map(|r| r.0), Some("enabled".to_owned()));
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(mutations(&pay).is_empty(), "never at enqueue");
+    assert_eq!(pay.fx.calls("node").len(), 0, "the send is the outbox's");
+    assert_eq!(posts(&pay), 0);
 }
 
 #[test]
 fn a_failed_slack_send_makes_only_the_read_call_and_writes_no_row() {
     let pay = post_with_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
-    refused(&post_cmd(&pay), "slack_auth", 3);
+    let out = post_cmd(&pay).ok();
 
+    assert_eq!(out["queued"], true, "{out}");
     assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
@@ -372,7 +327,7 @@ fn auto_merge_adds_no_readiness_check_of_its_own() {
     let pay = post();
     let out = post_cmd(&pay).ok();
     assert_eq!(out["ok"], true);
-    assert_eq!(out["auto_merge"]["state"], "enabled");
+    assert_eq!(out["queued"], true);
     drop(pay);
 
     let unready = post();
@@ -384,4 +339,16 @@ fn auto_merge_adds_no_readiness_check_of_its_own() {
     assert_eq!(error["details"]["reasons"], json!(["checks_failed"]));
     assert!(gh(&unready).is_empty(), "{:?}", gh(&unready));
     assert_eq!(posts(&unready), 0);
+}
+
+#[test]
+fn an_already_enabled_request_counts_as_enabled_without_a_second_mutation() {
+    let pay = post();
+    pay.gh.auto.lock().unwrap().already = true;
+
+    let out = post_cmd(&pay).ok();
+
+    assert_eq!(out["queued"], true, "{out}");
+    assert!(mutations(&pay).is_empty(), "{:?}", gh(&pay));
+    assert_eq!(row(&pay), None);
 }

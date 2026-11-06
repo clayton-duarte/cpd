@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): one per
-//! machine, running E1–E5, E7–E11 and E13 (E6 was removed) every `tick_seconds` under `locks/watch.lock`.
+//! machine, running E1–E5, E7–E10 and E13 (E6 was removed) every `tick_seconds` under `locks/watch.lock`.
 //!
 //! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`, and E7
 //!   (the Workflow start, which calls `pr::start`);
@@ -7,7 +7,6 @@
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`sleep`] E13: puts finished Lead and Manager Sessions to sleep;
 //! - [`archive_leads`] E14: archives the done Plan of a Lead asleep past `timeouts.archive_sleep_seconds`;
-//! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
 //! - [`auto_merge`] E18: turns on squash auto-merge for posted Workflows whose request is pending (deferred while stacked);
 //! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
@@ -93,7 +92,6 @@ mod provider_hold;
 mod provider_hold_e3_tests;
 #[cfg(test)]
 mod provider_hold_tests;
-mod react;
 #[cfg(test)]
 mod repeated_asks_tests;
 mod report;
@@ -122,8 +120,11 @@ mod swr_jira_tests;
 #[cfg(test)]
 mod swr_models_tests;
 #[cfg(test)]
+mod swr_slack_tests;
+#[cfg(test)]
+mod swr_slack_write_tests;
+#[cfg(test)]
 mod swr_tests;
-pub mod team;
 #[cfg(test)]
 mod testkit;
 mod titles;

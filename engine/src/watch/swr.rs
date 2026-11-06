@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::engine::Engine;
+use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::swr::outbox::{self, Retry};
@@ -83,12 +83,18 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// One source for one pass: skip it while an endpoint is paused, drain its outbox, fetch its due keys, report an outage.
+/// One source for one pass: skip it while an endpoint is paused or incident mode holds the step, drain its outbox, fetch its
+/// due keys, report an outage. Incident mode holds the drain of every system and the Slack fetch alike (contract §3.7): both
+/// are here, so no source adds its own hold.
 fn pass(
     engine: &mut Engine,
     source: &'static dyn Source,
     now: time::OffsetDateTime,
 ) -> Result<(), CpdError> {
+    if incident_holds(engine, Step::E24) {
+        engine.log.line("E24: holding: incident mode is on");
+        return Ok(());
+    }
     for name in source.endpoints() {
         if endpoint::get(&mut engine.store, name)?.is_some_and(|row| endpoint::is_paused(&row, now))
         {

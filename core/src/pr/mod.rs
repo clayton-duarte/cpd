@@ -34,8 +34,6 @@ mod poll_tests;
 #[cfg(test)]
 mod poll_threads_tests;
 #[cfg(test)]
-mod post_refusal_tests;
-#[cfg(test)]
 mod push_reset_tests;
 #[cfg(test)]
 mod query_tests;
@@ -59,7 +57,6 @@ pub(crate) mod postable;
 pub mod posts;
 pub mod pulls;
 mod push;
-pub mod reactions;
 pub(crate) mod rebase;
 mod reply;
 mod repost;

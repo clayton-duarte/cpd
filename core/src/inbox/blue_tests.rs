@@ -150,10 +150,7 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     let ts = NOW.unix_timestamp() as f64 - 3600.0;
     let post: Value = json!({"repo": "acme/pay", "number": 812, "ts": ts, "ts_raw": "1.1", "author": "Ryan Case", "primary": true,
                              "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let path = home.run_dir().join("team-review.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
-    std::fs::write(path, cache.to_string()).unwrap();
+    crate::inbox::team::seed_cache(&mut store, "C02JU6C2Z1D", &[post]);
 
     let workflow = GhPr {
         title: "Add retries".to_owned(),

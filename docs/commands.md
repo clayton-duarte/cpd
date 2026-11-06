@@ -2860,6 +2860,8 @@ Idempotent: no (every run posts a comment).
 
 ### 9.8b `pr post`
 
+**From the Slack cutover (`docs/architecture/swr-slack.md` §5.1).** `pr post` enqueues the send as an outbox mutation (`op_kind` `post`) and returns `{ok, plan, workflow, queued: true, mutation_id, message}`; engine E24 sends it, then writes the `pr_posts` row, the `in_review` Jira row and the `auto_merge` mutation. Check 8 reads the merge methods and `autoMergeAllowed` from `swr_repos`, not from `gh`. Check 2 also refuses `already_posted` while a `post` mutation of the Workflow is active. The checks and refusals below are otherwise as written.
+
 ```
 cpd pr post [--workflow <key>] [--plan <id>]
 ```
@@ -2917,6 +2919,8 @@ Output: `{"ok":true,"plan":<id>,"workflow":<key>,"number":<n>,"url":<the pull re
 Idempotent: no (every run tries to post).
 
 ### 9.8b2 `pr repost`
+
+**From the Slack cutover (`docs/architecture/swr-slack.md` §5.1).** `pr repost` enqueues one `repost` mutation and returns `queued: true` with its `mutation_id`; E24 sends it, and `last_posted_at` is set on completion. The checks below are as written.
 
 ```
 cpd pr repost [--workflow <key>] [--plan <id>]
@@ -6270,6 +6274,8 @@ Idempotent: yes. An item already dismissed returns `"already": true` and writes 
 
 ### 21.5 The team review cache (engine E11)
 
+**Superseded at the Slack cutover** (`docs/architecture/swr-slack.md` §9): the file is replaced by `swr_slack_posts` (SWR, swr.md §3.9), and E11 by the `slack` Source under E24. The text below is the design until then.
+
 Not a command. The team review read (Context decision "Team review Inbox", User, 2026-10-19; contract §2.2 "The team review rule", §3.7 E11): engine step E11 runs the Slack helper (§21.6) every `watch.team_review_seconds` (contract §8.2, default **1800**) after the end of the previous run, when `inbox.team_channel` is set and caches what it read in `run/team-review.json`. **It appends no Event of its own** (a failure is reported, below): the file is a derived cache (contract §1.4), like a Context digest. Its one store write is the `pr_posts` row of a confirmed post (the bullet Confirmation, below).
 
 - **Detached.** The helper runs on its own thread with a deadline of 120 s (§1.2 `tool_timeout`, `details.tool` `node`) and a later tick collects its answer: E11 never holds the tick. `locate_pi` (contract §9) gives the entry and `PI_CODING_AGENT_DIR`; `pi` that is not found is `pi_not_found`. The helper's argv is the one of §21.6, cwd `$CPD_HOME`, under pi's Node.
@@ -6279,6 +6285,8 @@ Not a command. The team review read (Context decision "Team review Inbox", User,
 - **What reads it.** The Inbox rule, in E8 (contract §2.2 "The team review rule", hs-d320): the status of each primary post's pull request from one `gh api graphql` call, memoised for `GITHUB_TTL` (30 s) and dropped at once when a `review-requested` row in the store changes (the invalidation token, contract §2.2 "The team review rule"), with the Slack overrides from `claim`, `eyes_me` and `thread_tags_me` (hermes `classify` 264-341, `refresh.build` 435-466); only `NEEDS_REVIEW` opens an item. It is not E11's: E11 calls no GitHub. A missing file is "unknown": the open items stay.
 
 ### 21.6 The helper `slack-channel.ts`
+
+**From the Slack cutover** (`docs/architecture/swr-slack.md` §3): the helper reads one JSON value on stdin (`known` and `terminal`), and its output carries the reaction counts, `reply_count`, `latest_reply`, `author_is_me`, and the `eyes_me` and `thread_tags_me` it read or echoed. The argv and the failure table below are unchanged, except that a malformed stdin is `usage`.
 
 `pi/lib/slack-channel.ts` in cpd's `pi/` package, beside the adapter (contract §8 `pi_adapter`). Not a cpd command: engine E11 (§21.5) runs it, detached. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client (hs-d107) and never reads, copies or logs the credential (as hermes' `slack_fetch.py:21-28` did through Hermes' own storage). Evidence and the rejected alternatives: `docs/research/team-review.md`.
 
@@ -6432,6 +6440,8 @@ or `"already": true` when the reaction was already there.
 Writes one Slack reaction (or confirms one already present) and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (engine E16, §21.9) writes the `reacted_at` column after a successful reaction.
 
 ### 21.9 The Slack reaction queue (engine E17)
+
+**Retired at the Slack cutover** (`docs/architecture/swr-slack.md` §4): the queue is `swr_mutations` (`op_kind` `reaction`), drained by E24; the table `slack_reactions` is dropped by the breaking migration. The text below is the design until then.
 
 Not a command. A queue of Slack reactions appended by every step that wants to add a reaction to a Slack post: today the merge reaction (Plan pr-post, Workflow `react`, User decision pro-d64 step 7) and the Claim reaction (Plan review-intake, Workflow `claim`). Engine step E17 drains the queue, running the helper (§21.8) once per tick for the oldest queued reaction that is due.
 

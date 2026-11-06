@@ -117,13 +117,10 @@ fn gh(reply: Reply) -> FakeRunner {
 
 /// A review-requested item 1 with a team cache holding its primary post.
 fn with_cache(runner: FakeRunner) -> (tempfile::TempDir, CpdHome, Store, Ports) {
-    let f = fixture(Kind::ReviewRequested, SUBJECT, runner);
-    let path = f.1.run_dir().join("team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut f = fixture(Kind::ReviewRequested, SUBJECT, runner);
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": "1767225600.000100",
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    crate::inbox::team::seed_cache(&mut f.2, "C02JU6C2Z1D", &[post]);
     f
 }
 

@@ -5,23 +5,16 @@
 
 use std::path::Path;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::auto_merge::{self, Outcome};
 use super::postable::unready;
 use super::posts::{self, PostRecord};
 use super::{Env, workflow_policy};
 use crate::args::{PlanArg, WorkflowArg};
-use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
-use crate::host::deadline::Failed;
-use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::ports::Ports;
-use crate::slack;
-
-/// The helper's deadline: above its own 30 s call.
-const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+use crate::swr::source::slack;
 
 #[derive(clap::Args, Debug)]
 pub struct PostArgs {
@@ -29,22 +22,6 @@ pub struct PostArgs {
     workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
-}
-
-/// Test constructor of the arguments: Workflow `key` of Plan `plan`.
-#[cfg(test)]
-pub(super) fn args(plan: PlanId, key: WorkflowKey) -> PostArgs {
-    PostArgs {
-        workflow: WorkflowArg {
-            workflow: Some(key),
-        },
-        plan: PlanArg { plan: Some(plan) },
-    }
-}
-
-fn record_json(post: &PostRecord) -> Value {
-    json!({"channel": post.channel, "ts": post.ts, "link": post.link, "posted_at": post.posted_at,
-           "reaction": post.reaction, "reacted_at": post.reacted_at})
 }
 
 pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
@@ -155,153 +132,35 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             )
             .with("key", "pr.post.template")
         })?;
-    // (i)
-    let call = slack::call(
-        &env.config,
-        "slack-post.ts",
-        &[("channel", &channel)],
-        Some(message.clone().into_bytes()),
-        DEADLINE,
-    )?;
-    let argv: Vec<String> = std::iter::once(call.program.clone())
-        .chain(call.args.iter().cloned())
-        .collect();
-    // (i) the row is written only AFTER the send resolves; a post that failed never happened.
-    let since = timestamp(env.ports.clock.utc());
-    let mut record = PostRecord {
-        channel: channel.clone(),
-        ts: String::new(),
-        link: String::new(),
-        posted_at: since.clone(),
-        reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
-        reacted_at: None,
-        auto_merge: "pending".to_owned(),
-        auto_merge_at: None,
-    };
-    let sent = match env.ports.runner.run(&call) {
-        Ok(out) => slack::answer(&out, &argv),
-        Err(Failed::Io(e)) => Err(CpdError::new(
-            ErrorCode::SpawnFailed,
-            format!("Cannot run {}: {e}.", argv.join(" ")),
-        )
-        .with("argv", json!(argv))),
-        Err(Failed::Timeout(e)) => Err(e),
-    }?;
-    let text = |name: &str| sent[name].as_str().unwrap_or_default().to_owned();
-    record.channel = text("channel");
-    record.ts = text("ts");
-    record.link = text("link");
-    // (j)
-    let stored = env.store.write("pr post", |tx| {
-        let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
-        if new {
-            crate::swr::source::jira::enqueue_for_workflow(
-                tx,
-                id.as_str(),
-                key.as_str(),
-                "in_review",
-            )?;
-        }
-        Ok(new)
+    // (i) the send is the outbox's: E24 runs the helper and writes the `pr_posts` row when it answers (swr-slack.md §5.1).
+    let vars = json!({
+        "channel": channel, "number": pull.number, "plan": id.as_str(), "repo": pull.repo.as_str(),
+        "text": message, "workflow": key.as_str(),
     });
-    match stored {
-        Ok(true) => {}
-        Ok(false) => {
-            let done = env
-                .store
-                .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
-            return Err(match done {
-                Some(done) => already_posted(&key, &done),
-                None => CpdError::bad_row(format!(
-                    "Workflow {key} has no post after its insert was refused"
-                )),
-            });
+    let queued = env.store.write("pr post", |tx| {
+        if let Some(done) = posts::find(tx, id.as_str(), key.as_str())? {
+            return Err(already_posted(&key, &done));
         }
-        Err(e) => {
-            return Err(CpdError::new(
-                ErrorCode::StoreFailed,
-                format!(
-                    "The message WAS posted ({}) but recording it failed: {}",
-                    record.link,
-                    e.message()
-                ),
-            )
-            .with("link", record.link.as_str())
-            .with("channel", record.channel.as_str())
-            .with("ts", record.ts.as_str()));
+        if let Some(mutation_id) = slack::active_post(tx, id.as_str(), key.as_str())? {
+            return Err(already_queued(&key, mutation_id));
         }
-    }
-    let merge = request_auto_merge(&mut env, &id, &key, &read)?;
+        slack::post_in(tx, &channel, &vars)
+    })?;
     Ok(Output::success(json!({
-        "plan": id, "pr": key, "number": pull.number, "url": pull.url,
-        "post": record_json(&record), "message": message, "auto_merge": merge,
+        "plan": id, "pr": key, "number": pull.number, "url": pull.url, "channel": channel,
+        "queued": queued.queued, "mutation_id": queued.mutation_id, "message": message,
     })))
 }
 
-/// The GitHub attempt, after the post is stored, on the read made before the send: `{state, reason}` (commands.md §9.8b).
-fn request_auto_merge(
-    env: &mut Env,
-    id: &PlanId,
-    key: &WorkflowKey,
-    read: &super::gh::AutoMergeRead,
-) -> Result<Value, CpdError> {
-    let stacked = env
-        .store
-        .read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
-    let outcome = if !read.allowed {
-        Outcome::NotAllowed
-    } else if stacked {
-        return Ok(state(
-            "deferred",
-            Some(
-                "the Workflow is stacked on another Workflow's branch: the request waits until it is unstacked",
-            ),
-        ));
-    } else {
-        auto_merge::after_read(&*env.ports.runner, Path::new("."), read)
-    };
-    let (stored, reported) = match outcome {
-        Outcome::Enabled => {
-            super::request_poll_now();
-            (Some("enabled"), state("enabled", None))
-        }
-        Outcome::NotAllowed => (
-            Some("none"),
-            state(
-                "not_allowed",
-                Some(
-                    "the repo does not allow auto-merge: cpd merges the Workflow when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)",
-                ),
-            ),
-        ),
-        Outcome::Refused(why) => (Some("refused"), state("refused", Some(&why))),
-        Outcome::Failed(e) => (None, state("failed", Some(e.message()))),
-    };
-    if let Some(stored) = stored {
-        env.store
-            .write("pr post", |tx| {
-                posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored)
-            })
-            .map_err(|e| {
-                CpdError::new(
-                    ErrorCode::StoreFailed,
-                    format!(
-                        "The message WAS posted but recording its auto-merge outcome failed: {}",
-                        e.message()
-                    ),
-                )
-            })?;
-    }
-    Ok(reported)
-}
-
-fn state(state: &str, reason: Option<&str>) -> Value {
-    json!({"state": state, "reason": reason.map(one_line)})
-}
-
-/// A reason on one line.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// `already_posted` of a post still in the outbox.
+fn already_queued(key: &crate::ids::WorkflowKey, mutation_id: i64) -> CpdError {
+    CpdError::new(
+        ErrorCode::AlreadyPosted,
+        format!("Workflow {key} has a post queued (mutation {mutation_id})."),
+    )
+    .with("pr", key.as_str())
+    .with("workflow", key.as_str())
+    .with("mutation_id", mutation_id)
 }
 
 fn already_posted(key: &crate::ids::WorkflowKey, done: &PostRecord) -> CpdError {

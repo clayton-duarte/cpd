@@ -561,7 +561,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         .with("item", item.id)
         .with("subject", item.subject.clone())
     };
-    let cache = team::read_cache(&env.home)?.ok_or_else(missing)?;
+    let cache = team::read_cache(&mut env.store)?.ok_or_else(missing)?;
     let (repo, number) = item
         .subject
         .strip_prefix("pr:")
@@ -677,7 +677,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
             item.id,
         );
         events::append(tx, scoped(event, &item))?;
-        crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
+        crate::swr::source::slack::react_in(tx, &channel, &ts_raw, "eyes")?;
         // A live codereview Plan of this PR is reused (pro-d416 A5): its Lead re-reviews, no second Plan is spawned.
         let existing: Option<(String, String)> = tx
             .query_row(

@@ -19,8 +19,8 @@ use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
     SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
-    inbox, janitor, liveness, models, open, parked, permanent, pr, react, restart, schedule, sleep,
-    swr, team, titles, wake, workers,
+    inbox, janitor, liveness, models, open, parked, permanent, pr, restart, schedule, sleep, swr,
+    titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
@@ -85,10 +85,6 @@ pub(super) struct Engine {
     pub curate_backoff: HashMap<ContextId, cpd_core::context::curate_backoff::Backoff>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
-    /// E11: the helper's run in flight and when the last one ended.
-    pub team: team::State,
-    /// E17: the merge reaction's run in flight and when the last one ended.
-    pub react: react::State,
     /// E18: the auto-merge request's run in flight and when the last one failed.
     pub auto_merge: auto_merge::State,
     /// E15: the helper's run in flight and when the last one ended.
@@ -164,8 +160,6 @@ impl Engine {
             curating: HashMap::new(),
             curate_backoff: HashMap::new(),
             titles: titles::Runs::default(),
-            team: team::State::default(),
-            react: react::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),
             swr: swr::State::default(),
@@ -284,7 +278,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 26] = [
+        let steps: [fn(&mut Engine); 24] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -301,8 +295,6 @@ impl Engine {
             inbox::run,
             distill::run,
             titles::run,
-            team::run,
-            react::run,
             auto_merge::run,
             models::run,
             swr::run,
@@ -322,13 +314,14 @@ impl Engine {
 }
 
 /// Whether incident mode holds `step` machine-wide (contract §3.7): E9 (Context curation), E10 (Session
-/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1, E2, E5,
-/// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
+/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E24 (the SWR
+/// outbox drain and the Slack fetch, which took over E17 and E11's reads) holds too; E1, E2, E5, E8, E12 and E13
+/// run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per Workflow ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
     if !matches!(
         step,
-        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18
+        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E18 | Step::E24
     ) {
         return false;
     }

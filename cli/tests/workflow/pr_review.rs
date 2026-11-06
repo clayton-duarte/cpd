@@ -103,10 +103,12 @@ fn submit(
     fx.cpd(&args)
 }
 
+/// The Slack reaction mutations of the outbox: `channel`, `ts`, `emoji`, `reacted_at` (set once the send is done).
 fn rows(fx: &Fx) -> Vec<Value> {
     let text: String = fx.env.query(
-        "SELECT coalesce(json_group_array(json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at)), '[]')
-           FROM (SELECT * FROM slack_reactions ORDER BY id)",
+        "SELECT coalesce(json_group_array(json_object('channel', json_extract(vars_json, '$.channel'), 'ts', json_extract(vars_json, '$.ts'),
+                  'emoji', json_extract(vars_json, '$.emoji'), 'reacted_at', IIF(status IN ('revalidating', 'done'), completed_at, NULL))), '[]')
+           FROM (SELECT * FROM swr_mutations WHERE system = 'slack' AND op_kind = 'reaction' ORDER BY id)",
     );
     serde_json::from_str(&text).unwrap()
 }

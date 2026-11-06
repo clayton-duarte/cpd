@@ -19,6 +19,10 @@ mod jira_adopt_tests;
 mod jira_tests;
 pub mod models;
 pub mod slack;
+#[cfg(test)]
+mod slack_tests;
+#[cfg(test)]
+mod slack_write_tests;
 
 #[cfg(test)]
 mod models_tests;
