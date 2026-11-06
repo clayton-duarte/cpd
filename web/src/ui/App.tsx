@@ -13,8 +13,6 @@ import type { CrashReport } from "../electron/health.ts";
 import { activeLeadPlanId as leadPlanIdOf, loadSelection, saveSelection, visiblePlan as visiblePlanOf } from "./state/selection.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { ContextTree } from "./cockpit/ContextTree.tsx";
-import { Header } from "./cockpit/Header.tsx";
-import type { BreadcrumbCrumb } from "./cockpit/Header.tsx";
 import { Inbox } from "./cockpit/Inbox.tsx";
 import { ManagerView } from "./cockpit/ManagerView.tsx";
 import { PlanView } from "./cockpit/PlanView.tsx";
@@ -150,111 +148,6 @@ export function App(props: AppProps): ReactElement {
     return rows.length === inbox.rows.length ? inbox : { ...inbox, rows, openCount: rows.length };
   }, [cockpit.inbox, activeSessionId]);
 
-  const crumbs = useMemo((): readonly BreadcrumbCrumb[] => {
-    const tree = cockpit.tree;
-    if (tree === null) {
-      if (cockpit.plan === null) return [];
-      return [
-        { part: "manager", label: cockpit.plan.contextId },
-        { part: "lead", label: cockpit.plan.planId },
-      ];
-    }
-    const hostContext = tree.contexts.find((c) => c.id === "host");
-    const hostManagerId =
-      hostContext?.sessions.find((s) => s.ref.role === "manager" && !s.archived)?.ref.id ??
-      hostContext?.sessions[0]?.ref.id;
-    const activeSessionId = session?.id ?? selectedSessionId;
-    let activeContext: ContextNode | undefined;
-    let activePlan: PlanNode | undefined;
-    let activeSession: SessionNode | undefined;
-
-    if (activeSessionId !== null) {
-      for (const c of tree.contexts) {
-        const direct = c.sessions.find((s) => s.ref.id === activeSessionId);
-        if (direct !== undefined) {
-          activeContext = c;
-          activeSession = direct;
-          break;
-        }
-        for (const p of c.plans) {
-          const inPlan = p.sessions.find((s) => s.ref.id === activeSessionId);
-          if (inPlan !== undefined) {
-            activeContext = c;
-            activePlan = p;
-            activeSession = inPlan;
-            break;
-          }
-        }
-        if (activeContext !== undefined) break;
-      }
-    }
-    if (activeContext === undefined && cockpit.plan !== null) {
-      activeContext = tree.contexts.find((c) => c.id === cockpit.plan?.contextId);
-      activePlan = activeContext?.plans.find((p) => p.id === cockpit.plan?.planId);
-    }
-
-    const out: BreadcrumbCrumb[] = [];
-    if (tree.hostname !== undefined || activeContext !== undefined) {
-      out.push({
-        part: "host",
-        label: tree.hostname ?? "host",
-        ...(hostManagerId !== undefined ? { onClick: () => onSelectSession(hostManagerId) } : {}),
-      });
-    }
-    if (activeContext !== undefined) {
-      const isStanding = STANDING_IDS.includes(activeContext.id);
-      const isArchive =
-        !isStanding &&
-        (activeContext.archived || activePlan?.archived === true || activeSession?.archived === true);
-      out.push({
-        part: "group",
-        label: isStanding ? "standing" : isArchive ? "archive" : "contexts",
-      });
-      const managerId =
-        activeContext.sessions.find((s) => s.ref.role === "manager" && !s.archived)?.ref.id ??
-        activeContext.sessions.find((s) => s.ref.role === "manager")?.ref.id;
-      out.push({
-        part: "manager",
-        label: activeContext.id,
-        ...(managerId !== undefined ? { onClick: () => onSelectSession(managerId) } : {}),
-      });
-      if (activePlan !== undefined) {
-        const plan = activePlan;
-        out.push({
-          part: "lead",
-          label: plan.id,
-          onClick: () => {
-            onSelectPlan(plan.id);
-            if (plan.leadSessionId !== null) onSelectSession(plan.leadSessionId);
-          },
-        });
-        if (activeSession !== undefined && activeSession.ref.role === "worker") {
-          const workerId = activeSession.ref.id;
-          out.push({
-            part: "worker",
-            label: activeSession.jobKey ?? activeSession.ref.key,
-            onClick: () => onSelectSession(workerId),
-          });
-        } else if (activeSession !== undefined && activeSession.ref.id !== plan.leadSessionId) {
-          const forkId = activeSession.ref.id;
-          out.push({
-            part: "worker",
-            label: `${plan.id}·${forkId.slice(0, 4)}`,
-            onClick: () => onSelectSession(forkId),
-          });
-        }
-      } else if (activeSession !== undefined && activeSession.ref.role === "lead") {
-        const forkId = activeSession.ref.id;
-        out.push({
-          part: "lead",
-          label: activeSession.ref.key,
-          onClick: () => onSelectSession(forkId),
-        });
-      }
-    }
-    return out;
-  }, [cockpit.tree, cockpit.plan, session?.id, selectedSessionId, onSelectSession, onSelectPlan]);
-
   return (
     <>
     <BootstrapOverlay />
@@ -282,13 +175,6 @@ export function App(props: AppProps): ReactElement {
     )}
     <Shell
       panelsRef={panelsRef}
-      header={
-        <Header
-          crumbs={crumbs}
-          location={cockpit.plan === null ? null : { context: cockpit.plan.contextId, plan: cockpit.plan.planId }}
-          engine={cockpit.inbox === null ? null : cockpit.inbox.engineRunning}
-        />
-      }
       status={
         <StatusBar
           {...(cockpit.status === null ? { runner: session?.ref?.runner ?? null, state: session?.ref?.state ?? null, version: null } : { status: barStatus(cockpit.status, Date.now()) })}

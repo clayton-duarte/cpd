@@ -19,7 +19,6 @@ export function Shell(props: {
   plan: ReactNode;
   chat: ReactNode;
   inbox: ReactNode;
-  header?: ReactNode;
   status?: ReactNode;
   /** Filled with the resizable panels, for `resetLayout`. */
   panelsRef?: MutableRefObject<LayoutPanels | null>;
@@ -46,11 +45,6 @@ export function Shell(props: {
   const zoomed = mode === "zoomed";
   return (
     <div data-shell className="bg-background font-sans text-body text-foreground">
-      {props.header === undefined ? null : (
-        <header aria-label="Cockpit header" className="bg-background">
-          {props.header}
-        </header>
-      )}
       <ResizablePanelGroup
         id="cpd-columns"
         data-part="columns-group"
