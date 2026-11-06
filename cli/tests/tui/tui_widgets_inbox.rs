@@ -147,18 +147,17 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     });
     seed(&fx, &items, 330);
     let _engine = engine(&fx);
-    // a merge of acme/api#3 runs: its marker is there before the view starts, as a restarted view finds it
+    // a merge of acme/api#3 is queued: its mutation is there before the view starts, as a restarted view finds it
     let (home, clock) = (fx.env.cpd_home(), fx.fakes.clock.clone());
-    crate::tui_merge::put_marker_at(&home, "acme__api__3.json", fx.live_pid());
-    let dead = fx.ended_pid();
+    crate::tui_merge::queue_merge_at(&home, "acme/api#3");
     let spinning = |screen: &[String]| {
         glyph_of(screen, ready).is_some_and(|g| palette::SPINNER.contains(&g.as_str()))
     };
-    // the same marker, stale (a dead pid), is ignored as no marker is
+    // the same merge, refused by GitHub (the mutation failed), no longer spins
     let world = World::new().at(spinning, {
         let home = home.clone();
         move || {
-            crate::tui_merge::put_marker_at(&home, "acme__api__3.json", dead);
+            crate::tui_merge::fail_merges_at(&home);
             clock.advance(3 * ONE_SECOND);
         }
     });

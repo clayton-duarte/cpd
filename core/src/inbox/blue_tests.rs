@@ -7,7 +7,6 @@ use time::macros::datetime;
 use super::model::{Condition, Filter, Item, Kind, State, Urgency, list, reconcile};
 use super::rules::{Team, conditions_with};
 use super::team::{GhPr, GhState, Lookup};
-use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::store::Store;
 
@@ -169,10 +168,9 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
             .collect(),
     };
     let bots = ["github-actions".to_owned()];
-    let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
+    crate::inbox::swr_fixture::lookup(&mut store, &lookup).unwrap();
     let team = Team {
         bot_reviewers: &bots,
-        github: &mut github,
     };
     let all = conditions_with(&mut store, &home, NOW, 20, 1, Some(team)).unwrap();
     let reviews: Vec<Condition> = all

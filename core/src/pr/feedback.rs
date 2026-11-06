@@ -2,8 +2,6 @@
 //! text and the data of the Event, from the reasons `pulls::attention` found.
 //! Pure: no I/O.
 
-#[cfg(test)]
-use super::gh::View;
 use super::pulls::{PullRequest, Reason};
 use crate::events::NewEvent;
 
@@ -68,42 +66,24 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
-    fn view(checks: Vec<(&str, &str)>) -> View {
-        View {
-            state: "OPEN".into(),
-            title: "T".into(),
-            url: "u".into(),
-            review_decision: None,
-            labels: Vec::new(),
-            checks: Some(
-                checks
-                    .into_iter()
-                    .map(|(name, conclusion)| Check {
-                        name: Some(name.into()),
-                        context: None,
-                        conclusion: Some(conclusion.into()),
-                        state: None,
-                        url: None,
-                        workflow: None,
-                        started_at: None,
-                    })
-                    .collect(),
-            ),
-            reviews: Vec::new(),
-            comments: Vec::new(),
-        }
+    fn view(checks: Vec<(&str, &str)>) -> Vec<Check> {
+        checks
+            .into_iter()
+            .map(|(name, conclusion)| Check {
+                name: Some(name.into()),
+                context: None,
+                conclusion: Some(conclusion.into()),
+                state: None,
+                url: None,
+                workflow: None,
+                started_at: None,
+            })
+            .collect()
     }
 
     #[test]
     fn checks_are_summarised_failed_over_pending_over_passed() {
-        let summary = |checks: Vec<(&str, &str)>| {
-            ChecksSummary::of(
-                view(checks).checks.as_deref().unwrap_or_default(),
-                &[],
-                &[],
-                false,
-            )
-        };
+        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(&view(checks), &[], &[], false);
         assert_eq!(summary(vec![]), ChecksSummary::None);
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(

@@ -361,6 +361,13 @@ fn e8_opens_the_review_item_for_a_cached_post_hermes_calls_needs_review() {
     let t = team_with(Some(3600), gh);
     // The post is unclaimed and just made, on the clock the engine reads.
     let now = t.fx.fakes.clock.utc().unix_timestamp();
+    // The pass's rows for the pull request and the viewer: E8 reads the cache, not GitHub (swr-github.md §6).
+    let fetched = cpd_core::clock::timestamp(t.fx.fakes.clock.utc());
+    t.fx.env.sql(&format!(
+        "INSERT INTO swr_viewer (id, login, fetched_at) VALUES (1, '{ME}', '{fetched}');
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested, head_oid)
+           VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Add retries', 0, 'open', 'none', 'passed', '{fetched}', '{fetched}', 0, 1, 'abc');"
+    ));
     let post = r#"{"ok":true,"channel":"C02JU6C2Z1D","read":1,"posts":[{"repo":"acme/pay","number":812,"ts":TS,"ts_raw":"TSRAW","author":"Ryan Case","author_id":"U01","author_is_me":false,"primary":true,"reactions":{},"reply_count":null,"latest_reply":null,"claim":null,"eyes_me":null,"thread_tags_me":false}]}"#
         .replace("TSRAW", &format!("{now}.000100"))
         .replace("TS", &now.to_string());

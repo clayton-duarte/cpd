@@ -209,7 +209,12 @@ pub fn conditions(
     let mut rows = stmt.query([&due_before])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let pull = PullRequest::from_row(row)?;
+        let mut pull = PullRequest::from_row(row)?;
+        // The overlay (swr-github.md §6): the item follows the effective state, so a queued merge closes it at once.
+        crate::swr::github::effective_row(conn, &mut pull)?;
+        if pull.state != "open" {
+            continue;
+        }
         let clean: bool = row.get(width)?;
         let get = |i: usize| row.get::<_, Option<String>>(width + i);
         let (plan, key, context, lead) = (get(1)?, get(2)?, get(3)?, get(4)?);

@@ -476,27 +476,41 @@ pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
                 item.subject
             ))
         })?;
-    let environments = crate::pr::deploys::approvable(&*env.ports.runner, &env.home, repo, run_id)?;
-    if !environments.is_empty() {
-        crate::pr::deploys::approve(&*env.ports.runner, &env.home, repo, run_id, &environments)?;
-    }
-    crate::pr::deploys::forget_run(&env.home, repo, run_id)?;
-    let closed_at = timestamp(env.ports.clock.utc());
-    env.store.write("inbox approve", |tx| {
-        if let Some(now) = model::get(tx, id)?.filter(|i| i.closed_at.is_none()) {
-            model::close_item(tx, &now, &closed_at)?;
-        }
-        Ok(())
+    // The environments the User can approve, from the stored run (`swr_deploys`); the drain approves them (swr-github.md §9).
+    let pending: Option<String> = env.store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT pending_json FROM swr_deploys WHERE repo = ?1 AND run_id = ?2 AND inactive_at IS NULL",
+                rusqlite::params![repo, run_id as i64],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
     })?;
-    let mut fields = json!({
-        "id": id,
-        "repo": repo,
-        "run_id": run_id,
-        "environments": environments.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
-    });
+    let mut environments: Vec<String> = pending
+        .and_then(|p| serde_json::from_str::<Vec<Value>>(&p).ok())
+        .unwrap_or_default()
+        .iter()
+        .filter(|p| p["current_user_can_approve"].as_bool() == Some(true))
+        .filter_map(|p| p["environment"]["name"].as_str().map(str::to_owned))
+        .collect();
+    environments.sort();
+    let mut fields =
+        json!({"id": id, "repo": repo, "run_id": run_id, "environments": environments});
     if environments.is_empty() {
         fields["already"] = json!(true);
+        return Ok(Output::success(fields));
     }
+    let mutation = crate::swr::source::github_write::enqueue(
+        &mut env.store,
+        env.ports.clock.utc(),
+        &crate::swr::github::deploy_key(repo, run_id as i64),
+        "approve",
+        json!({"run_id": run_id, "environments": environments}),
+        Some(json!({"deploy": "approving"})),
+    )?;
+    fields["queued"] = json!(true);
+    fields["mutation_id"] = json!(mutation);
     Ok(Output::success(fields))
 }
 
@@ -553,10 +567,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
     let missing = || {
         CpdError::new(
             ErrorCode::PostNotFound,
-            format!(
-                "No Slack post of {} is in the team review cache.",
-                item.subject
-            ),
+            format!("No Slack post of {} is in the cache.", item.subject),
         )
         .with("item", item.id)
         .with("subject", item.subject.clone())
@@ -568,8 +579,10 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         .and_then(|s| s.rsplit_once('#'))
         .and_then(|(repo, n)| Some((repo, n.parse::<u64>().ok()?)))
         .ok_or_else(missing)?;
+    // The live check reads the effective row, not GitHub (swr-github.md §9).
     let post = cache.primary_post(repo, number).ok_or_else(missing)?;
-    let lookup = team::github_lookup_with(&*ports.runner, &env.home, &[(repo.to_owned(), number)])?;
+    let channel = cache.channel.clone();
+    let lookup = team::lookup_from_store(&mut env.store, &[(repo.to_owned(), number)])?;
     let found = lookup
         .workflows
         .get(&(repo.to_owned(), number))
@@ -644,14 +657,14 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
     let brief_text = review_plan::Brief {
         repo,
         number,
-        channel: &cache.channel,
+        channel: &channel,
         ts_raw: &post.ts_raw,
         home: &home,
     }
     .text();
     let brief: Text = brief_text.parse()?;
     let claimed = timestamp(now);
-    let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
+    let (channel, ts_raw) = (channel.clone(), post.ts_raw.clone());
     let (lead_tier, lead_runner) = (
         env.config.lead_tier.to_string(),
         env.config.new_lead_runner(),

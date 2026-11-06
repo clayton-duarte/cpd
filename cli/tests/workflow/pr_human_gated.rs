@@ -12,7 +12,6 @@ use super::pr_checks::{
     add_second_owned_pr, answer, checks_of_row, contexts, feedback_data, green, one_page, policy,
     read_says, reads, run, status_context,
 };
-use super::pr_view;
 use super::workflow::{Poll, Rows, node, pay, poll_fx};
 
 const OK: &str = r#"{"ok":true,"channel":"C0POLICY1","ts":"1793040197.490209","link":"https://acme.slack.com/archives/C0POLICY1/p1793040197490209"}"#;
@@ -237,38 +236,6 @@ fn human_gated_one_read_serves_a_failed_and_a_pending_pull_request() {
         "{}",
         calls[0][3]
     );
-}
-
-/// `pr view` of an open PR whose `gh pr view` has green CheckRuns and `UI Review` PENDING, under owner policy `body`.
-fn view(body: &str) -> Value {
-    let fx = pr_view::fx("open");
-    fx.fx.env.owner_policy("acme", body);
-    let mut checks = green(2);
-    checks.push(status_context("UI Review", "PENDING"));
-    let _ = (*fx.fx.fakes.runner).clone().on(
-        "gh",
-        |c| c.args.starts_with(&["pr".into(), "view".into()]),
-        Reply::ok(&super::pr_checks::view_with(checks)),
-    );
-    fx.fx
-        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
-        .ok()
-}
-
-#[test]
-fn human_gated_pr_view_summary_follows_the_same_rule() {
-    let out = view("[pr]\ngate = \"local\"\n");
-    assert_eq!(out["pr"]["checks"], "passed");
-    let listed = out["checks"].as_array().unwrap();
-    assert!(
-        listed
-            .iter()
-            .any(|c| c["name"] == "UI Review" && c["conclusion"] == "PENDING"),
-        "{listed:?}"
-    );
-
-    let out = view("[pr]\nhuman_gated_contexts = []\n");
-    assert_eq!(out["pr"]["checks"], "pending");
 }
 
 #[test]

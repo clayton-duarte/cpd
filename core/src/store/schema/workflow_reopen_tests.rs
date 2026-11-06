@@ -46,6 +46,7 @@ fn dump(store: &mut Store) -> String {
                 // `codereview-followup` (a later migration) adds `plans.pr_subject` and `plans.changes_requested_at`.
                 // `plan-reviewed-pr` (a later migration) adds `plans.reviewed_*`: likewise not touched.
                 // `swr` (a later migration) adds `pull_requests.head_oid` and `gh_updated_at`: likewise.
+                // `pr-light-cache` (a later migration) adds `pull_requests.author_login`, `reviews_json`, `labels_json`: likewise.
                 Ok(rows
                     .into_iter()
                     .filter(|n| {
@@ -55,6 +56,9 @@ fn dump(store: &mut Store) -> String {
                             "changes_requested_at",
                             "head_oid",
                             "gh_updated_at",
+                            "author_login",
+                            "reviews_json",
+                            "labels_json",
                         ]
                         .contains(&n.as_str())
                             && !n.starts_with("reviewed_")

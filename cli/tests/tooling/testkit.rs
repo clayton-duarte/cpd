@@ -67,8 +67,8 @@ fn lead(fx: &Fx) -> std::path::PathBuf {
     fx.env.root().join("lead")
 }
 
-/// Plan `pay` with PR `repo` open as pull request #812 of `acme/pay`: `cpd pr view --plan pay` runs `gh pr view` in
-/// [`lead`] and needs nothing else (no git).
+/// Plan `pay` with PR `repo` open as pull request #812 of `acme/pay`: `cpd pr poll` runs `gh api graphql` and needs nothing else
+/// (no git).
 fn open_pr(fx: &Fx) {
     std::fs::create_dir_all(lead(fx)).expect("create the Lead worktree");
     fx.env.owner_policy("acme", "");
@@ -214,7 +214,7 @@ fn a_command_that_runs_gh_reaches_the_scripted_reply() {
     open_pr(&fx);
     fx.fake_gh(Reply::exit(1, "", "HTTP 401: bad credentials"));
 
-    let run = fx.cpd(&["pr", "view", "--plan", "pay"]);
+    let run = fx.cpd(&["pr", "poll"]);
 
     assert_eq!(
         (run.error()["code"].as_str().unwrap(), run.exit),
@@ -236,21 +236,12 @@ fn calls_shows_the_argv_environment_and_directory_of_a_gh_call() {
     open_pr(&fx);
     fx.fake_gh(Reply::exit(1, "", "HTTP 401: bad credentials"));
 
-    fx.cpd(&["pr", "view", "--plan", "pay"]);
+    fx.cpd(&["pr", "poll"]);
 
     let calls = fx.calls("gh");
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0].tool, "gh");
-    assert_eq!(
-        calls[0].args,
-        [
-            "pr",
-            "view",
-            "812",
-            "--json",
-            "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,labels"
-        ]
-    );
+    assert_eq!(calls[0].args[..2], ["api", "graphql"]);
     assert!(
         calls[0]
             .envs
@@ -265,7 +256,7 @@ fn calls_shows_the_argv_environment_and_directory_of_a_gh_call() {
         "{:?}",
         calls[0].envs
     );
-    assert_eq!(calls[0].cwd.as_deref(), Some(lead(&fx).as_path()));
+    assert_eq!(calls[0].cwd.as_deref(), Some(fx.env.cpd_home().as_path()));
 }
 
 #[test]
@@ -373,13 +364,13 @@ fn an_unscripted_external_call_is_refused_at_drop_naming_the_program_and_argv() 
     let fx = fx();
     open_pr(&fx);
 
-    // No `fake_gh`: `pr view` calls `gh`, which nothing answers.
-    fx.cpd(&["pr", "view", "--plan", "pay"]);
+    // No `fake_gh`: `pr poll` calls `gh`, which nothing answers.
+    fx.cpd(&["pr", "poll"]);
     let text = panics(|| drop(fx));
 
     assert!(text.contains("gh"), "{text}");
     assert!(
-        text.contains("pr") && text.contains("view") && text.contains("812"),
+        text.contains("api") && text.contains("graphql"),
         "the message names the argv: {text}"
     );
 }

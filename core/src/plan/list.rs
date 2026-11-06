@@ -42,15 +42,30 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
     let out = heads
         .into_iter()
         .map(|plan| {
+            let workflows = workflows.remove(plan.id.as_str()).unwrap_or_default();
             json!({
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
                 "lead_session": plan.lead_session, "created_at": plan.created_at, "archived_at": plan.archived_at,
                 "counts": counts_value(&counts.remove(plan.id.as_str()).unwrap_or_default()),
-                "workflows": workflows.remove(plan.id.as_str()).unwrap_or_default(),
+                "open_pr_checks": open_pr_checks(&workflows),
+                "workflows": workflows,
             })
         })
         .collect();
     Ok((out, highest_id(conn)?))
+}
+
+/// The Plan's open pull requests counted by `checks`: `{passed, pending, failed}`.
+fn open_pr_checks(workflows: &[Value]) -> Value {
+    let count = |checks: &str| {
+        workflows
+            .iter()
+            .filter(|w| {
+                w["pull_request"]["state"] == "open" && w["pull_request"]["checks"] == checks
+            })
+            .count()
+    };
+    json!({"passed": count("passed"), "pending": count("pending"), "failed": count("failed")})
 }
 
 /// How many Jobs each Plan has in each status.

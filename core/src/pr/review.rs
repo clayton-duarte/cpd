@@ -6,7 +6,6 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::gh;
 use super::merge::PullRef;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -15,6 +14,8 @@ use crate::ids::{ContextId, PlanId};
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
+use crate::swr::github::effective_pr;
+use crate::swr::source::github_write::{enqueue, queued, target_of};
 
 const STORE_BUSY_MS: u64 = 5000;
 
@@ -151,31 +152,34 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
 
     let repo = pull.to_string();
     let (repo, number) = repo.split_once('#').expect("a PullRef prints owner/repo#n");
-    let actual = gh::pull_head(&*ports.runner, repo, number)?;
-    if !actual.eq_ignore_ascii_case(&head) {
+    let number: i64 = number.parse().expect("a PullRef number is an integer");
+    // The head is checked against the cache (swr-github.md §9); GitHub itself refuses a review of a head that moved since,
+    // through `commit_id`.
+    let home = CpdHome::from_env()?;
+    let mut main = Store::open(&home, STORE_BUSY_MS)?;
+    let cached = effective_pr(&mut main, repo, number)?.and_then(|e| e.head_oid);
+    if let Some(actual) = cached.filter(|actual| !actual.eq_ignore_ascii_case(&head)) {
         return Err(CpdError::new(
             ErrorCode::HeadMoved,
-            format!("The head of {repo}#{number} is {actual}, not {head}: nothing was posted."),
+            format!("The head of {repo}#{number} is {actual}, not {head}: nothing was queued."),
         )
         .with("pr", format!("{repo}#{number}"))
         .with("expected", head)
         .with("actual", actual));
     }
-    let body = serde_json::to_vec(&review).expect("a JSON value serializes");
-    let stdout = gh::post_review(&*ports.runner, repo, number, body)?;
-    super::request_poll_now();
-    let posted: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
-    let (Some(id), Some(url)) = (
-        posted.get("id").filter(|v| v.is_number()),
-        posted.get("html_url").and_then(Value::as_str),
-    ) else {
-        return Err(CpdError::new(
-            ErrorCode::GhFailed,
-            format!("gh answered the review without an id or html_url: the review may have been posted; check the pull request {repo}#{number}."),
-        )
-        .with("stdout", crate::git::tail(&stdout, crate::git::TAIL_LINES)));
+    let patch = match args.event.as_str() {
+        "APPROVE" => Some(json!({"review_decision": "approved"})),
+        _ => Some(json!({"review_decision": "changes_requested"})),
     };
-    let review = json!({"id": id, "url": url, "state": posted.get("state").cloned().unwrap_or(Value::Null), "commit_id": head});
+    let mutation = enqueue(
+        &mut main,
+        ports.clock.utc(),
+        &target_of(repo, number),
+        "approve",
+        review.clone(),
+        patch,
+    )?;
+    let review = json!({"event": args.event, "commit_id": head, "queued": true});
 
     let plan = std::env::var("CPD_PLAN")
         .ok()
@@ -210,9 +214,13 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
             _ => Value::Null,
         }
     };
-    Ok(Output::success(
+    queued(
+        &mut main,
+        repo,
+        number,
+        mutation,
         json!({"review": review, "reaction": reaction}),
-    ))
+    )
 }
 
 /// Finishes a `codereview` Plan (FR10): `grounding → done` with `locked_at` and `done_at` the transaction's time, and a quiet `plan-done`.

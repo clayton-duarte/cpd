@@ -4,7 +4,6 @@
 use cpd_core::host::runner::{Call, Reply};
 use serde_json::{Value, json};
 
-use super::pr_view;
 use super::workflow::{Poll, Rows, node, pay, poll_fx};
 
 /// What the policy says of `feedback.checks`.
@@ -338,51 +337,4 @@ fn a_failed_checks_read_fails_the_poll_and_writes_nothing() {
         (fx.txns(), fx.event_count(), fx.pr_data()),
         (txns, events, row)
     );
-}
-
-/// The `gh pr view` reply with `checks` as its `statusCheckRollup`.
-pub(super) fn view_with(checks: Vec<Value>) -> String {
-    json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": "https://github.com/acme/pay/pull/812",
-           "reviewDecision": null, "statusCheckRollup": checks, "reviews": [], "comments": []})
-    .to_string()
-        + "\n"
-}
-
-/// `pr view` of a PR whose `gh pr view` holds `checks`: its output.
-pub(super) fn view(checks: Vec<Value>) -> Value {
-    let fx = pr_view::fx("open");
-    let _ = (*fx.fx.fakes.runner).clone().on(
-        "gh",
-        |c| c.args.starts_with(&["pr".into(), "view".into()]),
-        Reply::ok(&view_with(checks)),
-    );
-    fx.fx
-        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
-        .ok()
-}
-
-#[test]
-fn pr_view_does_not_count_a_cancelled_check_as_failed() {
-    let cancelled = json!({"__typename": "CheckRun", "name": "bot", "conclusion": "CANCELLED", "status": "COMPLETED"});
-    let pending =
-        |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "PENDING"});
-    let success =
-        |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "SUCCESS"});
-    let failure = json!({"__typename": "CheckRun", "name": "ci", "conclusion": "FAILURE", "status": "COMPLETED"});
-
-    let out = view(vec![cancelled.clone(), pending("a"), pending("b")]);
-    assert_eq!(out["pr"]["checks"], "pending");
-    let listed = out["checks"].as_array().unwrap();
-    assert!(
-        listed
-            .iter()
-            .any(|c| c["name"] == "bot" && c["conclusion"] == "CANCELLED"),
-        "{listed:?}"
-    );
-
-    let out = view(vec![cancelled.clone(), success("a"), success("b")]);
-    assert_eq!(out["pr"]["checks"], "passed");
-
-    let out = view(vec![cancelled, failure]);
-    assert_eq!(out["pr"]["checks"], "failed");
 }

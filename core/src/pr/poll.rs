@@ -18,6 +18,9 @@ use super::pulls::{self, Change, PostFacts, Reason};
 use super::row::PlanWorkflows;
 use super::start::unstack;
 use super::status::{self, ChecksSummary, Mergeable, PrState};
+/// The single-call poll's builder and runner-taking read, for `swr::source::github` (`gh` is private to `pr`).
+#[allow(unused_imports)] // a stub until swr-github calls them
+pub(crate) use super::swr_read::{PollPlan, build_poll_query, head_ref_oid_on};
 use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
@@ -323,7 +326,12 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     report_unresolved(env, &unresolved)?;
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
-    deploys::read(&*env.ports.runner, &env.home, &crate::clock::now())?;
+    deploys::read_into_store(
+        &*env.ports.runner,
+        &mut env.store,
+        &env.home,
+        env.ports.clock.utc(),
+    )?;
 
     let printed_prs = match &selected {
         Some(id) => {

@@ -93,10 +93,9 @@ fn conditions(store: &mut Store, home: &CpdHome, pr: &GhPr) -> Vec<Condition> {
         workflows: [(("acme/pay".to_owned(), 812), Some(pr.clone()))].into(),
     };
     let bots = ["github-actions".to_owned()];
-    let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
+    crate::inbox::swr_fixture::lookup(store, &lookup).unwrap();
     let team = Team {
         bot_reviewers: &bots,
-        github: &mut github,
     };
     conditions_with(store, home, NOW, 20, 1, Some(team))
         .unwrap()

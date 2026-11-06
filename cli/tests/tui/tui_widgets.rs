@@ -270,7 +270,7 @@ fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
                 // not through `Store`, which refuses a changed schema
                 raw(
                     &db,
-                    "ALTER TABLE pull_requests RENAME TO pull_requests_gone;",
+                    "ALTER TABLE swr_mutations RENAME TO swr_mutations_gone;",
                 );
                 clock.advance(ONE_SECOND);
             }
@@ -283,7 +283,7 @@ fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
             );
             raw(
                 &db,
-                "ALTER TABLE pull_requests_gone RENAME TO pull_requests;",
+                "ALTER TABLE swr_mutations_gone RENAME TO swr_mutations;",
             );
             clock.advance(ONE_SECOND);
         })

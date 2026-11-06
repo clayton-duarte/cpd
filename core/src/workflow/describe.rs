@@ -1,5 +1,5 @@
 //! `workflow describe` (commands.md §9.5a): stores a Workflow's description, the body of its pull request. In any phase and any Workflow status
-//! but `merged` and `cancelled`; on an adopted Workflow it is refused; with an open pull request GitHub is updated first.
+//! but `merged` and `cancelled`; on an adopted Workflow it is refused; with an open pull request the update of GitHub is queued on the outbox.
 
 use std::io::Read;
 use std::path::Path;
@@ -14,7 +14,8 @@ use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
-use crate::pr::{describe_pr, find_workflow};
+use crate::pr::find_workflow;
+use crate::swr::source::github_write::{enqueue, target_of};
 
 const COMMAND: &str = "workflow describe";
 
@@ -47,6 +48,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
         .with("workflow", key.as_str())
         .with("max", MAX_CHARS));
     }
+    let mut queued = None;
     let (status, already) = match env
         .store
         .read(|conn| decide(conn, &plan, &key, Some(&text)))?
@@ -54,7 +56,16 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
         Decision::Already(status) => (status, true),
         Decision::Update { open, .. } => {
             if let Some((repo, number)) = open {
-                describe_pr(env.home.root(), &repo, number, &text)?;
+                // The body of the pull request goes through the outbox (swr-github.md §9); the stored description is cpd's own.
+                let id = enqueue(
+                    &mut env.store,
+                    env.ports.clock.utc(),
+                    &target_of(&repo, number),
+                    "describe",
+                    json!({"body": text}),
+                    None,
+                )?;
+                queued = Some(id);
             }
             let status = env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, Some(&text))? {
                 Decision::Already(status) => Ok(status),
@@ -72,6 +83,10 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let mut out = json!({"workflow": {"key": key, "status": status}});
     if already {
         out["already"] = json!(true);
+    }
+    if let Some(id) = queued {
+        out["queued"] = json!(true);
+        out["mutation_id"] = json!(id);
     }
     Ok(Output::success(out))
 }
