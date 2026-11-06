@@ -41,6 +41,8 @@ export type Request = {
   target: "in_progress" | "in_review" | "done";
   /** The cached site id, or null to resolve it with getAccessibleAtlassianResources. */
   cloud_id: string | null;
+  /** The cached accountId of the authenticated user, or null to resolve it with atlassianUserInfo. */
+  account_id: string | null;
   /** The policy name of the target. */
   target_name: string;
   /** The names of the targets of higher rank, in rank order. */
@@ -51,7 +53,7 @@ export type Request = {
   names?: { in_progress: string; in_review: string; done: string };
 };
 
-type Facts = { cloud_id: string; summary: string; estimates: Record<string, unknown> };
+type Facts = { cloud_id: string; account_id: string; summary: string; estimates: Record<string, unknown> };
 export type Result =
   | ({ ticket: string; target: string; outcome: "moved"; from: string; to: string } & Facts)
   | ({ ticket: string; target: string; outcome: "unchanged"; status_name: string; status_category: string; why: "at_target" | "done_category" | "past_target" } & Facts);
@@ -118,9 +120,9 @@ export async function transition(call: CallTool, request: Request): Promise<Resu
   const have = issue.fields ?? {};
   const estimates: Record<string, unknown> = {};
   for (const f of request.estimate_fields) if (f in have) estimates[f] = have[f];
-  const facts = { cloud_id: cloudId, summary, estimates };
+  const facts = { cloud_id: cloudId, account_id: "", summary, estimates };
   const category_ = typeof category === "string" ? category : "";
-  const unchanged = (why: "at_target" | "done_category" | "past_target"): Result => ({ ticket, target, outcome: "unchanged", cloud_id: cloudId, status_name: status, status_category: category_, why, summary, estimates });
+  const unchanged = (why: "at_target" | "done_category" | "past_target"): Result => ({ ticket, target, outcome: "unchanged", cloud_id: cloudId, account_id: "", status_name: status, status_category: category_, why, summary, estimates });
   if (status === want) return unchanged("at_target");
   if (category === "done") return unchanged("done_category");
   if (request.later_names.includes(status)) return unchanged("past_target");
@@ -162,7 +164,7 @@ function parseRequest(stdin: string): Request {
   if (typeof r.server !== "object" || r.server === null || typeof r.server.url !== "string" || !r.server.url) throw bad("server.url");
   const ef = r.estimate_fields;
   if (!Array.isArray(ef) || ef.some((f: unknown) => typeof f !== "string" || !ESTIMATE_FIELD.test(f)) || new Set(ef).size !== ef.length) throw bad("estimate_fields");
-  return { server: r.server, ticket: r.ticket, target: r.target, cloud_id: r.cloud_id, target_name: r.target_name, later_names: r.later_names, estimate_fields: ef };
+  return { server: r.server, ticket: r.ticket, target: r.target, cloud_id: r.cloud_id, account_id: null, target_name: r.target_name, later_names: r.later_names, estimate_fields: ef };
 }
 
 /** The `atlassian` connection of pi, built from the request's server (never from mcp.json). */
