@@ -13,6 +13,9 @@ use super::comments::{self, Read};
 use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
+/// The single-call poll's builder and runner-taking read, for `swr::source::github` (`gh` is private to `pr`).
+#[allow(unused_imports)] // a stub until swr-github calls them
+pub(crate) use super::gh::{PollPlan, build_poll_query, head_ref_oid_on};
 use super::posts;
 use super::pulls::{self, Change, Excused, PostFacts, Reason};
 use super::row::PlanWorkflows;

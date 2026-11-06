@@ -16,6 +16,9 @@ pub mod jira;
 pub mod models;
 pub mod slack;
 
+#[cfg(test)]
+mod github_tests;
+
 /// A query key `<system>:<kind>:<id>` (swr.md §4).
 pub type QueryKey = String;
 

@@ -2787,3 +2787,33 @@ mod tests {
         );
     }
 }
+
+/// What one pass of the single GraphQL read needs beyond the fixed part (swr-github.md §3.1): the rows chosen before the call.
+#[allow(dead_code)] // a stub until swr-github calls it
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PollPlan {
+    /// `(owner/name, number)` of the listed pull requests whose `Heavy` selection is sent: `updatedAt` or `headRefOid` moved, or unhydrated.
+    pub heavy: Vec<(String, i64)>,
+    /// `(owner/name, number)` of the absent or first-seen pull requests: one `p<i>` alias each (`viewerDidAuthor`, no `Heavy`).
+    pub absent: Vec<(String, i64)>,
+    /// `owner/name` of the repositories whose metadata is missing or older than 24 h: one `m<i>` alias each.
+    pub meta: Vec<String>,
+}
+
+/// The one read document of a pass (swr-github.md §3.1). Stub: swr-github implements it.
+#[allow(dead_code)] // a stub until swr-github calls it
+pub fn build_poll_query(_plan: &PollPlan) -> String {
+    todo!("swr-github: build_poll_query")
+}
+
+/// [`head_ref_oid`] on an explicit `runner`, never the ambient `Ports` (swr-github.md §7.3). Stub: the implementation gives
+/// `head_ref_oid` this signature and removes this one.
+#[allow(dead_code)] // a stub until swr-github calls it
+pub fn head_ref_oid_on(
+    _runner: &dyn Runner,
+    _cwd: &Path,
+    _repo: &str,
+    _number: i64,
+) -> Result<String, CpdError> {
+    todo!("swr-github: head_ref_oid takes a runner")
+}
