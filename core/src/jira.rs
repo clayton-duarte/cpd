@@ -23,6 +23,8 @@ pub struct Request {
     pub target: String,
     /// The cached site id, or `None` to have the helper resolve it.
     pub cloud_id: Option<String>,
+    /// The cached authenticated user's account id, or `None` to have the helper resolve it.
+    pub account_id: Option<String>,
     pub target_name: String,
     pub later_names: Vec<String>,
     pub estimate_fields: Vec<String>,
@@ -40,6 +42,7 @@ pub enum Done {
 pub struct Answer {
     pub done: Done,
     pub cloud_id: String,
+    pub account_id: String,
     pub summary: String,
     pub status_name: String,
     pub status_category: String,
@@ -127,6 +130,7 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Answer, CpdError> {
     Ok(Answer {
         done,
         cloud_id: text(&value, "cloud_id")?,
+        account_id: String::new(),
         summary: text(&value, "summary")?,
         status_name,
         status_category,
@@ -158,6 +162,7 @@ mod tests {
             ticket: "A-1".into(),
             target: "in_review".into(),
             cloud_id: None,
+            account_id: None,
             target_name: "In Review".into(),
             later_names: vec!["Done".into()],
             estimate_fields: vec!["customfield_10016".into()],

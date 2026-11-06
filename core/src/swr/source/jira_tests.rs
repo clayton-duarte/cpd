@@ -282,9 +282,12 @@ const MOVED: &str = r#"{"ok":true,"outcome":"moved","ticket":"EEC-1","target":"i
 
 /// Runs the claimed transition to `in_review` on a helper that answers `MOVED`; returns the rig, the outcome and the helper's calls.
 fn run_moved(rig: &mut Rig) -> (ExecOutcome, Vec<Call>, Mutation) {
-    (*rig.fakes.runner)
-        .clone()
-        .on("node", |_| true, Reply::ok(MOVED));
+    run_reply(rig, Reply::ok(MOVED))
+}
+
+/// `run_moved` with the helper's reply given.
+fn run_reply(rig: &mut Rig, reply: Reply) -> (ExecOutcome, Vec<Call>, Mutation) {
+    (*rig.fakes.runner).clone().on("node", |_| true, reply);
     let now = rig.fakes.clock.utc();
     enqueue(&mut rig.store, now, "in_review", Some("In Review"));
     let m = outbox::claim_next(&mut rig.store, now, "jira")
@@ -442,4 +445,99 @@ fn jira_helper_makes_one_get_issue_call_with_fields() {
         "no `names` object: Rust computes `later_names`"
     );
     assert_eq!(request["estimate_fields"], json!([]));
+}
+
+const MOVED_WITH_ACCOUNT: &str = r#"{"ok":true,"outcome":"moved","ticket":"EEC-1","target":"in_review","cloud_id":"cloud-new","account_id":"acct-new","from":"In Progress","to":"In Review","summary":"Retry failed payouts","estimates":{"customfield_10016":null}}"#;
+
+fn atlassian_with_account(rig: &mut Rig, cloud: &str, account: &str, fetched: OffsetDateTime) {
+    let at = timestamp(fetched);
+    rig.store
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO swr_atlassian (id, cloud_id, account_id, fetched_at) VALUES (1, ?1, ?2, ?3)",
+                params![cloud, account, at],
+            )?;
+            Ok::<(), crate::error::CpdError>(())
+        })
+        .unwrap();
+}
+
+fn cached_ids(rig: &mut Rig) -> (Option<String>, Option<String>) {
+    rig.store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT cloud_id, account_id FROM swr_atlassian WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn jira_account_id_is_cached_and_passed_to_the_helper() {
+    let mut fresh = rig();
+    let now = fresh.fakes.clock.utc();
+    atlassian_with_account(
+        &mut fresh,
+        "cloud-cached",
+        "acct-cached",
+        now - time::Duration::hours(23),
+    );
+    let (_, calls, _) = run_reply(&mut fresh, Reply::ok(MOVED_WITH_ACCOUNT));
+    assert_eq!(calls.len(), 1, "one helper spawn");
+    assert_eq!(stdin_of(&calls[0])["account_id"], "acct-cached");
+}
+
+#[test]
+fn jira_stale_account_id_is_sent_as_null() {
+    let mut old = rig();
+    let now = old.fakes.clock.utc();
+    atlassian_with_account(
+        &mut old,
+        "cloud-cached",
+        "acct-cached",
+        now - time::Duration::hours(25),
+    );
+    let (_, calls, _) = run_reply(&mut old, Reply::ok(MOVED_WITH_ACCOUNT));
+    assert_eq!(stdin_of(&calls[0]).get("account_id"), Some(&Value::Null));
+}
+
+#[test]
+fn jira_account_id_is_resolved_and_cached_beside_the_cloud_id() {
+    let mut r = rig();
+    let (_, calls, _) = run_reply(&mut r, Reply::ok(MOVED_WITH_ACCOUNT));
+    assert_eq!(stdin_of(&calls[0]).get("account_id"), Some(&Value::Null));
+    assert_eq!(
+        cached_ids(&mut r),
+        (Some("cloud-new".into()), Some("acct-new".into()))
+    );
+}
+
+#[test]
+fn jira_account_id_is_cleared_with_the_cloud_id_when_the_issue_is_not_found() {
+    let mut r = rig();
+    let now = r.fakes.clock.utc();
+    atlassian_with_account(
+        &mut r,
+        "cloud-cached",
+        "acct-cached",
+        now - time::Duration::hours(1),
+    );
+    let refused = r#"{"ok":false,"error":{"code":"jira_refused","message":"not found","details":{"reason":"issue_not_found"}}}"#;
+    let (outcome, _, _) = run_reply(&mut r, Reply::exit(3, refused, ""));
+    assert!(matches!(outcome, ExecOutcome::Failed { .. }), "{outcome:?}");
+    assert_eq!(cached_ids(&mut r), (None, None));
+}
+
+#[test]
+fn jira_helper_answer_without_account_id_is_jira_helper_failed() {
+    use std::os::unix::process::ExitStatusExt;
+    let out = std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: MOVED.as_bytes().to_vec(),
+        stderr: Vec::new(),
+    };
+    let error = crate::jira::answer(&out, &["node".to_owned()]).unwrap_err();
+    assert_eq!(error.code(), crate::error::ErrorCode::JiraHelperFailed);
 }

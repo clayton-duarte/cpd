@@ -614,6 +614,7 @@ impl Jira {
             ticket: ticket.to_owned(),
             target: target.to_owned(),
             cloud_id: cloud_id.clone(),
+            account_id: None,
             target_name: wanted.target_name.clone(),
             later_names: wanted.later_names.clone(),
             estimate_fields: wanted.estimate_fields.clone(),
