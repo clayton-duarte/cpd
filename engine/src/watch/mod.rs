@@ -120,6 +120,8 @@ mod swr_jira_run_tests;
 #[cfg(test)]
 mod swr_jira_tests;
 #[cfg(test)]
+mod swr_models_tests;
+#[cfg(test)]
 mod swr_tests;
 pub mod team;
 #[cfg(test)]

@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 114
+-- cpd-migration: breaking after 116
 -- jira-swr (docs/architecture/swr-jira.md §12; pro-d443): the Jira transition queue moves onto the SWR mutation outbox.
 --   * every open row of `jira_transitions` (PENDING, or PARKED as refused) is copied into `swr_mutations` as a `jira`
 --     `transition`; a Workflow with no ticket gets a PENDING row with no `target_key`, which the outbox never claims until a

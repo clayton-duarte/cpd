@@ -5,7 +5,7 @@
 //!
 //! The engine runs in-process on the `ManualClock` ([`Fx::watch`]); the migration is applied by hand, between two ticks
 //! (the hook runs before each nap) or inside one (the tmux route of E2). The step that would visibly write is E8: a
-//! `run/models-bifrost.json` with a fresh change opens a `models-changed` Inbox item at the next tick that runs E8.
+//! a `swr_models` row with a fresh change opens a `models-changed` Inbox item at the next tick that runs E8.
 
 use crate::common;
 
@@ -60,22 +60,30 @@ fn engine() -> Fx {
     fx
 }
 
-/// `run/models-bifrost.json` as E15 wrote it a minute ago with a change made a minute ago: the next E8 opens a
+/// The `swr_models` row of `bifrost` as E15 wrote it a minute ago with a change made a minute ago: the next E8 opens a
 /// `models-changed` item for it, a write only a step that runs can make.
+///
+/// A plain connection, not `Store::open`: it runs between ticks after a breaking migration, where a store of this cpd's
+/// schema would refuse to open. The database exists already (the engine's config opened the store).
 fn announce_a_change(cpd_home: &Path, clock: &impl Clock) {
     let at = (clock.utc() - time::Duration::seconds(60))
         .replace_nanosecond(0)
         .unwrap()
         .format(&Rfc3339)
         .unwrap();
-    let file = json!({
-        "version": 1, "provider": "bifrost", "polled_at": at, "pi_version": "1.3.0",
+    let catalog = json!({
+        "pi_version": "1.3.0",
         "source": {"kind": "openai-models", "auth": "custom", "base": null},
-        "ids": ["anthropic/claude-sonnet-5"],
-        "changes": {"at": at, "appeared": ["openai/gpt-5.6"], "went_away": []}
+        "ids": ["anthropic/claude-sonnet-5"]
     });
-    fs::create_dir_all(cpd_home.join("run")).unwrap();
-    fs::write(cpd_home.join("run/models-bifrost.json"), file.to_string()).unwrap();
+    let changes = json!({"at": at, "appeared": ["openai/gpt-5.6"], "went_away": []});
+    rusqlite::Connection::open(cpd_home.join("cpd.db"))
+        .unwrap()
+        .execute(
+            "INSERT OR REPLACE INTO swr_models (provider, catalog_json, changes_json, polled_at) VALUES ('bifrost', ?1, ?2, ?3)",
+            [catalog.to_string(), changes.to_string(), at],
+        )
+        .unwrap();
 }
 
 fn items(fx: &Fx) -> i64 {
@@ -162,6 +170,7 @@ fn stand_down_during_a_tick_runs_no_later_step_and_reports_no_error() {
     fx.engine_config("");
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     // A later step (E8) would open an item at this tick.
+    drop(fx.env.store());
     announce_a_change(&fx.env.cpd_home(), &*fx.fakes.clock);
     // The first rule that matches answers, so this one is put before `engine_routes`' tmux with no server: E2's listing is
     // where the migration lands (the matcher runs on the engine's thread, in the step) and the step fails (`tmux_failed`).

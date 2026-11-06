@@ -4295,7 +4295,7 @@ The header's lines are colour 8 and its two pills are read-only title pills (col
   | `job-stuck` (history rows only: hs-d318 dropped the kind, E8 opens none; a stuck Job goes to the Context's Manager as a message, contract §3.7 "A stuck Job") | nothing: no jump, no popup |
   | `curate-retire` (hs-d549, hs-d551; hs-d568, hs-d569 CD4; hs-d592) | Exists only for a curable Context (R6 of hs-d592). Runs `cpd context curation --context <the item's Context> --limit=10` (§3.15; hs-d569 CD4: cockpit asks for 10) and opens the `checklist` dialog (§13.2) with title `Retire records of <context>` (with suffix ` (<shown> of <total>)` when total > 10, hs-d569 CD4) and one entry per row of `retire` (hs-d569 CD2: full `text`, header line `[ ] <id> — <reason> <target>`); on **Approve** runs `cpd context retire --context <context> --approve <ticked ids> --reject <unticked ids>` (§3.17), deciding only the shown entries; on **[Later]** (hs-d569 CD3: the button says it) or Esc/q runs nothing, every entry stays pending for the next opening. With nothing pending the dialog is not opened and nothing runs. A refusal of either command is a `text` dialog (§17 "No notes"). The click decides nothing by itself; dismissing the item (`d`) decides nothing either. Only the `pending` rows are listed: a row that a model pair approved (contract §4.6 "Retirement") is not in the dialog |
   | `curate-docs` (history rows only: pro-d327 removed the documentation suggestions, E8 opens none) | nothing; no jump, no click action |
-  | `models-changed` (pro-d13, pro-d16) | opens a read-only `text` dialog (§17, the dialog kit) titled `Models: <provider>` with the announced ids of the item's `changes` read from `run/models-<provider>.json` (the provider and `changes.at` are in the item's subject `models:<provider>/<changes.at>`; the announced part and its filter are contract §2.2 "The models-changed rule"): a heading `New (<N>)` and one id per line, then a heading `Gone (<M>)` and one id per line, a part with no ids omitted. No command runs and nothing is decided; Esc/q/Enter closes it. A file that no longer has that `changes` (a newer change replaced it) shows `changed again; the item closes at the next tick` in the dialog. The kind has no `url`, no OSC 8 link and no target, so the simpler rule of the other kinds (copy the `url`, or nothing) is not used: the ids are the point |
+  | `models-changed` (pro-d13, pro-d16) | opens a read-only `text` dialog (§17, the dialog kit) titled `Models: <provider>` with the announced ids of the item's `changes` read from the provider's `swr_models` row (`swr-models.md` §5) (the provider and `changes.at` are in the item's subject `models:<provider>/<changes.at>`; the announced part and its filter are contract §2.2 "The models-changed rule"): a heading `New (<N>)` and one id per line, then a heading `Gone (<M>)` and one id per line, a part with no ids omitted. No command runs and nothing is decided; Esc/q/Enter closes it. A row that no longer has that `changes` (a newer change replaced it) shows `changed again; the item closes at the next tick` in the dialog. The kind has no `url`, no OSC 8 link and no target, so the simpler rule of the other kinds (copy the `url`, or nothing) is not used: the ids are the point |
   | `question` (history rows only: hs-d306 (1) dropped the kind, E8 opens none) | `session open` of the Context's Manager Session (`cpd context manager --context <c>`, then `session open <manager>`, as a click on a Context row) |
 
   Every jump and link open of this table runs off the view's thread, as **Inbox actions run off the view's thread** (pro-d350, the `widgets` view) says.
@@ -4465,7 +4465,7 @@ The column has no engine line, no slots, no Escalations, no Events and no footer
 |---|---|
 | `cpd config` (read) | `config_missing` (1), `config_invalid` (1) |
 | `cpd tiers --model …` (read, and after a pick) | `pi_not_found` (1), `catalog_failed` (1), `tier_model_unknown` (1), `lock_timeout` (5) |
-| `cpd models show` (read) | none: a cache file it cannot parse is skipped and named in `warnings` (§14.5) |
+| `cpd models show` (read) | none: a row it cannot parse is `store_failed` (§14.5); `warnings` stays `[]` |
 | `cpd preset set --O … --S … --H … --G …` | `usage` (2), `policy_invalid` (1), `pi_not_found` (1), `spawn_failed` (1), `tool_timeout` (5), `models_helper_failed` (1), `preset_provider_unconfigured` (3), `preset_model_unoffered` (3) (§14.6a) |
 | `cpd config tiers set --auxiliar … --worker … --lead … --manager …` | `config_missing` (1), `tier_invalid` (2), `config_invalid` (1), `policy_invalid` (1), `lock_timeout` (5), `pi_not_found` (1), `catalog_failed` (1), `tier_model_unknown` (1) (§14.2a) |
 | `cpd config experimental <feature> <on|off>` | `usage` (2), `config_invalid` (1), `config_missing` (1) (§14.2b) |
@@ -4850,9 +4850,9 @@ cpd models refresh
 cpd models show [--provider <provider>]
 ```
 
-The model lists of the providers pi can use (contract §3.7 E15, Context decisions pro-d13, pro-d17, pro-d20). **cpd has no provider list and names no key**: the providers come from pi, through the helper `pi/lib/models-list.ts` and `--provider` only names one of the files already cached. Callers: Manager, Lead, or the User at a shell (§2). Neither command opens the store, writes a row or appends an Event.
+The model lists of the providers pi can use (contract §3.7 E15, Context decisions pro-d13, pro-d17, pro-d20). **cpd has no provider list and names no key**: the providers come from pi, through the helper `pi/lib/models-list.ts` and `--provider` only names one of the providers already cached. Callers: Manager, Lead, or the User at a shell (§2). Both commands open the store (the `swr_models` rows, contract §4.4, `swr-models.md`); `refresh` writes rows and appends no Event.
 
-**`models refresh`** reads the lists now, whatever their age. It runs the helper exactly as E15 does (no argument, under pi's Node, its own process group, a deadline of 120 s, the engine's environment inherited; contract §3.7 E15 for the answer, its validation, the error codes and the file), then, under `locks/models.lock`, computes each provider's diff and writes `run/models-<provider>.json` whole (`.tmp` and rename), by the same code as the engine, so a refresh and the engine never interleave. A provider whose list is empty or failed writes nothing and keeps its last good file. A first run, or a run after a change of `auth`, reports no change.
+**`models refresh`** reads the lists now, whatever their age. It runs the helper exactly as E15 does (no argument, under pi's Node, its own process group, a deadline of 120 s, the engine's environment inherited; contract §3.7 E15 for the answer, its validation, the error codes and the file), then computes each provider's diff and writes its `swr_models` row in one store transaction (`BEGIN IMMEDIATE`), by the same code as the engine, so a refresh and the engine never interleave (no lock file). A provider whose list is empty or failed keeps its row: `last_error` is set and nothing else moves. A first run, or a run after a change of `auth`, reports no change.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -4863,11 +4863,11 @@ The model lists of the providers pi can use (contract §3.7 E15, Context decisio
 | pi can use a provider the contract lists | `models_no_provider` | 1 |
 | the helper's whole run did not fail | the helper's code (`models_refresh_failed`, …) | 1 |
 | every provider listed has a good, non-empty list | the provider's code (`models_key_unset`, `models_unauthorized`, `models_unreachable`, `models_tls`, `models_timeout`, `models_unparseable`, `models_empty`, `models_refresh_failed`) | 1 |
-| `locks/models.lock` is free within `store_busy_ms` | `lock_timeout` | 5 |
+| the store's write lock is free within `store_busy_ms` | `store_busy` | 5 |
 
 When one provider fails and others do not, **the good ones are written first and the command then fails** with the failing provider's code (the first, in the helper's order) and `details.providers`: the same array as `ok`'s, a failed entry being `{provider, error: {code, message, details}}`. Nothing is hidden and nothing good is lost. No key is ever in an output, a message or `details`.
 
-Effects: `run/models-<provider>.json` written for each provider that has a good list; the helper's own effect on pi (`models-store.json`'s `checkedAt` for `github-copilot`). No row, no Event, no tmux, no git. The engine's next E15 is not due for `watch.models_discovery_seconds` after the newest `polled_at`.
+Effects: the `swr_models` row written for each provider that has a good list; the helper's own effect on pi (`models-store.json`'s `checkedAt` for `github-copilot`). No Event, no tmux, no git. The engine's next E15 is not due for `watch.models_discovery_seconds` after the newest row's `polled_at`.
 
 ```json
 {"ok": true, "pi_version": "1.3.0", "providers": [
@@ -4877,7 +4877,7 @@ Effects: `run/models-<provider>.json` written for each provider that has a good 
 
 `changes` is the diff of this run when it is not empty, else `null` (a list that did not change, a first run and a change of `auth` all print `null`). The ids above are an illustration, not verified values. Idempotent: yes (the same lists write the same ids and move `polled_at`).
 
-**`models show`** prints the cached lists and runs nothing (no helper, no network, no lock). `--provider <provider>` prints only that provider's file. A provider with no file and a home with no file at all, is an empty `providers` array, not an error. A file it cannot parse is skipped and named in `warnings` (`{provider, file, code: "models_unparseable"}`); the command still succeeds.
+**`models show`** prints the cached lists from the `swr_models` rows and runs nothing (no helper, no network, no write). `--provider <provider>` prints only that provider's row. A home with no row is an empty `providers` array, not an error. A row it cannot parse is a store fault: the command fails with `store_failed` (exit 1), it is not skipped. `warnings` stays in the output as `[]`.
 
 | Precondition | Code | Exit |
 |---|---|---|
