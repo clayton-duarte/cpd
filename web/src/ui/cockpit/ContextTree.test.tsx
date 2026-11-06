@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
+import type { ReactElement } from "react";
 import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ContextNode, ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
@@ -826,4 +828,137 @@ it("draft: archiving a session deletes only that session draft", () => {
   expect(window.localStorage.getItem("cpd-ui:draft:s-mgr")).toBe("other");
   m.unmount();
   window.localStorage.clear();
+});
+
+// Manager auto-collapse (pro-d78)
+function remountable(el: ReactElement) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(el));
+  return {
+    container,
+    render: (next: ReactElement) => act(() => root.render(next)),
+    unmount() {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
+const toggleOf = (c: ParentNode, id: string, scope = "") => q(c, `${scope} [data-context="${id}"] button[aria-label="Toggle ${id}"]`.trim());
+const stateOf = (c: ParentNode, id: string, scope = "") => toggleOf(c, id, scope)?.getAttribute("data-state");
+const hasPlan = (c: ParentNode, id: string) => q(c, `[data-context="c1"] [data-plan="${id}"]`) !== null;
+const hasFork = (c: ParentNode) => q(c, 'button[data-session="s-cfork"]') !== null;
+const treeSel = (id: string | null) => <ContextTree {...props({ selectedSessionId: id })} />;
+
+const twoContexts = (): ContextTreeModel => {
+  const c2: ContextNode = {
+    ...tree.contexts[0]!,
+    id: "c2",
+    title: "Context Two",
+    sessions: [session("s-mgr2", "c2", "waiting", null, { contextId: "c2" }), session("s-c2fork", "c2-fork", "idle", null, { role: "lead", contextId: "c2" })],
+    plans: [],
+  };
+  return { cursor: 1, contexts: [...tree.contexts, c2] };
+};
+
+it("selecting a Manager collapses that Context's tree", () => {
+  const m = remountable(treeSel(null));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  expect(hasPlan(m.container, "p1")).toBe(false);
+  expect(hasFork(m.container)).toBe(false);
+  expect(q(m.container, '[data-context="c1"] button[data-select="context"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("selecting a Manager does not rewrite the persisted collapse state", () => {
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  expect(store.getItem("cpd-ui:collapse:ctx:c1")).toBeNull();
+  m.render(treeSel("s-lead"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(store.getItem("cpd-ui:collapse:ctx:c1")).not.toBe("0");
+  m.unmount();
+});
+
+it("navigating from a Manager to a Lead expands the Context's tree again", () => {
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(treeSel("s-lead"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  expect(hasFork(m.container)).toBe(true);
+  m.unmount();
+});
+
+it("navigating from a Manager to another Context's session expands the tree again", () => {
+  const t = twoContexts();
+  const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
+  const m = remountable(el(null));
+  m.render(el("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(el("s-c2fork"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.unmount();
+});
+
+it("a Context the User had closed opens when its Manager is deselected", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:ctx:c1": "0" }));
+  const m = remountable(treeSel(null));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.render(treeSel("s-lead"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.unmount();
+});
+
+it("the User can reopen a selected Manager's tree by hand until the selection changes", () => {
+  const m = remountable(treeSel(null));
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  click(toggleOf(m.container, "c1"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  expect(hasPlan(m.container, "p1")).toBe(true);
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  m.render(treeSel("s-lead"));
+  expect(stateOf(m.container, "c1")).toBe("open");
+  m.render(treeSel("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  m.unmount();
+});
+
+it("selecting a Manager leaves other Contexts' trees open", () => {
+  const t = twoContexts();
+  const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
+  const m = remountable(el(null));
+  m.render(el("s-mgr"));
+  expect(stateOf(m.container, "c1")).toBe("closed");
+  expect(stateOf(m.container, "c2")).toBe("open");
+  expect(q(m.container, 'button[data-session="s-c2fork"]')).not.toBeNull();
+  m.unmount();
+});
+
+it("Archive section rows ignore the Manager auto-collapse", () => {
+  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:archive": "1" }));
+  const base = tree.contexts[0]!;
+  const t: ContextTreeModel = {
+    cursor: 1,
+    contexts: [{ ...base, plans: [...base.plans, { ...base.plans[0]!, id: "p9", archived: true, sessions: [] }] }],
+  };
+  const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
+  const m = remountable(el(null));
+  m.render(el("s-mgr"));
+  expect(stateOf(m.container, "c1", "[data-archived]")).toBe("open");
+  expect(q(m.container, '[data-archived] [data-plan="p9"]')).not.toBeNull();
+  expect(stateOf(m.container, "c1", "[data-part=tree-section][data-section=contexts]")).toBe("closed");
+  m.unmount();
 });
