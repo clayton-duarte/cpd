@@ -56,6 +56,7 @@ pub mod session;
 pub mod slack;
 pub mod spec;
 pub mod store;
+pub mod swr;
 pub mod tag;
 pub mod testsel;
 pub mod version_sync;

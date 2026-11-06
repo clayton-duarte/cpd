@@ -1103,6 +1103,8 @@ mod reviewed_pr_tests;
 #[cfg(test)]
 mod session_runner_tests;
 #[cfg(test)]
+mod swr_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tier_catalog_tests;
