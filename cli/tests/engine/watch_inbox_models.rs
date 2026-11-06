@@ -1,13 +1,12 @@
 //! Engine step E8, the `models-changed` Inbox items (contract §2.2 "Inbox item" and "The models-changed rule", §3.7 E8;
-//! commands.md §21.4; pro-d13, pro-d16, pro-n12): E8 reads each `run/models-<provider>.json` that E15 wrote and opens one white
+//! commands.md §21.4; pro-d13, pro-d16, pro-n12): E8 reads each `swr_models` row that E15 wrote and opens one white
 //! item per provider whose `changes.at` is within the last 7 days and whose announced part is not empty. The engine runs
-//! in-process on the `ManualClock` ([`Fx::watch_ticks`]); no helper runs (`Fx::engine_config` writes a fresh cache file, so E15
+//! in-process on the `ManualClock` ([`Fx::watch_ticks`]); no helper runs (`Fx::engine_config` writes a fresh cache row, so E15
 //! is not due), except in the one test about E15's error.
 
 use crate::common;
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use common::fx::Fx;
@@ -47,28 +46,26 @@ fn stamp(at: OffsetDateTime) -> String {
 }
 
 fn cache_file(
-    home: &std::path::Path,
+    env: &common::TestEnv,
     provider: &str,
     polled_at: OffsetDateTime,
     changes: Option<Value>,
-) -> PathBuf {
+) {
     let auth = if provider == "bifrost" {
         "custom"
     } else {
         "oauth"
     };
-    let mut file = json!({
-        "version": 1, "provider": provider, "polled_at": stamp(polled_at), "pi_version": "1.3.0",
+    let catalog = json!({
+        "pi_version": "1.3.0",
         "source": {"kind": if provider == "bifrost" { "openai-models" } else { "copilot-available" }, "auth": auth, "base": null},
         "ids": ["anthropic/claude-sonnet-5"]
     });
-    if let Some(changes) = changes {
-        file["changes"] = changes;
-    }
-    fs::create_dir_all(home.join("run")).unwrap();
-    let path = home.join(format!("run/models-{provider}.json"));
-    fs::write(&path, file.to_string()).unwrap();
-    path
+    let changes = changes.map_or("NULL".to_owned(), |c| format!("'{c}'"));
+    env.sql(&format!(
+        "INSERT OR REPLACE INTO swr_models (provider, catalog_json, changes_json, polled_at) VALUES ('{provider}', '{catalog}', {changes}, '{}');",
+        stamp(polled_at)
+    ));
 }
 
 impl Models {
@@ -77,7 +74,7 @@ impl Models {
         self.fx.fakes.clock.utc() - time::Duration::seconds(seconds)
     }
 
-    /// `run/models-<provider>.json` as E15 wrote it a minute ago, with `changes` made `changed_ago` seconds ago. Returns the `at`.
+    /// The `swr_models` row as E15 wrote it a minute ago, with `changes` made `changed_ago` seconds ago. Returns the `at`.
     fn change(
         &self,
         provider: &str,
@@ -88,7 +85,7 @@ impl Models {
         let at = stamp(self.ago(changed_ago));
         let changes = json!({"at": at, "appeared": appeared, "went_away": went_away});
         cache_file(
-            &self.fx.env.cpd_home(),
+            &self.fx.env,
             provider,
             self.ago(60),
             Some(changes),
@@ -96,16 +93,15 @@ impl Models {
         at
     }
 
-    /// A first run: the file has no `changes`.
+    /// A first run: the row has no `changes`.
     fn first_run(&self, provider: &str) {
-        cache_file(&self.fx.env.cpd_home(), provider, self.ago(60), None);
+        cache_file(&self.fx.env, provider, self.ago(60), None);
     }
 
-    fn path(&self, provider: &str) -> PathBuf {
+    fn remove(&self, provider: &str) {
         self.fx
             .env
-            .cpd_home()
-            .join(format!("run/models-{provider}.json"))
+            .sql(&format!("DELETE FROM swr_models WHERE provider = '{provider}';"));
     }
 
     /// The engine starts, ticks once and stops.
@@ -393,34 +389,16 @@ fn dismiss_hides_the_item_while_its_change_lives_and_a_newer_change_shows_again(
 }
 
 #[test]
-fn a_missing_or_unparseable_file_keeps_the_open_item_and_a_file_of_another_version_too() {
+fn a_provider_with_no_row_keeps_the_open_item() {
     let fx = fx();
     fx.change("bifrost", 3600, &["openai/gpt-5.6"], &[]);
     fx.tick();
     let open = fx.items();
     assert_eq!(open.len(), 1, "{open:?}");
 
-    fs::write(fx.path("bifrost"), "{not json").unwrap();
+    fx.remove("bifrost");
     fx.tick();
-    assert_eq!(
-        fx.items(),
-        open,
-        "unparseable: the open item stays as it is"
-    );
-
-    let mut other = json!({"version": 2, "provider": "bifrost", "polled_at": stamp(fx.ago(60)), "ids": ["a"], "changes": {"at": stamp(fx.ago(60)), "appeared": ["b"], "went_away": []}});
-    other["version"] = json!(2);
-    fs::write(fx.path("bifrost"), other.to_string()).unwrap();
-    fx.tick();
-    assert_eq!(
-        fx.items(),
-        open,
-        "not `version` 1: the open item stays as it is"
-    );
-
-    fs::remove_file(fx.path("bifrost")).unwrap();
-    fx.tick();
-    assert_eq!(fx.items(), open, "missing: the open item stays as it is");
+    assert_eq!(fx.items(), open, "no row: the open item stays as it is");
     assert_eq!(fx.closed(), Vec::<Value>::new());
     let errors = fx.fx.cpd(&["inbox", "list"]).ok()["items"]
         .as_array()
@@ -433,7 +411,7 @@ fn a_missing_or_unparseable_file_keeps_the_open_item_and_a_file_of_another_versi
 
 /// The engine of E15's tests: the helper `node` is a route that fails, the cache is old enough for E15 to be due.
 #[test]
-fn a_discovery_error_is_not_an_inbox_item_only_the_files_change_is() {
+fn a_discovery_error_is_not_an_inbox_item_only_the_rows_change_is() {
     let fx = Fx::with_ports();
     let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
@@ -449,7 +427,7 @@ fn a_discovery_error_is_not_an_inbox_item_only_the_files_change_is() {
     fx.fake_node(Reply::exit(1, &down.to_string(), ""));
     let at = stamp(fx.fakes.clock.utc() - time::Duration::hours(2));
     cache_file(
-        &fx.env.cpd_home(),
+        &fx.env,
         "github-copilot",
         fx.fakes.clock.utc() - time::Duration::hours(2),
         Some(json!({"at": at, "appeared": ["gpt-6-astra"], "went_away": []})),
@@ -494,7 +472,7 @@ fn a_discovery_error_is_not_an_inbox_item_only_the_files_change_is() {
     assert_eq!(
         models.len(),
         1,
-        "the file's change, and nothing for the error: {items:?}"
+        "the row's change, and nothing for the error: {items:?}"
     );
     assert_eq!(models[0]["subject"], format!("models:github-copilot/{at}"));
     assert_eq!(
