@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 116
+-- cpd-migration: breaking after 117
 -- swr-slack (docs/architecture/swr-slack.md §2): one row per (message, pull request); the helper's author and primary flag.
 -- The table holds no row a user wrote (the first fetch fills it), so it is rebuilt empty-compatible: open rows are copied.
 CREATE TABLE swr_slack_posts_new (
