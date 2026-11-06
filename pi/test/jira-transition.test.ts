@@ -213,7 +213,7 @@ test("main refuses a stdin that is not the request with usage before connecting"
 });
 
 test("main connects with the server of the request and prints one ok line for a move", async () => {
-  const f = scripted(happy());
+  const f = scripted(happy(userInfo({ account_id: ACC })));
   let closed = 0;
   const opens: unknown[][] = [];
   const open = (async (...a: unknown[]) => {
@@ -234,7 +234,7 @@ test("main connects with the server of the request and prints one ok line for a 
 test("main prints a failure as ok false with its code and exit and closes the connection", async () => {
   let closed = 0;
   const mk = (table: Table) => (async () => ({ call: scripted(table).call, close: async () => void closed++ })) as any;
-  const r = await main(ARGS, ENV, "/cwd", body(), mk(happy({ getTransitionsForJiraIssue: json({ transitions: [] }) })));
+  const r = await main(ARGS, ENV, "/cwd", body(), mk(happy({ ...userInfo({ account_id: ACC }), getTransitionsForJiraIssue: json({ transitions: [] }) })));
   assert.equal(r.exit, 1);
   const v = r.value as any;
   assert.equal(v.ok, false);
@@ -243,7 +243,7 @@ test("main prints a failure as ok false with its code and exit and closes the co
   assert.equal(v.error.details.reason, "no_transition");
   assert.equal(closed, 1);
 
-  const auth = await main(ARGS, ENV, "/cwd", body(), mk(happy({ getJiraIssue: failed(401) })));
+  const auth = await main(ARGS, ENV, "/cwd", body(), mk(happy({ ...userInfo({ account_id: ACC }), getJiraIssue: failed(401) })));
   assert.equal(auth.exit, 3);
   assert.equal((auth.value as any).error.code, "jira_auth");
   assert.equal(closed, 2);
