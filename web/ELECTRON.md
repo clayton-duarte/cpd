@@ -392,7 +392,7 @@ The root is `env.CPD_CHECKOUT`, else `path.resolve(bundleDir, '..', '..')` (A3).
 5. Otherwise, with `opts.rebase`: `git rebase --autostash origin/main`; non-zero runs `git rebase --abort` and returns skipped, `rebase-conflict`. Without `opts.rebase`: skipped, `diverged`.
 6. `updated` is `{ kind: 'updated', from, to, lockfileChanged }`, with `lockfileChanged` true when the changed paths contain `pnpm-lock.yaml`.
 
-`start.ts` passes `{ rebase: readPreviewMode(deps.env).mode === 'preview' }`: production never rebases, preview rebases a checkout with local commits (contract: [docs/ui-preview.md](../docs/ui-preview.md#production-and-preview-modes), item 9 and A7).
+`start.ts` passes `{ rebase: readPreviewMode(deps.env).mode === 'preview' }`: production never rebases, preview rebases a checkout with local commits (contract: [docs/ui-preview.md](../docs/ui-preview.md#production-and-preview-modes), item 7 and A7).
 
 #### bundle.ts
 
