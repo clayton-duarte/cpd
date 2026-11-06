@@ -16,6 +16,7 @@ import { ContextTree } from "./cockpit/ContextTree.tsx";
 import { Header } from "./cockpit/Header.tsx";
 import type { BreadcrumbCrumb } from "./cockpit/Header.tsx";
 import { Inbox } from "./cockpit/Inbox.tsx";
+import { ManagerView } from "./cockpit/ManagerView.tsx";
 import { PlanView } from "./cockpit/PlanView.tsx";
 import { Shell } from "./cockpit/Shell.tsx";
 import { barStatus, StatusBar } from "./cockpit/StatusBar.tsx";
@@ -30,6 +31,7 @@ import type { FileReaderBoundary } from "./composer/attachments.ts";
 
 const MemoTree = memo(ContextTree);
 const MemoPlan = memo(PlanView);
+const MemoManager = memo(ManagerView);
 const MemoInbox = memo(Inbox);
 
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
@@ -115,6 +117,22 @@ export function App(props: AppProps): ReactElement {
     if (selectedPlanId !== activeLeadPlanId) connection.selectPlan(activeLeadPlanId);
   }, [live, activeSessionId, activeLeadPlanId, selectedPlanId, connection]);
   const visiblePlan = useMemo(() => visiblePlanOf(activeLeadPlanId, cockpit.plan), [activeLeadPlanId, cockpit.plan]);
+  const managerContext = useMemo(
+    () => cockpit.tree?.contexts.find((c) => c.sessions.some((s) => s.ref.id === activeSessionId)) ?? null,
+    [cockpit.tree, activeSessionId],
+  );
+  // Workflows whose PR the Inbox offers to post (a `pr.post` action) in the visible Plan
+  const postableWorkflows = useMemo(() => {
+    if (cockpit.inbox === null || visiblePlan === null) return null;
+    const out = new Set<string>();
+    for (const r of cockpit.inbox.rows) {
+      if (r.planId !== visiblePlan.planId || !r.actions.some((a) => a.action.kind === "pr.post")) continue;
+      if (r.workflow !== undefined && r.workflow !== null) out.add(r.workflow);
+      if (r.url !== null) out.add(r.url);
+      if (typeof r.subject === "string" && r.subject.includes("#")) out.add(`#${r.subject.split("#")[1]}`);
+    }
+    return out;
+  }, [cockpit.inbox, visiblePlan]);
   const dismissedUnread = useRef<Set<number>>(new Set());
   const inboxRows = cockpit.inbox?.rows;
   useEffect(() => {
@@ -295,7 +313,17 @@ export function App(props: AppProps): ReactElement {
           onAction={onAction}
         /></ErrorBoundary>
       }
-      plan={!live ? null : <ErrorBoundary name="PlanView" {...crash}><MemoPlan plan={visiblePlan} onAction={onAction} /></ErrorBoundary>}
+      plan={
+        !live ? null : managerContext !== null && visiblePlan === null ? (
+          <ErrorBoundary name="ManagerView" {...crash}>
+            <MemoManager context={managerContext} onSelectPlan={onSelectPlan} onSelectSession={onSelectSession} />
+          </ErrorBoundary>
+        ) : (
+          <ErrorBoundary name="PlanView" {...crash}>
+            <MemoPlan plan={visiblePlan} {...(postableWorkflows !== null ? { postableWorkflows } : {})} onAction={onAction} />
+          </ErrorBoundary>
+        )
+      }
       chat={
         session === null ? (
           <p data-empty className="grid h-full place-items-center text-muted-foreground">Select a session</p>
