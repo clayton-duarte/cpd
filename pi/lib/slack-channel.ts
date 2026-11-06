@@ -59,12 +59,29 @@ async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<
 
 export type Read = { read: number; posts: Post[] };
 
+/** One `known` entry of the helper's stdin (docs/architecture/swr-slack.md §3.2): the stored state of one (message, pull request) row. */
+export type Known = {
+  ts: string;
+  repo: string;
+  number: number;
+  author_is_me: boolean;
+  reply_count: number | null;
+  latest_reply: string | null;
+  reactions: Record<string, number>;
+  eyes_me: boolean | null;
+  thread_tags_me: boolean | null;
+};
+
+/** The helper's stdin: one JSON value (§3.2). `terminal` lists `owner/name#n` of merged or closed pull requests. */
+export type Input = { version: 1; known: Known[]; terminal: string[] };
+
 /**
  * Reads the channel, validates that the payload parses into messages (`refresh.fetch_slack`: else `slack_unparseable`, so a
  * caller never replaces its last good copy with what looks like a quiet channel), parses it, then reads every distinct
  * post's thread and the `:eyes:` reactors of the claimed ones, each failing soft as in hermes.
  */
-export async function readTeamChannel(call: CallTool, channel: string, me: string, now: Date): Promise<Read> {
+// TODO(swr-slack implementation): `_input` is not read yet, so no skip rule (§3.4) applies and every thread and reaction is read.
+export async function readTeamChannel(call: CallTool, channel: string, me: string, now: Date, _input: Input = { version: 1, known: [], terminal: [] }): Promise<Read> {
   const text = await call("slack_read_channel", { channel_id: channel, limit: MSG_LIMIT }, CHANNEL_TIMEOUT_MS);
   if (!text.trim()) throw new Refusal("slack_failed", "slack_read_channel returned no text content.");
   const transcript = unwrap(text);
@@ -177,7 +194,8 @@ export function parseArgs(argv: string[], names: readonly string[], optional: re
 }
 
 /** The helper: the JSON value to print and the exit status. Never throws. */
-export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, now = new Date()): Promise<{ value: unknown; exit: number }> {
+// TODO(swr-slack implementation): `_stdin` (the text of the helper's stdin, §3.2) is not parsed yet.
+export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, now = new Date(), _stdin = ""): Promise<{ value: unknown; exit: number }> {
   let close: (() => Promise<void>) | undefined;
   try {
     const args = parseArgs(argv, ["coding-agent", "channel", "me"]);
