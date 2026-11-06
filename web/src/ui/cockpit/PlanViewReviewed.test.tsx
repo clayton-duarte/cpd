@@ -31,6 +31,7 @@ it("review plan shows a Review PR card with a link to the PR", () => {
   expect(card?.textContent).toContain("Review PR");
   expect(card?.textContent).toContain("acme/api");
   expect(card?.textContent).toContain("Fix the thing");
+  expect(m.container.querySelector('[data-part="title-row"]')?.contains(card ?? null)).toBe(false);
   m.unmount();
 });
 
