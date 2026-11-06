@@ -235,7 +235,7 @@ It replaces `run/team-review.json` (§15).
 | `ticket` | TEXT PRIMARY KEY | the Jira key, e.g. `EEC-1` |
 | `cloud_id` | TEXT | the Atlassian cloud id the ticket belongs to |
 | `summary` | TEXT | the summary |
-| `status_name` | TEXT | the workflow status's name |
+| `status_name` | TEXT | the name of the ticket's Jira status |
 | `status_category` | TEXT | the status category |
 | `estimates_json` | TEXT | the estimates |
 | `synced_at` | TEXT | when it was read |

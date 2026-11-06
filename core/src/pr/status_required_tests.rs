@@ -44,7 +44,7 @@ fn guard() -> Check {
 #[test]
 fn required_check_absent_from_the_rollup_is_pending() {
     assert_eq!(
-        ChecksSummary::of(&[guard()], &[], &required(&["gate"])),
+        ChecksSummary::of(&[guard()], &[], &required(&["gate"]), false),
         ChecksSummary::Pending
     );
 }
@@ -52,7 +52,7 @@ fn required_check_absent_from_the_rollup_is_pending() {
 #[test]
 fn no_check_reported_yet_with_a_required_check_is_pending() {
     assert_eq!(
-        ChecksSummary::of(&[], &[], &required(&["gate"])),
+        ChecksSummary::of(&[], &[], &required(&["gate"]), false),
         ChecksSummary::Pending
     );
 }
@@ -62,7 +62,7 @@ fn required_check_is_matched_by_its_exact_name_only() {
     for name in ["gate-extra", "Gate", "gat", "my gate"] {
         let checks = [run(name, "COMPLETED", "SUCCESS")];
         assert_eq!(
-            ChecksSummary::of(&checks, &[], &required(&["gate"])),
+            ChecksSummary::of(&checks, &[], &required(&["gate"]), false),
             ChecksSummary::Pending,
             "{name}"
         );
@@ -72,22 +72,22 @@ fn required_check_is_matched_by_its_exact_name_only() {
 #[test]
 fn an_empty_required_list_changes_nothing() {
     assert_eq!(
-        ChecksSummary::of(&[guard()], &[], &[]),
+        ChecksSummary::of(&[guard()], &[], &[], false),
         ChecksSummary::Passed
     );
-    assert_eq!(ChecksSummary::of(&[], &[], &[]), ChecksSummary::None);
+    assert_eq!(ChecksSummary::of(&[], &[], &[], false), ChecksSummary::None);
 }
 
 #[test]
 fn a_passed_required_check_is_fine() {
     let checks = [guard(), run("gate", "COMPLETED", "SUCCESS")];
     assert_eq!(
-        ChecksSummary::of(&checks, &[], &required(&["gate"])),
+        ChecksSummary::of(&checks, &[], &required(&["gate"]), false),
         ChecksSummary::Passed
     );
     let checks = [run("gate", "COMPLETED", "SKIPPED")];
     assert_eq!(
-        ChecksSummary::of(&checks, &[], &required(&["gate"])),
+        ChecksSummary::of(&checks, &[], &required(&["gate"]), false),
         ChecksSummary::Passed
     );
 }
@@ -96,7 +96,7 @@ fn a_passed_required_check_is_fine() {
 fn a_failure_wins_over_a_missing_required_check() {
     let checks = [run("lint", "COMPLETED", "FAILURE")];
     assert_eq!(
-        ChecksSummary::of(&checks, &[], &required(&["gate"])),
+        ChecksSummary::of(&checks, &[], &required(&["gate"]), false),
         ChecksSummary::Failed
     );
 }
@@ -104,14 +104,20 @@ fn a_failure_wins_over_a_missing_required_check() {
 #[test]
 fn a_required_check_that_is_running_is_pending_and_one_that_failed_is_failed() {
     assert_eq!(
-        ChecksSummary::of(&[run("gate", "IN_PROGRESS", "")], &[], &required(&["gate"])),
+        ChecksSummary::of(
+            &[run("gate", "IN_PROGRESS", "")],
+            &[],
+            &required(&["gate"]),
+            false
+        ),
         ChecksSummary::Pending
     );
     assert_eq!(
         ChecksSummary::of(
             &[run("gate", "COMPLETED", "FAILURE")],
             &[],
-            &required(&["gate"])
+            &required(&["gate"]),
+            false
         ),
         ChecksSummary::Failed
     );
