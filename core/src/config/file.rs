@@ -61,6 +61,7 @@ pub struct Config {
     pub manager_runner: WorkerRunner,
     pub timeouts: Timeouts,
     pub watch: Watch,
+    pub swr: Swr,
     pub inbox: Inbox,
     pub events: Events,
     pub tmux: Tmux,
@@ -181,6 +182,13 @@ pub struct Watch {
     pub error_repeat_seconds: u32,
     /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
     pub pr_poll_transient_minutes: u32,
+}
+
+/// The `[swr]` table (contract §8.2; docs/architecture/swr.md §4).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Swr {
+    /// gcTime in days: a row inactive this long with no observer is deleted by `gc::sweep`.
+    pub gc_days: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -304,6 +312,7 @@ impl Config {
         r.sections_are_tables(&[
             "timeouts",
             "watch",
+            "swr",
             "inbox",
             "events",
             "tmux",
@@ -413,6 +422,10 @@ impl Config {
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
+        // Stub: the red test pins that 0 is refused (`positive`); the implementation Job replaces this.
+        let swr = Swr {
+            gc_days: r.get("swr.gc_days", 7, |v| int(v, 0, u32::MAX))?,
+        };
         let slack_id = |first: char| {
             move |v: Value| {
                 let id = text_of(&v)?;
@@ -499,6 +512,7 @@ impl Config {
             manager_runner,
             timeouts,
             watch,
+            swr,
             inbox,
             events,
             tmux,
@@ -685,9 +699,10 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 7] = [
+const KNOWN_SECTIONS: [&str; 8] = [
     "timeouts",
     "watch",
+    "swr",
     "inbox",
     "events",
     "tmux",

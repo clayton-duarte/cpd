@@ -20,7 +20,7 @@ use super::report::{About, Failure, Report, Step};
 use super::{
     SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
     inbox, janitor, jira, liveness, models, open, parked, permanent, pr, react, restart, schedule,
-    sleep, team, titles, wake, workers,
+    sleep, swr, team, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
@@ -95,6 +95,8 @@ pub(super) struct Engine {
     pub auto_merge: auto_merge::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
+    /// E24: when `gc::sweep` last ran.
+    pub swr: swr::State,
     /// P1.10: the durable host this engine started or adopted, per Session (contract §6.19).
     pub hosts: hosts::State,
     /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
@@ -169,6 +171,7 @@ impl Engine {
             jira: jira::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),
+            swr: swr::State::default(),
             hosts: hosts::State::default(),
             janitor_started: None,
             restart_started: None,
@@ -284,7 +287,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 26] = [
+        let steps: [fn(&mut Engine); 27] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -306,6 +309,7 @@ impl Engine {
             jira::run,
             auto_merge::run,
             models::run,
+            swr::run,
             archive::run,
             sleep::run,
             archive_leads::run,

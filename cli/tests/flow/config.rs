@@ -78,6 +78,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "archive_sleep_seconds": 86400
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "janitor_minutes": 60, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "swr": {"gc_days": 7},
             "inbox": {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
@@ -127,6 +128,25 @@ fn config_refuses_a_removed_context_engine_key_as_unknown() {
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
     assert_eq!(err["details"]["key"], "context_engine_enabled");
+}
+
+/// contract §8.2: `swr.gc_days` is an integer >= 1, default 7; 0 is `config_invalid`.
+#[test]
+fn swr_config_gc_days_defaults_to_seven_and_rejects_zero() {
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["config"]["swr"]["gc_days"], 7, "{out}");
+    assert_eq!(out["sources"]["swr.gc_days"], "default", "{out}");
+
+    let out = config_with(&fx, &format!("{MINIMAL}[swr]\ngc_days = 3\n")).ok();
+    assert_eq!(out["config"]["swr"]["gc_days"], 3, "{out}");
+    assert_eq!(out["sources"]["swr.gc_days"], "file", "{out}");
+
+    let run = config_with(&fx, &format!("{MINIMAL}[swr]\ngc_days = 0\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "swr.gc_days");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -307,6 +327,8 @@ models_discovery_seconds = 1
 janitor_minutes = 1
 pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
+[swr]
+gc_days = 4294967295
 [inbox]
 stuck_job_minutes = 1
 team_channel = "C1"

@@ -54,7 +54,7 @@ use crate::policy::model::Models;
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
 pub use experimental::{Experimental, Feature};
 pub use file::{
-    Config, Events, Inbox, Preset, Source, Sources, TickSeconds, Timeouts, Tmux, Watch,
+    Config, Events, Inbox, Preset, Source, Sources, Swr, TickSeconds, Timeouts, Tmux, Watch,
 };
 pub use repo::RepoTests;
 pub use runner::{WorkerRunner, toggle};

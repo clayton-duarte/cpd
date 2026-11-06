@@ -1,10 +1,12 @@
 //! Stale-while-revalidate (docs/architecture/swr.md): the cache and the endpoint health.
 
 pub mod cache;
+pub mod cmd;
 pub mod endpoint;
 pub mod gc;
 pub mod outbox;
 pub mod overlay;
+pub mod source;
 
 #[cfg(test)]
 mod cache_tests;

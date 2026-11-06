@@ -109,6 +109,7 @@ mod secret_grants;
 mod secret_guard;
 mod secret_op;
 mod spec;
+mod swr_cmd;
 mod worker_runner;
 mod worker_runner_durable;
 mod worker_runner_report;

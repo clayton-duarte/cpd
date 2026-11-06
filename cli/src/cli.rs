@@ -16,7 +16,7 @@ use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use cpd_core::{
     ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp,
-    metrics, models, plan, policy, pr, prune, resource, secret, session, tag, testsel,
+    metrics, models, plan, policy, pr, prune, resource, secret, session, swr, tag, testsel,
     version_sync,
 };
 use cpd_engine::watch::restart;
@@ -105,6 +105,9 @@ pub enum Command {
     /// The model lists pi can offer (commands.md §14.5)
     #[command(subcommand)]
     Models(models::Command),
+    /// The SWR cache and outbox (commands.md §32)
+    #[command(subcommand)]
+    Swr(swr::cmd::Command),
     /// The tier presets and their machine switch (commands.md §14.6)
     #[command(subcommand)]
     Preset(config::preset::Command),
@@ -236,6 +239,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
         Command::Models(c) => models::run(c),
+        Command::Swr(c) => swr::cmd::run(ports, c),
         Command::Preset(c) => config::preset::run(c),
         Command::Metrics(a) => metrics::run(a),
         Command::Install(a) => install::run(ports, a),
