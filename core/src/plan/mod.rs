@@ -56,6 +56,8 @@ mod rename;
 mod render;
 #[cfg(test)]
 mod render_all_jobs_tests;
+#[cfg(test)]
+mod replan_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
