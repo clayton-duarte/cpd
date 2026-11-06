@@ -913,3 +913,16 @@ test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four
     assert.ok(!/^ {2}5\. /.test(lines[at + 5] ?? ""), `${c.skill}: no fifth step`);
   }
 });
+
+test("cpd-manager and cpd-lead state the three external-approval rules (pro-d451)", () => {
+  for (const { skill } of skills) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.ok(text.includes("cpd_external_approve"), `${skill}: names the tool`);
+    assert.ok(text.includes("bot review thread"), `${skill}: only a bot review thread is answered on its own`);
+    assert.ok(text.includes("`bot: true`"), `${skill}: names bot: true`);
+    assert.ok(text.includes("`gh pr comment`"), `${skill}: raw gh comment writes are refused`);
+    assert.ok(text.includes("approval_required"), `${skill}: approval_required`);
+    assert.ok(text.includes("Slack"), `${skill}: Slack needs the User`);
+    assert.ok(!text.includes("cpd pr approve"), `${skill}: never names cpd pr approve`);
+  }
+});
