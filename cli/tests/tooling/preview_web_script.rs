@@ -312,15 +312,9 @@ fn on_sets_the_preview_option_and_writes_the_state_file() {
 }
 
 #[test]
-fn on_builds_electron_only_when_asked() {
+fn on_builds_electron_when_the_bundle_is_missing() {
     let p = Preview::new();
-    assert_eq!(p.on(&[]).exit, 0);
-    assert!(
-        !p.pnpm_calls().iter().any(|c| c.contains("build:electron")),
-        "{:?}",
-        p.pnpm_calls()
-    );
-    let out = p.on(&[("CPD_PREVIEW_ELECTRON", "1")]);
+    let out = p.on(&[]);
     assert_eq!(out.exit, 0, "{}", out.text);
     let wt = p.worktree.display();
     let builds: Vec<_> = p
@@ -331,6 +325,22 @@ fn on_builds_electron_only_when_asked() {
     assert_eq!(builds.len(), 1, "{builds:?}");
     assert!(builds[0].contains(&format!("--dir {wt}")), "{builds:?}");
     assert!(builds[0].contains("run build:electron"), "{builds:?}");
+}
+
+#[test]
+fn on_does_not_build_electron_when_the_bundle_exists() {
+    let p = Preview::new();
+    let dist = p.worktree.join("web/dist-electron");
+    fs::create_dir_all(&dist).unwrap();
+    fs::write(dist.join("main.js"), "").unwrap();
+    let out = p.on(&[]);
+    assert_eq!(out.exit, 0, "{}", out.text);
+    assert!(
+        !p.pnpm_calls().iter().any(|c| c.contains("build:electron")),
+        "{:?}",
+        p.pnpm_calls()
+    );
+    assert!(p.watchdog_pid_file().exists(), "watchdog not started");
 }
 
 #[test]
