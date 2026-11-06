@@ -175,3 +175,78 @@ fn cancelling_the_last_open_workflow_holds_the_plan_in_deploy_while_a_job_is_not
 
     assert_eq!(state(&rig), ("deploy".to_owned(), true, 0));
 }
+
+/// `(phase, done_at is null, plan-done Events, plan-phase Events)` of Plan `pay`.
+fn full_state(rig: &Rig) -> (String, bool, i64, i64) {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT phase, done_at IS NULL, (SELECT count(*) FROM events WHERE kind = 'plan-done'),
+                        (SELECT count(*) FROM events WHERE kind = 'plan-phase')
+                   FROM plans WHERE id = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+/// Runs `settle_done` on Plan `pay` in its own transaction.
+fn settle(rig: &Rig) -> Result<bool, crate::error::CpdError> {
+    let plan = PlanId::parse("pay").unwrap();
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store.write("test", |tx| crate::plan::done::settle_done(tx, &plan, None))
+}
+
+/// Plan `pay` in `phase`, locked, with the one Workflow `api` merged.
+fn merged_in(phase: &str) -> Rig {
+    let mut rig = Rig::new();
+    rig.workflow("api", "merged");
+    rig.sql(&format!(
+        "UPDATE plans SET phase = '{phase}' WHERE id = 'pay'"
+    ));
+    rig
+}
+
+#[test]
+fn settle_done_steps_a_dispatch_plan_through_deploy_to_done() {
+    let rig = merged_in("dispatch");
+    job(&rig, "api", "api-fix", "merged");
+
+    let done = settle(&rig).expect("dispatch settles to done without illegal_transition");
+
+    assert!(done);
+    assert_eq!(full_state(&rig), ("done".to_owned(), false, 1, 0));
+}
+
+#[test]
+fn settle_done_with_a_non_final_job_moves_dispatch_to_deploy_only() {
+    let rig = merged_in("dispatch");
+    job(&rig, "api", "api-fix", "queued");
+
+    let done = settle(&rig).expect("settle runs");
+
+    assert!(!done);
+    assert_eq!(full_state(&rig), ("deploy".to_owned(), true, 0, 0));
+    // The same Plan with its Job final, from dispatch, ends done in the one call (the step is dispatch -> deploy -> done).
+    let rig = merged_in("dispatch");
+    job(&rig, "api", "api-fix", "merged");
+    assert!(settle(&rig).expect("dispatch settles to done"));
+    assert_eq!(full_state(&rig), ("done".to_owned(), false, 1, 0));
+}
+
+#[test]
+fn settle_done_leaves_a_plan_in_phase_plan_alone() {
+    let rig = merged_in("deploy");
+    job(&rig, "api", "api-fix", "merged");
+    // A re-planned Plan: phase plan, locked_at kept (pro-d433).
+    rig.sql("DROP TRIGGER plans_phase; UPDATE plans SET phase = 'plan' WHERE id = 'pay';");
+    let before = full_state(&rig);
+    assert_eq!(before.0, "plan");
+
+    let done = settle(&rig).expect("settle runs");
+
+    assert!(!done);
+    assert_eq!(full_state(&rig), before);
+}
