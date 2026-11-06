@@ -1809,6 +1809,8 @@ CREATE TABLE pull_requests (
   base_ref        TEXT,                                           -- migration `pr-base` (pro-d118, A1-A5, section 4.5): the base branch from GitHub; used to determine if ready to merge (section 2.2 Pull request)
   default_branch  TEXT,                                           -- migration `pr-base`: the default branch from GitHub; used to determine if ready to merge
   archived        INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),          -- migration `20261105T1521-pr-archived` (pro-d392): 1 when the repository is archived on GitHub
+  head_oid        TEXT,                                           -- migration `swr` (docs/architecture/swr.md §3): the head commit of the pull request, from the poll
+  gh_updated_at   TEXT,                                           -- migration `swr`: GitHub's updatedAt of the pull request at the last read
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
@@ -2527,6 +2529,162 @@ BEGIN SELECT RAISE(ABORT, 'append_only: events'); END;
 
 `events` are not copied into `history`: the table is itself append-only and carries its `txn`. The delete exception makes it the one table whose deleted rows leave no copy: the Events of a deleted Plan are gone, and the `plan-deleted` Event (§5.2) is what remains of them.
 
+**The SWR tables** (Plan `external-sync-arch`, Job `swr-core`; design and column meanings in `docs/architecture/swr.md` §3). They arrive in one additive migration `20261106T1659-swr` (accepted assumption A1), which also adds the columns `head_oid` and `gh_updated_at` to `pull_requests` (shown in its DDL above; `swr.md` §18). They are data tables: no history triggers and no `history_tables` row, like `jira_transitions`. `swr_mutations` is the one outbox for every external write (`swr.md` §8).
+
+```sql
+CREATE TABLE swr_queries (
+  key         TEXT PRIMARY KEY,                                  -- '<system>:<kind>:<id>', e.g. github:pr:owner/repo#12
+  system      TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'error')),
+  data_hash   TEXT,
+  fetched_at  TEXT,                                              -- the last Changed commit
+  invalidated INTEGER NOT NULL DEFAULT 0 CHECK (invalidated IN (0, 1)),
+  stale_after TEXT,                                              -- NULL: never stale (Infinity)
+  last_error  TEXT,
+  error_count INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+  inactive_at TEXT                                               -- NULL while an observer needs the key
+) STRICT;
+
+CREATE TABLE swr_endpoints (
+  endpoint       TEXT PRIMARY KEY,                               -- github, slack, jira, ollama.lab, bifrost
+  status         TEXT CHECK (status IN ('pending', 'success', 'error')),
+  fetch_status   TEXT NOT NULL DEFAULT 'idle' CHECK (fetch_status IN ('idle', 'fetching', 'paused')),
+  paused_until   TEXT,
+  failing_since  TEXT,
+  reported_at    TEXT,
+  last_error     TEXT,
+  error_count    INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+  last_ok_at     TEXT,
+  rate_remaining INTEGER,
+  rate_reset_at  TEXT
+) STRICT;
+
+CREATE TABLE swr_mutations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  system          TEXT,
+  target_key      TEXT,                                          -- the query key the write changes
+  op_kind         TEXT,
+  vars_json       TEXT NOT NULL,
+  patch_json      TEXT,                                          -- the overlay patch; NULL when none
+  status          TEXT NOT NULL CHECK (status IN ('pending', 'in_flight', 'revalidating', 'done', 'failed', 'superseded')),
+  submitted_at    TEXT,
+  started_at      TEXT,
+  completed_at    TEXT,
+  next_attempt_at TEXT,                                          -- NULL: at once
+  attempt_count   INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  error           TEXT,
+  context_json    TEXT                                           -- plan, Workflow and pull request
+) STRICT;
+CREATE INDEX swr_mutations_active ON swr_mutations (system, target_key, op_kind, status);
+
+CREATE TABLE swr_viewer (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  login      TEXT,
+  fetched_at TEXT
+) STRICT;
+
+CREATE TABLE swr_repos (
+  repo                   TEXT PRIMARY KEY,                       -- owner/name
+  default_branch         TEXT,
+  is_archived            INTEGER CHECK (is_archived IN (0, 1)),
+  auto_merge_allowed     INTEGER CHECK (auto_merge_allowed IN (0, 1)),
+  squash_merge_allowed   INTEGER CHECK (squash_merge_allowed IN (0, 1)),
+  merge_commit_allowed   INTEGER CHECK (merge_commit_allowed IN (0, 1)),
+  rebase_merge_allowed   INTEGER CHECK (rebase_merge_allowed IN (0, 1)),
+  delete_branch_on_merge INTEGER CHECK (delete_branch_on_merge IN (0, 1)),
+  fetched_at             TEXT,
+  inactive_at            TEXT
+) STRICT;
+
+CREATE TABLE swr_pr_detail (                                     -- the heavy part of a pull request; the header stays in pull_requests
+  repo        TEXT NOT NULL,
+  number      INTEGER NOT NULL,
+  head_oid    TEXT,
+  updated_at  TEXT,
+  hydrated_at TEXT,
+  detail_json TEXT NOT NULL,                                     -- latestReviews, reviewThreads, comments, check runs
+  detail_hash TEXT NOT NULL,
+  PRIMARY KEY (repo, number)
+) STRICT;
+
+CREATE TABLE swr_deploys (
+  repo         TEXT NOT NULL,
+  run_id       INTEGER NOT NULL,
+  updated_at   TEXT,
+  run_json     TEXT,
+  pending_json TEXT,
+  inactive_at  TEXT,
+  PRIMARY KEY (repo, run_id)
+) STRICT;
+
+CREATE TABLE gh_issues (                                         -- created now, unused until a later Plan polls issues
+  repo       TEXT NOT NULL,
+  number     INTEGER NOT NULL,
+  state      TEXT,
+  title      TEXT,
+  updated_at TEXT,
+  data_json  TEXT,
+  fetched_at TEXT,
+  inactive_at TEXT,
+  PRIMARY KEY (repo, number)
+) STRICT;
+
+CREATE TABLE swr_slack_posts (
+  channel        TEXT NOT NULL,
+  ts             TEXT NOT NULL,
+  repo           TEXT,
+  number         INTEGER,
+  author_is_me   INTEGER,
+  reply_count    INTEGER,
+  latest_reply   TEXT,
+  reactions_json TEXT,
+  eyes_me        INTEGER,
+  claim          TEXT,
+  thread_tags_me INTEGER,
+  fetched_at     TEXT,
+  inactive_at    TEXT,
+  PRIMARY KEY (channel, ts)
+) STRICT;
+
+CREATE TABLE swr_jira_issues (
+  ticket          TEXT PRIMARY KEY,
+  cloud_id        TEXT,
+  summary         TEXT,
+  status_name     TEXT,
+  status_category TEXT,
+  estimates_json  TEXT,
+  synced_at       TEXT,
+  inactive_at     TEXT
+) STRICT;
+
+CREATE TABLE swr_atlassian (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  cloud_id   TEXT,
+  fetched_at TEXT
+) STRICT;
+
+CREATE TABLE swr_models (
+  provider     TEXT PRIMARY KEY,
+  catalog_json TEXT,
+  changes_json TEXT,
+  polled_at    TEXT,
+  last_error   TEXT,
+  inactive_at  TEXT
+) STRICT;
+
+CREATE TABLE swr_badges (
+  session_id  TEXT PRIMARY KEY,
+  entry_id    TEXT NOT NULL,
+  label       TEXT,
+  score       REAL,
+  text        TEXT,
+  tone        TEXT,
+  others_json TEXT,
+  synced_at   TEXT,
+  inactive_at TEXT
+) STRICT;
+```
+
 ### 4.5 Schema versions and migrations
 
 The store's schema changes by **named migrations** (hs-d178; design `docs/research/migrations.md`, as amended by the User's decisions D1–D4, which win where they differ). Everything below is normative for `core/src/store/`.
@@ -3105,6 +3263,23 @@ The judge is `JudgePort`, beside `Ports` (docs/implementing.md); the real one ru
 | `judge_unreachable` | 1 | connect, DNS, timeout, or a non-zero exit of the helper; retryable (it starts the backoff) |
 | `judge_refused` | 1 | the gateway answered a non-2xx; `details.status` is the status |
 | `judge_bad_reply` | 1 | the reply is not JSON, has an unknown verdict, or lacks a field |
+
+### 4.7 The SWR store and engine step E24
+
+The SWR design (`docs/architecture/swr.md`) is the one place that defines the cache, the outbox, the overlay and the fence; this section states its two contract rules. The tables are §4.4 ("The SWR tables").
+
+**No external read or write outside SWR.** Every read of an external system (GitHub, Slack, Jira, a model provider, the classifier's endpoints) and every write to one is made through a `Source` of `core/src/swr/source/` (`swr.md` §11), and every external write is a row of `swr_mutations`. A read's result is stored in the `swr_*` tables before any reader sees it. No command, engine step or helper keeps its own cache file or queue. A datasource's existing file, queue and side-door read stay until its cutover, and are removed in the same PR as the cutover (`swr.md` §15); after it, the rule holds for that datasource.
+
+**Engine step E24** (`engine/src/watch/swr.rs`; `swr.md` §12). Every tick, for every source except `github` (engine step E5 runs `github` through the same trait), E24:
+
+1. skips the source while any of its endpoints is `fetch_status` `paused` (`paused_until` in the future);
+2. calls `fetch` once per endpoint per pass for the keys `due` returns, with `poll_started_at` recorded before the call (the fence, `swr.md` §10);
+3. drains the outbox: `claim_next` and `execute` until nothing is claimable or an endpoint pauses;
+4. runs `gc::sweep` at most once an hour (the last run is kept in engine memory).
+
+An outage raises the existing `error` Event once, after 10 minutes of continuous transient failure (a permanent failure at once); one report per outage (A3). A failed or paused fetch never deletes or overwrites cached data. A caller that needs fresher data calls `cache::invalidate` and the engine wakes (`engine/src/watch/wake.rs`).
+
+**gcTime** is config key `swr.gc_days` (§8.2, default 7). `gc::sweep` deletes a row whose `inactive_at` is older than it and that has no active observer: no open or waiting Workflow, no open Inbox item and no active mutation (`pending`, `in_flight` or `revalidating`) on its key.
 
 ## 5. Events
 
@@ -5970,6 +6145,9 @@ error_repeat_seconds = 600   # the same `error` Event at most once per this (§3
 models_discovery_seconds = 604800  # the model lists of the providers pi can use are read again this long after the last good one (E15, §3.7; 7 days); >= 1
 pr_poll_transient_minutes = 10  # minutes the same `gh` call of the PR poll may fail with an HTTP 5xx, a timeout or a cut response (`unexpected end of JSON input`) before E5 raises an error (§3.7 E5, §7.6, hs-d354)
 
+[swr]
+gc_days = 7                 # days a row of the SWR cache stays after it went inactive with no observer (E24, §3.7); >= 1
+
 [inbox]
 stuck_job_minutes = 10     # the Manager is told of a failed Job after this (E8, §3.7 "A stuck Job")
 team_channel = ""          # Slack channel id of the team review channel, "C02JU6C2Z1D" for the User; "" = no team review item (§2.2, E11)
@@ -6026,6 +6204,7 @@ turn_question_guard = true   # the switch of the turn-question-guard Experimenta
 | `watch.pr_poll_seconds`, `watch.error_repeat_seconds` | int | above | ≥ 1 |
 | `watch.pr_poll_transient_minutes` | int | `10` | ≥ 1; how long the same `gh` call of E5's poll may fail transiently (an HTTP 5xx, a timeout or a cut response, §7.6 step 4) before E5 raises an `error` Event (§3.7 E5, §7.6 step 4, hs-d354) |
 | `watch.models_discovery_seconds` | int | `604800` | ≥ 1, else `config_invalid` (`details.key`). Seven days from the `polled_at` of the newest `run/models-<provider>.json` (not from the engine's start); with no file the step is due at once. Each run is one helper process that lists every provider pi can use, detached from the tick (E15, §3.7). There is no `providers` key and no model or key name: cpd learns the providers from pi (pro-d20) |
+| `swr.gc_days` | int | `7` | ≥ 1, else `config_invalid` (`details.key`). gcTime of the SWR cache (`docs/architecture/swr.md` §4): E24's hourly `gc::sweep` deletes a row inactive this many days with no observer, and a `done`, `failed` or `superseded` mutation this old |
 | `watch.team_review_seconds` | int | `1800` | ≥ 1. Thirty minutes after the end of the previous read (the User's decision; hermes' own code speaks of a five-minute poll, `refresh.py:191`, while its cron job ran every 15 minutes, `*/15 * * * *`). Each read is the channel, then each post's thread and the `:eyes:` reactors (eight at a time); E11 is detached, so its length never holds a tick |
 | `inbox.stuck_job_minutes` | int | `10` | ≥ 1 |
 | `inbox.team_channel` | text | `""` | `""` or `^C[A-Z0-9]+$`. `""` switches E11 and the Inbox kind `review-requested` off (hs: the Context decision 'Team review Inbox', 2026-10-19, names `C02JU6C2Z1D`) |
@@ -6033,6 +6212,7 @@ turn_question_guard = true   # the switch of the turn-question-guard Experimenta
 | `inbox.review_context` | retired (pro-d338) | none | not a key any more: `inbox claim` always targets `codereview` (§2.2 "Permanent Contexts", commands.md §21.7). The config migration `drop-inbox-review-context` (§8.1) removes the `review_context` line of `[inbox]`; after it, a config that still sets the key is `config_invalid` (an unknown key) |
 | `inbox.bot_reviewers` | [text] | the three above | non-empty strings; GitHub logins (hermes `classify.BOT_REVIEWERS`, `classify.py:58-62`) |
 | `events.poll_ms` | int | `200` | 20–10000 |
+| `swr.gc_days` | int | `7` | integer ≥ 1, else `config_invalid` (`details.key`). The gcTime of the SWR cache, in days, set in the `[swr]` table: a row whose `inactive_at` is older than this and that has no active observer is deleted by `gc::sweep` (§4.7; `docs/architecture/swr.md` §4) |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
 | `presets.<name>.*` | map | none (a config with no `[presets.<name>]` table) | see "`[presets.<name>]`" below: a name `^[a-z][a-z0-9-]{0,31}$`, exactly the four keys `O`, `S`, `H`, `G`, each a model ref of §8.3 (`<provider>/<id>`, 1–200 characters, no NUL); a violation is `config_invalid` (`details.key`) |
 

@@ -116,6 +116,9 @@ mod sleep_tests;
 mod stacked_ready_tests;
 #[cfg(test)]
 mod stuck_explore_tests;
+mod swr;
+#[cfg(test)]
+mod swr_tests;
 pub mod team;
 #[cfg(test)]
 mod testkit;

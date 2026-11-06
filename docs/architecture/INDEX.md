@@ -61,6 +61,7 @@ flowchart TD
 - **Agents**: [[roles]], [[agent-runtime]]
 - **Interfaces**: [[interfaces]], [[clocks]]
 - **Operation**: [[verification]], [[workspace]], [[knowledge-plane]], [[message-board]], [[attention-inbox]]
+- **Data**: [[swr]] (the stale-while-revalidate cache, outbox and overlay that every external read and write goes through)
 - **Edges**: [[edge-and-self-hosting]], [[boundaries]]
 
 ## How to read

@@ -154,6 +154,14 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
 | `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |
 | `cpd models show` | Print the cached model lists (§14.5) | Manager, Lead | |
+| `cpd swr` | The SWR cache and outbox (commands.md §32) | | |
+| `cpd swr list` | The cached queries (§32.1) | | |
+| `cpd swr show` | One query and its active mutations (§32.2) | | |
+| `cpd swr invalidate` | Ask the engine to fetch a query now (§32.3) | | |
+| `cpd swr endpoints` | The health of every endpoint (§32.4) | | |
+| `cpd swr mutation` | The mutation outbox (§32.5, §32.6) | | |
+| `cpd swr mutation show` | One mutation (§32.5) | | |
+| `cpd swr mutation list` | The mutations, filtered by status (§32.6) | | |
 | `cpd preset` | The tier presets and their machine switch (commands.md §14.6) | | |
 | `cpd preset list` | Print the presets (§14.6) | Manager, Lead | |
 | `cpd preset show` | Print a preset and the current host model (§14.6) | Manager, Lead | |
