@@ -47,6 +47,17 @@ describe("store", () => {
     expect(s5.cockpit.error).toBeNull();
   });
 
+  it("cockpit.snapshot clears a store_too_new lastError", () => {
+    const tooNew: WireError = { code: "cpd_failed", message: "store is newer", details: { cpdCode: "store_too_new" } };
+    const withErr = run(initialState, server({ type: "cockpit.error", error: tooNew }));
+    const withLast: AppState = { ...withErr, lastError: tooNew };
+    const healed = run(withLast, server({ type: "cockpit.snapshot", tree: tree(1), plan, inbox }));
+    expect(healed.lastError).toBeNull();
+    expect(healed.cockpit.error).toBeNull();
+    const other: AppState = { ...withErr, lastError: err };
+    expect(run(other, server({ type: "cockpit.snapshot", tree: tree(1), plan, inbox })).lastError).toEqual(err);
+  });
+
   it("selecting a session requests attach and detaches the previous one", () => {
     const store = createStore();
     const listener = vi.fn();
