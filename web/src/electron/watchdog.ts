@@ -9,7 +9,7 @@ export interface WatchdogPorts {
   /** Unused by the watchdog since rollback relaunches in production; kept optional for existing callers. */
   signalReload?(pid: number): void;
   /** Resolves once the process is gone. */
-  terminate(pid: number): Promise<void>;
+  terminate(pid: number): void | Promise<void>;
   relaunch(): Promise<void>;
   restore: RestorePoints;
   log(entry: object): Promise<void>;
