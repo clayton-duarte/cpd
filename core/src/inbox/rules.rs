@@ -123,7 +123,7 @@ pub fn conditions_with(
     all.extend(store.read(|conn| super::pr::conditions(conn, home, now))?);
     all.extend(store.read(super::pr::closed_conditions)?);
     all.extend(store.read(|conn| curate(conn, floor))?);
-    all.extend(review_requested(store, home, now, team)?);
+    all.extend(review_requested(store, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
     all.extend(store.read(drafts_parked)?);
@@ -131,7 +131,7 @@ pub fn conditions_with(
 }
 
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
-/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
+/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable cache
 /// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     #[derive(serde::Deserialize)]
@@ -655,20 +655,19 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 /// `review-requested` (label `review <repo>#<n>\n<GitHub title>`): a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
 ///
-/// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
+/// The posts are `swr_slack_posts` (the `slack` source); a channel never read is "unknown", not "empty", and so is a GitHub that
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
 /// as they are, and no `engine-error` is opened (hs-d314: the failure goes to an `error` Event). A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
 fn review_requested(
     store: &mut Store,
-    home: &CpdHome,
     now: OffsetDateTime,
     team: Option<Team<'_>>,
 ) -> Result<Vec<Condition>, CpdError> {
     let Some(team) = team else {
         return Ok(Vec::new());
     };
-    let cache = match team::read_cache(home) {
+    let cache = match team::read_cache(store) {
         Ok(Some(cache)) => cache,
         Ok(None) => return kept_review_items(store),
         Err(_) => return kept_review_items(store),
@@ -1994,11 +1993,14 @@ mod tests {
         post
     }
 
-    fn write_cache(f: &Fixture, posts: &[Value]) {
-        let path = f.home.run_dir().join("team-review.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let cache = json!({"version": 1, "polled_at": T, "channel": "C02JU6C2Z1D", "read": 10, "posts": posts});
-        std::fs::write(path, cache.to_string()).unwrap();
+    /// Stores `posts` (the helper's older shape) as the `slack` source's rows, the query read.
+    fn write_cache(f: &mut Fixture, posts: &[Value]) {
+        team::seed_cache(&mut f.store, "C02JU6C2Z1D", posts);
+    }
+
+    /// The channel was never read: no query data and no row, so the posts are "unknown".
+    fn clear_cache(f: &mut Fixture) {
+        f.sql("DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';");
     }
 
     fn open_pr() -> GhPr {
@@ -2246,7 +2248,7 @@ mod tests {
             "posts of other Workflows"
         );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
-        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        clear_cache(&mut f);
         let none = conditions_with(
             &mut f.store,
             &f.home,
@@ -2270,7 +2272,7 @@ mod tests {
         };
         let mut mention = post("acme/pay", 3);
         mention["primary"] = json!(false);
-        write_cache(&f, &[old(1, 6.9 * day), old(2, 7.1 * day), mention]);
+        write_cache(&mut f, &[old(1, 6.9 * day), old(2, 7.1 * day), mention]);
         let mut asked = Vec::new();
         let answer = lookup(&[("acme/pay", 1, open_pr())]);
         let all = conditions_with(
@@ -2330,7 +2332,7 @@ mod tests {
         reconcile(&mut f.store, &opened, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
-        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        clear_cache(&mut f);
         let unknown = conditions_with(
             &mut f.store,
             &f.home,
@@ -2366,7 +2368,9 @@ mod tests {
             &[("acme/pay", 1, open_pr())],
         );
         reconcile(&mut f.store, &opened, T).unwrap();
-        std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
+        // A channel whose read failed has no data: unknown.
+        clear_cache(&mut f);
+        f.sql("INSERT INTO swr_queries (key, system, status, last_error, error_count) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'error', 'slack_failed: down', 1);");
         let all = conditions_with(
             &mut f.store,
             &f.home,
@@ -2386,28 +2390,6 @@ mod tests {
             all.iter().all(|c| c.kind != Kind::EngineError),
             "no engine-error for an unreadable cache"
         );
-        std::fs::write(
-            f.home.run_dir().join("team-review.json"),
-            r#"{"version": 2, "posts": []}"#,
-        )
-        .unwrap();
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| panic!("unreadable"))),
-        )
-        .unwrap();
-        assert_eq!(
-            all.iter()
-                .filter(|c| c.kind == Kind::ReviewRequested)
-                .count(),
-            1,
-            "another version is unreadable too: kept"
-        );
-        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
@@ -2443,7 +2425,7 @@ mod tests {
     #[test]
     fn a_pull_request_github_cannot_read_is_dropped_and_all_unreadable_keeps_the_queue() {
         let mut f = fixture("dispatch");
-        write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
+        write_cache(&mut f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.workflows.insert(("acme/gone".to_owned(), 2), None);
         let all = conditions_with(
@@ -2546,7 +2528,7 @@ mod tests {
             .skip(3)
             .collect();
         assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
-        write_cache(&f, &[post("acme/pay", 812)]);
+        write_cache(&mut f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
         let kinds: Vec<_> = conditions_with(
             &mut f.store,

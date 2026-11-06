@@ -25,13 +25,10 @@ fn store() -> (tempfile::TempDir, CpdHome, Store) {
     (dir, home, store)
 }
 
-fn write_cache(home: &CpdHome) {
+fn write_cache(store: &mut Store) {
     let post = json!({"repo": "acme/pay", "number": 812, "ts": NOW.unix_timestamp() as f64 - 3600.0, "ts_raw": "1.1",
                       "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let path = home.run_dir().join("team-review.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
-    std::fs::write(path, cache.to_string()).unwrap();
+    crate::inbox::team::seed_cache(store, "C02JU6C2Z1D", &[post]);
 }
 
 fn pr(
@@ -140,7 +137,7 @@ fn open(store: &mut Store, conditions: &[Condition]) {
 
 /// An initial item at `head`, claimed (`mark` = `claimed_at` or `dismissed_at`) with `oid` as its `head_oid`, then closed.
 fn settle(store: &mut Store, home: &CpdHome, head: &str, mark: &str, oid: Option<&str>) {
-    write_cache(home);
+    write_cache(store);
     let items = conditions(store, home, &initial(head));
     assert_eq!(subjects(&items), [SUBJECT]);
     open(store, &items);
@@ -255,7 +252,7 @@ fn followup_item_reopens_for_a_later_head() {
 #[test]
 fn initial_review_item_records_head_oid() {
     let (_dir, home, mut store) = store();
-    write_cache(&home);
+    write_cache(&mut store);
     let items = conditions(&mut store, &home, &initial(S_HEAD));
     assert_eq!(subjects(&items), [SUBJECT]);
     open(&mut store, &items);

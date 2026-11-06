@@ -83,12 +83,9 @@ fn world(existing: Existing, runner_kind: &str) -> World {
         reviewed_oid: Some(S_REV.into()),
     };
     reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z").unwrap();
-    let path = home.run_dir().join("team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
     let post = json!({"repo": "acme/pay", "number": 5, "ts": 1767225600.0, "ts_raw": TS_RAW,
         "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": CHANNEL, "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    crate::inbox::team::seed_cache(&mut store, CHANNEL, &[post]);
     let (phase, archived, done) = match existing {
         Existing::Done => ("done", "NULL", "'t'"),
         Existing::Archived => ("grounding", "'t'", "NULL"),

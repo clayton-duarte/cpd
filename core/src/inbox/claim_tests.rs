@@ -27,7 +27,7 @@ fn store() -> (tempfile::TempDir, CpdHome, Store) {
 }
 
 /// The team review cache holding one primary post per `(number, ts_raw)`, posted `age` seconds before `now`.
-fn write_cache(home: &CpdHome, now: OffsetDateTime, posts: &[(u64, &str, f64)]) {
+fn write_cache(store: &mut Store, now: OffsetDateTime, posts: &[(u64, &str, f64)]) {
     let posts: Vec<Value> = posts
         .iter()
         .map(|(number, ts_raw, age)| {
@@ -35,10 +35,7 @@ fn write_cache(home: &CpdHome, now: OffsetDateTime, posts: &[(u64, &str, f64)]) 
                    "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false})
         })
         .collect();
-    let path = home.run_dir().join("team-review.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": posts});
-    std::fs::write(path, cache.to_string()).unwrap();
+    crate::inbox::team::seed_cache(store, "C02JU6C2Z1D", &posts);
 }
 
 /// The `review-requested` conditions of the cache, every posted pull request open on GitHub with no review.
@@ -114,7 +111,7 @@ fn count_open(store: &mut Store) -> usize {
 
 /// Opens the item of `#812` and sets `column` (`dismissed_at` or `claimed_at`) on it.
 fn open_and_mark(store: &mut Store, home: &CpdHome, column: &str) {
-    write_cache(home, NOW, &[(812, "1.1", 3600.0)]);
+    write_cache(store, NOW, &[(812, "1.1", 3600.0)]);
     let open = reviews(store, home, NOW, &[812]);
     assert_eq!(subjects(&open), ["pr:acme/pay#812"]);
     run(store, &open, "2026-01-01T00:00:00.000Z");
@@ -163,13 +160,13 @@ fn a_dismissed_review_request_opens_no_new_item_for_a_repost_a_new_head_or_a_lat
     assert_eq!(count_open(&mut store), 0);
 
     let later = NOW + time::Duration::days(10);
-    write_cache(&home, later, &[(812, "1.1", 10.0 * 86400.0 + 3600.0)]);
+    write_cache(&mut store, later, &[(812, "1.1", 10.0 * 86400.0 + 3600.0)]);
     assert!(
         reviews(&mut store, &home, later, &[812]).is_empty(),
         "the old post left the window"
     );
 
-    write_cache(&home, later, &[(812, "9.9", 600.0)]);
+    write_cache(&mut store, later, &[(812, "9.9", 600.0)]);
     let repost = reviews(&mut store, &home, later, &[812]);
     assert!(
         repost.is_empty(),
@@ -202,7 +199,7 @@ fn open_item_closes(column: &str) {
 #[test]
 fn a_dismissal_of_one_pull_request_does_not_stop_the_review_item_of_another() {
     let (_dir, home, mut store) = store();
-    write_cache(&home, NOW, &[(812, "1.1", 3600.0), (813, "1.2", 3600.0)]);
+    write_cache(&mut store, NOW, &[(812, "1.1", 3600.0), (813, "1.2", 3600.0)]);
     let open = reviews(&mut store, &home, NOW, &[812, 813]);
     assert_eq!(open.len(), 2);
     run(&mut store, &open, "2026-01-01T00:00:00.000Z");
@@ -219,7 +216,7 @@ fn a_dismissal_of_one_pull_request_does_not_stop_the_review_item_of_another() {
 #[test]
 fn a_claimed_item_is_left_out_of_the_visible_list_and_listed_with_the_open_items() {
     let (_dir, home, mut store) = store();
-    write_cache(&home, NOW, &[(812, "1.1", 3600.0)]);
+    write_cache(&mut store, NOW, &[(812, "1.1", 3600.0)]);
     let open = reviews(&mut store, &home, NOW, &[812]);
     run(&mut store, &open, "2026-01-01T00:00:00.000Z");
     sql(
@@ -265,7 +262,7 @@ fn gh_reply(
 fn refused_claim(answer: &str) -> (CpdError, model::Item) {
     let (_dir, home, mut store) = store();
     std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n").unwrap();
-    write_cache(&home, NOW, &[(812, "1.1", 3600.0)]);
+    write_cache(&mut store, NOW, &[(812, "1.1", 3600.0)]);
     let open = reviews(&mut store, &home, NOW, &[812]);
     run(&mut store, &open, "2026-01-01T00:00:00.000Z");
     let id = store.read(model::open_items).unwrap()[0].id;

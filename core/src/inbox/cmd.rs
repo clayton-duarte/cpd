@@ -561,7 +561,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         .with("item", item.id)
         .with("subject", item.subject.clone())
     };
-    let cache = team::read_cache(&env.home)?.ok_or_else(missing)?;
+    let cache = team::read_cache(&mut env.store)?.ok_or_else(missing)?;
     let (repo, number) = item
         .subject
         .strip_prefix("pr:")
