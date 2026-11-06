@@ -1,5 +1,5 @@
 //! A2 of an explore Attempt (contract §3.4 "An explore Job's Attempt", R7): no worktree, no `pre-start`, no `base_sha`; the
-//! explore directory is created if missing and is the Worker's cwd, and the Job's stale artefact is deleted.
+//! explore directory is created if missing and is the Worker's cwd, and the Job's artefact is kept (pro-d433).
 
 use std::path::{Path, PathBuf};
 
@@ -13,8 +13,8 @@ pub(crate) fn artefact_in(dir: &Path, job: &str) -> PathBuf {
     dir.join(format!("{job}.md"))
 }
 
-/// Prepares the start of an explore `target`: creates the explore directory, deletes the stale artefact of the Job there
-/// (a file an earlier Attempt left), and returns the Worker's cwd. Runs no git and no hook.
+/// Prepares the start of an explore `target`: creates the explore directory, keeps any artefact of the Job there
+/// (a valid file of an earlier Attempt may be submitted by the retry), and returns the Worker's cwd. Runs no git and no hook.
 pub(super) fn prepare(
     _ports: &Ports,
     _home: &CpdHome,
@@ -29,11 +29,5 @@ pub(super) fn prepare(
         .with("path", path.display().to_string())
     };
     std::fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
-    let stale = artefact_in(&dir, target.job.as_str());
-    match std::fs::remove_file(&stale) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(failed("remove", &stale, e)),
-    }
     Ok(dir)
 }
