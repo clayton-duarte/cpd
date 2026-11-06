@@ -262,3 +262,43 @@ fn open_still_starts_a_pane_for_a_pi_session() {
     let out = try_cpd(&w, &["open", "plead"]).unwrap();
     assert!(new_windows(&w) >= 1, "a pane is started: {out}");
 }
+
+const BOUND: &str = "SELECT host_restarts, host_window_start FROM sessions WHERE id = 'dlead'";
+
+fn bound(w: &mut World) -> (i64, Option<String>) {
+    w.store
+        .read(|c| Ok(c.query_row(BOUND, [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .unwrap()
+}
+
+#[test]
+fn open_of_a_latched_durable_session_resets_the_stored_restart_bound() {
+    let mut w = world();
+    w.store
+        .write("fixture", |tx| {
+            Ok(tx.execute(
+                "UPDATE sessions SET asleep_at = 't', state_label = 'host crash loop', host_restarts = 3, host_window_start = 't' WHERE id = 'dlead'",
+                [],
+            )?)
+        })
+        .unwrap();
+    w.host_socket.script(vec![Reach::Accepted]);
+    try_cpd(&w, &["open", "dlead"]).unwrap();
+    assert_eq!(bound(&mut w), (0, None));
+}
+
+#[test]
+fn open_of_an_asleep_unlatched_session_keeps_the_stored_restart_bound() {
+    let mut w = world();
+    w.store
+        .write("fixture", |tx| {
+            Ok(tx.execute(
+                "UPDATE sessions SET asleep_at = 't', host_restarts = 2, host_window_start = 'w' WHERE id = 'dlead'",
+                [],
+            )?)
+        })
+        .unwrap();
+    w.host_socket.script(vec![Reach::Accepted]);
+    try_cpd(&w, &["open", "dlead"]).unwrap();
+    assert_eq!(bound(&mut w), (2, Some("w".to_owned())));
+}

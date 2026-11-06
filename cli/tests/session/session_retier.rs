@@ -402,3 +402,44 @@ fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
     assert_eq!(tier(&fx, LEAD1), "O2");
     assert_eq!(tier(&fx, MANAGER), "O4");
 }
+
+/// Records a failed switch on `id` as the pi adapter's `session switch-failed` does (the row's `switch_failed`).
+fn record_switch_failure(env: &TestEnv, id: &str) {
+    env.sql(&format!(
+        "UPDATE sessions SET switch_failed = '{{\"tier\":\"O2\",\"code\":\"model_unavailable\",\"message\":\"no\",\"at\":\"t\"}}' WHERE id = '{id}'"
+    ));
+}
+
+/// A durable Session has no `cpd session run` to relaunch: its switch has no `next` key.
+/// Fails now: `next` is always `cpd session run <id>`.
+#[test]
+fn a_durable_sessions_switch_failure_has_no_next_hint() {
+    let fx = Fx::new();
+    let env = &fx.env;
+    fixture(env);
+    env.sql(&format!(
+        "UPDATE sessions SET runner = 'durable' WHERE id = '{LEAD1}'"
+    ));
+    record_switch_failure(env, LEAD1);
+    let switch = show(&fx, LEAD1)["switch"].clone();
+    let switch = switch
+        .as_object()
+        .unwrap_or_else(|| panic!("a switch: {switch}"));
+    assert_eq!(switch["code"], "model_unavailable");
+    assert!(!switch.contains_key("next"), "{switch:?}");
+}
+
+/// A pi Session keeps the hint.
+#[test]
+fn a_pi_sessions_switch_failure_keeps_the_session_run_hint() {
+    let fx = Fx::new();
+    let env = &fx.env;
+    fixture(env);
+    record_switch_failure(env, LEAD1);
+    let switch = show(&fx, LEAD1)["switch"].clone();
+    assert_eq!(
+        switch["next"],
+        format!("cpd session run {LEAD1}"),
+        "{switch}"
+    );
+}

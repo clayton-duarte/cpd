@@ -3126,7 +3126,7 @@ cpd session show [<id>]
 
 `model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`) and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
-`switch` (DEFECT 2) is null when the Session's last model switch succeeded or has not been attempted; otherwise it is `{tier, code, message, at, next}` where `tier` is the `tier` the switch tried, `code` and `message` are from the adapter error, `at` is the RFC 3339 UTC time and `next` is the exact `cpd session run <id>` command that relaunches this Session's pi so it starts on the current `tier` (taken from contract §6.5, §10.4, §10.8 as they stand at the time `switch` is read; the docs Job picks and cites it).
+`switch` (DEFECT 2) is null when the Session's last model switch succeeded or has not been attempted; otherwise it is `{tier, code, message, at, next}` where `tier` is the `tier` the switch tried, `code` and `message` are from the adapter error, `at` is the RFC 3339 UTC time and `next` is the exact `cpd session run <id>` command that relaunches this Session's pi so it starts on the current `tier` (contract §6.5, §10.4, §10.8). **A `durable` Session has no `next` key** (DEFECT 2, the pane hint): it has no pane and no pi to relaunch, so its `switch` is `{tier, code, message, at}` with the same values and no `next` key at all, never a `cpd session run` command. A `pi` Session keeps `next`. Tests: `session_retier::a_durable_sessions_switch_failure_has_no_next_hint` (a durable Session's `switch` has no `next` key) and `session_retier::a_pi_sessions_switch_failure_keeps_the_session_run_hint` (a pi Session's `switch.next` is `cpd session run <id>`).
 
 ```json
 {"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "building-cpd:cpd2", "key": "building-cpd:cpd2", "runner": "pi", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "switch": null, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
@@ -3598,7 +3598,7 @@ Output:
 cpd session switch-failed --code <code> --message <text> [--session <id>]
 ```
 
-Records a failed model switch (DEFECT 2): the adapter of a Lead runs this when `setModel` fails (the three `unavailable` paths), to record the failure for the Lead to see in `session show` and to help it relaunch pi.
+Records a failed model switch (DEFECT 2): the adapter of a Lead runs this when `setModel` fails (the three `unavailable` paths), to record the failure for the Lead to see in `session show` and to help it relaunch pi. The `next` hint that `session show` derives from the record (§10.2) is a `cpd session run <id>` command and is given only to a `pi` Session; a `durable` Session has no pane, so its `switch` has no `next` key (§10.2, test `session_retier::a_durable_sessions_switch_failure_has_no_next_hint`).
 
 | Flag | Meaning |
 |---|---|
