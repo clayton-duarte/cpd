@@ -360,3 +360,157 @@ fn plan_show_reads_the_serving_env_not_process_cpd_home() {
     assert_eq!(frames[3]["id"], "r2");
     assert_eq!(frames[3]["error"]["code"], "plan_not_found");
 }
+
+// ---- Restart in place on a binary upgrade (decision pro-d450) ----
+
+/// Rig `ports()` with the `FakeSpawn` kept, so a test sets `self_exe` and reads the launches.
+fn rig_with_spawn() -> (Rig, Arc<FakeSpawn>) {
+    let mut rig = rig();
+    let clock = ManualClock::new();
+    let spawn = Arc::new(FakeSpawn::new());
+    rig.env.ports = Ports {
+        clock: Arc::new(clock.clone()),
+        runner: Arc::new(FakeRunner::new(clock)),
+        spawn: spawn.clone(),
+        ..Ports::real()
+    };
+    (rig, spawn)
+}
+
+/// An installed cpd (`<dir>/cpd`) that a new install replaces by a rename, so the path holds another inode.
+struct Install {
+    _dir: TempDir,
+    path: std::path::PathBuf,
+}
+
+impl Install {
+    fn new() -> Install {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cpd");
+        fs::write(&path, "v1").unwrap();
+        Install { _dir: dir, path }
+    }
+
+    fn upgrade(&self) {
+        let next = self.path.with_file_name("cpd.new");
+        fs::write(&next, "v2").unwrap();
+        fs::rename(&next, &self.path).unwrap();
+    }
+}
+
+/// What a newer cpd does to the store: a migration this binary lacks (`breaking`), recorded under `cpd_txn()`.
+fn newer_cpd_migrates(home: &CpdHome) {
+    use rusqlite::functions::FunctionFlags;
+    let conn = rusqlite::Connection::open(home.db()).unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn))
+        .unwrap();
+    conn.execute_batch("BEGIN; CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;")
+        .unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+         VALUES ('29991231T2359-newer', 'breaking', lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?1, 0)",
+        rusqlite::params![txn],
+    )
+    .unwrap();
+    conn.execute_batch("COMMIT;").unwrap();
+}
+
+/// At its first poll: upgrades the binary (when `install`) and migrates the store (when `migrate`); reports a change
+/// when it migrated, as the store's `data_version` does.
+struct Upgrade<'a> {
+    home: CpdHome,
+    install: Option<&'a Install>,
+    migrate: bool,
+    polls: usize,
+}
+
+impl ChangeSource for Upgrade<'_> {
+    fn poll(&mut self) -> Option<i64> {
+        self.polls += 1;
+        if self.polls > 1 {
+            return None;
+        }
+        if let Some(install) = self.install {
+            install.upgrade();
+        }
+        if self.migrate {
+            newer_cpd_migrates(&self.home);
+            return Some(1);
+        }
+        None
+    }
+}
+
+/// Serves `n` ticks; returns the frames and whether serve returned an error.
+fn serve_ticks(rig: &mut Rig, changes: &mut dyn ChangeSource, n: usize) -> (Vec<Value>, bool) {
+    let mut out = Vec::new();
+    let result = serve(&mut rig.env, &mut ticks(n).into_iter(), &mut out, changes);
+    let frames = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    (frames, result.is_err())
+}
+
+fn assert_one_exec_of(spawn: &FakeSpawn, install: &Install) {
+    let launches = spawn.launches();
+    assert_eq!(launches.len(), 1, "one exec: {launches:?}");
+    assert_eq!(launches[0].program, install.path.display().to_string());
+    assert_eq!(launches[0].args, ["cockpit", "serve"]);
+}
+
+#[test]
+fn cockpit_serve_execs_replaced_binary_on_tick_and_writes_no_error_frame() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let mut changes = Upgrade {
+        home: rig.home.clone(),
+        install: Some(&install),
+        migrate: false,
+        polls: 0,
+    };
+    let (frames, _) = serve_ticks(&mut rig, &mut changes, 4);
+    assert_one_exec_of(&spawn, &install);
+    assert!(!kinds(&frames).contains(&"error"), "{frames:?}");
+}
+
+#[test]
+fn cockpit_serve_execs_replaced_binary_on_store_too_new_and_writes_no_error_frame() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let mut changes = Upgrade {
+        home: rig.home.clone(),
+        install: Some(&install),
+        migrate: true,
+        polls: 0,
+    };
+    let (frames, _) = serve_ticks(&mut rig, &mut changes, 6);
+    assert_one_exec_of(&spawn, &install);
+    assert!(!kinds(&frames).contains(&"error"), "{frames:?}");
+}
+
+#[test]
+fn cockpit_serve_store_too_new_with_unchanged_binary_still_emits_error_frame() {
+    let (mut rig, spawn) = rig_with_spawn();
+    let install = Install::new();
+    spawn.set_self_exe(&install.path);
+    let mut changes = Upgrade {
+        home: rig.home.clone(),
+        install: None,
+        migrate: true,
+        polls: 0,
+    };
+    let (frames, failed) = serve_ticks(&mut rig, &mut changes, 6);
+    assert!(failed);
+    let last = frames.last().unwrap();
+    assert_eq!(last["t"], "error");
+    assert_eq!(last["id"], Value::Null);
+    assert_eq!(last["error"]["code"], "store_too_new");
+    assert!(spawn.launches().is_empty());
+}
