@@ -801,16 +801,13 @@ pub struct CurateArgs {
 
 /// The real embedder: `pi/lib/embed.ts` run by `runner` in pi's agent directory. Shared by curate, embed and search.
 pub(super) fn bifrost_embedder(
+    home: &CpdHome,
     config: &Config,
     runner: &std::sync::Arc<dyn crate::host::runner::Runner>,
 ) -> Result<BifrostEmbedding, CpdError> {
     let agent_dir = locate_pi()?.agent_dir;
     let lib = config.pi_adapter_dir()?.join("lib");
-    Ok(BifrostEmbedding::new(
-        runner.clone(),
-        lib.join("embed.ts"),
-        agent_dir,
-    ))
+    Ok(BifrostEmbedding::new(runner.clone(), lib.join("embed.ts"), agent_dir).with_health(home))
 }
 
 /// `context curate` (§3.13a).
@@ -848,7 +845,7 @@ pub(super) fn curate(args: CurateArgs) -> Result<Output, CpdError> {
         agent_dir,
         &home,
     );
-    let embedding = bifrost_embedder(&config, &ports.runner)?;
+    let embedding = bifrost_embedder(&home, &config, &ports.runner)?;
     let judge = BifrostJudge::new(&home, &config, ports.runner.clone());
     let models = Models {
         classifier: &classifier,
