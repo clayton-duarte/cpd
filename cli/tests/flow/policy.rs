@@ -164,6 +164,7 @@ fn the_output_has_exactly_the_documented_fields() {
         [
             "feedback.checks",
             "pr.excused_labels",
+            "pr.feedback.reply",
             "pr.human_gated_contexts",
             "pr.jira.done",
             "pr.jira.estimate_fields",
@@ -172,6 +173,7 @@ fn the_output_has_exactly_the_documented_fields() {
             "pr.post.channel",
             "pr.post.enabled",
             "pr.post.merged_reaction",
+            "pr.post.require_approval",
             "pr.post.template",
             "pr.required_checks"
         ]

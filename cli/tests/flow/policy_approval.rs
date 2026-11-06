@@ -96,6 +96,7 @@ fn a_non_boolean_require_approval_is_policy_invalid() {
         true,
         "pr.post.require_approval: {out}"
     );
+    drop(ok);
     let fx = world("[pr.post]\nrequire_approval = \"yes\"\n");
     let error = refused(&show(&fx, false), "policy_invalid", 1);
     assert_eq!(
