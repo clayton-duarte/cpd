@@ -132,7 +132,7 @@ fn as_cockpit(pay: &Pay, args: &[&str]) -> Run {
     as_agent(pay, "", args)
 }
 
-fn reply_args<'a>(to: &'a str) -> Vec<&'a str> {
+fn reply_args(to: &str) -> Vec<&str> {
     vec![
         "pr",
         "reply",
