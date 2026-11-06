@@ -711,9 +711,7 @@ fn post(rig: &Rig, repo: &str, number: u64, age: u64) -> Value {
 }
 
 fn write_cache(h: &Home, posts: &[Value]) {
-    let path = h.home.run_dir().join("team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, json!({"version": 1, "polled_at": "t", "channel": "C02JU6C2Z1D", "read": 10, "posts": posts}).to_string()).unwrap();
+    crate::inbox::team::seed_cache(&mut store(&h.home), "C02JU6C2Z1D", posts);
 }
 
 /// What `gh api graphql` prints for one open pull request nobody has reviewed.

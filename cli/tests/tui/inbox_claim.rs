@@ -1,7 +1,7 @@
 //! `cpd inbox claim <id>`, the fixed `codereview` target and the `hidden` object's `claimed` count (commands.md §21.7,
 //! §21.1; contract §8.2): a temporary `$CPD_HOME`, the Inbox fixture of `inbox.rs`, a fake tmux.
 
-use crate::inbox::{CLOSED_Y, Fixture, T0, condition};
+use crate::inbox::{CLOSED_Y, Fixture, condition};
 use cpd_core::host::runner::Reply;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
@@ -74,13 +74,17 @@ fn codereview_context(fx: &mut Fixture, state: &str) {
 }
 
 fn write_cache(fx: &Fixture, number: u64) {
-    let path = fx.fx.env.cpd_home().join("run/team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let post = json!({"repo": "acme/pay", "number": number, "ts": 1_700_000_000.0, "ts_raw": TS_RAW, "author": "Ryan Case", "primary": true,
-                      "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache =
-        json!({"version": 1, "polled_at": T0, "channel": CHANNEL, "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    seed_post(&fx.fx, CHANNEL, "acme/pay", number, TS_RAW);
+}
+
+/// The `slack` source's rows for one primary post: the channel's query has data and one `swr_slack_posts` row.
+fn seed_post(env: &crate::common::fx::Fx, channel: &str, repo: &str, number: u64, ts_raw: &str) {
+    env.env.sql(&format!(
+        "DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';
+         INSERT INTO swr_queries (key, system, status, data_hash) VALUES ('slack:channel:{channel}', 'slack', 'success', 'h');
+         INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me, reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
+           VALUES ('{channel}', '{ts_raw}', '{repo}', {number}, 1, '', 'Ryan Case', 0, '{{}}', NULL, NULL, 0, 't');"
+    ));
 }
 
 /// The Fixture with an open `review-requested` item for `acme/pay#812`, the Context `codereview` with an idle live
@@ -226,14 +230,13 @@ fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_reques
 #[test]
 fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
     let (fx, id) = claimable();
-    let cache = fx.fx.env.cpd_home().join("run/team-review.json");
     write_cache(&fx, 7);
     assert_eq!(
         refusal(&fx, &id.to_string()),
         (3, "post_not_found".to_owned()),
         "a cache without a post of this pull request"
     );
-    fs::remove_file(cache).unwrap();
+    fx.fx.env.sql("DELETE FROM swr_slack_posts; DELETE FROM swr_queries WHERE key LIKE 'slack:channel:%';");
     assert_eq!(
         refusal(&fx, &id.to_string()),
         (3, "post_not_found".to_owned()),
@@ -592,13 +595,7 @@ fn claimable_pr(owner: &str, repo: &str, number: u64) -> (Fixture, i64) {
     fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "idle");
-    let path = fx.fx.env.cpd_home().join("run/team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let post = json!({"repo": format!("{owner}/{repo}"), "number": number, "ts": 1_700_000_000.0, "ts_raw": TS_RAW, "author": "Ryan Case", "primary": true,
-                      "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache =
-        json!({"version": 1, "polled_at": T0, "channel": CHANNEL, "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    seed_post(&fx.fx, CHANNEL, &format!("{owner}/{repo}"), number, TS_RAW);
     let mut all = base();
     let mut item = review_request();
     item.subject = subject.clone();

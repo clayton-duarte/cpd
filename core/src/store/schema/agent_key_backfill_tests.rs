@@ -211,9 +211,9 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.iter().rev().nth(14).map(|n| n.name),
+        NAMED.iter().rev().nth(15).map(|n| n.name),
         Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr`, `host-restarts`, `replan-phase` and `swr` come after it"
+        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr`, `host-restarts`, `replan-phase`, `swr` and `swr-slack` come after it"
     );
     assert_eq!(
         NAMED.iter().rev().nth(13).map(|n| n.name),

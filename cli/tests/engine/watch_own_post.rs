@@ -1,7 +1,7 @@
-//! Engine step E11 confirms the User's own Slack post of a pull request (decisions of 2026-11-05 EST; contract §3.7):
+//! The `slack` Source under E24 (the former E11) confirms the User's own Slack post of a pull request (decisions of 2026-11-05 EST; contract §3.7):
 //! for a Workflow whose pull request is open, that has NO `pr_posts` row and whose owner policy enables `pr.post`, the
 //! EARLIEST message of the team channel authored by `inbox.slack_user_id` (the helper's `author_id`) that carries the
-//! PR's github url is its post. E11 then writes `pr_posts` (channel, ts, link) with that message's ts. Messages by
+//! PR's github url is its post. It then writes `pr_posts` (channel, ts, link) with that message's ts. Messages by
 //! others and PRs that already have a row change nothing.
 //!
 //! In-process, on virtual time, like `watch_team.rs`: the helper is the `node` route of the `FakeRunner` (never a real
@@ -39,8 +39,8 @@ impl Handler for Helper {
 /// A post of the helper's JSON: `author_id` is the Slack id of its author.
 fn post(author_id: &str, number: u64, ts_raw: &str) -> Value {
     json!({"repo": "acme/pay", "number": number, "ts": ts_raw.parse::<f64>().unwrap(), "ts_raw": ts_raw,
-           "author": "Someone", "author_id": author_id, "primary": true, "reactions": [], "claim": null,
-           "eyes_me": false, "thread_tags_me": false})
+           "author": "Someone", "author_id": author_id, "author_is_me": author_id == ME, "primary": true, "reactions": {},
+           "reply_count": null, "latest_reply": null, "claim": null, "eyes_me": false, "thread_tags_me": false})
 }
 
 struct Own {
@@ -79,7 +79,7 @@ fn own(posts: Vec<Value>) -> Own {
     for (key, number) in [("one", 812), ("two", 813)] {
         sql.push_str(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-               VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'open', 'none', 'none', 't', NULL, 't');
+               VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'open', 'none', 'none', '2000-01-01T00:00:00Z', NULL, 't');
              INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
                VALUES ('pay', '{key}', '/nowhere', 'main', 'open', 'cpd/pay/{key}', '/nowhere/{key}', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
                        (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number}), cpd_txn(), 't', 't', NULL);"
@@ -98,16 +98,16 @@ impl Own {
         self.fx.env.cpd_home().join("cpd.db")
     }
 
-    /// The engine runs until the helper's answer is cached and three more ticks passed.
+    /// The engine runs until the helper's answer is stored and three more ticks passed.
     fn run(&self) {
         let clock: ManualClock = (*self.fx.fakes.clock).clone();
         let start = clock.elapsed();
-        let cache = self.fx.env.cpd_home().join("run/team-review.json");
+        let db = self.db();
         let mut since = None;
         self.fx
             .watch_steps(move |_| {
                 let now = clock.elapsed() - start;
-                if since.is_none() && cache.exists() {
+                if since.is_none() && stored(&db) {
                     since = Some(now);
                 }
                 since.is_some_and(|at| now - at >= TICK * 3)
@@ -127,6 +127,13 @@ impl Own {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
     }
+}
+
+/// Whether the channel's posts are in `swr_slack_posts`.
+fn stored(db: &std::path::Path) -> bool {
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    conn.query_row("SELECT count(*) FROM swr_slack_posts", [], |r| r.get::<_, i64>(0))
+        .is_ok_and(|n| n > 0)
 }
 
 const TWO_ROW: (&str, &str, &str, &str) = (
@@ -188,10 +195,7 @@ fn e11_ignores_posts_by_others_and_prs_that_already_have_a_row() {
         post(ME, 813, "1730000001.000001"),
     ]);
     t.run();
-    assert!(
-        t.fx.env.cpd_home().join("run/team-review.json").exists(),
-        "E11 ran"
-    );
+    assert!(stored(&t.db()), "the Slack source ran");
     let rows = t.rows();
     assert!(only_two_row(&rows), "pr_posts is unchanged: {rows:?}");
 }

@@ -1,11 +1,10 @@
 //! The reviewed PR of a review Plan (commands.md §21.7 "The reviewed PR", contract §2.2 Plan `reviewed_pr`): `inbox
 //! claim` stores it, `plan show` prints it. Mocks only: `Fx::with_ports`, `fake_gh`, the fake cockpit.
 
-use crate::inbox::{Fixture, T0, condition};
+use crate::inbox::{Fixture, condition};
 use cpd_core::host::runner::Reply;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
-use std::fs;
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
 const SUBJECT: &str = "pr:acme/pay#812";
@@ -38,12 +37,11 @@ fn claimable() -> (Fixture, i64) {
          VALUES ('mgr-rc', 'manager', 'codereview', NULL, NULL, 'codereview-manager', '/sessions/mgr-rc.jsonl', '/repo', 'O4', NULL, 'idle', NULL,
                  '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);",
     );
-    let path = fx.fx.env.cpd_home().join("run/team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let post = json!({"repo": "acme/pay", "number": 812, "ts": 1_700_000_000.0, "ts_raw": "1700000000.000100", "author": "Ryan Case",
-                      "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": T0, "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
-    fs::write(path, cache.to_string()).unwrap();
+    fx.fx.env.sql(
+        "INSERT INTO swr_queries (key, system, status, data_hash) VALUES ('slack:channel:C02JU6C2Z1D', 'slack', 'success', 'h');
+         INSERT INTO swr_slack_posts (channel, ts, repo, number, primary_pr, author_id, author, author_is_me, reactions_json, claim_json, eyes_me, thread_tags_me, fetched_at)
+           VALUES ('C02JU6C2Z1D', '1700000000.000100', 'acme/pay', 812, 1, '', 'Ryan Case', 0, '{}', NULL, NULL, 0, 't');",
+    );
     let mut all = vec![
         condition(Kind::JobStuck, Urgency::Red, "stuck", "ctx1"),
         condition(Kind::Dialog, Urgency::White, "dialog", "ctx1"),

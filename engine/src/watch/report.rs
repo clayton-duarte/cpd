@@ -45,6 +45,8 @@ pub(super) enum Step {
     E8,
     E9,
     E10,
+    /// Retired: the Slack source runs under E24 (swr-slack.md §9). The number is not reused; incident mode still names it.
+    #[cfg_attr(not(test), allow(dead_code))]
     E11,
     E12,
     E13,
