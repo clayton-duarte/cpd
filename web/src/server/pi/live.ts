@@ -69,7 +69,7 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
     const out = (m: SessionServerMessage): void => {
       if (!stopped) emit(m);
     };
-    // The open assistant message, set by message_start or inflight. `blocks` maps a content index to its block index.
+    // The open assistant message, set by message_start or inflight. `blocks` maps a content index to its block index, allocated at its first emitted delta.
     let open: { ts: number; model: string | undefined; next: number; blocks: Map<number, number> } | null = null;
     const tools = new Map<string, { name: string; args: Record<string, unknown> }>();
 
@@ -133,7 +133,8 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
           if ((f.kind !== "text" && f.kind !== "thinking") || typeof f.index !== "number") return;
           let blockIndex = open.blocks.get(f.index);
           if (blockIndex === undefined) {
-            if (f.phase !== "start" && f.phase !== "delta") return;
+            // A block takes its index only at its first emitted delta, so indexes stay consecutive with the client's blocks.
+            if (f.phase !== "delta" || typeof f.delta !== "string") return;
             blockIndex = open.next++;
             open.blocks.set(f.index, blockIndex);
           }
