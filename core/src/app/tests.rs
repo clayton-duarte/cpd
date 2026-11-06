@@ -5,15 +5,25 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
 
 use super::{App, Electron, LaunchAction, Preview, ensure, launch, preview, read_root, status};
 use crate::error::ErrorCode;
-use crate::host::runner::{Call, Reply};
+use crate::host::runner::{Call, Handler, Reply};
 use crate::host::spawn::{Pid, Signal};
 use crate::ports::Fakes;
+
+/// Answers every call of its program that no rule matched (rules come first, so a test's own rule wins).
+struct Always(Reply);
+
+impl Handler for Always {
+    fn handle(&self, _: &Call) -> Reply {
+        self.0.clone()
+    }
+}
 
 struct Rig {
     _tmp: TempDir,
@@ -44,9 +54,9 @@ impl Rig {
         let fakes = Fakes::new();
         let _ = (*fakes.runner)
             .clone()
-            .on("pnpm", |_| true, Reply::ok(""))
-            .on("plutil", |_| true, Reply::ok(""))
-            .on("sh", |_| true, Reply::ok("script text\n"));
+            .route("pnpm", Arc::new(Always(Reply::ok(""))))
+            .route("plutil", Arc::new(Always(Reply::ok(""))))
+            .route("sh", Arc::new(Always(Reply::ok("script text\n"))));
         Rig {
             _tmp: tmp,
             fakes,

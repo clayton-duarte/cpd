@@ -6,12 +6,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::sync::Arc;
 
 use tempfile::TempDir;
 
 use super::{DEFAULT_LOCK_WAIT, Install, run};
 use crate::home::CpdHome;
-use crate::host::runner::{Call, Reply};
+use crate::host::runner::{Call, Handler, Reply};
 use crate::host::spawn::{Pid, Signal};
 use crate::ports::Fakes;
 
@@ -19,6 +20,15 @@ const NO_VERDICT: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":nu
 const MIGRATED: &str = r#"{"ok":true,"migrated":[]}"#;
 const CONFIG: &str =
     r#"{"ok":true,"config":{"tmux":{"socket":"","cockpit_session":"","work_session":""}}}"#;
+
+/// Answers every call of its program that no rule matched (rules come first, so a test's own rule wins).
+struct Always(Reply);
+
+impl Handler for Always {
+    fn handle(&self, _: &Call) -> Reply {
+        self.0.clone()
+    }
+}
 
 struct Rig {
     _tmp: TempDir,
@@ -85,8 +95,8 @@ impl Rig {
                 move |c| Path::new(&c.program) == tag,
                 Reply::ok(""),
             )
-            .on("pnpm", |_| true, Reply::ok(""))
-            .on("plutil", |_| true, Reply::ok(""));
+            .route("pnpm", Arc::new(Always(Reply::ok(""))))
+            .route("plutil", Arc::new(Always(Reply::ok(""))));
         let install = Install {
             root,
             target_dir,
