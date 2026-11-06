@@ -15,6 +15,7 @@ mod adapter;
 mod follow_up;
 mod packages;
 
+use crate::app;
 use crate::git::run::{Out, run_with};
 use crate::home::CpdHome;
 use crate::ports::Ports;
@@ -99,9 +100,43 @@ fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, S
 }
 
 /// The Electron step (commands.md §14.4 step 7a): builds the checkout's Electron app, writes `app-root` and signals the
-/// running Electron; whether a part failed. A stub until the implementation Job.
-fn electron_step(_ports: &Ports, _install: &Install, _err: &mut dyn Write) -> bool {
-    false
+/// running Electron; whether a part failed. A failed part skips the rest.
+fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool {
+    let app = app::App {
+        root: install.root.clone(),
+        home: install.home.clone(),
+        cpd_home: install.cpd_home.root().to_path_buf(),
+        preview_dir: install.preview_dir.clone(),
+        macos: install.macos,
+    };
+    let mut fail = |part: &str, e: crate::error::CpdError| {
+        let _ = writeln!(
+            err,
+            "cpd install follow-up failed: electron {part}: {}",
+            e.message()
+        );
+        true
+    };
+    if let Err(e) = app::pnpm(ports, &app.root, &["install", "--frozen-lockfile"]) {
+        return fail("a", e);
+    }
+    if let Err(e) = app::ensure(ports, &app, true) {
+        return fail("b", e);
+    }
+    if let Err(e) = app::write_root(&app.home, &app.root) {
+        return fail("c", e);
+    }
+    if app.preview_dir.join("web-state").exists() {
+        let _ = writeln!(
+            err,
+            "cpd install: web preview is on; Electron was not signalled"
+        );
+        return false;
+    }
+    match app::reload(ports, &app) {
+        Ok(_) => false,
+        Err(e) => fail("d", e),
+    }
 }
 
 /// The branch check (contract §3.7): refuses a build that carries a migration file that is not, byte for byte, on
