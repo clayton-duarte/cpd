@@ -19,7 +19,6 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, RepoName, WorkflowKey};
 use crate::output::Output;
-use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
 use crate::pr::retitle_pr;
@@ -270,7 +269,7 @@ fn editable_workflow(
     }
     if others {
         let phase = plan_phase(conn, plan)?;
-        let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
+        let locked = crate::plan::is_locked(conn, plan)?;
         let retarget = shape.retarget && matches!(workflow.status.as_str(), "waiting" | "dispatch");
         if locked && !(shape.restack && workflow.status == "waiting") && !retarget {
             return Err(workflow_locked(plan, phase, COMMAND));
@@ -341,7 +340,7 @@ fn decide(
         )?;
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan) && !edits.retarget_shape() {
+        if crate::plan::is_locked(conn, plan)? && !edits.retarget_shape() {
             check_restack(
                 conn,
                 plan,

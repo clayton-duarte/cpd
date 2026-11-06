@@ -249,7 +249,8 @@ fn decide(
     );
     needs.sort();
     needs.dedup();
-    let appended = phase != "plan";
+    // After the lock, a re-planned Plan (phase plan, `locked_at` kept) included (pro-d433).
+    let appended = crate::plan::is_locked(conn, plan)?;
     // In phase `plan` every Job is a draft; after it, only with `--draft`.
     let draft = !appended || wanted.draft;
     let mut job = Job {

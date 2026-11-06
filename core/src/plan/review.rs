@@ -179,10 +179,11 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
 }
 
 fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
-    render::markdown(
+    render::markdown_locked(
         heading,
         s.plan.context.as_str(),
         s.plan.phase.as_str(),
+        s.plan.locked_at.is_some(),
         &s.workflows,
         &s.jobs,
         &s.overlaps,
@@ -521,7 +522,8 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
 
     let (review, phase, current, queued) = env.store.write("plan decide", |tx| {
         // The phase and the drafts as they are now: an approval queues what it covered only.
-        let phase = row::load(tx, &id)?.phase;
+        let plan_now = row::load(tx, &id)?;
+        let (mut phase, locked) = (plan_now.phase, plan_now.locked_at.is_some());
         let all = jobs::load(tx, &id)?;
         let current = review.fingerprint == plan_fingerprint(tx, &id)?;
         let changed = tx.execute(
@@ -533,9 +535,14 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         if changed == 0 {
             return Err(review_decided(&id, &now));
         }
-        let queues = status == "approved" && current && phase != Phase::Plan;
+        // Before the lock the lock queues the drafts; after it (a re-planned Plan too) the approval does (pro-d433).
+        let queues = status == "approved" && current && (phase != Phase::Plan || locked);
         let mut queued: Vec<String> = Vec::new();
         if queues {
+            if phase == Phase::Plan {
+                crate::workflow::add::reopen(tx, &id, "plan", "dispatch", "its drafts were approved")?;
+                phase = Phase::Dispatch;
+            }
             for job in all.iter().filter(|j| j.is_draft()) {
                 tx.execute(
                     "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",

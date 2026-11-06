@@ -705,10 +705,11 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     Ok((status, lead_branch, appended, base, base_workflow, needs, true))
                 }
                 Decision::Insert { phase, base, base_workflow, needs } => {
-                    let appended = matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done);
+                    let appended = crate::plan::is_locked(tx, &plan)?;
                     let lead_branch = workflow_branch(&plan, &wanted.key);
                     let key = &wanted.key;
-                    if matches!(phase, Phase::Deploy | Phase::Done) {
+                    // A re-planned Plan (phase plan, locked) returns to dispatch with its first Workflow (A3).
+                    if appended && phase != Phase::Dispatch {
                         reopen(
                             tx,
                             &plan,
@@ -856,7 +857,8 @@ fn decide(
     unconfigured: Option<&CpdError>,
 ) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
-    if wanted.jobs.is_some() && !matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done) {
+    let locked = crate::plan::is_locked(conn, plan)?;
+    if wanted.jobs.is_some() && !locked {
         return Err(CpdError::new(
             ErrorCode::Usage,
             format!("--jobs is for a Plan after the lock: Plan {plan} is in phase {}, where every Job is a draft. Lay out the template and give its Jobs a Tier and Spec (cpd job edit).", phase.as_str()),
@@ -922,8 +924,8 @@ fn decide(
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
         None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&workflows),
-        None if phase == Phase::Dispatch && stacked => Vec::new(),
-        None if phase == Phase::Dispatch => {
+        None if locked && stacked => Vec::new(),
+        None if locked => {
             return Err(CpdError::new(
                 ErrorCode::NeedsRequired,
                 format!("Plan {plan} is in dispatch: say --needs <pr> to link Workflow {} to the Workflow it waits on (merged), --base <pr> to stack it on a Workflow it waits on to open, or --no-needs. A Workflow with no needs is started at once.", wanted.key),

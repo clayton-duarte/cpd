@@ -69,9 +69,14 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             .with("to", "dispatch"));
         }
     }
+    // A re-planned Plan (pro-d433: phase plan, `locked_at` kept) is locked again: its Workflows are left as they are.
+    let relock = plan.locked_at.is_some();
     let drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
     if drafts.is_empty() {
-        return Err(no_draft_jobs(&id));
+        if !relock {
+            return Err(no_draft_jobs(&id));
+        }
+        return relock_without_drafts(env, &id, &workflows, &held);
     }
     env.store
         .read(|conn| check_drafts_complete(conn, &id, &jobs))?;
@@ -93,8 +98,10 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    if let Some(e) = lint::workflow_empty(&id, &workflows, &jobs) {
-        return Err(e);
+    if !relock {
+        if let Some(e) = lint::workflow_empty(&id, &workflows, &jobs) {
+            return Err(e);
+        }
     }
     if let Some(e) = lint::dependency_cycle(&id, &jobs) {
         return Err(e);
@@ -104,7 +111,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
     for workflow in workflows.iter().filter(|p| {
-        p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)
+        !relock && p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)
     }) {
         match start::prepare(&env.home, &env.config, &mut env.store, &id, workflow) {
             Ok(p) => prepared.push(p),
@@ -125,7 +132,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             return Err(cas_lost(&id));
         }
         let moved = tx.execute(
-            "UPDATE plans SET phase = 'dispatch', locked_at = (SELECT at FROM txns WHERE id = cpd_txn())
+            "UPDATE plans SET phase = 'dispatch', locked_at = coalesce(locked_at, (SELECT at FROM txns WHERE id = cpd_txn()))
               WHERE id = ?1 AND phase = 'plan'",
             [id.as_str()],
         )?;
@@ -158,6 +165,28 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"plan": id, "phase": "dispatch", "jobs": keys, "workflows": listed(&workflows, &started, &held), "watch": watch}),
     ))
+}
+
+/// A re-planned Plan with no draft Job needs no review and no draft (A4): it returns to `dispatch` and is settled, so one whose
+/// Workflows are all merged and whose Jobs are all final ends `done`.
+fn relock_without_drafts(
+    mut env: Env,
+    id: &PlanId,
+    workflows: &[WorkflowRow],
+    held: &HashMap<String, NotReady>,
+) -> Result<Output, CpdError> {
+    let phase = env.store.write(COMMAND, |tx| {
+        crate::workflow::add::reopen(tx, id, "plan", "dispatch", "it was locked again")?;
+        Ok(if super::done::settle_done(tx, id, None)? {
+            "done"
+        } else {
+            row::load(tx, id)?.phase.as_str()
+        })
+    })?;
+    let watch = ensure_watch(&env, id)?;
+    Ok(Output::success(json!({
+        "plan": id, "phase": phase, "jobs": Vec::<String>::new(), "workflows": listed(workflows, &[], held), "watch": watch,
+    })))
 }
 
 /// `workflows` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in

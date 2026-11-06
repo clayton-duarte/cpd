@@ -1,7 +1,7 @@
 //! The plan fingerprint (contract §2.3): what a Plan review approves, so that
 //! it covers the `draft` Jobs and the Workflows.
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::jobs::{self, Job, sha256_of};
@@ -17,14 +17,7 @@ pub use super::prs::load_workflows;
 /// drafts only, so `prs` is the empty array there: a Workflow appended after the
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    let phase: Option<String> = conn
-        .query_row(
-            "SELECT phase FROM plans WHERE id = ?1",
-            [plan.as_str()],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let workflows = if reviews_prs(phase.as_deref()) {
+    let workflows = if !super::is_locked(conn, plan)? {
         load_workflows(conn, plan)?
     } else {
         Vec::new()
