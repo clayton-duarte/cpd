@@ -12,9 +12,26 @@ export interface CompletionStore {
   put(sessionId: string, entryId: string, completion: Completion): Promise<void>;
 }
 
-export function createCompletionStore(_deps: { cpd: CpdRunner }): CompletionStore {
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+export function createCompletionStore(deps: { cpd: CpdRunner }): CompletionStore {
   return {
-    get: () => { throw new Error("not implemented"); },
-    put: () => { throw new Error("not implemented"); },
+    async get(sessionId) {
+      const reply = await deps.cpd(["swr", "badge", "get", sessionId]);
+      const badge = isRecord(reply) ? reply["badge"] : null;
+      if (!isRecord(badge)) return null;
+      const completion = {
+        label: badge["label"],
+        text: badge["text"],
+        score: badge["score"],
+        tone: badge["tone"],
+        ...(Array.isArray(badge["others"]) ? { others: badge["others"] } : {}),
+      } as Completion;
+      return { entryId: String(badge["entry_id"]), completion };
+    },
+    async put(sessionId, entryId, c) {
+      const others = c.others !== undefined && c.others.length > 0 ? ["--others", JSON.stringify(c.others)] : [];
+      await deps.cpd(["swr", "badge", "put", sessionId, "--entry", entryId, "--label", c.label, "--score", String(c.score), "--text", c.text, "--tone", c.tone, ...others]);
+    },
   };
 }

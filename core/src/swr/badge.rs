@@ -107,10 +107,7 @@ pub fn put(
             synced_at: stored.synced_at,
         });
     }
-    let others = classification
-        .others
-        .as_ref()
-        .map(|o| o.to_string());
+    let others = classification.others.as_ref().map(|o| o.to_string());
     store.write("swr badge put", |tx| {
         tx.execute(
             "INSERT INTO swr_badges (session_id, entry_id, label, score, text, tone, others_json, synced_at, inactive_at)
