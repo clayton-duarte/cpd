@@ -2,6 +2,7 @@
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ContextNode, PlanNode, PlanWorkflowSummary, SessionNode } from "../../protocol/cockpit.ts";
+import { livePlans } from "../../state/archiveNav.ts";
 import { mount } from "../../testing/render.tsx";
 import { Dot } from "./ContextTree.tsx";
 import { ManagerView } from "./ManagerView.tsx";
@@ -134,25 +135,59 @@ it("ManagerView omits cancelled workflows", () => {
   expect(q(r, '[data-part="wf-pr-summary"]')).toBeNull();
 });
 
-it("ManagerView lists done plans in a collapsed section", () => {
+const ids = (c: ParentNode) => qa(c, "li[data-manager-plan]").map((li) => li.getAttribute("data-manager-plan"));
+const red = { state: "idle", attention: "red" } as const;
+
+it("ManagerView shows every unarchived plan in one list, done plans included, with no Done plans collapsible", () => {
   const { container } = show(ctx([plan("a"), plan("d1", { phase: "done" }), plan("d2", { phase: "done" })]));
-  expect(q(container, 'li[data-manager-plan="a"]')).not.toBeNull();
-  expect(q(container, 'li[data-manager-plan="d1"]')).toBeNull();
-  const trigger = qa(container, "button").find((b) => b.textContent === "Done plans (2)")!;
-  expect(trigger).toBeDefined();
-  act(() => { trigger.click(); });
-  expect(q(container, 'li[data-manager-plan="d1"]')).not.toBeNull();
-  expect(q(container, 'li[data-manager-plan="d2"]')).not.toBeNull();
+  const lists = qa(container, 'ol[data-part="plans"]');
+  expect(lists).toHaveLength(1);
+  expect(ids(lists[0]!).sort()).toEqual(["a", "d1", "d2"]);
+  expect(ids(container).sort()).toEqual(["a", "d1", "d2"]);
+  expect(row(container, "d1").getAttribute("data-phase")).toBe("done");
+  expect(row(container, "a").getAttribute("data-phase")).toBe("dispatch");
+  expect(q(container, '[data-part="active-plans"]')).toBeNull();
+  expect(q(container, '[data-part="done-plans"]')).toBeNull();
+  expect(qa(container, "button").some((b) => (b.textContent ?? "").includes("Done plans"))).toBe(false);
 });
 
-it("ManagerView sorts active plans like the ContextTree", () => {
-  const red = { state: "idle", attention: "red" } as const;
-  const old = plan("old", { createdAt: "2026-01-01T00:00:00Z" });
-  const fresh = plan("fresh", { createdAt: "2026-03-01T00:00:00Z" });
+it("ManagerView orders the plans exactly like livePlans, the order the ContextTree shows", () => {
   const urgent = plan("urgent", { createdAt: "2025-01-01T00:00:00Z", sessions: [lead("lead-urgent", red)], leadSessionId: "lead-urgent" });
-  const { container } = show(ctx([old, fresh, urgent]));
-  const ids = qa(container, "li[data-manager-plan]").map((li) => li.getAttribute("data-manager-plan"));
-  expect(ids).toEqual(["urgent", "fresh", "old"]);
+  const context = ctx([
+    plan("old", { createdAt: "2026-01-01T00:00:00Z" }),
+    plan("doneNew", { phase: "done", createdAt: "2026-04-01T00:00:00Z" }),
+    plan("fresh", { createdAt: "2026-03-01T00:00:00Z" }),
+    urgent,
+    plan("doneOld", { phase: "done", createdAt: "2025-06-01T00:00:00Z" }),
+  ]);
+  const expected = livePlans(context).map((p) => p.id);
+  expect(expected).toEqual(["urgent", "doneNew", "fresh", "old", "doneOld"]);
+  const { container } = show(context);
+  expect(ids(container)).toEqual(expected);
+});
+
+it("ManagerView leaves archived plans out of the list", () => {
+  const { container } = show(ctx([plan("a"), plan("x", { archived: true }), plan("d", { phase: "done" }), plan("xd", { phase: "done", archived: true })]));
+  expect(ids(container).sort()).toEqual(["a", "d"]);
+  expect(qa(container, 'ol[data-part="plans"]')).toHaveLength(1);
+});
+
+it("ManagerView counters count active and done plans of the one list", () => {
+  const { container } = show(ctx([plan("a"), plan("b"), plan("d1", { phase: "done" }), plan("d2", { phase: "done" }), plan("d3", { phase: "done" }), plan("x", { archived: true }), plan("xd", { phase: "done", archived: true })]));
+  const counters = q(container, '[data-part="manager-counters"]')!.textContent;
+  expect(counters).toBe("2 active · 3 done · 4 records");
+  expect(ids(container)).toHaveLength(5);
+});
+
+it("ManagerView shows the empty note only when no plan is live, not when all are done", () => {
+  const empty = show(ctx([plan("x", { archived: true })]));
+  expect(q(empty.container, "[data-empty]")!.textContent).toContain("No plans in this context yet — chat with the Manager below to shape a Plan");
+  mounted!.unmount();
+  const { container } = show(ctx([plan("d1", { phase: "done" }), plan("d2", { phase: "done" })]));
+  expect(ids(container).sort()).toEqual(["d1", "d2"]);
+  expect(q(container, "[data-empty]")).toBeNull();
+  expect(container.textContent).not.toContain("All current plans are done.");
+  expect(container.textContent).not.toContain("No plans in this context yet");
 });
 
 it("ManagerView clicking a plan selects the plan and its lead session", () => {
