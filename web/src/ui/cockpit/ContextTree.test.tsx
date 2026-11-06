@@ -368,7 +368,7 @@ it("sections are separated by separators and Archive renders only when something
 it("the Contexts section lists live Contexts by dot tier then newest first", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const top = section(m.container, "contexts");
-  expect(ids(top).filter((id) => !["cpd", "host", "codereview"].includes(id))).toEqual(["hot", "new", "old"]);
+  expect(ids(top).filter((id) => id !== null && !["cpd", "host", "codereview"].includes(id))).toEqual(["hot", "new", "old"]);
   m.unmount();
 });
 
