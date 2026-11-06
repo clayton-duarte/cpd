@@ -113,7 +113,7 @@ it("ChatPane replaces the Composer with the PlanReviewCard while a plan review d
 
 it("ChatPane replaces the Composer with a read-only dialog card too", () => {
   const c = setup(ask(false));
-  expect(askOf(c)).not.toBeNull();
+  expect(c.querySelector('[data-dialog="ask_user_question"]')).not.toBeNull();
   expect(composerOf(c)).toBeNull();
 });
 
