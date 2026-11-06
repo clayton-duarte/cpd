@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanViewModel } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
 import { PlanView } from "./PlanView.tsx";
@@ -67,11 +67,30 @@ it("shows job needs", () => {
   m.unmount();
 });
 
-it("PlanView renders the empty state Select a lead to see plans when plan is null", () => {
-  const m = mount(<PlanView plan={null} onAction={vi.fn()} />);
-  expect(m.container.querySelector("[data-empty]")?.textContent).toBe("Select a lead to see plans");
-  expect(m.container.querySelector("section")).toBeNull();
-  m.unmount();
+describe("PlanView with a flowchart", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("PlanView renders the flowchart canvas when plan is null", () => {
+    const m = mount(<PlanView plan={null} onAction={vi.fn()} />);
+    const canvas = m.container.querySelector('[data-part="flow-canvas"]');
+    expect(canvas).not.toBeNull();
+    expect(canvas?.querySelectorAll("li[data-step]").length).toBe(20);
+    expect(m.container.querySelector("[data-empty]")).toBeNull();
+    expect(m.container.querySelector('section[aria-label^="Plan "]')).toBeNull();
+    m.unmount();
+  });
+
+  it("the workflow dag-body scrolls with a ScrollArea", () => {
+    const m = mount(<PlanView plan={plan} onAction={vi.fn()} />);
+    const body = m.container.querySelector('[data-part="dag-body"]');
+    expect(body?.getAttribute("data-slot")).toBe("scroll-area");
+    expect(body?.className).not.toContain("overflow-x-auto");
+    expect(body?.querySelector('[data-part="dag-canvas"]')).not.toBeNull();
+    m.unmount();
+  });
 });
 
 it("PlanView header has min-h-11 and a truncating title", () => {

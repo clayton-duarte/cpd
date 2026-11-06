@@ -2,6 +2,7 @@ import { ChevronDownIcon, ChevronUpIcon, MaximizeIcon, MinimizeIcon } from "luci
 import { useCallback, useEffect, useState } from "react";
 import type { MutableRefObject, ReactElement, ReactNode } from "react";
 import { Button } from "../components/button.tsx";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import type { LayoutPanels } from "./layout.ts";
 import {
   ResizableHandle,
@@ -102,7 +103,7 @@ export function Shell(props: {
                 onResize={sync}
               >
                 <section aria-label="Plan pane" data-state={mode} {...(collapsed ? { inert: true } : {})}>
-                  {props.plan}
+                  <ScrollArea className="h-full w-full">{props.plan}</ScrollArea>
                 </section>
               </ResizablePanel>
               <ResizableHandle
@@ -182,7 +183,7 @@ export function Shell(props: {
           collapsible
           collapsedSize="0%"
         >
-          <aside aria-label="Inbox column" className="h-full overflow-y-auto">
+          <aside aria-label="Inbox column" className="h-full overflow-hidden">
             {props.inbox}
           </aside>
         </ResizablePanel>

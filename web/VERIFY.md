@@ -36,7 +36,7 @@ Vite prints `Local: http://localhost:5173/` (`web/vite.config.ts`: `port: 5173`,
 | Read the Inbox | heading `Inbox (<n>)`, one row per item with its actions; `Nothing needs you` when empty; `Engine is not running` appears if the engine is stopped (check with `cpd watch --check`) | right |
 | Click an Inbox row's session button | that session is selected | right then centre |
 | Select a session, read the status bar | `Runner: pi` or `Runner: durable` matches `cpd session list`; `State: …` matches the tree dot; `cpd: <version>` (or `cpd: unknown`) | bottom |
-| Select nothing (reload) | `Runner: none`, `State: none`, plan pane `No plan selected` | bottom, centre |
+| Select nothing (reload) | `Runner: none`, `State: none`, plan pane shows the Plan flowchart (`[data-part="flow-canvas"]`, with an `Expand all` button; pro-d68) | bottom, centre |
 
 The Phase 3/4 look of the frame is checked in section 6.
 

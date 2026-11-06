@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { cn } from "../../lib/utils.ts";
+import { ScrollArea } from "../components/scroll-area.tsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/dialog.tsx";
 
 /** A mark in a Dango tone, then its meaning (scout-legend §6, from the TUI legend). */
@@ -103,8 +104,10 @@ const SECTIONS: readonly { title: string; rows: readonly Row[] }[] = [
 export function LegendDialog(props: { open: boolean; onClose(): void }): ReactElement {
   return (
     <Dialog open={props.open} onOpenChange={(o) => { if (!o) props.onClose(); }}>
-      <DialogContent data-part="legend-dialog" aria-describedby={undefined} className="sm:max-w-3xl">
+      <DialogContent data-part="legend-dialog" aria-describedby={undefined} className="overflow-hidden sm:max-w-3xl">
         <DialogHeader><DialogTitle>Legend: What The Cockpit's Colours And Icons Mean</DialogTitle></DialogHeader>
+        <ScrollArea className="h-[70vh]">
+        <div className="grid gap-3 pr-3">
         {SECTIONS.map((s) => (
           <section key={s.title} className="grid gap-1">
             <h3 className="font-semibold text-fg-strong underline">{s.title}</h3>
@@ -116,6 +119,8 @@ export function LegendDialog(props: { open: boolean; onClose(): void }): ReactEl
             ))}
           </section>
         ))}
+        </div>
+        </ScrollArea>
       </DialogContent>
     </Dialog>
   );

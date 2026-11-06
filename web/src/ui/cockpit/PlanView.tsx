@@ -2,8 +2,9 @@ import type { ReactElement } from "react";
 import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
-import { Empty, EmptyHeader, EmptyTitle } from "../components/empty.tsx";
+import { ScrollArea, ScrollBar } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
+import { CpdFlowCanvas } from "./FlowCanvas.tsx";
 import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
 
 const phaseOrder: readonly Phase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
@@ -186,7 +187,8 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
           </p>
         ) : null}
       </header>
-      <div data-part="dag-body" className="overflow-x-auto p-3">
+      <ScrollArea data-part="dag-body" className="w-full">
+      <div className="p-3">
         {layout.nodes.length === 0 ? (
           <p data-part="no-jobs" className="text-[11.5px] text-muted-foreground">No jobs</p>
         ) : (
@@ -208,6 +210,8 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
           </div>
         )}
       </div>
+      <ScrollBar orientation="horizontal" />
+      </ScrollArea>
     </section>
   );
 }
@@ -234,15 +238,7 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
 }): ReactElement {
   const { plan, onAction } = props;
   if (plan === null) {
-    return (
-      <Empty data-empty className="h-full border-none py-6 text-muted-foreground">
-        <EmptyHeader>
-          <EmptyTitle className="text-sm font-normal text-muted-foreground">
-            Select a lead to see plans
-          </EmptyTitle>
-        </EmptyHeader>
-      </Empty>
-    );
+    return <CpdFlowCanvas />;
   }
   const explore = plan.jobs.filter((j) => j.workflow === null);
   return (

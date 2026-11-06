@@ -62,12 +62,14 @@ it("the transcript log scrolls on its own", () => {
   expect(css, "no [role=log] rule").not.toMatch(/\[role="log"\]\s*\{/);
 });
 
-it("the context tree, plan and inbox scroll independently", () => {
+it("the shell asides and the plan pane clip and leave scrolling to ScrollArea", () => {
   const aside = declsMatching(/\[data-shell\] aside/);
-  expect(aside.get("overflow-y"), "shell aside: overflow-y").toBe("auto");
+  expect(aside.get("overflow"), "shell aside: overflow").toBe("hidden");
   expect(aside.get("height"), "shell aside: height").toBe("100%");
+  expect(aside.has("overflow-y"), "shell aside: no overflow-y").toBe(false);
   const plan = declsMatching(/plan/i);
-  expect(plan.get("overflow-y"), "plan pane: overflow-y").toBe("auto");
+  expect(plan.get("overflow"), "plan pane: overflow").toBe("hidden");
+  expect(plan.has("overflow-y"), "plan pane: no overflow-y").toBe(false);
   expect(decls('[data-column="center"]').get("min-height"), "center column: min-height").toBe("0");
 });
 
