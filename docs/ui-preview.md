@@ -49,6 +49,10 @@ If loading the dev URL fails (for example the server is down), boot logs the err
 
 `preview-web.sh` itself never runs `git checkout`, `git reset` or `git clean`. The Electron sync does a scoped `git checkout HEAD -- <files>` in the preview worktree before it fast-forwards (see [Electron app](#electron-app)). The matching scripts in `web/package.json` are `preview:on`, `preview:off` and `preview:reload`.
 
+## Production and preview modes
+
+(Contract being written: Job dual-docs, attempt dual-docs-a1.)
+
 ## Electron app
 
 (pro-d37, pro-d38, pro-d39)
