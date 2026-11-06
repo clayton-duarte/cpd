@@ -207,7 +207,7 @@ describe("cockpit stream", () => {
     expect(children[0]!.killed).toBe(true);
     expect(children).toHaveLength(2);
     expect(scheduler.pending()).toBe(0);
-    expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("down");
+    expect(await outcome).toBe("down");
     expect(errors).toEqual([]);
   });
 
