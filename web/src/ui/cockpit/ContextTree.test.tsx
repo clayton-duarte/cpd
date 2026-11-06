@@ -307,8 +307,6 @@ it("every open section is flex-1 and a closed section is shrink-0", () => {
   expect(section(c, "archive")?.getAttribute("data-state")).toBe("closed");
   click(header(c, "Archive"));
   expect(section(c, "archive")?.className, "archive open").toContain("flex-1");
-  click(header(c, "Contexts"));
-  expect(section(c, "contexts")?.className, "contexts closed").toContain("shrink-0");
   m.unmount();
 });
 
@@ -322,7 +320,7 @@ it("no section has a max height of 50 percent", () => {
 it("each section label is outside the scroll area and only the section body scrolls", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   click(header(m.container, "Archive"));
-  for (const name of ["contexts", "archive"]) {
+  for (const name of ["archive"]) {
     const sec = section(m.container, name);
     const label = sec?.querySelector('[data-slot="sidebar-group-label"]');
     expect(label, name).not.toBeNull();
@@ -426,8 +424,6 @@ it("the Standing section collapse key is never written", () => {
   vi.stubGlobal("localStorage", preset);
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   expect(q(section(m.container, "contexts") ?? m.container, '[data-context="cpd"]'), "stale key does not hide cpd").not.toBeNull();
-  click(header(m.container, "Contexts"));
-  click(header(m.container, "Contexts"));
   click(header(m.container, "Archive"));
   expect(set.mock.calls.map((c) => c[0]).filter((k) => String(k).includes("standing"))).toEqual([]);
   expect(preset.getItem("cpd-ui:collapse:section:standing")).toBe("0");
@@ -446,11 +442,6 @@ it("an archived standing Context is not listed in the Archive section", () => {
 it("each section header shows a minus icon when open and a plus icon when closed", () => {
   const m = mount(<ContextTree {...props({ tree: layered })} />);
   const icon = (name: string) => header(m.container, name)?.querySelector("svg")?.getAttribute("class") ?? "";
-  for (const name of ["Contexts"]) {
-    expect(icon(name), `${name} open`).toContain("lucide-minus");
-    click(header(m.container, name));
-    expect(icon(name), `${name} closed`).toContain("lucide-plus");
-  }
   expect(icon("Archive"), "Archive closed by default").toContain("lucide-plus");
   click(header(m.container, "Archive"));
   expect(icon("Archive"), "Archive open").toContain("lucide-minus");
@@ -495,10 +486,6 @@ const withArchivedPlans = (): ContextTreeModel => {
 it("section and context open state persists in localStorage under cpd-ui collapse keys", () => {
   const m = mount(<ContextTree {...props({ tree: withArchivedPlans() })} />);
   const key = (k: string) => store.getItem(`cpd-ui:collapse:${k}`);
-  click(header(m.container, "Contexts"));
-  expect(key("section:contexts")).toBe("0");
-  click(header(m.container, "Contexts"));
-  expect(key("section:contexts")).toBe("1");
   click(header(m.container, "Archive"));
   expect(key("section:archive")).toBe("1");
   click(q(m.container, '[data-context="c1"] [data-slot="sidebar-menu-action"]'));
@@ -515,11 +502,6 @@ it("a closed section stays closed after a remount", () => {
   const again = mount(<ContextTree {...props({ tree: layered })} />);
   expect(q(again.container, '[data-archived] [data-context="gone"]')).not.toBeNull();
   again.unmount();
-  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0" });
-  vi.stubGlobal("localStorage", preset);
-  const closed = mount(<ContextTree {...props({ tree: layered })} />);
-  expect(q(closed.container, '[data-context="hot"]')).toBeNull();
-  closed.unmount();
 });
 
 // pro-d45: the dot of a row is a lucide icon; hooks data-dot, data-tone, data-work.
@@ -1056,16 +1038,6 @@ it("selecting a fork in a collapsed Context expands that Context", () => {
   m.unmount();
 });
 
-it("selecting a session when the Contexts section is collapsed opens the section", () => {
-  vi.stubGlobal("localStorage", fakeStorage({ "cpd-ui:collapse:section:contexts": "0" }));
-  const m = remountable(treeSel(null));
-  expect(sectionOpen(m.container, "Contexts")).toBe("false");
-  m.render(treeSel("s-lead"));
-  expect(sectionOpen(m.container, "Contexts")).toBe("true");
-  expect(q(m.container, '[data-plan="p1"] button[aria-current="true"]')).not.toBeNull();
-  m.unmount();
-});
-
 it("selecting an archived session opens the Archive section", () => {
   const t = archivedTree();
   const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
@@ -1078,11 +1050,10 @@ it("selecting an archived session opens the Archive section", () => {
 });
 
 it("selecting a Manager keeps its own Context collapsed", () => {
-  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0", "cpd-ui:collapse:ctx:c1": "0" });
+  const preset = fakeStorage({ "cpd-ui:collapse:ctx:c1": "0" });
   vi.stubGlobal("localStorage", preset);
   const m = remountable(treeSel(null));
   m.render(treeSel("s-mgr"));
-  expect(sectionOpen(m.container, "Contexts")).toBe("true");
   expect(stateOf(m.container, "c1")).toBe("closed");
   expect(hasPlan(m.container, "p1")).toBe(false);
   expect(preset.getItem("cpd-ui:collapse:ctx:c1")).toBe("0");
@@ -1135,5 +1106,80 @@ it("no selection scrolls nothing", () => {
   m.render(treeSel(null));
   flush();
   expect(scroll.mock.calls.length).toBe(after);
+  m.unmount();
+});
+
+// Column header (pro-d86): TopPaneHeader with phi left and the New context button right.
+const treeHeader = (c: ParentNode) => q(c, '[data-part="tree-header"]');
+
+it("ContextTree header is a TopPaneHeader with a phi on the left and the New context button on the right", () => {
+  const m = mount(<ContextTree {...props({ onNewContext: vi.fn() })} />);
+  const h = treeHeader(m.container);
+  expect(h?.tagName).toBe("HEADER");
+  expect(h?.classList.contains("pr-12")).toBe(false);
+  const kids = Array.from(h?.children ?? []);
+  const phi = q(h ?? m.container, '[data-part="phi"]');
+  expect(phi?.textContent).toBe("φ");
+  expect(phi?.getAttribute("aria-hidden")).toBe("true");
+  for (const c of ["font-display", "text-[20px]", "font-bold"]) expect(phi?.classList.contains(c)).toBe(true);
+  expect(q(h ?? m.container, ".sr-only")?.textContent).toBe("Contexts");
+  const add = q(h ?? m.container, 'button[data-action="new-context"][aria-label="New context"]');
+  expect(add).not.toBeNull();
+  const spacer = kids.findIndex((k) => k.className.includes("flex-1"));
+  expect(spacer).toBeGreaterThan(0);
+  expect(kids.findIndex((k) => k === phi || k.contains(phi))).toBeLessThan(spacer);
+  expect(kids.findIndex((k) => k === add || k.contains(add))).toBeGreaterThan(spacer);
+  m.unmount();
+});
+
+it("ContextTree header has no New context button without onNewContext", () => {
+  const m = mount(<ContextTree {...props()} />);
+  const h = treeHeader(m.container);
+  expect(h?.tagName).toBe("HEADER");
+  expect(q(h ?? m.container, '[data-part="phi"]')).not.toBeNull();
+  expect(q(m.container, 'button[data-action="new-context"]')).toBeNull();
+  m.unmount();
+});
+
+it("ContextTree header is h-11 and sticky like the other column headers", () => {
+  const m = mount(<ContextTree {...props({ onNewContext: vi.fn() })} />);
+  const h = treeHeader(m.container);
+  for (const c of ["sticky", "top-0", "z-10", "flex", "h-11", "shrink-0", "items-center", "border-b", "border-border", "bg-background", "px-4"]) {
+    expect(h?.classList.contains(c), c).toBe(true);
+  }
+  m.unmount();
+});
+
+it("the Contexts list is always visible and has no section toggle or persisted flag", () => {
+  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0" });
+  const set = vi.spyOn(preset, "setItem");
+  vi.stubGlobal("localStorage", preset);
+  const m = mount(<ContextTree {...props({ tree: layered, onNewContext: vi.fn() })} />);
+  expect(q(section(m.container, "contexts") ?? m.container, '[data-context="hot"]'), "stale flag does not hide the list").not.toBeNull();
+  expect(header(m.container, "Contexts")).toBeNull();
+  expect(section(m.container, "contexts")?.querySelector("[aria-expanded]")).toBeNull();
+  expect(section(m.container, "contexts")?.contains(treeHeader(m.container))).toBe(false);
+  click(treeHeader(m.container));
+  click(q(m.container, '[data-part="phi"]'));
+  expect(q(section(m.container, "contexts") ?? m.container, '[data-context="hot"]')).not.toBeNull();
+  expect(set.mock.calls.map((c) => c[0]).filter((k) => String(k).includes("section:contexts"))).toEqual([]);
+  m.unmount();
+});
+
+it("selecting a session no longer needs to open a Contexts section but still opens Archive", () => {
+  const preset = fakeStorage({ "cpd-ui:collapse:section:contexts": "0" });
+  const set = vi.spyOn(preset, "setItem");
+  vi.stubGlobal("localStorage", preset);
+  const t = archivedTree();
+  const el = (id: string | null) => <ContextTree {...props({ tree: t, selectedSessionId: id })} />;
+  const m = remountable(el(null));
+  m.render(el("s-lead"));
+  expect(q(m.container, '[data-plan="p1"] button[aria-current="true"]')).not.toBeNull();
+  expect(set.mock.calls.map((c) => c[0]).filter((k) => String(k).includes("section:contexts"))).toEqual([]);
+  expect(sectionOpen(m.container, "Contexts")).toBeUndefined();
+  expect(sectionOpen(m.container, "Archive")).toBe("false");
+  m.render(el("m-gone"));
+  expect(sectionOpen(m.container, "Archive")).toBe("true");
+  expect(q(m.container, '[data-archived] [data-context="gone"] [aria-current="true"]')).not.toBeNull();
   m.unmount();
 });
