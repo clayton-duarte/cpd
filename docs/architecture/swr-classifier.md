@@ -2,7 +2,7 @@
 
 Status: **normative for the Jobs `swr-classifier-tests` and `swr-classifier-impl`** (Plan `external-sync-arch`, Workflow `swr-classifier`). Where merged code later differs from this page, the code wins. The shared design is [swr.md](swr.md); the schema is [contract §4.4](../contract.md); the classifier port is [contract §3.7a](../contract.md); the commands are [commands §32](../commands.md).
 
-Decisions: pro-d438 (the badge is always visible and keeps its last value), pro-d445 (the hover card of the other scores), pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend; clients call cpd). Accepted assumptions of [swr.md §17](swr.md) apply; the ones this page relies on are A1, A3, A4, A6 and A7.
+Decisions: pro-d438 (the badge is always visible and keeps its last value), pro-d445 (the hover card of the other scores), pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend; clients call cpd). Accepted assumptions of [swr.md §17](swr.md) apply; the ones this page relies on are A1, A3, A4 and A6.
 
 ## 1. Scope
 
@@ -19,18 +19,18 @@ Today, on `origin/main` (353b5db7f):
 |---|---|---|
 | badge state | `web/src/server/completion-service.ts:10-12` | three memory maps: `cache` (key to completion), `last` (session to completion, replayed on track), `inflight` (single-flight). Lost at every WebUI restart |
 | badge key | `completion-service.ts:33` | `${ref.id}\|${last item id}\|${plan.cursor}` |
-| badge classify | `web/src/server/completion-classify.ts:80` | `deps.child.spawn("node", [script])` directly, the helper `pi/lib/classify.ts`; not through the core `Runner` port |
-| badge failure | `completion-classify.ts:86-106` | a non-zero exit, no line, bad JSON, `ok: false`, a spawn throw and the 30 s deadline all resolve `null`; nothing is recorded |
-| badge wiring | `web/src/server/plugin.ts:138-152`, script path `:186-196` | `createCompletionService` with `planOf` (reads `cpd plan show`) and the classifier |
+| badge classify | `web/src/server/completion-classify.ts:91` | `deps.child.spawn("node", [script])` directly, the helper `pi/lib/classify.ts`; not through the core `Runner` port |
+| badge failure | `completion-classify.ts:97-113` | a non-zero exit, no line, bad JSON, `ok: false`, a spawn throw and the 30 s deadline all resolve `null`; nothing is recorded |
+| badge wiring | `web/src/server/plugin.ts:148-157`, script path `:196-205` | `createCompletionService` with `planOf` (reads `cpd plan show`) and the classifier |
 | outage marker | `core/src/classifier.rs`, `notify` | on `classifier_unreachable`, appends one `error` Event and writes `run/classifier-unreachable.json` (`{}`) if absent; a successful `choose()` removes it |
 
-The line numbers are those of `origin/main` 353b5db7f. Where a line number of the Explore report (`s-badge-health`) no longer matches, this page names the function instead.
+The line numbers are those of `origin/main` 353b5db7f, checked with `grep -n`. The Explore report (`s-badge-health`) cites older lines for the same code, so it is not used for them.
 
 ## 2. The Lead completion badge
 
 ### 2.1 Flow
 
-The web server runs this for a Lead session. It runs when the session's items are non-empty and the plan is known: on a `session.window` in `tail` mode, and on a `session.status` settle from busy to idle (`completion-service.ts:61-63`, `:78-82`, as today).
+The web server runs this for a Lead session. It runs when the session's items are non-empty and the plan is known: on a `session.window` in `tail` mode, and on a `session.status` settle from busy to idle (`completion-service.ts:63`, `:79-81`, as today).
 
 ```mermaid
 sequenceDiagram
@@ -63,7 +63,7 @@ Rules of the flow:
 
 - **Freshness.** A row is fresh while `entry_id` equals the Session's last transcript item id `E` (the Job's "last assistant turn", read as the last item: the key `completion-service.ts:33` uses today). Only a fresh row skips the classify call. A stale row is still shown while the classify runs (pro-d438).
 - **No memory of freshness.** Freshness is read from the row, not from the engine's memory. A WebUI restart therefore shows the last badge at once and classifies only when `E` has moved. This is the exception to [swr.md §4](swr.md) ("after a restart every query is stale once"): a badge is not a `swr_queries` row, so it has no in-memory fresh-until instant.
-- **Single-flight stays in the web.** The in-process `inflight` map (`completion-service.ts:12`, `:38-47`) still merges concurrent classifies of one key. It is not persisted.
+- **Single-flight stays in the web.** The in-process `inflight` map (`completion-service.ts:12`, `:38-46`) still merges concurrent classifies of one key. It is not persisted.
 - **The helper spawn stays in the web** for now. See §7, open item 3.
 
 ### 2.2 The completion type
@@ -107,7 +107,7 @@ Read back, `badge get` returns `others` as the parsed array when `others_json` i
 
 ### 2.5 Failure
 
-- Any classify failure keeps the cached row and the value on screen. The web writes nothing for it. A failure never shows an empty badge, which today's `null` (`completion-classify.ts:86-106`) does.
+- Any classify failure keeps the cached row and the value on screen. The web writes nothing for it. A failure never shows an empty badge, which today's `null` (`completion-classify.ts:97-113`) does.
 - The failure is recorded as endpoint health (§4). No Event and no file are written for the badge itself; the outage Event, if the outage lasts 10 minutes, is the engine's (§4.3).
 
 ## 3. Command contracts
@@ -149,10 +149,10 @@ Full syntax, exit codes and the output envelope are in [commands §32.7 to §32.
 
 | Endpoint | Calls it makes | Writes its health |
 |---|---|---|
-| `ollama.lab` | `classify.ts` through `PiClassifier` (merge triage, curation, distill); the badge (`completion-classify.ts`); the question guard (`pi/lib/question-guard.ts:72`) | Rust: `PiClassifier::choose` (`core/src/classifier.rs`). Web and question guard: `cpd swr health record` |
-| `bifrost` | the judge `judge.ts` through `BifrostJudge` (`core/src/context/curate_judge.rs`, `JudgePort::judge`); the embedding `embed.ts` through `BifrostEmbedding` (`core/src/embedding.rs:128`) | Rust, in the two adapters |
+| `ollama.lab` | `classify.ts` through `PiClassifier` (merge triage, curation, distill); the badge (`completion-classify.ts`); the question guard (`pi/lib/question-guard.ts:79`) | Rust: `PiClassifier::choose` (`core/src/classifier.rs`). Web and question guard: `cpd swr health record` |
+| `bifrost` | the judge `judge.ts` through `BifrostJudge` (`core/src/context/curate_judge.rs:151`); the embedding `embed.ts` through `BifrostEmbedding` (`core/src/embedding.rs:128`) | Rust, in the two adapters |
 
-**Where the Rust side records.** In the adapter, not in each caller. The bifrost callers are the curation sweep (its judge call is `curate_run.rs:317`, in `verify_pair`; the sweep stops at the first judge error), the distill verify (`distill.rs:482`, which ends the asking on a judge error), the search vector leg (`search.rs:377-386`, FTS-only fallback) and curation's embed (`curate_run.rs:512`, `:529`). All of them reach the two adapters, so recording there covers every caller once (DRY, one source of truth).
+**Where the Rust side records.** In the adapter, not in each caller. The bifrost callers are the curation sweep (its judge calls are `curate_run.rs:433`, in `judge_pair`, and `:341`, in `verify_pair`; the sweep stops at the first judge error), the distill verify (`distill.rs:516`, which ends the asking on a judge error), the search vector leg (`search.rs:377-386`, FTS-only fallback) and curation's embed (`curate_run.rs:512`, `:529`). All of them reach the two adapters, so recording there covers every caller once (DRY, one source of truth).
 
 ### 4.2 What counts as an outage
 
@@ -188,7 +188,7 @@ This is the reachability rule: an answer or a refusal clears an outage, and only
 
 - `run/classifier-unreachable.json` is no longer written or read ([contract §1.4](../contract.md) row removed). A file left by an older binary is ignored.
 - The notice of [contract §3.7a](../contract.md) ("the notice of an unreachable classifier") is replaced by §4.3.
-- The question guard's per-run NOTICE (`pi/lib/question-guard.ts:74-78`) is pi's own UI message, not an Event and not a file. It stays. Its classify call also records `ok` or `error` through the command (open item 6).
+- The question guard's per-run NOTICE (`pi/lib/question-guard.ts:81-85`) is pi's own UI message, not an Event and not a file. It stays. Its classify call also records `ok` or `error` through the command (open item 6).
 
 ## 5. Endpoints
 
