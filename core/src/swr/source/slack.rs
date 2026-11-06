@@ -24,12 +24,11 @@ impl Source for Slack {
         _keys: &[QueryKey],
         _poll_started_at: OffsetDateTime,
     ) -> Result<(), CpdError> {
-        Ok(())
+        // The red tests call `fetch` directly; `due` stays empty so E24 never reaches this stub (swr-slack.md §3, §6).
+        todo!("swr-slack: run the helper with stdin, apply the posts, confirm own posts")
     }
     fn execute(&self, _cx: &mut Cx<'_>, _m: &Mutation) -> ExecOutcome {
-        ExecOutcome::Failed {
-            error: "not implemented".into(),
-        }
+        todo!("swr-slack: reaction, post and repost (swr-slack.md §4)")
     }
     fn coalesce(&self, _op_kind: &str) -> Coalesce {
         Coalesce::LatestWins
