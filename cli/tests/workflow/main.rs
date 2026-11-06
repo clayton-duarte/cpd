@@ -10,6 +10,7 @@ mod git_lead_branch;
 mod git_written;
 mod merge;
 mod merge_durable;
+mod pr_approval;
 mod pr_checks;
 mod pr_comments;
 mod pr_excused;
