@@ -796,7 +796,7 @@ mod tests {
 
     use super::*;
     use crate::inbox::model::reconcile;
-    use crate::inbox::team::{GhState, Review};
+    use crate::inbox::team::{GhState, Lookup, Review};
 
     /// [`super::conditions_with`] with the team review rule off: these tests need no config file.
     fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
@@ -1929,11 +1929,8 @@ mod tests {
         post
     }
 
-    fn write_cache(f: &Fixture, posts: &[Value]) {
-        let path = f.home.run_dir().join("team-review.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let cache = json!({"version": 1, "polled_at": T, "channel": "C02JU6C2Z1D", "read": 10, "posts": posts});
-        std::fs::write(path, cache.to_string()).unwrap();
+    fn write_cache(f: &mut Fixture, posts: &[Value]) {
+        crate::inbox::swr_fixture::posts(&mut f.store, posts).unwrap();
     }
 
     fn open_pr() -> GhPr {
@@ -1970,12 +1967,11 @@ mod tests {
         }
     }
 
-    fn team<'a>(github: GithubLookup<'a>) -> Team<'a> {
+    fn team() -> Team<'static> {
         static BOT_LIST: std::sync::LazyLock<Vec<String>> =
             std::sync::LazyLock::new(|| BOTS.map(str::to_owned).to_vec());
         Team {
             bot_reviewers: &BOT_LIST,
-            github,
         }
     }
 
@@ -1986,16 +1982,8 @@ mod tests {
         workflows: &[(&str, u64, GhPr)],
     ) -> Vec<Condition> {
         write_cache(f, posts);
-        let lookup = lookup(workflows);
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| Ok(lookup.clone()))),
-        )
-        .unwrap();
+        crate::inbox::swr_fixture::lookup(&mut f.store, &lookup(workflows)).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         all.into_iter()
             .filter(|c| c.kind == Kind::ReviewRequested)
             .collect()
@@ -2181,14 +2169,14 @@ mod tests {
             "posts of other Workflows"
         );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
-        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        f.sql("DELETE FROM swr_slack_posts");
         let none = conditions_with(
             &mut f.store,
             &f.home,
             NOW,
             20,
             1,
-            Some(team(&mut |_| panic!("no post, no call"))),
+            Some(team()),
         )
         .unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
@@ -2205,22 +2193,10 @@ mod tests {
         };
         let mut mention = post("acme/pay", 3);
         mention["primary"] = json!(false);
-        write_cache(&f, &[old(1, 6.9 * day), old(2, 7.1 * day), mention]);
-        let mut asked = Vec::new();
+        write_cache(&mut f, &[old(1, 6.9 * day), old(2, 7.1 * day), mention]);
         let answer = lookup(&[("acme/pay", 1, open_pr())]);
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |refs| {
-                asked = refs.to_vec();
-                Ok(answer.clone())
-            })),
-        )
-        .unwrap();
-        assert_eq!(asked, [("acme/pay".to_owned(), 1)]);
+        crate::inbox::swr_fixture::lookup(&mut f.store, &answer).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert_eq!(
             all.iter()
                 .filter(|c| c.kind == Kind::ReviewRequested)
@@ -2265,14 +2241,14 @@ mod tests {
         reconcile(&mut f.store, &opened, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
-        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        f.sql("DELETE FROM swr_slack_posts");
         let unknown = conditions_with(
             &mut f.store,
             &f.home,
             NOW,
             20,
             1,
-            Some(team(&mut |_| panic!("nothing to ask"))),
+            Some(team()),
         )
         .unwrap();
         assert_eq!(
@@ -2293,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_cache_keeps_the_items_and_opens_no_engine_error() {
+    fn an_unknown_viewer_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2301,70 +2277,9 @@ mod tests {
             &[("acme/pay", 1, open_pr())],
         );
         reconcile(&mut f.store, &opened, T).unwrap();
-        std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| panic!("unreadable"))),
-        )
-        .unwrap();
-        assert_eq!(
-            all.iter()
-                .filter(|c| c.kind == Kind::ReviewRequested)
-                .count(),
-            1
-        );
-        assert!(
-            all.iter().all(|c| c.kind != Kind::EngineError),
-            "no engine-error for an unreadable cache"
-        );
-        std::fs::write(
-            f.home.run_dir().join("team-review.json"),
-            r#"{"version": 2, "posts": []}"#,
-        )
-        .unwrap();
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| panic!("unreadable"))),
-        )
-        .unwrap();
-        assert_eq!(
-            all.iter()
-                .filter(|c| c.kind == Kind::ReviewRequested)
-                .count(),
-            1,
-            "another version is unreadable too: kept"
-        );
-        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
-    }
-
-    #[test]
-    fn a_github_that_fails_keeps_the_items_and_opens_no_engine_error() {
-        let mut f = fixture("dispatch");
-        let opened = reviews(
-            &mut f,
-            &[post("acme/pay", 1)],
-            &[("acme/pay", 1, open_pr())],
-        );
-        reconcile(&mut f.store, &opened, T).unwrap();
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| {
-                Err(CpdError::new(ErrorCode::GhFailed, "down"))
-            })),
-        )
-        .unwrap();
+        // The pass has not stored the viewer (or lost it): "unknown", not "empty".
+        f.sql("DELETE FROM swr_viewer");
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert_eq!(
             all.iter()
                 .filter(|c| c.kind == Kind::ReviewRequested)
@@ -2378,7 +2293,7 @@ mod tests {
     #[test]
     fn a_pull_request_github_cannot_read_is_dropped_and_all_unreadable_keeps_the_queue() {
         let mut f = fixture("dispatch");
-        write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
+        write_cache(&mut f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.workflows.insert(("acme/gone".to_owned(), 2), None);
         let all = conditions_with(
@@ -2387,7 +2302,7 @@ mod tests {
             NOW,
             20,
             1,
-            Some(team(&mut |_| Ok(answer.clone()))),
+            Some(team()),
         )
         .unwrap();
         assert_eq!(
@@ -2406,15 +2321,8 @@ mod tests {
             me: ME_LOGIN.to_owned(),
             workflows: [(("acme/pay".to_owned(), 1), None)].into(),
         };
-        let all = conditions_with(
-            &mut f.store,
-            &f.home,
-            NOW,
-            20,
-            1,
-            Some(team(&mut |_| Ok(blind.clone()))),
-        )
-        .unwrap();
+        crate::inbox::swr_fixture::lookup(&mut f.store, &blind).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team())).unwrap();
         assert_eq!(
             all.iter()
                 .filter(|c| c.kind == Kind::ReviewRequested)
@@ -2481,15 +2389,16 @@ mod tests {
             .skip(3)
             .collect();
         assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
-        write_cache(&f, &[post("acme/pay", 812)]);
+        write_cache(&mut f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
+        crate::inbox::swr_fixture::lookup(&mut f.store, &lookup).unwrap();
         let kinds: Vec<_> = conditions_with(
             &mut f.store,
             &f.home,
             NOW,
             20,
             1,
-            Some(team(&mut |_| Ok(lookup.clone()))),
+            Some(team()),
         )
         .unwrap()
         .into_iter()

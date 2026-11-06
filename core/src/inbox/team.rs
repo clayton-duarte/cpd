@@ -308,8 +308,6 @@ fn gh_pr(e: &crate::swr::github::EffectivePr, me: &str) -> GhPr {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     const ME: &str = "clayton-duarte";
@@ -618,98 +616,5 @@ mod tests {
         ] {
             assert_eq!(status(&tagged, &workflow, ME, &bots()), want);
         }
-    }
-
-    // ---- the GitHub reply ----
-
-    fn reply() -> Value {
-        json!({"data": {
-            "viewer": {"login": ME},
-            "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
-                   "latestReviews": {"nodes": [{"state": "COMMENTED", "author": {"login": "github-actions"}}]}}},
-            "p1": null
-        }, "errors": [{"type": "NOT_FOUND", "path": ["p1"], "message": "Could not resolve"}]})
-    }
-
-    #[test]
-    fn a_reply_is_the_users_login_and_each_pull_request_or_none_when_not_found() {
-        let refs = [("acme/pay".to_owned(), 1), ("acme/gone".to_owned(), 2)];
-        let lookup = parse_lookup(&reply(), &refs).unwrap();
-        assert_eq!(lookup.me, ME);
-        assert_eq!(
-            lookup.workflows[&refs[0]],
-            Some(GhPr {
-                reviews: vec![review("github-actions", "COMMENTED")],
-                ..workflow()
-            })
-        );
-        assert_eq!(lookup.workflows[&refs[1]], None);
-    }
-
-    #[test]
-    fn a_reply_with_another_error_or_no_data_is_a_failure_never_an_empty_answer() {
-        let refs = [("acme/pay".to_owned(), 1)];
-        let mut other = reply();
-        other["errors"] = json!([{"type": "RATE_LIMITED", "message": "slow down"}]);
-        assert!(
-            parse_lookup(&other, &refs)
-                .unwrap_err()
-                .contains("slow down")
-        );
-        assert!(
-            parse_lookup(&json!({"errors": []}), &refs)
-                .unwrap_err()
-                .contains("without data")
-        );
-        let mut state = reply();
-        state["data"]["p0"]["pullRequest"]["state"] = json!("WEIRD");
-        assert!(parse_lookup(&state, &refs).unwrap_err().contains("state"));
-    }
-
-    // ---- the memo ----
-
-    #[test]
-    fn the_memo_asks_again_only_for_other_posts_or_after_the_ttl() {
-        let (a, b) = (
-            vec![("acme/pay".to_owned(), 1)],
-            vec![("acme/pay".to_owned(), 2)],
-        );
-        let lookup = Lookup {
-            me: ME.to_owned(),
-            workflows: BTreeMap::new(),
-        };
-        let mut calls = 0;
-        let mut memo = Memo::default();
-        let t0 = Instant::now();
-        let mut ask = |memo: &mut Memo, refs: &[(String, u64)], at: Instant| {
-            memo.get(refs, "", at, |_| {
-                calls += 1;
-                Ok(lookup.clone())
-            })
-            .unwrap();
-        };
-        ask(&mut memo, &a, t0);
-        ask(&mut memo, &a, t0 + Duration::from_secs(29));
-        ask(&mut memo, &b, t0 + Duration::from_secs(29));
-        ask(&mut memo, &b, t0 + Duration::from_secs(29 + 30));
-        assert_eq!(calls, 3, "first, other posts, and past the ttl");
-    }
-
-    #[test]
-    fn the_memo_holds_a_failure_too() {
-        let a = vec![("acme/pay".to_owned(), 1)];
-        let mut memo = Memo::default();
-        let t0 = Instant::now();
-        let mut calls = 0;
-        for _ in 0..3 {
-            let err = memo
-                .get(&a, "", t0, |_| {
-                    calls += 1;
-                    Err(CpdError::new(ErrorCode::GhFailed, "down"))
-                })
-                .unwrap_err();
-            assert_eq!(err.code(), ErrorCode::GhFailed);
-        }
-        assert_eq!(calls, 1);
     }
 }

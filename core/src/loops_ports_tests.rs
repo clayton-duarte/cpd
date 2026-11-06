@@ -13,8 +13,6 @@
 //! out) -> `ask_wakes_on_an_answer_that_lands_between_polls` and `ask_expires_at_its_deadline_in_half_second_polls`;
 //! `cli/tests/flow/plan_cancel.rs` (the wait for the drivers) -> the `plan_cancel_*` tests.
 //!
-//! The memo of GitHub's answer (`inbox::rules::GITHUB`) is process-wide: each rules test uses a pull request of its
-//! own, so none reads another's answer, under nextest (a process per test) or not.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -40,7 +38,6 @@ use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::inbox::cmd::{DismissArgs, Until, claim_in, snooze_until_on};
 use crate::inbox::model::{Kind, open_items, reconcile};
 use crate::inbox::rules::conditions_on;
-use crate::inbox::team::GITHUB_TTL;
 use crate::lock;
 use crate::output::Output;
 use crate::plan::cancel::wait_until_ended_with;
@@ -690,16 +687,7 @@ fn the_poll_lock_timeout_says_how_many_seconds_it_waited() {
     assert_eq!(err.details()["waited_seconds"], 60);
 }
 
-// ---- the inbox rules: the review window and the GitHub memo -------------------------------------------------------------
-
-/// The memo holds one answer for the whole process: a test that reads it holds this lock, so that threads of one
-/// process (`cargo test`) cannot overwrite each other's answer. Nextest runs a process per test and never waits here.
-static MEMO: Mutex<()> = Mutex::new(());
-
-fn memo_guard() -> std::sync::MutexGuard<'static, ()> {
-    MEMO.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+// ---- the inbox rules: the review window and the cached GitHub state ------------------------------------------------------
 
 const TEAM: &str = "[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"U02ABCDEF12\"\n";
 
@@ -711,19 +699,34 @@ fn post(rig: &Rig, repo: &str, number: u64, age: u64) -> Value {
 }
 
 fn write_cache(h: &Home, posts: &[Value]) {
-    let path = h.home.run_dir().join("team-review.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, json!({"version": 1, "polled_at": "t", "channel": "C02JU6C2Z1D", "read": 10, "posts": posts}).to_string()).unwrap();
+    crate::inbox::swr_fixture::posts(&mut store(&h.home), posts).unwrap();
 }
 
-/// What `gh api graphql` prints for one open pull request nobody has reviewed.
-fn gh_answer() -> Reply {
-    Reply::ok(
-        &json!({"data": {"viewer": {"login": "me"},
-                         "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": null,
-                                                "author": {"login": "ryan"}, "latestReviews": {"nodes": []}}}}})
-        .to_string(),
-    )
+/// The single pass's rows for one open pull request: the viewer `me`, `decision` and the latest `reviews` of `(state, login)`.
+fn seed_pr(h: &Home, repo: &str, number: u64, decision: Option<&str>, reviews: &[(&str, &str)]) {
+    use crate::inbox::team::{GhPr, GhState, Lookup, Review};
+    let pr = GhPr {
+        title: "Add retries".to_owned(),
+        draft: false,
+        state: GhState::Open,
+        author: "ryan".to_owned(),
+        decision: decision.map(str::to_owned),
+        reviews: reviews
+            .iter()
+            .map(|(state, login)| Review {
+                author: (*login).to_owned(),
+                state: (*state).to_owned(),
+                commit_oid: None,
+            })
+            .collect(),
+        head_oid: None,
+        checks_state: None,
+    };
+    let lookup = Lookup {
+        me: "me".to_owned(),
+        workflows: [((repo.to_owned(), number), Some(pr))].into(),
+    };
+    crate::inbox::swr_fixture::lookup(&mut store(&h.home), &lookup).unwrap();
 }
 
 fn review_items(rig: &Rig, h: &Home, s: &mut Store) -> Vec<String> {
@@ -745,24 +748,23 @@ fn gh_calls(rig: &Rig) -> usize {
 
 #[test]
 fn a_post_inside_the_window_opens_a_review_item() {
-    let _memo = memo_guard();
     let rig = rig();
     let h = home(TEAM);
     write_cache(&h, &[post(&rig, "acme/win-in", 1, 3600)]);
-    rig.on("gh", gh_answer());
+    seed_pr(&h, "acme/win-in", 1, None, &[]);
     assert_eq!(
         review_items(&rig, &h, &mut store(&h.home)),
         ["pr:acme/win-in#1"]
     );
+    assert_eq!(gh_calls(&rig), 0, "E8 reads the cache, never GitHub");
 }
 
 #[test]
-fn a_post_the_clock_has_aged_past_the_window_opens_nothing_and_asks_nothing() {
-    let _memo = memo_guard();
+fn a_post_the_clock_has_aged_past_the_window_opens_nothing() {
     let rig = rig();
     let h = home(TEAM);
     write_cache(&h, &[post(&rig, "acme/win-out", 2, 3600)]);
-    rig.on("gh", gh_answer());
+    seed_pr(&h, "acme/win-out", 2, None, &[]);
     // The window is a week: eight days later the same post is outside it.
     rig.clock.advance(SECS(8 * 24 * 3600));
     assert_eq!(
@@ -770,53 +772,6 @@ fn a_post_the_clock_has_aged_past_the_window_opens_nothing_and_asks_nothing() {
         Vec::<String>::new()
     );
     assert_eq!(gh_calls(&rig), 0);
-}
-
-#[test]
-fn the_github_answer_is_reused_while_it_is_younger_than_its_ttl() {
-    let _memo = memo_guard();
-    let rig = rig();
-    let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/ttl-in", 3, 3600)]);
-    rig.on("gh", gh_answer());
-    let mut s = store(&h.home);
-    review_items(&rig, &h, &mut s);
-    rig.clock.advance(SECS(29));
-    review_items(&rig, &h, &mut s);
-    assert_eq!(gh_calls(&rig), 1);
-}
-
-#[test]
-fn the_github_answer_is_asked_again_once_its_ttl_has_passed() {
-    let _memo = memo_guard();
-    let rig = rig();
-    let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/ttl-out", 4, 3600)]);
-    rig.on("gh", gh_answer());
-    let mut s = store(&h.home);
-    review_items(&rig, &h, &mut s);
-    rig.clock.advance(SECS(30));
-    review_items(&rig, &h, &mut s);
-    assert_eq!(gh_calls(&rig), 2);
-}
-
-/// What `gh api graphql` prints for the one pull request when it is open with `decision` and `reviews` of `(state, login)`.
-fn gh_reply(decision: Option<&str>, reviews: &[(&str, &str)]) -> Reply {
-    let nodes: Vec<Value> = reviews
-        .iter()
-        .map(|(state, login)| json!({"state": state, "author": {"login": login}}))
-        .collect();
-    Reply::ok(
-        &json!({"data": {"viewer": {"login": "me"},
-                         "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": decision,
-                                                "author": {"login": "ryan"}, "latestReviews": {"nodes": nodes}}}}})
-        .to_string(),
-    )
-}
-
-/// A rule answering the first `gh` call only (the runner's first match answers, a used `once` rule is skipped).
-fn first_gh(rig: &Rig, reply: Reply) {
-    let _ = (*rig.runner).clone().once("gh", |_| true, reply);
 }
 
 /// One E8 tick: the conditions, reconciled into `s`; the subjects of the review ones.
@@ -838,93 +793,59 @@ fn open_review_items(s: &mut Store) -> usize {
 }
 
 #[test]
-fn e8_closes_open_review_after_ttl_when_lookup_turns_approved() {
-    let _memo = memo_guard();
+fn e8_closes_open_review_at_the_next_tick_when_the_cache_turns_approved() {
     let rig = rig();
     let h = home(TEAM);
     write_cache(&h, &[post(&rig, "acme/e8-approved", 5, 3600)]);
-    first_gh(&rig, gh_answer());
-    rig.on("gh", gh_reply(Some("APPROVED"), &[]));
+    seed_pr(&h, "acme/e8-approved", 5, None, &[]);
     let mut s = store(&h.home);
     tick(&rig, &h, &mut s);
     assert_eq!(open_review_items(&mut s), 1);
-    rig.clock.advance(SECS(29));
-    tick(&rig, &h, &mut s);
-    assert_eq!(open_review_items(&mut s), 1, "kept just before the ttl");
+    seed_pr(&h, "acme/e8-approved", 5, Some("APPROVED"), &[]);
     rig.clock.advance(SECS(1));
     tick(&rig, &h, &mut s);
     assert_eq!(
         open_review_items(&mut s),
         0,
-        "closed once the ttl has passed"
+        "closed at once: there is no memo of a GitHub answer"
     );
 }
 
-#[test]
-fn github_ttl_is_thirty_seconds() {
-    assert_eq!(GITHUB_TTL, Duration::from_secs(30));
-}
-
-/// Primes E8 with the pull request claimable, refuses a claim of its item on `reply`, then ticks again within the ttl:
-/// the subjects the stale tick asked for, and the calls of `gh` after it.
-fn tick_after_refused_claim(repo: &str, number: u64, reply: Reply) -> (Vec<String>, usize, usize) {
-    let _memo = memo_guard();
+/// Primes E8 with the pull request claimable, refuses a claim of its item once the cache says `decision` and `reviews`, then ticks
+/// again: the subjects that tick opened, and the review items still open.
+fn tick_after_refused_claim(
+    repo: &str,
+    number: u64,
+    decision: Option<&str>,
+    reviews: &[(&str, &str)],
+) -> (Vec<String>, usize) {
     let rig = rig();
     let h = home(TEAM);
     write_cache(&h, &[post(&rig, repo, number, 3600)]);
-    first_gh(&rig, gh_answer());
-    rig.on("gh", reply);
+    seed_pr(&h, repo, number, None, &[]);
     let mut s = store(&h.home);
     tick(&rig, &h, &mut s);
     let id = s.read(open_items).unwrap()[0].id;
+    seed_pr(&h, repo, number, decision, reviews);
     claim_in(&rig.ports, env(&rig, &h), DismissArgs { id }).expect_err("the claim is refused");
-    let before = gh_calls(&rig);
+    assert_eq!(gh_calls(&rig), 0, "the live check reads the cache");
     rig.clock.advance(SECS(1));
     let seen = tick(&rig, &h, &mut s);
-    (seen, gh_calls(&rig) - before, open_review_items(&mut s))
+    (seen, open_review_items(&mut s))
 }
 
 #[test]
-fn e8_does_not_reopen_after_claim_refusal_with_stale_memo() {
-    let (_, _, open) =
-        tick_after_refused_claim("acme/e8-reopen", 6, gh_reply(Some("APPROVED"), &[]));
+fn e8_does_not_reopen_after_claim_refusal() {
+    let (_, open) = tick_after_refused_claim("acme/e8-reopen", 6, Some("APPROVED"), &[]);
     assert_eq!(open, 0, "no new review-requested item for the subject");
 }
 
 #[test]
-fn e8_does_not_reopen_non_terminal_claim_refusal_with_stale_memo() {
-    let (seen, asked, open) = tick_after_refused_claim(
-        "acme/e8-in-review",
-        7,
-        gh_reply(None, &[("COMMENTED", "bea")]),
-    );
-    assert_eq!(
-        asked, 1,
-        "the memo is missed after the claim closed the row"
-    );
+fn e8_does_not_reopen_non_terminal_claim_refusal() {
+    let (seen, open) =
+        tick_after_refused_claim("acme/e8-in-review", 7, None, &[("COMMENTED", "bea")]);
     assert_eq!(seen, Vec::<String>::new());
     assert_eq!(open, 0);
-}
-
-#[test]
-fn e8_memo_refetches_after_external_dismiss() {
-    let _memo = memo_guard();
-    let rig = rig();
-    let h = home(TEAM);
-    write_cache(&h, &[post(&rig, "acme/e8-dismiss", 8, 3600)]);
-    rig.on("gh", gh_answer());
-    let mut s = store(&h.home);
-    tick(&rig, &h, &mut s);
-    assert_eq!(gh_calls(&rig), 1);
-    // Another process (`cpd inbox dismiss`) writes through its own connection to the same store.
-    let mut other = store(&h.home);
-    sql(
-        &mut other,
-        "UPDATE inbox_items SET dismissed_at = '2026-01-01T00:00:01.000Z' WHERE kind = 'review-requested'",
-    );
-    rig.clock.advance(SECS(1));
-    tick(&rig, &h, &mut s);
-    assert_eq!(gh_calls(&rig), 2, "asked again within the ttl");
 }
 
 // ---- inbox snooze: "tomorrow" ----------------------------------------------------------------------------------------------

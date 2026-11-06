@@ -53,9 +53,9 @@ mod rows_review_tests;
 #[cfg(test)]
 mod rows_tests;
 #[cfg(test)]
-mod runner_tests;
-#[cfg(test)]
 mod snooze_refusal_tests;
+#[cfg(test)]
+pub(crate) mod swr_fixture;
 #[cfg(test)]
 mod tier_tests;
 #[cfg(test)]

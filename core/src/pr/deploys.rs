@@ -29,6 +29,7 @@ struct Runs {
 #[derive(Deserialize)]
 struct Listed {
     id: u64,
+    #[serde(default)]
     updated_at: String,
     triggering_actor: Option<Actor>,
     #[serde(flatten)]
@@ -60,6 +61,19 @@ pub fn read_into_store(
     let at = timestamp(now);
     let mut failure: Option<CpdError> = None;
     let mut writes: Vec<Write> = Vec::new();
+    // A repo whose policy no longer declares a workflow: its waiting runs are nobody's to approve.
+    let undeclared: Vec<(String, i64)> = store.read(|c| {
+        let mut stmt = c.prepare("SELECT repo, run_id FROM swr_deploys WHERE inactive_at IS NULL")?;
+        Ok(stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    writes.extend(
+        undeclared
+            .into_iter()
+            .filter(|(repo, _)| !declared.iter().any(|(r, _)| r == repo))
+            .map(|(repo, id)| Write::Inactive(repo, id)),
+    );
     for (repo, workflow) in &declared {
         let alone = declared.iter().filter(|(r, _)| r == repo).count() == 1;
         let stored: Vec<(i64, String, bool, Option<String>)> = store.read(|c| {

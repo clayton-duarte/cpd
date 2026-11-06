@@ -35,10 +35,8 @@ fn write_cache(home: &CpdHome, now: OffsetDateTime, posts: &[(u64, &str, f64)]) 
                    "author": "Ryan Case", "primary": true, "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false})
         })
         .collect();
-    let path = home.run_dir().join("team-review.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": posts});
-    std::fs::write(path, cache.to_string()).unwrap();
+    let mut store = Store::open(home, 5000).unwrap();
+    crate::inbox::swr_fixture::posts(&mut store, &posts).unwrap();
 }
 
 /// The `review-requested` conditions of the cache, every posted pull request open on GitHub with no review.
@@ -69,10 +67,9 @@ fn reviews(
         workflows,
     };
     let bots = ["github-actions".to_owned()];
-    let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
+    crate::inbox::swr_fixture::lookup(store, &lookup).unwrap();
     let team = Team {
         bot_reviewers: &bots,
-        github: &mut github,
     };
     let all = conditions_with(store, home, now, 20, 1, Some(team)).unwrap();
     all.into_iter()
