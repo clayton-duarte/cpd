@@ -24,11 +24,11 @@ function packageOf(spec: string): string {
 test("every package a non-test source under pi/ imports is a production dependency", () => {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
   const deps = pkg.dependencies ?? {};
-  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)["']([^"']+)["']/gm;
+  const re = /^\s*(?:(?:import|export)\b[^"'`;]*?\bfrom\s*|import\s+)["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']/gm;
   const missing: string[] = [];
   for (const f of tsFiles(piDir)) {
     for (const m of readFileSync(f, "utf8").matchAll(re)) {
-      const spec = m[1];
+      const spec = m[1] ?? m[2];
       if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("node:")) continue;
       const name = packageOf(spec);
       if (!(name in deps)) missing.push(`${name} (${relative(piDir, f).split(sep).join("/")})`);
