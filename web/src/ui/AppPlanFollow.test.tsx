@@ -91,10 +91,21 @@ it("selecting a Lead session shows that Lead Plan in PlanView", () => {
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
 });
 
-it("selecting a Manager session shows the flowchart in PlanView", () => {
+it("selecting a Manager session shows the ManagerView in the Plan pane", () => {
   const { container } = start();
   act(() => { q(container, '[data-context="ctx"] button[data-select="context"]')!.click(); });
+  expect(q(container, 'section[aria-label="Plan pane"] [data-manager-view="ctx"]')).not.toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] [data-manager-plan="plan"]')).not.toBeNull();
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label^="Plan "]')).toBeNull();
-  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).not.toBeNull();
-  expect(q(container, 'section[aria-label="Plan pane"] [data-empty]')).toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).toBeNull();
+});
+
+it("selecting a plan in ManagerView shows its PlanView and Lead", () => {
+  const { transport, container } = start();
+  act(() => { q(container, '[data-context="ctx"] button[data-select="context"]')!.click(); });
+  act(() => { q(container, 'section[aria-label="Plan pane"] [data-manager-plan="plan"] [role="button"]')!.click(); });
+  act(() => transport.emitMessage({ ...snapshot, plan: loadedPlan }));
+  expect(q(container, 'section[aria-label="Plan pane"] [data-manager-view]')).toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
+  expect(q(container, '[data-session="s1"][aria-current="true"]')).not.toBeNull();
 });

@@ -219,7 +219,7 @@ const WORK_COLOUR = {
   review: "text-status-landing-bright",
 } as const;
 
-function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode; archived?: boolean }): ReactElement {
+export function Dot({ dot, plan, archived = false }: { dot: SessionDot; plan?: PlanNode; archived?: boolean }): ReactElement {
   const { state } = dot;
   const attention = dot.attention === "blue" ? null : dot.attention;
   const label = attention === null ? state : `${state}, needs you (${attention})`;
