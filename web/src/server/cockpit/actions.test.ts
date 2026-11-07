@@ -185,9 +185,14 @@ describe("tree menu actions", () => {
     expect(post.calls.at(-1)).toEqual(["pr", "post", "--workflow", "w1", "--plan", "p7"]);
     expect(repost.calls.at(-1)).toEqual(["pr", "repost", "--workflow", "w1", "--plan", "p7"]);
   });
-  it("error.report sends the report to the target manager with unblocks", async () => {
+  it("error.report sends the report to the bare Context id with unblocks", async () => {
     const { cpd, calls } = fakeCpd();
     await runAction(cpd, { kind: "error.report", target: "host", code: "store_too_new", message: "x\ny" });
-    expect(calls).toEqual([["session", "send", "host:manager", "--unblocks", "WebUI error toast (store_too_new)", "--", "Error toast reported from WebUI:\n- code: store_too_new\n- message: x\ny"]]);
+    await runAction(cpd, { kind: "error.report", target: "cpd", code: "protocol_error", message: "bad frame" });
+    // air-n12: a Manager's key is the bare Context id (`host`, `cpd`), never `<target>:manager`.
+    expect(calls).toEqual([
+      ["session", "send", "host", "--unblocks", "WebUI error toast (store_too_new)", "--", "Error toast reported from WebUI:\n- code: store_too_new\n- message: x\ny"],
+      ["session", "send", "cpd", "--unblocks", "WebUI error toast (protocol_error)", "--", "Error toast reported from WebUI:\n- code: protocol_error\n- message: bad frame"],
+    ]);
   });
 });

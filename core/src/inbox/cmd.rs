@@ -297,6 +297,19 @@ fn open_item(conn: &Connection, id: i64) -> Result<Item, CpdError> {
     }
 }
 
+/// The no-op of the hide commands `snooze`, `dismiss` and `claim` (commands.md §21's intro, air-d26): a
+/// closed item answers ok with `already: "closed"`, writes nothing and raises no error. `None` when the
+/// item is open (or absent, which is `item_not_found`); `inbox approve` still refuses a closed item.
+fn closed_hide(conn: &Connection, id: i64, now: OffsetDateTime) -> Result<Option<Output>, CpdError> {
+    let item = model::get(conn, id)?.ok_or_else(|| not_found(id))?;
+    Ok(match item.closed_at {
+        Some(_) => Some(Output::success(
+            json!({"already": "closed", "item": item_json(&item, now)?}),
+        )),
+        None => None,
+    })
+}
+
 /// `inbox show` (§21.2).
 fn show(ports: &Ports, args: ShowArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open_with(ports)?;
@@ -376,6 +389,9 @@ pub fn snooze_until_on(ports: &Ports, until: Until) -> Result<OffsetDateTime, Cp
 fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open_with(ports)?;
     let now = ports.clock.utc();
+    if let Some(out) = store.read(|conn| closed_hide(conn, args.id, now))? {
+        return Ok(out);
+    }
     let until_at = snooze_until(&*ports.runner, args.until, now)?;
     let until = timestamp(until_at);
     let said = crate::clock::prose(until_at, &ports.clock.zone());
@@ -404,6 +420,10 @@ fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
 fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open_with(ports)?;
     let now = ports.clock.utc();
+    // A closed item is the no-op of §21's intro (air-d26): it writes nothing, not even a `txns` row.
+    if let Some(out) = store.read(|conn| closed_hide(conn, args.id, now))? {
+        return Ok(out);
+    }
     // Already dismissed writes nothing, not even a `txns` row.
     let before = store.read(|conn| open_item(conn, args.id))?;
     if before.dismissed_at.is_some() {
@@ -546,6 +566,10 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 /// [`claim`] on an opened `env`: what a test hands in instead of `$CPD_HOME`.
 pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result<Output, CpdError> {
     let now = ports.clock.utc();
+    // A closed item is the no-op of §21's intro (air-d26): nothing is claimed, nothing enqueued.
+    if let Some(out) = env.store.read(|conn| closed_hide(conn, args.id, now))? {
+        return Ok(out);
+    }
     let item = env.store.read(|conn| open_item(conn, args.id))?;
     if item.claimed_at.is_some() {
         return Ok(Output::success(
