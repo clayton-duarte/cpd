@@ -359,18 +359,25 @@ fn shaping_notify_without_live_manager_writes_nothing() {
     let manager = manager_of(&fx, "ctx");
     new_shaping(&fx, &manager, "ctx", "shape1");
     add_scout(&fx, &manager, "shape1", "scan");
-    let attempt = running_explore(&fx, "ctx", "shape1", "scan");
-    // The Manager kept the Plan and added its Job while live; it is gone before the Job ends.
+    add_scout(&fx, &manager, "shape1", "probe");
+    let scan = running_explore(&fx, "ctx", "shape1", "scan");
+    let probe = running_explore(&fx, "ctx", "shape1", "probe");
+
+    // A live Manager is woken by the first Event, the control that the rule runs at all.
+    submit_explore(&fx, "w-scan", "shape1", &scan, "First.").ok();
+    assert_eq!(messages(&fx).len(), 1, "the live Manager is woken");
+
+    // The Manager created the Plan and added its Job while live; it is gone before the Job ends.
     fx.env.sql(&format!(
         "UPDATE sessions SET archived_at = 't' WHERE id = '{manager}';"
     ));
+    submit_explore(&fx, "w-probe", "shape1", &probe, "Second.").ok();
 
-    submit_explore(&fx, "w-scan", "shape1", &attempt, "Done.").ok();
-
-    assert_eq!(events(&fx, "job-merged").len(), 1, "the Job still merged");
-    assert!(
-        messages(&fx).is_empty(),
-        "with no live Manager nothing is written: {:?}",
+    assert_eq!(events(&fx, "job-merged").len(), 2, "both Jobs merged");
+    assert_eq!(
+        messages(&fx).len(),
+        1,
+        "with no live Manager the second Event writes nothing: {:?}",
         messages(&fx)
     );
 }
@@ -381,17 +388,41 @@ fn shaping_notify_without_live_manager_writes_nothing() {
 fn shaping_notify_lead_plan_events_are_unchanged() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
+    // A Lead-less shaping Plan beside it, the control: its Job's Event does wake the Manager.
+    new_shaping(&fx, &manager, "ctx", "shape1");
+    add_scout(&fx, &manager, "shape1", "scan");
     let lead = new_lead_plan(&fx, &manager, "ctx", "pl");
-    add_scout(&fx, &lead, "pl", "scan");
-    let attempt = running_explore(&fx, "ctx", "pl", "scan");
+    add_scout(&fx, &lead, "pl", "probe");
+    let scan = running_explore(&fx, "ctx", "shape1", "scan");
+    let probe = running_explore(&fx, "ctx", "pl", "probe");
 
-    submit_explore(&fx, "w-scan", "pl", &attempt, "Done.").ok();
+    submit_explore(&fx, "w-scan", "shape1", &scan, "Shaping.").ok();
+    submit_explore(&fx, "w-probe", "pl", &probe, "Lead.").ok();
 
-    assert_eq!(events(&fx, "job-merged").len(), 1, "the Job merged");
-    assert!(
-        messages(&fx).is_empty(),
-        "a Lead Plan's Events are unchanged: no session-message {:?}",
-        messages(&fx)
+    let merged = events(&fx, "job-merged");
+    assert_eq!(merged.len(), 2, "both Jobs merged: {merged:?}");
+    let shaping_text = merged
+        .iter()
+        .find(|e| e["plan"] == json!("shape1"))
+        .expect("the shaping Job's Event")["text"]
+        .clone();
+    let lead_text = merged
+        .iter()
+        .find(|e| e["plan"] == json!("pl"))
+        .expect("the Lead Plan's Event")["text"]
+        .clone();
+
+    let sent = messages(&fx);
+    assert_eq!(
+        sent.len(),
+        1,
+        "only the Lead-less Plan's Event wakes it: {sent:?}"
+    );
+    assert_eq!(sent[0]["session"], json!(manager));
+    assert_eq!(sent[0]["data"]["text"], shaping_text);
+    assert_ne!(
+        sent[0]["data"]["text"], lead_text,
+        "a Lead Plan's job-merged Event writes no session-message"
     );
 }
 
