@@ -2151,4 +2151,4 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 ### 15.4 Tests and limits
 
 - Tests run without a real process, socket, timer or `cpd` (A6): the server socket and the client `WebSocket` are injected fakes driven by `emit*` helpers, the heartbeat and the watchdog run on the injected `Scheduler`, and no test opens a real port.
-- Limits, stated plainly: the browser's automatic pong answering is the platform's, not the code's (unverified in a real browser, O27 of this Plan); the constants above are the code's named constants, not configuration.
+- Limits, stated plainly: the browser's automatic pong answering is the platform's, not the code's (unverified in a real browser); the constants above are the code's named constants, not configuration.
