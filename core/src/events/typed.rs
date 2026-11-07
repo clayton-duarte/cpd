@@ -771,12 +771,14 @@ impl NewEvent {
         from: impl Serialize,
         message: &str,
         wake: bool,
-    ) -> NewEvent {
-        make(
+        origin: Option<&str>,
+    ) -> Result<NewEvent, CpdError> {
+        let _ = origin;
+        Ok(make(
             Kind::SessionMessage,
             text,
-            json!({"from": from, "text": message, "wake": wake}),
-        )
+            json!({"from": from, "text": message, "wake": wake, "origin": null}),
+        ))
     }
 
     /// The engine's Review Lead wake: a waking message from the User's side (`from` null) that names the woken `head_oid`,
@@ -805,12 +807,14 @@ impl NewEvent {
         from: impl Serialize,
         message: &str,
         unblocks: &str,
-    ) -> NewEvent {
-        make(
+        origin: Option<&str>,
+    ) -> Result<NewEvent, CpdError> {
+        let _ = origin;
+        Ok(make(
             Kind::SessionMessage,
             text,
-            json!({"from": from, "text": message, "unblocks": unblocks}),
-        )
+            json!({"from": from, "text": message, "unblocks": unblocks, "origin": null}),
+        ))
     }
 
     pub fn inbox_opened(
@@ -1055,8 +1059,8 @@ mod tests {
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
             Kind::SessionMessage => vec![
-                NewEvent::session_message(T, s, s, b),
-                NewEvent::session_message_unblocking(T, s, s, s),
+                NewEvent::session_message(T, s, s, b, None).unwrap(),
+                NewEvent::session_message_unblocking(T, s, s, s, None).unwrap(),
                 NewEvent::session_message_head(T, s, "h2").unwrap(),
             ],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],

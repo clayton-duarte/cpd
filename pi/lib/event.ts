@@ -32,7 +32,7 @@ type Needed = {
   "plan-review": { review: string; status: string };
   "session-renamed": { name: string };
   "attempt-nudge": { prompt: string };
-  "session-message": { text: string; from: string | null };
+  "session-message": { text: string; from: string | null; origin?: "tui" | "webui" };
   "mcp-attached": { name: string; server: Record<string, unknown> };
 };
 

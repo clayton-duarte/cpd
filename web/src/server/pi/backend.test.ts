@@ -172,6 +172,16 @@ describe("pi backend", () => {
     expect(sends()).toBe(before);
   });
 
+  it("the pi backend passes origin webui to session send", async () => {
+    const s = await attached();
+    await s.handle.submit({ clientSubmissionId: "c1", text: "hello", images: [], whenBusy: "followUp" });
+    const send = s.cpd.calls.find((c) => c[1] === "send");
+    expect(send).toBeDefined();
+    const at = send!.indexOf("--origin");
+    expect(at).toBeGreaterThan(-1);
+    expect(send![at + 1]).toBe("webui");
+  });
+
   it("text file attachments are inlined and images are declared supported", async () => {
     const s = await attached();
     const inlined = 'look at this\n<file name="notes.txt">\nline one\n</file>';

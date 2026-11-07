@@ -343,7 +343,7 @@ impl Kind {
             SessionMessage => spec(
                 [Y, M, N, N, Y],
                 &["from", "text"],
-                &["unblocks", "wake", "head_oid"],
+                &["unblocks", "wake", "head_oid", "origin"],
             ),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
