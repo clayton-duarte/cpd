@@ -86,7 +86,8 @@ it("selecting a Lead session shows that Lead Plan in PlanView", () => {
   // the loaded plan "other" is not the Lead's: it is hidden
   act(() => { q(container, '[data-plan="plan"] button[data-select="plan"]')!.click(); });
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan other"]')).toBeNull();
-  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).not.toBeNull();
+  expect(q(container, 'section[aria-label="Plan pane"]')!.textContent).toContain("Select a lead to see plans");
+  expect(q(container, 'section[aria-label="Plan pane"] [data-part="flow-canvas"]')).toBeNull();
   act(() => transport.emitMessage({ ...snapshot, plan: loadedPlan }));
   expect(q(container, 'section[aria-label="Plan pane"] section[aria-label="Plan plan"]')).not.toBeNull();
 });

@@ -48,9 +48,10 @@ const q = (c: ParentNode, sel: string) => c.querySelector<HTMLElement>(sel);
 const qa = (c: ParentNode, sel: string) => [...c.querySelectorAll<HTMLElement>(sel)];
 const row = (c: ParentNode, id: string) => q(c, `li[data-manager-plan="${id}"]`)!;
 
-it("ManagerView renders the flowchart canvas when there is no context", () => {
+it("ManagerView renders the select-a-lead text, not the flowchart, when there is no context", () => {
   const { container } = show(null);
-  expect(q(container, '[data-part="flow-canvas"]')).not.toBeNull();
+  expect(container.textContent).toContain("Select a lead to see plans");
+  expect(q(container, '[data-part="flow-canvas"]')).toBeNull();
 });
 
 it("ManagerView header is a TopPaneHeader with the manager key and counters", () => {
