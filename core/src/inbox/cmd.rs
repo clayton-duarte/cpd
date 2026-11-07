@@ -300,7 +300,11 @@ fn open_item(conn: &Connection, id: i64) -> Result<Item, CpdError> {
 /// The no-op of the hide commands `snooze`, `dismiss` and `claim` (commands.md §21's intro, air-d26): a
 /// closed item answers ok with `already: "closed"`, writes nothing and raises no error. `None` when the
 /// item is open (or absent, which is `item_not_found`); `inbox approve` still refuses a closed item.
-fn closed_hide(conn: &Connection, id: i64, now: OffsetDateTime) -> Result<Option<Output>, CpdError> {
+fn closed_hide(
+    conn: &Connection,
+    id: i64,
+    now: OffsetDateTime,
+) -> Result<Option<Output>, CpdError> {
     let item = model::get(conn, id)?.ok_or_else(|| not_found(id))?;
     Ok(match item.closed_at {
         Some(_) => Some(Output::success(
