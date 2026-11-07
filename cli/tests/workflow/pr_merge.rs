@@ -222,30 +222,81 @@ fn a_passed_required_check_or_an_empty_required_list_queues_the_merge() {
     }
 }
 
+/// The pull request's persisted readiness verdict (`pull_requests.checks`), as the poll's live read stored it: the one
+/// record the Inbox pr-ready readiness and (air-d48) `pr merge` both read. It is independent of the `swr_pr_detail`
+/// rollup the tests write with [`rollup`], so a cache that lagged the poll cannot decide the merge.
+fn readiness(env: &TestEnv, verdict: &str) {
+    env.sql(&format!(
+        "UPDATE pull_requests SET checks = '{verdict}' WHERE repo = 'acme/api' AND number = 7"
+    ));
+}
+
+/// Regression, air-n24: the poll's live read stored readiness `passed`, but the `swr_pr_detail` cache still holds the
+/// head's rollup from before the required `gate` existed (the stale #940 state). The required-check gate reads the
+/// persisted readiness verdict, not the cache, so the merge queues instead of refusing `required_check_not_passed`.
+/// On the buggy tree the refusal recomputes from the stale detail and refuses `missing: ["gate"]`.
 #[test]
-fn zz_diagnostic_readiness_vs_detail() {
-    let mut seen = Vec::new();
-    for (verdict, nodes) in [
-        ("pending", json!([])),
-        ("pending", json!([gate("IN_PROGRESS", json!(null))])),
-        ("pending", json!([gate("COMPLETED", json!("SUCCESS"))])),
-        ("failed", json!([gate("COMPLETED", json!("SUCCESS"))])),
-        ("passed", json!([])),
-    ] {
+fn pr_merge_allows_when_readiness_passed_but_cached_detail_stale() {
+    let fx = Fx::with_ports();
+    fx.env.repo_policy("acme", "api", REQUIRED);
+    cached(&fx.env, "open", "clean", (true, false, false));
+    assert_eq!(
+        fx.env.query::<String>(
+            "SELECT checks FROM pull_requests WHERE repo = 'acme/api' AND number = 7"
+        ),
+        "passed"
+    );
+    rollup(&fx, json!([])); // the stale cache: no `gate` node at all
+    let out = fx.cpd(&["pr", "merge", REF]).ok();
+    assert_eq!(out["queued"], true, "{out}");
+    assert_eq!(out["effective"]["checks"], "passed", "{out}");
+    assert_eq!(mutations(&fx.env).len(), 1, "the merge was queued");
+}
+
+/// The guard: a persisted readiness verdict that is not passed still refuses `required_check_not_passed`, whatever the
+/// cached `swr_pr_detail` says, and the refusal names the real missing/pending/failed state. The last case is the
+/// inverse of the regression: the cache says `gate` passed, yet the persisted verdict is not passed, so the merge must
+/// refuse (on the buggy tree the cache wins and the merge is queued).
+#[test]
+fn pr_merge_refuses_when_readiness_not_passed() {
+    // (persisted verdict, the head's cached rollup nodes, the details to check; `None`: only the code and exit)
+    let cases: [(&str, Value, Option<Value>); 4] = [
+        ("pending", json!([]), None),
+        (
+            "pending",
+            json!([gate("IN_PROGRESS", json!(null))]),
+            Some(json!({"missing": [], "pending": ["gate"], "failed": []})),
+        ),
+        // stale cache: it says `gate` passed, the persisted verdict says not passed
+        (
+            "pending",
+            json!([gate("COMPLETED", json!("SUCCESS"))]),
+            None,
+        ),
+        (
+            "failed",
+            json!([gate("COMPLETED", json!("FAILURE"))]),
+            Some(json!({"missing": [], "pending": [], "failed": ["gate"]})),
+        ),
+    ];
+    for (verdict, nodes, want) in cases {
         let fx = Fx::with_ports();
         fx.env.repo_policy("acme", "api", REQUIRED);
         cached(&fx.env, "open", "clean", (true, false, false));
-        fx.env.sql(&format!(
-            "UPDATE pull_requests SET checks = '{verdict}' WHERE repo = 'acme/api' AND number = 7"
-        ));
-        rollup(&fx, nodes.clone());
-        let run = fx.cpd(&["pr", "merge", REF]);
-        seen.push(format!(
-            "verdict={verdict} nodes={nodes} exit={} stdout={}",
-            run.exit, run.stdout
-        ));
+        readiness(&fx.env, verdict);
+        rollup(&fx, nodes);
+        let error = refused(
+            &fx.cpd(&["pr", "merge", REF]),
+            "required_check_not_passed",
+            3,
+        );
+        if let Some(want) = want {
+            for key in ["missing", "pending", "failed"] {
+                assert_eq!(error["details"][key], want[key], "verdict {verdict} {key}");
+            }
+        }
+        assert!(mutations(&fx.env).is_empty(), "verdict {verdict}");
     }
-    panic!("DIAGNOSTIC\n{}", seen.join("\n"));
 }
 
 #[test]
