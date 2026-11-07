@@ -141,17 +141,17 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Grilling](#grilling); they e
 
 #### Exploring
 
-An explore Job has a Worker answer one question for you, so the material never enters your session. A **scout** reads only this machine (a checkout, a log, a code survey), Tier `H3`; a **research** Job may also reach outside it (upstream docs, a registry, a web page), Tier `S1` or higher. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
+An explore Job has a Worker answer one question, so the material stays out of it. A **scout** reads only this machine, Tier `H3`; a **research** Job may also reach outside it, Tier `S1` or higher. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
 
 ```
 cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --kind scout|research
 ```
 
 - **Queued at once.** An explore Job is never a draft: no Plan review, no lock, no approval.
-- **The summary arrives, the file does not.** The `job-merged` Event of an explore Job carries its summary and the artefact's path. Read the summary. That path is for the Worker: the adapter refuses your reads of it. To use the findings in a Spec, cite the path there. When the summary is not enough, add another explore Job.
+- **The summary arrives, the file does not.** The `job-merged` Event carries the summary and the artefact's path. Read the summary; the adapter refuses your reads of the path. Cite the path in the Spec that needs it; when the summary is not enough, add another explore Job.
 - **Every other rule** (Spec fields, Tiers, refusals) is in [Spec files](references/spec-files.md#explore-jobs).
 
-A Manager explores before a Lead exists through its own Lead-less Plan; the brief it hands you cites the artefact path it names, and you carry that path into the Specs that need it.
+A Manager explores before a Lead exists through its own Lead-less Plan; its brief cites that path, which you carry into the Specs that need it.
 
 Grounding is done when every touched repo's latest origin/main is fetched (`git fetch origin`), every file path and public interface you will name in a Spec has an explore answer, and every question that spans several files has an explore Job answer.
 
