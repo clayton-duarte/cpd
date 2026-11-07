@@ -173,6 +173,7 @@ fn open(
             .job(asker.job.clone())
             .attempt(attempt.clone()),
     )?;
+    crate::events::escalation(tx, plan, &asker.job, question, &id)?;
     wait(tx, &asker)?;
     Ok((asker, id))
 }

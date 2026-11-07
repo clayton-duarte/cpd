@@ -43,7 +43,7 @@ Three kinds of agent act on a Plan:
 
 ### 01 Intake raw input
 
-The User, or an external ticket, reaches the Manager as raw direction. The Manager creates the Plan in the `shaping` phase with no Lead yet; the phase `shaping` and the nullable `plans.lead_session` are implemented (seam 1 below), the Manager creates it and runs its explore Jobs (seam 2 below), the rest of the flow is planned (seams 3 and 4).
+The User, or an external ticket, reaches the Manager as raw direction. The Manager creates the Plan in the `shaping` phase with no Lead yet; the phase `shaping` and the nullable `plans.lead_session` are implemented (seam 1 below), the Manager creates it and runs its explore Jobs (seam 2 below), and its Events reach the Manager (seam 3 below); the rest of the flow, the handoff to a Lead (seam 4), is planned.
 
 ### 02 Explore
 
@@ -125,7 +125,7 @@ The Pull Request merges, the Plan becomes `done` and the Manager wakes. Follow-u
 
 ### D1 Plan
 
-The Plan record. Its phase moves through `shaping`, `grounding`, `plan`, `dispatch`, `deploy` and `done`. `lead_session` is null only while the phase is `shaping`.
+The Plan record. Its phase moves through `shaping`, `grounding`, `plan`, `dispatch`, `deploy` and `done`. `lead_session` is null only while the phase is `shaping`, or in `done` after a Lead-less shaping Plan has settled.
 
 ### D2 Context Records
 
@@ -167,9 +167,9 @@ The Worker is a stateless function: 1 Worker = 1 Job = 1 Commit (or 1 Explore Re
 
 ## Pre-Lead shaping and Manager explore
 
-Steps 01–05 run before the Plan has a Lead. Four seams would let that work. Seams 1 and 2 are implemented: main now has the phase `shaping` and a nullable `plans.lead_session` (Plan `ctx-explore`, Workflow `schema`), and a Manager creates a Lead-less `shaping` Plan with `cpd plan new --shaping` and runs its explore Jobs (Plan `ctx-explore`, Workflow `cmds`). Seams 3 and 4 are planned.
+Steps 01–05 run before the Plan has a Lead. Four seams would let that work. Seams 1, 2 and 3 are implemented: main now has the phase `shaping` and a nullable `plans.lead_session` (Plan `ctx-explore`, Workflow `schema`), a Manager creates a Lead-less `shaping` Plan with `cpd plan new --shaping` and runs its explore Jobs (Plan `ctx-explore`, Workflow `cmds`), and the Plan's `job-merged`, `job-failed` and `escalation` Events reach its Manager (Plan `ctx-explore`, Workflow `engine`). Seam 4 is planned.
 
 1. `plans.lead_session` is nullable while the phase is `shaping`, and the phase `shaping` exists. Status: implemented (Plan `ctx-explore`, Workflow `schema`).
 2. Scout and research Jobs are allowed on a Plan that has no Lead. Status: implemented (Plan `ctx-explore`, Workflow `cmds`).
-3. The `job-merged`, `job-failed` and `escalation` events route to the Context's Manager session when `lead_session IS NULL`. Status: planned, not implemented.
+3. The `job-merged`, `job-failed` and `escalation` events route to the Context's Manager session when `lead_session IS NULL`. Status: implemented (Plan `ctx-explore`, Workflow `engine`).
 4. The Lead handoff moves the Plan from `shaping` to `grounding` and sets `lead_session`. Status: planned, not implemented.

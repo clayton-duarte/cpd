@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
 import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
+import { zoneTime } from "../lib/time.ts";
 import { ev, Fixture, ID, OTHER, planShow, sessionShow, shown, stateCalls, waitFor } from "./fake.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
@@ -453,6 +456,39 @@ test("a delivery gated to nextTurn does not reset the loop guard counters", asyn
   assert.equal(f.pi.delivered().length, 2);
   assert.deepEqual(f.pi.delivered()[1]!.options, { triggerTurn: false, deliverAs: "nextTurn" });
   assert.ok((await readCall(f))?.block, "the streak kept its value");
+});
+
+/** A live view marker in the fixture's `$CPD_HOME` (never the real User's), read by the tag. */
+const markView = (f: Fixture, view: "tui" | "webui" | "webui-preview"): void => {
+  mkdirSync(join(f.cpdHome, "run"), { recursive: true });
+  writeFileSync(join(f.cpdHome, "run", "ui-view.json"), JSON.stringify({ view, pid: process.pid }));
+};
+
+test("a webui session-message is prefixed with the tag", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  markView(f, "webui");
+  const at = "2026-10-14T21:41:02.114Z"; // `ev`'s default `at`
+  f.emit(message(101, null, { data: { from: null, text: "ship it", origin: "webui" } }));
+  await f.drain();
+  assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): [via WebUI · view: WebUI] ship it`);
+});
+
+test("an engine session-message is untagged", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  markView(f, "webui");
+  // an engine message carries no origin; a WebUI one does, and is the control that keeps this red until the tag exists
+  f.emit(
+    message(101, null, { data: { from: null, text: "ship it" } }),
+    message(102, null, { data: { from: null, text: "ship it", origin: "webui" } }),
+  );
+  await f.drain();
+  const at = "2026-10-14T21:41:02.114Z";
+  assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): ship it`, "an engine message is untagged");
+  assert.equal(f.pi.delivered()[1]!.message.content, `Message from the User (${zoneTime(at)}): [via WebUI · view: WebUI] ship it`);
 });
 
 test("a delivery that starts no turn does not reset the loop guard counters", async (t) => {

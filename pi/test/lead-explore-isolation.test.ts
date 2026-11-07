@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { Fixture, shown } from "./fake.ts";
 
-// A3: a Lead may not read a Worker's explore artefact; Workers and Managers are untouched.
+// A3: a Lead and a Manager may not read a Worker's explore artefact; Workers are untouched.
 
 type Result = { block?: boolean; reason?: string } | undefined;
 
@@ -81,5 +81,6 @@ test("a lead's bash reader of an explore artefact is refused", async (t) => {
   assert.equal(await call(w, "bash", { command: `cat ${own}`, timeout: 10 }), undefined, "scout worker");
   const m = await started(t, "manager", undefined);
   inCwd(m, plain(t));
-  assert.equal(await call(m, "bash", { command: "cat $CPD_HOME/run/p/explore/j.md", timeout: 10 }), undefined, "manager");
+  // §15.22a: the guard is the Lead's and the Manager's; the same artefact stays refused for both.
+  refused(await call(m, "bash", { command: "cat $CPD_HOME/run/p/explore/j.md", timeout: 10 }), "manager");
 });

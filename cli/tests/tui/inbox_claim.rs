@@ -267,9 +267,14 @@ fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_reques
         refusal(&fx, &id.to_string()),
         (3, "not_claimable".to_owned())
     );
-    // a closed one: the pull request's condition ended
+    // a closed one: the pull request's condition ended; claiming it is the no-op of §21's intro (air-d26)
     reconcile(&mut fx.store, &base(), CLOSED_Y).unwrap();
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "item_closed".to_owned()));
+    let txns = fx.store_count("SELECT count(*) FROM txns");
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(out["already"], "closed");
+    assert_eq!(out["item"]["closed_at"], CLOSED_Y);
+    // No Event and no transaction was written.
+    assert_eq!(fx.store_count("SELECT count(*) FROM txns"), txns);
     assert_nothing_written(&fx);
 }
 
@@ -368,7 +373,14 @@ fn a_refused_claim_queues_nothing() {
         (3, "post_not_found".to_owned())
     );
     reconcile(&mut fx.store, &base(), CLOSED_Y).unwrap();
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "item_closed".to_owned()));
+    // A closed item's claim is the no-op of §21's intro (air-d26): it exits 0 with `already: "closed"`.
+    let txns = fx.store_count("SELECT count(*) FROM txns");
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(out["already"], "closed");
+    assert_eq!(out["item"]["closed_at"], CLOSED_Y);
+    // No Event and no transaction was written, so nothing is queued either.
+    assert_eq!(fx.store_count("SELECT count(*) FROM txns"), txns);
+    assert!(fx.events("inbox-claimed").is_empty());
     assert!(queued(&fx).is_empty());
 }
 
@@ -552,11 +564,16 @@ fn a_stale_claim_writes_only_the_item_close() {
     assert_eq!(counts(&fx), before);
     assert_eq!(queued_rows(&fx).len(), reactions);
     assert!(fx.events("session-message").is_empty());
-    assert_eq!(
-        refusal(&fx, &id.to_string()),
-        (3, "item_closed".to_owned()),
-        "a second claim"
-    );
+    // The item is now closed: a second claim is the no-op of §21's intro (air-d26), writing nothing.
+    let closed_at = fx.ok(&["show", &id.to_string()])["item"]["closed_at"].clone();
+    assert!(closed_at.is_string(), "{closed_at}");
+    let txns = fx.store_count("SELECT count(*) FROM txns");
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(out["already"], "closed");
+    assert_eq!(out["item"]["closed_at"], closed_at);
+    assert_eq!(counts(&fx), before);
+    assert_eq!(queued_rows(&fx).len(), reactions);
+    assert_eq!(fx.store_count("SELECT count(*) FROM txns"), txns);
 }
 
 #[test]

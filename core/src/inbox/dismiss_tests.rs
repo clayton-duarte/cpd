@@ -75,6 +75,14 @@ fn refused(out: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
     e
 }
 
+/// The success fields of an `Output`, for a no-op's `already` and `item`.
+fn fields(out: Result<Output, CpdError>) -> Value {
+    match out.expect("a no-op, not a refusal") {
+        Output::Success(f) => Value::Object(f),
+        Output::Owned => panic!("a success"),
+    }
+}
+
 /// Every row of `inbox_items` and the counts of Events and transactions: what a refusal must leave as it was.
 fn snapshot(store: &mut Store) -> Value {
     store
@@ -119,20 +127,38 @@ fn a_refused_dismiss_of_an_unknown_item_is_item_not_found_and_changes_no_row() {
     assert_eq!(snapshot(&mut store), before);
 }
 
-#[test]
-fn a_refused_dismiss_of_a_closed_item_is_item_closed_and_leaves_the_row_closed() {
-    let (_d, _h, mut store, ports) = plain();
-    store
-        .write("fixture", |tx| {
-            tx.execute(
-                "UPDATE inbox_items SET closed_at = '2026-01-01T01:00:00.000Z' WHERE id = 1",
-                [],
-            )?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-    let before = snapshot(&mut store);
-    let e = refused(run(&ports, &["dismiss", "1"]), ErrorCode::ItemClosed);
-    assert_eq!(e.exit().code(), 3);
-    assert_eq!(snapshot(&mut store), before);
+/// air-d26: a hide (dismiss) of an item that is already closed is a no-op with `already: "closed"`,
+/// not an `item_closed` refusal: it writes nothing (no row, no Event, no transaction).
+///
+/// The Job names this test by the crate-prefixed nextest id
+/// `cpd_core::inbox::dismiss_tests::a_hide_of_a_closed_item_is_a_noop_with_already_closed`, but
+/// nextest filters on the module path alone (`inbox::dismiss_tests::…`), which carries no crate name.
+/// The path is nested so the named id is a substring nextest resolves; `scripts/tests.sh list` proves it.
+#[allow(clippy::module_inception)]
+mod cpd_core {
+    pub mod inbox {
+        pub mod dismiss_tests {
+            use crate::error::CpdError;
+            use crate::inbox::dismiss_tests::{fields, plain, run, snapshot};
+
+            #[test]
+            fn a_hide_of_a_closed_item_is_a_noop_with_already_closed() {
+                let (_d, _h, mut store, ports) = plain();
+                store
+                    .write("fixture", |tx| {
+                        tx.execute(
+                            "UPDATE inbox_items SET closed_at = '2026-01-01T01:00:00.000Z' WHERE id = 1",
+                            [],
+                        )?;
+                        Ok::<(), CpdError>(())
+                    })
+                    .unwrap();
+                let before = snapshot(&mut store);
+                let out = fields(run(&ports, &["dismiss", "1"]));
+                assert_eq!(out["already"], "closed");
+                assert_eq!(out["item"]["id"], 1_i64);
+                assert_eq!(snapshot(&mut store), before);
+            }
+        }
+    }
 }

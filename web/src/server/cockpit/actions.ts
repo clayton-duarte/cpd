@@ -19,7 +19,9 @@ export function actionArgs(action: CockpitAction): CpdCommand {
       return { kind: "pr.merge", pull: action.pull };
     }
     case "error.report":
-      return { kind: "session.send", sessionId: `${action.target}:manager`, unblocks: `WebUI error toast (${action.code})`, text: `Error toast reported from WebUI:\n- code: ${action.code}\n- message: ${action.message}` };
+      // a Manager's key is the bare Context id (cpd, host; agent keys are `<role> <context>[:<plan>[:<job>]]`),
+      // so `cpd session send cpd ...`, never `cpd:manager` (air-n12).
+      return { kind: "session.send", sessionId: action.target, unblocks: `WebUI error toast (${action.code})`, text: `Error toast reported from WebUI:\n- code: ${action.code}\n- message: ${action.message}` };
     case "engine.start": return { kind: "watch.ensure" };
     case "context.retire":
       return { kind: "context.retire", contextId: action.contextId, approve: action.approve, reject: action.reject };
