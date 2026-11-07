@@ -5,6 +5,7 @@
 
 mod append;
 mod kind;
+mod notify;
 pub mod repeat;
 mod select;
 mod stale;
@@ -25,6 +26,7 @@ use crate::output::{Output, to_line};
 
 pub use append::{NewEvent, append};
 pub use kind::{Kind, PROTOCOL, Set, Spec};
+pub use notify::{escalation, job_event};
 pub use select::{Event, Selection, highest_id};
 pub use typed::{BasePull, Counts};
 
