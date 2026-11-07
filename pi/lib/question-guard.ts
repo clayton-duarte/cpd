@@ -2,6 +2,7 @@ import { isObject, toCpdError } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import { boldPhi } from "./phi.ts";
 import { isTyped, startsReply } from "./reply.ts";
+import { registerOriginTag } from "./origin.ts";
 import { lastAssistantText } from "./reminder.ts";
 import type { ModelCtx } from "./pi.ts";
 import type { Run } from "./run.ts";
@@ -36,6 +37,7 @@ export function noteQuestionTool(host: Host, toolName: string): void {
 
 /** Registered once (pi has no unsubscribe); the run and its role are read at each call. */
 export function registerQuestionGuard(host: Host): void {
+  registerOriginTag(host.pi); // §15.3: the surface and view tag on interactively typed User input, registered once here (pi has no unsubscribe)
   const newRun = (event: unknown) => {
     const r = host.run;
     if (!r || !guarded(r)) return;
