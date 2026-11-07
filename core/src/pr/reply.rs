@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::Env;
+use super::comments::Kind;
+use super::{Env, approval, workflow_policy};
 use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
@@ -31,6 +32,12 @@ pub struct ReplyArgs {
 
 fn usage(message: &str) -> CpdError {
     CpdError::new(ErrorCode::Usage, message)
+}
+
+/// `pr.feedback.reply = "bots_only"`. `policy::Reply` is not exported from `policy`, so the value is read as its
+/// serialized name.
+fn bots_only(policy: &crate::policy::Policy) -> bool {
+    serde_json::to_value(policy.pr.feedback.reply).is_ok_and(|v| v == "bots_only")
 }
 
 pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> {
@@ -81,6 +88,22 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         .with("open", json!(open)));
     };
 
+    let key = workflow.key.clone();
+    let approval = match approval::agent_session() {
+        Some(session)
+            if bots_only(&workflow_policy(&mut env, &id, &key)?)
+                && !(item.bot && item.kind == Kind::Thread) =>
+        {
+            let need = approval::Need {
+                kind: approval::Kind::Reply,
+                plan: &id,
+                workflow: &key,
+                to: Some(&args.to),
+            };
+            approval::require(&env.home, &session, &need, env.ports.clock.utc())?
+        }
+        _ => approval::Guard::none(),
+    };
     let id_text = item.id.clone();
     let mutation = enqueue(
         &mut env.store,
@@ -90,11 +113,13 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         json!({"to": id_text, "body": text}),
         Some(json!({"feedback_without": id_text})),
     )?;
-    queued(
+    let out = queued(
         &mut env.store,
         &pull.repo,
         pull.number,
         mutation,
         json!({"replied": {"pr": workflow.key, "to": args.to, "url": item.url}}),
-    )
+    )?;
+    approval.consume()?;
+    Ok(out)
 }

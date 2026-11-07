@@ -78,26 +78,40 @@ fn mutations(pay: &Pay) -> Vec<String> {
         .collect()
 }
 
-/// Runs the queued mutations through the source as the engine's drain does, with the pay fixture's `gh`: the outcomes.
-fn drain(pay: &Pay) -> Vec<cpd_core::swr::source::ExecOutcome> {
+/// Runs the queued mutations through the source as the engine's drain does (`engine/src/watch/swr.rs`
+/// `drain_outbox`), with the pay fixture's `gh`: each is completed or failed, so the next one of its key is claimed.
+/// Returns the outcomes.
+pub(super) fn drain(pay: &Pay) -> Vec<cpd_core::swr::source::ExecOutcome> {
     use cpd_core::config::Config;
     use cpd_core::home::CpdHome;
-    use cpd_core::swr::outbox;
+    use cpd_core::swr::outbox::{self, Retry};
     use cpd_core::swr::source::github::GithubSource;
-    use cpd_core::swr::source::{Cx, Source};
+    use cpd_core::swr::source::{Cx, ExecOutcome, Source};
     let home = CpdHome::resolve(Some(pay.fx.env.cpd_home().into()), None).unwrap();
     let mut store = pay.store();
     let config = Config::load(&home).unwrap();
     let now = cpd_core::clock::Clock::utc(&*pay.fx.fakes.ports.clock);
     let mut out = Vec::new();
     while let Some(m) = outbox::claim_next(&mut store, now, "github").unwrap() {
-        let mut cx = Cx {
-            store: &mut store,
-            ports: &pay.fx.fakes.ports,
-            home: &home,
-            config: &config,
+        let outcome = {
+            let mut cx = Cx {
+                store: &mut store,
+                ports: &pay.fx.fakes.ports,
+                home: &home,
+                config: &config,
+            };
+            GithubSource::default().execute(&mut cx, &m)
         };
-        out.push(GithubSource::default().execute(&mut cx, &m));
+        match &outcome {
+            ExecOutcome::Done => outbox::complete(&mut store, m.id, now).unwrap(),
+            ExecOutcome::Retry { after } => {
+                outbox::fail(&mut store, m.id, now, "retry", Retry::After(*after)).unwrap()
+            }
+            ExecOutcome::Failed { error } => {
+                outbox::fail(&mut store, m.id, now, error, Retry::Never).unwrap()
+            }
+        }
+        out.push(outcome);
     }
     out
 }

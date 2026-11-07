@@ -40,6 +40,7 @@ mod query_tests;
 #[cfg(test)]
 mod rate_limit_tests;
 
+pub mod approval;
 pub mod auto_merge;
 pub mod closed;
 pub mod comments;
@@ -120,6 +121,9 @@ pub enum Command {
     Repost(repost::RepostArgs),
     /// Merge a clean pull request on GitHub with a method the repo allows (§9.10)
     Merge(merge::MergeArgs),
+    /// Record the User's approval for one agent reply, post or repost (adapter)
+    #[command(hide = true)]
+    Approve(approval::ApproveArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -189,6 +193,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Post(args) => post::post(ports, args),
         Command::Repost(args) => repost::repost(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
+        Command::Approve(args) => approval::approve(ports, args),
     }
 }
 
