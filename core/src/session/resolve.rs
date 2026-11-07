@@ -110,7 +110,9 @@ fn relative(conn: &Connection, raw: &str, caller: &SessionId) -> Result<Option<S
 
 /// Step 6: a Plan id (its Lead) or a bare id prefix of at least [`MIN_BARE_PREFIX`] characters.
 fn legacy(conn: &Connection, raw: &str, reference: &SessionRef) -> Result<SessionId, CpdError> {
-    if let Some(lead) = scalar(conn, "SELECT lead_session FROM plans WHERE id = ?1", &[raw])? {
+    if let Some(Some(lead)) =
+        nullable(conn, "SELECT lead_session FROM plans WHERE id = ?1", &[raw])?
+    {
         return parse(&lead);
     }
     if raw.len() >= MIN_BARE_PREFIX {
@@ -133,6 +135,17 @@ fn by_name(conn: &Connection, name: &str) -> Result<Option<String>, CpdError> {
 }
 
 fn scalar(conn: &Connection, sql: &str, params: &[&str]) -> Result<Option<String>, CpdError> {
+    Ok(conn
+        .query_row(sql, rusqlite::params_from_iter(params), |r| r.get(0))
+        .optional()?)
+}
+
+/// A query of one nullable column: no row is None, a NULL column is Some(None).
+fn nullable(
+    conn: &Connection,
+    sql: &str,
+    params: &[&str],
+) -> Result<Option<Option<String>>, CpdError> {
     Ok(conn
         .query_row(sql, rusqlite::params_from_iter(params), |r| r.get(0))
         .optional()?)

@@ -43,7 +43,7 @@ Three kinds of agent act on a Plan:
 
 ### 01 Intake raw input
 
-The User, or an external ticket, reaches the Manager as raw direction. The Manager creates the Plan in the `shaping` phase with no Lead yet; this is planned, not implemented (see the seams below).
+The User, or an external ticket, reaches the Manager as raw direction. The Manager creates the Plan in the `shaping` phase with no Lead yet; the phase `shaping` and the nullable `plans.lead_session` are implemented (seam 1 below), the rest of the flow is planned (seams 2 to 4).
 
 ### 02 Explore
 
@@ -167,9 +167,9 @@ The Worker is a stateless function: 1 Worker = 1 Job = 1 Commit (or 1 Explore Re
 
 ## Pre-Lead shaping and Manager explore
 
-Steps 01–05 run before the Plan has a Lead. Four seams would let that work. Each is planned, not implemented: main has no `shaping` phase today.
+Steps 01–05 run before the Plan has a Lead. Four seams would let that work. Seam 1 is implemented: main now has the phase `shaping` and a nullable `plans.lead_session` (Plan `ctx-explore`, Workflow `schema`). Seams 2 to 4 are planned.
 
-1. `plans.lead_session` is nullable while `phase = 'shaping'`. Status: planned, not implemented.
+1. `plans.lead_session` is nullable while the phase is `shaping`, and the phase `shaping` exists. Status: implemented (Plan `ctx-explore`, Workflow `schema`).
 2. Scout and research Jobs are allowed on a Plan that has no Lead. Status: planned, not implemented.
 3. The `job-merged`, `job-failed` and `escalation` events route to the Context's Manager session when `lead_session IS NULL`. Status: planned, not implemented.
 4. The Lead handoff moves the Plan from `shaping` to `grounding` and sets `lead_session`. Status: planned, not implemented.

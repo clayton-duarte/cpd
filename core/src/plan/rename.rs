@@ -25,7 +25,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
                         Ok((
                             r.get::<_, String>(0)?,
                             r.get::<_, String>(1)?,
-                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(2)?,
                         ))
                     },
                 )
@@ -34,10 +34,13 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         .ok_or_else(|| CpdError::plan_not_found(&id))?;
     let context = ContextId::parse(&context)?;
     let mut out = json!({"plan": {"id": id, "context": context, "title": title}});
-    let lead = SessionId::parse(&lead)?;
+    // A Lead-less shaping Plan has no pane to retitle (contract §3.1, air-d19).
+    let lead = lead.as_deref().map(SessionId::parse).transpose()?;
     if old == title {
         // A rerun repairs the pane's header too.
-        retitle(&mut env, &lead, title)?;
+        if let Some(lead) = &lead {
+            retitle(&mut env, lead, title)?;
+        }
         out["already"] = json!(true);
         return Ok(Output::success(out));
     }
@@ -53,6 +56,8 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         append(tx, event)?;
         Ok(())
     })?;
-    retitle(&mut env, &lead, title)?;
+    if let Some(lead) = &lead {
+        retitle(&mut env, lead, title)?;
+    }
     Ok(Output::success(out))
 }

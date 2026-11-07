@@ -46,7 +46,7 @@ The curator at work: the distiller runs once per batch of uncurated records, and
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
-One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
+One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. A Plan may be **Lead-less** in the phase `shaping`: its Manager creates it and explores through its explore Jobs before any Lead exists, with a null `lead_session` (contract §3.1). Otherwise its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
 _Avoid_: project; task, run (as a noun)
 
 **Workflow** (entity, pro-d136, pro-d138):

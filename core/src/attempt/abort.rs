@@ -105,10 +105,11 @@ fn caller(env: &mut Env, plan: &PlanId) -> Result<String, CpdError> {
                 .query_row(
                     "SELECT lead_session FROM plans WHERE id = ?1",
                     [plan.as_str()],
-                    |r| r.get::<_, String>(0),
+                    |r| r.get::<_, Option<String>>(0),
                 )
                 .optional()?)
         })?
+        .flatten()
         .ok_or_else(|| {
             CpdError::new(
                 ErrorCode::SessionRequired,

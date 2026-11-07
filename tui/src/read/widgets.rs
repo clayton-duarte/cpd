@@ -161,12 +161,11 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     plan_heads(conn, None)?
         .into_iter()
         .map(|head| {
-            let (label, lead_place) = labels.get(head.id.as_str()).cloned().ok_or_else(|| {
-                bad_row(format!(
-                    "Plan {} has no Lead Session {}",
-                    head.id, head.lead_session
-                ))
-            })?;
+            // A Lead-less shaping Plan has no Lead Session: it is labelled by its id (contract §3.1, air-d19).
+            let (label, lead_place) = labels
+                .get(head.id.as_str())
+                .cloned()
+                .unwrap_or_else(|| (head.id.to_string(), Place::None));
             let workflows = pulls.remove(head.id.as_str()).unwrap_or_default();
             Ok(PlanCard {
                 label,

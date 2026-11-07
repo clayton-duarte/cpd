@@ -162,7 +162,7 @@ impl<'a> Input<'a> {
         Input {
             plan,
             phase,
-            locked: !matches!(phase, Phase::Grounding | Phase::Plan),
+            locked: !matches!(phase, Phase::Shaping | Phase::Grounding | Phase::Plan),
             workflows,
             jobs,
             outline,

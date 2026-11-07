@@ -74,7 +74,7 @@ pub fn plan(
             title: titled(id),
             jira: None,
             phase,
-            lead_session: lead.id,
+            lead_session: Some(lead.id),
             pr: None,
             counts: JobCounts {
                 draft,

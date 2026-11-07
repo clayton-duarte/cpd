@@ -376,7 +376,7 @@ pub(crate) fn blockers(
         }
         if check_asleep {
             let quiet: bool = conn.query_row(
-                "SELECT p.archived_at IS NOT NULL OR s.asleep_at IS NOT NULL FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
+                "SELECT COALESCE(p.archived_at IS NOT NULL OR s.asleep_at IS NOT NULL, 1) FROM plans p LEFT JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
                 [plan.as_str()],
                 |r| r.get(0),
             )?;

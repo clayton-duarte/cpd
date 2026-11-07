@@ -497,7 +497,11 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
         .iter()
         .flat_map(|c| &c.plans)
         .find(|p| &p.head.id == plan)?;
-    Some(open_or_history(tree, &plan.head.lead_session))
+    // A Lead-less shaping Plan has no Lead to open (contract §3.1, air-d19).
+    plan.head
+        .lead_session
+        .as_ref()
+        .map(|lead| open_or_history(tree, lead))
 }
 
 /// The kinds whose label is a `Link` to the item's `url`.
