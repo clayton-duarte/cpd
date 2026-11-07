@@ -7,6 +7,7 @@ import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import type { FollowerHooks } from "../lib/follower.ts";
 import { parseLine, type EventOf } from "../lib/event.ts";
+import { readView, tag, WEB_CLIENT } from "../lib/origin.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { CpdError, toCpdError } from "../lib/cpd.ts";
@@ -500,12 +501,14 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       piDurable: PI_DURABLE,
       epoch,
       ring,
-      submit: async ({ text, whenBusy, requestId, images }) => {
+      submit: async ({ text, whenBusy, requestId, images }, client) => {
         const id = requestId ?? randomUUID();
+        // §15.3: a socket submit from the WebUI client is the WebUI surface, so its content carries the tag.
+        const said = client === WEB_CLIENT ? tag("webui", readView(config.home)) + text : text;
         const content =
           images === undefined || images.length === 0
-            ? text
-            : [{ type: "text" as const, text }, ...images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))];
+            ? said
+            : [{ type: "text" as const, text: said }, ...images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))];
         try {
           const s = await submit({ content, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true });
           return { submissionId: s.id, status: await s.status() };

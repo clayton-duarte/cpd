@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
-import { createWatchdog, productionEnv } from "./watchdog.ts";
+import { createPreviewWatchdog, createWatchdog, productionEnv } from "./watchdog.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -261,6 +261,38 @@ it("a malformed health file is logged once and ignored", async () => {
   await s.wd.tick();
   expect(s.logs).toHaveLength(2);
   expect(s.calls).toEqual([]);
+});
+
+it("rolls the preview back to production webui on loading too long", async () => {
+  const calls: string[] = [];
+  const logs: Entry[] = [];
+  const state = { clock: T0, health: loading(2) as HealthRecord | null };
+  const wd = createPreviewWatchdog(
+    {
+      now: () => state.clock,
+      readHealth: async () => state.health,
+      pidAlive: () => true,
+      setMode: async (mode) => {
+        calls.push(`mode:${mode}`);
+      },
+      showErrorBox: (title, content) => {
+        calls.push(`dialog:${title}:${content}`);
+      },
+      log: async (entry) => {
+        logs.push(entry as Entry);
+      },
+    },
+    { stabilizeMs: 3000, crashDebounceMs: 1000, loadingGraceMs: 10000 },
+  );
+  await wd.tick();
+  state.clock += 9999;
+  await wd.tick();
+  expect(calls).toEqual([]);
+  state.clock += 1;
+  await wd.tick();
+  expect(calls).toEqual(["mode:webui", "dialog:WebUI Preview: loading too long"]);
+  expect(logs.map((entry) => entry.event)).toContain("rollback");
+  expect(calls).not.toContain("mode:webui-preview");
 });
 
 it("productionEnv sets CPD_MODE to production and drops the dev URL", () => {

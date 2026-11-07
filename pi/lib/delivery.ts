@@ -4,6 +4,7 @@ import type { Host } from "./host.ts";
 import { resetTurn } from "./loop-guard.ts";
 import type { Run } from "./run.ts";
 import { zoneTime } from "./time.ts";
+import { readView, tag } from "./origin.ts";
 
 /**
  * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
@@ -52,8 +53,9 @@ export function errorMessage(what: string, code: string, message: string, extra:
   };
 }
 
-/** §15.3 `session-message`: `Message from <name> (<id>) (HH:MM ZZZ): <text>`, or `Message from the User (<HH:MM>): <text>` when nobody sent it. The time is the sender's machine-local `at` (pi/lib/time.ts). */
+/** §15.3 `session-message`: `Message from <name> (<id>) (HH:MM ZZZ): <text>`, or `Message from the User (<HH:MM>): <text>` when nobody sent it. The time is the sender's machine-local `at` (pi/lib/time.ts). A message sent from the WebUI (`data.origin` `webui`) carries the surface and view tag (§15.3, Plan ui-origin); every other one is untagged. */
 export function sessionMessage(event: EventOf<"session-message">, sessionId: string, sender: { id: string; name: string | null } | null): Message {
   const from = sender === null ? "the User" : sender.name === null ? sender.id : `${sender.name} (${sender.id})`;
-  return eventMessage(event, sessionId, `Message from ${from} (${zoneTime(event.at)}): ${event.data.text}`);
+  const text = event.data.origin === "webui" ? tag("webui", readView()) + event.data.text : event.data.text;
+  return eventMessage(event, sessionId, `Message from ${from} (${zoneTime(event.at)}): ${text}`);
 }

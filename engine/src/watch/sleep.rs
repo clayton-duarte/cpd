@@ -12,16 +12,30 @@ use cpd_core::host::chat_slot;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::close_lead;
 
-/// What must hold of a Lead's Plan besides its phase: nothing of it is live or open (see [`LEAD_FINISHED`]).
-macro_rules! nothing_open {
+/// What must hold of a Plan besides its phase and its Lead's Inbox: nothing of the Plan is live or open. Aliases the Plan
+/// `p` and binds no parameter. [`PLAN_FINISHED`] is shared with E14's Lead-less selection ([`super::archive_leads`]), so
+/// the two cannot drift.
+macro_rules! plan_nothing_open {
     () => {
         "
        AND NOT EXISTS (SELECT 1 FROM workflows r WHERE r.plan = p.id AND (r.status NOT IN ('merged', 'cancelled')
                                                   OR r.status = 'cancelled' AND EXISTS (SELECT 1 FROM pull_requests q WHERE q.id = r.pull_request AND q.state = 'open')))
        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running', 'failed'))
        AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
-       AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')
-       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL)"
+       AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')"
+    };
+}
+
+/// The plan part of "finished": a Plan (alias `p`) with nothing live or open. A Lead-less `shaping` Plan uses this alone,
+/// having no Session; a Lead's query adds its own Inbox rule. Aliases `p` only.
+pub(super) const PLAN_FINISHED: &str = plan_nothing_open!();
+
+/// What must hold of a Lead's Plan besides its phase: nothing of it is live or open, and its Lead's Session has no open,
+/// undismissed Inbox item (snoozed or not). Aliases the Session `s` and its Plan `p`.
+macro_rules! nothing_open {
+    () => {
+        concat!(plan_nothing_open!(), "
+       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL)")
     };
 }
 

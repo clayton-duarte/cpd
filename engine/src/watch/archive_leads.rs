@@ -1,13 +1,12 @@
 //! E14, the archive of finished Plans (contract §3.7, §2.2 "Archived"; hs-d630, hs-d633): archives the done Plan of
 //! each Lead whose `asleep_at` is older than `timeouts.archive_sleep_seconds`, taking the whole Plan through the
-//! `plan archive` cascade. A finished codereview Plan follows E13 then E14 like every Plan. A refusal (`archive_blocked`, `in_chat_slot`) is not an error: the Plan is skipped this
+//! `plan archive` cascade. A Lead-less `shaping` Plan (air-d22) has no Lead Session to sleep: E14 archives it directly
+//! once its `done_at` is older than the threshold, with the same cascade. A finished codereview Plan follows E13 then E14 like every Plan. A refusal (`archive_blocked`, `in_chat_slot`) is not an error: the Plan is skipped this
 //! tick and its Lead stays asleep. Idempotent: after the archive the Lead is not selected again.
-
-use time::OffsetDateTime;
 
 use super::engine::Engine;
 use super::report::{About, Step};
-use super::sleep::LEAD_FINISHED;
+use super::sleep::{LEAD_FINISHED, PLAN_FINISHED};
 use cpd_core::clock::timestamp;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ids::{PlanId, SessionId};
@@ -23,6 +22,18 @@ fn archivable() -> String {
           WHERE s.role = 'lead' AND s.archived_at IS NULL AND s.asleep_at IS NOT NULL AND s.asleep_at <= ?2
             AND p.deleted_at IS NULL
             AND {LEAD_FINISHED}
+         ORDER BY 1"
+    )
+}
+
+/// Lead-less done Plans (air-d22): no Session to sleep, so E14 archives one directly once its `done_at` is older than the
+/// threshold. The plan part of E13's `LEAD_FINISHED` is shared so "finished" cannot drift; there is no Session or Inbox.
+/// `?2` is the cut-off `now - timeouts.archive_sleep_seconds` (`?1` unused, the query binds it too).
+fn archivable_leadless() -> String {
+    format!(
+        "SELECT p.id FROM plans p
+          WHERE p.phase = 'done' AND p.lead_session IS NULL AND p.archived_at IS NULL
+            AND p.deleted_at IS NULL AND p.done_at IS NOT NULL AND p.done_at <= ?2{PLAN_FINISHED}
          ORDER BY 1"
     )
 }
@@ -71,16 +82,23 @@ fn stop_hosts(engine: &mut Engine, plan: &PlanId) {
 }
 
 fn ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
-    let now = OffsetDateTime::now_utc();
+    // The engine's own clock (as E13 reads): a test on the `ManualClock` dates its rows against the same time.
+    let now = engine.ports.clock.utc();
     let cutoff =
         now - time::Duration::seconds(i64::from(engine.config.timeouts.archive_sleep_seconds));
     let (now, cutoff) = (timestamp(now), timestamp(cutoff));
     engine.store.read(|conn| {
-        let mut stmt = conn.prepare(&archivable())?;
-        let rows = stmt
-            .query_map([&now, &cutoff], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.iter().map(|id| PlanId::parse(id)).collect()
+        let mut plans = Vec::new();
+        for sql in [archivable(), archivable_leadless()] {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map([&now, &cutoff], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for id in rows {
+                plans.push(PlanId::parse(&id)?);
+            }
+        }
+        Ok(plans)
     })
 }
 

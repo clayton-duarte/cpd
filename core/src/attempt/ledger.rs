@@ -512,7 +512,7 @@ pub fn end_explore(
         "Job {job} ({kind}) merged: findings in $CPD_HOME/{artefact}.\nSummary: {shown}\nNext: cite that path in the Specs that need it; add another explore Job when the summary is not enough. cpd job show {job} --plan {plan}",
         kind = attempt.kind
     );
-    events::append(
+    let event = events::append(
         tx,
         NewEvent::job_merged_explore(
             text,
@@ -526,6 +526,7 @@ pub fn end_explore(
         .job(attempt.job.clone())
         .attempt(attempt.id.clone()),
     )?;
+    events::job_event(tx, event)?;
     crate::plan::done::settle_done(tx, &attempt.plan, None)?;
     Ok(())
 }
@@ -786,13 +787,14 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Job's status"));
     }
-    events::append(
+    let event = events::append(
         tx,
         event
             .plan(attempt.plan.clone())
             .job(attempt.job.clone())
             .attempt(attempt.id.clone()),
     )?;
+    events::job_event(tx, event)?;
     // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its Workflow that it fixes.
     if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;

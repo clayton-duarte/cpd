@@ -176,9 +176,9 @@ export function exploreGuard(role: string | undefined, env: Record<string, strin
 const READERS = new Set(["cat", "head", "tail", "sed", "grep", "rg", "awk", "less", "more", "jq", "wc", "cut", "sort", "nl", "bat"]);
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** The refusal of a Lead's read of an explore artefact (<CPD_HOME>/run/<plan>/explore/): the `read` tool, or a bash simple command that is a file reader. */
+/** The refusal of a Lead's or a Manager's read of an explore artefact (<CPD_HOME>/run/<plan>/explore/): the `read` tool, or a bash simple command that is a file reader. A Manager gets the artefact's path in the message that wakes it for its Lead-less shaping Plan and cites it, but may not read the file either (commands.md §15.22a, air-d22). */
 export function leadExploreGuard(role: string | undefined, env: Record<string, string | undefined>, call: { name: string; arguments: Record<string, unknown> }): Verdict {
-  if (role !== "lead") return undefined;
+  if (role !== "lead" && role !== "manager") return undefined;
   const home = env.CPD_HOME || `${homedir()}/.cpd`;
   const bases = ["$CPD_HOME", "${CPD_HOME}", "~/.cpd", "$HOME/.cpd", "${HOME}/.cpd", home, `${homedir()}/.cpd`].map(escapeRe).join("|");
   const re = new RegExp(`^(?:${bases})/run/[^/]+/explore(?:/|$)`);
