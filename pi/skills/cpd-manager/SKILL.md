@@ -59,9 +59,9 @@ A key is fixed: never rename a session.
   4. Include regression tests so the bug can never be reintroduced.
 - **Exact CLI syntax (never guess flags or subcommands):**
   - `cpd context decide --context <c> "<decision>"` (positional `<TEXT>`, NO `--title` or `--body`; the sibling command is `cpd context note`, and there is no `context add`).
-  - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes.
+  - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes. On your own shaping Plan the form is `cpd plan new <id> --context <c> --title "<t>" --shaping` (`--brief-file` and `--by-user` are refused with `--shaping`).
   - `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (`--unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
-  - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required).
+  - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required). On a shaping Plan the list adds `cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>` (the explore kinds only, with no `--draft`), `cpd job list --plan <id>`, `cpd job show <k> --plan <id>`, `cpd job cancel <k> --reason "<why>" --plan <id>` and `cpd answer <escalation> "<text>" --plan <id>` (a Worker's question).
 
 ## Policies
 
@@ -96,6 +96,27 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 ## 2. Plans
 
 1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines that name every deliverable, every affected repo and every out-of-scope boundary, and record them. Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan. See "Areas and overlaps" below for work that only overlaps.
+
+### Explore without a Lead
+
+Use when a question needs reading code or the outside world and no Lead exists to delegate to: explore it through a Plan you create and own, with no Lead and only `scout` and `research` Jobs. You add only explore Jobs to it; work Jobs stay a Lead's.
+
+```
+cpd plan new <id> --context <c> --title "<t>" --shaping
+cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>
+cpd job list --plan <id>
+cpd job show <k> --plan <id>
+cpd job cancel <k> --reason "<why>" --plan <id>
+cpd job retry <k> --tier <T> --plan <id>
+cpd answer <escalation> "<text>" --plan <id>
+```
+
+- `--shaping` creates a Lead-less Plan of this Context: no Lead, no pane, no first message. The Job's Spec fields and Tier ranges are an explore Job's ([Spec files](../cpd-lead/references/spec-files.md#explore-jobs)): a `scout` reads this machine, a `research` Job may reach outside it. It is queued at once rather than drafted.
+- Watch the Plan with `cpd job list --plan <id>` and `cpd job show <k> --plan <id>`.
+- `cpd answer <escalation> "<text>" --plan <id>` answers a Worker's question, which reaches you as a message; a `job-merged` message carries the summary and the artefact path.
+- **The result arrives as a message**, not a file: the summary (at most 1500 characters) and the artefact path. You may not read the file: cite its path in the brief of the Plan you start later (`cpd plan new --brief-file`), and that Plan's Workers read it.
+- The Plan settles itself to `done` when every Job is final, and the engine archives it; a new explore Job reopens it.
+
 2. **Interview** until every Requirement, repo boundary and Plan cut is settled, with no cross-Plan Workflow need. Group independent questions into one round. Record each answer as you get it.
 3. **Split into Plans.** A Plan is one deliverable: one or more Workflows, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. Each Plan is independent: no Workflow needs another Plan's Workflow, and no Workflow's base is another Plan's Workflow. When one Plan needs another's result, split them so they stay independent: start the first Plan, let it land, then start the second with what the first delivered. Record the order as a decision. Agree the cut with the User before starting any Plan.
 4. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
