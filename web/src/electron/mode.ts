@@ -1,5 +1,6 @@
+import * as path from "node:path";
 import type { UiMode } from "./channels.ts";
-import type { MenuTemplate } from "./menu.ts";
+import { buildMenuTemplate, type MenuTemplate } from "./menu.ts";
 
 /** The view `cpd desktop` always launches in (web/ELECTRON.md, air-d40). */
 export const LAUNCH_MODE: UiMode = "webui";
@@ -43,17 +44,68 @@ export interface ModeController {
   dispose(): Promise<void>;
 }
 
-// STUB: the launch view, the delete-once, the run-only marker and the switch are implemented by a
-// later Job (web/ELECTRON.md, air-d40, air-d41, air-n19).
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
+}
+
+/** The renderer only knows the two in-place views: preview runs the WebUI client (air-d41). */
+function rendererMode(mode: UiMode): "tui" | "webui" {
+  return mode === "tui" ? "tui" : "webui";
+}
+
 export function createModeController(deps: ModeControllerDeps): ModeController {
-  void deps;
+  const { fs, legacyFile, viewFile, pid } = deps;
   let current: UiMode = LAUNCH_MODE;
-  return {
-    async init(): Promise<void> {},
+
+  const writeMarker = async (mode: UiMode): Promise<void> => {
+    await fs.mkdir(path.dirname(viewFile));
+    await fs.writeFile(viewFile, JSON.stringify({ view: mode, pid }) + "\n");
+  };
+
+  const apply = async (mode: UiMode): Promise<void> => {
+    deps.menu.setApplicationMenu(
+      buildMenuTemplate({
+        mode,
+        platform: deps.platform,
+        onSelect: (next) => {
+          controller.setMode(next).catch(deps.onError);
+        },
+      }),
+    );
+    deps.window.setIgnoreMenuShortcuts(mode === "tui");
+    deps.window.sendMode(rendererMode(mode));
+  };
+
+  // The dropped ui-mode.json is deleted once; it is never read as a launch default (air-d40).
+  const deleteLegacy = async (): Promise<void> => {
+    try {
+      await fs.remove(legacyFile);
+      deps.log(`deleted ${legacyFile}; the launch view is always ${LAUNCH_MODE}`);
+    } catch (error) {
+      if (!isMissing(error)) deps.onError(error);
+    }
+  };
+
+  const controller: ModeController = {
+    async init(): Promise<void> {
+      await deleteLegacy();
+      await writeMarker(current);
+      await apply(current);
+    },
     getMode: () => current,
     async setMode(mode: UiMode): Promise<void> {
+      if (mode === current) return;
       current = mode;
+      await writeMarker(mode);
+      await apply(mode);
     },
-    async dispose(): Promise<void> {},
+    async dispose(): Promise<void> {
+      try {
+        await fs.remove(viewFile);
+      } catch (error) {
+        if (!isMissing(error)) deps.onError(error);
+      }
+    },
   };
+  return controller;
 }

@@ -24,6 +24,7 @@ export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate {
         accelerator: "CmdOrCtrl+Shift+M",
         click: () => onSelect("webui"),
       },
+      { label: "WebUI Preview", type: "radio", checked: mode === "webui-preview", click: () => onSelect("webui-preview") },
     ],
   });
   template.push({ role: "windowMenu" });
