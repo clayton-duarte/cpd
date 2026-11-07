@@ -68,6 +68,8 @@ export async function startRendererServer(root: string): Promise<RendererServer>
 type Fixtures = {
   /** A per-run `CPD_HOME`, isolated and removed after the test. */
   cpdHome: string;
+  /** A per-run Electron `userData` dir, isolated and removed after the test. */
+  userDataDir: string;
   /** The renderer URL server, owned by the suite. */
   rendererServer: RendererServer;
   /** The launched desktop app. */
@@ -83,20 +85,30 @@ export const test = base.extend<Fixtures>({
     await rm(home, { recursive: true, force: true });
   },
 
+  userDataDir: async ({}, use) => {
+    const dir = await mkdtemp(join(tmpdir(), "cpd-e2e-userdata-"));
+    await use(dir);
+    await rm(dir, { recursive: true, force: true });
+  },
+
   rendererServer: async ({}, use) => {
     const server = await startRendererServer(rendererDir);
     await use(server);
     await server.close();
   },
 
-  electronApp: async ({ cpdHome, rendererServer }, use) => {
+  electronApp: async ({ cpdHome, userDataDir, rendererServer }, use) => {
     const app = await electron.launch({
       executablePath: electronExecutable,
-      args: ["."],
+      // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and
+      // app data) in a temp dir, so the run never touches the User's real profile.
+      args: [`--user-data-dir=${userDataDir}`, "."],
       cwd: webRoot,
       env: {
         ...process.env,
         CPD_HOME: cpdHome,
+        // Create the app window hidden: no window ever appears on the User's screen.
+        CPD_ELECTRON_HIDDEN: "1",
         CPD_MODE: "preview",
         CPD_CHECKOUT: webRoot,
         CPD_ELECTRON_DEV_URL: rendererServer.url,

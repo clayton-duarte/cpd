@@ -19,9 +19,13 @@ export interface BootDeps {
 }
 export async function boot(deps: BootDeps): Promise<void> {
   const preview = readPreviewMode(deps.env);
+  // Test-only hidden seam: the e2e suite sets CPD_ELECTRON_HIDDEN=1 so the window is
+  // created with `show:false` and can never appear on the User's screen (no flash).
+  // Unset in production, where Electron's default `show:true` still applies.
+  const hidden = deps.env['CPD_ELECTRON_HIDDEN'] === '1';
   deps.app.setName('CPD');
   await deps.app.whenReady();
-  const win = new deps.BrowserWindow({ title: 'CPD' });
+  const win = new deps.BrowserWindow({ title: 'CPD', show: !hidden });
   await deps.initMode(win);
   deps.process.on('SIGUSR1', async () => {
     try {
