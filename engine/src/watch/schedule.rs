@@ -91,7 +91,8 @@ pub(super) fn backing_off_with(
 
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy` (or in `plan` once locked: a re-planned Plan, pro-d433), whose Workflow is `dispatch`
 /// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no Workflow) is Ready in a live Plan (not archived)
-/// in `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
+/// in `shaping`, `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged` (a Lead-less `shaping` Plan's explore
+/// Jobs are dispatched like a Lead Plan's; air-d19, air-d22). `driver::start`'s `require_ready` says the same.
 /// An `open` or `update` Job has no Dependency rows: its rule is derived from the Workflow's other Jobs (§3.2),
 /// which are the Jobs that are neither `open` nor `update` (those do not count each other). An `open` Job is
 /// Ready when its Workflow is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
@@ -102,7 +103,7 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped
   WHERE j.status = 'queued' AND p.archived_at IS NULL
     AND ((j.workflow IS NOT NULL AND (p.phase IN ('dispatch', 'deploy') OR (p.phase = 'plan' AND p.locked_at IS NOT NULL)) AND r.status IN ('dispatch', 'open'))
       OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
-          AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
+          AND p.phase IN ('shaping', 'grounding', 'plan', 'dispatch', 'deploy')))
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
     AND (j.kind <> 'open' OR (r.status = 'dispatch'

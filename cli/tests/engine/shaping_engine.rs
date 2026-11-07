@@ -14,6 +14,7 @@ use crate::common;
 
 use common::fx::Fx;
 use cpd_core::attempt::ledger;
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use serde_json::json;
@@ -33,10 +34,13 @@ fn home_with(extra: &str) -> Fx {
     let fx = Fx::with_ports();
     fx.engine_config(extra);
     fx.engine_routes();
-    // The driver's executable must exist for E3's spawn to record a launch (`FakeSpawn` runs nothing).
-    fx.fakes
-        .spawn
-        .set_self_exe(std::env::current_exe().unwrap());
+    // The driver's executable must exist for E3's spawn to record a launch (`FakeSpawn` runs nothing), and its name is
+    // what E5 (`cpd pr poll`) is routed by, so E5 finds no pull request.
+    let exe = fx.env.root().join("cpd-installed");
+    std::fs::write(&exe, "").unwrap();
+    fx.fakes.spawn.set_self_exe(&exe);
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
     fx.env.owner_policy("acme", "");
     let install = fx.env.root().join("install");
     std::fs::create_dir_all(&install).unwrap();
@@ -157,7 +161,7 @@ fn shaping_engine_e3_starts_explore_job_of_shaping_plan() {
     );
     assert_eq!(
         fx.env.query::<i64>(
-            "SELECT count(*) FROM job_pools WHERE plan = 'shape' AND job = 'look' AND pool = 'workers'"
+            "SELECT count(*) FROM job_tenants WHERE plan = 'shape' AND job = 'look' AND pool = 'workers'"
         ),
         1,
         "the explore Job takes a workers slot like any Job"
@@ -387,6 +391,9 @@ fn shaping_engine_inbox_and_readers_skip_leadless_plan() {
     assert_eq!(list["plans"][0]["lead_session"], json!(null));
     fx.cpd(&["plan", "show", "--plan", PLAN]).ok();
     fx.cpd(&["context", "pending", "--context", CONTEXT]).ok();
-    fx.cpd(&["context", "pending", "--context", CONTEXT, "--markdown"])
-        .ok();
+    // `--markdown` prints on the process's own stdout (`print!`): the binary, which `Fx::cpd` cannot read.
+    let run = fx
+        .env
+        .cpd(&["context", "pending", "--context", CONTEXT, "--markdown"]);
+    assert_eq!(run.exit, 0, "{run:?}");
 }
