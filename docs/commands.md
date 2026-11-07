@@ -300,7 +300,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
-| `cpd app` (§14.4a) | none | no | no |
+| `cpd desktop` (§14.4a) | none | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -4875,9 +4875,9 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
 6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced, are not protected by a live pin (`pi.pin.<pid>` of a live pid, whose target is a version name; contract §3.7 "The pin") and are older than 60 minutes and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids and the pins of dead or unparseable pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json`, `<share>/pnpm-lock.yaml`, `<share>/pnpm-workspace.yaml` or `<share>/patches`. Prints `installed <bin> and <link>` on stderr.
 7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
-7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd app`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
+7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
    - a. `pnpm --dir <root> install --frozen-lockfile`.
-   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd app` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
+   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
    - c. `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`) is written with `<root>` as its one line, the absolute path, after b succeeded (a temporary file, then a rename).
    - d. When `<preview_dir>/web-state` exists (`<preview_dir>` = `$CPD_PREVIEW_DIR`, else `~/.cache/cpd-preview`), a web preview is on: Electron is left alone and stderr says `cpd install: web preview is on; Electron was not signalled`. Otherwise SIGUSR1 goes to the pid in `<cpd_home>/run/preview-health.json` (field `pid`) when that pid is alive. With no live Electron, nothing is signalled and nothing is started.
 
@@ -4894,21 +4894,21 @@ Every refusal (steps 1 to 4a, nothing replaced), failure (steps 5 and 6) and fai
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
-### 14.4a `app`
+### 14.4a `desktop`
 
 ```
-cpd app
-cpd app --preview [<worktree>]
-cpd app --reload [<worktree>]
-cpd app --off
-cpd app --status
+cpd desktop
+cpd desktop --preview [<worktree>]
+cpd desktop --reload [<worktree>]
+cpd desktop --off
+cpd desktop --status
 ```
 
-The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd app` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
+The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd desktop` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
 
-**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `app_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
+**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
 
-**Plain `cpd app`.** Ensure, then reload or launch:
+**Plain `cpd desktop`.** Ensure, then reload or launch:
 1. **Ensure** (idempotent). `pnpm --dir <root> --filter cpd-web-client run build:electron` runs only when `<root>/web/dist-electron/main.js` is missing (install always builds, §14.4 step 7a). Then, always: when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before the remaining steps; when the binary is present, no extra install command runs. Always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`. These are the steps of the `electron` script of `web/package.json`. The build is bounded at 10 minutes.
 2. **Reload or launch.** The running Electron is the pid in `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`; field `pid`; every Electron launch writes it), when that pid is alive. Alive: SIGUSR1 to it, action `reloaded`. Otherwise: spawn `<root>/web/node_modules/.bin/electron .` with cwd `<root>/web`, in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, without waiting; action `launched`.
 
@@ -4925,13 +4925,13 @@ Output:
 | Error | Exit | When |
 |---|---|---|
 | `usage` | 2 | clap: two of the four flags at once, a `<worktree>` after `--off` or `--status`, an unknown flag |
-| `app_not_installed` | 1 | `app-root` is missing (every form); the message says to run `scripts/install-cpd.sh` |
+| `desktop_not_installed` | 1 | `app-root` is missing (every form); the message says to run `scripts/install-cpd.sh` |
 | `spawn_failed` | 1 | a child could not be started or exited non-zero: `pnpm` or `plutil` (ensure), `sh preview-web.sh` (the preview forms), the Electron launch; `details` is `{argv, exit, stdout, stderr}` as in §21.6, `exit` `null` when it did not start. A refused SIGUSR1: `details` is `{pid, error}` |
 | `tool_timeout` | 5 | the ensure's build passes 10 minutes, or a preview script passes 15 minutes; `details.argv` names the child |
 
 A failed ensure or a failed script exits with its error and runs nothing after it.
 
-Effects: plain `cpd app` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
+Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
 
 Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again; `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
 
@@ -6039,7 +6039,7 @@ The same guards apply in the pi adapter (`pi/lib/adapter.ts`), the durable host 
 
 ### 15.28 The electron guard (decision pro-d455)
 
-Decision pro-d455 (User): agents never run the electron binary by hand. The Electron app is `cpd app`'s (§14.4a), which owns its preview, reload, status and stop (`--preview`, `--reload`, `--status`, `--off`). A pi guard refuses a direct run and points there. The guard is a pure function of the command (`pi/lib/electronguard.ts`, like `pi/lib/secretguard.ts`).
+Decision pro-d455 (User): agents never run the electron binary by hand. The Electron app is `cpd desktop`'s (§14.4a), which owns its preview, reload, status and stop (`--preview`, `--reload`, `--status`, `--off`). A pi guard refuses a direct run and points there. The guard is a pure function of the command (`pi/lib/electronguard.ts`, like `pi/lib/secretguard.ts`).
 
 **When.** While a run is active, for every role (Lead, Manager, Worker, side forks), in the three bash-guard places that already call `secretBypass`, in the same order as the secret guard: the `tool_call` handler of `pi/lib/adapter.ts` (next to `secretBypass` and `hostApproveBypass`), `hostVerdict` of `pi/durable-host/guards.ts` and `workerVerdict` of `pi/durable-worker/guards.ts`. Each returns `{block: <reason>}` (the adapter returns `{block: true, reason}`).
 
@@ -6055,7 +6055,7 @@ Decision pro-d455 (User): agents never run the electron binary by hand. The Elec
 **The refusal.** `reasonText(matched: string): string` gives the reason, one line, no newline:
 
 ```
-φ: agents do not run the electron binary; use cpd app (--preview, --reload, --status, --off) (commands.md §15.28); refused: <matched>
+φ: agents do not run the electron binary; use cpd desktop (--preview, --reload, --status, --off) (commands.md §15.28); refused: <matched>
 ```
 
 `<matched>` is the words from the command word through the `electron` word (for (a) and (d), just the command word).
@@ -6072,7 +6072,7 @@ Decision pro-d455 (User): agents never run the electron binary by hand. The Elec
 | `yarn dlx electron` | `yarn dlx electron` |
 | `/Applications/Electron.app/Contents/MacOS/Electron` | `/Applications/Electron.app/Contents/MacOS/Electron` |
 
-Passed: `echo electron`, `grep electron f`, `cat web/electron.ts`, `pnpm run build:electron`, `pnpm --filter cpd-web-client run build:electron`, `ls node_modules/.bin/electron-builder`, `cpd app`, `cpd app --status`.
+Passed: `echo electron`, `grep electron f`, `cat web/electron.ts`, `pnpm run build:electron`, `pnpm --filter cpd-web-client run build:electron`, `ls node_modules/.bin/electron-builder`, `cpd desktop`, `cpd desktop --status`.
 
 ### 16.1 The Worker Spec
 

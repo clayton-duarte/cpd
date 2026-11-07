@@ -70,19 +70,16 @@ it("shows job needs", () => {
   m.unmount();
 });
 
-describe("PlanView with a flowchart", () => {
+describe("PlanView empty state", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
   });
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it("PlanView renders the flowchart canvas when plan is null", () => {
+  it("the empty state shows the select-a-lead text and not the flow canvas", () => {
     const m = mount(<PlanView plan={null} onAction={vi.fn()} />);
-    const canvas = m.container.querySelector('[data-part="flow-canvas"]');
-    expect(canvas).not.toBeNull();
-    expect(canvas?.querySelectorAll("li[data-step]").length).toBe(20);
-    expect(m.container.querySelector("[data-empty]")).toBeNull();
-    expect(m.container.querySelector('section[aria-label^="Plan "]')).toBeNull();
+    expect(m.container.textContent).toContain("Select a lead to see plans");
+    expect(m.container.querySelector('[data-part="flow-canvas"]')).toBeNull();
     m.unmount();
   });
 
