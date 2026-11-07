@@ -1,10 +1,10 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # ADR 0015: The WebUI data transport
 
-**Proposed, not decided.** The audit of the whole WebUI data path was the deliverable of Plan `webui-data` (air-d30); this ADR is the target design it asked for. No option below is Accepted and no final decision is recorded: the User picks the option at the ADR review after this lands. What stands regardless of the pick is the audit (below), the comparison criteria, and the separate frame-timeout/seq-watchdog requirement (Failure modes, point 2).
+**Accepted, 2026-11-07 (air-d45, air-d46).** The audit of the whole WebUI data path was the deliverable of Plan `webui-data` (air-d30); this ADR is the target design it asked for. At the ADR review the User picked **option B** (air-d45): one WebSocket transport shared by the Electron desktop and the browser build, with a ping/pong heartbeat — plus the serve-stream watchdog on top (air-d46, §The plan). The audit (below) and the comparison criteria stand as the recorded baseline; the frame-timeout/seq-watchdog requirement (Failure modes, point 2) is decided with them.
 
 ## Context
 
@@ -58,23 +58,41 @@ Criteria per air-d30/air-d35: correctness (no lost or stale updates, ordering, r
 | remote R2 (ssh children + forwarded socket) | works | works | works |
 | remote R3 (backend remote, thin client over `ssh -L`) | **impossible**: Electron IPC is a channel between main and its own renderer (channels.ts:12-13; <https://www.electronjs.org/docs/latest/tutorial/ipc>), not a network endpoint | **the intended fit**: the WS server runs on the remote machine, the desktop connects to `ws://127.0.0.1:<port>` through `ssh -L` (<https://man.openbsd.org/ssh#L>) | works: plain HTTP on a port forwards the same way |
 
-## Recommendation (proposed)
+## Decision (accepted)
 
-**Option B: one WebSocket transport for both the desktop and the browser build, with a ping/pong heartbeat.** Reasons:
+**Option B: one WebSocket transport for both the desktop and the browser build, with a ping/pong heartbeat** (air-d45, accepted 2026-11-07). Reasons:
 
 1. **It closes the reconnect hole with code that already exists.** The renderer reconnects on a `"closed"` status with backoff and re-subscribes for a fresh snapshot (connection.ts:205-224; hub/connection.ts:69-80); the desktop transport never emits `"closed"` (transport.ts:18-25), so that machinery is dead today. A WebSocket emits `close` for free.
 2. **It removes the duplicated client transports** (transport.ts:5-38 and main.tsx:8-39 implement the same `Transport` semantics twice) and is the least bespoke option that reaches R3 (option C reaches R3 too, with a two-channel client); it also keeps R2 open (air-d35).
 3. **It gives the heartbeat a natural hook**, so a stalled transport is seen, never silent — the failure-visibility criterion the current path fails.
 
-The cost is one pinned dependency and a server process the desktop did not have; the protocol seam and every mock pattern survive unchanged. If R3 were dropped and only R2 wanted, option A is the smaller change — air-d35 keeps R3 on the table, so B is the proposal.
+The cost is one pinned dependency and a server process the desktop did not have; the protocol seam and every mock pattern survive unchanged. If R3 were dropped and only R2 wanted, option A would be the smaller change — air-d35 keeps R3 on the table, so B is the decision.
 
-**A separate frame-timeout/seq-watchdog is needed on top of any transport.** No transport change fixes a serve child that stays alive and stops emitting: the heartbeat sees the socket, not the pipe. The web side must watch the stream boundary itself — a frame timeout, or a check that the snapshot `seq` it already parses (stream.ts:57,60) advances — and must not gate on `ready()`, because while the stream is ready both existing resync paths are disabled (the safety tick skips pane refresh, events.ts:147, and the follow fallback early-returns, events.ts:157). This watchdog is a later Job in this Plan, not part of the transport pick.
+**A separate frame-timeout/seq-watchdog is needed on top of any transport.** No transport change fixes a serve child that stays alive and stops emitting: the heartbeat sees the socket, not the pipe. The web side must watch the stream boundary itself — a frame timeout, or a check that the snapshot `seq` it already parses (stream.ts:57,60) advances — and must not gate on `ready()`, because while the stream is ready both existing resync paths are disabled (the safety tick skips pane refresh, events.ts:147, and the follow fallback early-returns, events.ts:157). The watchdog is decided too (air-d46, `web/src/server/cockpit/liveness.ts`, §The plan); its build is a later Job of this Plan, on top of the transport, not instead of one.
+
+## The plan (accepted)
+
+The concrete file plan of the decision (air-d45, air-d46). Repo-relative paths; the build is later Jobs of Plan `webui-data`.
+
+**The transport (air-d45):**
+
+1. **Create `web/src/server/ws.ts`** — one WebSocket server on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the same `newConnection(send)` factory (web/src/server/plugin.ts:157): one hub per accepted socket, JSON text frames both ways over the unchanged wire union (`ClientMessage`, web/src/protocol/wire.ts:6-22, parsed once by `parseClientMessage`, web/src/protocol/wire.ts:193, in `HubConnection.handle`; `ServerMessage`, web/src/protocol/wire.ts:35-61, written by `send`). The Electron main process hosts it on loopback and the dev plugin hosts the same server on its httpServer, replacing the dev-only `server.ws.on("cpd:c2s", …)` route (web/src/server/plugin.ts:370-388). No hand-rolled RFC 6455 framing (<https://www.rfc-editor.org/rfc/rfc6455>); the endpoint, the heartbeat interval and timeout and the reconnect rule are stated in docs/contract.md §5.5.
+2. **Create `web/src/protocol/ws-transport.ts`** — `createWebSocketTransport` over the unchanged `Transport` interface (web/src/protocol/runtime.ts:10-15); `close` and `error` map to `onStatus("closed")`; it carries no reconnect logic, the renderer's backoff owns that. It is the one client transport for the desktop and the browser build alike.
+3. **Heartbeat ping/pong** — the server pings and terminates on a missed pong, so a stalled transport is seen loud, never silent; the terminate surfaces as `close` → `onStatus("closed")`.
+4. **Reconnect and resync need no new code** — socket `close` runs the renderer's existing backoff and re-subscribe (web/src/state/connection.ts:205-224), whose reply is a fresh full `cockpit.snapshot` (web/src/server/hub/connection.ts:69-80). The path is dead today only because `createElectronTransport` never emits `"closed"` (web/src/electron/transport.ts:18-25); the WebSocket's real closed event brings it alive.
+5. **Delete** `web/src/electron/transport.ts` and `web/src/electron/transport.test.ts` (the replaced desktop client transport, web/src/electron/transport.ts:5-38) and `web/src/electron/cockpit-ipc.ts` (the per-sender IPC hub wiring, web/src/electron/cockpit-ipc.ts:23-59).
+6. **Change** `web/src/electron/main.ts` (start and stop the WS server next to the services it already builds, web/src/electron/main.ts:173-190,192), `web/src/electron/webui.tsx` (mount `createWebSocketTransport` instead of `createElectronTransport`, web/src/electron/webui.tsx:18), `web/src/main.tsx` (point the dev entry at the WS endpoint instead of `createHotTransport`, web/src/main.tsx:8-39; the `import.meta.hot` throw goes away, web/src/main.tsx:41-42), `web/src/server/plugin.ts` (the dev server hosts the same WS server), `web/src/electron/channels.ts` (drop `webC2s`/`webS2c`, web/src/electron/channels.ts:12-13, and the bridge fields `sendWeb`/`onWebMessage`, web/src/electron/channels.ts:37-38), `web/src/electron/bridge.ts` (drop the two mappings, web/src/electron/bridge.ts:34-35), `web/src/electron/preload.ts` (expose the bridge without the removed fields, web/src/electron/preload.ts:21) and `web/package.json` (pin `ws` and `@types/ws`).
+7. **Keep** `createCockpitStream` (web/src/server/cockpit/stream.ts:82) and the whole `cpd cockpit serve` pipe behind the seam (air-d31): the stream spawn (web/src/server/plugin.ts:248-275), the cockpit service (web/src/server/cockpit/events.ts:73) and the cursor guard (web/src/server/cockpit/events.ts:97-102) are kept, not replaced.
+
+**The watchdog (air-d46):**
+
+8. **Create `web/src/server/cockpit/liveness.ts`, used by `web/src/server/cockpit/stream.ts` and `web/src/server/cockpit/events.ts`** — a serve child that stays alive but stops emitting is reported loud and resynced (the air-n13/n14/n15 freeze; Failure modes, point 2). It is not gated on `ready()`: while the stream is ready, both existing resync paths are disabled today (the safety tick skips the pane refresh, web/src/server/cockpit/events.ts:147, and the `events follow` fallback early-returns, web/src/server/cockpit/events.ts:157). Its contract is in docs/contract.md §5.5.
 
 ## Consequences
 
 - The renderer keeps depending only on `Transport` (runtime.ts:10-15); whichever option is picked, no store or reducer change is implied by the transport alone.
 - The audit findings above are the acceptance baseline for the build Jobs: after the build, a stalled serve child must be seen (watchdog), a dropped transport must reconnect (whichever transport), and the silent lower-cursor drop (events.ts:99-101) must be surfaced or removed.
-- The build is a later Workflow of Plan `webui-data` (air-d30): nothing here is implemented, no dependency is added, and docs/contract.md §5.5 and docs/commands.md §11a are amended by the build's docs Job, not here.
+- The build is the later Jobs of Plan `webui-data` (air-d30): nothing is implemented yet and no dependency is added. The docs Job amended docs/contract.md §5.5 and web/ELECTRON.md (2026-11-07); docs/commands.md §11a is unchanged, because the serve protocol itself does not change — the pipe stays behind the seam.
 
 ## Rejected alternative
 
