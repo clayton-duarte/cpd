@@ -15,7 +15,7 @@ import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
 import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode } from "./channels.ts";
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
-import { resolveLoginPath } from "./env.ts";
+import { resolveLoginPath, stripSessionEnv } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
@@ -77,6 +77,12 @@ const backend: PtyBackend = {
 };
 
 async function main(): Promise<void> {
+  // The cpd Session that launched the app is not the app: strip its per-session
+  // identity from `process.env` once, before any cpd child is spawned. Every
+  // cpd call of the updater inherits `{ ...process.env }` (update/node.ts), so
+  // this covers them all; CPD_HOME, PATH and every other variable stay
+  // (contract §6.6; web/ELECTRON.md "Boot order").
+  process.env = stripSessionEnv(process.env);
   let win!: BrowserWindow;
   const send = (channel: string, payload: unknown): void => {
     if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
