@@ -335,12 +335,13 @@ On macOS only:
 - Bounce: the Dock bounces once (`informational`) when blocking rises above the previous count and the window is not focused. The first count after startup is the baseline and never bounces. A rise in decisions alone does not bounce, and neither does a fall in blocking, or any rise while the window has focus.
 - Dispose: the shell's `dispose` destroys the Tray. It is idempotent.
 
-## IPC WebUI transport
+## WebSocket transport
 
-The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (renderer to main) and `cpd:s2c` (main to renderer). The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createElectronTransport` in the renderer and `registerWebuiIpc` in the main process.
+The WebUI reaches the cockpit over one WebSocket (ADR 0015, option B, air-d45), shared by the desktop and the browser build. The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createWebSocketTransport` in the renderer (web/src/protocol/ws-transport.ts) and the WS server `web/src/server/ws.ts` in the main process; the `cpd:c2s`/`cpd:s2c` IPC pair, `createElectronTransport` and `registerWebuiIpc` are gone.
 
-- Main process: the first frame from a window creates one hub connection for that window, through `services.newConnection(send)`. `send` writes to `cpd:s2c` unless the window is destroyed. When the window is destroyed its hub is closed and forgotten. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
-- Renderer: `createElectronTransport` has the same semantics as the browser transport (`createHotTransport`): it opens with status `open`, `send` throws before open or after close, and `close` is final.
+- Main process: the server binds `ws://127.0.0.1:<port>/ws` on loopback and creates one hub connection per accepted socket, through `services.newConnection(send)`; `send` writes one JSON text frame to the socket. A closed socket closes its hub. Each frame waits for the cockpit to start, then goes to its hub.
+- Heartbeat: the server pings every socket every 30 s and terminates a socket that does not pong within 10 s, so a stalled transport is seen loud, never silent (docs/contract.md §5.5 "The WebUI transport and the serve-stream watchdog").
+- Renderer: `createWebSocketTransport` has the transport semantics of the `Transport` interface unchanged (web/src/protocol/runtime.ts:10-15): it opens with status `open`, `send` throws before open or after close, and `close` is final. A closed socket is a real `closed` status, so the renderer backs off, reconnects and re-subscribes for a fresh full snapshot (web/src/state/connection.ts:205-224).
 - Both views stay mounted, so a switch is instant and keeps the session state. The WebUI keeps its connection and selection, and the TUI keeps its pty.
 - TUI mode: the terminal is shown, resumed, refitted to its container and focused. Menu shortcuts are ignored, so the keys reach cpd.
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
