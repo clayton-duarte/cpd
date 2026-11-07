@@ -238,6 +238,9 @@ pub struct SendArgs {
     /// What the message unblocks (1–200 characters, one line)
     #[arg(long, value_name = "reason")]
     unblocks: Unblocks,
+    /// The surface the message was submitted from: `tui` or `webui` (Plan ui-origin)
+    #[arg(long, value_name = "origin")]
+    origin: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]

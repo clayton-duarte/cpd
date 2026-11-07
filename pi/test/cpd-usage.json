@@ -1543,6 +1543,7 @@
     "flags": {
       "--file": true,
       "--help": false,
+      "--origin": true,
       "--unblocks": true
     },
     "positionals": {
