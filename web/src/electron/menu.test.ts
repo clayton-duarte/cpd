@@ -18,19 +18,25 @@ test("buildMenuTemplate puts appMenu first on darwin only", () => {
   }
 });
 
-test("buildMenuTemplate View submenu has TUI and WebUI radio items", () => {
-  const items = viewItems(build("tui", "darwin"));
-  expect(items).toHaveLength(2);
-  expect(items[0]).toMatchObject({ label: "TUI", type: "radio" });
-  expect(items[0]?.accelerator).toBeUndefined();
-  expect(items[1]).toMatchObject({ label: "WebUI", type: "radio", accelerator: "CmdOrCtrl+Shift+M" });
+test("View menu has three radio clients with WebUI accelerated", () => {
+  const items = viewItems(build("webui", "linux"));
+  expect(items.map((i) => i.label)).toEqual(["TUI", "WebUI", "WebUI Preview"]);
+  expect(items.map((i) => i.type)).toEqual(["radio", "radio", "radio"]);
+  expect(items.map((i) => i.accelerator)).toEqual([undefined, "CmdOrCtrl+Shift+M", undefined]);
 });
 
 test("buildMenuTemplate checks the radio item of the current mode", () => {
-  const tui = viewItems(build("tui", "linux"));
-  expect([tui[0]?.checked, tui[1]?.checked]).toEqual([true, false]);
-  const webui = viewItems(build("webui", "linux"));
-  expect([webui[0]?.checked, webui[1]?.checked]).toEqual([false, true]);
+  const checked = (mode: UiMode) => viewItems(build(mode, "linux")).map((i) => i.checked);
+  expect(checked("tui")).toEqual([true, false, false]);
+  expect(checked("webui")).toEqual([false, true, false]);
+  expect(checked("webui-preview")).toEqual([false, false, true]);
+});
+
+test("selecting WebUI Preview calls setMode with webui-preview", () => {
+  const calls: UiMode[] = [];
+  const items = viewItems(build("webui", "linux", (m) => calls.push(m)));
+  items[2]?.click?.({}, undefined, {});
+  expect(calls).toEqual(["webui-preview"]);
 });
 
 test("buildMenuTemplate click calls onSelect with the mode", () => {

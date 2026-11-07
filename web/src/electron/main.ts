@@ -15,7 +15,7 @@ import { resolveLoginPath } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
-import { createModeController, modeFilePath } from "./mode.ts";
+import { createModeController } from "./mode.ts";
 import { createPtyTabs, tabCommand } from "./pty-tabs.ts";
 import { resolveSshHosts } from "./ssh-config.ts";
 import type { SshHost } from "./ssh-config.ts";
@@ -113,13 +113,16 @@ async function main(): Promise<void> {
   const initMode = async (_window: unknown): Promise<void> => {
   controller = createModeController({
     fs: {
-      readFile: (file) => fs.readFile(file, "utf8"),
       writeFile: (file, data) => fs.writeFile(file, data),
+      remove: (file) => fs.rm(file),
       mkdir: async (dir) => {
         await fs.mkdir(dir, { recursive: true });
       },
     },
-    file: modeFilePath(cpdHome),
+    legacyFile: path.join(cpdHome, "run", "ui-mode.json"),
+    viewFile: path.join(cpdHome, "run", "ui-view.json"),
+    pid: process.pid,
+    log: (line) => console.log(line),
     menu: {
       setApplicationMenu: (template: MenuTemplate) =>
         Menu.setApplicationMenu(Menu.buildFromTemplate(template)),
@@ -234,6 +237,7 @@ async function main(): Promise<void> {
   let stopUpdate: () => void = () => {};
   app.on("before-quit", () => {
     stopUpdate();
+    controllerRef?.dispose().catch((error: unknown) => console.error(error));
     for (const dispose of disposers) dispose();
     nativeShell.dispose();
   });

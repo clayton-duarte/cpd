@@ -21,7 +21,7 @@ export const CHANNELS = {
 export const UPDATE_BOOTSTRAP_CHANNEL = "update:bootstrap";
 export const UPDATE_STATE_CHANNEL = "update:state";
 
-export type UiMode = "tui" | "webui";
+export type UiMode = "tui" | "webui" | "webui-preview";
 
 export interface PtySize {
   cols: number;
