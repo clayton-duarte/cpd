@@ -110,6 +110,8 @@ mod secret;
 mod secret_grants;
 mod secret_guard;
 mod secret_op;
+mod shaping_cmds;
+mod shaping_listing;
 mod spec;
 mod swr_badge;
 mod swr_cmd;

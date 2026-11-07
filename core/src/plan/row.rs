@@ -10,6 +10,7 @@ use crate::ids::{ContextId, PlanId, SessionId};
 /// A Plan's phase (§3.1).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
+    Shaping,
     Grounding,
     Plan,
     Dispatch,
@@ -18,7 +19,8 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 5] = [
+    pub const ALL: [Phase; 6] = [
+        Phase::Shaping,
         Phase::Grounding,
         Phase::Plan,
         Phase::Dispatch,
@@ -28,6 +30,7 @@ impl Phase {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Phase::Shaping => "shaping",
             Phase::Grounding => "grounding",
             Phase::Plan => "plan",
             Phase::Dispatch => "dispatch",
@@ -50,7 +53,8 @@ pub struct PlanRow {
     pub title: String,
     pub jira: Option<String>,
     pub phase: Phase,
-    pub lead_session: SessionId,
+    /// The Plan's Lead Session; none while the Plan is Lead-less (contract §2.2, air-d19, air-d22).
+    pub lead_session: Option<SessionId>,
     pub created_at: String,
     pub locked_at: Option<String>,
     pub done_at: Option<String>,
@@ -69,7 +73,7 @@ type Raw = (
     String,
     Option<String>,
     String,
-    String,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -114,8 +118,11 @@ impl PlanRow {
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
-            lead_session: SessionId::parse(&lead_session)
-                .map_err(|_| field("lead_session", &lead_session))?,
+            lead_session: lead_session
+                .as_deref()
+                .map(SessionId::parse)
+                .transpose()
+                .map_err(|_| field("lead_session", lead_session.as_deref().unwrap_or("")))?,
             outline: outline
                 .map(|text| Outline::stored(id.as_str(), &text))
                 .transpose()?,

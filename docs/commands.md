@@ -72,7 +72,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Six
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
 | `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the design outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.21.45-070ddee", "protocol": 21, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from) and `dev` when the build was given none, e.g. `0.19.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **21** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `workflow-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `incident-started` and `incident-ended`, hs-d634, 14 until `mcp-attached`, pro-d8, 15 until the adapter runs `session switch-failed` and `session switched` and the `error` Event carries the reporting Session, 16 until `workflow-described`, pro-d94, 17 until `session-model-changed`: the tier-preset switch, the adapter acts on it at the Session's next idle, §14.6, 18 until `context pending`'s plan-level `jobs` field (Plan `explore-view`): the adapter's Manager `Pending work:` digest reads it, §15.7, 21 until the agent key on every display surface: `session show` and `session list` carry `key` and `board take` and `board list` carry `from_name`, both read by the adapter, which also restores a fixed name and handles `key_fixed`, §10.1, §10a, §15.4), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.22.45-070ddee", "protocol": 22, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from) and `dev` when the build was given none, e.g. `0.19.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **23** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `workflow-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `incident-started` and `incident-ended`, hs-d634, 14 until `mcp-attached`, pro-d8, 15 until the adapter runs `session switch-failed` and `session switched` and the `error` Event carries the reporting Session, 16 until `workflow-described`, pro-d94, 17 until `session-model-changed`: the tier-preset switch, the adapter acts on it at the Session's next idle, §14.6, 18 until `context pending`'s plan-level `jobs` field (Plan `explore-view`): the adapter's Manager `Pending work:` digest reads it, §15.7, 21 until the agent key on every display surface: `session show` and `session list` carry `key` and `board take` and `board list` carry `from_name`, both read by the adapter, which also restores a fixed name and handles `key_fixed`, §10.1, §10a, §15.4), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
 Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional, as `tui`) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
 
@@ -124,6 +124,10 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `supersedes_unlinked` | 3 | `context decide` or `context note` whose text names, after `supersedes`, `overrules` or `replaces`, a record in force of the Context that `--supersedes` does not list (§3.5, the prose check); `details: {ids}`, the unlisted ids in text order; nothing is written |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
 | `explore_pending` | 3 | `plan phase plan` (§4.4) while a scout or research Job of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}`, `jobs` the sorted keys of those Jobs; nothing is written (pro-d374) |
+| `shaping_manager_only` | 2 | `plan new --shaping` (§4.1) run by anyone but the Context's live Manager (a Lead, a Worker or the User's cockpit): only a Manager creates a Lead-less shaping Plan (air-d19, air-d22); `details.caller` is the caller's role, or `null` when the caller is the User at a terminal; nothing is written |
+| `plan_has_lead` | 3 | a Manager ran a shaping-Plan command (`job add`, `job list`, `job show`, `job cancel`, `job retry`, `attempt list`, `attempt show`, `attempt read`, `attempt abort` or `answer`; §4.1, §5.1 to §5.4, §6.2, §6.3, §6.5, §8.2) on a Plan that has a Lead (`lead_session` not null): a Manager never runs a Lead's command on it; `details.plan`; nothing is written (air-d19, air-d22) |
+| `plan_other_context` | 2 | a Manager ran one of those commands on a shaping Plan of another Context; `details` `{plan, plan_context, context}`, `plan_context` the Plan's Context and `context` the Manager's; nothing is written (air-d19, air-d22) |
+| `shaping_explore_only` | 2 | `job add` (§5.1) on a shaping Plan (`lead_session` null, phase `shaping` or `done`) with `--kind` other than `scout` or `research`, or with `--workflow`: a shaping Plan holds only explore Jobs; `details` `{plan, kind}` or `{plan, workflow}`; nothing is written (air-d19, air-d22) |
 | `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive`, `session unarchive` or `session resume` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11, §10.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: these commands are the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
@@ -296,7 +300,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
-| `cpd app` (§14.4a) | none | no | no |
+| `cpd desktop` (§14.4a) | none | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -697,7 +701,7 @@ Effects: none. One read transaction, no write, no subprocess (no `git`, no `gh`)
 
 Output: `plans`, every Plan of the Context that is not `done` and not archived, in creation order, each with `id`, `title`, `phase`, `lead_session` and `workflows`: its Workflows that are not `merged` (cancelled ones included), in key order, each with `key`, `repo`, `base`, `status`, `lead_branch`, `pull_request` (`{number, url, state}` as stored by `pr poll`, or null before its pull request is opened), `waiting_on` (hs-d521: blockers of this Workflow, absent when none) and `jobs`: the Workflow's Jobs that are not `cancelled` and not yet on the base, in `seq` order, with status `draft`, `queued`, `running`, `failed`, `merged` or `waiting` (hs-d523: display only, waiting on a Dependency or Workflow that has not started). Here `merged` means on the Lead Branch and not yet on the base (§2.2 Job). Each Job has `key`, `status`, `title`, `touches` and `waiting_on` (hs-d521: the blocker keys, absent when none or status is not `waiting`).
 
-**The plan-level `jobs` array** (Plan `explore-view`). Beside `workflows`, every Plan of the output also carries `jobs`: its explore Jobs (`scout`, `research`; contract §2.2 "Job kinds") that are not `cancelled`, in `seq` order, each with `key`, `kind`, `status`, `tier`, `title`, `touches` and `waiting_on`. `status` is the display status: `waiting` when the Job is not Ready, the same rule as a Workflow Job's (contract §3.2 "Display status: waiting"), else the stored status. `tier` is the Tier the Job is displayed at (contract §3.4a). `touches` is the Job's parsed JSON (`[]` when null). `waiting_on` is present only when non-empty (the explore Dependencies that hold it). A Plan with only explore Jobs and no Workflow is listed like any other Plan, with an empty `workflows`: it is not empty output, and its `jobs` are its content.
+**The plan-level `jobs` array** (Plan `explore-view`). Beside `workflows`, every Plan of the output also carries `jobs`: its explore Jobs (`scout`, `research`; contract §2.2 "Job kinds") that are not `cancelled`, in `seq` order, each with `key`, `kind`, `status`, `tier`, `title`, `touches` and `waiting_on`. `status` is the display status: `waiting` when the Job is not Ready, the same rule as a Workflow Job's (contract §3.2 "Display status: waiting"), else the stored status. `tier` is the Tier the Job is displayed at (contract §3.4a). `touches` is the Job's parsed JSON (`[]` when null). `waiting_on` is present only when non-empty (the explore Dependencies that hold it). A Plan with only explore Jobs and no Workflow is listed like any other Plan, with an empty `workflows`: it is not empty output, and its `jobs` are its content. A **Lead-less** Plan (`lead_session` null, phase `shaping`; air-d19, air-d22) is listed the same way: `lead_session` is `null`, `workflows` is `[]`, and its explore Jobs are its `jobs`. A Lead-less Plan in `done` is excluded like any done Plan.
 
 ```json
 {"ok": true, "context": "building-cpd",
@@ -1158,10 +1162,12 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>] [--shaping]
 ```
 
 A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the User's home directory, whatever directory `plan new` runs from (contract §2.2, pro-d343). `--repo` and `--base` are gone: either is `usage` (exit 2). `--name` is gone too: it is `usage` (exit 2). The Lead's name is its agent key, `<context>:<plan>` (contract §2.2 "Agent key").
+
+**`--shaping`** (air-d19, air-d22; A1, A2). The Context's live Manager creates a **Lead-less** Plan: `lead_session` null, phase `shaping`, no Lead Session row, no pane, no first message and no `run/<id>/lead-message.md`. The Manager adds the Plan's explore Jobs and is their subscriber (the paragraph "A Manager on a shaping Plan" below). Only a Manager may run it: a Lead, a Worker or the User's cockpit with `--shaping` is refused `shaping_manager_only` (exit 2). With `--shaping`, `--brief-file`, `--by-user`, `--tier` and `--runner` are refused `usage` (exit 2): a shaping Plan has no Lead to brief, register by-user, tier or run. `plan new` without `--shaping` is unchanged.
 
 | Flag | Meaning |
 |---|---|
@@ -1173,6 +1179,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.11); omit it and the Lead starts with its first message, as today |
 | `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5), checked against the lead range (below). Omitted, the Tier is `lead_tier` (Effects, step 1) |
 | `--runner <pi|durable>` | the new Lead's runner; omitted, `durable` when `experimental.durable_leads` is on, else the config key `lead_runner`, default `pi` (contract §6.19 "The config keys") |
+| `--shaping` | (air-d19, air-d22) create a **Lead-less** shaping Plan, the Context's Manager only (below): no Lead Session, no pane, no first message, phase `shaping`, `lead_session` null. Refused `shaping_manager_only` for any other caller; `--brief-file`, `--by-user`, `--tier` and `--runner` are refused with it (`usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1184,6 +1191,8 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | no Context row with this id, deleted ones included, when no Plan row has this id (a rerun for an existing Plan is `already` or `plan_exists`, as above) | `id_taken` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 | `--runner` is neither `pi` nor `durable` | `usage` | 2 |
+| the caller is not the Context's live Manager with `--shaping` | `shaping_manager_only` | 2 |
+| `--shaping` together with `--brief-file`, `--by-user`, `--tier` or `--runner` | `usage` | 2 |
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name` = `<context>:<plan>`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
@@ -1196,6 +1205,13 @@ Effects, in this order:
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>` and `set -p -t <pane> @cpd_session <session>`, then `@cpd_title` to the Lead's pill (contract §6.1: its dynamic title when it has one, else its key `<context>:<plan>`; the Plan's title is never the pill). One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11). **For a durable Lead** (`runner` `durable`, contract §6.19) this step and its `session-moved` are skipped: no tmux, no pane. The Session is left live and `stopped`, and the engine's hosts step starts its host at the next tick (contract §6.19); the output `lead.pane` and `lead.window` are null.
 5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2). A durable Lead has no pane and no `session run`: its host is the engine's (§6.19).
 
+**With `--shaping`** only step 1 runs, and it differs: one `plans` row (`phase = shaping`, `lead_session` NULL) and one `plan-created` `{title, jira, lead_session: null, forked_from: null, cwd}`; no `sessions` row and no `session-registered`, no Context record, no first message, no tmux and no `session run`. Its output carries `phase` and `lead_session` at the top level, in the shape below:
+
+```json
+{"ok": true, "plan": {"id": "pay-4522", "context": "payments", "title": "Retry failed payouts", "jira": null, "phase": "shaping", "lead_session": null, "workflows": []},
+ "phase": "shaping", "lead_session": null}
+```
+
 When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd tui builds main later.
 
 ```json
@@ -1206,13 +1222,20 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
 
 Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The cwd is not a flag and is never the caller's: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
+**A Manager on a shaping Plan** (air-d19, air-d22; A3). A **shaping Plan** is a Lead-less Plan: `lead_session` null, phase `shaping`, or `done` once a Lead-less shaping Plan has settled. On a shaping Plan of its own Context, a Manager names the Plan with `--plan <id>` (it has no `CPD_PLAN`) and runs `job add` (explore kinds only), `job list`, `job show`, `job cancel`, `job retry`, `attempt list`, `attempt show`, `attempt read`, `attempt abort` and `answer`. Each is refused:
+- `plan_has_lead` (exit 3): the Plan has a Lead (`lead_session` not null); a Manager never runs a Lead's command on it;
+- `plan_other_context` (exit 2): the Plan belongs to another Context;
+- `shaping_explore_only` (exit 2): `job add` on a shaping Plan with `--kind` other than `scout` or `research`, or with `--workflow`, since a shaping Plan holds only explore Jobs.
+
+`job add` of an explore Job on a `done` Lead-less Plan reopens it to `shaping`, as an explore Job on a Lead's `done` Plan reopens it to `plan`. The Lead-only commands stay Lead-only and are refused for a Manager as they are today: `plan phase`, `plan lock`, `plan review`, `plan outline`, `plan render`, `plan lint` and every `workflow` command name no Manager right.
+
 ### 4.2 `plan list`
 
 ```
 cpd plan list [--context <id>] [--phase <phase>]
 ```
 
-`--phase` is one of §3.1's phases. Archived Plans are listed, with `archived_at` (null, or a time). Each Plan carries `reviewed_pr` (contract §2.2 Plan: null, or the pull request a review Plan reviews, `{repo, number, url, title, state}`); this list is the cockpit's `plan` pane (contract §5.5). Effects: none. Each Plan carries `open_pr_checks`, `{passed, pending, failed}`: how many of its Workflows' pull requests are `open` with those `checks` (swr-github §10 (c)). Each Plan lists its Workflows (R34) in key order, `cancelled` ones included, with `key`, `repo`, `status`, `pr` (`{number, url, opened_at}` or null) and `pull_request` (hs-d96: its row of contract §2.2 "Pull request", `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`, or null before `pr open`). The Workflows of a list carry no `posted` (pro-d77): `pr.posted` is `plan show` only (§4.3).
+`--phase` is one of §3.1's phases. Archived Plans are listed, with `archived_at` (null, or a time). Each Plan carries `reviewed_pr` (contract §2.2 Plan: null, or the pull request a review Plan reviews, `{repo, number, url, title, state}`); this list is the cockpit's `plan` pane (contract §5.5). Effects: none. Each Plan carries `open_pr_checks`, `{passed, pending, failed}`: how many of its Workflows' pull requests are `open` with those `checks` (swr-github §10 (c)). Each Plan lists its Workflows (R34) in key order, `cancelled` ones included, with `key`, `repo`, `status`, `pr` (`{number, url, opened_at}` or null) and `pull_request` (hs-d96: its row of contract §2.2 "Pull request", `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`, or null before `pr open`). The Workflows of a list carry no `posted` (pro-d77): `pr.posted` is `plan show` only (§4.3). A **Lead-less** Plan (`lead_session` null, phase `shaping`; air-d19, air-d22) is listed with phase `"shaping"`, `lead_session` `null` and `workflows` `[]`; its explore Jobs are not part of this output (`plan show` and `context pending` carry them).
 
 ```json
 {"ok": true, "plans": [{"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null,
@@ -1232,7 +1255,7 @@ cpd plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2), `outline` included (hs-d502: the outline object of §4.13, parsed from `plans.outline`, or `null`), and `reviewed_pr` (contract §2.2 Plan: null, or `{repo, number, url, title, state}`, the `state` read from the effective row of `swr::github::effective_pr` (swr-github §6), not live, `null` when there is none); `workflows` (R34, A14), every Workflow of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 Workflow: `key`, `repo`, `base`, `base_workflow` (the base Workflow as `<plan>/<key>`, derived from `base`, or null: hs-d324), `jira` (the Workflow's Jira ticket, the key or null: pro-d127, B2), `needs` (Workflow references: a bare key of this Plan, `<plan>/<key>` of another), `status`, `lead_branch`, `lead_worktree`, `pr` (`{number, url, opened_at}`, or null; when non-null it also carries `posted`, a boolean: true iff a `pr_posts` row exists for the Workflow, that is `cpd pr post` has posted it to Slack, pro-d77), `pull_request` (the effective row of `swr::github::effective_pr`, as in §4.2, `mergeable`, `merge_state` and `head_oid` included, and `feedback_open` repeated inside it, or null: swr-github §6 and §10 (c)), `closed_unmerged` (boolean: true iff the closed-unmerged predicate of contract §3.8 holds for the Workflow; in `plan show` only, `plan list`, `pr poll` and `context pending` are unchanged), `feedback_open` (integer: the number of open feedback items in the row's stored list, contract §2.2 "Feedback item"; null when the list is NULL, never read; pro-d68), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `workflow`, `review` and `urgent` among them), `needs` and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2), `outline` included (hs-d502: the outline object of §4.13, parsed from `plans.outline`, or `null`), and `reviewed_pr` (contract §2.2 Plan: null, or `{repo, number, url, title, state}`, the `state` read from the effective row of `swr::github::effective_pr` (swr-github §6), not live, `null` when there is none); `workflows` (R34, A14), every Workflow of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 Workflow: `key`, `repo`, `base`, `base_workflow` (the base Workflow as `<plan>/<key>`, derived from `base`, or null: hs-d324), `jira` (the Workflow's Jira ticket, the key or null: pro-d127, B2), `needs` (Workflow references: a bare key of this Plan, `<plan>/<key>` of another), `status`, `lead_branch`, `lead_worktree`, `pr` (`{number, url, opened_at}`, or null; when non-null it also carries `posted`, a boolean: true iff a `pr_posts` row exists for the Workflow, that is `cpd pr post` has posted it to Slack, pro-d77), `pull_request` (the effective row of `swr::github::effective_pr`, as in §4.2, `mergeable`, `merge_state` and `head_oid` included, and `feedback_open` repeated inside it, or null: swr-github §6 and §10 (c)), `closed_unmerged` (boolean: true iff the closed-unmerged predicate of contract §3.8 holds for the Workflow; in `plan show` only, `plan list`, `pr poll` and `context pending` are unchanged), `feedback_open` (integer: the number of open feedback items in the row's stored list, contract §2.2 "Feedback item"; null when the list is NULL, never read; pro-d68), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `workflow`, `review` and `urgent` among them), `needs` and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`. A **Lead-less** Plan (`lead_session` null, phase `shaping`, or `done` after a Lead-less `shaping` Plan settled; air-d19, air-d22) has `lead_session` `null` and no Lead in `workflows` (there is none); its explore Jobs are in the top-level `jobs` array with `workflow` `null`.
 
 ```json
 {"ok": true,
@@ -1845,9 +1868,9 @@ Effects: the Job's write as above; for an explore Job added in phase `dispatch`,
 
 ### Explore Jobs (`scout`, `research`)
 
-Explore Jobs (Plan `explore-roles`, R1-R9; contract §2.2 "Explore Jobs") answer one question from this machine, or also from outside it for `research` and leave one Markdown artefact and a bounded summary. Only a Lead adds one. Together they are the explore kinds; a Job of one is an explore Job.
+Explore Jobs (Plan `explore-roles`, R1-R9; contract §2.2 "Explore Jobs") answer one question from this machine, or also from outside it for `research` and leave one Markdown artefact and a bounded summary. Only a Lead adds one, or a Manager on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22). Together they are the explore kinds; a Job of one is an explore Job.
 
-- **Belongs to the Plan.** No `--workflow` (`explore_workflow_forbidden`); `workflow_required` is not raised, also when the Plan has two or more Workflows. The Job's `workflow` is null (`plan show`, `job show`).
+- **Belongs to the Plan.** No `--workflow` (`explore_workflow_forbidden`; for a Manager on a shaping Plan the same flag is `shaping_explore_only`, §1.3); `workflow_required` is not raised, also when the Plan has two or more Workflows. The Job's `workflow` is null (`plan show`, `job show`).
 - **No draft, no review, no lock.** The Job is `queued` at once, with its Locked-Job fingerprint, in phase `grounding`, `plan`, `dispatch`, `deploy` or `done`; `--draft` is `explore_no_draft`. In phase `dispatch`, `deploy` or `done` the accepted add moves the Plan back to `plan` (decision pro-d429, which supersedes clause (1) of pro-d407; contract §3.1): in the same transaction, before `job-added`, `plan-phase` `{from, to: "plan"}` is appended, `done_at` is cleared when it was `done`, and `locked_at` is kept. In phase `grounding` or `plan` the add changes no phase. The Plan stays in `plan` until its Lead moves it on (`plan lock`, an approved batch of drafts or `workflow add`, §4.7, §4.8, §9.4). A refused add leaves the Plan where it was, and a rerun of an add already made (`already`) appends no second `plan-phase`. It is in no plan fingerprint and invisible to `plan review` and `plan lock` (§4.6, §4.8): adding one never invalidates an approved review.
 - **The Spec is four fields**: `goal` (the one question), `context` (where to look and what a good answer contains; it may name absolute machine paths, the repo-relative rule is waived for these kinds), `acceptance` (what the file must answer and cite) and `out_of_scope`, all required. `touches`, `tests`, `test_files` and `resources` are `spec_invalid`. cpd derives and stores `touches` = `["run/<plan>/explore/<job-key>.md"]`, the artefact, a path relative to `$CPD_HOME`; the `touches_missing` check does not run for it.
 - **Tier**: `scout` letter `H`, `research` letter `S`, effort ≥ 1 or `X`, up to the worker ceiling (the ladder climbs to the next valid effort inside the letter, contract §9 'Next rung'; after the top rung a `no_submit` fails the Job). A `crashed` or `merge_conflict` there is retried at the same Tier under the cap; it never leaves its letter (`job retry` and §9 as for any Job).
@@ -1916,6 +1939,8 @@ The Event is `job-edited` in both cases. Idempotent: yes; when no value changes 
 cpd job cancel <key> --reason <text> [--plan <id>]
 ```
 
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+
 | Precondition | Code | Exit |
 |---|---|---|
 | the Job is not `merged` | `job_merged` | 3 |
@@ -1939,6 +1964,8 @@ Idempotent: yes; a `cancelled` Job, or one with a request already recorded, retu
 ```
 cpd job retry <key> --tier <T> [--plan <id>]
 ```
+
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1990,6 +2017,8 @@ Idempotent: no. A second call finds the Job `running` and is refused `job_not_re
 cpd job list [--status <status>] [--plan <id>]
 ```
 
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+
 `--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean) and `kind`. Effects: none.
 
 ```json
@@ -2001,6 +2030,8 @@ cpd job list [--status <status>] [--plan <id>]
 ```
 cpd job show <key> [--plan <id>]
 ```
+
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
 Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by E3 (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`, `actual_files` and `footprint`, the values `attempt show` prints, §6.3) and its Escalations (cpd 1 §11, kept). It also has `addenda`, the addenda of `job addendum` (§5.10), oldest first: `[{"number", "attempt", "session", "created_at", "text"}]`, with `attempt` and `session` null when none was addressed, and `[]` when there are none (contract §3.4 "Addenda").
 
@@ -2197,6 +2228,8 @@ Effects, for an explore Attempt that passes:
 cpd attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+
 A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order. The source is the Worker Session's `runner`:
 - `pi`: the Worker's session file (`sessions.file`). A partial last line of a file being written is skipped.
 - `durable`: the Attempt's store `run/<plan>/durable/<attempt>.sqlite`, the `entries` table. Only the rows whose `record` `kind` is `pi.assistant` are read, in `id` order: each `model[0].content` text block gives an `assistant: …` line and each `toolCall` block a `tool: <name>` line, as for `pi`. The `file` field is the `.sqlite` path. There is no partial-line rule.
@@ -2230,6 +2263,8 @@ Read-only.
 cpd attempt show <attempt> [--plan <id>]
 cpd attempt list [--job <key>] [--active] [--plan <id>]
 ```
+
+A Manager may run these on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
 `show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). Its `attempt` carries `actual_files` (an array of the repo-relative paths the Attempt wrote, or null; contract §2.2, §7.3); it also carries `footprint`: null, or `{class, undeclared, untouched}` derived on read from `actual_files` and the Job's `touches` (contract 7.3 "The footprint"), null for the kinds `open`, `update`, `scout` and `research`, for a Job with no Spec and for a null `actual_files`; `list` does not. The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). An Attempt ended `aborted` (hs-a8, `attempt abort`, §6.5, contract §3.4) has `outcome` `failed` and `cause` `aborted` in both `show` and `list`. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
@@ -2268,6 +2303,8 @@ Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt":
 ```
 cpd attempt abort <attempt> [--plan <id>]
 ```
+
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
 The Lead's abort of a running Attempt (hs-a8, the User, 2026-10-31; contract §3.4 "attempt abort"): the Lead ends a `running` Attempt `failed` / `aborted` in ONE write transaction (contract §3.4). It refuses a Worker that types it (`not_a_lead` exit 3), the same `CPD_ATTEMPT` check as `job approve-tests` (§5.9); the Attempt must be `running` (`attempt_not_running` exit 3). A Worker that needs a stopped Attempt talks to the Lead, or runs `cpd ask`.
 
@@ -2330,6 +2367,8 @@ Idempotent: no. Each call is a new Escalation; ids are never reused (§3.5).
 ```
 cpd answer <escalation> <answer> [--plan <id>]
 ```
+
+A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
 Run by the Lead.
 
@@ -4837,9 +4876,9 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
 6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced, are not protected by a live pin (`pi.pin.<pid>` of a live pid, whose target is a version name; contract §3.7 "The pin") and are older than 60 minutes and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids and the pins of dead or unparseable pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json`, `<share>/pnpm-lock.yaml`, `<share>/pnpm-workspace.yaml` or `<share>/patches`. Prints `installed <bin> and <link>` on stderr.
 7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
-7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd app`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
+7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
    - a. `pnpm --dir <root> install --frozen-lockfile`.
-   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd app` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
+   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
    - c. `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`) is written with `<root>` as its one line, the absolute path, after b succeeded (a temporary file, then a rename).
    - d. When `<preview_dir>/web-state` exists (`<preview_dir>` = `$CPD_PREVIEW_DIR`, else `~/.cache/cpd-preview`), a web preview is on: Electron is left alone and stderr says `cpd install: web preview is on; Electron was not signalled`. Otherwise SIGUSR1 goes to the pid in `<cpd_home>/run/preview-health.json` (field `pid`) when that pid is alive. With no live Electron, nothing is signalled and nothing is started.
 
@@ -4856,21 +4895,21 @@ Every refusal (steps 1 to 4a, nothing replaced), failure (steps 5 and 6) and fai
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
-### 14.4a `app`
+### 14.4a `desktop`
 
 ```
-cpd app
-cpd app --preview [<worktree>]
-cpd app --reload [<worktree>]
-cpd app --off
-cpd app --status
+cpd desktop
+cpd desktop --preview [<worktree>]
+cpd desktop --reload [<worktree>]
+cpd desktop --off
+cpd desktop --status
 ```
 
-The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd app` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
+The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd desktop` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
 
-**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `app_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
+**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
 
-**Plain `cpd app`.** Ensure, then reload or launch:
+**Plain `cpd desktop`.** Ensure, then reload or launch:
 1. **Ensure** (idempotent). `pnpm --dir <root> --filter cpd-web-client run build:electron` runs only when `<root>/web/dist-electron/main.js` is missing (install always builds, §14.4 step 7a). Then, always: when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before the remaining steps; when the binary is present, no extra install command runs. Always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`. These are the steps of the `electron` script of `web/package.json`. The build is bounded at 10 minutes.
 2. **Reload or launch.** The running Electron is the pid in `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`; field `pid`; every Electron launch writes it), when that pid is alive. Alive: SIGUSR1 to it, action `reloaded`. Otherwise: spawn `<root>/web/node_modules/.bin/electron .` with cwd `<root>/web`, in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, without waiting; action `launched`.
 
@@ -4887,13 +4926,13 @@ Output:
 | Error | Exit | When |
 |---|---|---|
 | `usage` | 2 | clap: two of the four flags at once, a `<worktree>` after `--off` or `--status`, an unknown flag |
-| `app_not_installed` | 1 | `app-root` is missing (every form); the message says to run `scripts/install-cpd.sh` |
+| `desktop_not_installed` | 1 | `app-root` is missing (every form); the message says to run `scripts/install-cpd.sh` |
 | `spawn_failed` | 1 | a child could not be started or exited non-zero: `pnpm` or `plutil` (ensure), `sh preview-web.sh` (the preview forms), the Electron launch; `details` is `{argv, exit, stdout, stderr}` as in §21.6, `exit` `null` when it did not start. A refused SIGUSR1: `details` is `{pid, error}` |
 | `tool_timeout` | 5 | the ensure's build passes 10 minutes, or a preview script passes 15 minutes; `details.argv` names the child |
 
 A failed ensure or a failed script exits with its error and runs nothing after it.
 
-Effects: plain `cpd app` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
+Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
 
 Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again; `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
 
@@ -5121,7 +5160,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.2 Start-up and the cursor
 
 At `session_start`, in this order:
-0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (`PROTOCOL` in `pi/lib/event.ts`; 21 today, contract §5.2). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
+0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (`PROTOCOL` in `pi/lib/event.ts`; 23 today, contract §5.2). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
 1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name and `key`. The `key` field must be present, a string or null (§10.2); a `session show` without it is refused as `bad_output` (§15.1 'Errors') and is retried like a failed call. The adapter keeps `key` for §15.4. A failure is delivered as an error message once per error code and the call is retried with the follower's back-off (1 s, doubling to at most 30 s) until it succeeds; the adapter does nothing else until then and `session_shutdown` ends the retries. A refusal that cannot pass (`usage`, `session_required`, `invalid_session_id`, `session_ambiguous`, `session_not_found`, `plan_not_found`, `context_not_found`, `cursor_ahead`) is delivered once and not retried: the adapter stays inactive.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
@@ -6001,7 +6040,7 @@ The same guards apply in the pi adapter (`pi/lib/adapter.ts`), the durable host 
 
 ### 15.28 The electron guard (decision pro-d455)
 
-Decision pro-d455 (User): agents never run the electron binary by hand. The Electron app is `cpd app`'s (§14.4a), which owns its preview, reload, status and stop (`--preview`, `--reload`, `--status`, `--off`). A pi guard refuses a direct run and points there. The guard is a pure function of the command (`pi/lib/electronguard.ts`, like `pi/lib/secretguard.ts`).
+Decision pro-d455 (User): agents never run the electron binary by hand. The Electron app is `cpd desktop`'s (§14.4a), which owns its preview, reload, status and stop (`--preview`, `--reload`, `--status`, `--off`). A pi guard refuses a direct run and points there. The guard is a pure function of the command (`pi/lib/electronguard.ts`, like `pi/lib/secretguard.ts`).
 
 **When.** While a run is active, for every role (Lead, Manager, Worker, side forks), in the three bash-guard places that already call `secretBypass`, in the same order as the secret guard: the `tool_call` handler of `pi/lib/adapter.ts` (next to `secretBypass` and `hostApproveBypass`), `hostVerdict` of `pi/durable-host/guards.ts` and `workerVerdict` of `pi/durable-worker/guards.ts`. Each returns `{block: <reason>}` (the adapter returns `{block: true, reason}`).
 
@@ -6017,7 +6056,7 @@ Decision pro-d455 (User): agents never run the electron binary by hand. The Elec
 **The refusal.** `reasonText(matched: string): string` gives the reason, one line, no newline:
 
 ```
-φ: agents do not run the electron binary; use cpd app (--preview, --reload, --status, --off) (commands.md §15.28); refused: <matched>
+φ: agents do not run the electron binary; use cpd desktop (--preview, --reload, --status, --off) (commands.md §15.28); refused: <matched>
 ```
 
 `<matched>` is the words from the command word through the `electron` word (for (a) and (d), just the command word).
@@ -6034,7 +6073,7 @@ Decision pro-d455 (User): agents never run the electron binary by hand. The Elec
 | `yarn dlx electron` | `yarn dlx electron` |
 | `/Applications/Electron.app/Contents/MacOS/Electron` | `/Applications/Electron.app/Contents/MacOS/Electron` |
 
-Passed: `echo electron`, `grep electron f`, `cat web/electron.ts`, `pnpm run build:electron`, `pnpm --filter cpd-web-client run build:electron`, `ls node_modules/.bin/electron-builder`, `cpd app`, `cpd app --status`.
+Passed: `echo electron`, `grep electron f`, `cat web/electron.ts`, `pnpm run build:electron`, `pnpm --filter cpd-web-client run build:electron`, `ls node_modules/.bin/electron-builder`, `cpd desktop`, `cpd desktop --status`.
 
 ### 16.1 The Worker Spec
 

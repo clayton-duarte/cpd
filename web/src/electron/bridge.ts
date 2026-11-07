@@ -1,5 +1,12 @@
 import { CHANNELS } from "./channels.ts";
-import type { CpdElectronBridge, PtySize, UiMode } from "./channels.ts";
+import type {
+  CpdElectronBridge,
+  PtyDataPayload,
+  PtyExitPayload,
+  PtySize,
+  PtyStatusPayload,
+  UiMode} from "./channels.ts";
+import type { SshHost } from "./ssh-config.ts";
 
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -33,5 +40,15 @@ export function createBridge(ipc: IpcRendererLike): CpdElectronBridge {
     onMode: (cb) => subscribe<UiMode>(CHANNELS.uiMode, cb),
     sendWeb: (raw) => ipc.send(CHANNELS.webC2s, raw),
     onWebMessage: (cb) => subscribe<unknown>(CHANNELS.webS2c, cb),
+    async startTabPty(tabId: string, size: PtySize) {
+      await ipc.invoke(CHANNELS.ptyStart, { tabId, cols: size.cols, rows: size.rows });
+    },
+    writeTabPty: (tabId, data) => ipc.send(CHANNELS.ptyWrite, { tabId, data }),
+    resizeTabPty: (tabId, size) =>
+      ipc.send(CHANNELS.ptyResize, { tabId, cols: size.cols, rows: size.rows }),
+    onTabData: (cb) => subscribe<PtyDataPayload>(CHANNELS.ptyData, cb),
+    onTabExit: (cb) => subscribe<PtyExitPayload>(CHANNELS.ptyExit, cb),
+    onTabStatus: (cb) => subscribe<PtyStatusPayload>(CHANNELS.ptyStatus, cb),
+    listHosts: async () => (await ipc.invoke(CHANNELS.ptyHosts)) as SshHost[],
   };
 }

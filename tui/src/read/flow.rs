@@ -95,7 +95,7 @@ impl NeedsUser {
     fn of(
         visible: &[Item],
         plan: &PlanId,
-        lead: &SessionId,
+        lead: Option<&SessionId>,
         lead_working: bool,
         lead_work: Option<Work>,
         worked_on: Vec<JobKey>,
@@ -106,9 +106,12 @@ impl NeedsUser {
                 .filter(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(plan))
                 .filter_map(|i| i.job.clone())
                 .collect(),
-            lead_dialog: visible
-                .iter()
-                .any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
+            // A Lead-less shaping Plan has no Lead dialog (contract §3.1, air-d19).
+            lead_dialog: lead.is_some_and(|lead| {
+                visible
+                    .iter()
+                    .any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead))
+            }),
             lead_working,
             lead_work,
             worked_on,
@@ -348,9 +351,10 @@ fn boxes(
     now_ms: i64,
 ) -> Result<PlanBoxes, CpdError> {
     {
-        let (context, lead, lead_working, phase, working_pr): (String, String, bool, String, Option<String>) = conn
+        // A Lead-less shaping Plan has no sessions row: the LEFT JOIN leaves its Lead columns null (contract §3.1, air-d19).
+        let (context, lead, lead_working, phase, working_pr): (String, Option<String>, bool, String, Option<String>) = conn
             .query_row(
-                "SELECT p.context, p.lead_session, s.state = 'working', p.phase, s.working_pr FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
+                "SELECT p.context, p.lead_session, COALESCE(s.state = 'working', 0), p.phase, s.working_pr FROM plans p LEFT JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
                 [plan.as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
@@ -370,10 +374,14 @@ fn boxes(
             .into_iter()
             .map(|(_, job)| job)
             .collect(); // a BTreeSet: sorted
+        let lead = lead
+            .as_deref()
+            .map(|lead| id("Session id", lead, SessionId::parse))
+            .transpose()?;
         let needs_user = NeedsUser::of(
             &visible_items(conn, &now)?,
             plan,
-            &id("Session id", &lead, SessionId::parse)?,
+            lead.as_ref(),
             lead_working,
             Some(head.work()),
             worked_on,
@@ -387,7 +395,7 @@ fn boxes(
                 plan,
                 lead_working.then_some(working_pr).flatten().as_deref(),
                 Some(head.work()),
-                &lead,
+                lead.as_ref().map(SessionId::as_str),
                 &jobs,
                 now_ms,
             )?,
@@ -436,28 +444,31 @@ fn workflow_nodes(
     plan: &PlanId,
     working_pr: Option<&str>,
     lead_work: Option<Work>,
-    lead: &str,
+    lead: Option<&str>,
     jobs: &[JobNode],
     now_ms: i64,
 ) -> Result<Vec<WorkflowNode>, CpdError> {
     let mut events = Vec::new();
-    let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
-    for row in stmt.query_map([lead], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, rusqlite::types::Value>(1)?,
-        ))
-    })? {
-        let (at, to) = row?;
-        let rusqlite::types::Value::Text(to) = to else {
-            return Err(bad_row(format!(
-                "A session-state Event of {lead} has no string `to`"
-            )));
-        };
-        events.push((
-            active::parse_ms(&format!("A session-state Event of {lead}"), &at)?,
-            to,
-        ));
+    // A Lead-less shaping Plan has no Lead, so no session-state Events (contract §3.1, air-d19).
+    if let Some(lead) = lead {
+        let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
+        for row in stmt.query_map([lead], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, rusqlite::types::Value>(1)?,
+            ))
+        })? {
+            let (at, to) = row?;
+            let rusqlite::types::Value::Text(to) = to else {
+                return Err(bad_row(format!(
+                    "A session-state Event of {lead} has no string `to`"
+                )));
+            };
+            events.push((
+                active::parse_ms(&format!("A session-state Event of {lead}"), &at)?,
+                to,
+            ));
+        }
     }
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();

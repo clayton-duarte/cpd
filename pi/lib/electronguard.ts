@@ -45,4 +45,4 @@ export function electronBypass(command: string): string | undefined {
 
 /** The rule's reason, one line. */
 export const reasonText = (matched: string): string =>
-  `φ: agents do not run the electron binary; use cpd app (--preview, --reload, --status, --off) (commands.md §15.28); refused: ${matched}`;
+  `φ: agents do not run the electron binary; use cpd desktop (--preview, --reload, --status, --off) (commands.md §15.28); refused: ${matched}`;

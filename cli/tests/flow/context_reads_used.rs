@@ -240,21 +240,21 @@ fn job_add_scans_goal_context_acceptance_and_out_of_scope() {
     let fx = Fx::new();
     job::setup(&fx.env);
     job::plan(&fx.env, "pl", "plan");
+    // The caller is the Plan's Lead (`lead-pl`): a Manager may add a Job only to a Lead-less shaping Plan of its own
+    // Context (commands.md §5.1; air-d19, air-d22), and `job::plan` makes a Plan that has a Lead.
     fx.env.sql(
-        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-           VALUES ('s1', 'manager', 'ctx', 'One', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO context_records (context, id, kind, at, machine, text) VALUES
+        "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES
            ('ctx', 'pro-d1', 'decision', '2026-01-01T00:00:00.000Z', 'pro', 'one'),
            ('ctx', 'pro-d2', 'decision', '2026-01-01T00:00:01.000Z', 'pro', 'two'),
            ('ctx', 'pro-d3', 'decision', '2026-01-01T00:00:02.000Z', 'pro', 'three'),
            ('ctx', 'pro-d4', 'decision', '2026-01-01T00:00:03.000Z', 'pro', 'four'),
            ('ctx', 'pro-d6', 'decision', '2026-01-01T00:00:04.000Z', 'pro', 'six');
          INSERT INTO context_reads (context, record, session, channel, read_at) VALUES
-           ('ctx', 'pro-d1', 's1', 'show', 't'),
-           ('ctx', 'pro-d2', 's1', 'show', 't'),
-           ('ctx', 'pro-d3', 's1', 'show', 't'),
-           ('ctx', 'pro-d4', 's1', 'show', 't'),
-           ('ctx', 'pro-d6', 's1', 'show', 't');",
+           ('ctx', 'pro-d1', 'lead-pl', 'show', 't'),
+           ('ctx', 'pro-d2', 'lead-pl', 'show', 't'),
+           ('ctx', 'pro-d3', 'lead-pl', 'show', 't'),
+           ('ctx', 'pro-d4', 'lead-pl', 'show', 't'),
+           ('ctx', 'pro-d6', 'lead-pl', 'show', 't');",
     );
     // An explore Job has no `touches`, so this is an ordinary Job. pro-d6 is cited in `touches` only; pro-d7 is cited and was never read.
     let spec = json!({
@@ -270,14 +270,14 @@ fn job_add_scans_goal_context_acceptance_and_out_of_scope() {
         &[
             "job", "add", "k", "--title", "Look", "--tier", "S2", "--spec", &file, "--plan", "pl",
         ],
-        &as_session("s1"),
+        &as_session("lead-pl"),
     );
     assert_eq!(run.ok()["ok"], true);
     for id in ["pro-d1", "pro-d2", "pro-d3", "pro-d4"] {
-        assert_eq!(used(&fx, "ctx", id, "s1"), Some(1), "{id}");
+        assert_eq!(used(&fx, "ctx", id, "lead-pl"), Some(1), "{id}");
     }
     assert_eq!(
-        used(&fx, "ctx", "pro-d6", "s1"),
+        used(&fx, "ctx", "pro-d6", "lead-pl"),
         None,
         "touches is not scanned"
     );

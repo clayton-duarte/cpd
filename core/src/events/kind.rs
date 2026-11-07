@@ -408,8 +408,9 @@ mod tests {
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`workflow-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
-    /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`)
-    /// and 23 (the Lead-less `shaping` phase, Plan ctx-explore) and 24 (`session-message`'s optional `data.origin`, Plan ui-origin).
+    /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`),
+    /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase) and 24 (`session-message`'s optional `data.origin`,
+    /// Plan ui-origin).
     #[test]
     fn the_protocol_is_24_with_session_message_origin() {
         assert_eq!(PROTOCOL, 24);

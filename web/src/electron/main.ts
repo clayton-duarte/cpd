@@ -16,6 +16,9 @@ import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController, modeFilePath } from "./mode.ts";
+import { createPtyTabs, tabCommand } from "./pty-tabs.ts";
+import { resolveSshHosts } from "./ssh-config.ts";
+import type { SshHost } from "./ssh-config.ts";
 import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
 import type { MenuTemplate } from "./menu.ts";
 import { nodeExec, nodeFs, nodeSpawnFollow, nodeTimers } from "./update/node.ts";
@@ -45,6 +48,7 @@ async function main(): Promise<void> {
   };
   let env: NodeJS.ProcessEnv = process.env;
   let cpdHome = "";
+  let sshHosts: SshHost[] = [];
   let assets!: ReturnType<typeof resolveAssetPaths>;
   let nativeShell!: ReturnType<typeof setupNativeShell>;
   let controller!: ReturnType<typeof createModeController>;
@@ -66,6 +70,7 @@ async function main(): Promise<void> {
   });
   env = { ...process.env, PATH: loginPath };
   cpdHome = process.env["CPD_HOME"] ?? path.join(os.homedir(), ".cpd");
+  sshHosts = await resolveSshHosts(path.join(os.homedir(), ".ssh", "config"));
 
   assets = resolveAssetPaths({
     packaged: app.isPackaged,
@@ -157,6 +162,17 @@ async function main(): Promise<void> {
       data: (chunk: string) => send(CHANNELS.ptyData, chunk),
       exit: (exitCode: number) => send(CHANNELS.ptyExit, exitCode),
     };
+    const tabs = createPtyTabs({
+      spawn: (file, args, options) => backend.spawn(file, args, options),
+      commandFor: (tabId) => tabCommand(tabId, sshHosts),
+      cwd: os.homedir(),
+      env,
+      data: (tabId, chunk) => send(CHANNELS.ptyData, { tabId, data: chunk }),
+      exit: (tabId, code) => send(CHANNELS.ptyExit, { tabId, code }),
+      status: (tabId, tabStatus, code) =>
+        send(CHANNELS.ptyStatus, code === undefined ? { tabId, status: tabStatus } : { tabId, status: tabStatus, code }),
+    });
+    ipcMain.handle(CHANNELS.ptyHosts, () => sshHosts);
     const wasmPath = createRequire(import.meta.url).resolve("@aurigax-ai/ghostty-web/ghostty-vt.wasm");
     const ipc = registerIpc({
       ipc: ipcMain,
@@ -166,8 +182,10 @@ async function main(): Promise<void> {
       readWasm: async () => new Uint8Array(await fs.readFile(wasmPath)),
       getMode: controller.getMode,
       timers: nodeTimers,
+      tabs,
     });
     disposers.push(() => ipc.dispose());
+    disposers.push(() => ipcMain.removeHandler(CHANNELS.ptyHosts));
   };
 
   const registerWebuiIpcNow = (): void => {

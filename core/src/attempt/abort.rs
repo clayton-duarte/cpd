@@ -45,6 +45,9 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let mut env = Env::open()?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let by = caller(&mut env, &plan)?;
     // The expensive refusals (no Plan, no Attempt, not running) before the write; the write re-reads (ADR-0014).
     let attempt = env.store.read(|conn| decide(conn, &plan, &id))?;
@@ -105,10 +108,11 @@ fn caller(env: &mut Env, plan: &PlanId) -> Result<String, CpdError> {
                 .query_row(
                     "SELECT lead_session FROM plans WHERE id = ?1",
                     [plan.as_str()],
-                    |r| r.get::<_, String>(0),
+                    |r| r.get::<_, Option<String>>(0),
                 )
                 .optional()?)
         })?
+        .flatten()
         .ok_or_else(|| {
             CpdError::new(
                 ErrorCode::SessionRequired,

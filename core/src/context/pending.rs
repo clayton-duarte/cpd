@@ -54,7 +54,7 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

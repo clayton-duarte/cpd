@@ -2,6 +2,7 @@ import { CHANNELS } from "./channels.ts";
 import type { PtySize, UiMode } from "./channels.ts";
 import type { UpdateTimers } from "./update/types.ts";
 import type { PtySession, PtySinks } from "./pty.ts";
+import type { PtyTabs } from "./pty-tabs.ts";
 
 export type IpcListener = (event: unknown, ...args: unknown[]) => unknown;
 export interface IpcMainLike {
@@ -17,9 +18,25 @@ export interface IpcDeps {
   readWasm(): Promise<Uint8Array>;
   getMode(): UiMode;
   timers: UpdateTimers;
+  /** The per-tab registry; when present a `tabId` on a pty payload routes there instead of the singleton. */
+  tabs?: PtyTabs;
 }
 function isSizeValue(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1000;
+}
+function tabIdOf(raw: unknown): string | undefined {
+  if (typeof raw === "object" && raw !== null) {
+    const { tabId } = raw as { tabId?: unknown };
+    if (typeof tabId === "string" && tabId !== "") return tabId;
+  }
+  return undefined;
+}
+function parsePtyTabWrite(raw: unknown): string {
+  if (typeof raw === "object" && raw !== null) {
+    const { data } = raw as { data?: unknown };
+    if (typeof data === "string") return data;
+  }
+  throw new Error("invalid pty write");
 }
 export function parsePtySize(raw: unknown): PtySize {
   if (typeof raw === "object" && raw !== null) {
@@ -50,6 +67,11 @@ export function registerIpc(deps: IpcDeps): { dispose(): void } {
   };
   const start: IpcListener = (_event, payload) => {
     const size = parsePtySize(payload);
+    const tabId = tabIdOf(payload);
+    if (tabId !== undefined && deps.tabs) {
+      deps.tabs.start(tabId, size);
+      return undefined;
+    }
     if (session) {
       const live = session;
       live.resize({ cols: size.cols - 1, rows: size.rows });
@@ -58,12 +80,20 @@ export function registerIpc(deps: IpcDeps): { dispose(): void } {
     return undefined;
   };
   const write: IpcListener = (_event, payload) => {
-    const data = parsePtyWrite(payload);
-    need().write(data);
+    const tabId = tabIdOf(payload);
+    if (tabId !== undefined && deps.tabs) {
+      deps.tabs.write(tabId, parsePtyTabWrite(payload));
+      return;
+    }
+    need().write(parsePtyWrite(payload));
   };
   const resize: IpcListener = (_event, payload) => {
-    const size = parsePtySize(payload);
-    need().resize(size);
+    const tabId = tabIdOf(payload);
+    if (tabId !== undefined && deps.tabs) {
+      deps.tabs.resize(tabId, parsePtySize(payload));
+      return;
+    }
+    need().resize(parsePtySize(payload));
   };
   const getMode: IpcListener = () => deps.getMode();
   const wasm: IpcListener = () => deps.readWasm();
@@ -81,6 +111,7 @@ export function registerIpc(deps: IpcDeps): { dispose(): void } {
       ipc.removeListener(CHANNELS.ptyResize, resize);
       session?.kill();
       session = undefined;
+      deps.tabs?.dispose();
     },
   };
 }

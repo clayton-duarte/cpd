@@ -46,7 +46,7 @@ The curator at work: the distiller runs once per batch of uncurated records, and
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
-One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
+One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. A Plan may be **Lead-less** in the phase `shaping`: its Manager creates it and explores through its explore Jobs before any Lead exists, with a null `lead_session` (contract §3.1). Otherwise its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
 _Avoid_: project; task, run (as a noun)
 
 **Workflow** (entity, pro-d136, pro-d138):
@@ -326,6 +326,10 @@ _Avoid_: notification, alert, task (as a word for an item)
 **cpd desktop** (entity, air-d10):
 The Electron app in web/, the cockpit's desktop client (TUI and WebUI views); the name 'cpd app' is reserved for a possible future phone app.
 _Avoid_: cpd app, Electron app
+
+**Tab** (entity, air-d33):
+A clickable terminal surface in cpd desktop: the local tab, or one remote tab per ssh host (a `Host` block of `~/.ssh/config` with an explicit `HostName`). The local tab runs `cpd tui --attach`; a remote tab runs `ssh -t <alias> cpd tui --attach`. The tab bar shows the local tab plus every remote tab in every view mode. Not a **Session** and not a tmux pane.
+_Avoid_: pane, window, session
 
 **Cockpit** (entity, pro-d145):
 The User's interface: one tmux window with global side bars and a centre bound to one Plan (the plan view above, the Lead's chat below). Its three columns are the three stages, read as past, present and future: Context, Plan and the third column (Dispatch; its title in the code still differs until the rename lands). tmux hosts the panes, ratatui draws the views.

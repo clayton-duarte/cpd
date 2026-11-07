@@ -13,6 +13,9 @@ use crate::plan::jobs;
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let listed = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
@@ -51,6 +54,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let home = env.home.clone();
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let concurrency = env.config.concurrency;
     let (job, needed_by, attempts, needs, waiting_for, summary, addenda) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;

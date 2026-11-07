@@ -128,8 +128,11 @@ pub(crate) fn teardown_aborted(
         &attempt.id,
     );
     let removed = match runner {
+        // An explore Attempt has no worktree and no branch to remove (A9, explore variant; contract §3.4 "An explore
+        // Job's Attempt"): its Worktree is the explore directory, which stays.
         crate::config::WorkerRunner::Pi
-            if !crate::git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) =>
+            if !crate::plan::jobs::is_explore(&attempt.kind)
+                && !crate::git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) =>
         {
             crate::git::remove_merged_attempt(
                 &attempt.lead_worktree,

@@ -28,7 +28,7 @@ pub(crate) fn list_in(env: &mut Env) -> Result<Output, CpdError> {
             let plans = stmt
                 .query_map([&row.id], |r| {
                     Ok(json!({"id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                              "phase": r.get::<_, String>(2)?, "lead_session": r.get::<_, String>(3)?,
+                              "phase": r.get::<_, String>(2)?, "lead_session": r.get::<_, Option<String>>(3)?,
                               "archived_at": r.get::<_, Option<String>>(4)?}))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;

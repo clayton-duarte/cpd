@@ -17,6 +17,9 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
     let attempt = id.attempt().clone();
     let job: JobKey = attempt.job().clone();
     let mut env = Env::open()?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
 
     let answered_at = env.store.write(COMMAND, |tx| {
         let status: String = tx

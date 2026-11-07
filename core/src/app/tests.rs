@@ -1,4 +1,4 @@
-//! `core::app` (docs/implementing.md "`cpd app`", commands.md §14.4a), in-process on `Fakes`: the runner answers `pnpm`,
+//! `core::app` (docs/implementing.md "`cpd desktop`", commands.md §14.4a), in-process on `Fakes`: the runner answers `pnpm`,
 //! `plutil` and `sh`, `FakeSpawn` records the launches and signals, `HOME` and `CPD_HOME` are directories of a temp dir.
 //! No real pnpm, plutil, Electron or signal, and no sleep.
 
@@ -11,7 +11,6 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use super::{App, Electron, LaunchAction, Preview, ensure, launch, preview, read_root, status};
-use crate::error::ErrorCode;
 use crate::host::runner::{Call, Handler, Reply};
 use crate::host::spawn::{Pid, Signal};
 use crate::ports::Fakes;
@@ -322,10 +321,10 @@ fn app_status_reports_preview_and_electron_pid() {
 }
 
 #[test]
-fn app_without_root_file_is_refused_app_not_installed() {
+fn desktop_without_root_file_is_refused_desktop_not_installed() {
     let rig = Rig::new();
     let err = read_root(&rig.app.home).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::AppNotInstalled);
+    assert_eq!(err.code().as_str(), "desktop_not_installed");
     assert!(
         err.message().contains("scripts/install-cpd.sh"),
         "{}",

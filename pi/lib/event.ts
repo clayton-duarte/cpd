@@ -4,7 +4,7 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`, 22 is `workflow-reopened`, 23 is the Lead-less `shaping` phase (Plan ctx-explore), 24 is `session-message`'s optional `data.origin`.
+ * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`, 22 is `workflow-reopened`, 23 is the Lead-less `shaping` phase: `plans.lead_session` may be null and a Plan's phase may be `shaping`, which `plan show`, `plan list` and `context pending` carry, 24 is `session-message`'s optional `data.origin`.
  */
 export const PROTOCOL = 24;
 

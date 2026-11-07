@@ -692,7 +692,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
         events::append(tx, scoped(event, &item))?;
         crate::swr::source::slack::react_in(tx, &channel, &ts_raw, "eyes")?;
         // A live codereview Plan of this PR is reused (pro-d416 A5): its Lead re-reviews, no second Plan is spawned.
-        let existing: Option<(String, String)> = tx
+        let existing: Option<(String, Option<String>)> = tx
             .query_row(
                 "SELECT id, lead_session FROM plans WHERE context = 'codereview' AND archived_at IS NULL
                    AND deleted_at IS NULL AND phase = 'grounding' AND pr_subject = ?1
@@ -701,7 +701,8 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((plan, lead)) = existing {
+        // A Lead-less codereview Plan is not reused: there is no Lead to re-review (contract §3.1, air-d19).
+        if let Some((plan, Some(lead))) = existing {
             tx.execute(
                 "UPDATE inbox_items SET head_oid = ?2 WHERE id = ?1",
                 params![item.id, head_oid],

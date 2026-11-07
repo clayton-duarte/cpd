@@ -74,7 +74,7 @@ fn plan_row(outline: Option<Outline>) -> PlanRow {
         title: "Title".into(),
         jira: None,
         phase: Phase::Plan,
-        lead_session: SessionId::parse("s1").unwrap(),
+        lead_session: Some(SessionId::parse("s1").unwrap()),
         created_at: "t".into(),
         locked_at: None,
         done_at: None,

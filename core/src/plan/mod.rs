@@ -61,6 +61,7 @@ mod replan_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
+pub(crate) mod shaping;
 pub mod shared;
 #[cfg(test)]
 mod shared_tests;
@@ -150,6 +151,9 @@ pub struct NewArgs {
     /// The new Lead's runner; default the config key `lead_runner`
     #[arg(long, value_name = "pi|durable")]
     runner: Option<WorkerRunner>,
+    /// The Context's Manager creates a Lead-less shaping Plan (air-d19, air-d22)
+    #[arg(long)]
+    shaping: bool,
 }
 
 /// Filters only: neither falls back to `CPD_PLAN`, so the TUI lists every Plan.
