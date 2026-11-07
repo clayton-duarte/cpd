@@ -292,7 +292,7 @@ test("a failed Plan Events read fails the whole message: nothing added, the curs
 const pjob = (n: number, status: string, tier = "H2"): PendingJob => ({ key: `job-${n}`, kind: "scout", status, tier, title: `Title ${n}` });
 const prjob = (n: number, status: string): PendingPrJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
 const ppr = (jobs: PendingPrJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });
-const pplan = (id: string, workflows: ReturnType<typeof ppr>[], phase = "dispatch", jobs: PendingJob[] = []): PendingPlan => ({ id, phase, workflows, jobs });
+const pplan = (id: string, workflows: ReturnType<typeof ppr>[], phase = "dispatch", jobs: PendingJob[] = []): PendingPlan => ({ id, phase, leadSession: null, workflows, jobs });
 /** What `cpd context pending` prints for the same Plans (the fields the digest does not use are there too). */
 const pendingJson = (plans: PendingPlan[]) => ({
   ok: true,
