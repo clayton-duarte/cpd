@@ -4,9 +4,9 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`, 22 is `workflow-reopened`, 23 is the Lead-less `shaping` phase: `plans.lead_session` may be null and a Plan's phase may be `shaping`, which `plan show`, `plan list` and `context pending` carry.
+ * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`, 22 is `workflow-reopened`, 23 is the Lead-less `shaping` phase: `plans.lead_session` may be null and a Plan's phase may be `shaping`, which `plan show`, `plan list` and `context pending` carry, 24 is `session-message`'s optional `data.origin`.
  */
-export const PROTOCOL = 23;
+export const PROTOCOL = 24;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
@@ -32,7 +32,7 @@ type Needed = {
   "plan-review": { review: string; status: string };
   "session-renamed": { name: string };
   "attempt-nudge": { prompt: string };
-  "session-message": { text: string; from: string | null };
+  "session-message": { text: string; from: string | null; origin?: "tui" | "webui" };
   "mcp-attached": { name: string; server: Record<string, unknown> };
 };
 
@@ -94,6 +94,8 @@ export function parseLine(text: string): Line {
   for (const f of (NEEDED as Partial<Record<string, readonly string[]>>)[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
   if (kind === "mcp-attached" && !isObject(json.data.server)) return bad("mcp-attached: `data.server` is not an object");
   if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
+  // An absent origin is no key; a present one is exactly `tui` or `webui` (null included is refused), contract §5.2.
+  if (kind === "session-message" && "origin" in json.data && json.data.origin !== "tui" && json.data.origin !== "webui") return bad("session-message: `data.origin` is not tui|webui");
   return { type: "event", event: json as unknown as CpdEvent };
 }
 

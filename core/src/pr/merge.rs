@@ -97,7 +97,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", e.state.as_str())
         .with("merge_state", e.row.merge_state.as_str()));
     }
-    refuse_unless_required_passed(&home, &repo, number, e.detail.as_ref())?;
+    refuse_unless_required_passed(&home, &repo, number, &e.row.checks, e.detail.as_ref())?;
     let method = match merge_method(&mut store, &repo)? {
         Some(Ok(method)) => method,
         Some(Err(methods)) => {
@@ -147,16 +147,23 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
     )
 }
 
-/// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head,
-/// read from the cached detail of the pull request.
+/// `required_check_not_passed` when the persisted required-check verdict of the pull request (`pull_requests.checks`, the
+/// same record the Inbox pr-ready readiness reads) is not `passed`. The names of the refusal are the missing, pending and
+/// failed ones `checks_of_detail` reads from the cached detail; the detail never overrides a stored `passed` verdict
+/// (air-d48), so a cache that lags the poll cannot refuse a ready pull request.
 fn refuse_unless_required_passed(
     home: &CpdHome,
     repo: &str,
     number: i64,
+    verdict: &str,
     detail: Option<&serde_json::Value>,
 ) -> Result<(), CpdError> {
     let required = poll::repo_required(home, repo)?;
     if required.is_empty() {
+        return Ok(());
+    }
+    // The poll's live read already evaluated the required checks: a `passed` verdict proceeds, whatever the cache holds.
+    if verdict == "passed" {
         return Ok(());
     }
     let checks = detail.map(checks_of_detail).unwrap_or_default();
@@ -173,9 +180,6 @@ fn refuse_unless_required_passed(
         named(Required::Pending),
         named(Required::Failed),
     );
-    if missing.is_empty() && pending.is_empty() && failed.is_empty() {
-        return Ok(());
-    }
     Err(CpdError::new(
         ErrorCode::RequiredCheckNotPassed,
         format!("{repo}#{number} has required checks that have not passed on its head (missing: {missing:?}, pending: {pending:?}, failed: {failed:?})."),

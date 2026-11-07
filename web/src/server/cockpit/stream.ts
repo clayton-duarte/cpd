@@ -1,6 +1,7 @@
 import { WebError } from "../../protocol/domain.ts";
 import type { CpdEvent } from "./events.ts";
 import { parseEventLine } from "./events.ts";
+import { createStreamWatchdog } from "./liveness.ts";
 
 export interface StreamChild {
   write(line: string): void;
@@ -94,6 +95,27 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
   let wait: { dispose(): void } | null = null;
   let pending = new Map<string, Pending>();
 
+  // D3 (air-d46): the serve child is watched for a live-but-silent stall, whatever `ready()` says — a child that
+  // never says `hello` is a stall. The probe writes one `refresh` on the child's stdin; a stall is raised loud on
+  // the error path (the renderer's cockpit.error toast), resynced, and the child restarted with the existing backoff
+  // if still silent past the second deadline.
+  const requestRefresh = (): void => {
+    try { child?.write(`${JSON.stringify({ t: "refresh" })}\n`); } catch { /* the child is gone; its exit follows */ }
+  };
+  const watchdog = createStreamWatchdog({
+    scheduler: deps.scheduler,
+    probe: requestRefresh,
+    resync: () => {
+      reported = true; // the stall toast below is the one loud report; the restart must not repeat it
+      fail(new WebError("cpd_failed", "the serve stream stalled: no frame answered the refresh probe", { cpdCode: "stalled" }));
+      requestRefresh(); // ask the child for a fresh full snapshot (the resync)
+    },
+    restart: () => {
+      // Kill the current child; its exit relaunches through the existing restart backoff (13.7).
+      child?.kill();
+    },
+  });
+
   const fail = (e: Error): void => { for (const cb of errorCbs) cb(e); };
   const setReady = (r: boolean): void => {
     if (isReady === r) return;
@@ -113,8 +135,9 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
       if (e instanceof WebError && e.details?.["field"] === "protocol") child?.kill();
       return;
     }
+    watchdog.frame(frame.t === "snapshot" ? frame.snapshot.seq : undefined);
     switch (frame.t) {
-      case "hello": failures = 0; healed = false; downAll(); setReady(true); return;
+      case "hello": failures = 0; healed = false; downAll(); setReady(true); watchdog.connected(); return;
       case "snapshot": for (const cb of snapshotCbs) cb(frame.snapshot); return;
       case "event": for (const cb of eventCbs) cb(frame.event); return;
       case "plan_show": {
@@ -141,6 +164,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
     child = null;
     healed = true;
     setReady(false);
+    watchdog.disconnected();
     downAll();
     old?.kill();
     launch();
@@ -155,6 +179,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
   const onExit = (info: { code: number | null; stderr: string }): void => {
     child = null;
     setReady(false);
+    watchdog.disconnected();
     downAll();
     if (!reported) {
       const msg = info.stderr.trim();
@@ -169,6 +194,8 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
     start() {
       if (child !== null || stopped) return;
       launch();
+      // Watch the first child from the spawn: a child that never says `hello` is exactly a stall (D3).
+      watchdog.connected();
     },
     stop() {
       if (stopped) return;
@@ -177,6 +204,7 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
       const c = child;
       child = null;
       isReady = false;
+      watchdog.disconnected();
       downAll();
       if (c !== null) { c.endInput(); c.kill(); }
     },

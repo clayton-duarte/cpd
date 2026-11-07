@@ -10,8 +10,7 @@ afterEach(() => { render.mockClear(); vi.restoreAllMocks(); });
 
 function bridge() {
   return {
-    sendWeb: vi.fn(),
-    onWebMessage: vi.fn(() => () => {}),
+    webSocketUrl: "ws://127.0.0.1:1234/cpd-ws",
     reportHealthy: vi.fn(),
     reportCrash: vi.fn(),
   };
