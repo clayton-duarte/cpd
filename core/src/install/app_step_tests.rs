@@ -98,7 +98,8 @@ impl Rig {
                 Reply::ok(""),
             )
             .route("pnpm", Arc::new(Always(Reply::ok(""))))
-            .route("plutil", Arc::new(Always(Reply::ok(""))));
+            .route("plutil", Arc::new(Always(Reply::ok(""))))
+            .route("node", Arc::new(Always(Reply::ok(""))));
         let install = Install {
             root,
             target_dir,
@@ -254,4 +255,79 @@ fn install_skips_the_electron_step_when_the_checkout_has_no_web_client() {
     );
     assert_eq!(rig.argv("pnpm"), Vec::<Vec<String>>::new());
     assert!(!rig.app_root().exists());
+}
+
+fn electron_dir(rig: &Rig) -> std::path::PathBuf {
+    rig.install.root.join("web/node_modules/electron")
+}
+
+/// Every runner call of the step as `program args`, in order.
+fn sequence(rig: &Rig) -> Vec<String> {
+    rig.fakes
+        .runner
+        .calls()
+        .into_iter()
+        .filter(|c| named("node", c) || named("plutil", c))
+        .map(|c| {
+            let program = Path::new(&c.program)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            format!("{program} {}", c.args.join(" "))
+        })
+        .collect()
+}
+
+#[test]
+fn electron_binary_missing_runs_install_js_before_plutil() {
+    let rig = Rig::new(true);
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 0, "{stderr}");
+    let install_js = electron_dir(&rig).join("install.js");
+    assert_eq!(
+        rig.argv("node"),
+        vec![strings(&[install_js.to_str().unwrap()])]
+    );
+    let seq = sequence(&rig);
+    assert!(seq[0].starts_with("node "), "{seq:?}");
+    assert_eq!(seq.len(), 3, "{seq:?}");
+    assert!(seq[1..].iter().all(|c| c.starts_with("plutil ")), "{seq:?}");
+}
+
+#[test]
+fn electron_binary_present_skips_install_js() {
+    let rig = Rig::new(true);
+    let dir = electron_dir(&rig);
+    fs::create_dir_all(dir.join("dist/Electron.app")).unwrap();
+    fs::write(dir.join("path.txt"), "Electron.app/Contents/MacOS/Electron").unwrap();
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 0, "{stderr}");
+    assert_eq!(rig.argv("node"), Vec::<Vec<String>>::new());
+    assert_eq!(rig.argv("plutil").len(), 2);
+
+    // Either half missing (here path.txt) still counts as a missing binary: install.js runs.
+    let half = Rig::new(true);
+    fs::create_dir_all(electron_dir(&half).join("dist/Electron.app")).unwrap();
+    let (exit, stderr) = half.run();
+    assert_eq!(exit, 0, "{stderr}");
+    assert_eq!(
+        half.argv("node").len(),
+        1,
+        "path.txt absent must run install.js"
+    );
+}
+
+#[test]
+fn electron_binary_install_failure_stops_before_plutil() {
+    let rig = Rig::new(true);
+    let _ =
+        (*rig.fakes.runner)
+            .clone()
+            .on("node", |_| true, Reply::exit(1, "", "download failed\n"));
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 1, "{stderr}");
+    assert!(stderr.contains("download failed"), "{stderr}");
+    assert_eq!(rig.argv("node").len(), 1);
+    assert_eq!(rig.argv("plutil"), Vec::<Vec<String>>::new());
 }
