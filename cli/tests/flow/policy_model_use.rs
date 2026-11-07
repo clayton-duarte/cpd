@@ -396,13 +396,13 @@ fn title_model(fx: &Fx, session: &str) -> String {
 #[test]
 fn c5_the_title_writer_of_a_context_with_an_owner_runs_on_the_g_ref_of_its_owners_policy() {
     let (fx, _pi) = titles();
-    assert_eq!(title_model(&fx, "lead-owned"), "github-copilot/owner-g:off");
+    assert_eq!(title_model(&fx, "lead-owned"), "github-copilot/owner-g");
 }
 
 #[test]
 fn c5_the_title_writer_of_a_context_with_no_owner_runs_on_the_machine_layers_g_ref() {
     let (fx, _pi) = titles();
-    assert_eq!(title_model(&fx, "lead-bare"), "github-copilot/mach-g:off");
+    assert_eq!(title_model(&fx, "lead-bare"), "github-copilot/mach-g");
 }
 
 /// A Context `ctx` (owner `acme`, or none) with one record, the policy files of `titles`, pi's catalog from the fake node.
@@ -455,13 +455,13 @@ fn distill_model(fx: &Fx) -> String {
 #[test]
 fn c5_the_distiller_of_a_context_with_an_owner_runs_on_the_g_ref_of_its_owners_policy() {
     let (fx, _pi) = distiller(Some("acme"));
-    assert_eq!(distill_model(&fx), "github-copilot/owner-g:off");
+    assert_eq!(distill_model(&fx), "github-copilot/owner-g");
 }
 
 #[test]
 fn c5_the_distiller_of_a_context_with_no_owner_runs_on_the_machine_layers_g_ref() {
     let (fx, _pi) = distiller(None);
-    assert_eq!(distill_model(&fx), "github-copilot/mach-g:off");
+    assert_eq!(distill_model(&fx), "github-copilot/mach-g");
 }
 
 // ---------- c6: the ladder ----------
