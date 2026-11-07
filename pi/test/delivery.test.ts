@@ -471,7 +471,6 @@ test("a webui session-message is prefixed with the tag", async (t) => {
   markView(f, "webui");
   const at = "2026-10-14T21:41:02.114Z"; // `ev`'s default `at`
   f.emit(message(101, null, { data: { from: null, text: "ship it", origin: "webui" } }));
-  await waitFor("the message", () => f.pi.delivered().length === 1);
   await f.drain();
   assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): [via WebUI · view: WebUI] ship it`);
 });
@@ -486,7 +485,6 @@ test("an engine session-message is untagged", async (t) => {
     message(101, null, { data: { from: null, text: "ship it" } }),
     message(102, null, { data: { from: null, text: "ship it", origin: "webui" } }),
   );
-  await waitFor("both messages", () => f.pi.delivered().length === 2);
   await f.drain();
   const at = "2026-10-14T21:41:02.114Z";
   assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): ship it`, "an engine message is untagged");
