@@ -76,6 +76,14 @@ fn refused(out: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
     e
 }
 
+/// The success fields of an `Output`, for a no-op's `already` and `item`.
+fn fields(out: Result<Output, CpdError>) -> Value {
+    match out.expect("a no-op, not a refusal") {
+        Output::Success(f) => Value::Object(f),
+        Output::Owned => panic!("a success"),
+    }
+}
+
 /// Every row of `inbox_items` and the counts of Events and transactions: what a refusal must leave as it was.
 fn snapshot(store: &mut Store) -> Value {
     store
@@ -191,8 +199,11 @@ fn a_refused_claim_of_a_merged_pull_request_closes_the_row_and_names_the_reason(
     let e = refused(run(&ports, &["claim", "1"]), ErrorCode::NotClaimable);
     assert_eq!(e.details()["reason"], "merged");
     assert!(closed_at(&mut store).is_some());
-    let again = refused(run(&ports, &["claim", "1"]), ErrorCode::ItemClosed);
-    assert_eq!(again.exit().code(), 3);
+    // air-d26: a second claim of the now-closed item is the closed-item no-op, not an item_closed refusal
+    let before = snapshot(&mut store);
+    let again = fields(run(&ports, &["claim", "1"]));
+    assert_eq!(again["already"], "closed");
+    assert_eq!(snapshot(&mut store), before);
 }
 
 #[test]

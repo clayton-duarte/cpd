@@ -36,12 +36,12 @@ const unread = (id: number, label: string, sessionId: string | null) => ({
   id, kind: "unread", label, urgency: "white", contextId: "ctx", planId: "plan", jobKey: null, sessionId, url: null,
   openedAt: "2026-01-01T00:00:00Z", ageSeconds: 5, actions: [],
 });
-const snapshot = (rows: unknown[]) => ({
+const snapshot = (rows: unknown[], sessionId = "s1") => ({
   type: "cockpit.snapshot",
   tree: {
     cursor: 1,
     contexts: [{ id: "ctx", title: "Context One", archived: false, records: 0, openQuestions: 0, sessions: [],
-      plans: [{ id: "plan", contextId: "ctx", title: "Plan One", phase: "dispatch", archived: false, counts, leadSessionId: "s1", sessions: [node] }] }],
+      plans: [{ id: "plan", contextId: "ctx", title: "Plan One", phase: "dispatch", archived: false, counts, leadSessionId: sessionId, sessions: [{ ...node, ref: { ...ref, id: sessionId } }] }] }],
   },
   plan: { planId: "plan", contextId: "ctx", title: "Plan One", phase: "dispatch", counts, review: null, openEscalations: 0, workflows: [], jobs: [], cursor: 1 },
   inbox: { openCount: rows.length, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows, cursor: 1 },
@@ -81,4 +81,33 @@ it("app hides and dismisses unread rows of the active session", () => {
   expect(dismissals(transport)).toEqual([11, 14]);
   act(() => transport.emitMessage(snapshot([...rows, unread(14, "again", "s1")])));
   expect(dismissals(transport)).toEqual([11, 14]);
+});
+
+it("a remounted app does not re-hide an already dismissed unread row", () => {
+  const first = new FakeTransport();
+  const view = mount(<App transport={first} scheduler={new FakeScheduler()} reader={reader} newId={() => "d1"} />);
+  mounted = view;
+  act(() => first.emitStatus("open"));
+  act(() => first.emitMessage(snapshot([unread(21, "mine", "s7")], "s7")));
+  const planButton = view.container.querySelector<HTMLButtonElement>('button[data-select="plan"]');
+  expect(planButton).not.toBeNull();
+  act(() => { planButton!.click(); });
+  expect(dismissals(first)).toEqual([21]);
+  view.unmount();
+  mounted = null;
+
+  // air-d26: a remount starts a fresh App and store; the dismissed-id set lives in app state, not in the
+  // per-mount ref, so the stale row is not hidden again and no second inbox.dismiss is sent after the
+  // engine has closed the item.
+  const second = new FakeTransport();
+  const remount = mount(<App transport={second} scheduler={new FakeScheduler()} reader={reader} newId={() => "d2"} />);
+  mounted = remount;
+  act(() => second.emitStatus("open"));
+  act(() => second.emitMessage(snapshot([unread(21, "mine", "s7")], "s7")));
+  const planAgain = remount.container.querySelector<HTMLButtonElement>('button[data-select="plan"]');
+  expect(planAgain).not.toBeNull();
+  act(() => { planAgain!.click(); });
+  expect(dismissals(second)).toEqual([]);
+  remount.unmount();
+  mounted = null;
 });
