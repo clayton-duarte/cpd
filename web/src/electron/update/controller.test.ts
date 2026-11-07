@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
+import { swapBundle } from './bundle';
 import type { SyncResult } from './checkout';
 import { createUpdater, type UpdaterDeps } from './controller';
+import { fakeFs } from './fakes';
 import type { UpdateState } from './types';
 
 const OK = { ok: true } as const;
 const SHA = 'abc123';
+
+// D1: an update that changes a non-renderer build artefact relaunches the main process through an
+// injected port; a renderer-only change keeps the in-place renderer reload.
+type RelaunchingDeps = UpdaterDeps & { relaunch(): void };
+const ROOT = '/repo';
+const bundle = (files: Record<string, string>) => fakeFs(files);
+const withRelaunch = (deps: UpdaterDeps, relaunch: () => void): RelaunchingDeps => {
+  (deps as unknown as { relaunch(): void }).relaunch = relaunch;
+  return deps as RelaunchingDeps;
+};
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -151,5 +163,43 @@ describe('createUpdater', () => {
     await Promise.all([a, b, c]);
     await updater.check();
     expect(sync).toHaveBeenCalledTimes(3);
+  });
+
+  it('relaunches the main process when a non-renderer artefact changed', async () => {
+    const fs = bundle({
+      [`${ROOT}/web/dist-electron/main.js`]: 'main',
+      [`${ROOT}/web/dist-electron/preload.cjs`]: 'preload',
+      [`${ROOT}/web/dist-electron/server.js`]: 'old server',
+      [`${ROOT}/web/dist-electron/renderer/electron.html`]: 'page',
+      [`${ROOT}/web/dist-electron.next/main.js`]: 'main',
+      [`${ROOT}/web/dist-electron.next/preload.cjs`]: 'preload',
+      [`${ROOT}/web/dist-electron.next/server.js`]: 'new server',
+      [`${ROOT}/web/dist-electron.next/renderer/electron.html`]: 'page',
+    });
+    const { deps, updater } = setup({ swap: vi.fn(() => swapBundle(fs, ROOT)) });
+    const relaunch = vi.fn();
+    withRelaunch(deps, relaunch);
+    await updater.check();
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    expect(deps.reloadRenderer).not.toHaveBeenCalled();
+  });
+
+  it('reloads the renderer in place when only renderer files changed', async () => {
+    const fs = bundle({
+      [`${ROOT}/web/dist-electron/main.js`]: 'main',
+      [`${ROOT}/web/dist-electron/preload.cjs`]: 'preload',
+      [`${ROOT}/web/dist-electron/server.js`]: 'server',
+      [`${ROOT}/web/dist-electron/renderer/electron.html`]: 'old page',
+      [`${ROOT}/web/dist-electron.next/main.js`]: 'main',
+      [`${ROOT}/web/dist-electron.next/preload.cjs`]: 'preload',
+      [`${ROOT}/web/dist-electron.next/server.js`]: 'server',
+      [`${ROOT}/web/dist-electron.next/renderer/electron.html`]: 'new page',
+    });
+    const { deps, updater } = setup({ swap: vi.fn(() => swapBundle(fs, ROOT)) });
+    const relaunch = vi.fn();
+    withRelaunch(deps, relaunch);
+    await updater.check();
+    expect(deps.reloadRenderer).toHaveBeenCalledTimes(1);
+    expect(relaunch).not.toHaveBeenCalled();
   });
 });
