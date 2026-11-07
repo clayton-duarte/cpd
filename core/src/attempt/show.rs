@@ -15,6 +15,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let mut env = Env::open()?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let (attempt, escalations, worker_file, cursor, footprint) = env.store.read(|conn| {
         let attempt = row::load(conn, &plan, &id)?;
         let escalations = row::escalations(conn, &plan, &id)?;
@@ -57,6 +60,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let attempts = env
         .store
         .read(|conn| row::list(conn, &plan, args.job.as_ref(), args.active))?;

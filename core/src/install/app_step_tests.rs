@@ -1,6 +1,7 @@
-//! `cpd install`'s Electron step (commands.md §14.4 step 7a, docs/implementing.md step 8a), in-process on `Fakes`: the
-//! whole install runs on a minimal checkout (`pi/package.json` only), with the built and the installed `cpd`, `git`,
-//! `pnpm`, `plutil` and the tagger as runner rules, `FakeSpawn` for the Electron pid. No real process, no sleep.
+//! `cpd install`'s Electron step (commands.md §14.4 step 7a): it writes the `app-root` state file `cpd desktop` reads
+//! (commands.md §14.4a, docs/implementing.md step 8a), in-process on `Fakes`: the whole install runs on a minimal
+//! checkout (`pi/package.json` only), with the built and the installed `cpd`, `git`, `pnpm`, `plutil` and the tagger as
+//! runner rules, `FakeSpawn` for the Electron pid. No real process, no sleep.
 
 use std::ffi::OsString;
 use std::fs;

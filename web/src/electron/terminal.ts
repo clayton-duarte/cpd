@@ -1,4 +1,4 @@
-import type { CpdElectronBridge, PtySize, UiMode } from "./channels.ts";
+import type { CpdElectronBridge, PtySize, TabStatus, UiMode } from "./channels.ts";
 
 export const DANGO_THEME = {
   foreground: "#d8d2cc",
@@ -120,6 +120,45 @@ export function fitToContainer(
   term.resize(dims.cols, dims.rows);
 }
 
+type ClipboardLike = { writeText(text: string): Promise<void>; readText(): Promise<string> };
+
+/** The Shift Enter / zoom / Cmd V key handler shared by every terminal host. */
+function keyHandler(engine: TerminalEngine, clipboard: ClipboardLike, onError: (error: unknown) => void): (event: KeyEventLike) => boolean {
+  return (event) => {
+    const sequence = shiftEnterSequence(event);
+    if (sequence !== null) {
+      engine.input(sequence);
+      return true;
+    }
+    const action = zoomAction(event);
+    if (action !== null) {
+      engine.setFontSize(nextFontSize(engine.fontSize(), action));
+      engine.fit();
+      return true;
+    }
+    if (isCmdV(event)) {
+      clipboard.readText().then((text) => {
+        if (text !== "") engine.paste(text);
+      }).catch(onError);
+      return true;
+    }
+    return false;
+  };
+}
+
+/** The application mouse-wheel handler shared by every terminal host. */
+function wheelHandler(engine: TerminalEngine, wheel: { push(deltaY: number, deltaMode: number, cellHeight: number): number }): (event: WheelEventLike) => boolean {
+  return (event) => {
+    if (!engine.appOwnsWheel()) return false;
+    const steps = wheel.push(event.deltaY, event.deltaMode, engine.cellHeight());
+    if (steps !== 0) {
+      const step = engine.wheelStep(steps < 0 ? "up" : "down", event.clientX, event.clientY);
+      engine.input(step.repeat(Math.abs(steps)));
+    }
+    return true;
+  };
+}
+
 export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): void }> {
   const { engine, bridge } = deps;
   engine.open();
@@ -136,35 +175,8 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
     return true;
   });
   const wheel = createWheelAccumulator();
-  engine.setKeyHandler((event) => {
-    const sequence = shiftEnterSequence(event);
-    if (sequence !== null) {
-      engine.input(sequence);
-      return true;
-    }
-    const action = zoomAction(event);
-    if (action !== null) {
-      engine.setFontSize(nextFontSize(engine.fontSize(), action));
-      engine.fit();
-      return true;
-    }
-    if (isCmdV(event)) {
-      deps.clipboard.readText().then((text) => {
-        if (text !== "") engine.paste(text);
-      }).catch(deps.onError);
-      return true;
-    }
-    return false;
-  });
-  engine.setWheelHandler((event) => {
-    if (!engine.appOwnsWheel()) return false;
-    const steps = wheel.push(event.deltaY, event.deltaMode, engine.cellHeight());
-    if (steps !== 0) {
-      const step = engine.wheelStep(steps < 0 ? "up" : "down", event.clientX, event.clientY);
-      engine.input(step.repeat(Math.abs(steps)));
-    }
-    return true;
-  });
+  engine.setKeyHandler(keyHandler(engine, deps.clipboard, deps.onError));
+  engine.setWheelHandler(wheelHandler(engine, wheel));
   const apply = (mode: UiMode): void => {
     engine.setPaused(mode !== "tui");
     deps.view.showTerminal(mode === "tui");
@@ -178,6 +190,86 @@ export async function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispo
   await bridge.startPty(engine.size());
   engine.onResize((size) => bridge.resizePty(size));
   return {
+    dispose() {
+      for (const off of unsubscribes) off();
+      engine.dispose();
+    },
+  };
+}
+
+/** The per-tab bridge methods a tab terminal needs; `CpdElectronBridge` marks them optional. */
+type TabBridge = Required<Pick<CpdElectronBridge,
+  "startTabPty" | "writeTabPty" | "resizeTabPty" | "onTabData" | "onTabExit" | "onTabStatus">>;
+
+function requireTabBridge(bridge: CpdElectronBridge): TabBridge {
+  const { startTabPty, writeTabPty, resizeTabPty, onTabData, onTabExit, onTabStatus } = bridge;
+  if (!startTabPty || !writeTabPty || !resizeTabPty || !onTabData || !onTabExit || !onTabStatus) {
+    throw new Error("bridge is missing the per-tab pty methods");
+  }
+  return { startTabPty, writeTabPty, resizeTabPty, onTabData, onTabExit, onTabStatus };
+}
+
+export interface TabTerminalDeps {
+  tabId: string;
+  engine: TerminalEngine;
+  bridge: CpdElectronBridge;
+  clipboard: ClipboardLike;
+  pointer: { buttons(): number };
+  /** Reports a `pty:status` event for this tab. */
+  onStatus?(status: TabStatus, code?: number): void;
+  onError(error: unknown): void;
+}
+
+export interface TabTerminal {
+  /** Starts (or restarts) this tab's pty at the current fitted size. */
+  start(): Promise<void>;
+  fit(): void;
+  /** Pauses the engine and shows or hides it; a shown engine is fitted and focused. */
+  setVisible(visible: boolean): void;
+  dispose(): void;
+}
+
+/**
+ * Wires one tab's engine to its keyed bridge methods. Keys, resize, OSC 52 copy, paste and zoom
+ * behave exactly as `startTerminalHost`; data, exit and status route by the tab id.
+ */
+export function startTabTerminal(deps: TabTerminalDeps): TabTerminal {
+  const { engine, tabId } = deps;
+  const bridge = requireTabBridge(deps.bridge);
+  engine.open();
+  engine.fit();
+  const unsubscribes: (() => void)[] = [];
+  unsubscribes.push(bridge.onTabData((payload) => {
+    if (payload.tabId === tabId) engine.write(payload.data);
+  }));
+  unsubscribes.push(bridge.onTabExit((payload) => {
+    if (payload.tabId === tabId) engine.write("\r\n[cpd tui exited with code " + payload.code + "]\r\n");
+  }));
+  unsubscribes.push(bridge.onTabStatus((payload) => {
+    if (payload.tabId === tabId) deps.onStatus?.(payload.status, payload.code);
+  }));
+  engine.onData((data) => bridge.writeTabPty(tabId, fixSgrMouseHover(data, deps.pointer.buttons())));
+  engine.onResize((size) => bridge.resizeTabPty(tabId, size));
+  engine.setClipboardWriteHandler((text) => {
+    deps.clipboard.writeText(text).catch(deps.onError);
+    return true;
+  });
+  const wheel = createWheelAccumulator();
+  engine.setKeyHandler(keyHandler(engine, deps.clipboard, deps.onError));
+  engine.setWheelHandler(wheelHandler(engine, wheel));
+  return {
+    async start() {
+      engine.fit();
+      await bridge.startTabPty(tabId, engine.size());
+    },
+    fit: () => engine.fit(),
+    setVisible(visible) {
+      engine.setPaused(!visible);
+      if (visible) {
+        engine.fit();
+        engine.focus();
+      }
+    },
     dispose() {
       for (const off of unsubscribes) off();
       engine.dispose();
