@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { readPreviewMode } from './preview-mode';
-import { createModeController, type ModeFs } from './mode';
+import { createModeController } from './mode';
 import { boot, type BootDeps, type BootWindow } from './boot';
 
 function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void>; loadDevUrl?: BootDeps['loadDevUrl']; initMode?: BootDeps['initMode']; onWindow?: (w: BootWindow) => void } = {}) {
@@ -167,21 +167,26 @@ describe('boot', () => {
     const order = s.log.filter((l) => ['whenReady', 'window', 'initMode'].includes(l) || l.startsWith('loadFile:'));
     expect(order).toEqual(['whenReady', 'window', 'initMode', 'loadFile:renderer/electron.html']);
   });
-  it('boot with no ui-mode.json never touches an absent window', async () => {
+  it('always boots the production WebUI renderer', async () => {
     let created: BootWindow | undefined;
     const sent: string[] = [];
+    const removed: string[] = [];
     const use = (): void => {
-      if (!created) throw new Error('mode applied before the window exists');
-    };
-    const fs: ModeFs = {
-      readFile: async (p) => Promise.reject(Object.assign(new Error('ENOENT ' + p), { code: 'ENOENT' })),
-      writeFile: async () => undefined,
-      mkdir: async () => undefined,
+      if (!created) throw new Error('view applied before the window exists');
     };
     const controller = createModeController({
-      fs,
-      file: '/h/run/ui-mode.json',
+      fs: {
+        writeFile: async () => undefined,
+        mkdir: async () => undefined,
+        remove: async (p) => {
+          removed.push(p);
+        },
+      },
+      legacyFile: '/h/run/ui-mode.json',
+      viewFile: '/h/run/ui-view.json',
+      pid: 1,
       platform: 'darwin',
+      log: () => undefined,
       menu: { setApplicationMenu: () => undefined },
       window: {
         setIgnoreMenuShortcuts: () => use(),
@@ -193,6 +198,8 @@ describe('boot', () => {
     });
     const s = setup({ onWindow: (w) => (created = w), initMode: () => controller.init() });
     await expect(boot(s.deps)).resolves.toBeUndefined();
-    expect(sent).toEqual(['tui']);
+    expect(sent).toEqual(['webui']);
+    expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
+    expect(removed).toEqual(['/h/run/ui-mode.json']);
   });
 });

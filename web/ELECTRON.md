@@ -1,6 +1,6 @@
 # Electron app
 
-The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
+The Electron app is a standalone Electron desktop app in `web/` with three in-place clients in one process and one window: TUI, WebUI and WebUI Preview. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over the one WebSocket transport (ADR 0015 option B, air-d46; formerly over IPC, pro-d23 — see §WebSocket transport). WebUI Preview is the same cockpit served by the Vite dev server of a preview worktree (see [Previewing a UI change](../docs/ui-preview.md)). The app always launches in WebUI (the built production renderer); a native View menu switches the client for this run only — TUI, WebUI or WebUI Preview — and no choice is ever read back as a launch default. On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell; its live WebUI over IPC transport is superseded by ADR 0015 option B, air-d46) and pro-d24 (packaging), with air-d40 (always launch WebUI; the View menu switches for the run only; `ui-mode.json` dropped), air-d41 (WebUI Preview in the View menu), air-d49 (serve-only preview) and air-d50 (the host tabs show only in TUI).
 
 ## Run
 
@@ -24,7 +24,7 @@ Why `allowBuilds` in `pnpm-workspace.yaml` sets `electron` and `node-pty` to `fa
 
 ## Boot order
 
-The Electron boot sequence ensures the mode is applied only after the window exists. `prepare()` (called by `app.whenReady()`) runs paths, env and native shell setup. When ready, the window is created. Then the mode controller's `init()` applies the persisted UI mode (TUI or WebUI) with menu and window calls. Finally the renderer loads with the result. The mode is applied after the window exists, so no mode apply touches the window before it is created.
+The Electron boot sequence ensures the mode is applied only after the window exists. `prepare()` (called by `app.whenReady()`) runs paths, env and native shell setup. When ready, the window is created. Then the mode controller's `init()` applies WebUI, the only launch view, with menu and window calls, and deletes the dropped `$CPD_HOME/run/ui-mode.json` once, with a log line. Finally the renderer loads with the result. The view is applied after the window exists, so no view apply touches the window before it is created.
 
 ## Module contract
 
@@ -45,7 +45,7 @@ export const CHANNELS = {
   uiMode: "ui:mode",         // main -> renderer, payload UiMode
   wasm: "ghostty:wasm",      // renderer -> main, invoke, resolves Uint8Array (bytes of ghostty-vt.wasm)
 } as const;
-export type UiMode = "tui" | "webui";
+export type UiMode = "tui" | "webui" | "webui-preview";
 export interface PtySize { cols: number; rows: number }
 export interface CpdElectronBridge {          // window.cpdElectron
   readWasm(): Promise<Uint8Array>;
@@ -140,36 +140,32 @@ export function buildMenuTemplate(options: MenuTemplateOptions): MenuTemplate;
 ```
 
 - Template order of `buildMenuTemplate`, on every platform: `{ role: "appMenu" }` only when `platform === "darwin"`; then `{ role: "editMenu" }`, on every platform (it is there so Cmd+C, Cmd+V, Cmd+X, Cmd+A and Cmd+Z work in WebUI; TUI ignores menu shortcuts, so the terminal's own key handler does its paste, see terminal.ts); then `{ label: "View", submenu: [...] }`; then `{ role: "windowMenu" }`. The template is therefore `[appMenu (darwin only), editMenu, View, windowMenu]`.
-- The View submenu is exactly two items in this order: `{ label: "TUI", type: "radio", checked: mode === "tui", click }` and `{ label: "WebUI", type: "radio", checked: mode === "webui", accelerator: "CmdOrCtrl+Shift+M", click }`. TUI has no accelerator. The `click` of each calls `onSelect("tui")` / `onSelect("webui")` (the click arguments are ignored).
+- The View submenu is exactly three items in this order: `{ label: "TUI", type: "radio", checked: mode === "tui", click }`, `{ label: "WebUI", type: "radio", checked: mode === "webui", accelerator: "CmdOrCtrl+Shift+M", click }` and `{ label: "WebUI Preview", type: "radio", checked: mode === "webui-preview", accelerator: "CmdOrCtrl+Shift+M", click }`. TUI has no accelerator. WebUI and WebUI Preview keep `CmdOrCtrl+Shift+M`. The `click` of each calls `onSelect("tui")` / `onSelect("webui")` / `onSelect("webui-preview")` (the click arguments are ignored). TUI ignores the menu shortcuts, so in TUI none of these accelerators fire; in WebUI and WebUI Preview they do.
 
-### mode.ts (UI mode persistence and controller)
+### mode.ts (UI view controller)
+
+The three UI modes are `tui`, `webui` and `webui-preview` (`UiMode` in channels.ts). `cpd desktop` always launches in WebUI, the built production renderer. No mode is ever persisted or read back as a launch default: the choice lasts for the run only. The dropped `$CPD_HOME/run/ui-mode.json` is deleted once on the first launch, with a log line; a missing file deletes nothing.
 
 ```ts
-export const DEFAULT_MODE: UiMode;   // "tui"
 export function parseUiMode(raw: unknown): UiMode;
-export function modeFilePath(cpdHome: string): string;
-export interface ModeFs {
-  readFile(path: string): Promise<string>;      // rejects with an error whose `code` is "ENOENT" when the file is missing
-  writeFile(path: string, data: string): Promise<void>;
-  mkdir(path: string): Promise<void>;           // recursive; the real adapter passes { recursive: true }
-}
-export function readMode(fs: ModeFs, file: string): Promise<UiMode>;
-export function writeMode(fs: ModeFs, file: string, mode: UiMode): Promise<void>;
 export interface ModeWindow { setIgnoreMenuShortcuts(ignore: boolean): void; sendMode(mode: UiMode): void }
 export interface MenuHost { setApplicationMenu(template: MenuTemplate): void }
 export interface ModeControllerDeps {
-  fs: ModeFs; file: string; menu: MenuHost; window: ModeWindow;
+  fs: { remove(path: string): Promise<void> };   // removes the dropped ui-mode.json
+  legacyFile: string;                            // $CPD_HOME/run/ui-mode.json
+  menu: MenuHost; window: ModeWindow;
   platform: NodeJS.Platform; onError(error: unknown): void;
 }
 export interface ModeController { init(): Promise<void>; getMode(): UiMode; setMode(mode: UiMode): Promise<void> }
 export function createModeController(deps: ModeControllerDeps): ModeController;
 ```
 
-- `parseUiMode(raw)`: returns `raw` when it is `"tui"` or `"webui"`; otherwise throws `Error("invalid ui mode: " + JSON.stringify(raw))`.
-- `modeFilePath(cpdHome)` = `path.join(cpdHome, "run", "ui-mode.json")`.
-- `readMode`: a rejection with `code === "ENOENT"` returns `"tui"`; any other fs error propagates unchanged. Otherwise the content must be JSON of the shape `{"mode": "tui" | "webui"}`; invalid JSON, a non-object or an invalid mode throws an `Error` whose message contains `file` (no fallback to `"tui"`).
-- `writeMode`: `fs.mkdir(path.dirname(file))` first, then `fs.writeFile(file, JSON.stringify({ mode }) + "\n")`.
-- Controller: `getMode()` is `"tui"` until `init()` resolves. `init()` reads the persisted mode with `readMode` and applies it (below) unconditionally. `setMode(mode)`: when `mode` equals the current mode it does nothing (no write, no menu, no window call); otherwise it calls `writeMode` first (a failure rejects `setMode` and leaves the current mode and the menu unchanged), then updates the current mode and applies it. Applying = `menu.setApplicationMenu(buildMenuTemplate({ mode, platform, onSelect }))`, then `window.setIgnoreMenuShortcuts(mode === "tui")`, then `window.sendMode(mode)`, in that order. The template's `onSelect(m)` is `controller.setMode(m).catch(deps.onError)`.
+- `parseUiMode(raw)`: returns `raw` when it is `"tui"`, `"webui"` or `"webui-preview"`; otherwise throws `Error("invalid ui mode: " + JSON.stringify(raw))`.
+- The persistence helpers are gone: no `DEFAULT_MODE`, no `readMode`, no `writeMode`, no `modeFilePath` for a mode file. No mode file is ever read as a launch default.
+- Delete-once: `init()` removes `legacyFile` (`$CPD_HOME/run/ui-mode.json`, the format of earlier builds) exactly once, and logs one line when it removes a file. A missing file is not an error and removes nothing. `init()` then applies WebUI (below) unconditionally: the app always launches in WebUI.
+- Controller: `getMode()` is `"webui"` until `init()` resolves. `setMode(mode)`: when `mode` equals the current view it does nothing (no menu, no window call); otherwise it updates the current view and applies it — there is no write, the choice lasts for the run only. Applying = `menu.setApplicationMenu(buildMenuTemplate({ mode, platform, onSelect }))`, then `window.setIgnoreMenuShortcuts(mode === "tui")`, then `window.sendMode(mode)`, in that order. The template's `onSelect(m)` is `controller.setMode(m).catch(deps.onError)`.
+
+Run-only view marker (air-n19): the controller writes `$CPD_HOME/run/ui-view.json` on launch and on every switch, as one JSON object `{"view":"tui" | "webui" | "webui-preview","pid":<electron main pid>}` where `pid` is the pid of the Electron main process. The file is removed on graceful quit. It is a marker only: it is never read as a launch default. A reader treats a missing file, a malformed file or a dead pid as view unknown.
 
 ### bridge.ts (preload bridge, bundled into the sandboxed preload)
 
@@ -328,23 +324,27 @@ On every platform:
 On macOS only:
 
 - Dock icon: `app.dock.setIcon` shows `build/icon.png` in dev, and `icon.png` in `process.resourcesPath` when packaged.
-- Tray: a menu bar item with the tooltip `cpd` and the template image. Its menu, in order: `Open cockpit`, `Switch to TUI`, `Switch to WebUI`, a separator, `Quit cpd`. `Open cockpit` shows and focuses the window and switches to WebUI (A6). The two switch items do what the View menu does.
+- Tray: a menu bar item with the tooltip `cpd` and the template image. Its menu, in order: `Open cockpit`, `Switch to TUI`, `Switch to WebUI`, `Switch to WebUI Preview`, a separator, `Quit cpd`. `Open cockpit` shows and focuses the window and switches to WebUI (A6). The three switch items do what the View menu does.
 - Attention image: the Tray shows `trayAttentionTemplate.png` while there is something to attend to, and `trayTemplate.png` otherwise. Both images are created once at setup.
 - Dock badge: blocking + decisions. The badge is empty when the sum is zero.
 - Counting (A2): the main process counts the rows of the Inbox from the same cockpit service the WebUI reads. A row with urgency `red` is blocking, and a row with urgency `magenta` is a decision. Other urgencies are not counted. The count is recomputed on every cockpit update.
 - Bounce: the Dock bounces once (`informational`) when blocking rises above the previous count and the window is not focused. The first count after startup is the baseline and never bounces. A rise in decisions alone does not bounce, and neither does a fall in blocking, or any rise while the window has focus.
 - Dispose: the shell's `dispose` destroys the Tray. It is idempotent.
 
-## IPC WebUI transport
+## WebSocket transport
 
-The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (renderer to main) and `cpd:s2c` (main to renderer). The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createElectronTransport` in the renderer and `registerWebuiIpc` in the main process.
+The WebUI reaches the cockpit over one WebSocket (ADR 0015, option B, air-d46), shared by the desktop and the browser build. The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createWebSocketTransport` in the renderer and the WS server of `web/src/server/ws.ts` in the main process; the `cpd:c2s`/`cpd:s2c` IPC pair, `createElectronTransport` and `registerWebuiIpc` are gone. The full transport contract, the heartbeat and the watchdog are in docs/contract.md §5.5 and web/CONTRACT.md §15.
 
-- Main process: the first frame from a window creates one hub connection for that window, through `services.newConnection(send)`. `send` writes to `cpd:s2c` unless the window is destroyed. When the window is destroyed its hub is closed and forgotten. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
-- Renderer: `createElectronTransport` has the same semantics as the browser transport (`createHotTransport`): it opens with status `open`, `send` throws before open or after close, and `close` is final.
+- Main process: the server binds `ws://127.0.0.1:<port>/cpd-ws` — loopback only, on a port the OS chooses (bind port 0). It creates one hub connection per accepted socket, through `services.newConnection(send)`; `send` writes one JSON text frame to the socket. A closed socket closes its hub. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
+- Renderer learns the URL through the preload `contextBridge`, not over a data channel: the main process exposes the resulting `ws://127.0.0.1:<port>/cpd-ws` to the renderer as one read-only member of `window.cpdElectron` (`webSocketUrl`), and `createWebSocketTransport` connects to it. No `cpd:c2s`/`cpd:s2c` channel exists; the bridge carries only this URL and the non-data members it already had (pty, mode, wasm, health).
+- Authorisation: no token. The check is the Origin alone, at connect, before any hub is created: an absent or `null` Origin (the desktop renderer runs from `file://` in production) and a loopback Origin (`localhost`, `127.0.0.1`, `[::1]`) are accepted; every other Origin is rejected. A remote thin client reaches the same endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
+- Heartbeat: the server protocol-pings every socket every `WS_PING_MS` and terminates a socket that does not pong within `WS_PONG_TIMEOUT_MS`, so a stalled transport is seen loud, never silent. The client sends its own wire `ping` every `WS_CLIENT_PING_MS` and closes the socket when the server's `pong` misses `WS_CLIENT_PONG_TIMEOUT_MS`, so a hung server is seen too (the browser `WebSocket` cannot send protocol ping frames, so the client's ping rides the wire).
+- Renderer: `createWebSocketTransport` has the semantics of the `Transport` interface unchanged (web/src/protocol/runtime.ts:10-15): it opens with status `open`, `send` throws before open or after close, and `close` is final. A closed socket — a terminate, an error or a heartbeat failure — is a real `closed` status, so the renderer backs off, reconnects and re-subscribes for a fresh full snapshot (web/src/state/connection.ts:205-224).
 - Both views stay mounted, so a switch is instant and keeps the session state. The WebUI keeps its connection and selection, and the TUI keeps its pty.
 - TUI mode: the terminal is shown, resumed, refitted to its container and focused. Menu shortcuts are ignored, so the keys reach cpd.
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
-- The chosen mode persists in `$CPD_HOME/run/ui-mode.json` (see Module contract, mode.ts).
+- WebUI Preview mode: the window loads the dev renderer of a preview worktree (see [Previewing a UI change](../docs/ui-preview.md)); the terminal is paused and hidden. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
+- The chosen mode lasts for the run only: no mode is persisted, `$CPD_HOME/run/ui-mode.json` is deleted once on the first launch, and the run-only marker `$CPD_HOME/run/ui-view.json` is written instead (see Module contract, mode.ts).
 
 ## Remote TUI tabs over ssh
 
@@ -365,7 +365,7 @@ cpd desktop shows one terminal per tab: the local tab, and one remote tab per ss
 
 ### Visibility and the view
 
-- The tab bar shows `local` plus every remote tab in every view mode (TUI and WebUI): remote tabs never hide (air-d40).
+- The host tabs (`local` plus every remote tab) show only in the TUI view: they are hidden in WebUI and WebUI Preview (air-d50).
 - Clicking a remote tab switches the view to TUI for this run (air-d40) and connects that tab's pty if it has none. The `local` tab follows the view the View menu selects; how the menu and the mode switch work is owned by mode.ts and menu.ts (see Module contract and the View menu items) and is not restated here.
 
 ### IPC channels
@@ -388,7 +388,7 @@ Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal
 
 ### Overview
 
-The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) relaunches the Electron main process with `app.relaunch()` + `app.exit()`. A renderer-only change keeps the in-place renderer reload.
 
 Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
@@ -413,7 +413,7 @@ export type UpdateState = { phase: 'idle' } | { phase: 'syncing' } | { phase: 'b
 export function electronOutDir(env: Record<string, string | undefined>): string
 ```
 
-Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js` and `preload.cjs` under this directory; the default is unchanged.
+Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js`, `server.js` and `preload.cjs` under this directory; the default is unchanged.
 
 #### checkout.ts
 
@@ -451,7 +451,7 @@ export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
 
 `readBuiltSha` reads `<root>/web/dist-electron/.built-sha`, trimmed, and returns `null` when it is missing.
 
-`swapBundle` sets `mainChanged` to true when the text of `main.js` or of `preload.cjs` differs between `web/dist-electron` and `web/dist-electron.next`; a missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
+`swapBundle` sets `mainChanged` to true when any non-renderer build artefact differs between `web/dist-electron` and `web/dist-electron.next`: the artefacts of the main and preload builds — `main.js`, `preload.cjs`, `server.js` — plus any other main-side artefact the build emits. The renderer output is excluded. A missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
 
 #### cli.ts
 
@@ -517,7 +517,7 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> }
 
 1. `onState({ phase: 'syncing' })`, then `sync()`. A `skipped` result logs the reason, calls `onState({ phase: 'idle' })` and ends: no build and no CLI install.
 2. `sha = headSha()`.
-3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, or `restart-needed` was already set earlier in this process (sticky), it calls `onState({ phase: 'restart-needed' })` and does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
+3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, it calls `onState({ phase: 'restart-needed' })` and then relaunches the Electron main process with `app.relaunch()` followed by `app.exit(0)`, through an injected port like every other external effect; it does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
 4. CLI flow, concurrent with the bundle flow, when `cliSha() !== sha`: `installCli(sha)`. A failure is only logged; it never sets the `error` state.
 
 `check()` is single-flight. A call made during a run returns that run's promise, and queues exactly one trailing run after it.
@@ -556,7 +556,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 
 The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
 
-A changed `main.js` or `preload.cjs` never reloads the renderer: it shows `Restart to Apply Update` in the menu, and only the User's click applies it. That click is the only path that loads new main-process or preload code. The restart-needed state is sticky for the rest of the process.
+A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed` and relaunches the Electron main process with `app.relaunch()` + `app.exit(0)`, so the new main-process, preload and server code load in a fresh process. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
 
 ## Verification checklist
 
@@ -572,7 +572,7 @@ Run each check against the built app (`pnpm --filter cpd-web-client run electron
 8. Zoom (Cmd+= / Cmd++ / Cmd+- / Cmd+0) steps the font of the focused tab (local or remote) within 9..28, resets to 13, and refits that tab's pty; it is not persisted. Zoom a remote tab. Result: the font changes and the remote cockpit redraws at the new size; after a restart the font is back to the default.
 9. View > WebUI hides the terminal, shows the WebUI cockpit and pauses drawing. Result: the terminal disappears, the cockpit is shown with its panes, and output stops being drawn.
 10. View > TUI restores the terminal with focus and the pty session intact. Result: the terminal reappears with the cursor focused, and the cockpit state is unchanged (no restart; the `cpd tui` process id is the same).
-11. The choice persists across restarts in `$CPD_HOME/run/ui-mode.json`. Set View > WebUI, quit, relaunch. Result: the app opens in WebUI and the file holds `{"mode":"webui"}`. Set View > TUI and the file holds `{"mode":"tui"}`.
+11. The choice lasts for the run only. On the first launch with this build, `$CPD_HOME/run/ui-mode.json` is deleted once with a log line. While the app runs, `$CPD_HOME/run/ui-view.json` holds `{"view":"<mode>","pid":<pid>}` and changes on every View menu switch; a graceful quit removes it. Set View > WebUI Preview, quit, relaunch. Result: the app opens in WebUI again, `ui-mode.json` is absent, and `ui-view.json` is absent after the quit (and says `webui-preview` while the preview ran).
 12. Closing the window quits the app and leaves no orphan process. Close the window, then run `pgrep -fl 'cpd tui'`. Result: no line is printed, so no `node-pty` or `cpd tui` process remains.
 13. The renderer is WebGL. In devtools, `renderer` shows `webgl` (`term.rendererType`, when available). Result: `webgl`. If `term.rendererType` is not exposed by the build, this check is unverified, not passed.
 14. The accelerator caveat. In TUI mode, CmdOrCtrl+Shift+M does not fire, because menu shortcuts are ignored so terminal keys pass through. Result: nothing changes. Switch to WebUI with View > WebUI. Switch back to TUI with CmdOrCtrl+Shift+M or with View > TUI. Result: in WebUI the accelerator switches to TUI.

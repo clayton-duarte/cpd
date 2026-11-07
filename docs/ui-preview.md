@@ -49,6 +49,36 @@ If loading the dev URL fails (for example the server is down), boot logs the err
 
 `preview-web.sh` itself never runs `git checkout`, `git reset` or `git clean`. The Electron sync runs `git checkout HEAD -- <paths>` and `git clean -f -- <paths>` in the preview worktree, scoped to the dirty paths that `origin/main` supersedes, before it fast-forwards or rebases (see [Electron sync in preview](#electron-sync-in-preview-a7) and [Electron app](#electron-app)). The matching scripts in `web/package.json` are `preview:on`, `preview:off` and `preview:reload`.
 
+## Serve-only mode and the View menu preview
+
+(air-d41, air-d49, air-n19; the three in-place clients are documented in `web/ELECTRON.md`)
+
+The View menu of `cpd desktop` carries **WebUI Preview**, a third in-place client: the same one process and one window switch to the dev renderer of a preview worktree. The worktree and its dev server are managed by two serve-only subcommands of `preview-web.sh`:
+
+```
+sh scripts/preview-web.sh serve [<worktree>]
+sh scripts/preview-web.sh unserve
+```
+
+- **`serve [<worktree>]`** ensures the preview worktree exactly as `on` does (create on branch `preview/web` from `origin/main` when missing, default path `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`, install and link `node_modules` when created) and starts, or respawns, the Vite dev server of the worktree on port 5173, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It starts no watchdog, writes no `web-state`, sets no `@cpd_web_preview` and prints no Electron command.
+- **`unserve`** stops only that dev server (the `web` window). It does not touch the watchdog, `web-state` or `@cpd_web_preview`.
+- **`on [<worktree>]`**, **`off`** and **`status`** keep exactly the behaviour documented above; they are the subcommands of `cpd desktop --preview`, `--off` and `--status` and are unchanged.
+
+### The View menu client
+
+Selecting **WebUI Preview** in the View menu of `cpd desktop`:
+
+1. runs `serve [<worktree>]` for the preview worktree (default path as for `on`),
+2. shows a built-in loading page in the window,
+3. once the client health is healthy, loads the dev renderer at `CPD_ELECTRON_DEV_URL` (default `http://localhost:5173/electron.html`),
+4. keeps the server until quit and stops it on quit (`unserve`).
+
+The same Electron-main backend serves the preview renderer: the dev renderer talks IPC (`cpd:c2s` / `cpd:s2c`, see `web/ELECTRON.md`) to the services of the running main process, not to the Vite server's WebSocket backend, which serves only a plain browser tab at `http://localhost:5173`.
+
+A start or load failure shows a native error dialog and the previous view returns. There is never a silent fallback to another view.
+
+[Crash safety (pro-d64)](#crash-safety-pro-d64) stays true for `cpd desktop --preview`: its watchdog still rolls back a crashing build, and its rollback lands in the production WebUI (the built renderer, relaunched in production mode, item 8). The View menu preview runs no watchdog; its failure path is the native error dialog above.
+
 ## Production and preview modes
 
 Production is the default; preview is opt-in. The contract below is the source every later Job follows literally. Accepted assumptions A1-A8 (User, 2026-11-06 EST; pro-d73, pro-d74) are stated inside the items. The primary checkout is a mirror of `origin/main` and is never a preview.
@@ -123,6 +153,8 @@ The Electron app (`web/src/electron/main.ts`) shows the same WebUI in a window. 
 
 A crashing WebUI build must not leave the preview dead. The main process records each load of the WebUI as a reload epoch in a health file. A supervisor, the watchdog, rolls the files back to the last build that proved healthy and reloads Electron. Renderer crashes, load failures and a dead process all count.
 
+`health:ok` is sent only after the renderer's startup IPC resolves: the boot calls in `web/src/electron/renderer.ts` (`readWasm`, `listHosts`, `getMode`). A renderer that mounts React but whose startup IPC rejects reports `health:crash`, so the epoch records `crashed` and the watchdog rollback runs.
+
 With a dev URL (`CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html`, honoured in preview mode only), the first launch loads it. The watchdog's relaunch runs in production mode with no dev URL (item 8), so it loads the built renderer. A failed dev-URL load is recorded as a `did-fail-load` crash, and boot then loads `renderer/electron.html` from the built output, which starts a new epoch. The crash clears before `crashDebounceMs` when that load starts in time, so the watchdog does nothing.
 
 ### Health file and crash log
@@ -176,7 +208,7 @@ A crash line is `{at, reloadEpoch, pid, source, error, stack?}`. A watchdog line
 
 - **`ErrorBoundary`** (`web/src/ui/ErrorBoundary.tsx`) is a class component: `ErrorBoundary({name: string; onCrash?: (r: CrashReport) => void; fallback?: (ctx: {name; error; retry(): void}) => ReactNode; children})`. On a throw it calls `onCrash({source: 'error-boundary', error: message, stack})` once per caught error. It renders the default fallback: `role='alert'`, the name, the message, and a `Retry` button that clears the error and renders the children again.
 - **Crash signals** (`web/src/electron/crash-signals.ts`): `installCrashSignals(target: {addEventListener, removeEventListener}, onCrash): {errors(): number; dispose(): void}`. An `error` event is reported as source `window-error`. An `unhandledrejection` event is reported as source `unhandledrejection`, with the reason's message or `String(reason)`. `errors()` counts every one.
-- **`HealthBeacon`** (`web/src/ui/HealthBeacon.tsx`): `HealthBeacon({root: () => HTMLElement | null; errors: () => number; onHealthy: () => void})`. It renders nothing. Its mount effect calls `onHealthy` once, and never again on re-render, when `root()` has at least one child element and `errors()` is 0.
+- **`HealthBeacon`** (`web/src/ui/HealthBeacon.tsx`): `HealthBeacon({root: () => HTMLElement | null; errors: () => number; onHealthy: () => void})`. It renders nothing. Its mount effect calls `onHealthy` once, and never again on re-render, when `root()` has at least one child element, `errors()` is 0, and the renderer's startup IPC has resolved. `onHealthy` — and with it `health:ok` — is sent only after the startup IPC resolves; a startup IPC rejection reports `health:crash` instead (see [Crash safety](#crash-safety-pro-d64)).
 - **`Root`** (`web/src/ui/Root.tsx`): `Root(props: AppProps & {onCrash?; onHealthy?; errors?; reload?})`. It is an `ErrorBoundary` named `App` around `App`. Its fallback is a full-window alert with a `Reload` button that calls `reload` (default `window.location.reload`). After `App` it renders a `HealthBeacon` with `root` set to `document.getElementById('root')`.
 - **Panes.** `App` wraps `ContextTree`, `PlanView`, `ManagerView`, `ChatPane` and `Inbox` each in its own `ErrorBoundary`, named `ContextTree`, `PlanView`, `ManagerView`, `ChatPane` and `Inbox`. `App` takes an optional `onCrash` and passes it down, so one pane's throw leaves the others mounted.
 - **Electron mount.** `mountWebui(root, bridge)` in `web/src/electron/webui.tsx` installs the crash signals on `window` with `bridge.reportCrash`. It renders `Root` with `onCrash={bridge.reportCrash}`, `onHealthy={bridge.reportHealthy}` and `errors={signals.errors}`. `web/src/main.tsx` (Vite dev, no Electron) renders `Root` with none of them.

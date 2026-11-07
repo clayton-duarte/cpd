@@ -1,30 +1,29 @@
 import path from "node:path";
 import type { UiMode } from "./channels.ts";
 import type { MenuTemplate } from "./menu.ts";
-import {
-  createModeController,
-  modeFilePath,
-  parseUiMode,
-  readMode,
-  writeMode,
-  type ModeFs,
-} from "./mode.ts";
+import { createModeController, parseUiMode, LAUNCH_MODE, type ModeFs } from "./mode.ts";
 
-function fakeFs(initial: Record<string, string> = {}, log: string[] = []) {
+const LEGACY = "/h/run/ui-mode.json";
+const VIEW = "/h/run/ui-view.json";
+const PID = 4242;
+
+// The dropped ui-mode.json is never read: the fs surface has no read at all (air-d40).
+function fakeFs(initial: Record<string, string> = {}, log: string[] = [], writes: Write[] = []) {
   const files = new Map(Object.entries(initial));
-  const state = { writeError: undefined as unknown, readError: undefined as unknown };
+  const state = { writeError: undefined as unknown, removeError: undefined as unknown };
   const fs: ModeFs = {
-    readFile(p) {
-      log.push(`read ${p}`);
-      if (state.readError !== undefined) return Promise.reject(state.readError);
-      const data = files.get(p);
-      if (data === undefined) return Promise.reject(Object.assign(new Error("missing"), { code: "ENOENT" }));
-      return Promise.resolve(data);
-    },
     writeFile(p, data) {
       log.push(`write ${p} ${data}`);
       if (state.writeError !== undefined) return Promise.reject(state.writeError);
+      writes.push({ path: p, data });
       files.set(p, data);
+      return Promise.resolve();
+    },
+    remove(p) {
+      log.push(`remove ${p}`);
+      if (state.removeError !== undefined) return Promise.reject(state.removeError);
+      if (!files.has(p)) return Promise.reject(Object.assign(new Error("missing"), { code: "ENOENT" }));
+      files.delete(p);
       return Promise.resolve();
     },
     mkdir(p) {
@@ -35,19 +34,33 @@ function fakeFs(initial: Record<string, string> = {}, log: string[] = []) {
   return { fs, files, state };
 }
 
+interface Write {
+  path: string;
+  data: string;
+}
+
+function viewItems(template: MenuTemplate) {
+  const view = template.find((item) => item.label === "View");
+  return (view?.submenu ?? []) as { label?: string; checked?: boolean }[];
+}
+
 function harness(initial: Record<string, string> = {}, platform: NodeJS.Platform = "linux") {
   const log: string[] = [];
+  const writes: Write[] = [];
   const templates: MenuTemplate[] = [];
   const errors: unknown[] = [];
-  const f = fakeFs(initial, log);
+  const f = fakeFs(initial, log, writes);
   const controller = createModeController({
     fs: f.fs,
-    file: "/h/run/ui-mode.json",
+    legacyFile: LEGACY,
+    viewFile: VIEW,
+    pid: PID,
     platform,
+    log: (line) => log.push(`log ${line}`),
     menu: {
       setApplicationMenu(t) {
         templates.push(t);
-        const checked = ((t.find((i) => i.label === "View")?.submenu ?? []) as { checked?: boolean }[]).map((i) => i.checked);
+        const checked = viewItems(t).map((i) => i.checked);
         log.push(`menu ${checked.join(",")}`);
       },
     },
@@ -57,107 +70,115 @@ function harness(initial: Record<string, string> = {}, platform: NodeJS.Platform
     },
     onError: (e) => errors.push(e),
   });
-  return { controller, log, templates, errors, ...f };
+  return { controller, log, writes, templates, errors, ...f };
 }
 
 async function flush() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-const FILE = "/h/run/ui-mode.json";
+function markerWrites(h: ReturnType<typeof harness>) {
+  return h.writes.filter((w) => w.path === VIEW).map((w) => JSON.parse(w.data));
+}
 
-test("parseUiMode accepts tui and webui only", () => {
+test("parseUiMode accepts tui, webui and webui-preview only", () => {
   expect(parseUiMode("tui")).toBe("tui");
   expect(parseUiMode("webui")).toBe("webui");
+  expect(parseUiMode("webui-preview")).toBe("webui-preview");
   expect(() => parseUiMode("TUI")).toThrow('invalid ui mode: "TUI"');
   expect(() => parseUiMode(undefined)).toThrow("invalid ui mode: ");
   expect(() => parseUiMode(1)).toThrow("invalid ui mode: 1");
 });
 
-test("modeFilePath is run/ui-mode.json under CPD_HOME", () => {
-  expect(modeFilePath("/home/u/.cpd")).toBe(path.join("/home/u/.cpd", "run", "ui-mode.json"));
-});
-
-test("readMode returns tui when the file is missing", async () => {
-  await expect(readMode(fakeFs().fs, FILE)).resolves.toBe("tui");
-});
-
-test("readMode rejects invalid content naming the file", async () => {
-  await expect(readMode(fakeFs({ [FILE]: "not json" }).fs, FILE)).rejects.toThrow(FILE);
-  await expect(readMode(fakeFs({ [FILE]: "42" }).fs, FILE)).rejects.toThrow(FILE);
-  await expect(readMode(fakeFs({ [FILE]: "null" }).fs, FILE)).rejects.toThrow(FILE);
-  await expect(readMode(fakeFs({ [FILE]: '{"mode":"x"}' }).fs, FILE)).rejects.toThrow(FILE);
-  await expect(readMode(fakeFs({ [FILE]: "{}" }).fs, FILE)).rejects.toThrow(FILE);
-  await expect(readMode(fakeFs({ [FILE]: '{"mode":"webui"}' }).fs, FILE)).resolves.toBe("webui");
-});
-
-test("readMode propagates other fs errors", async () => {
-  const f = fakeFs();
-  const boom = Object.assign(new Error("denied"), { code: "EACCES" });
-  f.state.readError = boom;
-  await expect(readMode(f.fs, FILE)).rejects.toBe(boom);
-});
-
-test("writeMode creates the directory then writes the mode json", async () => {
-  const log: string[] = [];
-  const f = fakeFs({}, log);
-  await writeMode(f.fs, FILE, "webui");
-  expect(log).toEqual([`mkdir ${path.dirname(FILE)}`, `write ${FILE} {"mode":"webui"}\n`]);
-});
-
-test("controller init applies the persisted mode", async () => {
-  const h = harness({ [FILE]: '{"mode":"webui"}' });
-  expect(h.controller.getMode()).toBe("tui");
+test("launches in webui and never reads ui-mode.json", async () => {
+  const h = harness({ [LEGACY]: '{"mode":"tui"}' });
+  expect(h.controller.getMode()).toBe(LAUNCH_MODE);
   await h.controller.init();
   expect(h.controller.getMode()).toBe("webui");
-  expect(h.log).toEqual([`read ${FILE}`, "menu false,true", "ignore false", "send webui"]);
+  expect(h.log).toContain("menu false,true,false");
+  expect(h.log).toContain("ignore false");
+  expect(h.log).toContain("send webui");
+  // No launch view is ever read back from a file.
+  expect(h.log.some((l) => l.startsWith("read "))).toBe(false);
 });
 
-test("controller setMode persists then applies menu, shortcuts and window in order", async () => {
-  const h = harness();
-  await h.controller.setMode("webui");
-  expect(h.controller.getMode()).toBe("webui");
-  expect(h.log).toEqual([
-    `mkdir ${path.dirname(FILE)}`,
-    `write ${FILE} {"mode":"webui"}\n`,
-    "menu false,true",
-    "ignore false",
-    "send webui",
-  ]);
+test("deletes the stale ui-mode.json once and logs it", async () => {
+  const withFile = harness({ [LEGACY]: '{"mode":"tui"}' });
+  await withFile.controller.init();
+  expect(withFile.log.filter((l) => l.startsWith("remove "))).toEqual([`remove ${LEGACY}`]);
+  const lines = withFile.log.filter((l) => l.startsWith("log ") && l.includes(LEGACY));
+  expect(lines).toHaveLength(1);
+  expect(withFile.files.has(LEGACY)).toBe(false);
+
+  const withoutFile = harness();
+  await expect(withoutFile.controller.init()).resolves.toBeUndefined();
+  expect(withoutFile.log.filter((l) => l.startsWith("log "))).toEqual([]);
 });
 
-test("controller setMode to the current mode does nothing", async () => {
+test("writes the ui-view marker on launch and on every setMode", async () => {
   const h = harness();
+  await h.controller.init();
   await h.controller.setMode("tui");
-  expect(h.log).toEqual([]);
-  expect(h.controller.getMode()).toBe("tui");
+  await h.controller.setMode("webui-preview");
+  expect(markerWrites(h)).toEqual([
+    { view: "webui", pid: PID },
+    { view: "tui", pid: PID },
+    { view: "webui-preview", pid: PID },
+  ]);
+  expect(h.log).toContain(`mkdir ${path.dirname(VIEW)}`);
+  expect(h.controller.getMode()).toBe("webui-preview");
 });
 
-test("controller setMode keeps the old mode when the write fails", async () => {
+test("removes the ui-view marker on graceful quit", async () => {
   const h = harness();
-  const boom = new Error("disk full");
-  h.state.writeError = boom;
-  await expect(h.controller.setMode("webui")).rejects.toBe(boom);
-  expect(h.controller.getMode()).toBe("tui");
-  expect(h.templates).toEqual([]);
-  expect(h.log.some((l) => l.startsWith("menu") || l.startsWith("send") || l.startsWith("ignore"))).toBe(false);
+  await h.controller.init();
+  await h.controller.setMode("tui");
+  await h.controller.dispose();
+  expect(h.log.filter((l) => l === `remove ${VIEW}`)).toEqual([`remove ${VIEW}`]);
+  expect(h.files.has(VIEW)).toBe(false);
+});
+
+test("treats webui-preview as webui for the renderer channel", async () => {
+  const h = harness();
+  await h.controller.init();
+  await h.controller.setMode("webui-preview");
+  expect(h.controller.getMode()).toBe("webui-preview");
+  expect(h.log).toContain("menu false,false,true");
+  expect(h.log).toContain("ignore false");
+  expect(h.log).toContain("send webui");
+  expect(h.log).not.toContain("send webui-preview");
+});
+
+test("setMode applies menu, shortcuts and the renderer channel in order", async () => {
+  const h = harness();
+  await h.controller.init();
+  const before = h.log.length;
+  await h.controller.setMode("tui");
+  const tail = h.log.slice(before);
+  const step = (line: string) => tail.indexOf(line);
+  expect(step("menu true,false,false")).toBeGreaterThanOrEqual(0);
+  expect(step("menu true,false,false")).toBeLessThan(step("ignore true"));
+  expect(step("ignore true")).toBeLessThan(step("send tui"));
+  expect(JSON.parse(h.writes.at(-1)!.data)).toEqual({ view: "tui", pid: PID });
+});
+
+test("setMode to the current view applies nothing", async () => {
+  const h = harness();
+  await h.controller.init();
+  const before = h.log.length;
+  await h.controller.setMode("webui");
+  expect(h.log.slice(before).some((l) => l.startsWith("menu") || l.startsWith("send") || l.startsWith("ignore"))).toBe(false);
+  expect(h.controller.getMode()).toBe("webui");
 });
 
 test("menu click selects the mode through the controller", async () => {
-  const h = harness({ [FILE]: '{"mode":"tui"}' }, "darwin");
+  const h = harness({}, "darwin");
   await h.controller.init();
   const view = h.templates[0]?.find((i) => i.label === "View");
   const items = (view?.submenu ?? []) as { label?: string; click?: () => void }[];
-  items.find((i) => i.label === "WebUI")?.click?.();
+  items.find((i) => i.label === "WebUI Preview")?.click?.();
   await flush();
   expect(h.errors).toEqual([]);
-  expect(h.files.get(FILE)).toBe('{"mode":"webui"}\n');
-
-  h.state.writeError = new Error("nope");
-  const latest = h.templates[h.templates.length - 1]?.find((i) => i.label === "View");
-  const back = ((latest?.submenu ?? []) as { label?: string; click?: () => void }[]).find((i) => i.label === "TUI");
-  back?.click?.();
-  await flush();
-  expect(h.errors).toHaveLength(1);
-  expect(h.controller.getMode() satisfies UiMode).toBe("webui");
+  expect(h.controller.getMode() satisfies UiMode).toBe("webui-preview");
+  expect(markerWrites(h).at(-1)).toEqual({ view: "webui-preview", pid: PID });
 });

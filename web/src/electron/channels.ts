@@ -12,8 +12,6 @@ export const CHANNELS = {
   uiGetMode: "ui:get-mode",
   uiMode: "ui:mode",
   wasm: "ghostty:wasm",
-  webC2s: "cpd:c2s",
-  webS2c: "cpd:s2c",
   healthOk: "health:ok",
   healthCrash: "health:crash",
 } as const;
@@ -21,7 +19,7 @@ export const CHANNELS = {
 export const UPDATE_BOOTSTRAP_CHANNEL = "update:bootstrap";
 export const UPDATE_STATE_CHANNEL = "update:state";
 
-export type UiMode = "tui" | "webui";
+export type UiMode = "tui" | "webui" | "webui-preview";
 
 export interface PtySize {
   cols: number;
@@ -62,8 +60,8 @@ export interface CpdElectronBridge {
   onPtyData(cb: (data: string) => void): () => void;
   onPtyExit(cb: (exitCode: number) => void): () => void;
   onMode(cb: (mode: UiMode) => void): () => void;
-  sendWeb(raw: unknown): void;
-  onWebMessage(cb: (raw: unknown) => void): () => void;
+  /** The one WebSocket endpoint of web/CONTRACT.md §15.1, handed over once as a plain value (preload). */
+  readonly webSocketUrl: string;
   /** Starts (or restarts) that tab's pty. */
   startTabPty?(tabId: string, size: PtySize): Promise<void>;
   writeTabPty?(tabId: string, data: string): void;
