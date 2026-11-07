@@ -31,13 +31,14 @@ async function boot(): Promise<void> {
   const webuiRoot = element("webui-root");
   const tabBar = element("tab-bar");
 
-  // D2: the renderer's startup IPC is this promise. mountWebui's HealthBeacon calls reportHealthy
-  // on mount; passing it the startup promise defers health:ok until every startup IPC here has
-  // resolved and reports health:crash (so the watchdog's rollback runs) when one of them rejects.
+  // D2: the renderer's startup IPC is this promise. The App calls reportHealthy only after the
+  // first cockpit.snapshot (web/CONTRACT.md §15.2); passing it the startup promise defers health:ok
+  // until every startup IPC here has resolved and reports health:crash (so the watchdog's rollback
+  // runs) when one of them rejects.
   const startup = (async (): Promise<void> => {
     const ghostty = await Ghostty.fromBytes(await bridge.readWasm());
 
-    const showTerminal = createViewToggle(boolHidden(container), boolHidden(webuiRoot));
+    const showTerminal = createViewToggle(boolHidden(container), boolHidden(webuiRoot), boolHidden(tabBar));
     const hosts = (await bridge.listHosts?.()) ?? [];
     const tabs = buildTabs(hosts);
     const panes = new Map<string, { pane: HTMLElement; host: TabTerminal }>();
@@ -110,7 +111,7 @@ async function boot(): Promise<void> {
 
     const applyView = (): void => {
       const shown = terminalShown();
-      showTerminal(shown);
+      showTerminal(shown, mode);
       for (const [id, entry] of panes) {
         entry.pane.hidden = id !== activeId;
         entry.host.setVisible(id === activeId && shown);

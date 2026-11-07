@@ -36,11 +36,10 @@ const MemoInbox = memo(Inbox);
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
 
 export type { FileReaderBoundary };
-// `onHealthy` is a stub: accepted, never called yet.
 export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void; onHealthy?: () => void }
 
 export function App(props: AppProps): ReactElement {
-  const { transport, scheduler, reader, newId, onCrash } = props;
+  const { transport, scheduler, reader, newId, onCrash, onHealthy } = props;
   const crash = onCrash === undefined ? {} : { onCrash };
   const { store, connection } = useMemo(() => {
     const s = createStore();
@@ -93,6 +92,14 @@ export function App(props: AppProps): ReactElement {
     if (saved.ok) setSettingsOpen(false);
   }, [saving, saved]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
+  // web/CONTRACT.md §15.2: the desktop reports health:ok only after the first cockpit.snapshot
+  // (cockpit.tree goes from null to a tree), once: later traffic does not report again.
+  const healthyReported = useRef(false);
+  useEffect(() => {
+    if (!live || healthyReported.current || onHealthy === undefined) return;
+    healthyReported.current = true;
+    onHealthy();
+  }, [live, onHealthy]);
   const selectedPlanId = cockpit.selectedPlanId;
   const restored = useRef(false);
   useEffect(() => {
