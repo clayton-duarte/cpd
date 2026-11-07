@@ -59,7 +59,7 @@ it("bash read edit write codemode and mcp tools each render a row", () => {
     m.unmount();
   }
   const failed = mount(<ToolRow tool={tool({ name: "bash", args: { command: "x" }, status: "failed", result: { text: "\nboom\nmore", isError: true } })} />);
-  expect(part(failed.container, "status")).toBe("Failed: boom");
+  expect(part(failed.container, "status")).toBe("Failed");
   failed.unmount();
   const running = mount(<ToolRow tool={tool({ name: "bash", args: { command: "x" }, status: "running", result: undefined })} />);
   expect(part(running.container, "status")).toBe("Running");
@@ -103,9 +103,8 @@ it("a long path or command is cut at 100 characters and other details at 160", (
   const exact = mount(<ToolRow tool={tool({ name: "read", args: { path: "p".repeat(100) } })} />);
   expect(part(exact.container, "detail")).toBe("p".repeat(100));
   exact.unmount();
-  const reason = "r".repeat(300);
-  const failed = mount(<ToolRow tool={tool({ name: "bash", args: { command: "x" }, status: "failed", result: { text: reason, isError: true } })} />);
-  expect(part(failed.container, "status")).toBe(`Failed: ${reason}`);
+  const failed = mount(<ToolRow tool={tool({ name: "bash", args: { command: "x" }, status: "failed", result: { text: "r".repeat(300), isError: true } })} />);
+  expect(part(failed.container, "status")).toBe("Failed");
   failed.unmount();
 });
 
@@ -120,6 +119,13 @@ it("tool output previews 10 lines and the expander shows every line", () => {
   click(btn);
   expect(shown()).toBe(text);
   expect(m.container.querySelector('button[data-action="expand-output"]')).toBeNull();
+  m.unmount();
+});
+
+it("a failed tool shows Failed without the reason", () => {
+  const m = mount(<ToolRow tool={tool({ name: "bash", args: { command: "x" }, status: "failed", result: { text: "\nboom\nmore", isError: true } })} />);
+  // 15.1: the reason text goes to the toast, never inline in the row's status.
+  expect(part(m.container, "status")).toBe("Failed");
   m.unmount();
 });
 
