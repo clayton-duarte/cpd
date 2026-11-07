@@ -346,6 +346,44 @@ The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (rend
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
 - The chosen mode persists in `$CPD_HOME/run/ui-mode.json` (see Module contract, mode.ts).
 
+## Remote TUI tabs over ssh
+
+cpd desktop shows one terminal per tab: the local tab, and one remote tab per ssh host (air-d33). This section is the contract for that tab list, the per-tab pty and its IPC; the WebUI data plane for a remote cockpit is future work and is not documented as shipped here.
+
+### Tabs and their hosts
+
+- The host source is `~/.ssh/config`: the tab list is the `Host` blocks that declare an explicit `HostName`, with `Include` directives resolved transitively and wildcard patterns (for example `Host *`) skipped. There is no new cpd setting for this (air-d34).
+- Tab order: `local` first, then the ssh aliases in file order of the resolved config.
+- Tab ids: the local tab is `local`; a remote tab is `ssh:<alias>` (for example `ssh:homeserver`). The tab label is the alias.
+
+### Per-tab pty
+
+- Each tab has exactly one pty, created when the tab is first selected and kept for the life of the app. Switching tabs never restarts a live pty; a hidden tab keeps running.
+- The local tab's pty runs the local default command (`CPD_TUI_COMMAND`: `cpd tui --attach`). A remote tab's pty runs `ssh -t <alias> cpd tui --attach`, so the remote cockpit attaches over ssh.
+- Status values per tab: `connecting` (the pty is spawning or the ssh connection is not up yet), `live`, `exited` (the process ended normally), `failed`. A `failed` tab carries a reason: the ssh exit code, or `cpd not found on <host>` when the remote command is missing (exit code 127).
+- Nothing reconnects on its own. Clicking a `failed` or `exited` tab restarts that tab's pty and nothing else; the other tabs are untouched.
+
+### Visibility and the view
+
+- The tab bar shows `local` plus every remote tab in every view mode (TUI and WebUI): remote tabs never hide (air-d40).
+- Clicking a remote tab switches the view to TUI for this run (air-d40) and connects that tab's pty if it has none. The `local` tab follows the view the View menu selects; how the menu and the mode switch work is owned by mode.ts and menu.ts (see Module contract and the View menu items) and is not restated here.
+
+### IPC channels
+
+The pty channels carry a tab id on every payload. Existing channel names (`pty:start`, `pty:write`, `pty:resize`, `pty:data`, `pty:exit`, see Module contract, channels.ts) keep their names and gain the id; `pty:status` and `pty:hosts` are new.
+
+- Main to renderer:
+  - `pty:data` with `{tabId, data}`: a raw terminal chunk for that tab.
+  - `pty:exit` with `{tabId, code}`: the process exit code for that tab.
+  - `pty:status` with `{tabId, status, code?}`: the tab's status (`connecting` | `live` | `exited` | `failed`), with `code` present when the status is `exited` or `failed`.
+- Renderer to main:
+  - `pty:start` invoke with `{tabId, cols, rows}`: starts (or, after `exited`/`failed`, restarts) that tab's pty.
+  - `pty:write` with `{tabId, data}`: keystrokes and pastes for that tab.
+  - `pty:resize` with `{tabId, cols, rows}`: refit that tab's pty.
+  - `pty:hosts` invoke with no payload: returns the resolved hosts from `~/.ssh/config`, in tab order; the renderer builds the tab list from it.
+
+Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal.ts contract (Module contract) requires; the Verification checklist below covers the remote tabs as well as the local one.
+
 ## Auto-update and CLI bootstrap
 
 ### Overview
@@ -525,17 +563,19 @@ A changed `main.js` or `preload.cjs` never reloads the renderer: it shows `Resta
 Run each check against the built app (`pnpm --filter cpd-web-client run electron`). A check passes only when its observable result is seen.
 
 1. The window opens full-window with background `#1c1a20`, and the `cpd tui --attach` cockpit renders. Result: the terminal fills the window, no margin shows another colour, and the cockpit is drawn.
-2. Keys reach cpd tui / pi. Type text, then press Ctrl-W, Ctrl-T, Ctrl-N and Esc. Result: each key acts inside the cockpit (in TUI mode the menu shortcuts are ignored, so the keys are not taken by the menu).
+2. Keys reach cpd tui / pi, on every tab (local and remote). Type text, then press Ctrl-W, Ctrl-T, Ctrl-N and Esc. Result: each key acts inside that tab's cockpit (in TUI mode the menu shortcuts are ignored, so the keys are not taken by the menu).
 3. Colours match the Dango palette. Run `for i in $(seq 0 15); do printf '\033[48;5;%dm  ' $i; done; printf '\033[0m\n'`. Result: 16 colour blocks in the Dango v3 colours (black `#5a504a`, red `#e17f6e`, green `#8da96e`, yellow `#c29653`, blue `#7aa2ce`, magenta `#ca88a3`, cyan `#67ada7`, white `#aba3af`, then the bright set `#87808c`, `#ffa796`, `#b3cd96`, `#e4bb7f`, `#a1c6ef`, `#ecaec7`, `#92d1ca`, `#f3ead9`).
 4. Maple Mono is used. Result: glyphs match Maple Mono (for example `0`, `O`, `l`, `1`, `|` are distinct). Uninstalling Maple Mono changes the glyphs, so the check is meaningful only with it installed.
-5. Resizing the window refits the cockpit. Drag the window edges. Result: the cockpit redraws at the new size with no wrapped or stray lines from the old width.
-6. OSC 52 copy from inside pi lands in the macOS clipboard. Copy a message from pi, then run `pbpaste` in a shell. Result: `pbpaste` prints the copied text.
-7. View > WebUI hides the terminal, shows the WebUI cockpit and pauses drawing. Result: the terminal disappears, the cockpit is shown with its panes, and output stops being drawn.
-8. View > TUI restores the terminal with focus and the pty session intact. Result: the terminal reappears with the cursor focused, and the cockpit state is unchanged (no restart; the `cpd tui` process id is the same).
-9. The choice persists across restarts in `$CPD_HOME/run/ui-mode.json`. Set View > WebUI, quit, relaunch. Result: the app opens in WebUI and the file holds `{"mode":"webui"}`. Set View > TUI and the file holds `{"mode":"tui"}`.
-10. Closing the window quits the app and leaves no orphan process. Close the window, then run `pgrep -fl 'cpd tui'`. Result: no line is printed, so no `node-pty` or `cpd tui` process remains.
-11. The renderer is WebGL. In devtools, `renderer` shows `webgl` (`term.rendererType`, when available). Result: `webgl`. If `term.rendererType` is not exposed by the build, this check is unverified, not passed.
-12. The accelerator caveat. In TUI mode, CmdOrCtrl+Shift+M does not fire, because menu shortcuts are ignored so terminal keys pass through. Result: nothing changes. Switch to WebUI with View > WebUI. Switch back to TUI with CmdOrCtrl+Shift+M or with View > TUI. Result: in WebUI the accelerator switches to TUI.
+5. Resizing the window refits the cockpit, on every tab (local and remote): the tab being viewed refits, and each hidden tab refits on its next selection. Drag the window edges. Result: the cockpit redraws at the new size with no wrapped or stray lines from the old width.
+6. OSC 52 copy from inside pi lands in the macOS clipboard, on every tab (local and remote). Copy a message from pi, then run `pbpaste` in a shell. Result: `pbpaste` prints the copied text.
+7. Cmd+V pastes the clipboard into the focused tab (local or remote), bracketed when the app asked; an empty clipboard pastes nothing; Cmd+C is unchanged. Copy a message inside a remote tab's cockpit, focus it, press Cmd+V. Result: the text is pasted into that tab's cockpit.
+8. Zoom (Cmd+= / Cmd++ / Cmd+- / Cmd+0) steps the font of the focused tab (local or remote) within 9..28, resets to 13, and refits that tab's pty; it is not persisted. Zoom a remote tab. Result: the font changes and the remote cockpit redraws at the new size; after a restart the font is back to the default.
+9. View > WebUI hides the terminal, shows the WebUI cockpit and pauses drawing. Result: the terminal disappears, the cockpit is shown with its panes, and output stops being drawn.
+10. View > TUI restores the terminal with focus and the pty session intact. Result: the terminal reappears with the cursor focused, and the cockpit state is unchanged (no restart; the `cpd tui` process id is the same).
+11. The choice persists across restarts in `$CPD_HOME/run/ui-mode.json`. Set View > WebUI, quit, relaunch. Result: the app opens in WebUI and the file holds `{"mode":"webui"}`. Set View > TUI and the file holds `{"mode":"tui"}`.
+12. Closing the window quits the app and leaves no orphan process. Close the window, then run `pgrep -fl 'cpd tui'`. Result: no line is printed, so no `node-pty` or `cpd tui` process remains.
+13. The renderer is WebGL. In devtools, `renderer` shows `webgl` (`term.rendererType`, when available). Result: `webgl`. If `term.rendererType` is not exposed by the build, this check is unverified, not passed.
+14. The accelerator caveat. In TUI mode, CmdOrCtrl+Shift+M does not fire, because menu shortcuts are ignored so terminal keys pass through. Result: nothing changes. Switch to WebUI with View > WebUI. Switch back to TUI with CmdOrCtrl+Shift+M or with View > TUI. Result: in WebUI the accelerator switches to TUI.
 
 ## Automated checks
 
