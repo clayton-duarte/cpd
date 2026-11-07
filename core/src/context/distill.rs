@@ -164,6 +164,16 @@ const BATCH_BYTES: usize = 49152;
 const TOPIC_MAX: usize = 40;
 const SHORT_MAX: usize = 120;
 
+/// The `short` the prompt aims at (contract §4.6 step 5): the checks allow up to `SHORT_MAX`.
+const SHORT_TARGET: usize = 100;
+
+/// The most extra pi calls one run may make to re-ask the lines the checks rejected (commands.md §3.12).
+const REASK_MAX: usize = 2;
+
+/// The files of one distiller call, and of a re-ask (the failing records and their errors in `reask.md`).
+const STEP_FILES: &[&str] = &["prompt.md", "batch.md", "known.md", "docs.md"];
+const REASK_FILES: &[&str] = &["prompt.md", "batch.md", "known.md", "docs.md", "reask.md"];
+
 /// What a run reads in one transaction: every record of a Context, the records out of force, and the curations.
 pub struct State {
     records: Vec<Indexed>,
@@ -369,17 +379,11 @@ impl Batch<'_> {
                 continue;
             }
             let mut bad = Vec::new();
-            if raw.topic.is_empty()
-                || raw.topic.len() > TOPIC_MAX
-                || !raw
-                    .topic
-                    .bytes()
-                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
-            {
+            if !topic_ok(&raw.topic) {
                 bad.push(format!("topic {:?} must be 1 to {TOPIC_MAX} characters of lowercase letters, digits and `-`", raw.topic));
             }
             if raw.short.is_empty() || raw.short.len() > SHORT_MAX || raw.short.contains('\n') {
-                bad.push(format!("short must be 1 to {SHORT_MAX} bytes on one line"));
+                bad.push(short_rule());
             }
             let seq = batch[&id];
             let mut proposal = None;
@@ -462,6 +466,42 @@ impl Batch<'_> {
                 Reason::Duplicate | Reason::Superseded => Approval::Pending,
             },
         })
+    }
+
+    /// The ids of the batch's records whose lines `rejected` names, in batch order, each once: the records a
+    /// re-ask (commands.md §3.12) is for.
+    fn failing(&self, rejected: &[Problem]) -> Vec<RecordId> {
+        self.records
+            .iter()
+            .map(|(_, r)| &r.id)
+            .filter(|id| rejected.iter().any(|p| p.id.as_ref() == Some(*id)))
+            .cloned()
+            .collect()
+    }
+
+    /// The problems of `id` in `rejected`.
+    fn problems_of<'p>(&self, rejected: &'p [Problem], id: &RecordId) -> Vec<&'p Problem> {
+        rejected.iter().filter(|p| p.id.as_ref() == Some(id)).collect()
+    }
+
+    /// One parseable line of `text` per batch record that appears exactly once, by id.
+    fn raw_lines(&self, text: &str) -> HashMap<RecordId, RawLine> {
+        let mut counts: HashMap<RecordId, usize> = HashMap::new();
+        let mut lines: HashMap<RecordId, RawLine> = HashMap::new();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let Ok(raw) = serde_json::from_str::<RawLine>(line) else {
+                continue;
+            };
+            let Ok(id) = RecordId::parse(&raw.id) else {
+                continue;
+            };
+            if self.records.iter().any(|(_, r)| r.id == id) {
+                *counts.entry(id.clone()).or_default() += 1;
+                lines.insert(id, raw);
+            }
+        }
+        lines.retain(|id, _| counts.get(id) == Some(&1));
+        lines
     }
 }
 
@@ -626,7 +666,7 @@ impl Run<'_> {
         let hits = self.grep_hits(&batch_records)?;
         let dir = self.home.context_digest_dir(self.context);
         fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
-        self.write_inputs(&dir, &batch_records, state, &hits)?;
+        self.write_inputs(&dir, &batch_records, state, &hits, None)?;
         let batch = Batch {
             records: &batch_records,
             in_force: in_force
@@ -637,7 +677,7 @@ impl Run<'_> {
         };
         let start = self.config.context_distill_tier;
         let steps: Vec<Tier> = vec![start];
-        let (ran, checked, text) = match self.step(start, upto, &batch)? {
+        let (ran, checked, text, clamped) = match self.step(start, upto, state, &batch)? {
             Ok(done) => done,
             Err(Fault::Invalid(problems, kept)) => return Err(self.invalid(upto, &problems, &kept)),
             Err(Fault::Pi(failure, tail)) => return Err(self.pi_failed(upto, &failure, tail)),
@@ -662,7 +702,7 @@ impl Run<'_> {
             fs::write(&kept, &text).map_err(|e| io_failed("write", &kept, &e))?;
         }
         self.log_run(&ran, upto, "valid", &checked.rejected);
-        Ok(json!({
+        let mut out = json!({
             "context": self.context.as_str(),
             "distilled": true,
             "steps": steps.iter().map(Tier::to_string).collect::<Vec<_>>(),
@@ -673,28 +713,100 @@ impl Run<'_> {
             "dropped": dropped,
             "remaining": uncurated.len() - curated,
             "run": ran.figures(),
-        }))
+        });
+        if !clamped.is_empty() {
+            out["clamped"] = json!(clamped
+                .iter()
+                .map(|c| json!({"id": c.id.to_string(), "bytes": c.bytes}))
+                .collect::<Vec<_>>());
+        }
+        Ok(out)
     }
 
-    /// One step (contract §4.6 steps 4 and 5) at `tier`: the distiller, then the checks. The outer `Err` is a failure
-    /// that ends the run at once (a file); the inner one is the step's fault, which ends the run (hs-d560).
+    /// One step (contract §4.6 steps 4 and 5) at `tier`: the distiller, then the checks, the re-ask of the lines
+    /// they rejected, the clamp and the empty-answer smaller-batch retry. The outer `Err` is a failure that ends
+    /// the run at once (a file); the inner one is the step's fault, which ends the run (hs-d560).
     fn step(
         &mut self,
         tier: Tier,
         upto: u64,
+        state: &State,
         batch: &Batch<'_>,
-    ) -> Result<Result<(Ran, Checked, String), Fault>, CpdError> {
-        let (ran, text) = match self.run_pi(
-            tier,
-            upto,
-            &["prompt.md", "batch.md", "known.md", "docs.md"],
-        )? {
-            Ok(done) => done,
-            Err(fault) => return Ok(Err(fault)),
+    ) -> Result<Result<(Ran, Checked, String, Vec<Clamp>), Fault>, CpdError> {
+        match self.run_pi(tier, upto, STEP_FILES)? {
+            Ok((ran, text)) => self.checks(tier, upto, state, batch, batch.records, ran, text),
+            // An empty final assistant message retries once with a smaller batch, at the same Tier (GXD1,
+            // commands.md §3.12); every other fault ends the run.
+            Err(fault) if is_empty_answer(&fault) => {
+                let smaller = smaller_batch(batch.records);
+                let dir = self.home.context_digest_dir(self.context);
+                self.write_inputs(&dir, &smaller, state, &batch.hits, None)?;
+                match self.run_pi(tier, upto, STEP_FILES)? {
+                    Ok((ran, text)) => self.checks(tier, upto, state, batch, &smaller, ran, text),
+                    Err(fault) => Ok(Err(fault)),
+                }
+            }
+            Err(fault) => Ok(Err(fault)),
+        }
+    }
+
+    /// The checks of one distiller call (contract §4.6 step 5) with the re-ask, the clamp and the failure of a run
+    /// that accepts no line. `records` is what the call was run over; `batch` carries the Context's records in
+    /// force and their grep hits.
+    fn checks(
+        &mut self,
+        tier: Tier,
+        upto: u64,
+        state: &State,
+        batch: &Batch<'_>,
+        records: &[&Indexed],
+        mut ran: Ran,
+        mut text: String,
+    ) -> Result<Result<(Ran, Checked, String, Vec<Clamp>), Fault>, CpdError> {
+        let current = Batch {
+            records,
+            in_force: batch.in_force.clone(),
+            hits: batch.hits.clone(),
         };
-        let mut checked = batch.check(&text);
+        let mut checked = current.check(&text);
+        let mut reasks = 0;
+        while reasks < REASK_MAX {
+            let failing = current.failing(&checked.rejected);
+            if failing.is_empty() {
+                break;
+            }
+            reasks += 1;
+            let sub: Vec<&Indexed> = records
+                .iter()
+                .copied()
+                .filter(|indexed| failing.contains(&indexed.1.id))
+                .collect();
+            let dir = self.home.context_digest_dir(self.context);
+            let prompt = reask_md(&sub, &checked.rejected);
+            self.write_inputs(&dir, &sub, state, &batch.hits, Some(&prompt))?;
+            let (ran2, text2) = match self.run_pi(tier, upto, REASK_FILES)? {
+                Ok(done) => done,
+                Err(fault) => return Ok(Err(fault)),
+            };
+            ran = ran2;
+            text = text2;
+            let again = Batch {
+                records: &sub,
+                in_force: batch.in_force.clone(),
+                hits: batch.hits.clone(),
+            }
+            .check(&text);
+            // The re-asked records replace their old rejections with the new answer's.
+            checked
+                .rejected
+                .retain(|p| !p.id.as_ref().is_some_and(|id| failing.contains(id)));
+            checked.curations.extend(again.curations);
+            checked.proposals.extend(again.proposals);
+            checked.rejected.extend(again.rejected);
+        }
+        let clamped = clamp_shorts(&current, &mut checked, &text);
         if !checked.curations.is_empty() {
-            return Ok(Ok((ran, checked, text)));
+            return Ok(Ok((ran, checked, text, clamped)));
         }
         // No line accepted (GXD1): the run is invalid, and its rejections are all of its lines.
         if checked.rejected.is_empty() {
@@ -726,13 +838,15 @@ impl Run<'_> {
         grep_hits_with(&*Ports::current().runner, &repos, batch)
     }
 
-    /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`.
+    /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`, and, in a re-ask, `reask.md` (the failing
+    /// records, their errors and the byte budget).
     fn write_inputs(
         &self,
         dir: &Path,
         batch: &[&Indexed],
         state: &State,
         hits: &HashMap<RecordId, Vec<String>>,
+        reask: Option<&str>,
     ) -> Result<(), CpdError> {
         let known_md = known_md(state, batch)?;
         let mut docs_md = String::new();
@@ -744,12 +858,16 @@ impl Run<'_> {
             }
             docs_md.push('\n');
         }
-        for (name, content) in [
+        let mut files = vec![
             ("prompt.md", PROMPT.to_owned()),
             ("batch.md", records_md(batch)),
             ("known.md", known_md),
             ("docs.md", docs_md),
-        ] {
+        ];
+        if let Some(text) = reask {
+            files.push(("reask.md", text.to_owned()));
+        }
+        for (name, content) in files {
             let path = dir.join(name);
             fs::write(&path, content).map_err(|e| io_failed("write", &path, &e))?;
         }
@@ -1090,6 +1208,135 @@ pub(super) fn records_md(in_force: &[&Indexed]) -> String {
     out
 }
 
+/// Whether `topic` passes its bound (contract §4.6 step 5): 1 to `TOPIC_MAX` bytes of lowercase letters,
+/// digits and `-`.
+fn topic_ok(topic: &str) -> bool {
+    !topic.is_empty()
+        && topic.len() <= TOPIC_MAX
+        && topic
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
+/// The `short` rule's message, as `Batch::check` and the clamp compare it.
+fn short_rule() -> String {
+    format!("short must be 1 to {SHORT_MAX} bytes on one line")
+}
+
+/// One clamp of the non-silent clamp (commands.md §3.12): the record and the byte length of its clamped `short`.
+struct Clamp {
+    id: RecordId,
+    bytes: usize,
+}
+
+/// The non-silent clamp (commands.md §3.12): a `short` the re-asks could not fit is cut to at most
+/// `SHORT_MAX` bytes on one line — every newline becomes a space, the longest valid UTF-8 prefix of at most
+/// `SHORT_MAX` bytes is taken, then cut back to its last space — and never left empty.
+fn clamp_short(short: &str) -> String {
+    let flat = short.replace('\n', " ");
+    let mut end = flat.len().min(SHORT_MAX);
+    while end > 0 && !flat.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = flat[..end].trim_end();
+    let cut = prefix
+        .rfind(' ')
+        .map_or(prefix, |space| prefix[..space].trim_end());
+    if !cut.is_empty() {
+        return cut.to_owned();
+    }
+    if !prefix.is_empty() {
+        return prefix.to_owned();
+    }
+    flat.chars()
+        .next()
+        .map_or_else(|| " ".to_owned(), |c| c.to_string())
+}
+
+/// The clamp of the records whose only rejection is their `short`: curate each with its clamped short and
+/// return every clamp as `{id, bytes}` (commands.md §3.12).
+fn clamp_shorts(batch: &Batch<'_>, checked: &mut Checked, text: &str) -> Vec<Clamp> {
+    let raws = batch.raw_lines(text);
+    let mut clamped = Vec::new();
+    for indexed in batch.records {
+        let seq = indexed.0;
+        let record = &indexed.1;
+        let id = &record.id;
+        if checked.curations.iter().any(|c| c.record == *id) {
+            continue;
+        }
+        let problems = batch.problems_of(&checked.rejected, id);
+        if problems.len() != 1 || problems[0].what != short_rule() {
+            continue;
+        }
+        let Some(raw) = raws.get(id) else {
+            continue;
+        };
+        if !topic_ok(&raw.topic) || !(raw.short.len() > SHORT_MAX || raw.short.contains('\n')) {
+            continue;
+        }
+        let short = clamp_short(&raw.short);
+        let mut proposal = None;
+        if let Some(retire) = &raw.retire {
+            match batch.retire(id, seq, retire) {
+                Ok(p) => proposal = Some(p),
+                Err(_) => continue,
+            }
+        }
+        checked.curations.push(Curation {
+            record: id.clone(),
+            topic: raw.topic.clone(),
+            short: short.clone(),
+        });
+        checked.proposals.extend(proposal);
+        checked.rejected.retain(|p| p.id.as_ref() != Some(id));
+        clamped.push(Clamp {
+            id: id.clone(),
+            bytes: short.len(),
+        });
+    }
+    clamped
+}
+
+/// The re-ask prompt (commands.md §3.12): only the failing records, each with its full text, the validator's
+/// error and the byte budget.
+fn reask_md(records: &[&Indexed], rejected: &[Problem]) -> String {
+    let mut out = format!(
+        "Some lines were rejected by the checks. Answer again with JSON lines only, one for each record \
+         below, in this order, each id copied exactly, no other text and no code fence.\n\
+         Byte budget: `topic` 1 to {TOPIC_MAX} characters of lowercase letters, digits and `-`; `short` at \
+         most {SHORT_MAX} bytes (aim for {SHORT_TARGET}) on one line, every newline replaced by a space.\n\n"
+    );
+    for indexed in records {
+        let record = &indexed.1;
+        out.push_str(&format!("[{}] {}\n", record.id, record.kind().as_str()));
+        out.push_str(record.text.trim_end());
+        out.push('\n');
+        let mut first = true;
+        for p in rejected.iter().filter(|p| p.id.as_ref() == Some(&record.id)) {
+            out.push_str(if first { "error: " } else { "; " });
+            first = false;
+            out.push_str(&p.what);
+        }
+        if !first {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The smaller batch of the empty-answer retry: at most half the call's records, at least one.
+fn smaller_batch<'a>(records: &'a [&'a Indexed]) -> Vec<&'a Indexed> {
+    let take = (records.len() / 2).max(1).min(records.len());
+    records.iter().copied().take(take).collect()
+}
+
+/// Whether `fault` is pi's empty final assistant message, the one fault that gets a smaller-batch retry.
+fn is_empty_answer(fault: &Fault) -> bool {
+    matches!(fault, Fault::Pi(Failed::Output(why), _) if why == pi_json::NO_TEXT)
+}
+
 /// Why pi failed.
 enum Failed {
     Spawn(String),
@@ -1229,6 +1476,9 @@ mod pi_json {
     /// (`stop`: pi exits 0 for an `error`, `aborted` or `length` stop in this mode) and not be blank; a `length`
     /// stop gives its complete lines (GXD3, [`complete_lines`]), `cut`.
     /// `Err` when a line is not JSON or an assistant message lacks what pi's docs promise.
+    /// The answer of a call whose final assistant message holds no text: the empty-answer retry's trigger.
+    pub(super) const NO_TEXT: &str = "the final assistant message has no text";
+
     pub fn parse(bytes: &[u8]) -> Result<Output, String> {
         let mut usage: Option<Usage> = None;
         let mut last: Option<Assistant> = None;
@@ -1270,7 +1520,7 @@ mod pi_json {
                     .filter_map(|b| b.text.as_deref())
                     .collect();
                 match m.stop_reason.as_str() {
-                    "stop" if text.trim().is_empty() => Err("the final assistant message has no text".to_owned()),
+                    "stop" if text.trim().is_empty() => Err(NO_TEXT.to_owned()),
                     "stop" => Ok(text),
                     // GXD3: the answer is the text up to its last newline; the cut, incomplete line is dropped.
                     "length" => match complete_lines(&text) {
