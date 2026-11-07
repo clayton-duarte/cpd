@@ -16,11 +16,51 @@ use crate::store::WriteTxn;
 /// Workflows are merged but a Job is non-final, the Plan is (moved to) `deploy`, `done_at` NULL, no Event. Idempotent: a Plan already
 /// `done` is left alone. `just` names the Workflow this call merged and the time `gh` reported for it: that time, not the
 /// transaction time, is its `merged_at` in the Event. Whether the Plan became `done` in this call.
+///
+/// A **Lead-less `shaping` Plan** (air-d19, air-d22) has no Workflow, so only the Job half of the guard applies: once it has at
+/// least one Job and every Job is final (`merged` or `cancelled`; a `draft`, `queued`, `running` or `failed` Job, or no Job at
+/// all, keeps it `shaping`), it moves `shaping -> done` with `done_at` set and one quiet `plan-done`
+/// `{workflows: [], turn: false}`; `locked_at` stays null. Idempotent.
 pub(crate) fn settle_done(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     just: Option<(&WorkflowKey, &str)>,
 ) -> Result<bool, CpdError> {
+    // A Lead-less `shaping` Plan (air-d22): only the Job half of the guard applies, no Workflow condition.
+    let leadless: bool = tx
+        .query_row(
+            "SELECT 1 FROM plans WHERE id = ?1 AND phase = 'shaping' AND lead_session IS NULL",
+            [plan.as_str()],
+            |_| Ok(true),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(false),
+            e => Err(e),
+        })?;
+    if leadless {
+        let settle: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1)
+               AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
+        if !settle {
+            return Ok(false);
+        }
+        let moved = tx.execute(
+            "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE id = ?1 AND phase = 'shaping' AND lead_session IS NULL",
+            [plan.as_str()],
+        )?;
+        if moved == 0 {
+            return Ok(false);
+        }
+        let text = format!(
+            "Every Job of Plan {plan} is final: the Plan is done. See cpd plan show --plan {plan}"
+        );
+        append(tx, NewEvent::plan_done_quiet(text).plan(plan.clone()))?;
+        return Ok(true);
+    }
     let (all_merged, blocked): (bool, bool) = tx.query_row(
         "SELECT
            NOT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))
