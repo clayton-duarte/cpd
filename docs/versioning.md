@@ -2,7 +2,7 @@
 
 cpd's version is `0.<protocol>.<migrations>-<commit>`, for example `0.13.45-a4cedc3c`. The three parts are:
 
-- `<protocol>` is an integer, raised when an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"). Today it is **13** (constant `PROTOCOL` in `core/src/events/kind.rs`).
+- `<protocol>` is an integer, raised when an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"). Today it is **22** (constant `PROTOCOL` in `core/src/events/kind.rs`).
 - `<migrations>` is the count of `.sql` files directly in `core/src/store/migrations/`: the 14 legacy files `0001-initial`..`0014-register` plus the named `<YYYYMMDDTHHMM>-<slug>.sql` files. Today it is **45**. The count only grows (contract §4.5 N5): files are never edited or deleted; a breaking migration may be renamed to a newer timestamp with an unchanged body.
 - `<commit>` is the short commit hash the build was given in `CPD_COMMIT`, for example `a4cedc3c`. When `CPD_COMMIT` is unset or empty (a plain `cargo build`), the version is `<semantic version>-dev`, for example `0.13.45-dev`.
 
