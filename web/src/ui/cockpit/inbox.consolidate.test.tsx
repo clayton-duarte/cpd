@@ -328,11 +328,17 @@ function errorToastApp(error: { code: string; message: string; details?: Record<
 }
 const reportBtn = () => document.body.querySelector('[data-part="cockpit-error-toast"] [data-part="error-toast-report"]');
 
-it("error toast Send to host dispatches error.report and dismisses", () => {
+const sentReport = (transport: FakeTransport) =>
+  transport.sent.find((m) => (m as { action?: { kind?: string } }).action?.kind === "error.report") as { actionId: string };
+
+it("error toast Send to host dispatches error.report and dismisses on success", () => {
   const { transport, view } = errorToastApp({ code: "cpd_failed", message: "too new", details: { cpdCode: "store_too_new" } });
   expect(reportBtn()?.textContent).toBe("Send to host");
   click(reportBtn());
   expect(transport.sent).toContainEqual({ type: "cockpit.action", actionId: expect.any(String), action: { kind: "error.report", target: "host", code: "cpd_failed", message: "too new" } });
+  // the send is fire-and-forget: the toast stays until the action result, and a success dismisses it (air-d27)
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).not.toBeNull();
+  act(() => transport.emitMessage({ type: "action.result", actionId: sentReport(transport).actionId, ok: true, output: {} }));
   expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).toBeNull();
   view.unmount();
 });
@@ -340,5 +346,37 @@ it("error toast Send to host dispatches error.report and dismisses", () => {
 it("error toast Send to cpd for a protocol_error", () => {
   const { view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
   expect(reportBtn()?.textContent).toBe("Send to cpd");
+  view.unmount();
+});
+
+it("the error toast action button renders in the content row at the toast left edge", () => {
+  const { view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  const alert = document.body.querySelector('[data-part="cockpit-error-toast"] [data-slot="alert"]');
+  const btn = reportBtn();
+  // air-d27: the button spans the Alert's full content row (its own row under the icon), left-aligned at
+  // the toast's left edge. Without a column it is auto-placed into the 1rem icon column and renders
+  // squashed, overlapping the title and description.
+  expect(btn?.parentElement).toBe(alert);
+  expect(btn?.className).toContain("col-span-2");
+  view.unmount();
+});
+
+it("Send to cpd sends to the bare Context id and keeps the toast open when the send fails", () => {
+  const { transport, view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  expect(reportBtn()?.textContent).toBe("Send to cpd");
+  click(reportBtn());
+  // air-n12: the report names the bare Context id `cpd`, never the agent key `cpd:manager`.
+  expect(transport.sent).toContainEqual({
+    type: "cockpit.action",
+    actionId: expect.any(String),
+    action: { kind: "error.report", target: "cpd", code: "protocol_error", message: "bad frame" },
+  });
+  // the send is fire-and-forget: the toast stays open until the action result arrives (air-d27)
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).not.toBeNull();
+  // a failed send keeps the toast open and shows the failure
+  act(() => transport.emitMessage({ type: "action.result", actionId: sentReport(transport).actionId, ok: false, error: { code: "cpd_failed", message: "session_not_found" } }));
+  const toast = document.body.querySelector('[data-part="cockpit-error-toast"]');
+  expect(toast).not.toBeNull();
+  expect(toast?.textContent).toContain("session_not_found");
   view.unmount();
 });

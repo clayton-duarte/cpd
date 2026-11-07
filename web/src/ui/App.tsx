@@ -2,6 +2,7 @@ import { CircleAlertIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { ContextNode, PlanNode, SessionNode } from "../protocol/cockpit.ts";
+import type { WireError } from "../protocol/domain.ts";
 import type { Scheduler, Transport } from "../protocol/runtime.ts";
 import { createConnection } from "../state/connection.ts";
 import { createStore, useStore } from "../state/store.ts";
@@ -35,6 +36,10 @@ const MemoInbox = memo(Inbox);
 
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
 
+/** The unread Inbox rows already hidden this session. Module-level, not a per-mount ref, so a remount does
+ *  not send a second hide for a row whose item the engine has already closed (air-n11 B2). */
+const dismissedUnread = new Set<number>();
+
 export type { FileReaderBoundary };
 export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void }
 
@@ -59,8 +64,14 @@ export function App(props: AppProps): ReactElement {
   const onSelectSession = useCallback((id: string) => connection.selectSession(id), [connection]);
   const onSelectPlan = useCallback((id: string) => connection.selectPlan(id), [connection]);
   const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => connection.action(a), [connection]);
-  const onDismissError = useCallback(() => store.dispatch({ type: "dismissError" }), [store]);
+  // The report is fire-and-forget (pro-d452); the toast tracks its actionId so it dismisses on success and
+  // stays open, with the failure under the button and a Retry, when the send fails (air-d27).
+  const [report, setReport] = useState<{ id: string; error: WireError; failure: WireError | null } | null>(null);
+  const onDismissError = useCallback(() => { setReport(null); store.dispatch({ type: "dismissError" }); }, [store]);
   const activeError = lastError ?? cockpit.error;
+  // While a report is in flight or failed the toast keeps its own error, so the send's failure (lastError)
+  // never replaces it (air-d27).
+  const shownError = report?.error ?? activeError;
   const panelsRef = useRef<LayoutPanels | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
@@ -91,6 +102,12 @@ export function App(props: AppProps): ReactElement {
     setSaving(false);
     if (saved.ok) setSettingsOpen(false);
   }, [saving, saved]);
+  useEffect(() => {
+    if (report === null || report.failure !== null) return;
+    if (pendingActionIds.includes(report.id)) return;
+    if (completedActionIds.includes(report.id)) { onDismissError(); return; }
+    setReport((r) => (r === null ? null : { ...r, failure: lastError ?? { code: "cpd_failed", message: "the report could not be sent" } }));
+  }, [report, pendingActionIds, completedActionIds, lastError, onDismissError]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
   const selectedPlanId = cockpit.selectedPlanId;
   const restored = useRef(false);
@@ -132,48 +149,65 @@ export function App(props: AppProps): ReactElement {
     }
     return out;
   }, [cockpit.inbox, visiblePlan]);
-  const dismissedUnread = useRef<Set<number>>(new Set());
   const inboxRows = cockpit.inbox?.rows;
   useEffect(() => {
     if (activeSessionId === null || inboxRows === undefined) return;
     for (const r of inboxRows) {
-      if (r.kind !== "unread" || r.sessionId !== activeSessionId || r.id < 0 || dismissedUnread.current.has(r.id)) continue;
-      dismissedUnread.current.add(r.id);
+      if (r.kind !== "unread" || r.sessionId !== activeSessionId || r.id < 0 || dismissedUnread.has(r.id)) continue;
+      dismissedUnread.add(r.id);
       onAction({ kind: "inbox.dismiss", itemId: r.id });
     }
   }, [activeSessionId, inboxRows, onAction]);
   const inboxModel = useMemo(() => {
     const inbox = cockpit.inbox;
     if (inbox === null || activeSessionId === null) return inbox;
-    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === activeSessionId || dismissedUnread.current.has(r.id))));
+    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === activeSessionId || dismissedUnread.has(r.id))));
     return rows.length === inbox.rows.length ? inbox : { ...inbox, rows, openCount: rows.length };
   }, [cockpit.inbox, activeSessionId]);
 
   return (
     <>
     <BootstrapOverlay />
-    {activeError === null ? null : (
+    {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
         className="fixed right-4 bottom-8 z-50 w-full max-w-md shadow-lg"
       >
         <Alert variant="destructive" className="pr-9">
           <CircleAlertIcon className="size-4" />
-          <AlertTitle>{activeError.code}</AlertTitle>
-          <AlertDescription>{activeError.message}</AlertDescription>
+          <AlertTitle>{shownError.code}</AlertTitle>
+          <AlertDescription>{shownError.message}</AlertDescription>
           <Button
             type="button"
             variant="outline"
             size="sm"
             data-part="error-toast-report"
-            className="mt-2"
+            className="mt-2 col-span-2 justify-self-start"
             onClick={() => {
-              onAction({ kind: "error.report", target: routeErrorTarget(activeError), code: activeError.code, message: activeError.message });
-              onDismissError();
+              const id = onAction({ kind: "error.report", target: routeErrorTarget(shownError), code: shownError.code, message: shownError.message });
+              setReport({ id, error: shownError, failure: null });
             }}
           >
-            {`Send to ${routeErrorTarget(activeError)}`}
+            {`Send to ${routeErrorTarget(shownError)}`}
           </Button>
+          {report === null || report.failure === null ? null : (
+            <div data-part="error-toast-failure" className="col-span-2 mt-1 flex items-center gap-2 text-xs">
+              <span className="min-w-0 break-words">{`${report.failure.code}: ${report.failure.message}`}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                data-part="error-toast-retry"
+                onClick={() => {
+                  const error = report.error;
+                  const id = onAction({ kind: "error.report", target: routeErrorTarget(error), code: error.code, message: error.message });
+                  setReport({ id, error, failure: null });
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
           <Button
             type="button"
             variant="ghost"

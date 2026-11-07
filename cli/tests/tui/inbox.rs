@@ -513,11 +513,17 @@ fn snooze_refuses_what_it_cannot_hide() {
     let fx = Fixture::new();
     let (exit, error) = fx.fail(&["snooze", "999", "1h"]);
     assert_eq!((exit, error["code"].as_str()), (4, Some("item_not_found")));
-    let (exit, error) = fx.fail(&["snooze", &fx.id("x").to_string(), "1h"]);
-    assert_eq!((exit, error["code"].as_str()), (3, Some("item_closed")));
+    // A closed item's snooze is the no-op of §21's intro (air-d26): it exits 0 with `already: "closed"`.
+    let txns = fx.store_count("SELECT count(*) FROM txns");
+    let out = fx.ok(&["snooze", &fx.id("x").to_string(), "1h"]);
+    assert_eq!(out["already"], "closed");
+    assert_eq!(out["item"]["closed_at"], CLOSED_X);
+    assert_eq!(out["item"]["snoozed_until"], Value::Null);
     let (exit, error) = fx.fail(&["snooze", &fx.id("dialog").to_string(), "2h"]);
     assert_eq!((exit, error["code"].as_str()), (2, Some("usage")));
+    // No Event and no transaction was written.
     assert!(fx.events("inbox-snoozed").is_empty());
+    assert_eq!(fx.store_count("SELECT count(*) FROM txns"), txns);
 }
 
 #[test]
@@ -551,9 +557,14 @@ fn dismiss_refuses_what_it_cannot_hide() {
     let fx = Fixture::new();
     let (exit, error) = fx.fail(&["dismiss", "999"]);
     assert_eq!((exit, error["code"].as_str()), (4, Some("item_not_found")));
-    let (exit, error) = fx.fail(&["dismiss", &fx.id("x").to_string()]);
-    assert_eq!((exit, error["code"].as_str()), (3, Some("item_closed")));
+    // A closed item's dismiss is the no-op of §21's intro (air-d26): it exits 0 with `already: "closed"`.
+    let txns = fx.store_count("SELECT count(*) FROM txns");
+    let out = fx.ok(&["dismiss", &fx.id("x").to_string()]);
+    assert_eq!(out["already"], "closed");
+    assert_eq!(out["item"]["closed_at"], CLOSED_X);
+    // No Event and no transaction was written.
     assert!(fx.events("inbox-dismissed").is_empty());
+    assert_eq!(fx.store_count("SELECT count(*) FROM txns"), txns);
 }
 
 impl Fixture {
