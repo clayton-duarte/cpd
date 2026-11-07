@@ -61,10 +61,28 @@ struct Stop(String);
 #[cfg(test)]
 mod adapter_tests;
 
-/// Runs the install; the human text (refusals, warnings, `installed ...`) goes to `err`. The exit code: 0, or 1
-/// for a refusal, a failure or a follow-up that failed.
+/// What `cpd install` is asked beyond [`Install`]: `cpd install --no-follow-up` sets [`InstallOptions::no_follow_up`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct InstallOptions {
+    /// `--no-follow-up` (docs/commands.md §14.4): write the binary and the adapter, but run no follow-up, so a
+    /// running engine and its views are left as they are. The next install, without the flag, runs them.
+    pub no_follow_up: bool,
+}
+
+/// Runs the install with the defaults; the human text (refusals, warnings, `installed ...`) goes to `err`. The
+/// exit code: 0, or 1 for a refusal, a failure or a follow-up that failed.
 pub fn run(ports: &Ports, install: &Install, err: &mut dyn Write) -> i32 {
-    match steps(ports, install, err) {
+    run_with_options(ports, install, InstallOptions::default(), err)
+}
+
+/// Runs the install with the caller's options; otherwise as [`run`].
+pub fn run_with_options(
+    ports: &Ports,
+    install: &Install,
+    options: InstallOptions,
+    err: &mut dyn Write,
+) -> i32 {
+    match steps(ports, install, &options, err) {
         Ok(exit) => exit,
         Err(Stop(text)) => {
             let _ = writeln!(err, "{text}");
@@ -77,7 +95,12 @@ fn refused(text: impl std::fmt::Display) -> Stop {
     Stop(format!("cpd install refused: {text}"))
 }
 
-fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, Stop> {
+fn steps(
+    ports: &Ports,
+    install: &Install,
+    _options: &InstallOptions,
+    err: &mut dyn Write,
+) -> Result<i32, Stop> {
     check_migrations(ports, install)?;
     adapter::preflight(install)?;
     check_verdict(ports, install)?;
@@ -353,3 +376,5 @@ fn replace_binary(install: &Install) -> Result<PathBuf, Stop> {
 
 #[cfg(test)]
 mod migration_tests;
+#[cfg(test)]
+mod steps_tests;

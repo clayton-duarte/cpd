@@ -115,6 +115,49 @@ describe('installCli', () => {
     if (!r.ok) expect(r.log).toMatch(/plan list/);
     expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(false);
   });
+  it('installCli installs the binary before waiting for running attempts', async () => {
+    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
+    let n = 0;
+    const f = fakeExec({
+      [BUILD]: {},
+      [PLANS]: () => json({ plans: [{ id: 'a' }] }),
+      [LIST('a')]: () => json({ attempts: n++ === 0 ? [{ status: 'running' }] : [] }),
+      [NO_FOLLOW_UP]: {},
+      [INSTALL]: {},
+    });
+    const { timers, pending } = manualTimers();
+    const invoked = () => f.calls.map((c) => [c.cmd, ...c.args].join(' '));
+    const p = installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {}, retryMs: 1234 }, ROOT, 's1');
+    await flush();
+    // The binary is installed at once, before any wait: only the follow-ups wait for zero running attempts.
+    expect(invoked()).toContain(NO_FOLLOW_UP);
+    expect(invoked()).not.toContain(INSTALL);
+    expect(pending.map((t) => t.ms)).toEqual([1234]);
+    // The full install (the follow-ups) runs once, only when no attempt is running.
+    pending[0]?.fn();
+    expect(await p).toEqual({ ok: true });
+    expect(invoked().filter((k) => k === INSTALL)).toHaveLength(1);
+  });
+  it("update error log includes the refused call's error code and message", async () => {
+    const f = fakeExec({
+      [BUILD]: {},
+      [PLANS]: {
+        code: 3,
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'plan_has_lead', message: 'plan app-boot already has a lead' },
+        }),
+        stderr: '',
+      },
+    });
+    const { timers } = manualTimers();
+    const r = await installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.log).toContain('plan_has_lead');
+      expect(r.log).toContain('plan app-boot already has a lead');
+    }
+  });
 });
 
 describe('readInstalledSha', () => {
