@@ -4,6 +4,7 @@ import type { Disposable } from "../../protocol/runtime.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
 import type { Cpd, FollowBoundary, FollowProcess } from "./cli.ts";
 import type { PaneSet, PaneUpdate, ReadModel } from "./readmodel.ts";
+import type { CockpitStream, StreamSnapshot } from "./stream.ts";
 import { COALESCE_MS, SAFETY_REFRESH_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate } from "./events.ts";
 
 const tree = (cursor: number): ContextTreeModel => ({ contexts: [], cursor });
@@ -49,6 +50,32 @@ function setup(gate?: () => Promise<void>, cpdOverride?: Cpd) {
 
 const ev = (id: number, kind: string) => JSON.stringify({ id, kind, plan: null, context: null, session: null, job: null, attempt: null, at: "2026-01-01T00:00:00Z", text: "" });
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+/** A cockpit stream that is already ready: the primary path of 13, no follow process. */
+class ReadyStream implements CockpitStream {
+  private snapshotCbs: ((s: StreamSnapshot) => void)[] = [];
+  start(): void { /* not under test */ }
+  stop(): void { /* not under test */ }
+  ready(): boolean { return true; }
+  onSnapshot(cb: (s: StreamSnapshot) => void): void { this.snapshotCbs.push(cb); }
+  onEvent(): void { /* not under test */ }
+  onError(): void { /* not under test */ }
+  planShow(): Promise<unknown> { return Promise.resolve("down"); }
+  snapshot(panes: StreamSnapshot["panes"], seq: number): void { for (const cb of [...this.snapshotCbs]) cb({ seq, panes }); }
+}
+
+type Raw = Record<string, unknown>;
+const ctxRow = (id: string): Raw => ({ id, title: `Title ${id}`, archived_at: null, records: 0, open_questions: 0 });
+const planRow = (id: string, context: string): Raw => ({
+  id, context, title: `Plan ${id}`, phase: "dispatch", archived_at: null, created_at: "2026-01-01T00:00:00Z",
+  lead_session: null, counts: { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 },
+});
+const rawPanes = (contexts: Raw[], plans: Raw[], c: { context: number; plan: number; session: number; inbox: number }): StreamSnapshot["panes"] => ({
+  context: { ok: true, contexts, events_cursor: c.context },
+  plan: { ok: true, plans, events_cursor: c.plan },
+  session: { ok: true, sessions: [], events_cursor: c.session },
+  inbox: { ok: true, items: [], engine: { running: true }, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, events_cursor: c.inbox },
+});
 
 describe("cockpit service events", () => {
   it("events follow starts once and resumes from the snapshot cursor", async () => {
@@ -262,6 +289,42 @@ describe("cockpit service live updates", () => {
   });
 });
 
+describe("cockpit service live tree", () => {
+  it("the tree pane advances while the cockpit stream is ready", async () => {
+    const stream = new ReadyStream();
+    const scheduler = new FakeScheduler();
+    const procs: FakeFollow[] = [];
+    const follow: FollowBoundary = { start: (args) => { const p = new FakeFollow(args); procs.push(p); return p; } };
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: tree(0), plan: null, inbox }; },
+      async loadPanes() { return {}; },
+    };
+    const service = createCockpitService({ readModel, cpd: { json: async () => ({ ok: true }) }, follow, scheduler, stream });
+    const updates: CockpitUpdate[] = [];
+    service.subscribe((u) => updates.push(u));
+    await service.start();
+    expect(procs).toHaveLength(0); // the stream is ready: no follow process runs
+
+    // a committed batch ends in a Snapshot whose four cursors make a tree cursor of 20
+    stream.snapshot(rawPanes([ctxRow("c1")], [], { context: 20, plan: 30, session: 25, inbox: 40 }), 1);
+    scheduler.advance(COALESCE_MS);
+    await flush();
+    expect(updates.filter((u) => u.kind === "pane" && u.pane === "tree")).toHaveLength(1);
+
+    // a later batch adds a Plan; its minimum cursor (10) is lower, which is not stale (14.1)
+    stream.snapshot(rawPanes([ctxRow("c1")], [planRow("p2", "c1")], { context: 10, plan: 30, session: 25, inbox: 40 }), 2);
+    scheduler.advance(COALESCE_MS);
+    await flush();
+
+    const trees = updates.filter((u) => u.kind === "pane" && u.pane === "tree");
+    expect(trees).toHaveLength(2);
+    const last = trees[1]!;
+    const plans = last.kind === "pane" && last.pane === "tree" ? last.data.contexts.flatMap((c) => c.plans.map((p) => p.id)) : [];
+    expect(plans).toEqual(["p2"]);
+    service.stop();
+  });
+});
+
 describe("cockpit service stale pane updates", () => {
   const planAt = (cursor: number): PlanViewModel => ({ planId: "p1", contextId: "c", title: "P", cursor } as unknown as PlanViewModel);
   const inboxAt = (cursor: number): InboxModel => ({ ...inbox, cursor });
@@ -290,14 +353,14 @@ describe("cockpit service stale pane updates", () => {
     service.stop();
   });
 
-  it("apply_drops_stale_tree_update", async () => {
+  it("apply_keeps_a_tree_update_with_a_lower_cursor", async () => {
     const { service, procs, scheduler, updates } = stale({ tree: tree(30) });
     await service.start();
     procs[0]!.emit(ev(41, "context-created"));
     scheduler.advance(COALESCE_MS);
     await flush();
-    expect(service.snapshot().tree?.cursor).toBe(40);
-    expect(updates.filter((u) => u.kind === "pane" && u.pane === "tree")).toEqual([]);
+    expect(service.snapshot().tree?.cursor).toBe(30);
+    expect(updates.filter((u) => u.kind === "pane" && u.pane === "tree")).toHaveLength(1);
     service.stop();
   });
 

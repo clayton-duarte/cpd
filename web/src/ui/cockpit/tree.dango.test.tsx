@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextNode, ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
+import type { Disposable, Transport } from "../../protocol/runtime.ts";
+import { FakeScheduler } from "../../testing/scheduler.ts";
 import { mount } from "../../testing/render.tsx";
+import { createHubConnection } from "../../server/hub/connection.ts";
+import { createCockpitService } from "../../server/cockpit/events.ts";
+import type { ReadModel } from "../../server/cockpit/readmodel.ts";
+import type { CockpitStream, StreamSnapshot } from "../../server/cockpit/stream.ts";
+import type { FollowBoundary, FollowProcess } from "../../server/cockpit/cli.ts";
+import { App } from "../App.tsx";
 import { ContextTree } from "./ContextTree.tsx";
 
 function session(id: string, key: string, state: SessionNode["ref"]["state"], planId: string | null): SessionNode {
@@ -146,4 +154,93 @@ it("context tree marks the selected plan", () => {
   expect(c.querySelectorAll('[role="img"][data-dot]')).toHaveLength(3);
   expect(c.querySelector('[data-dot="fixing"]')?.getAttribute("data-tone")).toBe("blocked");
   m.unmount();
+});
+
+// --- the cockpit seam end to end: FakeTransport in front of the real service and hub ---
+
+class LiveTransport implements Transport {
+  private messageHandlers: ((raw: unknown) => void)[] = [];
+  private statusHandlers: ((s: "open" | "closed") => void)[] = [];
+  sendRaw: (raw: unknown) => void = () => {};
+  connect(): void { /* recorded by nothing: not under test */ }
+  send(raw: unknown): void { this.sendRaw(raw); }
+  close(): void { /* not under test */ }
+  onMessage(h: (raw: unknown) => void): Disposable { this.messageHandlers.push(h); return { dispose: () => { this.messageHandlers = this.messageHandlers.filter((x) => x !== h); } }; }
+  onStatus(h: (s: "open" | "closed") => void): Disposable { this.statusHandlers.push(h); return { dispose: () => { this.statusHandlers = this.statusHandlers.filter((x) => x !== h); } }; }
+  emitMessage(raw: unknown): void { for (const h of [...this.messageHandlers]) h(raw); }
+  emitStatus(s: "open" | "closed"): void { for (const h of [...this.statusHandlers]) h(s); }
+}
+
+class ReadyStream implements CockpitStream {
+  private snapshotCbs: ((s: StreamSnapshot) => void)[] = [];
+  start(): void { /* not under test */ }
+  stop(): void { /* not under test */ }
+  ready(): boolean { return true; }
+  onSnapshot(cb: (s: StreamSnapshot) => void): void { this.snapshotCbs.push(cb); }
+  onEvent(): void { /* not under test */ }
+  onError(): void { /* not under test */ }
+  planShow(): Promise<unknown> { return Promise.resolve("down"); }
+  snapshot(panes: StreamSnapshot["panes"], seq: number): void { for (const cb of [...this.snapshotCbs]) cb({ seq, panes }); }
+}
+
+type Raw = Record<string, unknown>;
+const ctxRow = (id: string): Raw => ({ id, title: `Title ${id}`, archived_at: null, records: 0, open_questions: 0 });
+const planRow = (id: string, context: string): Raw => ({
+  id, context, title: `Plan ${id}`, phase: "dispatch", archived_at: null, created_at: "2026-01-01T00:00:00Z",
+  lead_session: null, counts: { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 },
+});
+const rawPanes = (contexts: Raw[], plans: Raw[], c: { context: number; plan: number; session: number; inbox: number }): StreamSnapshot["panes"] => ({
+  context: { ok: true, contexts, events_cursor: c.context },
+  plan: { ok: true, plans, events_cursor: c.plan },
+  session: { ok: true, sessions: [], events_cursor: c.session },
+  inbox: { ok: true, items: [], engine: { running: true }, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, events_cursor: c.inbox },
+});
+const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+describe("Context tree live updates", () => {
+  it("a plan added after the first snapshot appears in the tree", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+    window.sessionStorage.clear();
+    const stream = new ReadyStream();
+    const scheduler = new FakeScheduler();
+    const follow: FollowBoundary = { start: () => ({} as FollowProcess) };
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: { contexts: [], cursor: 0 }, plan: null, inbox: { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 } }; },
+      async loadPanes() { return {}; },
+    };
+    const service = createCockpitService({ readModel, cpd: { json: async () => ({ ok: true }) }, follow, scheduler, stream });
+    await service.start();
+
+    const transport = new LiveTransport();
+    const hub = createHubConnection({
+      cockpit: service,
+      registry: { resolve: () => { throw new Error("no session is resolved in this test"); } },
+      backends: { pi: {} as never, durable: {} as never },
+      send: (m) => transport.emitMessage(m),
+    });
+    transport.sendRaw = (raw) => { void hub.handle(raw); };
+
+    const view = mount(<App transport={transport} scheduler={scheduler} reader={{ readBase64: async () => "", readText: async () => "" }} newId={() => "c1"} />);
+    act(() => transport.emitStatus("open"));
+
+    // the first committed batch: the tree holds its Context and no Plan
+    act(() => {
+      stream.snapshot(rawPanes([ctxRow("c1")], [], { context: 20, plan: 30, session: 25, inbox: 40 }), 1);
+      scheduler.advance(16);
+    });
+    await act(async () => { await flush(); });
+    expect(view.container.querySelector('[data-plan="p2"]')).toBeNull();
+
+    // a later batch adds the Plan; its minimum cursor (10) is lower, which is not stale (14.1)
+    act(() => {
+      stream.snapshot(rawPanes([ctxRow("c1")], [planRow("p2", "c1")], { context: 10, plan: 30, session: 25, inbox: 40 }), 2);
+      scheduler.advance(16);
+    });
+    await act(async () => { await flush(); });
+    expect(view.container.querySelector('[data-plan="p2"]')).not.toBeNull();
+
+    view.unmount();
+    service.stop();
+    await hub.close();
+  });
 });
