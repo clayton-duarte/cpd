@@ -399,6 +399,8 @@ pub fn attempt_status(status: AttemptStatus) -> Meaning {
 /// Meaning of a Plan's phase (`None`: no Plan).
 pub fn phase(phase: Option<Phase>) -> Meaning {
     match phase {
+        // A Lead-less shaping Plan has no Lead and has not started (contract §3.1, air-d19).
+        Some(Phase::Shaping) => Meaning::NotStarted,
         Some(Phase::Grounding) => Meaning::Grounding,
         Some(Phase::Plan) => Meaning::Planning,
         Some(Phase::Dispatch) => Meaning::InProgress,

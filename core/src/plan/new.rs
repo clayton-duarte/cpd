@@ -34,9 +34,12 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     let Some(plan) = row::find(conn, id)? else {
         return Ok(None);
     };
+    let Some(lead) = plan.lead_session.as_ref() else {
+        return Err(CpdError::bad_row(format!("Plan {id} has no Lead")));
+    };
     let (name, cwd, tier, runner) = conn.query_row(
         "SELECT name, cwd, tier, runner FROM sessions WHERE id = ?1",
-        [plan.lead_session.as_str()],
+        [lead.as_str()],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     Ok(Some(Created {
@@ -334,10 +337,14 @@ fn already(
             write_brief(env, plan, brief, "plan new")?;
         }
     }
+    let lead = plan
+        .lead_session
+        .as_ref()
+        .ok_or_else(|| CpdError::bad_row(format!("Plan {} has no Lead", plan.id)))?;
     let (state, pane, runner): (String, Option<String>, String) = env.store.read(|conn| {
         Ok(conn.query_row(
             "SELECT state, tmux_pane, runner FROM sessions WHERE id = ?1",
-            [plan.lead_session.as_str()],
+            [lead.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?)
     })?;
@@ -352,7 +359,7 @@ fn already(
                 env,
                 plan,
                 &created.cwd,
-                &plan.lead_session,
+                lead,
                 &name,
                 WorkerRunner::Pi,
                 "plan new",
@@ -365,8 +372,7 @@ fn already(
         }
         pane => (
             pane,
-            env.store
-                .read(|conn| lead::last_window(conn, &plan.lead_session))?,
+            env.store.read(|conn| lead::last_window(conn, lead))?,
         ),
     };
     let workflows = env.store.read(|conn| listed(conn, &plan.id))?;
@@ -536,7 +542,7 @@ mod tests {
             title: "Retry failed payouts".into(),
             jira: None,
             phase: Phase::Grounding,
-            lead_session: SessionId::parse("s1").unwrap(),
+            lead_session: Some(SessionId::parse("s1").unwrap()),
             created_at: "t".into(),
             locked_at: None,
             done_at: None,
