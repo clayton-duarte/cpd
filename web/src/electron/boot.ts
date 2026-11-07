@@ -9,6 +9,7 @@ export interface BootDeps {
   process: { on(signal: string, handler: () => void): unknown };
   startAutoUpdate(win: BootWindow): Promise<{ bootstrap: { state: string } }>;
   startServices(): void;
+  initMode(win: BootWindow): Promise<void>;
   registerIpc(): void;
   registerWebuiIpc(): void;
   loadDevUrl(win: BootWindow, url: string): Promise<unknown>;
