@@ -139,21 +139,26 @@ impl Tier {
         self.letter
     }
 
-    /// The effort digit; 0 for `X` (see [`Tier::is_x`]).
-    pub fn effort(self) -> u8 {
-        self.effort.unwrap_or(0)
+    /// The level name of the effort digit; `X` reads as `off`. To tell pi a level use [`Tier::thinking`].
+    pub fn level(self) -> &'static str {
+        LEVELS[self.effort.unwrap_or(0) as usize]
     }
 
-    /// pi's thinking level for this effort: `off`, `low`, `medium`, `high`, `xhigh`; `X` is `off`.
-    pub fn level(self) -> &'static str {
-        LEVELS[self.effort() as usize]
+    /// The thinking level to send pi: `off`, `low`, `medium`, `high`, `xhigh`; `None` for `X` (send no level).
+    pub fn thinking(self) -> Option<&'static str> {
+        self.effort.map(|e| LEVELS[e as usize])
+    }
+
+    /// The place within the letter: 0 < X < 1 < 2 < 3 < 4.
+    fn effort_rank(self) -> u8 {
+        self.effort.map_or(1, |e| if e == 0 { 0 } else { e + 1 })
     }
 }
 
-/// The ladder's order (Tier model v2): letters G < H < S < O, then effort ascending, `X` lowest of its letter.
+/// The ladder's order (Tier model v2): letters G < H < S < O, then effort ascending, `X` between 0 and 1.
 impl Ord for Tier {
     fn cmp(&self, other: &Tier) -> std::cmp::Ordering {
-        (self.letter.rank(), self.effort).cmp(&(other.letter.rank(), other.effort))
+        (self.letter.rank(), self.effort_rank()).cmp(&(other.letter.rank(), other.effort_rank()))
     }
 }
 
@@ -342,6 +347,14 @@ impl Serialize for Tier {
     }
 }
 
+/// `model` with `:<level>`; `model` alone when there is no level (`X`).
+pub fn with_level(model: &str, level: Option<&str>) -> String {
+    match level {
+        Some(level) => format!("{model}:{level}"),
+        None => model.to_string(),
+    }
+}
+
 /// One Tier letter's model and the efforts pi supports for it, ascending.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TierModel {
@@ -374,7 +387,7 @@ impl Catalog {
     pub fn is_valid(&self, tier: Tier) -> bool {
         let efforts = &self.model(tier.letter).efforts;
         match tier.effort {
-            None => efforts.is_empty(),
+            None => true,
             Some(effort) => efforts.contains(&effort),
         }
     }
@@ -399,14 +412,19 @@ impl Catalog {
         .with("efforts", model.efforts.clone()))
     }
 
-    /// pi's `--model` argument for `tier`: `<provider>/<model-id>:<level>`.
+    /// pi's `--model` argument for `tier`: `<provider>/<model-id>:<level>`, with no `:<level>` for `X`.
     pub fn model_arg(&self, tier: Tier) -> Result<String, CpdError> {
         self.check(tier)?;
-        Ok(format!(
-            "{}:{}",
-            self.model(tier.letter).model,
-            tier.level()
-        ))
+        Ok(with_level(&self.model(tier.letter).model, tier.thinking()))
+    }
+
+    /// Every rung a range is made of: the ladder plus the `X` of every letter, ascending.
+    fn rungs(&self) -> Vec<Tier> {
+        let mut rungs = self.ladder();
+        rungs.extend([Letter::G, Letter::H, Letter::S, Letter::O].map(Tier::x));
+        rungs.sort();
+        rungs.dedup();
+        rungs
     }
 
     /// Every valid rung, ascending (effort-0 rungs included; `X` is the one rung of a model without levels).
@@ -447,7 +465,7 @@ impl Catalog {
             Role::Lead => (defaults.lead, Some(defaults.manager)),
             Role::Manager => (defaults.manager, None),
         };
-        let ladder = self.ladder();
+        let ladder = self.rungs();
         let floor = ladder.iter().copied().find(|r| *r >= own)?;
         let ceiling = ladder
             .iter()
@@ -460,7 +478,7 @@ impl Catalog {
     /// (or `X`) up to the worker ceiling (or the letter's top rung); `None` when no rung is left.
     pub fn explore_range(&self, letter: Letter, worker: Range) -> Option<Range> {
         let rungs: Vec<Tier> = self
-            .ladder()
+            .rungs()
             .into_iter()
             .filter(|r| r.letter == letter && r.effort != Some(0) && *r <= worker.ceiling)
             .collect();
@@ -470,12 +488,12 @@ impl Catalog {
         })
     }
 
-    /// The next valid rung inside `range`; leaving a letter lands on its lowest effort >= 1 (or X); `None` at the ceiling.
+    /// The next ladder rung inside `range`, never effort 0 and never an `X` of a model with efforts; `None` at the ceiling.
     pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
         self.ladder()
             .into_iter()
             .filter(|r| range.contains(*r) && *r > tier)
-            .find(|r| r.letter == tier.letter || r.effort != Some(0))
+            .find(|r| r.effort != Some(0))
     }
 
     /// The lowest valid rung of `range` at or above `tier`.

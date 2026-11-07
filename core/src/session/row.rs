@@ -377,7 +377,7 @@ pub(crate) fn model_and_level(
     models: &Models,
     id: &SessionId,
     tier: &str,
-) -> Result<(String, &'static str), CpdError> {
+) -> Result<(String, Option<&'static str>), CpdError> {
     let tier =
         Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
     let model = match tier.letter() {
@@ -386,7 +386,7 @@ pub(crate) fn model_and_level(
         Letter::H => &models.h,
         Letter::G => &models.g,
     };
-    Ok((model.clone(), tier.level()))
+    Ok((model.clone(), tier.thinking()))
 }
 
 /// The models of the Session's Context (contract §8.3 "Models" (5)): its owner's key, or the machine layer.

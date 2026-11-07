@@ -171,7 +171,7 @@ fn the_title_writer_runs_pi_on_gx() {
             "--no-session",
             "--no-extensions",
             "--model",
-            "p/gemini:off",
+            "p/gemini",
             "--"
         ],
         "{argv:?}"

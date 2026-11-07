@@ -80,7 +80,7 @@ fn the_ladder_lists_valid_rungs_g_h_s_o_then_effort_ascending() {
 fn a_range_runs_from_its_floor_to_the_rung_below_the_next_role_default() {
     let c = catalog();
     let d = defaults("GX", "H1", "S1", "OX");
-    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "S0"));
+    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "SX"));
     assert_eq!(range(&c, Role::Lead, &d), pair("S1", "S3"));
     // The next default is itself excluded, and a role default may be effort 0.
     let d = defaults("GX", "H3", "S0", "OX");
@@ -133,7 +133,7 @@ fn a_default_that_is_not_a_rung_floors_up_and_ceilings_down() {
     assert_eq!(range(&c, Role::Manager, &d), pair("OX", "OX"));
     // A default below the whole ladder floors to its lowest rung.
     let d = defaults("G0", "H0", "S2", "OX");
-    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "S1"));
+    assert_eq!(range(&c, Role::Worker, &d), pair("HX", "S1"));
 }
 
 #[test]
@@ -148,6 +148,63 @@ fn a_role_with_no_valid_rung_in_its_span_has_no_range() {
         c.range(Role::Manager, &defaults("GX", "H1", "S1", "O4")),
         None
     );
+}
+
+/// R5: the rungs of a range are the ladder plus the X of every letter. A default `<L>X` is its own floor, also on a model
+/// with efforts; the ceiling is the highest rung strictly below the next default, an X included; the auxiliar takes
+/// `GX` on any G model.
+#[test]
+fn tier_x_is_its_own_floor_in_a_role_range() {
+    let c = catalog(); // H offers 1,3, S offers 0,1,3: HX and SX are no ladder rung, but are rungs of a range
+    let d = defaults("GX", "HX", "S1", "OX");
+    assert_eq!(range(&c, Role::Worker, &d), pair("HX", "SX"));
+    let r = c.range(Role::Worker, &d).unwrap();
+    assert!(
+        r.contains(t("HX")) && r.contains(t("H1")) && r.contains(t("S0")) && r.contains(t("SX"))
+    );
+    assert!(!r.contains(t("S1")) && !r.contains(t("GX")));
+    // A lead whose default is SX floors at SX; the worker below it ends at S0.
+    let d = defaults("GX", "H1", "SX", "OX");
+    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "S0"));
+    assert_eq!(range(&c, Role::Lead, &d), pair("SX", "S3"));
+    assert!(c.range(Role::Lead, &d).unwrap().contains(t("SX")));
+    // A default that is no X floors up on the ladder, and a range holds the X between its rungs.
+    let d = defaults("GX", "H1", "S1", "OX");
+    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "SX"));
+    assert!(c.range(Role::Worker, &d).unwrap().contains(t("SX")));
+    // The auxiliar is its default only: `GX` is valid on a G model that offers efforts.
+    let mut g = catalog();
+    g.g = model("gemini", &[1, 3]);
+    let d = defaults("GX", "H1", "S1", "OX");
+    assert_eq!(range(&g, Role::Auxiliar, &d), pair("GX", "GX"));
+    // The manager's default `OX` is its own floor on a model with efforts.
+    let mut o = catalog();
+    o.o = model("opus", &[1, 2]);
+    let d = defaults("GX", "H1", "S1", "OX");
+    assert_eq!(range(&o, Role::Manager, &d), pair("OX", "O2"));
+}
+
+/// R6: only effort 0 is excluded: a scout keeps letter H, a research Job letter S, from the letter's `<L>X` up to the
+/// worker ceiling.
+#[test]
+fn tier_x_is_in_the_explore_range_and_effort_0_is_not() {
+    let c = catalog(); // H offers 1,3, S offers 0,1,3
+    let worker = span("HX", "S3");
+    let scout = c.explore_range(Letter::H, worker).unwrap();
+    assert_eq!((scout.floor, scout.ceiling), (t("HX"), t("H3")));
+    assert!(scout.contains(t("HX")) && scout.contains(t("H1")) && scout.contains(t("H3")));
+    assert!(!scout.contains(t("GX")) && !scout.contains(t("SX")));
+    let research = c.explore_range(Letter::S, worker).unwrap();
+    assert_eq!((research.floor, research.ceiling), (t("SX"), t("S3")));
+    assert!(research.contains(t("SX")) && research.contains(t("S1")));
+    assert!(!research.contains(t("S0")), "effort 0 is excluded");
+    assert!(!research.contains(t("HX")) && !research.contains(t("OX")));
+    // A letter with efforts 0 and 1 only: its X is in, its 0 is out.
+    let mut c2 = catalog();
+    c2.h = model("haiku", &[0, 1]);
+    let scout = c2.explore_range(Letter::H, span("HX", "S3")).unwrap();
+    assert_eq!((scout.floor, scout.ceiling), (t("HX"), t("H1")));
+    assert!(!scout.contains(t("H0")));
 }
 
 #[test]
