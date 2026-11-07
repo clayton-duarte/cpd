@@ -15,6 +15,10 @@ export function parseMarkedPath(stdout: string): string {
   }
   return stdout.slice(begin + PATH_BEGIN.length, end);
 }
+/** Stub: the caller's cpd session identity is not yet stripped (red test). */
+export function stripSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env };
+}
 export async function resolveLoginPath(options: LoginPathOptions): Promise<string> {
   if (options.platform !== "darwin") {
     return options.currentPath ?? "";

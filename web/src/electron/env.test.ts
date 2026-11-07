@@ -1,4 +1,4 @@
-import { PATH_BEGIN, PATH_END, parseMarkedPath, resolveLoginPath } from "./env.ts";
+import { PATH_BEGIN, PATH_END, parseMarkedPath, resolveLoginPath, stripSessionEnv } from "./env.ts";
 import type { ShellRunner } from "./env.ts";
 
 function fakeRunner(result: { stdout?: string; error?: Error }) {
@@ -9,6 +9,24 @@ function fakeRunner(result: { stdout?: string; error?: Error }) {
   };
   return { run, calls };
 }
+
+test("stripSessionEnv removes session vars and keeps CPD_HOME", () => {
+  const env = {
+    CPD_HOME: "/cpd-home",
+    CPD_SESSION: "sess",
+    CPD_PLAN: "plan",
+    CPD_ATTEMPT: "attempt",
+    CPD_QUIT_MARKER: "/marker",
+    CPD_JOB_KIND: "worker",
+    PATH: "/usr/bin",
+  };
+  const stripped = stripSessionEnv(env);
+  for (const key of ["CPD_SESSION", "CPD_PLAN", "CPD_ATTEMPT", "CPD_QUIT_MARKER", "CPD_JOB_KIND"]) {
+    expect(stripped[key]).toBeUndefined();
+  }
+  expect(stripped["CPD_HOME"]).toBe("/cpd-home");
+  expect(stripped["PATH"]).toBe("/usr/bin");
+});
 
 test("parseMarkedPath returns the text between the markers and ignores shell noise", () => {
   const out = `noise\n${PATH_BEGIN}/a:/b${PATH_END}trailing ${PATH_BEGIN}x${PATH_END}`;
