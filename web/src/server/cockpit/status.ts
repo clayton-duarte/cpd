@@ -1,4 +1,5 @@
 import { readPreviewMode } from "../../electron/preview-mode.ts";
+import { toArgv } from "../cpd-argv.ts";
 export interface StatusDeps {
   cpd(argv: readonly string[]): Promise<string>;
   tmux(argv: readonly string[]): Promise<string>;
@@ -29,14 +30,14 @@ export async function readStatus(deps: StatusDeps): Promise<Status> {
   const home = process.env["CPD_HOME"] ?? `${process.env["HOME"] ?? ""}/.cpd`;
   const tmuxOpt = (name: string): Promise<string | null> => attempt(async () => (await deps.tmux(["show-options", "-qv", name])).trim() || null);
   const [version, incident, runner, workers, preview, install] = await Promise.all([
-    attempt(async () => { const v = json(await deps.cpd(["--version"]))?.["version"]; return typeof v === "string" ? v : null; }),
+    attempt(async () => { const v = json(await deps.cpd(toArgv({ kind: "version" })))?.["version"]; return typeof v === "string" ? v : null; }),
     attempt(async () => {
-      const o = json(await deps.cpd(["incident", "show"]));
+      const o = json(await deps.cpd(toArgv({ kind: "incident.status" })));
       const at = obj(o?.["incident"])?.["started_at"];
       return o?.["on"] === true && typeof at === "string" ? { startedAt: at } : null;
     }),
     attempt(async () => {
-      const d = obj(obj(json(await deps.cpd(["config", "show"]))?.["config"])?.["experimental"])?.["durable_workers"];
+      const d = obj(obj(json(await deps.cpd(toArgv({ kind: "config.read" })))?.["config"])?.["experimental"])?.["durable_workers"];
       return typeof d === "boolean" ? (d ? "durable" : "pi") : null;
     }),
     tmuxOpt("@cpd_workers").then((raw) => {
