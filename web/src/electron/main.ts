@@ -4,18 +4,22 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
+import { app, BrowserWindow, dialog as electronDialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import { boot } from "./boot.ts";
+import { createPreviewClient, type PreviewClient } from "./preview-client.ts";
+import { createPreviewWatchdog } from "./watchdog.ts";
+import { parseHealth, type HealthRecord } from "./health.ts";
+import { DEFAULT_DEV_URL } from "./preview-mode.ts";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
-import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL } from "./channels.ts";
+import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode } from "./channels.ts";
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
 import { resolveLoginPath } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
-import { createModeController, modeFilePath } from "./mode.ts";
+import { createModeController } from "./mode.ts";
 import { createPtyTabs, tabCommand } from "./pty-tabs.ts";
 import { resolveSshHosts } from "./ssh-config.ts";
 import type { SshHost } from "./ssh-config.ts";
@@ -37,6 +41,37 @@ const run = (file: string, args: readonly string[]): Promise<string> =>
     });
   });
 
+// `preview-web.sh serve|unserve` is long-running (it builds the worktree on first serve): 15 min.
+const previewRun = (file: string, args: readonly string[]): Promise<{ code: number; stderr: string }> =>
+  new Promise((resolve) => {
+    execFile(file, [...args], { timeout: 15 * 60_000 }, (error, _stdout, stderr) => {
+      const raw = (error as { code?: unknown } | null)?.code;
+      const code = error ? (typeof raw === "number" ? raw : 1) : 0;
+      resolve({ code, stderr: typeof stderr === "string" ? stderr : "" });
+    });
+  });
+
+/** The built-in loading page shown while a preview server starts and its health turns healthy. */
+const LOADING_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CPD</title>` +
+  `<style>html,body{margin:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;` +
+  `gap:16px;background:#1c1a20;color:#d8d2cc;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}` +
+  `.spinner{width:28px;height:28px;border:3px solid #4a4450;border-top-color:#ecaec7;border-radius:50%;animation:spin 1s linear infinite}` +
+  `@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="spinner"></div><p>Starting WebUI Preview…</p></body></html>`;
+
+const loadingPageUrl = (): string => `data:text/html;charset=utf-8,${encodeURIComponent(LOADING_PAGE)}`;
+
+/** The checkout root, resolved the way `cpd desktop --preview` does: the app-root install state, or `CPD_CHECKOUT`. */
+async function readCheckoutRoot(env: NodeJS.ProcessEnv): Promise<string | null> {
+  const explicit = env["CPD_CHECKOUT"];
+  if (explicit) return explicit;
+  try {
+    const root = (await fs.readFile(path.join(os.homedir(), ".local", "share", "cpd", "app-root"), "utf8")).trim();
+    return root || null;
+  } catch {
+    return null;
+  }
+}
+
 const backend: PtyBackend = {
   spawn: (file, args, options) => nodePty.spawn(file, args, options),
 };
@@ -54,6 +89,10 @@ async function main(): Promise<void> {
   let controller!: ReturnType<typeof createModeController>;
   // Assigned by initMode; the native shell is set up before the window.
   let controllerRef: ReturnType<typeof createModeController> | undefined;
+  // The in-place WebUI Preview client and its tick loop, created on the first switch to the preview.
+  let previewClient: PreviewClient | undefined;
+  let previewTimer: ReturnType<typeof setInterval> | undefined;
+  let previewPrevious: UiMode = "webui";
   const disposers: (() => void)[] = [];
   let services!: ReturnType<typeof createServices>;
   let started!: Promise<void>;
@@ -142,16 +181,89 @@ async function main(): Promise<void> {
 
   };
 
+  // Built once, on the first switch to `webui-preview`; the server stays up across later switches.
+  const ensurePreviewClient = async (): Promise<PreviewClient> => {
+    if (previewClient) return previewClient;
+    const root = await readCheckoutRoot(env);
+    if (!root) throw new Error("no checkout root (install cpd desktop or set CPD_CHECKOUT)");
+    const worktree = env["CPD_WEB_PREVIEW_WORKTREE"] || path.resolve(root, "..", "cpd.preview.web");
+    const devUrl = env["CPD_ELECTRON_DEV_URL"] || DEFAULT_DEV_URL;
+    const markerFile = path.join(cpdHome, "run", "ui-view.json");
+    const healthFile = path.join(cpdHome, "run", "preview-health.json");
+    const readHealth = async (): Promise<HealthRecord | null> => {
+      try {
+        return parseHealth(await fs.readFile(healthFile, "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    };
+    const writeHealth = async (record: HealthRecord): Promise<void> => {
+      await fs.mkdir(path.dirname(healthFile), { recursive: true });
+      const tmp = `${healthFile}.${process.pid}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(record));
+      await fs.rename(tmp, healthFile);
+    };
+    const showErrorBox = (title: string, content: string): void => electronDialog.showErrorBox(title, content);
+    const setMode = (mode: UiMode): Promise<void> => controller.setMode(mode);
+    const watchdog = createPreviewWatchdog({
+      now: () => Date.now(),
+      readHealth,
+      pidAlive: (pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "EPERM";
+        }
+      },
+      setMode,
+      showErrorBox,
+      log: async (entry) => console.log(`preview-watchdog ${JSON.stringify(entry)}`),
+    });
+    const client = createPreviewClient({
+      root,
+      worktree,
+      devUrl,
+      pid: process.pid,
+      now: () => Date.now(),
+      env,
+      markerFile,
+      run: previewRun,
+      readHealth,
+      writeHealth,
+      showLoading: () => {
+        void win.loadURL(loadingPageUrl());
+      },
+      loadDevUrl: (url) => win.loadURL(url),
+      showErrorBox,
+      setMode,
+      previousMode: () => previewPrevious,
+      removeMarker: async () => {
+        await fs.rm(markerFile, { force: true });
+      },
+      watchdog,
+    });
+    previewClient = client;
+    previewTimer = setInterval(() => {
+      void client.tick().catch((error: unknown) => console.error(error));
+    }, 500);
+    return client;
+  };
+
   const initMode = async (_window: unknown): Promise<void> => {
   controller = createModeController({
     fs: {
-      readFile: (file) => fs.readFile(file, "utf8"),
       writeFile: (file, data) => fs.writeFile(file, data),
+      remove: (file) => fs.rm(file),
       mkdir: async (dir) => {
         await fs.mkdir(dir, { recursive: true });
       },
     },
-    file: modeFilePath(cpdHome),
+    legacyFile: path.join(cpdHome, "run", "ui-mode.json"),
+    viewFile: path.join(cpdHome, "run", "ui-view.json"),
+    pid: process.pid,
+    log: (line) => console.log(line),
     menu: {
       setApplicationMenu: (template: MenuTemplate) =>
         Menu.setApplicationMenu(Menu.buildFromTemplate(template)),
@@ -167,6 +279,26 @@ async function main(): Promise<void> {
   });
   controllerRef = controller;
   await controller.init();
+  // The View menu calls controller.setMode; wrap it so switching to `webui-preview` drives the client
+  // (and switching away only leaves the server up). mode.ts owns the menu; this is the wiring seam.
+  const realSetMode = controller.setMode.bind(controller);
+  controller.setMode = async (mode: UiMode): Promise<void> => {
+    const before = controller.getMode();
+    await realSetMode(mode);
+    if (before === mode) return;
+    if (mode === "webui-preview") {
+      previewPrevious = before;
+      try {
+        const client = await ensurePreviewClient();
+        await client.open();
+      } catch (error) {
+        electronDialog.showErrorBox("WebUI Preview", (error as Error).message);
+        await controller.setMode(before);
+      }
+    } else if (before === "webui-preview") {
+      await previewClient?.leave();
+    }
+  };
   };
 
 
@@ -250,10 +382,28 @@ async function main(): Promise<void> {
   };
 
   let stopUpdate: () => void = () => {};
-  app.on("before-quit", () => {
+  let quitting = false;
+  app.on("before-quit", (event) => {
     stopUpdate();
+    controllerRef?.dispose().catch((error: unknown) => console.error(error));
     for (const dispose of disposers) dispose();
     nativeShell.dispose();
+    if (previewTimer) {
+      clearInterval(previewTimer);
+      previewTimer = undefined;
+    }
+    if (previewClient && !quitting) {
+      // Graceful quit: `unserve` once and drop the run marker, then let the quit proceed.
+      quitting = true;
+      event.preventDefault();
+      const client = previewClient;
+      previewClient = undefined;
+      const done = Promise.race([
+        client.close().catch((error: unknown) => console.error(error)),
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+      void done.finally(() => app.quit());
+    }
   });
   app.on("window-all-closed", () => app.quit());
 

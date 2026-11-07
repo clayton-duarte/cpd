@@ -72,8 +72,8 @@ export type PendingJob = { key: string; kind: string; status: string; tier: stri
 export type PendingPrJob = { key: string; status: string; title: string };
 /** A Workflow of `context pending` that is not merged or cancelled. */
 export type PendingPr = { key: string; status: string; number: number | null; jobs: PendingPrJob[] };
-/** An active Plan of `context pending`. */
-export type PendingPlan = { id: string; phase: string; workflows: PendingPr[]; jobs: PendingJob[] };
+/** An active Plan of `context pending`. `leadSession` is the Plan's `lead_session`, null for a Lead-less Plan (a Manager's shaping Plan, §3.12); optional so a Plan built without it still types. */
+export type PendingPlan = { id: string; phase: string; leadSession?: string | null; workflows: PendingPr[]; jobs: PendingJob[] };
 
 /** At most this many Jobs are listed under one Workflow of `Pending work:`; the rest are named by a count. */
 export const MAX_PENDING_JOBS = 10;
@@ -148,9 +148,11 @@ export function parsePending(out: Record<string, unknown>): PendingPlan[] {
   return out.plans.map((p) => {
     if (!isObject(p) || typeof p.id !== "string" || typeof p.phase !== "string" || !Array.isArray(p.workflows) || !Array.isArray(p.jobs)) throw bad(what, "a Plan lacks id, phase, workflows or jobs");
     const plan = p.id;
+    if (p.lead_session !== undefined && p.lead_session !== null && typeof p.lead_session !== "string") throw bad(what, `Plan ${plan}: lead_session is neither a string nor null`);
     return {
       id: plan,
       phase: p.phase,
+      leadSession: typeof p.lead_session === "string" ? p.lead_session : null,
       jobs: p.jobs.map((j) => {
         if (!isObject(j) || typeof j.key !== "string" || typeof j.kind !== "string" || typeof j.status !== "string" || typeof j.title !== "string") throw bad(what, `Plan ${plan}: a Job lacks key, kind, status or title`);
         return { key: j.key, kind: j.kind, status: j.status, tier: typeof j.tier === "string" ? j.tier : null, title: j.title };
