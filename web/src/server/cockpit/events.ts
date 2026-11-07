@@ -94,12 +94,23 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     for (const l of [...listeners]) l(u);
   };
   const emitError = (e: unknown): void => emit({ kind: "error", error: toWireError(e) });
+  // D4 (air-d44): a pane update whose cursor is lower than the held one is dropped, but never silently — every
+  // error is a toast, so the drop is raised on the existing cockpit error channel (the store's `cockpit.error`).
+  const dropLowerCursor = (pane: string, held: number, next: number): void => {
+    emitError(new WebError("cpd_failed", `dropped a stale ${pane} snapshot: cursor ${next} is lower than the held ${held}`, { pane, held, cursor: next }));
+  };
   const apply = (u: PaneUpdate): void => {
     if (stopped) return;
     // 14.1 (air-n13, air-n15): the tree cursor is the minimum of four cursors, so a newer tree can carry a lower cursor. The monotonic guard never applies to the tree: a tree update is applied and emitted in every case.
     if (u.tree !== undefined) { snap = { ...snap, tree: u.tree }; emit({ kind: "pane", pane: "tree", data: u.tree }); }
-    if (u.plan !== undefined && (u.plan === null || snap.plan === null || snap.plan.planId !== u.plan.planId || u.plan.cursor >= snap.plan.cursor)) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
-    if (u.inbox !== undefined && (snap.inbox === null || u.inbox.cursor >= snap.inbox.cursor)) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
+    if (u.plan !== undefined) {
+      if (u.plan === null || snap.plan === null || snap.plan.planId !== u.plan.planId || u.plan.cursor >= snap.plan.cursor) { snap = { ...snap, plan: u.plan }; emit({ kind: "pane", pane: "plan", data: u.plan }); }
+      else dropLowerCursor("plan", snap.plan.cursor, u.plan.cursor);
+    }
+    if (u.inbox !== undefined) {
+      if (snap.inbox === null || u.inbox.cursor >= snap.inbox.cursor) { snap = { ...snap, inbox: u.inbox }; emit({ kind: "pane", pane: "inbox", data: u.inbox }); }
+      else dropLowerCursor("inbox", snap.inbox.cursor, u.inbox.cursor);
+    }
   };
   let loop: Promise<void> | null = null;
   let queued: Set<CockpitPane> | null = null;

@@ -1,6 +1,6 @@
 # Electron app
 
-The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over IPC. A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell and live WebUI over IPC) and pro-d24 (packaging).
+The Electron app is a standalone Electron desktop app in `web/` with two views of the cockpit. TUI runs `cpd tui --attach` in a full-window terminal. The terminal is `@aurigax-ai/ghostty-web` 0.3.9 (libghostty-vt WASM, WebGL 2 renderer with a silent Canvas 2D fallback), backed by `node-pty` in the Electron main process. It draws the Dango v3 16-colour palette in Maple Mono 13px, weight 300, with ligatures off (ghostty-web has no ligature option), WebUI is the Dango v3 cockpit (the same `App` the browser build mounts), fed by the main process over the one WebSocket transport (ADR 0015 option B, air-d46; formerly over IPC, pro-d23 — see §WebSocket transport). A native View menu switches between TUI (the default) and WebUI (`CmdOrCtrl+Shift+M`). On macOS the app also owns the Dock icon, the Dock badge, the bounce and the menu bar (Tray) icon. Decisions: pro-d21 (D5, D6, D7, dual-mode), pro-d22 (TUI), pro-d23 (native shell; its live WebUI over IPC transport is superseded by ADR 0015 option B, air-d46) and pro-d24 (packaging).
 
 ## Run
 
@@ -335,12 +335,15 @@ On macOS only:
 - Bounce: the Dock bounces once (`informational`) when blocking rises above the previous count and the window is not focused. The first count after startup is the baseline and never bounces. A rise in decisions alone does not bounce, and neither does a fall in blocking, or any rise while the window has focus.
 - Dispose: the shell's `dispose` destroys the Tray. It is idempotent.
 
-## IPC WebUI transport
+## WebSocket transport
 
-The WebUI reaches the cockpit over one IPC pair per window (A4): `cpd:c2s` (renderer to main) and `cpd:s2c` (main to renderer). The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createElectronTransport` in the renderer and `registerWebuiIpc` in the main process.
+The WebUI reaches the cockpit over one WebSocket (ADR 0015, option B, air-d46), shared by the desktop and the browser build. The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createWebSocketTransport` in the renderer and the WS server of `web/src/server/ws.ts` in the main process; the `cpd:c2s`/`cpd:s2c` IPC pair, `createElectronTransport` and `registerWebuiIpc` are gone. The full transport contract, the heartbeat and the watchdog are in docs/contract.md §5.5 and web/CONTRACT.md §15.
 
-- Main process: the first frame from a window creates one hub connection for that window, through `services.newConnection(send)`. `send` writes to `cpd:s2c` unless the window is destroyed. When the window is destroyed its hub is closed and forgotten. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
-- Renderer: `createElectronTransport` has the same semantics as the browser transport (`createHotTransport`): it opens with status `open`, `send` throws before open or after close, and `close` is final.
+- Main process: the server binds `ws://127.0.0.1:<port>/cpd-ws` — loopback only, on a port the OS chooses (bind port 0). It creates one hub connection per accepted socket, through `services.newConnection(send)`; `send` writes one JSON text frame to the socket. A closed socket closes its hub. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
+- Renderer learns the URL through the preload `contextBridge`, not over a data channel: the main process exposes the resulting `ws://127.0.0.1:<port>/cpd-ws` to the renderer as one read-only member of `window.cpdElectron` (`webSocketUrl`), and `createWebSocketTransport` connects to it. No `cpd:c2s`/`cpd:s2c` channel exists; the bridge carries only this URL and the non-data members it already had (pty, mode, wasm, health).
+- Authorisation: no token. The check is the Origin alone, at connect, before any hub is created: an absent or `null` Origin (the desktop renderer runs from `file://` in production) and a loopback Origin (`localhost`, `127.0.0.1`, `[::1]`) are accepted; every other Origin is rejected. A remote thin client reaches the same endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
+- Heartbeat: the server protocol-pings every socket every `WS_PING_MS` and terminates a socket that does not pong within `WS_PONG_TIMEOUT_MS`, so a stalled transport is seen loud, never silent. The client sends its own wire `ping` every `WS_CLIENT_PING_MS` and closes the socket when the server's `pong` misses `WS_CLIENT_PONG_TIMEOUT_MS`, so a hung server is seen too (the browser `WebSocket` cannot send protocol ping frames, so the client's ping rides the wire).
+- Renderer: `createWebSocketTransport` has the semantics of the `Transport` interface unchanged (web/src/protocol/runtime.ts:10-15): it opens with status `open`, `send` throws before open or after close, and `close` is final. A closed socket — a terminate, an error or a heartbeat failure — is a real `closed` status, so the renderer backs off, reconnects and re-subscribes for a fresh full snapshot (web/src/state/connection.ts:205-224).
 - Both views stay mounted, so a switch is instant and keeps the session state. The WebUI keeps its connection and selection, and the TUI keeps its pty.
 - TUI mode: the terminal is shown, resumed, refitted to its container and focused. Menu shortcuts are ignored, so the keys reach cpd.
 - WebUI mode: the terminal is paused and hidden, and the WebUI is shown. Menu shortcuts work, including `CmdOrCtrl+Shift+M`.
@@ -388,7 +391,7 @@ Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal
 
 ### Overview
 
-The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) relaunches the Electron main process with `app.relaunch()` + `app.exit()`. A renderer-only change keeps the in-place renderer reload.
 
 Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
@@ -413,7 +416,7 @@ export type UpdateState = { phase: 'idle' } | { phase: 'syncing' } | { phase: 'b
 export function electronOutDir(env: Record<string, string | undefined>): string
 ```
 
-Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js` and `preload.cjs` under this directory; the default is unchanged.
+Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js`, `server.js` and `preload.cjs` under this directory; the default is unchanged.
 
 #### checkout.ts
 
@@ -451,7 +454,7 @@ export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
 
 `readBuiltSha` reads `<root>/web/dist-electron/.built-sha`, trimmed, and returns `null` when it is missing.
 
-`swapBundle` sets `mainChanged` to true when the text of `main.js` or of `preload.cjs` differs between `web/dist-electron` and `web/dist-electron.next`; a missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
+`swapBundle` sets `mainChanged` to true when any non-renderer build artefact differs between `web/dist-electron` and `web/dist-electron.next`: the artefacts of the main and preload builds — `main.js`, `preload.cjs`, `server.js` — plus any other main-side artefact the build emits. The renderer output is excluded. A missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
 
 #### cli.ts
 
@@ -517,7 +520,7 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> }
 
 1. `onState({ phase: 'syncing' })`, then `sync()`. A `skipped` result logs the reason, calls `onState({ phase: 'idle' })` and ends: no build and no CLI install.
 2. `sha = headSha()`.
-3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, or `restart-needed` was already set earlier in this process (sticky), it calls `onState({ phase: 'restart-needed' })` and does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
+3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, it calls `onState({ phase: 'restart-needed' })` and then relaunches the Electron main process with `app.relaunch()` followed by `app.exit(0)`, through an injected port like every other external effect; it does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
 4. CLI flow, concurrent with the bundle flow, when `cliSha() !== sha`: `installCli(sha)`. A failure is only logged; it never sets the `error` state.
 
 `check()` is single-flight. A call made during a run returns that run's promise, and queues exactly one trailing run after it.
@@ -556,7 +559,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 
 The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
 
-A changed `main.js` or `preload.cjs` never reloads the renderer: it shows `Restart to Apply Update` in the menu, and only the User's click applies it. That click is the only path that loads new main-process or preload code. The restart-needed state is sticky for the rest of the process.
+A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed` and relaunches the Electron main process with `app.relaunch()` + `app.exit(0)`, so the new main-process, preload and server code load in a fresh process. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
 
 ## Verification checklist
 

@@ -15,7 +15,7 @@ export interface IpcRendererLike {
   removeListener(channel: string, listener: (event: unknown, ...args: unknown[]) => void): void;
 }
 
-export function createBridge(ipc: IpcRendererLike): CpdElectronBridge {
+export function createBridge(ipc: IpcRendererLike): Omit<CpdElectronBridge, "webSocketUrl"> {
   const subscribe = <T>(channel: string, cb: (payload: T) => void): (() => void) => {
     const listener = (_event: unknown, ...args: unknown[]): void => cb(args[0] as T);
     ipc.on(channel, listener);
@@ -38,8 +38,6 @@ export function createBridge(ipc: IpcRendererLike): CpdElectronBridge {
     onPtyData: (cb) => subscribe<string>(CHANNELS.ptyData, cb),
     onPtyExit: (cb) => subscribe<number>(CHANNELS.ptyExit, cb),
     onMode: (cb) => subscribe<UiMode>(CHANNELS.uiMode, cb),
-    sendWeb: (raw) => ipc.send(CHANNELS.webC2s, raw),
-    onWebMessage: (cb) => subscribe<unknown>(CHANNELS.webS2c, cb),
     async startTabPty(tabId: string, size: PtySize) {
       await ipc.invoke(CHANNELS.ptyStart, { tabId, cols: size.cols, rows: size.rows });
     },
