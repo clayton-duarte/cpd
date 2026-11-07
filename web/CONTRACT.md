@@ -391,6 +391,7 @@ export type ErrorCode =
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
   | "invalid_submission" // empty text with no images (15.2), or text longer than the backend allows
+  | "tool_failed" // a tool result arrived with status "failed" (15.1); message = the reason, shown in the cockpit error toast, never inline in the row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
@@ -812,7 +813,7 @@ export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed"
 
 export interface PendingSubmission {
   readonly clientSubmissionId: string; readonly text: string; readonly imageCount: number; readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "failed"; readonly error?: WireError;
+  readonly state: "sending"; // Amended by 15.1 (air-d44): no "failed" state — a session.error with a clientSubmissionId drops the row and shows its error once in the cockpit error toast (11.7), so the row never carries an error; 10.3 adds "sent"
 }
 export interface SessionView {
   readonly id: string;
@@ -1413,7 +1414,7 @@ Behaviours:
   - **Manager:** refused without a cpd call: `session.error {sessionId, clientSubmissionId, error: {code: "manager_not_archivable", message: "A Manager is archived only with its Context.", details: {sessionId}}}`.
   - **Plan Lead** (the `leadSessionId` of its Plan, 5.1): runs `plan.archive` for its Plan. **Any other Lead or side fork:** runs `session.archive`. Both go through `runAction` (`actions.ts`, 5.4) with its park-and-retry for `in_chat_slot`, so `blockers()` is enforced exactly as for the cockpit.
   - **Success:** no reply for the submission and no `action.result`. The archive reaches the client as a tree change, which the web handles as DESIGN 3h says.
-  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. The Composer marks that pending row `failed` (6.2) and the User stays where they are.
+  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. **Amended by 15.1 (air-d44):** the pending row is dropped instead of being marked `failed` (6.2), and its error is shown once in the cockpit error toast (11.7); the User stays where they are.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
 
 #### `plugin.ts`: the Vite plugin and the real boundaries (thin, ONE place)
@@ -1655,6 +1656,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unknown_action` | `parseCockpitAction`, `actions.runAction` | action `kind` not in 5.4 | `{kind}` |
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
+| `tool_failed` | `store.ts` (the state layer) | a tool result with status `failed` is applied to the selected session's transcript; `message` = the reason, the first non-empty line of `result.text` (6.8, 15.1) | `{itemId?}` |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
 | `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
@@ -1758,7 +1760,7 @@ In both dialects an entry of kind `"cpd-chat"` (the host writes it for text type
 
 ### 10.3 State layer (`web/src/state/*`)
 
-1. `PendingSubmission.state` is `"sending" | "sent" | "failed"`. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
+1. **Amended by 15.1 (air-d44):** `PendingSubmission.state` is `"sending" | "sent"`, never `"failed"`: a `session.error` carrying a `clientSubmissionId` drops its pending row and shows the error once in the cockpit error toast (11.7) instead of marking the row. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
 2. `TranscriptState` gains `tailEpoch: number` (`emptyTranscript` has 0): `setTail(window, previous?)` returns `(previous?.tailEpoch ?? 0) + 1`; `prependEarlier`, `appendItems`, `updateItems` and `applyDelta` keep it.
 3. `applyDelta` locates its item searching from the END of the list (the streaming item is last) and copies only the changed item; every other item keeps reference identity. `mergeById` uses one id->index `Map`.
 4. Frame coalescing: `StoreAction` gains `{type: "serverBatch"; messages: ServerMessage[]}` which reduces the messages in order and produces ONE new state (one listener notification). `createConnection` buffers messages of type `session.append`, `session.update` and `session.delta` whose `sessionId` is the selected session; the first buffered message arms `scheduler.after(FRAME_MS, flush)` (`FRAME_MS = 16`, exported); `flush` dispatches one `serverBatch`. Adjacent buffered `session.delta` messages with the same `sessionId`, `itemId`, `blockIndex` and `blockType` are merged by concatenating `text`. Any other server message flushes the buffer synchronously first (order is preserved) and is then dispatched as before. `selectSession` and `close` drop the buffer and dispose the timer. A parse failure of a buffered message surfaces as `session.error` exactly as in Phase 1 (parse happens before buffering).
@@ -2117,7 +2119,7 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 ## 15. Amendments air-d44, air-d43: the error toast standard and the image-only message (Plan `toast-fix`)
 
-Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.8 or 11.3 is marked "Amended by 15.x", section 15 wins and the older statement is void.
+Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.6, 6.8, 7, 10.3 or 11.3 is marked "Amended by 15.x", section 15 wins and the older statement is void.
 
 ### 15.1 Every error is shown through the cockpit error toast (air-d44)
 
