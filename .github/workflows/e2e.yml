@@ -1,0 +1,62 @@
+name: E2E
+
+# Non-blocking desktop e2e (plan desktop-e2e, job e2e-ci): the Playwright Electron suite on the
+# self-hosted hs runner under a virtual display. Deliberately separate from ci.yml's Gate: this
+# check is not in [pr] required_checks ("gate" only), so a failure surfaces as pr-feedback and
+# never blocks a merge.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref: a newer run of the same pull request cancels the older one (each hs runner
+# runs one job at a time).
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      # clean: false keeps node_modules/ between runs in the runner's workspace, like ci.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          clean: false
+      # Drop untracked leftovers of an earlier branch (not ignored files: node_modules/ stays).
+      - name: Remove untracked files
+        run: git clean -ffd
+      # Like ci.yml, no setup steps: the runner provides node >= 22.19.0 (engines, package.json) and
+      # pnpm 12.6.0 (packageManager, package.json).
+      - name: Dependencies
+        run: pnpm install --frozen-lockfile
+      # pnpm-workspace.yaml sets allowBuilds.electron = false, so the frozen install leaves the
+      # Electron binary out; this downloads it (web/package.json, e2e:install).
+      - name: Electron binary
+        run: pnpm --filter cpd-web-client run e2e:install
+      # The suite launches the built bundle (web/src/testing/e2e-fixtures.ts points Electron at
+      # dist-electron/ and serves dist-electron/renderer/): build it as the `electron` script does,
+      # minus its macOS-only plutil patch.
+      - name: Desktop bundle
+        run: pnpm --filter cpd-web-client run build:electron
+      # Headless Electron on the runner is untried, so give the suite a virtual display; install
+      # xvfb only if the runner lacks it.
+      - name: Virtual display
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y xvfb
+          fi
+      # Isolation (air-d68): the fixtures give each test its own temp CPD_HOME and remove it, but
+      # Electron's userData defaults to $HOME/.config/CPD — so the run gets a temp HOME and TMPDIR,
+      # both removed when the step ends. xvfb-run tears down its Xvfb with the command.
+      - name: E2E suite
+        run: |
+          home=$(mktemp -d)
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$home" "$tmp"' EXIT
+          HOME="$home" TMPDIR="$tmp" xvfb-run -a pnpm --filter cpd-web-client run e2e
