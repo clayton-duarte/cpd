@@ -6,7 +6,6 @@ import { Button } from "../components/button.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
-import { CpdFlowCanvas } from "./FlowCanvas.tsx";
 import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
 
 const phaseOrder: readonly Phase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
@@ -249,7 +248,8 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
 }): ReactElement {
   const { plan, onAction } = props;
   if (plan === null) {
-    return <CpdFlowCanvas />;
+    // 14.2 (air-d28): the empty state is text, not the flowchart; CpdFlowCanvas renders only in the Documentation dialog.
+    return <p data-part="plan-empty" className="grid h-full place-items-center text-muted-foreground">Select a lead to see plans</p>;
   }
   const explore = plan.jobs.filter((j) => j.workflow === null);
   return (
