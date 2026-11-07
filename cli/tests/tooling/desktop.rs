@@ -44,7 +44,11 @@ fn command_is_named_desktop() {
 fn app_command_is_gone() {
     // D1: `cpd app` is removed outright, no alias.
     let err = Cli::try_parse_from(["cpd", "app", "--status"]).expect_err("`cpd app` is rejected");
-    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand, "{err}");
+    assert_eq!(
+        err.kind(),
+        clap::error::ErrorKind::InvalidSubcommand,
+        "{err}"
+    );
 }
 
 #[test]
