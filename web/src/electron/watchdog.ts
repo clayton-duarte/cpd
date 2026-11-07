@@ -1,3 +1,4 @@
+import type { UiMode } from "./channels.ts";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
 import type { RestorePoints } from "./restore-points.ts";
@@ -28,6 +29,88 @@ export interface WatchdogOptions {
 
 export interface Watchdog {
   tick(): Promise<void>;
+}
+
+/** The in-place preview's rollback: the generic watchdog, but the rollback returns to the production WebUI. */
+export interface PreviewWatchdogPorts {
+  now(): number;
+  readHealth(): Promise<HealthRecord | null>;
+  pidAlive(pid: number): boolean;
+  setMode(mode: UiMode): Promise<void>;
+  showErrorBox(title: string, content: string): void;
+  log(entry: object): Promise<void>;
+}
+
+export function createPreviewWatchdog(ports: PreviewWatchdogPorts, options: WatchdogOptions = {}): Watchdog {
+  const crashDebounceMs = options.crashDebounceMs ?? 1000;
+  const loadingGraceMs = options.loadingGraceMs ?? 10000;
+
+  let seenEpoch: number | null = null;
+  let crashSeenAt: number | null = null;
+  let actedEpoch: number | null = null;
+  let rolledBack = false;
+  let lastMalformed: string | null = null;
+
+  const log = (entry: Record<string, unknown>) =>
+    ports.log({ at: new Date(ports.now()).toISOString(), ...entry });
+
+  function trigger(rec: HealthRecord, now: number): string | null {
+    if (rec.status === "exited") return null;
+    if (rec.status === "crashed" && crashSeenAt !== null && now - crashSeenAt >= crashDebounceMs) {
+      return `crashed: ${rec.source}`;
+    }
+    if (rec.status === "loading" && now - Date.parse(rec.startedAt) >= loadingGraceMs) {
+      return "loading too long";
+    }
+    if (!ports.pidAlive(rec.pid)) return "pid dead";
+    return null;
+  }
+
+  async function rollback(rec: HealthRecord, reason: string): Promise<void> {
+    const base = { reason, reloadEpoch: rec.reloadEpoch, pid: rec.pid };
+    if (rolledBack) {
+      await log({ event: "rollback-skipped", ...base, reason: "already rolled back" });
+      return;
+    }
+    await log({ event: "rollback", ...base });
+    rolledBack = true;
+    await ports.setMode("webui");
+    ports.showErrorBox("WebUI Preview", ` ${reason}`);
+  }
+
+  async function observe(rec: HealthRecord): Promise<void> {
+    const now = ports.now();
+    if (rec.reloadEpoch !== seenEpoch) {
+      seenEpoch = rec.reloadEpoch;
+      crashSeenAt = null;
+    }
+    if (rec.status === "crashed" && crashSeenAt === null) crashSeenAt = now;
+
+    if (actedEpoch === rec.reloadEpoch) return;
+    const reason = trigger(rec, now);
+    if (reason === null) return;
+    actedEpoch = rec.reloadEpoch;
+    await rollback(rec, reason);
+  }
+
+  return {
+    async tick() {
+      let rec: HealthRecord | null;
+      try {
+        rec = await ports.readHealth();
+      } catch (error) {
+        if (!(error instanceof HealthParseError)) throw error;
+        if (error.message !== lastMalformed) {
+          lastMalformed = error.message;
+          await log({ event: "health-malformed", error: error.message });
+        }
+        return;
+      }
+      lastMalformed = null;
+      if (rec === null) return;
+      await observe(rec);
+    },
+  };
 }
 
 export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = {}): Watchdog {

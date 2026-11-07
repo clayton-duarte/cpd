@@ -1,50 +1,20 @@
 import * as path from "node:path";
 import type { UiMode } from "./channels.ts";
-import { buildMenuTemplate } from "./menu.ts";
-import type { MenuTemplate } from "./menu.ts";
+import { buildMenuTemplate, type MenuTemplate } from "./menu.ts";
 
-export const DEFAULT_MODE: UiMode = "tui";
+/** The view `cpd desktop` always launches in (web/ELECTRON.md, air-d40). */
+export const LAUNCH_MODE: UiMode = "webui";
 
 export function parseUiMode(raw: unknown): UiMode {
-  if (raw === "tui" || raw === "webui") return raw;
+  if (raw === "tui" || raw === "webui" || raw === "webui-preview") return raw;
   throw new Error("invalid ui mode: " + JSON.stringify(raw));
 }
 
-export function modeFilePath(cpdHome: string): string {
-  return path.join(cpdHome, "run", "ui-mode.json");
-}
-
 export interface ModeFs {
-  readFile(path: string): Promise<string>;
   writeFile(path: string, data: string): Promise<void>;
+  remove(path: string): Promise<void>;
   mkdir(path: string): Promise<void>;
 }
-
-export async function readMode(fs: ModeFs, file: string): Promise<UiMode> {
-  let content: string;
-  try {
-    content = await fs.readFile(file);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT") {
-      return DEFAULT_MODE;
-    }
-    throw error;
-  }
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (typeof parsed !== "object" || parsed === null) throw new Error("not an object");
-    return parseUiMode((parsed as { mode?: unknown }).mode);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`invalid ui mode file ${file}: ${message}`);
-  }
-}
-
-export async function writeMode(fs: ModeFs, file: string, mode: UiMode): Promise<void> {
-  await fs.mkdir(path.dirname(file));
-  await fs.writeFile(file, JSON.stringify({ mode }) + "\n");
-}
-
 export interface ModeWindow {
   setIgnoreMenuShortcuts(ignore: boolean): void;
   sendMode(mode: UiMode): void;
@@ -54,44 +24,87 @@ export interface MenuHost {
 }
 export interface ModeControllerDeps {
   fs: ModeFs;
-  file: string;
+  /** The dropped `$CPD_HOME/run/ui-mode.json`, deleted once on the first launch (air-d40). */
+  legacyFile: string;
+  /** The run-only `$CPD_HOME/run/ui-view.json` marker (air-n19). */
+  viewFile: string;
+  /** The pid written into the marker; the real adapter passes `process.pid`. */
+  pid: number;
   menu: MenuHost;
   window: ModeWindow;
   platform: NodeJS.Platform;
+  log(message: string): void;
   onError(error: unknown): void;
 }
 export interface ModeController {
   init(): Promise<void>;
   getMode(): UiMode;
   setMode(mode: UiMode): Promise<void>;
+  /** Graceful quit: removes the run-only marker. */
+  dispose(): Promise<void>;
+}
+
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
+}
+
+/** The renderer only knows the two in-place views: preview runs the WebUI client (air-d41). */
+function rendererMode(mode: UiMode): "tui" | "webui" {
+  return mode === "tui" ? "tui" : "webui";
 }
 
 export function createModeController(deps: ModeControllerDeps): ModeController {
-  let current: UiMode = DEFAULT_MODE;
-  const apply = (mode: UiMode): void => {
+  const { fs, legacyFile, viewFile, pid } = deps;
+  let current: UiMode = LAUNCH_MODE;
+
+  const writeMarker = async (mode: UiMode): Promise<void> => {
+    await fs.mkdir(path.dirname(viewFile));
+    await fs.writeFile(viewFile, JSON.stringify({ view: mode, pid }) + "\n");
+  };
+
+  const apply = async (mode: UiMode): Promise<void> => {
     deps.menu.setApplicationMenu(
       buildMenuTemplate({
         mode,
         platform: deps.platform,
-        onSelect: (m) => {
-          controller.setMode(m).catch(deps.onError);
+        onSelect: (next) => {
+          controller.setMode(next).catch(deps.onError);
         },
       }),
     );
     deps.window.setIgnoreMenuShortcuts(mode === "tui");
-    deps.window.sendMode(mode);
+    deps.window.sendMode(rendererMode(mode));
   };
+
+  // The dropped ui-mode.json is deleted once; it is never read as a launch default (air-d40).
+  const deleteLegacy = async (): Promise<void> => {
+    try {
+      await fs.remove(legacyFile);
+      deps.log(`deleted ${legacyFile}; the launch view is always ${LAUNCH_MODE}`);
+    } catch (error) {
+      if (!isMissing(error)) deps.onError(error);
+    }
+  };
+
   const controller: ModeController = {
-    async init() {
-      current = await readMode(deps.fs, deps.file);
-      apply(current);
+    async init(): Promise<void> {
+      await deleteLegacy();
+      await writeMarker(current);
+      await apply(current);
     },
     getMode: () => current,
-    async setMode(mode) {
+    async setMode(mode: UiMode): Promise<void> {
       if (mode === current) return;
-      await writeMode(deps.fs, deps.file, mode);
       current = mode;
-      apply(mode);
+      await writeMarker(mode);
+      await apply(mode);
+    },
+    async dispose(): Promise<void> {
+      try {
+        await fs.remove(viewFile);
+      } catch (error) {
+        if (!isMissing(error)) deps.onError(error);
+      }
     },
   };
   return controller;
