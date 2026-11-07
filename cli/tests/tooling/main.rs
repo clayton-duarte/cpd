@@ -4,9 +4,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-mod app;
 mod cargo_script;
 mod dead_code;
+mod desktop;
 mod fake_tmux;
 mod fx;
 mod fx_exec;

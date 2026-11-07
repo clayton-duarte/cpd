@@ -116,7 +116,7 @@ pub enum Command {
     /// Install the cpd built from a checkout (commands.md §14.4)
     Install(install::Args),
     /// The Electron app of the installed checkout and the web preview (commands.md §14.4a)
-    App(app::Args),
+    Desktop(app::Args),
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
@@ -243,7 +243,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Preset(c) => config::preset::run(c),
         Command::Metrics(a) => metrics::run(a),
         Command::Install(a) => install::run(ports, a),
-        Command::App(a) => app::run(ports, a),
+        Command::Desktop(a) => app::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(ports, c)),

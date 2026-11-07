@@ -4,15 +4,15 @@ The Electron app is a standalone Electron desktop app in `web/` with two views o
 
 ## Run
 
-Launch the app with `cpd app`:
+Launch the app with `cpd desktop`:
 
 ```sh
-cpd app
+cpd desktop
 ```
 
-`cpd app` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `app_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
+`cpd desktop` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `desktop_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
 
-These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. The `allowBuilds: electron: false` setting in `pnpm-workspace.yaml` stops the postinstall download of the Electron binary, so worktrees and CI have no binary. When the binary is missing, `cpd install` and `cpd app` run `node web/node_modules/electron/install.js` to download it; if that fails, the install or app step fails before plutil runs. When the binary is present, no extra command runs. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
+These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. The `allowBuilds: electron: false` setting in `pnpm-workspace.yaml` stops the postinstall download of the Electron binary, so worktrees and CI have no binary. When the binary is missing, `cpd install` and `cpd desktop` run `node web/node_modules/electron/install.js` to download it; if that fails, the install or app step fails before plutil runs. When the binary is present, no extra command runs. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
 
 Prerequisites:
 
