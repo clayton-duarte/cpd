@@ -21,16 +21,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const basePath = process.env["PATH"] ?? "";
 const fakeCpd = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
 
-const staging = mkdtempSync(join(tmpdir(), "cpd-e2e-update-"));
-const fakeBin = join(staging, "bin");
-const fakeShell = join(staging, "shell");
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(
-  fakeShell,
-  `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
-);
-chmodSync(fakeShell, 0o755);
-symlinkSync(fakeCpd, join(fakeBin, "cpd"));
+let staging = "";
 
 /** The main pid of the process a test or its relaunch left behind, killed in teardown. */
 let relaunchedPid: number | null = null;
@@ -44,6 +35,18 @@ function readHealth(cpdHome: string): { pid?: number; status?: string } | null {
 }
 
 test.beforeAll(() => {
+  staging = mkdtempSync(join(tmpdir(), "cpd-e2e-update-"));
+  const fakeBin = join(staging, "bin");
+  const fakeShell = join(staging, "shell");
+  mkdirSync(fakeBin, { recursive: true });
+  // A fake login shell reporting the app's PATH unchanged, so the pty's `cpd` is the fake, not a
+  // real cpd (`resolveLoginPath` would otherwise drop the fake bin dir).
+  writeFileSync(
+    fakeShell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(fakeShell, 0o755);
+  symlinkSync(fakeCpd, join(fakeBin, "cpd"));
   process.env["CPD_BIN"] = fakeCpd;
   process.env["SHELL"] = fakeShell;
   process.env["PATH"] = `${fakeBin}:${basePath}`;

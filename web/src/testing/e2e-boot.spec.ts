@@ -14,25 +14,26 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./e2e-fixtures";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const fakeCpd = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
 /** The PATH the runner started with, before any spec prepends its private bin dir. */
 const basePath = process.env["PATH"] ?? "";
-const fakeCpd = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
 
-// A private bin dir with the fake cpd as `cpd`, and a fake login shell that reports the app's
-// PATH unchanged. `resolveLoginPath` runs `$SHELL -ilc`; the real one would drop the fake dir, so
-// the pty (`cpd tui --attach`) would spawn a real cpd. The fake shell keeps the fake first.
-const staging = mkdtempSync(join(tmpdir(), "cpd-e2e-boot-"));
-const fakeBin = join(staging, "bin");
-const fakeShell = join(staging, "shell");
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(
-  fakeShell,
-  `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
-);
-chmodSync(fakeShell, 0o755);
-symlinkSync(fakeCpd, join(staging, "bin", "cpd"));
+let staging = "";
 
 test.beforeAll(() => {
+  // A private bin dir with the fake cpd as `cpd`, and a fake login shell that reports the app's
+  // PATH unchanged. `resolveLoginPath` runs `$SHELL -ilc`; the real one would drop the fake dir, so
+  // the pty (`cpd tui --attach`) would spawn a real cpd. The fake shell keeps the fake first.
+  staging = mkdtempSync(join(tmpdir(), "cpd-e2e-boot-"));
+  const fakeBin = join(staging, "bin");
+  const fakeShell = join(staging, "shell");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeShell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(fakeShell, 0o755);
+  symlinkSync(fakeCpd, join(fakeBin, "cpd"));
   process.env["CPD_BIN"] = fakeCpd;
   process.env["SHELL"] = fakeShell;
   process.env["PATH"] = `${fakeBin}:${basePath}`;

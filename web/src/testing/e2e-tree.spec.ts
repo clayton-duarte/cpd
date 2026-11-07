@@ -2,10 +2,10 @@
 // Scenario: the tree updates on a new Plan (guards air-n13/air-n15: tree frozen, new Plans missing).
 //
 // Bug air-n13/air-n15: the WebUI tree stopped updating, so new Plans never appeared without a full
-// reload. This spec drives the fake cockpit to emit one `plan-created` event and asserts the tree
-// shows the new Plan with no page reload. The fake answers `cpd cockpit serve` with an empty
-// snapshot, then on the test's trigger emits the event and answers `cpd plan list` with the Plan —
-// exactly the live path the freeze broke.
+// reload. This spec drives the fake cockpit to emit a fresh snapshot and asserts the tree shows the
+// new Plan with no page reload. The fake answers `cpd cockpit serve` with an empty snapshot, then on
+// the test's trigger emits a second snapshot and answers `cpd plan list` with the Plan — exactly
+// the live path the freeze broke.
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,24 +18,15 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const basePath = process.env["PATH"] ?? "";
 const PLAN_ID = "e2e-new-plan";
 
-const staging = mkdtempSync(join(tmpdir(), "cpd-e2e-tree-"));
-const fakeBin = join(staging, "bin");
-const fakeCpd = join(staging, "cpd");
-const fakeShell = join(staging, "shell");
-const trigger = join(staging, "trigger");
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(
-  fakeShell,
-  `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
-);
-chmodSync(fakeShell, 0o755);
-symlinkSync(fakeCpd, join(fakeBin, "cpd"));
+let staging = "";
+let fakeBin = "";
+let fakeCpd = "";
+let fakeShell = "";
+let trigger = "";
 
-// A scripted cpd: empty snapshot until the trigger file appears, then a `plan-created` event and a
-// `plan list` that carries the new Plan. Self-contained so no real cpd is ever spawned.
-writeFileSync(
-  fakeCpd,
-  `#!/usr/bin/env node
+// A scripted cpd: empty snapshot until the trigger file appears, then a fresh snapshot and a
+// `plan list` that carry the new Plan. Self-contained so no real cpd is ever spawned.
+const FAKE_CPD_SOURCE = `#!/usr/bin/env node
 "use strict";
 const fs = require("node:fs");
 const PLAN_ID = ${JSON.stringify(PLAN_ID)};
@@ -113,11 +104,25 @@ else if (command === "plan" && rest[0] === "show") {
 else if (command === "session" && rest[0] === "list") emit(sessionPane());
 else if (command === "inbox" && rest[0] === "list") emit(inboxPane());
 else emit({ ok: true });
-`,
-);
-chmodSync(fakeCpd, 0o755);
+`;
 
 test.beforeAll(() => {
+  staging = mkdtempSync(join(tmpdir(), "cpd-e2e-tree-"));
+  fakeBin = join(staging, "bin");
+  fakeCpd = join(staging, "cpd");
+  fakeShell = join(staging, "shell");
+  trigger = join(staging, "trigger");
+  mkdirSync(fakeBin, { recursive: true });
+  // A fake login shell reporting the app's PATH unchanged, so the pty's `cpd` is the fake, not a
+  // real cpd (`resolveLoginPath` would otherwise drop the fake bin dir).
+  writeFileSync(
+    fakeShell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(fakeShell, 0o755);
+  writeFileSync(fakeCpd, FAKE_CPD_SOURCE);
+  chmodSync(fakeCpd, 0o755);
+  symlinkSync(fakeCpd, join(fakeBin, "cpd"));
   process.env["CPD_BIN"] = fakeCpd;
   process.env["CPD_E2E_TREE_TRIGGER"] = trigger;
   process.env["SHELL"] = fakeShell;
@@ -131,7 +136,7 @@ test.afterAll(() => {
   rmSync(staging, { recursive: true, force: true });
 });
 
-test("the tree shows a new Plan delivered by a live event, with no reload (air-n13, air-n15)", async ({ page }) => {
+test("the tree shows a new Plan from a live cockpit snapshot, with no reload (air-n13, air-n15)", async ({ page }) => {
   const root = page.locator("#webui-root");
   // The tree loaded against the fake's empty snapshot: the Plan is not there yet.
   await expect(root.locator('[data-part="tree-section"] [data-part="empty"]')).toHaveText("No contexts");
