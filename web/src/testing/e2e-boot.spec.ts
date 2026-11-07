@@ -46,7 +46,16 @@ test.afterAll(() => {
   rmSync(staging, { recursive: true, force: true });
 });
 
-test("boot renders the desktop window with no missing IPC handler error (air-n31)", async ({ page }) => {
+test("boot renders the desktop window with no missing IPC handler error (air-n31)", async ({ electronApp, page }) => {
+  // Hidden + isolated launch (air-d68): no window is visible on screen, and the app's own
+  // userData lives in the per-run temp dir, never the User's real profile or lock.
+  const launch = await electronApp.evaluate(({ app, BrowserWindow }) => ({
+    visible: BrowserWindow.getAllWindows().map((w) => w.isVisible()),
+    userData: app.getPath("userData"),
+  }));
+  expect(launch.visible).not.toContain(true);
+  expect(launch.userData).toContain("cpd-e2e-userdata-");
+
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
 
