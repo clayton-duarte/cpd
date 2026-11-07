@@ -17,6 +17,7 @@ pub(super) fn read(args: ReadArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let mut env = Env::open()?;
+    let _ = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let (attempt, session, file) = env.store.read(|conn| {
         let attempt = row::load(conn, &plan, &id)?;
         let session = attempt.worker_session.clone();

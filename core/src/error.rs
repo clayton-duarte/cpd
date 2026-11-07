@@ -156,6 +156,10 @@ error_codes! {
     TierInvalid = "tier_invalid" => Usage,
     TierNotAllowed = "tier_not_allowed" => Usage,
     NothingToEdit = "nothing_to_edit" => Usage,
+    // A Manager on a Lead-less shaping Plan (air-d19, air-d22; commands.md §1.3, §4.1).
+    ShapingManagerOnly = "shaping_manager_only" => Usage,
+    PlanOtherContext = "plan_other_context" => Usage,
+    ShapingExploreOnly = "shaping_explore_only" => Usage,
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
@@ -265,6 +269,8 @@ error_codes! {
     OwnerInUse = "owner_in_use" => Refused,
     HostApprovalRequired = "host_approval_required" => Refused,
     NotAManager = "not_a_manager" => Refused,
+    // A Manager ran a shaping-Plan command on a Plan that has a Lead (air-d19, air-d22; commands.md §1.3, §4.1).
+    PlanHasLead = "plan_has_lead" => Refused,
     // The tier-preset switch (commands.md §14.6): the registry refused the preset, before any write.
     PresetProviderUnconfigured = "preset_provider_unconfigured" => Refused,
     PresetModelUnoffered = "preset_model_unoffered" => Refused,

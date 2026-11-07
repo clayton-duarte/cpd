@@ -58,10 +58,19 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 /// [`add`] on an open `env`: what a test hands in.
 pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
+    // A Manager runs this only on a Lead-less shaping Plan of its own Context (commands.md §5.1; air-d19, air-d22).
+    let shaping = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
     check_kind_not_reserved(&kind)?;
     let explore = jobs::is_explore(&kind);
+    if matches!(shaping, crate::plan::shaping::Caller::Shaping) {
+        crate::plan::shaping::explore_only(
+            &plan,
+            &kind,
+            args.workflow.workflow.as_ref().map(|w| w.as_str()),
+        )?;
+    }
     if explore {
         // An explore Job belongs to the Plan, and is never a draft (R2, R3).
         if let Some(workflow) = &args.workflow.workflow {
@@ -129,7 +138,9 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                         let phase = plan_phase(tx, &plan)?;
                         if matches!(phase.as_str(), "dispatch" | "deploy" | "done") {
                             let reason = format!("explore Job {} was added", job.key);
-                            crate::workflow::add::reopen(tx, &plan, &phase, "plan", &reason)?;
+                            // A Lead-less Plan reopens to `shaping` (a Lead's to `plan`; air-d19, air-d22).
+                            let to = if lead_less(tx, &plan)? { "shaping" } else { "plan" };
+                            crate::workflow::add::reopen(tx, &plan, &phase, to, &reason)?;
                         }
                     }
                     insert(tx, &plan, &job)?;
@@ -212,6 +223,15 @@ fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
             missing.join(" and ")
         ),
     ))
+}
+
+/// Whether the Plan has no Lead (`plans.lead_session` null): a Lead-less shaping Plan (air-d19, air-d22).
+fn lead_less(conn: &Connection, plan: &PlanId) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
+        "SELECT lead_session IS NULL FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?)
 }
 
 fn decide(
