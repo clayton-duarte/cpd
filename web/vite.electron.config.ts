@@ -39,7 +39,7 @@ export default defineConfig(
             target === "main"
               ? {
                   input: { main: "src/electron/main.ts", server: "src/server/plugin.ts" },
-                  external: ["electron", "node-pty", "@aurigax-ai/ghostty-web", ...nodeBuiltins],
+                  external: ["electron", "node-pty", "@aurigax-ai/ghostty-web", "ws", ...nodeBuiltins],
                   output: { format: "es", entryFileNames: (chunk) => entryFiles[chunk.name === "server" ? "server" : "main"].entryFileNames },
                 }
               : {

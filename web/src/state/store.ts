@@ -257,6 +257,8 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
         : settled;
       return { ...rolledBack, lastError: message.error };
     }
+    case "pong":
+      return state;
     default: {
       if (message.sessionId === null) {
         return message.type === "session.error" ? { ...state, lastError: message.error } : state;
