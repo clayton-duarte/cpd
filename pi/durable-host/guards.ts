@@ -3,6 +3,7 @@ import { toolCallGuard } from "../lib/loop-guard.ts";
 import { blockingReason, reasonText as noblockReason, BOUND_SECONDS } from "../lib/noblock.ts";
 import { leadExploreGuard } from "../lib/explore.ts";
 import { tooLong, unseen } from "../lib/askguard.ts";
+import { electronBypass, reasonText as electronReason } from "../lib/electronguard.ts";
 import { externalBlock } from "../lib/externalguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReason } from "../lib/mainguard.ts";
@@ -49,6 +50,8 @@ export function hostVerdict(
     if (moved !== undefined) return { block: mainReason(moved) };
     const secret = secretBypass(command);
     if (secret !== undefined) return { block: secretReason(secret) };
+    const electron = electronBypass(command);
+    if (electron !== undefined) return { block: electronReason(electron) };
     const host = hostApproveBypass(command);
     if (host !== undefined) return { block: hostReason(host) };
     const timeout = call.arguments.timeout;

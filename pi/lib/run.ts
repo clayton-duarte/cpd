@@ -56,6 +56,7 @@ export class Run {
   /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
   reminderDue = false;
   failedReminded = "";
+  failingReminded = "";
   /** The text of the `cpd-policy` section (§15.10), or undefined: none, or `cpd policy show` failed. */
   policy: string | undefined = undefined;
   /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */

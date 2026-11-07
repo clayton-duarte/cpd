@@ -1,4 +1,5 @@
 import { exploreVerdict, isInsideRepo, type ExploreKind } from "../lib/explore.ts";
+import { electronBypass, reasonText as electronReason } from "../lib/electronguard.ts";
 import { externalBlock } from "../lib/externalguard.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReason } from "../lib/mainguard.ts";
@@ -32,6 +33,8 @@ export function workerVerdict(call: { name: string; arguments: Record<string, un
   if (moved !== undefined) return { block: mainReason(moved) };
   const secret = secretBypass(command);
   if (secret !== undefined) return { block: secretReason(secret) };
+  const electron = electronBypass(command);
+  if (electron !== undefined) return { block: electronReason(electron) };
   const host = hostApproveBypass(command);
   if (host !== undefined) return { block: hostReason(host) };
   const test = unfilteredTestRun(command);

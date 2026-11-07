@@ -649,3 +649,140 @@ fn stack_review_stacking_blocks_only_ready_to_merge() {
     is(&mut f, 1, Cyan, "stacked pr pending base merge");
     is(&mut f, 2, Yellow, "ready to merge");
 }
+
+const BROKEN: [(&str, &str, &str); 3] = [
+    (
+        "mergeable = 'conflicting', merge_state = 'dirty'",
+        "conflict",
+        "updating",
+    ),
+    (
+        "checks = 'failed', merge_state = 'blocked'",
+        "failing",
+        "fixing",
+    ),
+    (
+        "review_decision = 'changes_requested', merge_state = 'blocked'",
+        "changes requested",
+        "fixing",
+    ),
+];
+
+impl Fx {
+    /// Seeds an Event of `kind` for `plan` (and `job`, `session`) with `data`; ids are monotonic.
+    fn event(
+        &mut self,
+        kind: &str,
+        plan: &str,
+        job: Option<&str>,
+        session: Option<&str>,
+        data: &str,
+    ) {
+        let job = job.map_or("NULL".to_owned(), |j| format!("'{j}'"));
+        let session = session.map_or("NULL".to_owned(), |s| format!("'{s}'"));
+        self.sql(&format!(
+            "INSERT INTO events (txn, at, kind, context, plan, job, attempt, session, text, data)
+             VALUES (cpd_txn(), '{T}', '{kind}', 'ctx', '{plan}', {job}, NULL, {session}, 'x', '{data}');"
+        ));
+    }
+
+    /// The Lead `l-pay` moves to state `to`.
+    fn transition(&mut self, to: &str) {
+        let data = format!(r#"{{"from":"working","label":null,"to":"{to}"}}"#);
+        self.event("session-state", "pay", None, Some("l-pay"), &data);
+    }
+
+    /// A wake Event of `kind` of Plan `plan`.
+    fn wake(&mut self, kind: &str, plan: &str) {
+        let job = (kind == "job-failed").then_some("w1");
+        self.event(kind, plan, job, None, "{}");
+    }
+}
+
+/// An owned broken PR `n` with the Lead idle; the Job `w1` of `p<n>` exists for a `job-failed` Event.
+fn owned_broken(f: &mut Fx, n: i64, set: &str) {
+    f.workflow(n, set);
+    f.own("pay", n);
+    f.idle();
+}
+
+#[test]
+fn a_pr_feedback_wake_newer_than_the_lead_going_idle_keeps_a_broken_pr_white() {
+    for (set, _, white) in BROKEN {
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        f.transition("idle");
+        f.wake("pr-feedback", "pay");
+        is(&mut f, 1, White, white);
+    }
+}
+
+#[test]
+fn a_job_failed_wake_newer_than_the_lead_going_idle_keeps_a_broken_pr_white() {
+    for (set, _, white) in BROKEN {
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        f.job(1, "w1", "impl", "failed");
+        f.transition("idle");
+        f.wake("job-failed", "pay");
+        is(&mut f, 1, White, white);
+    }
+}
+
+#[test]
+fn a_wake_older_than_the_lead_going_idle_leaves_a_broken_pr_red() {
+    for (set, red, white) in BROKEN {
+        // Control: a wake newer than the idle is white.
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        f.transition("idle");
+        f.wake("pr-feedback", "pay");
+        is(&mut f, 1, White, white);
+        for to in ["idle", "blocked", "stopped"] {
+            for kind in ["pr-feedback", "job-failed"] {
+                let mut f = fixture();
+                owned_broken(&mut f, 1, set);
+                f.job(1, "w1", "impl", "failed");
+                f.wake(kind, "pay");
+                f.transition(to);
+                is(&mut f, 1, Red, red);
+            }
+        }
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        is(&mut f, 1, Red, red); // no Event at all
+    }
+}
+
+#[test]
+fn a_wake_of_another_plan_or_another_kind_leaves_a_broken_pr_red() {
+    for (set, red, white) in BROKEN {
+        // Control: a wake newer than the idle is white.
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        f.transition("idle");
+        f.wake("pr-feedback", "pay");
+        is(&mut f, 1, White, white);
+        // A wake of another Plan after the idle.
+        let mut f = fixture();
+        f.sql(&format!(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('l-other', 'lead', 'ctx', 'other', 'Lead', '/', 'O3', 'working', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('other', 'ctx', 'Other', 'deploy', 'l-other', '{T}', '{T}');"
+        ));
+        owned_broken(&mut f, 1, set);
+        f.transition("idle");
+        f.wake("pr-feedback", "other");
+        is(&mut f, 1, Red, red);
+
+        // A `working` transition after the idle is no wake, nor is a non-wake kind.
+        let mut f = fixture();
+        owned_broken(&mut f, 1, set);
+        f.transition("idle");
+        f.transition("working");
+        f.event("job-merged", "pay", None, None, "{}");
+        f.idle();
+        is(&mut f, 1, Red, red);
+    }
+}

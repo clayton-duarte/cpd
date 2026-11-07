@@ -119,7 +119,7 @@ pub fn is_overdue(item: &Item) -> bool {
 /// What the table reads of a pull request besides its row.
 struct Facts<'a> {
     row: &'a PullRequest,
-    /// The owner's Lead is `working` or `waiting`, or the owner's Workflow has a live Job of any kind.
+    /// The owner's Lead is `working` or `waiting`, the owner's Workflow has a live Job of any kind, or the Plan has a `pr-feedback`/`job-failed` Event newer than the Lead's last move to idle, blocked or stopped.
     handled: bool,
     /// The owner's Workflow has a queued or running Job of any kind (the Job half of `handled`).
     live: bool,
@@ -187,7 +187,12 @@ pub fn conditions(
         .collect();
     let mut stmt = conn.prepare(&format!(
         "SELECT {}, {}, o.plan, o.key, p.context, p.lead_session,
-                COALESCE(s.state IN ('working', 'waiting'), 0) OR {live},
+                COALESCE(s.state IN ('working', 'waiting'), 0) OR {live}
+                    OR EXISTS (SELECT 1 FROM events e WHERE e.plan = o.plan
+                        AND e.kind IN ('pr-feedback', 'job-failed')
+                        AND e.id > COALESCE((SELECT max(t.id) FROM events t
+                            WHERE t.session = p.lead_session AND t.kind = 'session-state'
+                            AND json_extract(t.data, '$.to') IN ('idle', 'blocked', 'stopped')), 0)),
                 EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key),
                 {},
                 {live}

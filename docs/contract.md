@@ -733,7 +733,7 @@ Only `pr-ready` and `pr-closed` read the `pull_requests` row the poll last wrote
 **The authored pull request rule** (`pr-ready`; pro-d130, pro-d131, assumptions A1 to A8 accepted 2026-10-27). E8 (§3.7) computes one condition per open `pull_requests` row with `authored` 1, from the rows, with no `gh` call. The rows are read through `swr::github::effective_pr` (`swr-github.md` §6), so a pending write's overlay shows in the item. Links: the owning Plan, its Context and its Lead Session when a Plan owns the pull request, none otherwise; `url` the pull request's page; `<repo>` is the row's `repo` without the owner. The label's Row 2 is the pull request's title (`pull_requests.title`; the kinds table, pro-d171).
 
 - **OWNER:** the newest Plan (`plans.created_at` descending, then `id` descending) that has a `workflows` row whose `pull_request` is the row. A `cancelled` Workflow counts too (it keeps its `pull_request`, pro-d362, §3.8), so the item carries its context, plan and session.
-- **HANDLED:** the owner's Lead Session has `state` `working` or `waiting`, or the item is LIVE.
+- **HANDLED:** the owner's Lead Session has `state` `working` or `waiting`, or the item is LIVE, or the owner's Plan has a `pr-feedback` or `job-failed` Event whose id is greater than the id of the Lead Session's latest `session-state` Event whose `data.to` is `idle`, `blocked` or `stopped` (0 when there is none; pro-d456, User, decided work). The poll sees a failing check or a conflict before the Lead's turn has queued its fix, so this third half holds the row at white from that poll, and the row must not flash red in between. The Lead's own `session-state` to `idle`, `blocked` or `stopped` is then the newer event: a Lead that goes idle without queuing a fix Job leaves the row red.
 - **LIVE:** the owner's Workflow has a Job of any kind (`docs`, `test`, `impl`, `verify`, `work`, `open` or `update`) whose status is `queued` or `running` (the Job half of HANDLED, without the Lead's Session).
 - **POSTED:** a `pr_posts` row exists for the owner's (Plan, Workflow key), ("PR post" above).
 - **POST ENABLED:** the owner's resolved policy (`workflow::policy_of_workflow`) has `pr.post.enabled` true. An unowned pull request, or a policy that does not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`, §8.3), counts as not enabled and fails nothing (the poll already reports it, §7.6).
@@ -747,7 +747,7 @@ Only `pr-ready` and `pr-closed` read the `pull_requests` row the poll last wrote
 | # | Condition | Urgency | Label tail |
 |---|---|---|---|
 | 1 | `draft` is true | cyan | `draft` |
-| 2 | broken: `mergeable` is `conflicting`, or `checks` is `failed`, or `review_decision` is `changes_requested`; and HANDLED (Lead `working` or `waiting`, or LIVE) | white | `updating` if conflicting, else `fixing` |
+| 2 | broken: `mergeable` is `conflicting`, or `checks` is `failed`, or `review_decision` is `changes_requested`; and HANDLED (Lead `working` or `waiting`, or LIVE, or the `pr-feedback` / `job-failed` half of HANDLED above) | white | `updating` if conflicting, else `fixing` |
 | 2 | broken, and not HANDLED | red | `conflict` if conflicting, else `failing` if checks failed, else `changes requested` |
 | 3 | LIVE (a queued or running Job of any kind in the owner's Workflow) | white | `updating` |
 | 4 | `checks` is `pending` (`none` is not running) | white | `checks running` |

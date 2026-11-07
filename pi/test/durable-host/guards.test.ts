@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { tooLong, unseen, unseenReason } from "../../lib/askguard.ts";
 import { reasonText as hostReason } from "../../lib/hostapprove.ts";
 import { reasonText as mainReason } from "../../lib/mainguard.ts";
+import { reasonText as electronReason } from "../../lib/electronguard.ts";
 import { reasonText as secretReason } from "../../lib/secretguard.ts";
 import { leadExploreGuard } from "../../lib/explore.ts";
 import { hostVerdict, type Where } from "../../durable-host/guards.ts";
@@ -141,4 +142,11 @@ test("hostVerdict refuses a Lead read of an explore artefact", (t) => {
   assert.deepEqual(hostVerdict({ id: "c", name: "read", arguments: { path: artefact } }, x.where, "lead"), refusal);
   assert.deepEqual(hostVerdict({ id: "c", name: "bash", arguments: { command: `cat ${artefact}`, timeout: 5 } }, x.where, "lead"), refusal);
   assert.equal(hostVerdict({ id: "c", name: "read", arguments: { path: join(x.plain, "notes.md") } }, x.where, "lead"), undefined);
+});
+
+test("hostVerdict refuses a raw electron invocation in bash", (t) => {
+  const x = fixtures(t);
+  for (const role of ["lead", "manager"] as const) {
+    assert.deepEqual(hostVerdict({ id: "c", name: "bash", arguments: { command: "pnpm exec electron ." } }, x.where, role), { block: electronReason("pnpm exec electron") }, role);
+  }
 });
