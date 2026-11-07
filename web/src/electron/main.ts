@@ -48,6 +48,8 @@ async function main(): Promise<void> {
   let assets!: ReturnType<typeof resolveAssetPaths>;
   let nativeShell!: ReturnType<typeof setupNativeShell>;
   let controller!: ReturnType<typeof createModeController>;
+  // Assigned by initMode; the native shell is set up before the window.
+  let controllerRef: ReturnType<typeof createModeController> | undefined;
   const disposers: (() => void)[] = [];
   let services!: ReturnType<typeof createServices>;
   let started!: Promise<void>;
@@ -70,8 +72,6 @@ async function main(): Promise<void> {
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
   });
-  // Assigned after the controller exists; the native shell is set up before the window.
-  let controllerRef: ReturnType<typeof createModeController> | undefined;
   nativeShell = setupNativeShell({
     platform: process.platform,
     app,
@@ -103,6 +103,9 @@ async function main(): Promise<void> {
     },
   });
 
+  };
+
+  const initMode = async (_window: unknown): Promise<void> => {
   controller = createModeController({
     fs: {
       readFile: (file) => fs.readFile(file, "utf8"),
@@ -290,6 +293,7 @@ async function main(): Promise<void> {
 
   await boot({
     app: { setName: (name) => app.setName(name), whenReady: () => app.whenReady().then(prepare) },
+    initMode,
     BrowserWindow: CpdWindow,
     powerMonitor,
     process,

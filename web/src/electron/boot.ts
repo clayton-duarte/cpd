@@ -9,7 +9,7 @@ export interface BootDeps {
   process: { on(signal: string, handler: () => void): unknown };
   startAutoUpdate(win: BootWindow): Promise<{ bootstrap: { state: string } }>;
   startServices(): void;
-  initMode?(win: BootWindow): Promise<void>;
+  initMode(win: BootWindow): Promise<void>;
   registerIpc(): void;
   registerWebuiIpc(): void;
   loadDevUrl(win: BootWindow, url: string): Promise<unknown>;
@@ -22,6 +22,7 @@ export async function boot(deps: BootDeps): Promise<void> {
   deps.app.setName('CPD');
   await deps.app.whenReady();
   const win = new deps.BrowserWindow({ title: 'CPD' });
+  await deps.initMode(win);
   deps.process.on('SIGUSR1', async () => {
     try {
       await deps.reloadServer();
