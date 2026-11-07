@@ -485,7 +485,8 @@ pub(super) fn plan_heads(
         let pid: String = r.get(0)?;
         let plan = id("Plan id", &pid, PlanId::parse)?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {plan} has {name} {value:?}"));
-        let (context, phase, lead): (String, String, Option<String>) = (r.get(1)?, r.get(4)?, r.get(5)?);
+        let (context, phase, lead): (String, String, Option<String>) =
+            (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
         let workflow = match (

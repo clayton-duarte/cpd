@@ -35,10 +35,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let context = ContextId::parse(&context)?;
     let mut out = json!({"plan": {"id": id, "context": context, "title": title}});
     // A Lead-less shaping Plan has no pane to retitle (contract §3.1, air-d19).
-    let lead = lead
-        .as_deref()
-        .map(SessionId::parse)
-        .transpose()?;
+    let lead = lead.as_deref().map(SessionId::parse).transpose()?;
     if old == title {
         // A rerun repairs the pane's header too.
         if let Some(lead) = &lead {

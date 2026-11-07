@@ -454,7 +454,13 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (plan, review, context, lead, title): (String, String, String, Option<String>, Option<String>) = (
+        let (plan, review, context, lead, title): (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = (
             row.get(0)?,
             row.get(1)?,
             row.get(2)?,

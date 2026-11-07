@@ -110,7 +110,9 @@ fn relative(conn: &Connection, raw: &str, caller: &SessionId) -> Result<Option<S
 
 /// Step 6: a Plan id (its Lead) or a bare id prefix of at least [`MIN_BARE_PREFIX`] characters.
 fn legacy(conn: &Connection, raw: &str, reference: &SessionRef) -> Result<SessionId, CpdError> {
-    if let Some(Some(lead)) = nullable(conn, "SELECT lead_session FROM plans WHERE id = ?1", &[raw])? {
+    if let Some(Some(lead)) =
+        nullable(conn, "SELECT lead_session FROM plans WHERE id = ?1", &[raw])?
+    {
         return parse(&lead);
     }
     if raw.len() >= MIN_BARE_PREFIX {
