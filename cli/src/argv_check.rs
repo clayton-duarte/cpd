@@ -60,7 +60,14 @@ fn parse(args: &[String]) -> Option<String> {
     let argv = std::iter::once("cpd").chain(args.iter().map(String::as_str));
     match Cli::try_parse_from(argv) {
         Ok(_) => None,
-        Err(err) if matches!(err.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => None,
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            None
+        }
         Err(err) => Some(err.to_string()),
     }
 }
@@ -77,8 +84,7 @@ fn read_stdin() -> Result<String, CpdError> {
 }
 
 fn print_failures(report: &Report) {
-    let line =
-        serde_json::to_string(report).expect("the argv-check report always serialises");
+    let line = serde_json::to_string(report).expect("the argv-check report always serialises");
     let mut stdout = std::io::stdout().lock();
     let _ = writeln!(stdout, "{line}");
 }

@@ -36,10 +36,12 @@ describe("settings", () => {
   });
 
   it("settings.save runs tiers, then each switch, then retier all, in order", async () => {
-    const { cpd, calls } = fake({});
+    const { cpd, calls } = fake({ config, "config experimental": experimental });
     await saveSettings(cpd, { tiers: { worker: "H2", lead: "S2" }, experimental: { write_curation: false, durable_workers: true } });
     expect(calls).toEqual([
-      "config tiers set --worker H2 --lead S2",
+      "config",
+      "config experimental",
+      "config tiers set --auxiliar GX --worker H2 --lead S2 --manager O3",
       "config experimental durable_workers on",
       "config experimental write_curation off",
       "session retier --all",
@@ -53,8 +55,8 @@ describe("settings", () => {
   });
 
   it("settings.save stops at the first refusal", async () => {
-    const { cpd, calls } = fake({}, "config experimental write_curation off");
+    const { cpd, calls } = fake({ config, "config experimental": experimental }, "config experimental write_curation off");
     await expect(saveSettings(cpd, { tiers: { lead: "S2" }, experimental: { write_curation: false, failure_triage: false } })).rejects.toThrow("refused");
-    expect(calls).toEqual(["config tiers set --lead S2", "config experimental write_curation off"]);
+    expect(calls).toEqual(["config", "config experimental", "config tiers set --auxiliar GX --worker H3 --lead S2 --manager O3", "config experimental write_curation off"]);
   });
 });
