@@ -14,7 +14,7 @@ import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
 import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode } from "./channels.ts";
-import { registerWebuiIpc } from "./cockpit-ipc.ts";
+import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
 import { resolveLoginPath } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
@@ -98,6 +98,7 @@ async function main(): Promise<void> {
   let started!: Promise<void>;
   let markStarted: () => void = () => {};
   let failStarted: (error: unknown) => void = () => {};
+  let webSocketUrl = "";
 
   // Everything that needs the app to be ready but not the window: runs inside boot's whenReady.
   const prepare = async (): Promise<void> => {
@@ -146,6 +147,37 @@ async function main(): Promise<void> {
       quit: () => app.quit(),
     },
   });
+
+  // The one WebSocket endpoint (web/CONTRACT.md §15.1): bound here, before the window, so the
+  // renderer receives ws://127.0.0.1:<port>/cpd-ws as a plain preload value, not over an IPC
+  // data channel. `services` and `started` stay module-scoped so reloadServer can swap them.
+  const boundaries = realBoundaries(env);
+  services = createServices(boundaries);
+  started = new Promise<void>((resolve, reject) => {
+    markStarted = resolve;
+    failStarted = reject;
+  });
+  started.catch(() => undefined);
+  let signalListening: (port: number) => void = () => {};
+  const listening = new Promise<number>((resolve) => {
+    signalListening = resolve;
+  });
+  const endpoint = createWsServer({
+    newConnection: (send) => services.newConnection(send),
+    server: createListenerFactory(),
+    scheduler: boundaries.scheduler,
+    started,
+    onError: (error) => console.error(error),
+    host: "127.0.0.1",
+    port: 0,
+    path: WS_PATH,
+    onListening: (port) => signalListening(port),
+  });
+  disposers.push(() => endpoint.dispose());
+  disposers.push(() => {
+    void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
+  });
+  webSocketUrl = `ws://127.0.0.1:${await listening}${WS_PATH}`;
 
   };
 
@@ -283,6 +315,7 @@ async function main(): Promise<void> {
           contextIsolation: true,
           sandbox: true,
           nodeIntegration: false,
+          additionalArguments: [`--cpd-ws-url=${webSocketUrl}`],
         },
       });
       win = this;
@@ -320,24 +353,9 @@ async function main(): Promise<void> {
     disposers.push(() => ipcMain.removeHandler(CHANNELS.ptyHosts));
   };
 
-  const registerWebuiIpcNow = (): void => {
-    services = createServices(realBoundaries(env));
-    started = new Promise<void>((resolve, reject) => {
-      markStarted = resolve;
-      failStarted = reject;
-    });
-    started.catch(() => undefined);
-    const webuiIpc = registerWebuiIpc({
-      ipc: ipcMain,
-      newConnection: (...args) => services.newConnection(...args),
-      started,
-      onError: (error) => console.error(error),
-    });
-    disposers.push(() => {
-      void webuiIpc.dispose();
-      void Promise.resolve(services.cockpit.stop()).catch((error: unknown) => console.error(error));
-    });
-  };
+  // The endpoint and services are bound in `prepare` (before the window, for the preload URL);
+  // this stays the boot hook boot.ts calls.
+  const registerWebuiIpcNow = (): void => {};
 
   const startServices = (): void => {
     services.cockpit.start().then(markStarted, (error: unknown) => {

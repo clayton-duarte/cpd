@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 23;
+pub const PROTOCOL: u32 = 24;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -343,7 +343,7 @@ impl Kind {
             SessionMessage => spec(
                 [Y, M, N, N, Y],
                 &["from", "text"],
-                &["unblocks", "wake", "head_oid"],
+                &["unblocks", "wake", "head_oid", "origin"],
             ),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
@@ -409,11 +409,11 @@ mod tests {
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
     /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`),
-    /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase: `plans.lead_session` may be null and a Plan's
-    /// phase may be `shaping`, which `plan show`, `plan list` and `context pending` carry).
+    /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase) and 24 (`session-message`'s optional `data.origin`,
+    /// Plan ui-origin).
     #[test]
-    fn the_protocol_is_23_with_the_lead_less_shaping_phase() {
-        assert_eq!(PROTOCOL, 23);
+    fn the_protocol_is_24_with_session_message_origin() {
+        assert_eq!(PROTOCOL, 24);
     }
 
     #[test]
