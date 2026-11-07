@@ -2370,7 +2370,7 @@ cpd answer <escalation> <answer> [--plan <id>]
 
 A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
 
-Run by the Lead.
+Run by the Lead. On a Lead-less shaping Plan the Manager receives the Worker's Escalation as a `session-message` that wakes it: `Worker <agent-key> of Plan <plan> asks: "<question, first 300 characters>" (escalation <id>). Answer with: cpd answer <id> "<text>" --plan <plan>` (contract §5.3). It runs `cpd answer <id> "<text>" --plan <plan>`; the answer resolves the Escalation as it does for a Lead and the Worker's `ask` returns it. A `job-merged` message carries the summary and the artefact path, which the Manager may not read and cites in the brief of a later Plan.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3905,7 +3905,7 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 `--session <id>` takes any form of §1.3 and applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
 - for the Session that is its Plan's `lead_session`: Events with `plan` = its Plan; Events with `plan IS NULL AND context` = its Context; Events with `session` = itself;
 - for any other Session (Workers, side forks): Events with `session` = itself;
-- for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7).
+- for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7). A Manager of a Lead-less Plan also receives the engine's `session-message` for each `job-merged`, `job-failed` and `escalation` Event of that Plan (contract §5.3); the Plan's own Events are still not routed to it.
 
 The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
 
@@ -5222,7 +5222,7 @@ The Event's `data` carries `summary` and `artefact` (the path relative to `$CPD_
 
 **Other notices** stay follow-ups, delivered as the User's pi settings say: `followUpMode` (and `steeringMode`, for steered ones) `"all"` delivers every queued message together, pi's default `"one-at-a-time"` one per finished run. cpd does not set them (the User set both to `all` in the global pi settings on 2026-10-19; contract §6.5 "Queue modes are the User's").
 
-**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (the Plan review and the command `/plan-review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
+**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (the Plan review and the command `/plan-review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets. For a Lead-less Plan of its Context it also receives the engine's `session-message` for each `job-merged`, `job-failed` and `escalation` Event (contract §5.3); it arrives as a turn with `data.text` as the message content, so a `job-merged` message carries the summary and the artefact path. The Manager may not read the artefact file: it cites the path in the brief of a later Plan.
 
 This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
 
