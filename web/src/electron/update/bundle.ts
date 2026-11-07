@@ -1,6 +1,10 @@
 import type { UpdateExec, UpdateFs } from './types';
 
 export const BUILT_SHA_FILE = '.built-sha';
+// D1: the main-side build artefacts Electron loads from dist-electron but does not pick up on a
+// renderer reload — a change to any of them needs the whole process relaunched. The renderer output
+// lives under dist-electron/renderer and is the only thing an in-place reload refreshes.
+export const MAIN_ARTEFACTS = ['main.js', 'preload.cjs', 'server.js'] as const;
 const cur = (root: string) => `${root}/web/dist-electron`;
 const next = (root: string) => `${root}/web/dist-electron.next`;
 
@@ -22,9 +26,11 @@ export function readBuiltSha(fs: UpdateFs, root: string): string | null {
 export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean } {
   const differs = (f: string) => {
     const a = fs.readText(`${cur(root)}/${f}`);
-    return a === null || a !== fs.readText(`${next(root)}/${f}`);
+    const b = fs.readText(`${next(root)}/${f}`);
+    // A file absent from both builds is not a change; one present on either side that differs is.
+    return (a ?? b) !== null && a !== b;
   };
-  const mainChanged = differs('main.js') || differs('preload.cjs');
+  const mainChanged = MAIN_ARTEFACTS.some(differs);
   const prev = `${cur(root)}.prev`;
   fs.rename(cur(root), prev);
   try {
