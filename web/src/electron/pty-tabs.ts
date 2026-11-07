@@ -23,12 +23,12 @@
 //     `<alias>` is a host alias in `hosts`;
 //   - anything else -> null.
 
-import type { PtySize } from "./channels.ts";
+import type { PtySize, TabStatus } from "./channels.ts";
 import { CPD_TUI_COMMAND } from "./pty.ts";
 import type { PtyProcess, PtySpawnOptions } from "./pty.ts";
 import type { SshHost } from "./ssh-config.ts";
 
-export type TabStatus = "connecting" | "live" | "exited" | "failed";
+export type { TabStatus };
 
 export interface TabCommand {
   file: string;
