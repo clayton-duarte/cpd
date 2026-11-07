@@ -1922,7 +1922,7 @@ Recorded decision: Plan ui-origin (air-d23, air-d24; assumptions A2, A5). Where 
 
 - **The wire gains no field.** `session.submit` (4.1) carries no `origin`; the durable socket submit frame (6.4) carries none either, and is unchanged: the durable host's web submissions are `cpd-chat` entries, not `session-message` Events. No parser (4.3) learns a new field.
 - **The pi runner sets it.** The pi backend's `submit` (6.6) passes `--origin webui` to `cpd session send`, so the `session-message` Event it writes carries `data.origin: "webui"`. The pi runner is the only WebUI path that writes a `session-message`.
-- **The adapter reads it.** The pi adapter reads `data.origin` to tag a User message with its surface (the tag Job of the Plan); the field the adapter reads raises `protocol`, 22 → 23, in `core/src/events/kind.rs` and `pi/lib/event.ts` together.
+- **The adapter reads it.** The pi adapter reads `data.origin` to tag a User message with its surface (the tag Job of the Plan); the field the adapter reads raises `protocol`, 23 → 24, in `core/src/events/kind.rs` and `pi/lib/event.ts` together.
 
 ---
 
