@@ -14,6 +14,6 @@ export function createViewToggle(
  * The host tab bar is visible only in the TUI view: it is hidden in WebUI and WebUI Preview (air-d50).
  * The mode is the app-level view mode; `webui-preview` runs the WebUI renderer, so only `tui` shows the tabs.
  */
-export function hostTabsVisible(_mode: UiMode): boolean {
-  throw new Error("hostTabsVisible is not implemented");
+export function hostTabsVisible(mode: UiMode): boolean {
+  return mode === "tui";
 }
