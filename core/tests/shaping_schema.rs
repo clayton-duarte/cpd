@@ -53,14 +53,14 @@ fn rows(conn: &Connection, sql: &str) -> Vec<Vec<Value>> {
 #[test]
 fn shaping_schema_lead_session_is_nullable() {
     let dir = tempfile::tempdir().unwrap();
-    let store = store(&dir);
+    let mut store = store(&dir);
     let not_null: i64 = store
         .read(|conn| {
-            conn.query_row(
+            Ok(conn.query_row(
                 "SELECT \"notnull\" FROM pragma_table_info('plans') WHERE name = 'lead_session'",
                 [],
                 |r| r.get(0),
-            )
+            )?)
         })
         .unwrap();
     assert_eq!(
@@ -84,11 +84,11 @@ fn shaping_schema_accepts_shaping_phase_with_null_lead() {
     .expect("a shaping Plan with a null lead_session is accepted");
     let (phase, lead): (String, Option<String>) = store
         .read(|conn| {
-            conn.query_row(
+            Ok(conn.query_row(
                 "SELECT phase, lead_session FROM plans WHERE id = 'shape1'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            )?)
         })
         .unwrap();
     assert_eq!((phase.as_str(), lead.as_deref()), ("shaping", None));
@@ -104,10 +104,10 @@ fn shaping_schema_refuses_shaping_with_a_lead() {
         &mut store,
         &format!(
             "{CONTEXT}
-             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('lead1', 'lead', 'ctx', NULL, 'lead', '/', 'O3', 'idle', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at)
-               VALUES ('shape1', 'ctx', 'Shape', 'shaping', NULL, 't');"
+               VALUES ('shape1', 'ctx', 'Shape', 'shaping', NULL, 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead1', 'lead', 'ctx', 'shape1', 'lead', '/', 'O3', 'idle', 't', 't');"
         ),
     )
     .expect("a shaping Plan with a null lead_session is accepted");
@@ -188,11 +188,11 @@ fn shaping_schema_allows_shaping_done_transitions() {
     .expect("shaping>done is legal for a Lead-less Plan");
     let (phase, locked): (String, Option<String>) = store
         .read(|conn| {
-            conn.query_row(
+            Ok(conn.query_row(
                 "SELECT phase, locked_at FROM plans WHERE id = 'shape1'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            )?)
         })
         .unwrap();
     assert_eq!((phase.as_str(), locked), ("done", None));
