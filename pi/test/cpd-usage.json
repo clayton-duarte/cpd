@@ -950,6 +950,7 @@
       "--help": false,
       "--jira": true,
       "--runner": true,
+      "--shaping": false,
       "--tier": true,
       "--title": true
     },

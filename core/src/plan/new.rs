@@ -52,6 +52,10 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
 }
 
 pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
+    if args.shaping {
+        let mut env = Env::open()?;
+        return shaping(&mut env, args);
+    }
     let brief: Option<Text> = args
         .brief_file
         .as_deref()
@@ -379,6 +383,118 @@ fn already(
         "record": record,
         "already": true,
     })))
+}
+
+/// `plan new --shaping` (commands.md §4.1; air-d19, air-d22; A1, A2): the Context's live Manager creates a Lead-less
+/// Plan in phase `shaping`. Only step 1 runs: one `plans` row (`lead_session` NULL) and one `plan-created` Event, no
+/// Session row, no `plan` record, no first message and no window.
+fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
+    let id = args.id.clone();
+    let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
+    // Only the Context's live Manager creates a shaping Plan (air-d19): a Lead, a Worker and the User's cockpit are
+    // refused `shaping_manager_only`, `details.caller` the caller's role (or null for the User).
+    let live = env.store.read(super::shaping::caller)?;
+    let (role, context) = match &live {
+        Some((role, context)) => (Some(role.clone()), Some(context.clone())),
+        None => (None, None),
+    };
+    if role.as_deref() != Some("manager") || context.as_ref() != Some(&args.context) {
+        return Err(CpdError::new(
+            ErrorCode::ShapingManagerOnly,
+            "Only the Context's live Manager creates a Lead-less shaping Plan: run it as the Manager of that Context.",
+        )
+        .with("caller", role)
+        .with("context", args.context.as_str()));
+    }
+    if args.brief_file.is_some() || args.by_user || args.tier.is_some() || args.runner.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "A shaping Plan has no Lead to brief, register by-user, tier or run: drop --brief-file, --by-user, --tier and --runner.",
+        ));
+    }
+    let context = require_context(env, &args.context)?;
+    refuse_deleted(env, &id)?;
+    if let Some(plan) = env.store.read(|conn| row::find(conn, &id))? {
+        let same = plan.context == args.context
+            && plan.title == args.title.as_str()
+            && plan.jira == jira
+            && plan.lead_session.is_none();
+        if !same {
+            return Err(CpdError::new(
+                ErrorCode::PlanExists,
+                format!("Plan {id} exists with other flags."),
+            )
+            .with("plan", summary(&plan, &[])));
+        }
+        return Ok(shaped(&plan));
+    }
+    refuse_id_taken(env, &id)?;
+    refuse_archived(&context)?;
+    let cwd = crate::session::agent_cwd()?;
+    let creation = Shaping {
+        id: &id,
+        context: &args.context,
+        title: args.title.as_str(),
+        jira: jira.as_deref(),
+        cwd: &cwd,
+    };
+    env.store
+        .write("plan new", |tx| insert_shaping(tx, &creation))?;
+    let plan = env.store.read(|conn| row::load(conn, &id))?;
+    Ok(shaped(&plan))
+}
+
+/// The shaping Plan to create.
+struct Shaping<'a> {
+    id: &'a PlanId,
+    context: &'a ContextId,
+    title: &'a str,
+    jira: Option<&'a str>,
+    cwd: &'a str,
+}
+
+/// Step 1 of a shaping Plan, inside the caller's transaction: the `plans` row (`lead_session` NULL) and its
+/// `plan-created` Event. No Session and no `session-registered` (air-d19, air-d22).
+fn insert_shaping(tx: &WriteTxn<'_>, c: &Shaping<'_>) -> Result<(), CpdError> {
+    let Shaping {
+        id,
+        context,
+        title,
+        jira,
+        cwd,
+    } = c;
+    let exists = tx
+        .query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if exists.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::PlanExists,
+            format!("Plan {id} was created meanwhile."),
+        )
+        .with("plan", id.as_str()));
+    }
+    tx.execute(
+        "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
+         SELECT ?1, ?2, ?3, ?4, 'shaping', NULL, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![id.as_str(), context.as_str(), title, jira],
+    )?;
+    let text = format!(
+        "Plan {id} \"{title}\" created in Context {context}, phase shaping. Next: cpd job add <key> --kind scout --tier <T> --spec <file> --plan {id}"
+    );
+    let event = NewEvent::plan_created(text, title, *jira, Value::Null, Value::Null, cwd);
+    append(tx, event.plan((*id).clone()))?;
+    Ok(())
+}
+
+/// The output of `plan new --shaping` (commands.md §4.1): `phase` and `lead_session` at the top level too.
+fn shaped(plan: &PlanRow) -> Output {
+    Output::success(json!({
+        "plan": summary(plan, &[]),
+        "phase": plan.phase.as_str(),
+        "lead_session": plan.lead_session,
+    }))
 }
 
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
