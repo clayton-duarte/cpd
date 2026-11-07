@@ -27,20 +27,34 @@ export interface Tab {
 
 /** The tab id of a remote tab: `ssh:<alias>`. */
 export function remoteTabId(alias: string): string {
-  throw new Error("remoteTabId not implemented");
+  return "ssh:" + alias;
 }
 
 /** The local tab first, then one remote tab per host, in order; every tab starts `connecting`. */
 export function buildTabs(hosts: readonly TabHost[]): Tab[] {
-  throw new Error("buildTabs not implemented");
+  return [
+    { id: LOCAL_TAB_ID, label: "local", kind: "local", status: "connecting" },
+    ...hosts.map((host): Tab => ({ id: remoteTabId(host.alias), label: host.alias, kind: "remote", status: "connecting" })),
+  ];
 }
 
 /** The tabs visible in a view mode. Remote tabs stay visible in every mode; the mode only decides the local tab's view. */
-export function tabsForMode(tabs: readonly Tab[], mode: UiMode): Tab[] {
-  throw new Error("tabsForMode not implemented");
+export function tabsForMode(tabs: readonly Tab[], _mode: UiMode): Tab[] {
+  return [...tabs];
 }
 
 /** The status text shown next to a tab. */
 export function statusLabel(tab: Tab): string {
-  throw new Error("statusLabel not implemented");
+  switch (tab.status) {
+    case "connecting":
+      return "connecting...";
+    case "live":
+      return "";
+    case "exited":
+      return tab.code === undefined ? "exited" : `exited (code ${tab.code})`;
+    case "failed":
+      if (tab.code === 127 && tab.kind === "remote") return `cpd not found on ${tab.label}`;
+      if (tab.code !== undefined) return `ssh failed (exit ${tab.code})`;
+      return "ssh failed";
+  }
 }
