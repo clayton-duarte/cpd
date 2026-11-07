@@ -151,6 +151,8 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --kind scout|res
 - **The summary arrives, the file does not.** The `job-merged` Event of an explore Job carries its summary and the artefact's path. Read the summary. That path is for the Worker: the adapter refuses your reads of it. To use the findings in a Spec, cite the path there. When the summary is not enough, add another explore Job.
 - **Every other rule** (Spec fields, Tiers, refusals) is in [Spec files](references/spec-files.md#explore-jobs).
 
+A Manager explores before a Lead exists through its own Lead-less Plan; the brief it hands you cites the artefact path it names, and you carry that path into the Specs that need it.
+
 Grounding is done when every touched repo's latest origin/main is fetched (`git fetch origin`), every file path and public interface you will name in a Spec has an explore answer, and every question that spans several files has an explore Job answer.
 
 ### Grilling
