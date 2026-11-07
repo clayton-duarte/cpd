@@ -5,11 +5,12 @@ import { test } from "node:test";
 import { transition, type Answer, type CallTool, type Request } from "../lib/jira-transition.ts";
 
 const CLOUD = "11111111-2222-3333-4444-555555555555";
+const ACC = "712020:aaaa-bbbb";
 const NAMES = { in_progress: "In Progress", in_review: "In Review", done: "Done" };
 const json = (v: unknown): Answer => ({ isError: false, text: JSON.stringify(v, null, 2) });
 const jira = { id: CLOUD, url: "https://s.atlassian.net", scopes: ["read:jira-work", "write:jira-work"] };
 const read = (name: string, key = "indeterminate"): Answer =>
-  json({ key: "ABC-1", fields: { status: { name, statusCategory: { key } }, summary: "Retry failed payouts", customfield_10016: null } });
+  json({ key: "ABC-1", fields: { status: { name, statusCategory: { key } }, summary: "Retry failed payouts", assignee: { accountId: ACC }, customfield_10016: null } });
 
 function fake(table: Record<string, Answer>) {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -28,6 +29,7 @@ const request = (over: Partial<Request> = {}): Request => ({
   target: "in_review",
   names: NAMES,
   cloud_id: CLOUD,
+  account_id: ACC,
   target_name: "In Review",
   later_names: ["Done"],
   estimate_fields: [],
@@ -46,9 +48,10 @@ test("jira_helper_makes_one_get_issue_call_with_fields", async () => {
     ["getJiraIssue", "getTransitionsForJiraIssue", "transitionJiraIssue"],
     "a cached cloud_id skips the site call, and the read is made once",
   );
-  assert.deepEqual(f.calls[0]!.args, { cloudId: CLOUD, issueIdOrKey: "ABC-1", fields: ["status", "summary"] });
+  assert.deepEqual(f.calls[0]!.args, { cloudId: CLOUD, issueIdOrKey: "ABC-1", fields: ["status", "summary", "assignee"] });
   assert.equal(out.outcome, "moved");
   assert.equal((out as any).cloud_id, CLOUD);
+  assert.equal((out as any).account_id, ACC);
   assert.equal((out as any).summary, "Retry failed payouts");
   assert.deepEqual((out as any).estimates, {});
 });
@@ -63,16 +66,29 @@ test("a null cloud_id resolves the site once, then reads once with the estimate 
     f.calls.map((c) => c.name),
     ["getAccessibleAtlassianResources", "getJiraIssue"],
   );
-  assert.deepEqual(f.calls[1]!.args.fields, ["status", "summary", "customfield_10016"]);
+  assert.deepEqual(f.calls[1]!.args.fields, ["status", "summary", "assignee", "customfield_10016"]);
   assert.deepEqual(out, {
     ticket: "ABC-1",
     target: "in_progress",
     outcome: "unchanged",
     cloud_id: CLOUD,
+    account_id: ACC,
     status_name: "In Review",
     status_category: "indeterminate",
     why: "past_target",
     summary: "Retry failed payouts",
     estimates: { customfield_10016: null },
   });
+});
+
+test("a null account_id resolves the user once with atlassianUserInfo and a cached one makes no call", async () => {
+  const table = { getJiraIssue: read("In Review"), atlassianUserInfo: json({ account_id: ACC, name: "Ada" }) };
+  const f = fake(table);
+  const out = await transition(f.call, request({ account_id: null }));
+  assert.equal(f.calls.filter((c) => c.name === "atlassianUserInfo").length, 1);
+  assert.equal((out as any).account_id, ACC);
+  const g = fake(table);
+  const cached = await transition(g.call, request({ account_id: ACC }));
+  assert.equal(g.calls.filter((c) => c.name === "atlassianUserInfo").length, 0);
+  assert.equal((cached as any).account_id, ACC);
 });

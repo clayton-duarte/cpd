@@ -22,8 +22,8 @@ use cpd_core::ports::Fakes;
 use cpd_core::swr::outbox;
 use cpd_core::swr::source::jira::{self, Jira};
 
-const MOVED: &str = r#"{"ok":true,"outcome":"moved","ticket":"EEC-1","target":"in_review","cloud_id":"c1","from":"In Progress","to":"In Review","summary":"S","estimates":{}}"#;
-const UNCHANGED: &str = r#"{"ok":true,"outcome":"unchanged","ticket":"EEC-1","target":"in_review","cloud_id":"c1","status_name":"Done","status_category":"done","why":"done_category","summary":"S","estimates":{}}"#;
+const MOVED: &str = r#"{"ok":true,"outcome":"moved","ticket":"EEC-1","target":"in_review","cloud_id":"c1","account_id":"712020:aaaa","from":"In Progress","to":"In Review","summary":"S","estimates":{}}"#;
+const UNCHANGED: &str = r#"{"ok":true,"outcome":"unchanged","ticket":"EEC-1","target":"in_review","cloud_id":"c1","account_id":"712020:aaaa","status_name":"Done","status_category":"done","why":"done_category","summary":"S","estimates":{}}"#;
 const REFUSED: &str = r#"{"ok":false,"error":{"code":"jira_refused","message":"m","details":{"reason":"no_transition"}}}"#;
 const AUTH: &str = r#"{"ok":false,"error":{"code":"jira_auth","message":"Atlassian needs a sign-in.","details":{}}}"#;
 const FAILED: &str = r#"{"ok":false,"error":{"code":"jira_failed","message":"transitionJiraIssue failed.","details":{"tool":"transitionJiraIssue","status_code":503}}}"#;

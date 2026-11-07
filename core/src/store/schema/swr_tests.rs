@@ -144,7 +144,10 @@ const TABLES: &[(&str, &[&str])] = &[
             "inactive_at",
         ],
     ),
-    ("swr_atlassian", &["id", "cloud_id", "fetched_at"]),
+    (
+        "swr_atlassian",
+        &["id", "cloud_id", "fetched_at", "account_id"],
+    ),
     (
         "swr_models",
         &[

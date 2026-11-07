@@ -20,11 +20,13 @@ Status: **normative for the `jira` Workflow** (Plan `external-sync-arch`, Job `s
 | `context_json` | `{"plan": "pay-4521", "workflow": "ui"}`, plus `"refused_with": "<ticket>\|<status>"` once refused |
 | `patch_json` | `{"status_name": "In Review", "status_category": "indeterminate"}`, or NULL (§6) |
 | endpoint | `jira` (`swr_endpoints`) |
-| cache tables | `swr_jira_issues` (one row per ticket), `swr_atlassian` (one row: `cloud_id`, `fetched_at`) |
+| cache tables | `swr_jira_issues` (one row per ticket), `swr_atlassian` (one row: `cloud_id`, `account_id`, `fetched_at`) |
 
 **J1.** The Job's spelling of the target key is `jira:<TICKET>`. This page writes it `jira:issue:<TICKET>`, so `target_key` is the query key that `complete` invalidates ([swr.md §3.3, §14](swr.md)). One ticket, one spelling.
 
 The only op is `transition`. No other Jira write exists.
+
+**Ticket creation (pro-d454).** cpd never creates a Jira ticket itself. The `cpd-lead` and `cpd-manager` skills require a model that creates one with `mcp__atlassian__createJiraIssue` to call `mcp__atlassian__atlassianUserInfo` first and pass its account id as `assignee_account_id`, so a ticket cpd works is assigned to the User from the start; the helper's assignee write (§3.2 step 3a) keeps it so.
 
 ## 3. The helper's JSON contract
 
@@ -36,6 +38,7 @@ One helper run is one spawn: one JSON object on stdin, one JSON line on stdout. 
 {
   "server": {"url": "https://mcp.atlassian.com/v1/mcp/authv2", "exposure": "deferred"},
   "cloud_id": "b4c1d0e2-…",
+  "account_id": "712020:5b1c…",
   "ticket": "EEC-1",
   "target": "in_review",
   "target_name": "In Review",
@@ -48,6 +51,7 @@ One helper run is one spawn: one JSON object on stdin, one JSON line on stdout. 
 |---|---|
 | `server` | the machine policy's `atlassian` entry, as today; `url` required |
 | `cloud_id` | `swr_atlassian.cloud_id` when `fetched_at` is less than 24 h before `now`; otherwise `null` |
+| `account_id` | `swr_atlassian.account_id` when the row is fresh (the same `fetched_at` test as `cloud_id`, and the column is not NULL); otherwise `null`, which means the helper resolves it (§3.2 step 1; pro-d454) |
 | `ticket` | `^[A-Z][A-Z0-9]+-[0-9]+$` |
 | `target` | `in_progress`, `in_review` or `done` |
 | `target_name` | the policy's `pr.jira.<target>`, non-empty |
@@ -58,30 +62,31 @@ Any other shape is `usage` (exit 2) before the helper connects, as today. The re
 
 ### 3.2 The helper's calls, in order
 
-1. **Site.** If `cloud_id` is `null`: `getAccessibleAtlassianResources {}`. Keep the entries whose `scopes` include `read:jira-work` and `write:jira-work`. None: `jira_auth` (`reason` `no_jira_site`). More than one distinct `id`: `jira_refused` (`site_ambiguous`). Else the one `id` is the `cloud_id`. A non-null `cloud_id` skips this call.
-2. **The one read.** `getJiraIssue {cloudId, issueIdOrKey: ticket, fields: ["status", "summary", ...estimate_fields]}`. A 404 is `jira_refused` (`issue_not_found`). From the answer: `status_name` = `fields.status.name`, `status_category` = `fields.status.statusCategory.key`, `summary` = `fields.summary`, and `estimates` = each estimate field present as a key, with its value (`null` means empty). A key absent from `fields` is not in `estimates`.
-3. **The skip test on the fresh read** (§5). Order: `status_name == target_name` → `unchanged`, `why` `at_target`; `status_category == "done"` → `unchanged`, `done_category`; `status_name` in `later_names` → `unchanged`, `past_target`. No call follows an `unchanged`.
+1. **Site and user.** If `account_id` is `null`: `atlassianUserInfo {}`; the authenticated user's account id is the result field `account_id`, or `accountId` when that is absent; a result with neither is `jira_failed`. A non-null `account_id` skips this call (pro-d454). If `cloud_id` is `null`: `getAccessibleAtlassianResources {}`. Keep the entries whose `scopes` include `read:jira-work` and `write:jira-work`. None: `jira_auth` (`reason` `no_jira_site`). More than one distinct `id`: `jira_refused` (`site_ambiguous`). Else the one `id` is the `cloud_id`. A non-null `cloud_id` skips this call.
+2. **The one read.** `getJiraIssue {cloudId, issueIdOrKey: ticket, fields: ["status", "summary", "assignee", ...estimate_fields]}`. A 404 is `jira_refused` (`issue_not_found`). From the answer: `status_name` = `fields.status.name`, `status_category` = `fields.status.statusCategory.key`, `summary` = `fields.summary`, `assignee` = `fields.assignee?.accountId` (absent when the issue is unassigned), and `estimates` = each estimate field present as a key, with its value (`null` means empty). A key absent from `fields` is not in `estimates`.
+3. **The skip test on the fresh read** (§5). Order: `status_name == target_name` → `unchanged`, `why` `at_target`; `status_category == "done"` → `unchanged`, `done_category`; `status_name` in `later_names` → `unchanged`, `past_target`. Only the assignee write of step 3a (never a transition) follows an `unchanged`.
+3a. **The assignee** (pro-d454). Whenever `fields.assignee?.accountId` is not `account_id`, the helper sets `fields.assignee = {accountId: <account_id>}` through `editJiraIssue`. This holds on every outcome, an `unchanged` one included (a ticket already at or past the target is still assigned). For `target` `done` that write is coalesced with step 5's estimate write into the one `editJiraIssue` call. A failed assignee edit is `jira_failed` and the ticket is not moved (§3.2 step 6 is not reached).
 4. **The transition.** `getTransitionsForJiraIssue {cloudId, issueIdOrKey}`. Take the **first** entry whose `to.name` equals `target_name` exactly. Never match on `name` or `id`: from `In Review`, `Done` is offered twice (research §4). None: `jira_refused` (`no_transition`).
-5. **The estimate.** Only for `target` `done`: when some estimate field reads `null`, one `editJiraIssue {cloudId, issueIdOrKey, fields: {<id>: 1, …}}` writes 1 into each empty field. Absent keys and any other value, 0 included, are left alone. This replaces today's second `getJiraIssue` (`pi/lib/jira-transition.ts:88`), because step 2 already read the fields.
+5. **The estimate.** Only for `target` `done`: when some estimate field reads `null`, one `editJiraIssue {cloudId, issueIdOrKey, fields: {<id>: 1, …}}` writes 1 into each empty field, plus `assignee: {accountId}` when step 3a requires it (one call, never two). Absent keys and any other value, 0 included, are left alone. This replaces today's second `getJiraIssue` (`pi/lib/jira-transition.ts:88`), because step 2 already read the fields.
 6. **The move.** `transitionJiraIssue {cloudId, issueIdOrKey, transition: {id: "<id as a string>"}}`. It must answer `isError` false with `{"success": true, "statusName": …}`; anything else is `jira_failed`.
 
-Calls per run: one `getJiraIssue`, always. `getAccessibleAtlassianResources` only on a cache miss. `getTransitionsForJiraIssue`, `editJiraIssue` and `transitionJiraIssue` only when behind. A `done` move with no empty estimate makes no `editJiraIssue`.
+Calls per run: one `getJiraIssue`, always. `getAccessibleAtlassianResources` and `atlassianUserInfo` only on a cache miss (the same row, so normally together). `getTransitionsForJiraIssue` and `transitionJiraIssue` only when behind. `editJiraIssue` at most once per run: when the assignee differs, or (target `done`) an estimate is empty; it is the only call an `unchanged` run can make.
 
 ### 3.3 Answer (stdout)
 
 Success, a move:
 
 ```json
-{"ok": true, "outcome": "moved", "ticket": "EEC-1", "target": "in_review", "cloud_id": "b4c1d0e2-…", "from": "In Progress", "to": "In Review", "summary": "Retry failed payouts", "estimates": {}}
+{"ok": true, "outcome": "moved", "ticket": "EEC-1", "target": "in_review", "cloud_id": "b4c1d0e2-…", "account_id": "712020:5b1c…", "from": "In Progress", "to": "In Review", "summary": "Retry failed payouts", "estimates": {}}
 ```
 
 Success, already at or past the target:
 
 ```json
-{"ok": true, "outcome": "unchanged", "ticket": "EEC-1", "target": "in_progress", "cloud_id": "b4c1d0e2-…", "status_name": "In Review", "status_category": "indeterminate", "why": "past_target", "summary": "Retry failed payouts", "estimates": {}}
+{"ok": true, "outcome": "unchanged", "ticket": "EEC-1", "target": "in_progress", "cloud_id": "b4c1d0e2-…", "account_id": "712020:5b1c…", "status_name": "In Review", "status_category": "indeterminate", "why": "past_target", "summary": "Retry failed payouts", "estimates": {}}
 ```
 
-`estimates` holds the values read in step 2, with each value this run wrote shown as `1`.
+`account_id` is required in every success line, the one used (sent or resolved); a line without it is `jira_helper_failed` at Rust (pro-d454). `estimates` holds the values read in step 2, with each value this run wrote shown as `1`.
 
 Failure: `{"ok": false, "error": {"code", "message", "details"}}`.
 
@@ -97,7 +102,7 @@ Failure: `{"ok": false, "error": {"code", "message", "details"}}`.
 
 ### 3.4 The Rust seam
 
-`core/src/jira.rs` keeps `call` and `answer`. `Request` gains `cloud_id`, `target_name`, `later_names`, and `estimate_fields` replaces `names`. `Done` becomes an answer that carries the facts of §3.3. `HELPER_CODES` is unchanged.
+`core/src/jira.rs` keeps `call` and `answer`. `Request` gains `cloud_id`, `account_id: Option<String>` beside it (`None` serializes `null`: resolve it; pro-d454), `target_name`, `later_names`, and `estimate_fields` replaces `names`. `Done` becomes an answer that carries the facts of §3.3, `account_id` included, required. `HELPER_CODES` is unchanged.
 
 ## 4. The rank table
 
@@ -146,7 +151,7 @@ apply(raw, patches): for each patch in submitted order:
 
 ## 7. Enqueue
 
-The five enqueue sites stay where they are. Each one's `jira_sync::queue(tx, plan, key, target)` call becomes an `enqueue` of the op of §2 with `Coalesce::Forward(rank)`, in the same transaction as today:
+The enqueue sites stay where they are, and one is added (`pr::open::record`, `in_review`; pro-d454). Each one's `jira_sync::queue(tx, plan, key, target)` call becomes an `enqueue` of the op of §2 with `Coalesce::Forward(rank)`, in the same transaction as today:
 
 | Site (this branch) | Target | Written when |
 |---|---|---|
@@ -154,11 +159,17 @@ The five enqueue sites stay where they are. Each one's `jira_sync::queue(tx, pla
 | `core/src/pr/post.rs:198` | `in_review` | `pr_posts` is inserted new |
 | `engine/src/watch/team.rs:305` | `in_review` | the team review queues a post |
 | `core/src/pr/poll.rs:974` | `done` | a merge is recorded |
+| `core/src/pr/open.rs` `record` | `in_review` | the Workflow binds an open GitHub pull request, whether `cpd pr open` made it or `cpd workflow add --adopt` adopted it (both become `open` through `pr::open::record`; there is no `pr adopt`). It calls `crate::swr::source::jira::enqueue_for_workflow(tx, plan, workflow, 'in_review')` (pro-d454) |
 | `core/src/pr/open.rs:541` | `done` | an adopted pull request is already merged |
+| `adopt_ticket` (`core/src/swr/source/jira.rs`) | the target of the Workflow's status | a ticket is set on a Workflow (below) |
+
+When the pull request is already merged, `record` enqueues `in_review` and then `done` in the same transaction; the Forward rule (§4) supersedes the `in_review` row, so only `done` runs.
 
 `context_json` carries `plan` and `workflow`, which the event scope and the reopen need. An enqueue writes nothing else: it never calls Jira and never calls the helper.
 
 **Ticketless Workflows.** When the Workflow's `jira` is NULL, the row is enqueued with `target_key` NULL, which `claim_next` never takes (§8). When `workflow add --jira` or `workflow edit --jira` sets the ticket, the same transaction enqueues each of the Workflow's ticketless `pending` rows again under `jira:issue:<KEY>`, in rank order, with the same Forward rule, and sets the ticketless rows `superseded`. This keeps today's behaviour, where rows of a Workflow with no ticket wait and run once it has one ([commands.md §21.11](../commands.md)).
+
+**`adopt_ticket`** (pro-d454). Setting a ticket on a Workflow (`workflow add --jira`, `workflow edit --jira`) calls `adopt_ticket`, which, besides the re-enqueue above, also enqueues the target of the Workflow's current status under `jira:issue:<KEY>`: `merged` → `done`, `open` → `in_review`, `dispatch` with a started Job → `in_progress`. `waiting` (and `cancelled`) map to no target and enqueue nothing. A target already covered is not enqueued again: a `pending` or `in_flight` row of the key with rank ≥ the target's, or one the ticketless re-enqueue just wrote, covers it (the Forward rule of §4 would supersede it anyway). A Workflow made by `workflow add` is always `waiting`, so only `workflow edit --jira` reaches a non-empty target in practice.
 
 **J6. Command outputs do not change.** The enqueues above are side effects of their steps and commands, not the commands' own writes. A6's `{queued, mutation_id}` applies to a command's own external write (`cpd pr post` posts to Slack and returns its own output). The Jira transition is queued, and its output is not added to the command.
 
@@ -179,7 +190,7 @@ E24 ([swr.md §12](swr.md)) runs the `jira` source. For each claimed mutation:
 
 | Answer | Outbox | Cache and endpoint | Event |
 |---|---|---|---|
-| `ok` `moved` | one transaction: `complete` (`revalidating`, `completed_at` = now) and `cache::commit` of the facts with `poll_started_at` = now. The commit settles the mutation (§10, J5) | `swr_jira_issues` written by the commit (Changed). `swr_atlassian` written when the run resolved the cloud id. `record_ok('jira')` | none |
+| `ok` `moved` | one transaction: `complete` (`revalidating`, `completed_at` = now) and `cache::commit` of the facts with `poll_started_at` = now. The commit settles the mutation (§10, J5) | `swr_jira_issues` written by the commit (Changed). `swr_atlassian` written when the run resolved the cloud id or the account id (`cloud_id`, `account_id`, `fetched_at`). `record_ok('jira')` | none |
 | `ok` `unchanged` | `skip` (`done`) | the facts committed with `poll_started_at` = the time before the read. `record_ok('jira')` | none |
 | `jira_refused`, any reason | `fail` with `Retry::Never`, `error` = `jira_refused: <reason>`, and `context_json.refused_with` = `<ticket>\|<status name>` | `record_ok('jira')`: the endpoint answered | one plan-scoped `error` Event `jira_refused`, in the same transaction |
 | `jira_auth`, `jira_not_configured` | `fail` with `Retry::After(watch.error_repeat_seconds)` | `record_failure(Permanent)`: due at once, once per outage | one machine-wide `error` Event (the existing code, no Plan) |
@@ -188,7 +199,7 @@ E24 ([swr.md §12](swr.md)) runs the `jira` source. For each claimed mutation:
 
 The `jira_refused` row is parked: it is `failed`, and §9 decides when it comes back. Two more rules:
 
-- **The cloud id.** A run that sent a cached `cloud_id` and failed with `jira_refused` `issue_not_found` or with `jira_failed` clears `swr_atlassian.cloud_id`. The next run resolves the site again. The reason is that a cached id may name a site the account no longer reaches.
+- **The cloud id.** A run that sent a cached `cloud_id` and failed with `jira_refused` `issue_not_found` or with `jira_failed` clears `swr_atlassian.cloud_id` and `swr_atlassian.account_id` together. The next run resolves the site and the user again. A failed assignee edit (`jira_failed`) is such a failure. The reason is that a cached id may name a site the account no longer reaches.
 - **Scope of the outage Event.** A transient failure belongs to the endpoint, not to a Plan, so its `error` Event has no `plan`. It names the endpoint `jira`, the code, the message, and the instant the outage began. This replaces the per-row Event of today's R1 to R3 (commands §21.11). That is the change A3 asks for. The Event's `details` carry `endpoint` `jira` and `since`.
 
 ## 9. Parked transitions and the reopen
@@ -298,7 +309,8 @@ Each test uses `FakeRunner` for the helper, `ManualClock` for time, and no real 
 - **Settle.** A `moved` answer leaves no `revalidating` mutation behind after its transaction (J5). A pre-read commit settles nothing.
 - **Refusal.** `jira_refused` parks the row as `failed`, with one plan-scoped Event. A changed `<ticket>|<name>` enqueues once. A repeat of the same key enqueues nothing.
 - **Failure.** `jira_auth` gives one machine-wide Event at once. A transient failure gives no Event for 10 minutes, then one endpoint Event. A failure never overwrites or deletes the cached row ([swr.md §16](swr.md)).
-- **Cloud id.** A fresh `swr_atlassian` row is sent as `cloud_id`. A row older than 24 h is sent as `null`. A failed run that sent a cached id clears it on `jira_refused` `issue_not_found` or `jira_failed`.
+- **Cloud id and account id.** A fresh `swr_atlassian` row is sent as `cloud_id` and `account_id`. A row older than 24 h is sent as `null` for both. A failed run that sent a cached id clears both on `jira_refused` `issue_not_found` or `jira_failed`.
+- **Assignee.** The helper assigns the authenticated user whenever the assignee differs, also when the outcome is `unchanged`, in the one `editJiraIssue` call that writes the `done` estimates (pro-d454).
 - **Helper.** The request and answer shapes of §3, with the fake connection and the helper's comparison on the same strings as the Rust test of §5.
 - **Migration.** A store before the breaking migration, with open rows of both kinds, comes out with the rows of §12 and no `jira_transitions` table.
 

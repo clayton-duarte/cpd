@@ -157,7 +157,9 @@ pub fn enqueue_for_workflow(
 
 /// A ticket was set on the Workflow (swr-jira.md §7): each of its `pending` rows that has no ticket, or another one, is
 /// enqueued again under the ticket, in rank order, with the Forward rule, and the old rows are `superseded`. Today's
-/// queue reads the Workflow's ticket when a row runs, so a row follows a changed ticket as well.
+/// queue reads the Workflow's ticket when a row runs, so a row follows a changed ticket as well. The target of the
+/// Workflow's current status is enqueued too (merged: `done`; open: `in_review`; dispatch with a started Job, one with an
+/// Attempt: `in_progress`; waiting, cancelled: none); the Forward rule makes an already-covered target a no-op.
 pub fn adopt_ticket(
     tx: &WriteTxn<'_>,
     plan: &str,
@@ -189,6 +191,37 @@ pub fn adopt_ticket(
         tx.execute(
             "UPDATE swr_mutations SET status = 'superseded' WHERE id = ?1",
             [id],
+        )?;
+    }
+    let status: Option<String> = tx
+        .query_row(
+            "SELECT status FROM workflows WHERE plan = ?1 AND key = ?2",
+            [plan, workflow],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let target = match status.as_deref() {
+        Some("merged") => Some("done"),
+        Some("open") => Some("in_review"),
+        Some("dispatch") => {
+            let started: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+                   WHERE j.plan = ?1 AND j.workflow = ?2)",
+                [plan, workflow],
+                |r| r.get(0),
+            )?;
+            started.then_some("in_progress")
+        }
+        _ => None,
+    };
+    if let Some(target) = target {
+        enqueue_transition_tx(
+            tx,
+            now,
+            ticket,
+            target,
+            None,
+            json!({"plan": plan, "workflow": workflow}),
         )?;
     }
     Ok(())
@@ -464,7 +497,7 @@ fn settle(
     m: &Mutation,
     ticket: &str,
     answer: &jira::Answer,
-    resolved_site: bool,
+    cached: (Option<&str>, Option<&str>),
     now: OffsetDateTime,
 ) -> Result<(), CpdError> {
     let at = timestamp(now);
@@ -479,11 +512,16 @@ fn settle(
                estimates_json = excluded.estimates_json, synced_at = excluded.synced_at, inactive_at = NULL",
             params![ticket, answer.cloud_id, answer.summary, answer.status_name, answer.status_category, estimates, at],
         )?;
-        if resolved_site {
+        if cached.0.is_none() || cached.1.is_none() {
             tx.execute(
-                "INSERT INTO swr_atlassian (id, cloud_id, fetched_at) VALUES (1, ?1, ?2)
-                 ON CONFLICT (id) DO UPDATE SET cloud_id = excluded.cloud_id, fetched_at = excluded.fetched_at",
-                params![answer.cloud_id, at],
+                "INSERT INTO swr_atlassian (id, cloud_id, account_id, fetched_at) VALUES (1, ?1, ?2, ?3)
+                 ON CONFLICT (id) DO UPDATE SET cloud_id = excluded.cloud_id, account_id = excluded.account_id,
+                   fetched_at = excluded.fetched_at",
+                params![
+                    cached.0.unwrap_or(&answer.cloud_id),
+                    cached.1.unwrap_or(&answer.account_id),
+                    at
+                ],
             )?;
         }
         tx.execute(
@@ -500,28 +538,36 @@ fn settle(
     })
 }
 
-/// The `swr_atlassian` site id when it was fetched less than 24 h before `now`.
-fn cached_cloud_id(store: &mut Store, now: OffsetDateTime) -> Result<Option<String>, CpdError> {
-    let row: Option<(Option<String>, Option<String>)> = store.read(|c| {
+/// The `swr_atlassian` site id and account id when fetched less than 24 h before `now`.
+fn cached_ids(
+    store: &mut Store,
+    now: OffsetDateTime,
+) -> Result<(Option<String>, Option<String>), CpdError> {
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = store.read(|c| {
         Ok(c.query_row(
-            "SELECT cloud_id, fetched_at FROM swr_atlassian WHERE id = 1",
+            "SELECT cloud_id, account_id, fetched_at FROM swr_atlassian WHERE id = 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?)
     })?;
-    let Some((Some(cloud_id), fetched)) = row else {
-        return Ok(None);
+    let Some((cloud_id, account_id, fetched)) = row else {
+        return Ok((None, None));
     };
     let fetched = parse(fetched).map_err(CpdError::from)?;
-    Ok(fetched
-        .filter(|at| now - *at < time::Duration::hours(24))
-        .map(|_| cloud_id))
+    if fetched.is_some_and(|at| now - at < time::Duration::hours(24)) {
+        Ok((cloud_id, account_id))
+    } else {
+        Ok((None, None))
+    }
 }
 
-fn clear_cloud_id(store: &mut Store) -> Result<(), CpdError> {
+fn clear_ids(store: &mut Store) -> Result<(), CpdError> {
     store.write("jira clear cloud id", |tx| {
-        tx.execute("UPDATE swr_atlassian SET cloud_id = NULL WHERE id = 1", [])?;
+        tx.execute(
+            "UPDATE swr_atlassian SET cloud_id = NULL, account_id = NULL WHERE id = 1",
+            [],
+        )?;
         Ok::<(), CpdError>(())
     })
 }
@@ -609,11 +655,12 @@ impl Jira {
             skip(cx.store, m.id, now)?;
             return Ok(ExecOutcome::Done);
         }
-        let cloud_id = cached_cloud_id(cx.store, now)?;
+        let (cloud_id, account_id) = cached_ids(cx.store, now)?;
         let request = jira::Request {
             ticket: ticket.to_owned(),
             target: target.to_owned(),
             cloud_id: cloud_id.clone(),
+            account_id: account_id.clone(),
             target_name: wanted.target_name.clone(),
             later_names: wanted.later_names.clone(),
             estimate_fields: wanted.estimate_fields.clone(),
@@ -634,7 +681,14 @@ impl Jira {
         };
         match ran {
             Ok(answer) => {
-                settle(cx.store, m, ticket, &answer, cloud_id.is_none(), now)?;
+                settle(
+                    cx.store,
+                    m,
+                    ticket,
+                    &answer,
+                    (cloud_id.as_deref(), account_id.as_deref()),
+                    now,
+                )?;
                 endpoint::record_ok(cx.store, "jira", now)?;
                 Ok(ExecOutcome::Done)
             }
@@ -665,7 +719,7 @@ impl Jira {
                     && reason.as_deref() == Some("issue_not_found"))
                     || e.code() == ErrorCode::JiraFailed;
                 if cloud_id.is_some() && stale_id {
-                    clear_cloud_id(cx.store)?;
+                    clear_ids(cx.store)?;
                 }
                 Err(e)
             }

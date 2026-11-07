@@ -4,8 +4,11 @@
 
 use crate::common;
 
+use super::driver::PR_URL;
 use super::driver_desc_gate::{CLEAR_JIRA, refused_open_merge};
-use super::driver_open::{Live, open_live, open_pr_live};
+use super::driver_open::{Live, open_live, open_pr_live, submit_only};
+use cpd_core::host::runner::Reply;
+use serde_json::{Value, json};
 
 const NO_JIRA: &str = "UPDATE workflows SET jira = NULL WHERE key = 'repo';";
 const WITH_JIRA: &str = "UPDATE workflows SET jira = 'ABC-1', title = 'feat: ABC-1/Charge the card at checkout' WHERE key = 'repo';";
@@ -108,4 +111,98 @@ fn job_dispatch_starts_an_update_job_whose_pr_has_no_jira_when_required() {
     live.add_cpd_job("up-repo", "update");
     let out = live.dispatch("up-repo").ok();
     assert_eq!(out["attempt"], "up-repo-a1", "{out}");
+}
+
+// ---------- the in_review transition at the PR open (pro-d454) ----------
+
+/// The `jira` rows of the outbox as `[target_key, target, status]`, oldest first.
+fn jira_rows(live: &Live) -> Value {
+    let json: String = live.value(
+        "SELECT coalesce(json_group_array(json_array(target_key, target, status)), '[]')
+           FROM (SELECT target_key, json_extract(vars_json, '$.target') AS target, status
+                   FROM swr_mutations WHERE system = 'jira' ORDER BY id)",
+    );
+    serde_json::from_str(&json).unwrap()
+}
+
+/// The `[target_key, target]` of the rows still `pending`.
+fn pending(live: &Live) -> Value {
+    Value::Array(
+        jira_rows(live)
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r[2] == "pending")
+            .map(|r| json!([r[0], r[1]]))
+            .collect(),
+    )
+}
+
+fn merge_the_open_job(live: &Live) {
+    let (attempt, _) = live.run_job("open-repo", submit_only);
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("merged"), &json!("merged")),
+        "{attempt}"
+    );
+}
+
+#[test]
+fn an_open_job_merge_queues_the_in_review_transition() {
+    let live = open_live();
+    live.gh_creates();
+    live.fixture("UPDATE workflows SET jira = 'ABC-1' WHERE key = 'repo';");
+
+    merge_the_open_job(&live);
+
+    assert_eq!(live.pr_row().0, "open");
+    assert_eq!(
+        pending(&live),
+        json!([["jira:issue:ABC-1", "in_review"]]),
+        "{}",
+        jira_rows(&live)
+    );
+}
+
+#[test]
+fn an_open_job_merge_of_a_workflow_with_no_ticket_queues_a_ticketless_in_review_row() {
+    let live = open_live();
+    live.gh_creates();
+
+    merge_the_open_job(&live);
+
+    assert!(
+        pending(&live)
+            .as_array()
+            .unwrap()
+            .contains(&json!([null, "in_review"])),
+        "{}",
+        jira_rows(&live)
+    );
+}
+
+#[test]
+fn an_open_job_merge_of_an_already_merged_pr_leaves_only_done_pending() {
+    let live = open_live();
+    live.fixture("UPDATE workflows SET jira = 'ABC-1' WHERE key = 'repo';");
+    let merged = common::pay_lookup()
+        .replace("\"state\":\"OPEN\"", "\"state\":\"MERGED\"")
+        .replace("\"mergedAt\":null", "\"mergedAt\":\"2026-10-20T12:00:00Z\"");
+    live.runner()
+        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-28T10:00:00Z\"}}]")))
+        .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&merged));
+
+    merge_the_open_job(&live);
+
+    assert_eq!(live.pr_row().0, "merged");
+    let rows = jira_rows(&live);
+    assert_eq!(
+        pending(&live),
+        json!([["jira:issue:ABC-1", "done"]]),
+        "{rows}"
+    );
+    assert!(
+        rows.as_array().unwrap().iter().any(|r| r[1] == "in_review"),
+        "the open queued in_review before the merge's done: {rows}"
+    );
 }

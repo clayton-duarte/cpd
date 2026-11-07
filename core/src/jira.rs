@@ -23,6 +23,8 @@ pub struct Request {
     pub target: String,
     /// The cached site id, or `None` to have the helper resolve it.
     pub cloud_id: Option<String>,
+    /// The cached authenticated user's account id, or `None` to have the helper resolve it.
+    pub account_id: Option<String>,
     pub target_name: String,
     pub later_names: Vec<String>,
     pub estimate_fields: Vec<String>,
@@ -40,6 +42,7 @@ pub enum Done {
 pub struct Answer {
     pub done: Done,
     pub cloud_id: String,
+    pub account_id: String,
     pub summary: String,
     pub status_name: String,
     pub status_category: String,
@@ -75,6 +78,7 @@ pub fn stdin(server: &McpServer, request: &Request) -> Vec<u8> {
     let value = json!({
         "server": server,
         "cloud_id": request.cloud_id,
+        "account_id": request.account_id,
         "ticket": request.ticket,
         "target": request.target,
         "target_name": request.target_name,
@@ -127,6 +131,7 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Answer, CpdError> {
     Ok(Answer {
         done,
         cloud_id: text(&value, "cloud_id")?,
+        account_id: text(&value, "account_id")?,
         summary: text(&value, "summary")?,
         status_name,
         status_category,
@@ -158,6 +163,7 @@ mod tests {
             ticket: "A-1".into(),
             target: "in_review".into(),
             cloud_id: None,
+            account_id: None,
             target_name: "In Review".into(),
             later_names: vec!["Done".into()],
             estimate_fields: vec!["customfield_10016".into()],
@@ -178,7 +184,7 @@ mod tests {
         assert_eq!(
             value,
             json!({"server": {"url": "https://x/mcp"}, "ticket": "A-1", "target": "in_review",
-                   "cloud_id": null, "target_name": "In Review", "later_names": ["Done"], "estimate_fields": ["customfield_10016"]})
+                   "cloud_id": null, "account_id": null, "target_name": "In Review", "later_names": ["Done"], "estimate_fields": ["customfield_10016"]})
         );
     }
 
@@ -214,8 +220,8 @@ mod tests {
 
     #[test]
     fn ok_lines_are_answers() {
-        let moved = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","cloud_id":"c","from":"a","to":"Done","summary":"s","estimates":{}}"#;
-        let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","cloud_id":"c","status_name":"b","status_category":"indeterminate","why":"at_target","summary":"s","estimates":{"customfield_1":null}}"#;
+        let moved = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","cloud_id":"c","account_id":"u","from":"a","to":"Done","summary":"s","estimates":{}}"#;
+        let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","cloud_id":"c","account_id":"u","status_name":"b","status_category":"indeterminate","why":"at_target","summary":"s","estimates":{"customfield_1":null}}"#;
         let moved = answer(&output(0, moved), &[]).unwrap();
         assert_eq!(
             (
