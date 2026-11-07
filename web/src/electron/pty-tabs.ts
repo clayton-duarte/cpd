@@ -24,6 +24,7 @@
 //   - anything else -> null.
 
 import type { PtySize } from "./channels.ts";
+import { CPD_TUI_COMMAND } from "./pty.ts";
 import type { PtyProcess, PtySpawnOptions } from "./pty.ts";
 import type { SshHost } from "./ssh-config.ts";
 
@@ -51,10 +52,95 @@ export interface PtyTabs {
   dispose(): void;
 }
 
-export function createPtyTabs(_deps: PtyTabsDeps): PtyTabs {
-  throw new Error("not implemented");
+const LOCAL_TAB_ID = "local";
+const SSH_PREFIX = "ssh:";
+
+export function tabCommand(tabId: string, hosts: SshHost[]): TabCommand | null {
+  if (tabId === LOCAL_TAB_ID) return CPD_TUI_COMMAND;
+  if (tabId.startsWith(SSH_PREFIX)) {
+    const alias = tabId.slice(SSH_PREFIX.length);
+    if (alias !== "" && hosts.some((host) => host.alias === alias)) {
+      return { file: "ssh", args: ["-t", alias, "cpd", "tui", "--attach"] };
+    }
+  }
+  return null;
 }
 
-export function tabCommand(_tabId: string, _hosts: SshHost[]): TabCommand | null {
-  throw new Error("not implemented");
+function spawnEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) resolved[key] = value;
+  }
+  resolved["TERM"] = "xterm-256color";
+  resolved["COLORTERM"] = "truecolor";
+  return resolved;
+}
+
+interface LiveSession {
+  proc: PtyProcess;
+  alive: boolean;
+}
+
+export function createPtyTabs(deps: PtyTabsDeps): PtyTabs {
+  const sessions = new Map<string, LiveSession>();
+  const env = spawnEnv(deps.env);
+
+  const start = (tabId: string, size: PtySize): void => {
+    const command = deps.commandFor(tabId);
+    if (command === null) return;
+    const existing = sessions.get(tabId);
+    if (existing && existing.alive) {
+      existing.proc.resize(size.cols, size.rows);
+      return;
+    }
+    deps.status(tabId, "connecting");
+    let proc: PtyProcess;
+    try {
+      proc = deps.spawn(command.file, [...command.args], {
+        name: "xterm-256color",
+        cols: size.cols,
+        rows: size.rows,
+        cwd: deps.cwd,
+        env,
+      });
+    } catch {
+      deps.status(tabId, "failed");
+      return;
+    }
+    const session: LiveSession = { proc, alive: true };
+    sessions.set(tabId, session);
+    proc.onData((chunk) => {
+      deps.data(tabId, chunk);
+    });
+    proc.onExit((event) => {
+      if (!session.alive) return;
+      session.alive = false;
+      sessions.delete(tabId);
+      deps.exit(tabId, event.exitCode);
+      if (event.exitCode === 0) deps.status(tabId, "exited", 0);
+      else deps.status(tabId, "failed", event.exitCode);
+    });
+    deps.status(tabId, "live");
+  };
+
+  const write = (tabId: string, data: string): void => {
+    const session = sessions.get(tabId);
+    if (session?.alive) session.proc.write(data);
+  };
+
+  const resize = (tabId: string, size: PtySize): void => {
+    const session = sessions.get(tabId);
+    if (session?.alive) session.proc.resize(size.cols, size.rows);
+  };
+
+  const dispose = (): void => {
+    for (const session of sessions.values()) {
+      if (!session.alive) continue;
+      session.alive = false;
+      session.proc.kill();
+    }
+    sessions.clear();
+  };
+
+  return { start, write, resize, dispose };
 }
