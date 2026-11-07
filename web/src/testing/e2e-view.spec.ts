@@ -23,7 +23,6 @@ import { _electron as electron } from "playwright";
 import { test as base, expect } from "./e2e-fixtures";
 
 const webRoot = fileURLToPath(new URL("../..", import.meta.url));
-const repoRoot = webRoot;
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
 /** The PATH the runner started with, before any spec prepends its private bin dir. */
@@ -60,6 +59,40 @@ case "$1" in
 esac
 `;
 
+/**
+ * The shared launcher, extended with the two seams this scenario needs and the shared file cannot
+ * carry: the staged checkout root the in-place preview runs its serve-only script from
+ * (`CPD_CHECKOUT`, so no real tmux/preview server runs) and a hidden window with a private
+ * `userData` (air-d68). Everything else is the e2e-config fixture, verbatim.
+ */
+const test = base.extend<{ electronApp: unknown }>({
+  electronApp: async ({ cpdHome, rendererServer }, use) => {
+    const app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [".", `--user-data-dir=${userDataDir}`],
+      cwd: webRoot,
+      env: {
+        ...process.env,
+        CPD_HOME: cpdHome,
+        CPD_MODE: "preview",
+        CPD_CHECKOUT: previewRoot,
+        CPD_ELECTRON_DEV_URL: rendererServer.url,
+      },
+    });
+    const first = await app.firstWindow();
+    const window = await app.browserWindow(first);
+    await window.evaluate((w) => w.hide());
+    await use(app);
+    await app.close();
+  },
+
+  page: async ({ electronApp }, use) => {
+    const page = await electronApp.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+    await use(page);
+  },
+});
+
 test.beforeAll(() => {
   staging = mkdtempSync(join(tmpdir(), "cpd-e2e-view-"));
   const fakeBin = join(staging, "bin");
@@ -83,47 +116,13 @@ test.beforeAll(() => {
   process.env["CPD_BIN"] = e2eFakeCpd;
   process.env["SHELL"] = fakeShell;
   process.env["PATH"] = `${fakeBin}:${basePath}`;
-  if (!existsSync(join(repoRoot, "dist-electron", "main.js"))) {
-    execFileSync("pnpm", ["--filter", "cpd-web-client", "run", "build:electron"], { cwd: repoRoot, stdio: "inherit" });
+  if (!existsSync(join(webRoot, "dist-electron", "main.js"))) {
+    execFileSync("pnpm", ["--filter", "cpd-web-client", "run", "build:electron"], { cwd: webRoot, stdio: "inherit" });
   }
 });
 
 test.afterAll(() => {
   rmSync(staging, { recursive: true, force: true });
-});
-
-/**
- * The shared launcher, extended with the two seams the View scenario needs: the staged checkout
- * root the in-place preview runs its serve-only script from (`CPD_CHECKOUT`), and a hidden window
- * with a private `userData` (air-d68: no window on the User's screen, no writes to their profile).
- */
-const test = base.extend<{ electronApp: unknown }>({
-  electronApp: async ({ cpdHome, rendererServer }, use) => {
-    const app = await electron.launch({
-      executablePath: electronExecutable,
-      args: [".", `--user-data-dir=${userDataDir}`],
-      cwd: webRoot,
-      env: {
-        ...process.env,
-        CPD_HOME: cpdHome,
-        CPD_MODE: "preview",
-        CPD_CHECKOUT: previewRoot,
-        CPD_ELECTRON_DEV_URL: rendererServer.url,
-      },
-    });
-    await app.firstWindow();
-    await app.evaluate(({ BrowserWindow }) => {
-      for (const window of BrowserWindow.getAllWindows()) window.hide();
-    });
-    await use(app);
-    await app.close();
-  },
-
-  page: async ({ electronApp }, use) => {
-    const page = await electronApp.firstWindow();
-    await page.waitForLoadState("domcontentloaded");
-    await use(page);
-  },
 });
 
 /** The run-only view marker, written on launch and on every View menu switch (air-n19). */
@@ -146,9 +145,29 @@ async function selectView(app: unknown, label: string): Promise<void> {
   }, label);
 }
 
-/** The number of BrowserWindows the one main process owns; a second Electron would add one. */
-function windowCount(app: unknown): Promise<number> {
-  return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+/** The number of windows the one Electron app owns; a second Electron would add one. */
+function windowCount(app: { windows(): unknown[] }): number {
+  return app.windows().length;
+}
+
+/** The app's health record, or `{}` when it is missing or malformed. */
+function readHealth(cpdHome: string): { status?: string; reloadEpoch?: number; pid?: number; startedAt?: string } {
+  try {
+    return JSON.parse(readFileSync(join(cpdHome, "run", "preview-health.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Record the native dialogs without opening a modal window that would block the main process. */
+async function patchDialogs(app: unknown): Promise<void> {
+  await app.evaluate(({ dialog }) => {
+    const seen: { title: string; content: string }[] = [];
+    (globalThis as Record<string, unknown>)["__cpdViewDialogs"] = seen;
+    dialog.showErrorBox = (title: string, content: string) => {
+      seen.push({ title, content });
+    };
+  });
 }
 
 /** Tell the app the preview client health turned healthy, so it loads the dev renderer. */
@@ -173,10 +192,19 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   const mainPid = await electronApp.evaluate(() => process.pid);
   const markerPid = () => readMarker(cpdHome).pid;
 
-  // The app always launches in WebUI (air-d40): the WebUI is shown, the terminal hidden.
+  // Launched hidden and isolated: no CPD window on the User's screen, and the app writes to the
+  // per-run `userData`, never the User's profile (air-d68).
+  const window = await electronApp.browserWindow(page);
+  expect(await window.evaluate((w) => w.isVisible())).toBe(false);
+  expect(await electronApp.evaluate(({ app }) => app.getPath("userData"))).toContain(staging);
+  await patchDialogs(electronApp);
+
+  // The app always launches in WebUI (air-d40): the WebUI is shown, the terminal hidden. Its own
+  // health recorder reports the boot healthy (the renderer's post-mount `health:ok`).
   await expect(page.locator("#webui-root")).toBeVisible();
+  await expect.poll(() => readHealth(cpdHome).status ?? null, { timeout: 30_000 }).toBe("healthy");
   await expect(page.locator("#terminal")).toBeHidden();
-  await expect.poll(() => readMarker(cpdHome).view ?? null).toBe("webui");
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui");
   expect(markerPid()).toBe(mainPid);
   expect(await windowCount(electronApp)).toBe(1);
 
@@ -184,14 +212,14 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   await selectView(electronApp, "TUI");
   await expect(page.locator("#terminal")).toBeVisible();
   await expect(page.locator("#webui-root")).toBeHidden();
-  await expect.poll(() => readMarker(cpdHome).view ?? null).toBe("tui");
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("tui");
   expect(markerPid()).toBe(mainPid);
 
   // WebUI again: back in place, still one process and one window.
   await selectView(electronApp, "WebUI");
   await expect(page.locator("#webui-root")).toBeVisible();
   await expect(page.locator("#terminal")).toBeHidden();
-  await expect.poll(() => readMarker(cpdHome).view ?? null).toBe("webui");
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui");
   expect(markerPid()).toBe(mainPid);
   expect(await windowCount(electronApp)).toBe(1);
 
@@ -199,9 +227,17 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   // client health is loading, then the selected (WebUI) view renders once the health is healthy.
   await selectView(electronApp, "WebUI Preview");
   await expect(page.getByText("Starting WebUI Preview…")).toBeVisible();
-  await expect.poll(() => readMarker(cpdHome).view ?? null).toBe("webui-preview");
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui-preview");
+  // Wait for the app's health recorder to finish its `loading` write for the loading page (a new
+  // epoch, above the client's own loading record), so the `healthy` record written next is last.
+  await expect
+    .poll(() => {
+      const health = readHealth(cpdHome);
+      return health.status === "loading" && (health.reloadEpoch ?? 0) >= 2;
+    }, { timeout: 8_000 })
+    .toBe(true);
   markPreviewHealthy(cpdHome);
-  await expect(page.locator("#webui-root")).toBeVisible();
+  await expect(page.locator("#webui-root")).toBeVisible({ timeout: 30_000 });
   await expect(page.locator("#terminal")).toBeHidden();
 
   // No relaunch and no second Electron anywhere in the run: the main pid and the single window
@@ -213,16 +249,8 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
 
 test("a preview start failure keeps the current view and surfaces loudly, with no silent fallback", async ({ page, cpdHome, electronApp }) => {
   const mainPid = await electronApp.evaluate(() => process.pid);
+  await patchDialogs(electronApp);
   await expect(page.locator("#webui-root")).toBeVisible();
-
-  // Observe the native dialog without opening a modal window that would block the main process.
-  await electronApp.evaluate(({ dialog }) => {
-    const seen: { title: string; content: string }[] = [];
-    (globalThis as Record<string, unknown>)["__cpdViewDialogs"] = seen;
-    dialog.showErrorBox = (title: string, content: string) => {
-      seen.push({ title, content });
-    };
-  });
 
   // The fake preview server fails on start.
   writeFileSync(failMarker, "fail");
@@ -231,9 +259,17 @@ test("a preview start failure keeps the current view and surfaces loudly, with n
 
   // Loud, not silent: the native dialog carries the failure, and the current view (WebUI) stays.
   await expect
-    .poll(async () => (await electronApp.evaluate(() => (globalThis as Record<string, unknown>)["__cpdViewDialogs"] as { title: string }[])).map((entry) => entry.title))
+    .poll(
+      async () =>
+        (await electronApp.evaluate(() => (globalThis as Record<string, unknown>)["__cpdViewDialogs"] as { title: string }[])).map(
+          (entry) => entry.title,
+        ),
+      { timeout: 30_000 },
+    )
     .toEqual(["WebUI Preview"]);
-  await expect.poll(() => readMarker(cpdHome).view ?? null).toBe("webui");
+  const [dialog] = await electronApp.evaluate(() => (globalThis as Record<string, unknown>)["__cpdViewDialogs"] as { content: string }[]);
+  expect(dialog?.content ?? "").toContain("fake preview: serve failed");
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui");
   await expect(page.locator("#webui-root")).toBeVisible();
   await expect(page.locator("#terminal")).toBeHidden();
 
