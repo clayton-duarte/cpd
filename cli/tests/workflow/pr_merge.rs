@@ -171,16 +171,20 @@ const REQUIRED: &str = "[pr]\nrequired_checks = [\"gate\"]\n";
 
 #[test]
 fn a_required_check_that_is_missing_pending_or_failed_refuses_the_merge() {
-    for (nodes, want) in [
+    // (the persisted readiness verdict, the head's cached rollup nodes, the details to check)
+    for (verdict, nodes, want) in [
         (
+            "pending",
             json!([]),
             json!({"missing": ["gate"], "pending": [], "failed": []}),
         ),
         (
+            "pending",
             json!([gate("IN_PROGRESS", json!(null))]),
             json!({"missing": [], "pending": ["gate"], "failed": []}),
         ),
         (
+            "failed",
             json!([gate("COMPLETED", json!("FAILURE"))]),
             json!({"missing": [], "pending": [], "failed": ["gate"]}),
         ),
@@ -188,6 +192,7 @@ fn a_required_check_that_is_missing_pending_or_failed_refuses_the_merge() {
         let fx = Fx::with_ports();
         fx.env.repo_policy("acme", "api", REQUIRED);
         cached(&fx.env, "open", "clean", (true, false, false));
+        readiness(&fx.env, verdict);
         rollup(&fx, nodes);
         let error = refused(
             &fx.cpd(&["pr", "merge", REF]),
