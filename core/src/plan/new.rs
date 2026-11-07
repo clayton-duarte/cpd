@@ -438,7 +438,8 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
         jira: jira.as_deref(),
         cwd: &cwd,
     };
-    env.store.write("plan new", |tx| insert_shaping(tx, &creation))?;
+    env.store
+        .write("plan new", |tx| insert_shaping(tx, &creation))?;
     let plan = env.store.read(|conn| row::load(conn, &id))?;
     Ok(shaped(&plan))
 }
@@ -463,7 +464,9 @@ fn insert_shaping(tx: &WriteTxn<'_>, c: &Shaping<'_>) -> Result<(), CpdError> {
         cwd,
     } = c;
     let exists = tx
-        .query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| Ok(()))
+        .query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| {
+            Ok(())
+        })
         .optional()?;
     if exists.is_some() {
         return Err(CpdError::new(

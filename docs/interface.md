@@ -43,26 +43,26 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan cancel` | Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12) | Lead | |
 | `cpd plan delete` | Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14) | | yes |
 | `cpd job` | Jobs, Specs and Dependencies (commands.md §5) | | |
-| `cpd job add` | Add a Job (§5.1) | Lead | |
+| `cpd job add` | Add a Job (§5.1) | Lead, Manager | |
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |
-| `cpd job cancel` | Cancel a Job (§5.3) | Lead | |
-| `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
+| `cpd job cancel` | Cancel a Job (§5.3) | Lead, Manager | |
+| `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead, Manager | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
 | `cpd job approve-touches` | The Lead approves a Job to change a path outside its touches (§5.9a) | Lead | |
 | `cpd job addendum` | Add information to a Job without changing its Spec (§5.10) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
-| `cpd job list` | List the Jobs (§5.6) | Lead | |
-| `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
+| `cpd job list` | List the Jobs (§5.6) | Lead, Manager | |
+| `cpd job show` | Show a Job and its Attempts (§5.7) | Lead, Manager | |
 | `cpd attempt` | Attempts (commands.md §6) | | |
 | `cpd attempt submit` | Submit the Attempt for review (Worker) (§6.1) | Worker | |
-| `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead | |
-| `cpd attempt show` | Show an Attempt (§6.3) | Lead | |
-| `cpd attempt list` | List Attempts (§6.3) | Lead | |
-| `cpd attempt abort` | End a running Attempt failed/aborted (Lead) (§6.5) | Lead | |
+| `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead, Manager | |
+| `cpd attempt show` | Show an Attempt (§6.3) | Lead, Manager | |
+| `cpd attempt list` | List Attempts (§6.3) | Lead, Manager | |
+| `cpd attempt abort` | End a running Attempt failed/aborted (Lead) (§6.5) | Lead, Manager | |
 | `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
 | `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
-| `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |
+| `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead, Manager | |
 | `cpd board` | The message board (commands.md §10a) | | |
 | `cpd board post` | Post a message to a Session (it never starts a turn) | Lead, Manager | |
 | `cpd board list` | List the posts to a Session | Lead, Manager | |

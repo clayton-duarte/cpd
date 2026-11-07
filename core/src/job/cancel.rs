@@ -65,7 +65,9 @@ pub(super) fn cancel_in(
     shape: Shape,
 ) -> Result<Output, CpdError> {
     let (plan, reason) = (plan.clone(), reason.to_owned());
-    let _ = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, shape))?;
     let (status, requested, already, failed) = match decision {

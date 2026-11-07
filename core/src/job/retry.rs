@@ -31,7 +31,9 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
 /// [`retry`] on an open `env`: what a test hands in.
 pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let _ = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let key = args.key;
     let tier = args.tier.to_string();
     let kind: Option<String> = env.store.read(|conn| {

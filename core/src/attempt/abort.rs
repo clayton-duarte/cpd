@@ -45,7 +45,9 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let mut env = Env::open()?;
-    let _ = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
+    let _ = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let by = caller(&mut env, &plan)?;
     // The expensive refusals (no Plan, no Attempt, not running) before the write; the write re-reads (ADR-0014).
     let attempt = env.store.read(|conn| decide(conn, &plan, &id))?;

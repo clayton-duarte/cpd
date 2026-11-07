@@ -59,7 +59,9 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     // A Manager runs this only on a Lead-less shaping Plan of its own Context (commands.md §5.1; air-d19, air-d22).
-    let shaping = env.store.read(|conn| crate::plan::shaping::guard(conn, &plan))?;
+    let shaping = env
+        .store
+        .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
     check_kind_not_reserved(&kind)?;
@@ -139,7 +141,11 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                         if matches!(phase.as_str(), "dispatch" | "deploy" | "done") {
                             let reason = format!("explore Job {} was added", job.key);
                             // A Lead-less Plan reopens to `shaping` (a Lead's to `plan`; air-d19, air-d22).
-                            let to = if lead_less(tx, &plan)? { "shaping" } else { "plan" };
+                            let to = if lead_less(tx, &plan)? {
+                                "shaping"
+                            } else {
+                                "plan"
+                            };
                             crate::workflow::add::reopen(tx, &plan, &phase, to, &reason)?;
                         }
                     }
