@@ -227,7 +227,16 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
     case "settings.result":
       return { ...state, cockpit: { ...state.cockpit, settings: message.settings } };
     case "settings.saved":
-      return { ...state, cockpit: { ...state.cockpit, saved: message.ok ? { ok: true } : { ok: false, error: message.error } } };
+      // A refused Save is shown as the webui error toast (App's cockpit-error-toast), so it rides cockpit.error
+      // with the whole CLI message; a Save that succeeds leaves any standing error alone.
+      return {
+        ...state,
+        cockpit: {
+          ...state.cockpit,
+          saved: message.ok ? { ok: true } : { ok: false, error: message.error },
+          error: message.ok ? state.cockpit.error : message.error,
+        },
+      };
     case "cockpit.patch": {
       if (message.pane === "inbox") {
         const cur = state.cockpit.inbox;

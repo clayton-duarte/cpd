@@ -14,7 +14,7 @@ export type SettingsRead = SettingsModel;
 
 const TIER = /^[GHSO]([0-4]|X)$/;
 
-function Form(props: { read: SettingsRead; error: string | null; onSave(changes: SettingsChanges): void; onCancel(): void }): ReactElement {
+function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): void; onCancel(): void }): ReactElement {
   const { read } = props;
   const [tiers, setTiers] = useState<Record<SettingsRole, string>>({ ...read.tiers });
   const [flags, setFlags] = useState<Record<SettingsSwitch, boolean>>({ ...read.experimental });
@@ -69,7 +69,6 @@ function Form(props: { read: SettingsRead; error: string | null; onSave(changes:
           </div>
         ))}
       </section>
-      {props.error === null ? null : <p data-part="settings-error" className="text-status-blocked">{props.error}</p>}
       <DialogFooter>
         <Button type="button" disabled={!valid} onClick={save}>Save</Button>
         <Button type="button" variant="outline" onClick={props.onCancel}>Cancel</Button>
@@ -82,8 +81,6 @@ export function SettingsDialog(props: {
   open: boolean;
   /** Null while the read is on its way. */
   read: SettingsRead | null;
-  /** The last refusal of a save, shown in red. */
-  error?: string | null;
   onSave(changes: SettingsChanges): void;
   onCancel(): void;
 }): ReactElement {
@@ -94,7 +91,7 @@ export function SettingsDialog(props: {
         {props.read === null ? (
           <p className="text-fg-dim">Loading…</p>
         ) : (
-          <Form read={props.read} error={props.error ?? null} onSave={props.onSave} onCancel={props.onCancel} />
+          <Form read={props.read} onSave={props.onSave} onCancel={props.onCancel} />
         )}
       </DialogContent>
     </Dialog>
