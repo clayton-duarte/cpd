@@ -8,7 +8,7 @@
 // arms `STREAM_PROBE_TIMEOUT_MS`. A stall is one of two signals: the window closes with no frame at all, or the
 // answering snapshot's `seq` is not greater than the last `seq` seen from this serve process. A stall is reported
 // loud once and resynced; a child still silent past the second deadline is restarted with the existing backoff.
-import type { Scheduler } from "../../protocol/runtime.ts";
+import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 
 /** The interval of the watchdog's `refresh` probe on the serve stream; the safety tick's cadence (§15.2). */
 export const STREAM_PROBE_MS = 30_000;
@@ -44,16 +44,80 @@ export interface StreamWatchdog {
   disconnected(): void;
 }
 
-export function createStreamWatchdog(_deps: StreamWatchdogDeps): StreamWatchdog {
+export function createStreamWatchdog(deps: StreamWatchdogDeps): StreamWatchdog {
+  const { scheduler } = deps;
+  let probeTimer: Disposable | null = null;
+  let deadline: Disposable | null = null;
+  let restartTimer: Disposable | null = null;
+  let lastSeq: number | null = null;
+  let stalled = false;
+
+  const clearProbe = (): void => { probeTimer?.dispose(); probeTimer = null; };
+  const clearDeadline = (): void => { deadline?.dispose(); deadline = null; };
+  const clearRestart = (): void => { restartTimer?.dispose(); restartTimer = null; };
+  const clearAll = (): void => { clearProbe(); clearDeadline(); clearRestart(); };
+
+  const scheduleProbe = (): void => {
+    clearProbe();
+    probeTimer = scheduler.after(STREAM_PROBE_MS, fireProbe);
+  };
+  const fireProbe = (): void => {
+    probeTimer = null;
+    deps.probe();
+    clearDeadline();
+    deadline = scheduler.after(STREAM_PROBE_TIMEOUT_MS, onDeadline);
+  };
+  const onDeadline = (): void => {
+    deadline = null;
+    stall();
+  };
+  /**
+   * Report the stall loud once, request the resync, and arm the second deadline: still silent after it and the
+   * child is restarted with the existing backoff.
+   */
+  const stall = (): void => {
+    if (stalled) return;
+    stalled = true;
+    clearProbe();
+    clearDeadline();
+    deps.resync();
+    clearRestart();
+    restartTimer = scheduler.after(STREAM_PROBE_TIMEOUT_MS, () => {
+      restartTimer = null;
+      deps.restart();
+    });
+  };
+  /** A frame answered the probe (or one arrived), so the window closes, the cadence resumes and a stall clears. */
+  const healthy = (): void => {
+    clearDeadline();
+    clearRestart();
+    stalled = false;
+    scheduleProbe();
+  };
+
   return {
     connected(): void {
-      /* stub: not implemented */
+      clearAll();
+      lastSeq = null;
+      stalled = false;
+      scheduleProbe();
     },
-    frame(): void {
-      /* stub: not implemented */
+    frame(seq?: number): void {
+      // The `seq` of the answering snapshot must advance within one generation (§15.2); a non-snapshot frame answers
+      // the probe but carries no `seq`.
+      if (seq !== undefined) {
+        if (lastSeq !== null && seq <= lastSeq) {
+          stall();
+          return;
+        }
+        lastSeq = seq;
+      }
+      healthy();
     },
     disconnected(): void {
-      /* stub: not implemented */
+      clearAll();
+      lastSeq = null;
+      stalled = false;
     },
   };
 }
