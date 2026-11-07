@@ -115,6 +115,7 @@ fn write(
     text: &str,
     unblocks: Option<&str>,
     wake: bool,
+    origin: Option<&str>,
 ) -> Result<i64, CpdError> {
     let from_name: Option<String> = match from {
         Some(id) => tx
@@ -135,11 +136,15 @@ fn write(
     let message = match unblocks {
         Some(reason) => {
             let summary = format!("Message from {who} (unblocks: {reason}): {preview}");
-            NewEvent::session_message_unblocking(summary, from, text, reason)
+            NewEvent::session_message_unblocking(summary, from, text, reason, origin)?
         }
-        None => {
-            NewEvent::session_message(format!("Message from {who}: {preview}"), from, text, wake)
-        }
+        None => NewEvent::session_message(
+            format!("Message from {who}: {preview}"),
+            from,
+            text,
+            wake,
+            origin,
+        )?,
     };
     append(tx, scoped(message, target))
 }
@@ -176,6 +181,7 @@ pub fn tell_manager_of(
             text,
             None,
             true,
+            None,
         )?;
     }
     Ok(ids.len())
@@ -184,7 +190,7 @@ pub fn tell_manager_of(
 /// A waking message from the User's side (`from` null) to the live Session `target`, in the caller's transaction: the write
 /// of the stuck-Job message, for the engine's other reports to a Lead (E20).
 pub fn tell(tx: &WriteTxn<'_>, target: &SessionId, text: &str) -> Result<i64, CpdError> {
-    write(tx, &row::load(tx, target)?, &None, text, None, true)
+    write(tx, &row::load(tx, target)?, &None, text, None, true, None)
 }
 
 /// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725);
@@ -233,6 +239,18 @@ pub(crate) fn deliver(
     text: &str,
     unblocks: Option<&str>,
 ) -> Result<(i64, SessionId, Option<crate::host::PaneId>), CpdError> {
+    deliver_with_origin(env, id, from, text, unblocks, None)
+}
+
+/// [`deliver`] with the optional `origin` of the `session-message` Event (Plan ui-origin).
+pub(crate) fn deliver_with_origin(
+    env: &mut Env,
+    id: &SessionId,
+    from: &Option<SessionId>,
+    text: &str,
+    unblocks: Option<&str>,
+    origin: Option<&str>,
+) -> Result<(i64, SessionId, Option<crate::host::PaneId>), CpdError> {
     // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725); no cockpit refuses first.
     let needs_pane = {
         let target = env.store.read(|conn| row::load(conn, id))?;
@@ -245,7 +263,7 @@ pub(crate) fn deliver(
         if let Some(from) = from {
             guard(tx, &target, from, text)?;
         }
-        let event = write(tx, &target, from, text, unblocks, true)?;
+        let event = write(tx, &target, from, text, unblocks, true, origin)?;
         if target.runner == row::Runner::Durable {
             super::moves::wake_durable(tx, &target.id)?;
         }
@@ -273,12 +291,13 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let from = sender()?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
-    let (event, target, pane) = deliver(
+    let (event, target, pane) = deliver_with_origin(
         &mut env,
         &id,
         &from,
         text.as_str(),
         Some(args.unblocks.as_str()),
+        args.origin.as_deref(),
     )?;
     Ok(Output::success(json!({
         "event": event, "session": target, "from": from, "unblocks": args.unblocks.as_str(),

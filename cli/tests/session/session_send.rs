@@ -786,3 +786,69 @@ fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_
     assert!(messages(&fx).is_empty());
     assert!(show(&fx, "lead2")["tmux_pane"].is_null());
 }
+
+#[test]
+fn session_send_origin_flag_sets_event_data() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    fx.cpd(&[
+        "session",
+        "send",
+        "lead1",
+        "from the web",
+        "--unblocks",
+        "u",
+        "--origin",
+        "webui",
+    ])
+    .ok();
+    fx.cpd(&[
+        "session",
+        "send",
+        "lead1",
+        "from the tui",
+        "--unblocks",
+        "u",
+        "--origin",
+        "tui",
+    ])
+    .ok();
+    let events = messages(&fx);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["data"]["origin"], json!("webui"), "{}", events[0]);
+    assert_eq!(events[1]["data"]["origin"], json!("tui"), "{}", events[1]);
+}
+
+#[test]
+fn session_send_without_origin_omits_it() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    fx.cpd(&["session", "send", "lead1", "hi", "--unblocks", "u"])
+        .ok();
+    let event = &messages(&fx)[0];
+    assert!(
+        event["data"].as_object().unwrap().get("origin").is_none(),
+        "no --origin leaves the field absent: {event}"
+    );
+}
+
+#[test]
+fn session_send_refuses_invalid_origin() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    refused(
+        &fx.cpd(&[
+            "session",
+            "send",
+            "lead1",
+            "hi",
+            "--unblocks",
+            "u",
+            "--origin",
+            "bogus",
+        ]),
+        "usage",
+        2,
+    );
+    assert!(messages(&fx).is_empty(), "a refused send writes no Event");
+}

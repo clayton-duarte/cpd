@@ -455,7 +455,7 @@ export type ClientMessage =
   | { type: "session.attach"; sessionId: string } // attaches this connection to that session; an already attached session is detached first
   | { type: "session.detach" } // idempotent
   | { type: "session.loadEarlier"; sessionId: string; before: Cursor }
-  | { type: "session.submit"; sessionId: string; clientSubmissionId: string; text: string; images: WireImage[]; whenBusy: WhenBusy }
+  | { type: "session.submit"; sessionId: string; clientSubmissionId: string; text: string; images: WireImage[]; whenBusy: WhenBusy } // no `origin` field on the wire (11.9): the pi backend sends the text with `cpd session send --origin webui`, so the written `session-message` Event carries `data.origin: "webui"`; the durable backend adds none
   | { type: "session.abort"; sessionId: string }
   | { type: "session.abortSubmission"; sessionId: string; clientSubmissionId: string }
   | { type: "session.compact"; sessionId: string; instructions?: string }
@@ -534,7 +534,7 @@ Both are pure and throw `WebError`:
 
 - not an object, no string `type`, or an unknown `type` -> `invalid_message` (server messages: `protocol_error`);
 - a missing field, a wrong primitive type, an empty `sessionId` / `clientSubmissionId` / `actionId` / `dialogId` -> same codes, `details.field` names the field;
-- `session.submit`: `images.length <= IMAGE_MAX_COUNT`, every `mimeType` in `IMAGE_MIME_TYPES`, summed `dataBase64.length <= IMAGE_MAX_TOTAL_BASE64`, `whenBusy` in `followUp|steer`, `text` a string (emptiness with no images is the backend's `invalid_submission`; an image-only message is valid, 15.2);
+- `session.submit`: `images.length <= IMAGE_MAX_COUNT`, every `mimeType` in `IMAGE_MIME_TYPES`, summed `dataBase64.length <= IMAGE_MAX_TOTAL_BASE64`, `whenBusy` in `followUp|steer`, `text` a string (emptiness with no images is the backend's `invalid_submission`; an image-only message is valid, 15.2); it carries no `origin` field (11.9);
 - `session.configure`: exactly one `change.kind` of `model|thinking|tier`;
 - `dialog.respond`: `response.method`/`outcome` pair from `DialogResponse`; `changes` needs `feedback.trim() !== ""`;
 - `cockpit.action`: the action goes through `parseCockpitAction` (section 5.5), whose failures are `unknown_action` (unknown kind) and `invalid_message` (bad field of a known kind);
@@ -1078,7 +1078,7 @@ export interface HostCursor { epoch: string; seq: number } // host cursor (disti
 export interface HostClient {
   readonly welcome: Extract<HostFrame, { type: "welcome" }>;
   attach(cursor?: HostCursor): Promise<Extract<HostFrame, { type: "attached" }>>; // sends attach {req, conversation: "root", cursor?}; the view and ops frames that follow arrive through onFrame
-  submit(input: { text: string; whenBusy: "followUp" | "steer"; requestId?: string; images?: { mimeType: ImageMime; dataBase64: string }[] }): Promise<{ submissionId: number; status: string }>;
+  submit(input: { text: string; whenBusy: "followUp" | "steer"; requestId?: string; images?: { mimeType: ImageMime; dataBase64: string }[] }): Promise<{ submissionId: number; status: string }>; // no origin field on this submit frame (11.9): the durable host's web submissions are `cpd-chat` entries, not `session-message` Events
   compact(instructions?: string): Promise<{ taskId: number }>;
   configure(change: { model: string } | { thinkingLevel: string | null }): Promise<Record<string, unknown>>; // wire: model | thinking_level
   listModels(): Promise<{ provider: string; model_id: string; name: string; thinking_levels: string[]; context_window: number }[]>;
@@ -1362,7 +1362,7 @@ Behaviours:
 - Live: `append` events emit `session.append` (`added`), `session.update` (`updated`), `session.dialog` / `session.dialogResolved` for `dialogsOpened` / `dialogsResolved` (outcome `"answered"`; plan review `superseded` or `lost` -> `"superseded"`), `session.footer` when `factsChanged`, `session.status` when `busy` changed. `reset` -> re-reads the tail, emits a fresh `session.window {mode:"tail"}` (truncation or replacement resets the window) and restarts the watcher.
 - `busy` (Phase 1 choice, a file-derived approximation): `facts.lastRole === "user" || "toolResult"`, or `lastRole === "assistant"` with `lastStopReason` of `toolUse`/`pending`; false otherwise. `queued` is always `[]`.
 - `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`; on a session attached with no file it emits an empty `session.window {mode:"earlier", items: [], hasEarlier: false, cursor: null}`.
-- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); **Amended by 15.2 (air-d43):** `text.trim() === ""` with no images, or `text.length > PI_SEND_TEXT_MAX`, -> `invalid_submission`; with images and no text the submission is valid: the images are written and the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3); else `cpd.json(sessionSendArgs(id, text))` (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
+- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); **Amended by 15.2 (air-d43):** `text.trim() === ""` with no images, or `text.length > PI_SEND_TEXT_MAX`, -> `invalid_submission`; with images and no text the submission is valid: the images are written and the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3); else `cpd.json(sessionSendArgs(id, text))`, `sessionSendArgs` passing `--origin webui` (11.9: the `session-message` Event carries `data.origin: "webui"`) (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
 - `configure {kind:"tier"}`: `cpd.json(sessionRetierArgs(id, tier))` (applies at the next idle, scout-pi §6), then re-reads `cpd session show` and emits `session.footer`. `{kind:"model"|"thinking"}` -> `unsupported_capability`.
 - `abort`, `abortSubmission`, `compact` and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason). `respond` answers the open dialog (11.4).
 - Footer: `model` = `facts.model` (a later `model_change` wins over `session show`) else `session show` `model`; `thinking` likewise; `tier` = `session show` `tier` else `ref.tier`; `cost` = unknown (`"pi session cost needs a full-file scan, which Phase 1 never does"`); `contextPercent` = unknown (`"the model's context window is not available for pi sessions"`); `branch` = `git.branch(ref.cwd)` (the git branch of the session cwd; `ref.cwd` missing -> unknown `"the session row has no cwd"`; `null` -> unknown `"not a git repository"`).
@@ -1915,6 +1915,14 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 ### 11.8 Footer
 
 - `Footer` (`web/src/ui/chat/Footer.tsx`) renders only the context card (`{footer, contextWindow?}`, DESIGN-compose 3). The session telemetry row (cwd, session key, tokens, cache, model, tier, thinking, cost, branch) is removed from the chat (pro-d57). Its data stays in `SessionView.footer` for the composer's tier selector (DESIGN-compose 2).
+
+### 11.9 The session-message origin (Plan ui-origin)
+
+Recorded decision: Plan ui-origin (air-d23, air-d24; assumptions A2, A5). Where this subsection and an earlier section differ, this subsection stands. The `session-message` Event (docs/contract.md §5.2) gains the optional `data.origin` field, whose value is exactly `tui` or `webui` — the surface the message was submitted from. Absent means no origin: engine, agent and CLI `session send` without the flag leave it absent; it is set only by the WebUI paths.
+
+- **The wire gains no field.** `session.submit` (4.1) carries no `origin`; the durable socket submit frame (6.4) carries none either, and is unchanged: the durable host's web submissions are `cpd-chat` entries, not `session-message` Events. No parser (4.3) learns a new field.
+- **The pi runner sets it.** The pi backend's `submit` (6.6) passes `--origin webui` to `cpd session send`, so the `session-message` Event it writes carries `data.origin: "webui"`. The pi runner is the only WebUI path that writes a `session-message`.
+- **The adapter reads it.** The pi adapter reads `data.origin` to tag a User message with its surface (the tag Job of the Plan); the field the adapter reads raises `protocol`, 23 → 24, in `core/src/events/kind.rs` and `pi/lib/event.ts` together.
 
 ---
 

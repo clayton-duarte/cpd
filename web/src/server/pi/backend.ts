@@ -33,7 +33,7 @@ export type { Disposable };
 
 // Local copies of the argv builders of cockpit/actions.ts (sessionSendArgs, sessionRetierArgs, CONTRACT 6.3).
 const WEB_UNBLOCKS = "User message from the web chat";
-const sessionSendArgs = (id: string, text: string): readonly string[] => ["session", "send", id, "--unblocks", WEB_UNBLOCKS, "--", text];
+const sessionSendArgs = (id: string, text: string): readonly string[] => ["session", "send", id, "--origin", "webui", "--unblocks", WEB_UNBLOCKS, "--", text];
 const sessionRetierArgs = (id: string, tier: string): readonly string[] => ["session", "retier", id, "--tier", tier];
 
 const REASON = {

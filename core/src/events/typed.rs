@@ -40,6 +40,19 @@ fn make(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {
     NewEvent::new(kind, text, data)
 }
 
+/// The optional `origin` of a `session-message` (contract §5.2, Plan ui-origin): the surface a message was submitted
+/// from, exactly `tui` or `webui`, or `None` for absent. Any other value is refused with `usage`.
+fn checked_origin(origin: Option<&str>) -> Result<Option<&str>, CpdError> {
+    match origin {
+        None => Ok(None),
+        Some("tui" | "webui") => Ok(origin),
+        Some(other) => Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("An origin is tui or webui, not {other:?}."),
+        )),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl NewEvent {
     pub fn context_created(
@@ -771,12 +784,13 @@ impl NewEvent {
         from: impl Serialize,
         message: &str,
         wake: bool,
-    ) -> NewEvent {
-        make(
-            Kind::SessionMessage,
-            text,
-            json!({"from": from, "text": message, "wake": wake}),
-        )
+        origin: Option<&str>,
+    ) -> Result<NewEvent, CpdError> {
+        let mut data = json!({"from": from, "text": message, "wake": wake});
+        if let Some(origin) = checked_origin(origin)? {
+            data["origin"] = json!(origin);
+        }
+        Ok(make(Kind::SessionMessage, text, data))
     }
 
     /// The engine's Review Lead wake: a waking message from the User's side (`from` null) that names the woken `head_oid`,
@@ -805,12 +819,13 @@ impl NewEvent {
         from: impl Serialize,
         message: &str,
         unblocks: &str,
-    ) -> NewEvent {
-        make(
-            Kind::SessionMessage,
-            text,
-            json!({"from": from, "text": message, "unblocks": unblocks}),
-        )
+        origin: Option<&str>,
+    ) -> Result<NewEvent, CpdError> {
+        let mut data = json!({"from": from, "text": message, "unblocks": unblocks});
+        if let Some(origin) = checked_origin(origin)? {
+            data["origin"] = json!(origin);
+        }
+        Ok(make(Kind::SessionMessage, text, data))
     }
 
     pub fn inbox_opened(
@@ -1055,8 +1070,10 @@ mod tests {
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
             Kind::SessionMessage => vec![
-                NewEvent::session_message(T, s, s, b),
-                NewEvent::session_message_unblocking(T, s, s, s),
+                NewEvent::session_message(T, s, s, b, None).unwrap(),
+                NewEvent::session_message_unblocking(T, s, s, s, None).unwrap(),
+                NewEvent::session_message(T, s, s, b, Some("webui")).unwrap(),
+                NewEvent::session_message_unblocking(T, s, s, s, Some("tui")).unwrap(),
                 NewEvent::session_message_head(T, s, "h2").unwrap(),
             ],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],

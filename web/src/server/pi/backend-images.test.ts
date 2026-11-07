@@ -101,7 +101,7 @@ describe("pi backend images", () => {
       ["/att/s1-55-1.jpg", [4, 5, 6]],
     ]);
     const text = "look\n\n[Attached image: /att/s1-55-0.png]\n[Attached image: /att/s1-55-1.jpg]";
-    expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--unblocks", "User message from the web chat", "--", text]]);
+    expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", text]]);
     const none = await setup({ text: "" });
     await submit(none, "plain", []);
     expect(none.fs.writes).toEqual([]);
