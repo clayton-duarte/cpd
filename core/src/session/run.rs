@@ -490,7 +490,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
     // The row's current Tier, also on a resume (hs-d506): pi uses `--model` instead of the model its file recorded.
     let models = row::models_of(env, row)?;
     let (model, level) = row::model_and_level(&models, &row.id, &row.tier)?;
-    let model = format!("{model}:{level}");
+    let model = crate::config::with_level(&model, level);
     let ports = env.ports.clone();
     if let Some(file) = existing_file(dirs, row) {
         if row.file.as_deref() != Some(&file.display().to_string()) {

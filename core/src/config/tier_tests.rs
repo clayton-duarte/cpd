@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(
             sorted,
             [
-                "G0", "GX", "G2", "H0", "HX", "H4", "S1", "SX", "S3", "O0", "OX", "O4"
+                "G0", "GX", "G2", "H0", "HX", "H4", "SX", "S1", "S3", "O0", "OX", "O4"
             ]
         );
         assert!(t("H4") < t("SX"), "a higher letter beats any effort");

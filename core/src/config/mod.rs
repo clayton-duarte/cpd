@@ -58,7 +58,7 @@ pub use file::{
 };
 pub use repo::RepoTests;
 pub use runner::{WorkerRunner, toggle};
-pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel};
+pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel, with_level};
 
 /// `cpd config` takes no arguments, or the subcommand `tiers set` (§14.2a).
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]

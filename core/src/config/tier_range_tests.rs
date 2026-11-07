@@ -80,7 +80,7 @@ fn the_ladder_lists_valid_rungs_g_h_s_o_then_effort_ascending() {
 fn a_range_runs_from_its_floor_to_the_rung_below_the_next_role_default() {
     let c = catalog();
     let d = defaults("GX", "H1", "S1", "OX");
-    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "S0"));
+    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "SX"));
     assert_eq!(range(&c, Role::Lead, &d), pair("S1", "S3"));
     // The next default is itself excluded, and a role default may be effort 0.
     let d = defaults("GX", "H3", "S0", "OX");
@@ -133,7 +133,7 @@ fn a_default_that_is_not_a_rung_floors_up_and_ceilings_down() {
     assert_eq!(range(&c, Role::Manager, &d), pair("OX", "OX"));
     // A default below the whole ladder floors to its lowest rung.
     let d = defaults("G0", "H0", "S2", "OX");
-    assert_eq!(range(&c, Role::Worker, &d), pair("H1", "S1"));
+    assert_eq!(range(&c, Role::Worker, &d), pair("HX", "S1"));
 }
 
 #[test]

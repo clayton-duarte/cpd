@@ -33,10 +33,10 @@ export async function switchModel(host: Host, r: Run): Promise<void> {
 /** The `model` and `thinking` of `cpd session show`: the mapping from the Tier is cpd's (commands.md §10.2), the adapter reads no config. */
 async function apply(host: Host, r: Run): Promise<void> {
   let model: string;
-  let thinking: string;
+  let thinking: string | null;
   try {
     const shown = (await host.call(["session", "show", r.id])).session;
-    if (!isObject(shown) || typeof shown.model !== "string" || typeof shown.thinking !== "string") throw new CpdError("bad_output", "cpd session show: the session object lacks model or thinking");
+    if (!isObject(shown) || typeof shown.model !== "string" || (shown.thinking !== null && typeof shown.thinking !== "string")) throw new CpdError("bad_output", "cpd session show: the session object lacks model or thinking");
     ({ model, thinking } = { model: shown.model, thinking: shown.thinking });
   } catch (e) {
     if (host.run === r) host.deliver("model switch", e);
@@ -47,7 +47,7 @@ async function apply(host: Host, r: Run): Promise<void> {
     return;
   }
   const unavailable = async (why: string) => {
-    const text = `${model}:${thinking}: ${why}`;
+    const text = `${thinking === null ? model : `${model}:${thinking}`}: ${why}`;
     host.deliver("model switch", new CpdError("model_unavailable", text), { model, thinking });
     await record(host, r, ["switch-failed", "--code", "model_unavailable", "--message", text]);
   };
@@ -61,7 +61,7 @@ async function apply(host: Host, r: Run): Promise<void> {
     return unavailable(e instanceof Error ? e.message : String(e));
   }
   if (!accepted) return unavailable("pi has no authentication for its provider");
-  host.pi.setThinkingLevel(thinking as Parameters<Host["pi"]["setThinkingLevel"]>[0]);
+  if (thinking !== null) host.pi.setThinkingLevel(thinking as Parameters<Host["pi"]["setThinkingLevel"]>[0]);
   await record(host, r, ["switched"]);
 }
 
