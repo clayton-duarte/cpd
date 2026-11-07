@@ -317,21 +317,18 @@ fn a_reread_that_drops_a_default_rung_flags_that_tier_and_blocks_save() {
     let invalid: Vec<bool> = [AUX, WORKER, LEAD, MANAGER]
         .map(|r| row(&m, r).invalid)
         .into();
-    // GX is no rung of a G with efforts 0 and 1, and S4 none of an S with efforts 1 and 3.
-    assert_eq!(invalid, [true, false, true, false]);
-    let why = "auxiliar GX is not a rung of G's model.".to_string();
+    // GX is valid on every model (contract §9, R2), so only S4, no rung of an S with efforts 1 and 3, is flagged.
+    assert_eq!(invalid, [false, false, true, false]);
+    let why = "lead S4 is not a rung of S's model.".to_string();
     assert_eq!(m.blocked(), Some(why.clone()));
     assert_eq!(m.save(), Effect::None);
     assert_eq!(m.footer(), Some(why));
     // The new rungs are offered.
     assert_eq!(m.offered(AUX), strings(&["G0", "G1", "H0", "H1", "H2"]));
-    // Picking a valid rung clears the flag.
-    pick(&mut m, AUX, "G1");
-    assert!(!row(&m, AUX).invalid);
-    assert_eq!(
-        m.blocked(),
-        Some("lead S4 is not a rung of S's model.".into())
-    );
+    // Picking a valid rung for the lead clears the flag.
+    pick(&mut m, LEAD, "S3");
+    assert!(!row(&m, LEAD).invalid);
+    assert_eq!(m.blocked(), None);
 }
 
 #[test]

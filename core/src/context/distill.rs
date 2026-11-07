@@ -775,7 +775,7 @@ impl Run<'_> {
             Letter::H => &models.h,
             Letter::G => &models.g,
         };
-        let model = format!("{model}:{}", tier.level());
+        let model = crate::config::with_level(model, tier.thinking());
         let launch = pi::distiller(&model, files);
         let dir = self.home.context_digest_dir(self.context);
         let log = log_path(self.home, self.context);

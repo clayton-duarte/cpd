@@ -3034,7 +3034,7 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
 }
 
 /// The `update` Job runs at `worker_tier`, floored to a valid rung when it is not one: H4 is no rung (H offers 0-3 here), so the
-/// lowest valid rung at or above it is S1 (S offers 1-5; its effort 5 is no rung).
+/// lowest valid rung at or above it is SX: S offers 1-5, no S0, and within a letter X sits between 0 and 1 (contract §9).
 #[test]
 fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     let (fx, says) = open_pr_with("worker_tier = \"H4\"\nlead_tier = \"S4\"");
@@ -3047,7 +3047,7 @@ fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     assert_eq!(
         fx.env
             .query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'up-repo'"),
-        "S1",
+        "SX",
         "worker_tier H4 floored to its rung"
     );
 }
