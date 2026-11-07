@@ -457,7 +457,7 @@ Everything else is `cpd install --root <checkout>` (commands.md §14.4; `cli/src
 6. **The adapter swap** ("The adapter swap" below), then the verify and the cleanup.
 7. `installed <dest>/cpd and <link>` on stderr.
 8. **The follow-ups** on the new binary (`<dest>/cpd`, through the `Runner`; "The install's engine order" below): `cpd config`, `cpd watch --check`, `cpd tui --respawn`, `cpd watch --mark-restart`, `tmux -u … kill-window -t =<work>:watch`, `cpd watch --ensure`, and the check that an engine holds `locks/watch.lock` (`cpd_core::lock`, a non-blocking probe of the lock file; `python3` and `flock` are gone).
-8a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; commands.md §14.4 step 7a, `cpd app` below). After the follow-ups, before the tag, with `<root>` the checkout (when `<root>/web/package.json` does not exist the step prints `no web client in the checkout: electron step skipped` and does nothing): `pnpm --dir <root> install --frozen-lockfile` through the `Runner` (10 minutes); `app::ensure(ports, &app, true)` (builds `web/dist-electron` always, then the `chmod` and, on macOS, the `plutil` steps); `app::write_root(home, root)`; then, unless `<preview_dir>/web-state` exists (a preview is on: stderr says so and Electron is left alone), SIGUSR1 to the pid of `<cpd_home>/run/preview-health.json` when `Spawn::alive` reports it. Each failure prints `cpd install follow-up failed: electron <a|b|c|d>: <text>`, skips the rest of the step and goes on to the tag; the exit is 1 (step 10). The steps live in `core/src/app/`; the install's `steps` (`core/src/install/mod.rs`) call them after the follow-ups.
+8a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; commands.md §14.4 step 7a, `cpd desktop` below). After the follow-ups, before the tag, with `<root>` the checkout (when `<root>/web/package.json` does not exist the step prints `no web client in the checkout: electron step skipped` and does nothing): `pnpm --dir <root> install --frozen-lockfile` through the `Runner` (10 minutes); `app::ensure(ports, &app, true)` (builds `web/dist-electron` always, then the `chmod` and, on macOS, the `plutil` steps); `app::write_root(home, root)`; then, unless `<preview_dir>/web-state` exists (a preview is on: stderr says so and Electron is left alone), SIGUSR1 to the pid of `<cpd_home>/run/preview-health.json` when `Spawn::alive` reports it. Each failure prints `cpd install follow-up failed: electron <a|b|c|d>: <text>`, skips the rest of the step and goes on to the tag; the exit is 1 (step 10). The steps live in `core/src/app/`; the install's `steps` (`core/src/install/mod.rs`) call them after the follow-ups.
 9. **The tag.** `scripts/tag-version.sh` through the `Runner`, once, after the follow-ups (docs/versioning.md "Tags"). A non-zero exit prints its stderr under `tag-version:` as a warning and does not change the install's exit; a refused or failed install (any step above) never reaches it.
 10. **The exit.** 1 when any `cpd install follow-up failed` line was printed, else 0 (the output is human text on stderr, as the script's was; commands.md §14.4).
 
@@ -542,18 +542,18 @@ hs-d463 (incident: mac-pro's first sync install after #169 killed `cpd-work:watc
 - Shell: one function per script holds the only `tmux -u` line: `tmux_cmd` in `preview-tui.sh` (`install-cpd.sh` calls no tmux: `cpd install` does, through `host::tmux::client`).
 - **The guards:** `scripts/check-portable.sh` refuses a bare `tmux` ("The portability check", the row below); a Rust test refuses a tmux spawn outside `core/src/host/tmux.rs`; a Rust test with a fake `tmux` that records its argv requires `-u` first in the call of every `Tmux` method, of `installed_version`, of `doctor` and of `exec_attach`, under `LANG=C`, `LC_ALL=C` and an empty locale; a Rust test runs `list-panes -a -F` through `Tmux` against a real tmux with `env_clear` plus `PATH` (and with `LC_ALL=C`), and requires the panes to parse. The last is the defect itself: it fails today on tmux 3.8, where a client without a UTF-8 locale prints the formats' tabs as `_`, and passes with `-u`.
 
-## `cpd app`
+## `cpd desktop`
 
-Plan cpd-app-launch, decision pro-d431. `cpd app` (commands.md §14.4a) and install's Electron step (step 8a above) share one area, `core/src/app/`, and the CLI handler `cli/src/app.rs` (the `Args` struct and `run`, as `cli/src/install.rs`; a root `Command::App` variant, its dispatch arm and its `cli/src/interface.rs` row). The area uses `Ports` and std only; it depends on no other area.
+Plan cpd-app-launch, decision pro-d431. `cpd desktop` (commands.md §14.4a) and install's Electron step (step 8a above) share one area, `core/src/app/`, and the CLI handler `cli/src/app.rs` (the `Args` struct and `run`, as `cli/src/install.rs`; a root `Command::App` variant, its dispatch arm and its `cli/src/interface.rs` row). The area uses `Ports` and std only; it depends on no other area.
 
 **The names the tests use** (`core/src/app/mod.rs`):
 
 ```rust
 pub struct App { pub root: PathBuf, pub home: PathBuf, pub cpd_home: PathBuf, pub preview_dir: PathBuf, pub macos: bool }
-pub fn read_root(home: &Path) -> Result<PathBuf, CpdError>                       // app-root; app_not_installed when missing
+pub fn read_root(home: &Path) -> Result<PathBuf, CpdError>                       // app-root; desktop_not_installed when missing
 pub fn write_root(home: &Path, root: &Path) -> Result<(), CpdError>              // install step 8a, c
 pub fn ensure(ports: &Ports, app: &App, rebuild: bool) -> Result<(), CpdError>   // rebuild = true: install always builds
-pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError>              // plain cpd app
+pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError>              // plain cpd desktop
 pub fn preview(ports: &Ports, app: &App, step: Preview) -> Result<String, CpdError> // --preview, --reload, --off: the script's text
 pub fn status(ports: &Ports, app: &App) -> Result<Status, CpdError>              // --status
 pub enum Preview { On(Option<PathBuf>), Reload(Option<PathBuf>), Off }
@@ -563,10 +563,10 @@ pub struct Status { pub output: String, pub electron: Option<Electron> }        
 
 The return types are the JSON of commands.md §14.4a; `cli/src/app.rs` only maps them to `Output`.
 
-**`App` is built once at the CLI edge**, like the other Install fields: `root` is `read_root(home)` for `cpd app`, and the install builds its own `App` with `root` = `--root`; `home` is `$HOME`; `cpd_home` is `$CPD_HOME`, else `<home>/.cpd`; `preview_dir` is `$CPD_PREVIEW_DIR`, else `<home>/.cache/cpd-preview`; `macos` is `cfg!(target_os = "macos")`. The core reads no environment and no `cfg!`: a test sets `macos` and the directories itself.
+**`App` is built once at the CLI edge**, like the other Install fields: `root` is `read_root(home)` for `cpd desktop`, and the install builds its own `App` with `root` = `--root`; `home` is `$HOME`; `cpd_home` is `$CPD_HOME`, else `<home>/.cpd`; `preview_dir` is `$CPD_PREVIEW_DIR`, else `<home>/.cache/cpd-preview`; `macos` is `cfg!(target_os = "macos")`. The core reads no environment and no `cfg!`: a test sets `macos` and the directories itself.
 
 **The files** (no other file is read):
-- `<home>/.local/share/cpd/app-root`: one line, the absolute checkout path, with a newline. Written only by install step 8a (`write_root`: a temporary file in the same directory, then `rename`); read by `read_root`. Missing: `app_not_installed`, exit 1, the message says to run `scripts/install-cpd.sh`. `~/.local/share/cpd/web` is not used.
+- `<home>/.local/share/cpd/app-root`: one line, the absolute checkout path, with a newline. Written only by install step 8a (`write_root`: a temporary file in the same directory, then `rename`); read by `read_root`. Missing: `desktop_not_installed`, exit 1, the message says to run `scripts/install-cpd.sh`. `~/.local/share/cpd/web` is not used.
 - `<cpd_home>/run/preview-health.json`: read for its `pid` field only. It is written by the Electron main process on every launch (`web/src/electron/main.ts`, docs/ui-preview.md, "Health file and crash log"). A missing file or a missing `pid` is "no Electron" (`electron: null` in `--status`); a file that does not parse is `internal` (exit 1), never a guess.
 - `<cpd_home>/run/app.log`: stdout and stderr of an Electron that `launch` started.
 - `<preview_dir>/web-state`: its presence means a web preview is on (install step 8a, d); written by `preview-web.sh on`.
