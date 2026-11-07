@@ -170,7 +170,7 @@ serve_only() {
 unserve() {
   read_config
   if tmux_cmd list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx web; then
-    tmux_cmd kill-window -t "=$work:web"
+    tmux_cmd kill-window -t "=$work:web" || true
   fi
 }
 
