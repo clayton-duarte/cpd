@@ -501,7 +501,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       piDurable: PI_DURABLE,
       epoch,
       ring,
-      submit: async ({ text, whenBusy, requestId, images, client }) => {
+      submit: async ({ text, whenBusy, requestId, images }, client) => {
         const id = requestId ?? randomUUID();
         // §15.3: a socket submit from the WebUI client is the WebUI surface, so its content carries the tag.
         const said = client === WEB_CLIENT ? tag("webui", readView(config.home)) + text : text;
