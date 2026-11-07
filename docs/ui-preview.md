@@ -49,6 +49,36 @@ If loading the dev URL fails (for example the server is down), boot logs the err
 
 `preview-web.sh` itself never runs `git checkout`, `git reset` or `git clean`. The Electron sync runs `git checkout HEAD -- <paths>` and `git clean -f -- <paths>` in the preview worktree, scoped to the dirty paths that `origin/main` supersedes, before it fast-forwards or rebases (see [Electron sync in preview](#electron-sync-in-preview-a7) and [Electron app](#electron-app)). The matching scripts in `web/package.json` are `preview:on`, `preview:off` and `preview:reload`.
 
+## Serve-only mode and the View menu preview
+
+(air-d41, air-d49, air-n19; the three in-place clients are documented in `web/ELECTRON.md`)
+
+The View menu of `cpd desktop` carries **WebUI Preview**, a third in-place client: the same one process and one window switch to the dev renderer of a preview worktree. The worktree and its dev server are managed by two serve-only subcommands of `preview-web.sh`:
+
+```
+sh scripts/preview-web.sh serve [<worktree>]
+sh scripts/preview-web.sh unserve
+```
+
+- **`serve [<worktree>]`** ensures the preview worktree exactly as `on` does (create on branch `preview/web` from `origin/main` when missing, default path `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`, install and link `node_modules` when created) and starts, or respawns, the Vite dev server of the worktree on port 5173, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It starts no watchdog, writes no `web-state`, sets no `@cpd_web_preview` and prints no Electron command.
+- **`unserve`** stops only that dev server (the `web` window). It does not touch the watchdog, `web-state` or `@cpd_web_preview`.
+- **`on [<worktree>]`**, **`off`** and **`status`** keep exactly the behaviour documented above; they are the subcommands of `cpd desktop --preview`, `--off` and `--status` and are unchanged.
+
+### The View menu client
+
+Selecting **WebUI Preview** in the View menu of `cpd desktop`:
+
+1. runs `serve [<worktree>]` for the preview worktree (default path as for `on`),
+2. shows a built-in loading page in the window,
+3. once the client health is healthy, loads the dev renderer at `CPD_ELECTRON_DEV_URL` (default `http://localhost:5173/electron.html`),
+4. keeps the server until quit and stops it on quit (`unserve`).
+
+The same Electron-main backend serves the preview renderer: the dev renderer talks IPC (`cpd:c2s` / `cpd:s2c`, see `web/ELECTRON.md`) to the services of the running main process, not to the Vite server's WebSocket backend, which serves only a plain browser tab at `http://localhost:5173`.
+
+A start or load failure shows a native error dialog and the previous view returns. There is never a silent fallback to another view.
+
+[Crash safety (pro-d64)](#crash-safety-pro-d64) stays true for `cpd desktop --preview`: its watchdog still rolls back a crashing build, and its rollback lands in the production WebUI (the built renderer, relaunched in production mode, item 8). The View menu preview runs no watchdog; its failure path is the native error dialog above.
+
 ## Production and preview modes
 
 Production is the default; preview is opt-in. The contract below is the source every later Job follows literally. Accepted assumptions A1-A8 (User, 2026-11-06 EST; pro-d73, pro-d74) are stated inside the items. The primary checkout is a mirror of `origin/main` and is never a preview.
