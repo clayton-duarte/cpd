@@ -637,7 +637,8 @@ fn shaping_cmds_manager_attempt_commands_on_shaping_plan() {
     )
     .unwrap();
     fx.env.sql(&format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at, runner)
+        "UPDATE jobs SET status = 'running' WHERE plan = 'shape1' AND key = 'scan';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at, runner)
            VALUES ('shape1', 'scan-a1', 'scan', 1, 'H2', 'ladder', 'running', 'cpd/shape1--scan-a1', '/w', 'w1', 't', 'pi');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at)
            VALUES ('w1', 'worker', 'ctx', 'shape1', 'scan-a1', 'scan-a1', '{}', '/w', 'H2', 'working', 't', 't');",
