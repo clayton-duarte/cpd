@@ -440,15 +440,20 @@ export interface Completion {
 
 ## 4. `web/src/protocol/wire.ts`: the browser/server wire
 
-Carried as Vite custom events (A1): the browser calls `import.meta.hot.send("cpd:c2s", message)` and listens with `import.meta.hot.on("cpd:s2c", handler)`; the server listens with `server.ws.on("cpd:c2s", (data, client) => ...)` and answers with `client.send("cpd:s2c", message)` (`vite/dist/node/index.d.ts:1833-1866`, `NormalizedHotChannelClient.send(event, payload)` `:1394-1403`, vite 8.3.5). Payloads are JSON-serialisable; every message is an object with a string `type`.
+> **Amended by 15 (Plan `webui-ws`):** the wire is carried over one WebSocket (ADR 0015 option B, air-d46) as JSON text frames, not as Vite custom events; §4 adds the two heartbeat messages, `ping` (4.1) and `pong` (4.2). The endpoint, the Origin check and the heartbeat are stated in §15 and docs/contract.md §5.5.
+
+Carried as JSON text frames over the one WebSocket of §15 (A1, amended by 15): the renderer's `createWebSocketTransport` sends one JSON text frame per `ClientMessage` and delivers one per `ServerMessage`; the server writes one per `ServerMessage` and parses one per incoming frame. Payloads are JSON-serialisable; every message is an object with a string `type`.
 
 ### 4.1 Client to server
+
+> **Amended by 15:** adds the client message `ping` (the client's heartbeat; the server answers `pong` at once, 15.2).
 
 ```ts
 import type { Attachment, Cursor, ConfigureChange, DialogResponse, WhenBusy, WireImage } from "./domain.ts";
 import type { CockpitAction } from "./cockpit.ts";
 
 export type ClientMessage =
+  | { type: "ping" } // the client's wire heartbeat (15.2); the server answers { type: "pong" } at once, with no cockpit or session involvement
   | { type: "cockpit.subscribe" } // idempotent; the server answers with cockpit.snapshot (all panes)
   | { type: "cockpit.selectPlan"; planId: string | null } // choose the Plan shown in the Plan pane; null clears it
   | { type: "cockpit.action"; actionId: string; action: CockpitAction } // actionId: client correlation id, non-empty
@@ -469,6 +474,7 @@ export type ClientMessage =
 ### 4.2 Server to client
 
 > **Amended by 12:** adds the server message `session.remove` (12.1 L1).
+> **Amended by 15:** adds the server message `pong` (the answer to the client's `ping`; `parseServerMessage` accepts it, and it carries no session or cockpit state).
 
 ```ts
 import type { Capabilities, Cursor, Dialog, DialogOutcome, FooterStats, ModelChoice, QueuedSubmission, SessionRef, TranscriptItem, Window, WireError } from "./domain.ts";
@@ -483,6 +489,8 @@ export type CockpitPaneData =
 export interface SessionMeta { ref: SessionRef; footer: FooterStats }
 
 export type ServerMessage =
+  // heartbeat
+  | { type: "pong" } // the answer to the client's wire `ping` (15.2); no cockpit or session state
   // cockpit
   | { type: "cockpit.snapshot"; tree: ContextTreeModel; plan: PlanViewModel | null; inbox: InboxModel } // all three panes; sent on subscribe
   | ({ type: "cockpit.patch" } & CockpitPaneData) // replaces ONE pane (an invalidation refresh); "patch" = per-pane replacement
@@ -1016,7 +1024,7 @@ Service behaviours:
 8. `stop()` kills the follow process, disposes every timer and subscription; nothing fires afterwards. `selectPlan` stores the id and loads only the plan pane.
 9. `runAction(action)` delegates to `runAction(cpd, action)` of `actions.ts`; errors propagate as `WebError`.
 10. `refresh(panes)` (rules 3 and 5) always returns a promise that resolves only after the in-flight loop has drained every queued pane, so a call made while another refresh runs waits for that loop. `runAction` awaits that refresh before it resolves, so `action.result` is never sent while `snap.tree` is stale (for plan.new the tree already holds the new Plan and Lead session).
-11. Monotonic pane cursors (pro-d426): each pane update, whether from a coalesced `loadPanes` burst (rule 3) or from the `runAction` refresh (rule 10), is applied to the snapshot only when it is not older than the snapshot's pane: `tree` — **Amended by 14.1 (air-n13, air-n15): the guard never applies to the tree; a tree update is applied and emitted in every case, and a lower `tree.cursor` drops nothing**; `inbox` when `u.inbox.cursor >= snap.inbox.cursor` (or `snap.inbox` is null); `plan` when `u.plan` is null, or `snap.plan` is null, or the planId differs (a different Plan is a new selection, not a stale one), or `u.plan.cursor >= snap.plan.cursor`. A null plan always applies. A stale update is dropped without emitting a `{kind:"pane"}` update.
+11. Monotonic pane cursors (pro-d426): each pane update, whether from a coalesced `loadPanes` burst (rule 3) or from the `runAction` refresh (rule 10), is applied to the snapshot only when it is not older than the snapshot's pane: `tree` — **Amended by 14.1 (air-n13, air-n15): the guard never applies to the tree; a tree update is applied and emitted in every case, and a lower `tree.cursor` drops nothing**; `inbox` when `u.inbox.cursor >= snap.inbox.cursor` (or `snap.inbox` is null); `plan` when `u.plan` is null, or `snap.plan` is null, or the planId differs (a different Plan is a new selection, not a stale one), or `u.plan.cursor >= snap.plan.cursor`. A null plan always applies. **Amended by 15.3 (air-d44): a stale update is never dropped silently** — a drop emits one `{kind:"error"}` update, so the cockpit error toast shows it (the pane keeps its held rows).
 
 #### `actions.ts`
 
@@ -1430,8 +1438,8 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
 Behaviours (tested with a fake `ViteDevServer` and fake boundaries):
 
 - `configureServer(server)` builds the services (`options.boundaries ?? realBoundaries(process.env)`) and starts them: `cockpit.start()` is called once; its promise is awaited before the first client message is handled (a rejection is logged through `server.config.logger.error` and every `cockpit.subscribe` is then answered with `cockpit.error`; there is no retry: restart the dev server).
-- It registers `server.ws.on("cpd:c2s", (data, client) => ...)` (`vite index.d.ts:1833-1839`). The first message of a `client` creates its `HubConnection` with `send = (m) => client.send("cpd:s2c", m)` and registers `client.socket.on("close", ...)` to close it (`client.socket` `:1860-1866`); later messages of the same client reuse it. The plugin sends `s2c` to the client that sent the message only.
-- `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite.
+- It registers `server.ws.on("cpd:c2s", (data, client) => ...)` (`vite index.d.ts:1833-1839`). The first message of a `client` creates its `HubConnection` with `send = (m) => client.send("cpd:s2c", m)` and registers `client.socket.on("close", ...)` to close it (`client.socket` `:1860-1866`); later messages of the same client reuse it. The plugin sends `s2c` to the client that sent the message only. **Amended by 15.1 (Plan `webui-ws`): this `cpd:c2s`/`cpd:s2c` route is gone** — the dev server hosts the one WebSocket endpoint of §15 on its httpServer instead, same-origin at `/cpd-ws`.
+- `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite. **Amended by 15.1:** the same `hub.handle(data)` call serves the WebSocket endpoint's incoming text frames, and the hub answers a `ping` client message with `pong` at once (15.2), with no cockpit, backend or parse error involved.
 - Closing: on `server.httpServer?.once("close")` (and the plugin's `closeBundle` hook, whose dev-server timing is unverified, O17) the plugin closes every connection, calls `cockpit.stop()`; idempotent. Plugin starts services on server start and closes them on server close.
 
 `web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code.
@@ -2091,6 +2099,7 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 
 - Tests run without a real process, socket, timer or `cpd` (A6). `web/src/server/cockpit/stream.test.ts` (new; fake `StreamProcess`, fake Scheduler): ready only after `hello`; the backoff sequence of 13.7 and its reset at the first snapshot; `stop()` closes stdin, kills the child, cancels the wait and emits nothing afterwards; a request is answered, rejected, or resolved `down` when not ready and when the child exits. `web/src/server/cockpit/events.test.ts` (changed): the 16 ms coalescing of snapshot panes and of the spawn burst; the panes of a snapshot equal the spawn path's panes for the same replies; a `session-state` patch emits the tree in the same tick and the next snapshot replaces it; the follow child runs only while the stream is not ready.
 - Limits, stated plainly: the live output of `cpd cockpit serve` is unverified (O26); the 5 ms target is unmeasured; `seq` is informational, because one pipe keeps frames in order; no `hello` timeout is defined, so a child that never says `hello` stays not ready, with the spawn path serving the panes and no restart (unverified, O26).
+  - **Amended by 15.2 (Plan `webui-ws`): `seq` is no longer only informational** — the serve-stream watchdog compares it (a `seq` that stops advancing is one of its two stall signals, §15.2). One pipe still keeps frames in order; the watchdog reads `seq`, it does not reorder anything.
 
 ## 14. Amendments air-n13, air-n15, air-d28: the Context tree's live refresh and the Plan pane's empty state (Plan `toast-fix`)
 
@@ -2106,3 +2115,40 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 - The Plan pane's empty state — `PlanView` with `plan === null`, `ManagerView` with `context === null`, and the Plan pane of 6.11's wiring with no Context for the selected session — renders the text `Select a lead to see plans`, and nothing else.
 - `CpdFlowCanvas` renders **only in the Documentation dialog** (`web/src/ui/dialogs/DocsDialog.tsx`, the `flowchart` tab), which the status bar's `Documentation` item opens (`web/src/ui/cockpit/StatusBar.tsx`). It renders in no pane and as no empty state: not in the Plan pane, not in the Manager view.
+
+## 15. One WebSocket transport, the heartbeat and the serve-stream watchdog (Plan `webui-ws`)
+
+Normative. ADR 0015 option B (air-d46) decides the three points below; docs/contract.md §5.5 "The WebUI transport and the serve-stream watchdog" and web/ELECTRON.md "WebSocket transport" carry the same statements. Where a statement of §4, 6.3, 6.6 or 13 is marked "Amended by 15.x", section 15 wins and the older statement is void.
+
+### 15.1 The endpoint, the Origin check and the client transport (air-d46)
+
+- **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
+- **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
+- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent or `null` (the desktop renderer runs from `file://` in production) or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it.
+- **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
+
+### 15.2 The heartbeat and the stall watchdog (air-d46)
+
+- **The server's protocol ping.** The server protocol-pings every socket every `WS_PING_MS` (RFC 6455 §5.5.2/§5.5.3) and terminates a socket that has not ponged within `WS_PONG_TIMEOUT_MS` of that ping. The terminate surfaces as `close` → `onStatus("closed")`, so a stalled transport is seen loud, never silent. A stalled transport means the socket; the pipe is watched by the watchdog below.
+- **The client's wire ping.** The client sends a wire `ping` (4.1, amended by 15) every `WS_CLIENT_PING_MS` and requires the server's wire `pong` (4.2, amended by 15) within `WS_CLIENT_PONG_TIMEOUT_MS`; a `pong` that misses the deadline closes the socket from the client side, so a hung server is seen too. The client pings on the wire because a browser `WebSocket` cannot send protocol ping frames. The hub answers each `ping` with a `pong` at once (6.6, amended by 15.1), with no cockpit or session involvement; `pong` carries no state and the reducer changes nothing on it.
+- **The stall watchdog** (in `web/src/server/cockpit/`, on the stream boundary 13.1 owns). A serve child that stays alive but stops emitting (the air-n13/n14/n15 freeze) is detected here, and the watchdog runs **whatever `ready()` says** (13.2): while the stream is ready, the safety tick skips the pane refresh (6.3 rule 6, 13.6) and the `events follow` fallback early-returns (13.6) — that gate is exactly what froze the panes. Because the stream is silent while the cockpit is idle, a bare idle timer would fire on healthy children, so the watchdog elicits frames: every `STREAM_PROBE_MS` while the stream is connected it writes a `refresh` request on the serve child's stdin (13.1; the child answers it at once, 13.8/§11a) and arms `STREAM_PROBE_TIMEOUT_MS`; any frame of any `t` inside the window answers the probe. A stall is declared when either signal fires: the **frame deadline** — the window closes with no frame at all; or the **`seq` non-advance** — the answering `snapshot`'s `seq` is not greater than the last `seq` seen from this serve process (every snapshot advances `seq`, §11a). A `hello` of the same child — the in-place re-exec of 13.9 — starts a new generation and resets the watchdog's `seq` baseline, so snapshot 1 of the re-exec is fresh, never read as a non-advance.
+- **The stall's reaction.** On a stall the stream reports it loud once — one error on the stream's error path (13.8/13.9's error update), so the renderer gets `cockpit.error` and the cockpit error toast shows it — and **requests a resync**: the service reloads the panes by spawn (the fallback refresh of 6.3 rule 3), whatever `ready()` said. The serve child is then **restarted if it is still silent**: if the child still emits nothing, it is killed and relaunched with the restart backoff of 13.7, whose `hello` re-arms the watchdog. Probing stops while the stall is handled and resumes with the next child.
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `WS_PING_MS` | 30 s | the interval of the server's WS heartbeat protocol ping |
+| `WS_PONG_TIMEOUT_MS` | 10 s | how long after a ping the server waits for the pong before it terminates the socket |
+| `WS_CLIENT_PING_MS` | 30 s | the interval of the client's wire `ping` |
+| `WS_CLIENT_PONG_TIMEOUT_MS` | 10 s | how long after a wire `ping` the client waits for the `pong` before it closes the socket |
+| `STREAM_PROBE_MS` | 30 s | the interval of the watchdog's `refresh` probe on the serve stream; the safety tick's cadence (6.3) |
+| `STREAM_PROBE_TIMEOUT_MS` | 10 s | how long after a probe the watchdog waits for any frame before it reports the stall |
+
+### 15.3 The lower-cursor toast (air-d44)
+
+- In the cockpit service's `apply` (6.3 rule 11, amended by 15.3), a pane update the guard would drop — a lower cursor on `inbox` or `plan`, the monotonic guard pro-d426 kept as 14.1 leaves it — is **not dropped silently**: the drop emits one `{kind:"error"}` update, so the store's `cockpit.error` is set and the cockpit error toast shows it (the toast surface of 6.11/DESIGN-panes 4.8; the report target is `routeErrorTarget`'s, 7). The pane keeps its held rows, and the next snapshot that carries an advancing cursor reconciles it.
+- **The pane refresh contract is unchanged.** The cursor guard (6.3 rule 11 as 14.1 amends it) and the safety refresh (6.3 rule 6) keep the shape Plan `toast-fix`'s `webui-tree` change gives them, which lands separately: this section adds the toast on the drop, nothing else — no new pane source, no new refresh path, no tree-guard change.
+
+### 15.4 Tests and limits
+
+- Tests run without a real process, socket, timer or `cpd` (A6): the server socket and the client `WebSocket` are injected fakes driven by `emit*` helpers, the heartbeat and the watchdog run on the injected `Scheduler`, and no test opens a real port.
+- Limits, stated plainly: the browser's automatic pong answering is the platform's, not the code's (unverified in a real browser, O27 of this Plan); the constants above are the code's named constants, not configuration.
