@@ -52,6 +52,7 @@ export function setupNativeShell(deps: NativeShellDeps): NativeShell {
       { label: "Open cockpit", click: () => actions.openCockpit() },
       { label: "Switch to TUI", click: () => actions.setMode("tui") },
       { label: "Switch to WebUI", click: () => actions.setMode("webui") },
+      { label: "Switch to WebUI Preview", click: () => actions.setMode("webui-preview") },
       ...(update ? [update] : []),
       { type: "separator" },
       { label: "Quit cpd", click: () => actions.quit() },

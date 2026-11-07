@@ -183,6 +183,8 @@ Rules and decisions for a Lead are written to the Context as records, not sent a
 
 A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.
 
+A message from the User itself arrives as `Message from the User (HH:MM ZZZ): <text>` and starts no turn, the same way. Its text is prefixed with the **surface and view tag**: `[via <origin> · view: <view>] `, for example `[via TUI · view: WebUI]`. `<origin>` is the surface the message was sent from: `TUI` (typed interactively into pi) or `WebUI` (the cpd desktop's WebUI Composer). `<view>` is the cpd desktop view showing when it was sent: `TUI`, `WebUI`, `WebUI Preview`, or `unknown` — `unknown` when the marker file `$CPD_HOME/run/ui-view.json` is missing, is not valid JSON, or its `pid` is not a live process. A message that carries an image and no text is valid and is delivered: it means the User asks you to look at the image and find the problem, so treat it as a likely bug report or evidence.
+
 ## 5. The host Manager
 
 The Context `host` (id immutable: `"host"`) is created by dotfiles' `scripts/cpd-install.sh` when it is absent. It is not a product Manager; it keeps the machine healthy. Its first and only job so far is the skipped cpd install (contract §3.7 E6).
