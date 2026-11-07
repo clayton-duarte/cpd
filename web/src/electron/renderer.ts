@@ -148,13 +148,14 @@ async function boot(): Promise<void> {
   };
 
   const selectTab = (tabId: string): void => {
+    const created = panes.has(tabId);
     activeId = tabId;
     const tab = tabs.find((t) => t.id === tabId);
     const entry = ensurePane(tabId);
-    // A failed or exited tab restarts on click; nothing reconnects on its own.
-    if (tab && (tab.status === "failed" || tab.status === "exited")) {
-      void entry.host.start();
-    }
+    // A tab's pty is created on its first selection; a failed or exited tab restarts on click and
+    // nothing reconnects on its own. A tab that already has a session is never restarted here.
+    const restart = tab?.status === "failed" || tab?.status === "exited";
+    if (!created || restart) void entry.host.start().catch((error: unknown) => console.error(error));
     applyView();
   };
 
@@ -165,19 +166,9 @@ async function boot(): Promise<void> {
     mode = next;
     applyView();
   });
-  bridge.onTabStatus?.((payload) => {
-    const tab = tabs.find((t) => t.id === payload.tabId);
-    if (!tab) return;
-    tab.status = payload.status;
-    tab.code = payload.code;
-    renderBar();
-  });
 
   await document.fonts?.ready;
-  const local = ensurePane(LOCAL_TAB_ID);
-  applyView();
-  await local.host.start();
-  renderBar();
+  selectTab(LOCAL_TAB_ID);
 }
 
 boot().catch((error: unknown) => console.error(error));
