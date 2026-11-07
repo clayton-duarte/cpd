@@ -1404,6 +1404,10 @@ fn tail_of(log: &Path, offset: u64) -> String {
 mod distill_verify_tests;
 
 #[cfg(test)]
+#[path = "distill_retry_tests.rs"]
+mod distill_retry_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::context::{By, Draft};
