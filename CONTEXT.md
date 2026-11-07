@@ -327,6 +327,10 @@ _Avoid_: notification, alert, task (as a word for an item)
 The Electron app in web/, the cockpit's desktop client (TUI and WebUI views); the name 'cpd app' is reserved for a possible future phone app.
 _Avoid_: cpd app, Electron app
 
+**Tab** (entity, air-d33):
+A clickable terminal surface in cpd desktop: the local tab, or one remote tab per ssh host (a `Host` block of `~/.ssh/config` with an explicit `HostName`). The local tab runs `cpd tui --attach`; a remote tab runs `ssh -t <alias> cpd tui --attach`. The tab bar shows the local tab plus every remote tab in every view mode. Not a **Session** and not a tmux pane.
+_Avoid_: pane, window, session
+
 **Cockpit** (entity, pro-d145):
 The User's interface: one tmux window with global side bars and a centre bound to one Plan (the plan view above, the Lead's chat below). Its three columns are the three stages, read as past, present and future: Context, Plan and the third column (Dispatch; its title in the code still differs until the rename lands). tmux hosts the panes, ratatui draws the views.
 _Avoid_: dashboard, TUI session
