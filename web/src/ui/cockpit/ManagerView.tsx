@@ -9,7 +9,6 @@ import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Empty, EmptyHeader, EmptyTitle } from "../components/empty.tsx";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "../components/hover-card.tsx";
 import { Dot } from "./ContextTree.tsx";
-import { CpdFlowCanvas } from "./FlowCanvas.tsx";
 
 function phaseTone(phase: string): string {
   if (phase === "shaping" || phase === "grounding") {
@@ -223,7 +222,8 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
   const { context, onSelectPlan, onSelectSession } = props;
 
   if (context === null) {
-    return <CpdFlowCanvas />;
+    // 14.2 (air-d28): the empty state is text, not the flowchart; CpdFlowCanvas renders only in the Documentation dialog.
+    return <p data-part="manager-empty" className="grid h-full place-items-center text-muted-foreground">Select a lead to see plans</p>;
   }
 
   const plans = livePlans(context);
