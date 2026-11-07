@@ -96,6 +96,12 @@ it("dropping three images sends one submit with three images", async () => {
   expect(connection.submits[0]!.images).toHaveLength(3);
 });
 
+it("dropping an image into the composer focuses the composer", async () => {
+  const { container } = setup();
+  await dropOn(textarea(container), [png("a.png")]);
+  expect(document.activeElement).toBe(textarea(container));
+});
+
 it("dropping one image sends it once in the submit", async () => {
   const { connection, container } = setup();
   await dropOn(textarea(container), [png("a.png")]);
