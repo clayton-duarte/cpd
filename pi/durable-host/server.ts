@@ -24,7 +24,7 @@ export type ServerDeps = {
   piDurable: string;
   epoch: string;
   ring: Ring;
-  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[] }): Promise<{ submissionId: number; status: string }>;
+  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[]; client?: string }): Promise<{ submissionId: number; status: string }>;
   /** Contract §6.17: the five conversation commands; each port settles one reply or throws a `ProtocolError`. */
   compact(instructions?: string): Promise<{ task_id: number }>;
   configure(change: { model?: string; thinkingLevel?: string | null }): Promise<{ agent: AgentState }>;
@@ -60,6 +60,8 @@ type State = {
   conn: Connection;
   greeted: boolean;
   id: string;
+  /** The `hello` client name: `cpd-web` is the WebUI surface (§15.3), every other client is not. */
+  client: string;
   attached: boolean;
   closed: boolean;
   cancelHello: () => void;
@@ -142,7 +144,7 @@ export function createServer(deps: ServerDeps): Server {
         if (msg.type === "submit") {
           run(st, msg.req, async () => {
             const imgs = msg.images === undefined ? {} : { images: msg.images.map((i) => ({ mimeType: i.mime_type, data: i.data })) };
-            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs });
+            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, client: st.client, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs });
             return { submission_id: r.submissionId, status: r.status };
           });
         } else if (msg.type === "compact") {
@@ -189,7 +191,7 @@ export function createServer(deps: ServerDeps): Server {
 
   return {
     connect(conn) {
-      const st: State = { conn, greeted: false, id: "", attached: false, closed: false, cancelHello: () => {} };
+      const st: State = { conn, greeted: false, id: "", client: "", attached: false, closed: false, cancelHello: () => {} };
       if (down) {
         fail(st, "shutting_down", "host is shutting down");
         drop(st);
@@ -228,6 +230,7 @@ export function createServer(deps: ServerDeps): Server {
               return;
             }
             st.greeted = true;
+            st.client = msg.client;
             st.id = deps.clientId();
             st.cancelHello();
             send(st, {
