@@ -323,6 +323,10 @@ _Avoid_: notifications, alerts, to-do list
 One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User (labelled `review overdue` when its Slack post is 24 hours old and unreviewed; the User's RePost action sends the reminder), a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and closed after; the User can snooze or dismiss it. Its kind `deploy` and the policy domain `deploy` keep that name; they are not the Deploying step.
 _Avoid_: notification, alert, task (as a word for an item)
 
+**cpd desktop** (entity, air-d10):
+The Electron app in web/, the cockpit's desktop client (TUI and WebUI views); the name 'cpd app' is reserved for a possible future phone app.
+_Avoid_: cpd app, Electron app
+
 **Cockpit** (entity, pro-d145):
 The User's interface: one tmux window with global side bars and a centre bound to one Plan (the plan view above, the Lead's chat below). Its three columns are the three stages, read as past, present and future: Context, Plan and the third column (Dispatch; its title in the code still differs until the rename lands). tmux hosts the panes, ratatui draws the views.
 _Avoid_: dashboard, TUI session
