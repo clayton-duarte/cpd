@@ -6,6 +6,7 @@ import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
 import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
+import { zoneTime } from "../lib/time.ts";
 import { ev, Fixture, ID, OTHER, planShow, sessionShow, shown, stateCalls, waitFor } from "./fake.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
@@ -468,10 +469,11 @@ test("a webui session-message is prefixed with the tag", async (t) => {
   t.after(() => f.close());
   await started(f, "lead");
   markView(f, "webui");
+  const at = "2026-10-14T21:41:02.114Z"; // `ev`'s default `at`
   f.emit(message(101, null, { data: { from: null, text: "ship it", origin: "webui" } }));
   await waitFor("the message", () => f.pi.delivered().length === 1);
   await f.drain();
-  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11 +05:30): [via WebUI · view: WebUI] ship it");
+  assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): [via WebUI · view: WebUI] ship it`);
 });
 
 test("an engine session-message is untagged", async (t) => {
@@ -486,8 +488,9 @@ test("an engine session-message is untagged", async (t) => {
   );
   await waitFor("both messages", () => f.pi.delivered().length === 2);
   await f.drain();
-  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11 +05:30): ship it", "an engine message is untagged");
-  assert.equal(f.pi.delivered()[1]!.message.content, "Message from the User (03:11 +05:30): [via WebUI · view: WebUI] ship it");
+  const at = "2026-10-14T21:41:02.114Z";
+  assert.equal(f.pi.delivered()[0]!.message.content, `Message from the User (${zoneTime(at)}): ship it`, "an engine message is untagged");
+  assert.equal(f.pi.delivered()[1]!.message.content, `Message from the User (${zoneTime(at)}): [via WebUI · view: WebUI] ship it`);
 });
 
 test("a delivery that starts no turn does not reset the loop guard counters", async (t) => {
