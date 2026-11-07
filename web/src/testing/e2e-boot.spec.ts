@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./e2e-fixtures";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+/** The PATH the runner started with, before any spec prepends its private bin dir. */
+const basePath = process.env["PATH"] ?? "";
 const fakeCpd = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
 
 // A private bin dir with the fake cpd as `cpd`, and a fake login shell that reports the app's
@@ -33,7 +35,7 @@ symlinkSync(fakeCpd, join(staging, "bin", "cpd"));
 test.beforeAll(() => {
   process.env["CPD_BIN"] = fakeCpd;
   process.env["SHELL"] = fakeShell;
-  process.env["PATH"] = `${fakeBin}:${process.env["PATH"] ?? ""}`;
+  process.env["PATH"] = `${fakeBin}:${basePath}`;
   if (!existsSync(join(repoRoot, "dist-electron", "main.js"))) {
     execFileSync("pnpm", ["--filter", "cpd-web-client", "run", "build:electron"], { cwd: repoRoot, stdio: "inherit" });
   }

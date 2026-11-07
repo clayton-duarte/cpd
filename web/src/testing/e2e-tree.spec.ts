@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./e2e-fixtures";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+/** The PATH the runner started with, before any spec prepends its private bin dir. */
+const basePath = process.env["PATH"] ?? "";
 const PLAN_ID = "e2e-new-plan";
 
 const staging = mkdtempSync(join(tmpdir(), "cpd-e2e-tree-"));
@@ -119,7 +121,7 @@ test.beforeAll(() => {
   process.env["CPD_BIN"] = fakeCpd;
   process.env["CPD_E2E_TREE_TRIGGER"] = trigger;
   process.env["SHELL"] = fakeShell;
-  process.env["PATH"] = `${fakeBin}:${process.env["PATH"] ?? ""}`;
+  process.env["PATH"] = `${fakeBin}:${basePath}`;
   if (!existsSync(join(repoRoot, "dist-electron", "main.js"))) {
     execFileSync("pnpm", ["--filter", "cpd-web-client", "run", "build:electron"], { cwd: repoRoot, stdio: "inherit" });
   }
