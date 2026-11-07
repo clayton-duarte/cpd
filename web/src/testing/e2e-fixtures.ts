@@ -15,6 +15,14 @@ const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
 
+/**
+ * Headless Electron on Linux needs these: the bundled `chrome-sandbox` is not SUID (--no-sandbox),
+ * a virtual display has no GPU (--disable-gpu), and the CI runner's /dev/shm may be small
+ * (--disable-dev-shm-usage). macOS keeps its plain launch: the window is hidden and isolated, and
+ * these switches are neither needed nor harmless there.
+ */
+const headlessLinuxArgs = process.platform === "linux" ? ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] : [];
+
 /** The built renderer the suite points the app at; overridable for a scenario that serves its own. */
 const rendererDir = process.env["CPD_E2E_RENDERER_DIR"] ?? join(webRoot, "dist-electron", "renderer");
 
@@ -102,7 +110,7 @@ export const test = base.extend<Fixtures>({
       executablePath: electronExecutable,
       // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and
       // app data) in a temp dir, so the run never touches the User's real profile.
-      args: [`--user-data-dir=${userDataDir}`, "."],
+      args: [...headlessLinuxArgs, `--user-data-dir=${userDataDir}`, "."],
       cwd: webRoot,
       env: {
         ...process.env,
@@ -114,6 +122,11 @@ export const test = base.extend<Fixtures>({
         CPD_ELECTRON_DEV_URL: rendererServer.url,
       },
     });
+    // Surface the app's own stdout/stderr in the Playwright output, so a boot crash or an error the
+    // main process logs is visible instead of a bare firstWindow timeout.
+    const child = app.process();
+    child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[electron] ${chunk.toString()}`));
+    child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(`[electron] ${chunk.toString()}`));
     await use(app);
     await app.close();
   },
