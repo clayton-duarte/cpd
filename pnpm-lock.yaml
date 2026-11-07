@@ -221,6 +221,9 @@ importers:
       node-pty:
         specifier: 1.1.0
         version: 1.1.0
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
     devDependencies:
       '@shadcn/react':
         specifier: 0.3.1

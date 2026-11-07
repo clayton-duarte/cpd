@@ -41,6 +41,7 @@ const DEFAULT_BACKOFF = { baseMs: 500, maxMs: 10_000 };
 // Required fields per server message type: [field, primitive type] (the full shapes are the server's contract).
 const SESSION = ["sessionId", "string"] as const;
 const REQUIRED: Readonly<Record<ServerMessage["type"], readonly (readonly [string, string])[]>> = {
+  "pong": [],
   "cockpit.snapshot": [["tree", "object"], ["inbox", "object"]],
   "cockpit.patch": [["pane", "string"]],
   "cockpit.error": [["error", "object"]],

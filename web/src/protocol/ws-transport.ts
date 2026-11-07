@@ -28,6 +28,11 @@ export interface WebSocketLike {
 /** Opens one socket for a URL; injected so tests fake it. */
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
+/** The real browser WebSocket factory; the DOM `WebSocket` satisfies the injected slice. */
+export function browserWebSocket(url: string): WebSocketLike {
+  return new WebSocket(url) as unknown as WebSocketLike;
+}
+
 export interface WebSocketTransportDeps {
   /** The endpoint to connect to (`ws://127.0.0.1:<port>/cpd-ws` or same-origin `/cpd-ws`). */
   url: string;

@@ -118,8 +118,7 @@ function harness(mode: UiMode = "tui") {
         ptyExit = cb;
         return () => log.push("off onPtyExit");
       },
-      sendWeb: () => {},
-      onWebMessage: () => () => {},
+      webSocketUrl: "ws://127.0.0.1:1234/cpd-ws",
       onMode: (cb) => {
         log.push("onMode");
         modeCb = cb;
