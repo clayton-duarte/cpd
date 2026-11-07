@@ -223,6 +223,32 @@ fn a_passed_required_check_or_an_empty_required_list_queues_the_merge() {
 }
 
 #[test]
+fn zz_diagnostic_readiness_vs_detail() {
+    let mut seen = Vec::new();
+    for (verdict, nodes) in [
+        ("pending", json!([])),
+        ("pending", json!([gate("IN_PROGRESS", json!(null))])),
+        ("pending", json!([gate("COMPLETED", json!("SUCCESS"))])),
+        ("failed", json!([gate("COMPLETED", json!("SUCCESS"))])),
+        ("passed", json!([])),
+    ] {
+        let fx = Fx::with_ports();
+        fx.env.repo_policy("acme", "api", REQUIRED);
+        cached(&fx.env, "open", "clean", (true, false, false));
+        fx.env.sql(&format!(
+            "UPDATE pull_requests SET checks = '{verdict}' WHERE repo = 'acme/api' AND number = 7"
+        ));
+        rollup(&fx, nodes.clone());
+        let run = fx.cpd(&["pr", "merge", REF]);
+        seen.push(format!(
+            "verdict={verdict} nodes={nodes} exit={} stdout={}",
+            run.exit, run.stdout
+        ));
+    }
+    panic!("DIAGNOSTIC\n{}", seen.join("\n"));
+}
+
+#[test]
 fn a_bad_argument_is_usage_and_nothing_is_queued() {
     for bad in [
         "foo",
