@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { connect } from "node:net";
 import { existsSync, statSync, promises as fsp, realpathSync, watch as fsWatch } from "node:fs";
-import type { Plugin, ViteDevServer, WebSocketClient } from "vite";
+import type { Plugin, ViteDevServer } from "vite";
 import type { Runner } from "../protocol/domain.ts";
 import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
@@ -23,6 +23,7 @@ import { createDurableBackend } from "./durable/backend.ts";
 import { createCompletionClassifier, type CompletionClassifier } from "./completion-classify.ts";
 import { createCompletionService } from "./completion-service.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
+import { createUpgradeFactory, createWsServer, WS_PATH, type WebSocketUpgradeServer } from "./ws.ts";
 import { createRegistry, type Registry } from "./hub/registry.ts";
 import { createPiBackend } from "./pi/backend.ts";
 import { createLiveSource, type LiveConnection } from "./pi/live.ts";
@@ -353,37 +354,30 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
     name: "cpd-web",
     apply: "serve",
     async configureServer(server: ViteDevServer) {
-      const services = createServices(options?.boundaries ?? realBoundaries(process.env));
-      const connections = new Map<WebSocketClient, HubConnection>();
+      const boundaries = options?.boundaries ?? realBoundaries(process.env);
+      const services = createServices(boundaries);
       let closed = false;
       const started = services.cockpit.start().catch((e: unknown) => {
         server.config.logger.error(`cpd-web: cockpit failed to start: ${e instanceof Error ? e.message : String(e)}`);
       });
+      // The dev server hosts the one WebSocket endpoint on its own httpServer (web/CONTRACT.md §15.1),
+      // so Vite's HMR socket is untouched.
+      const endpoint = server.httpServer === null
+        ? null
+        : createWsServer({
+            newConnection: (send) => services.newConnection(send),
+            server: createUpgradeFactory(server.httpServer as unknown as WebSocketUpgradeServer),
+            scheduler: boundaries.scheduler,
+            started,
+            onError: (e: unknown) => server.config.logger.error(`cpd-web: ${e instanceof Error ? e.message : String(e)}`),
+            path: WS_PATH,
+          });
       closeAll = async () => {
         if (closed) return;
         closed = true;
+        endpoint?.dispose();
         services.cockpit.stop();
-        const all = [...connections.values()];
-        connections.clear();
-        await Promise.all(all.map((c) => c.close()));
       };
-      server.ws.on("cpd:c2s", (data: unknown, client: WebSocketClient) => {
-        if (closed) return;
-        let hub = connections.get(client);
-        if (hub === undefined) {
-          const created = services.newConnection((m) => client.send("cpd:s2c", m));
-          hub = created;
-          connections.set(client, created);
-          client.socket.on("close", () => {
-            connections.delete(client);
-            void created.close();
-          });
-        }
-        const target = hub;
-        void started
-          .then(() => target.handle(data))
-          .catch((e: unknown) => server.config.logger.error(`cpd-web: ${e instanceof Error ? e.message : String(e)}`));
-      });
       server.httpServer?.once("close", () => { void closeAll?.(); });
       await started;
     },

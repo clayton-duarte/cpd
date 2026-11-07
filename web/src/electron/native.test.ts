@@ -87,7 +87,7 @@ test("setupNativeShell sets the Dock icon on darwin", () => {
   expect(h.icons).toEqual(["/a/icon.png"]);
 });
 
-test("setupNativeShell creates a template tray with the cpd menu on darwin", () => {
+test("tray offers the three client switches and Quit", () => {
   const h = harness("darwin");
   setupNativeShell(h.deps);
   expect(h.trayCreatedWith).toHaveLength(1);
@@ -96,7 +96,14 @@ test("setupNativeShell creates a template tray with the cpd menu on darwin", () 
   expect(h.calls).toContain("tooltip:cpd");
   expect(h.menus).toHaveLength(1);
   const items = h.menus[0]!;
-  expect(items.map((i) => i.type === "separator" ? "-" : i.label)).toEqual(["Open cockpit", "Switch to TUI", "Switch to WebUI", "-", "Quit cpd"]);
+  expect(items.map((i) => i.type === "separator" ? "-" : i.label)).toEqual([
+    "Open cockpit",
+    "Switch to TUI",
+    "Switch to WebUI",
+    "Switch to WebUI Preview",
+    "-",
+    "Quit cpd",
+  ]);
 });
 
 test("setupNativeShell touches no dock or tray off darwin", () => {
@@ -172,9 +179,10 @@ test("tray menu items call the actions", () => {
   click("Open cockpit");
   click("Switch to TUI");
   click("Switch to WebUI");
+  click("Switch to WebUI Preview");
   click("Quit cpd");
   expect(h.calls.filter((c) => c === "openCockpit" || c === "quit")).toEqual(["openCockpit", "quit"]);
-  expect(h.modes).toEqual(["tui", "webui"]);
+  expect(h.modes).toEqual(["tui", "webui", "webui-preview"]);
 });
 
 test("dispose destroys the tray", () => {

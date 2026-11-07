@@ -2,7 +2,11 @@
 //! [`SystemHostSocket`] is the real one, one `UnixStream::connect`; [`FakeHostSocket`] is scripted in tests.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(feature = "fakes")]
+use std::path::PathBuf;
+#[cfg(feature = "fakes")]
 use std::sync::Mutex;
 
 /// What a probe of the host socket found.

@@ -519,8 +519,9 @@ pub fn explore_dir(home: &CpdHome, plan: &PlanId) -> PathBuf {
     home.run_dir().join(plan.as_str()).join("explore")
 }
 
-/// Ready for an explore Job (R3): `queued`, in a Plan not archived in `grounding`, `plan`, `dispatch` or `deploy`, every
-/// Dependency `merged`; else `job_not_ready`.
+/// Ready for an explore Job (R3): `queued`, in a Plan not archived in `shaping`, `grounding`, `plan`, `dispatch` or
+/// `deploy`, every Dependency `merged`; else `job_not_ready`. A Lead-less `shaping` Plan's explore Jobs are Ready like a
+/// Lead Plan's (air-d19, air-d22).
 fn require_ready_explore(
     conn: &Connection,
     all: &[Job],
@@ -541,7 +542,12 @@ fn require_ready_explore(
     )?;
     let why = if job.status != "queued" {
         format!("it is {}, not queued", job.status)
-    } else if archived || !matches!(phase, "grounding" | "plan" | "dispatch" | "deploy") {
+    } else if archived
+        || !matches!(
+            phase,
+            "shaping" | "grounding" | "plan" | "dispatch" | "deploy"
+        )
+    {
         format!(
             "Plan {plan} is in phase {phase}{}",
             if archived { " and archived" } else { "" }

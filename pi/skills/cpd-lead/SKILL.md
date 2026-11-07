@@ -85,6 +85,8 @@ cpd session send <context> "<text>" --unblocks "<reason>"
 
 The Manager is `<context>`, your Plan's Context (in `cpd plan show`). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
 
+A message from the User itself arrives as `Message from the User (HH:MM ZZZ): <text>` (Event `session-message`, `data.from` null) and starts no turn, the same way. Its text is prefixed with the **surface and view tag**: `[via <origin> · view: <view>] `, for example `[via TUI · view: WebUI]`. `<origin>` is the surface the message was sent from: `TUI` (typed interactively into pi) or `WebUI` (the cpd desktop's WebUI Composer). `<view>` is the cpd desktop view showing when it was sent: `TUI`, `WebUI`, `WebUI Preview`, or `unknown` — `unknown` when the marker file `$CPD_HOME/run/ui-view.json` is missing, is not valid JSON, or its `pid` is not a live process. A message that carries an image and no text is valid and is delivered: it means the User asks you to look at the image and find the problem, so treat it as a likely bug report or evidence.
+
 ### Communication rules
 
 Three ways to communicate are distinct:
@@ -141,15 +143,17 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Grilling](#grilling); they e
 
 #### Exploring
 
-An explore Job has a Worker answer one question for you, so the material never enters your session. A **scout** reads only this machine (a checkout, a log, a code survey), Tier `H3`; a **research** Job may also reach outside it (upstream docs, a registry, a web page), Tier `S1` or higher. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
+An explore Job has a Worker answer one question, so the material stays out of it. A **scout** reads only this machine, Tier `H3`; a **research** Job may also reach outside it, Tier `S1` or higher. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
 
 ```
 cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --kind scout|research
 ```
 
 - **Queued at once.** An explore Job is never a draft: no Plan review, no lock, no approval.
-- **The summary arrives, the file does not.** The `job-merged` Event of an explore Job carries its summary and the artefact's path. Read the summary. That path is for the Worker: the adapter refuses your reads of it. To use the findings in a Spec, cite the path there. When the summary is not enough, add another explore Job.
+- **The summary arrives, the file does not.** The `job-merged` Event carries the summary and the artefact's path. Read the summary; the adapter refuses your reads of the path. Cite the path in the Spec that needs it; when the summary is not enough, add another explore Job.
 - **Every other rule** (Spec fields, Tiers, refusals) is in [Spec files](references/spec-files.md#explore-jobs).
+
+A Manager explores before a Lead exists through its own Lead-less Plan; its brief cites that path, which you carry into the Specs that need it.
 
 Grounding is done when every touched repo's latest origin/main is fetched (`git fetch origin`), every file path and public interface you will name in a Spec has an explore answer, and every question that spans several files has an explore Job answer.
 
@@ -310,7 +314,7 @@ The engine polls every open pull request of the User every 5 s. You may run `cpd
 
 A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan: read its code, tell the User what broke and what you propose.
 
-Engine step E20 sends a session-message (with no sender, so it appears as `Message from the User (HH:MM): ...`, but it is cpd's engine) with the text `Drafts of Plan <P> are parked: <k1>, <k2> (no pending Plan review). Resolve each now: edit it to a full Spec and Tier and call cpd_plan_review; or cancel it and add it queued when it only carries out a recorded decision; or cancel it (cpd job cancel <k> --reason "<why>"). Nothing runs it otherwise.` A draft of the Plan has neither a pending Plan review nor an unfinished need. Resolve each listed draft now, in one of the legal forms (Rules, "Register planned work at once"), and do not wait for the User. After your next finished turn with a draft still parked, the User is asked in the Inbox (kind drafts-parked).
+Engine step E20 sends a session-message (with no sender, so it appears as `Message from the User (HH:MM): ...`, but it is cpd's engine — the User's own messages carry the surface and view tag, [Your Manager](#your-manager)) with the text `Drafts of Plan <P> are parked: <k1>, <k2> (no pending Plan review). Resolve each now: edit it to a full Spec and Tier and call cpd_plan_review; or cancel it and add it queued when it only carries out a recorded decision; or cancel it (cpd job cancel <k> --reason "<why>"). Nothing runs it otherwise.` A draft of the Plan has neither a pending Plan review nor an unfinished need. Resolve each listed draft now, in one of the legal forms (Rules, "Register planned work at once"), and do not wait for the User. After your next finished turn with a draft still parked, the User is asked in the Inbox (kind drafts-parked).
 
 #### Starting a later batch
 

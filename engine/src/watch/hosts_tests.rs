@@ -5,14 +5,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cpd_core::clock::ManualClock;
+use cpd_core::clock::{Clock, ManualClock, timestamp};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::runner::FakeRunner;
 use cpd_core::host::spawn::{FakeSpawn, Pid, Signal, Spawn};
 use cpd_core::ids::SessionId;
 use cpd_core::ports::Ports;
 
-use super::testkit::{Fx, ago_seconds};
+use super::testkit::Fx;
 use super::{archive_leads, hosts, sleep};
 
 /// An engine on a temporary home whose fakes are a `ManualClock`, a `FakeSpawn` and a `FakeRunner`.
@@ -283,9 +283,10 @@ fn stops_the_host_when_the_session_sleeps_or_is_archived() {
         "an asleep Session is never started"
     );
 
-    // Archive: a durable Lead asleep past the threshold; `archive_leads::run` stops the host it archives.
-    let (mut fx, spawn, _clock) = live_fx();
-    let asleep = ago_seconds(2 * 24 * 3600);
+    // Archive: a durable Lead asleep past the threshold; `archive_leads::run` stops the host it archives. E14 reads the
+    // engine's clock (`clock`), so the fixture is dated against it as E13's times are.
+    let (mut fx, spawn, clock) = live_fx();
+    let asleep = timestamp(clock.utc() - time::Duration::seconds(2 * 24 * 3600));
     fx.fixture(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, asleep_at, runner)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', '{old}', '{old}', '{asleep}', 'durable');

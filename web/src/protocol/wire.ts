@@ -4,6 +4,7 @@ import { parseCockpitAction, type ActionOutput, type CockpitAction, type Context
 
 
 export type ClientMessage =
+  | { type: "ping" } // the client's wire heartbeat (15.2); the server answers { type: "pong" } at once, with no cockpit or session involvement
   | { type: "cockpit.subscribe" } // idempotent; the server answers with cockpit.snapshot (all panes)
   | { type: "cockpit.selectPlan"; planId: string | null } // choose the Plan shown in the Plan pane; null clears it
   | { type: "cockpit.action"; actionId: string; action: CockpitAction } // actionId: client correlation id, non-empty
@@ -33,6 +34,7 @@ export type CockpitPaneData =
 export interface SessionMeta { ref: SessionRef; footer: FooterStats }
 
 export type ServerMessage =
+  | { type: "pong" } // the answer to the client's wire `ping` (15.2); no cockpit or session state
   // cockpit
   | { type: "cockpit.snapshot"; tree: ContextTreeModel; plan: PlanViewModel | null; inbox: InboxModel; status?: StatusModel; costs?: CostModel } // all panes; sent on subscribe
   | ({ type: "cockpit.patch" } & CockpitPaneData) // replaces ONE pane (an invalidation refresh); "patch" = per-pane replacement
@@ -195,6 +197,7 @@ export function parseClientMessage(raw: unknown): ClientMessage {
   const o = raw;
   const sessionId = (): string => nonEmpty(o, "sessionId");
   switch (o["type"]) {
+    case "ping": return { type: "ping" };
     case "cockpit.subscribe": return { type: "cockpit.subscribe" };
     case "cockpit.selectPlan": {
       const planId = o["planId"];
