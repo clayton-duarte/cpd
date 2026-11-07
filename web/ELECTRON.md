@@ -579,6 +579,8 @@ Run each check against the built app (`pnpm --filter cpd-web-client run electron
 
 ## Automated checks
 
+The Playwright Electron e2e suite under `web/src/testing/` automates part of the verification checklist above (placeholder — skeleton commit for job e2e-docs).
+
 Run these from the repository root:
 
 ```sh
