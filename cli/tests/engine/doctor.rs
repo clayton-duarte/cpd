@@ -438,7 +438,7 @@ fn tiers_fail_for_a_lead_tier_its_model_does_not_support() {
 }
 
 /// A role default that is no rung of the catalog fails the check and names its key (it is no error at config parse).
-/// The healthy catalog: every model has levels 0 to 4, but H is `p/m-low` (0 to 2) and G is `p/m-aux` (0 to 4, so `GX` is no rung).
+/// The healthy catalog: every model has levels 0 to 4, but H is `p/m-low` (0 to 2) and G is `p/m-aux` (0 to 4; `GX` is valid on any model).
 #[test]
 fn tiers_fail_for_a_default_that_is_not_a_catalog_rung() {
     // Every default is a rung: G0 (G has levels), H2, O2, O4.
@@ -453,14 +453,22 @@ fn tiers_fail_for_a_default_that_is_not_a_catalog_rung() {
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "tiers", "error", "worker_tier");
-    // `context_distill_tier` GX (its default) is no rung when G has levels.
-    write_config(&fx, "worker_tier = \"H2\"");
-    let run = doctor(&fx);
-    assert_doctor_failed(&run);
-    assert_fails(&run, "tiers", "error", "context_distill_tier");
     // A lead_tier outside the catalog is still `tier_invalid`, checked first.
     write_config(&fx, "lead_tier = \"H4\"");
     assert_fails(&doctor(&fx), "tiers", "error", "tier_invalid");
+}
+
+/// `GX` is valid on every model (contract §9, R2): the default `context_distill_tier` passes though G is `p/m-aux`, which
+/// offers levels 0 to 4.
+#[test]
+fn doctor_does_not_report_context_distill_tier_x_on_a_model_with_efforts() {
+    let fx = healthy();
+    write_config(
+        &fx,
+        "context_distill_tier = \"GX\"\nworker_tier = \"H2\"\nlead_tier = \"S4\"",
+    );
+    let run = doctor(&fx);
+    assert_passes(&run, "tiers");
 }
 
 #[test]

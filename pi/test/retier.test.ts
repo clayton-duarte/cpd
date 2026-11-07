@@ -41,6 +41,18 @@ test("at idle after a retier the adapter sets the tier's model and thinking leve
   assert.equal(f.pi.thinkingSet.length, 1);
 });
 
+test("at idle after a retier to an X tier the adapter sets the model and no thinking level", async (t) => {
+  const f = await started(t);
+  f.respond("session-show", shown({ tier: "OX", model: "p/opus", thinking: null })); // X sends pi no effort: the row has no thinking level (contract §9)
+  f.emit(retiered(200));
+  await waitFor("switched", () => switchCalls(f, "switched").length > 0, WAIT);
+  await f.drain();
+  assert.deepEqual(f.pi.modelsSet, [{ provider: "p", id: "opus" }]);
+  assert.deepEqual(f.pi.thinkingSet, [], "no thinking level is set for X");
+  assert.deepEqual(adapterErrors(f), []);
+  assert.deepEqual(switchCalls(f, "switch-failed"), []);
+});
+
 test("not while working: the switch waits for the idle and then happens once", async (t) => {
   const f = await started(t);
   await f.pi.busy();

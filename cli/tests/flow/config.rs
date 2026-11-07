@@ -1929,6 +1929,30 @@ fn config_tiers_set_writes_the_changed_keys_atomically_and_reports_them() {
     assert_eq!(names, ["config.toml"], "no temporary file is left");
 }
 
+/// `GX` is valid on every model (contract §9, R2): `G` here is `p/m-g`, which offers efforts 0 to 4, and `--auxiliar GX`
+/// still succeeds.
+#[test]
+fn config_tiers_set_accepts_x_on_a_model_with_efforts() {
+    let fx = tiers_set_fx();
+    let out = fx
+        .cpd(&[
+            "config",
+            "tiers",
+            "set",
+            "--auxiliar",
+            "GX",
+            "--worker",
+            "H2",
+            "--lead",
+            "S3",
+            "--manager",
+            "O4",
+        ])
+        .ok();
+    assert_eq!(out["config"]["context_distill_tier"], "GX", "{out}");
+    assert_eq!(out["config"]["worker_tier"], "H2", "{out}");
+}
+
 /// The four must strictly ascend: `lead_tier` `H1` is below `worker_tier` `H2`.
 #[test]
 fn config_tiers_set_refuses_a_non_ascending_set_and_writes_nothing() {

@@ -67,45 +67,139 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_accepts_x_only_without_levels_and_a_digit_only_when_offered() {
+    fn the_catalog_accepts_x_on_every_model_and_a_digit_only_when_offered() {
         let c = gappy();
-        for ok in ["H1", "H3", "S0", "S1", "S3", "OX", "GX"] {
+        for ok in ["H1", "H3", "S0", "S1", "S3", "HX", "SX", "OX", "GX"] {
             assert!(c.is_valid(t(ok)), "{ok}");
             c.check(t(ok)).unwrap();
         }
-        for bad in [
-            "HX", "SX", "H0", "H2", "H4", "S2", "S4", "O0", "O3", "G0", "G2",
-        ] {
+        for bad in ["H0", "H2", "H4", "S2", "S4", "O0", "O3", "G0", "G2"] {
             assert!(!c.is_valid(t(bad)), "{bad}");
             let err = c.check(t(bad)).unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierInvalid, "{bad}");
         }
-        // A model that offers 0,2,3,4 (a gap) takes those digits and no X.
+        // A model that offers 0,2,3,4 (a gap) takes those digits and X.
         let mut gap = gappy();
         gap.o = model("opus", &[0, 2, 3, 4]);
-        for ok in ["O0", "O2", "O3", "O4"] {
+        for ok in ["O0", "O2", "O3", "O4", "OX"] {
             assert!(gap.is_valid(t(ok)), "{ok}");
         }
-        for bad in ["O1", "OX"] {
-            assert!(!gap.is_valid(t(bad)), "{bad}");
+        assert!(!gap.is_valid(t("O1")));
+    }
+
+    /// R2: `<L>X` is valid on EVERY model, also one that offers efforts; a digit only where offered; effort 5 and a
+    /// syntax error stay `tier_invalid`.
+    #[test]
+    fn tier_x_is_valid_on_a_model_with_efforts() {
+        let mut c = gappy();
+        c.g = model("gemini", &[1, 3]);
+        for letter in ["G", "H", "S", "O"] {
+            let x = t(&format!("{letter}X"));
+            assert!(c.is_valid(x), "{x}");
+            c.check(x).unwrap();
+        }
+        for ok in ["G1", "G3"] {
+            assert!(c.is_valid(t(ok)), "{ok}");
+        }
+        for bad in ["G0", "G2", "G4"] {
+            assert_eq!(
+                c.check(t(bad)).unwrap_err().code(),
+                ErrorCode::TierInvalid,
+                "{bad}"
+            );
+        }
+        for bad in ["G5", "X5", "GX5", "5X"] {
+            assert_eq!(
+                Tier::parse(bad).unwrap_err().code(),
+                ErrorCode::TierInvalid,
+                "{bad}"
+            );
         }
     }
 
+    /// R1: within a letter 0 < X < 1 < 2 < 3 < 4, and a letter ranks above every effort of the one before.
     #[test]
-    fn model_arg_of_an_x_tier_uses_the_off_level() {
+    fn tier_x_orders_between_effort_0_and_1() {
+        for letter in ["G", "H", "S", "O"] {
+            let (e0, x, e1) = (
+                t(&format!("{letter}0")),
+                t(&format!("{letter}X")),
+                t(&format!("{letter}1")),
+            );
+            assert!(e0 < x, "{e0} < {x}");
+            assert!(x < e1, "{x} < {e1}");
+            assert!(x < t(&format!("{letter}4")));
+        }
+        assert!(t("G4") < t("HX"), "X sits below the next letter");
+        assert!(t("H4") < t("SX"));
+        assert!(t("S4") < t("OX"));
+        assert!(t("GX") > t("G0") && t("HX") > t("H0"));
+        let mut tiers: Vec<Tier> = ["G1", "GX", "G0", "H2", "HX", "H0"].map(t).to_vec();
+        tiers.sort();
+        let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
+        assert_eq!(sorted, ["G0", "GX", "G1", "H0", "HX", "H2"]);
+    }
+
+    /// R3: X sends no effort, so pi's model argument is the bare model, on a model with efforts and on one with none;
+    /// a digit gives `model:level`.
+    #[test]
+    fn tier_x_model_arg_has_no_level_suffix() {
         let c = gappy();
-        assert_eq!(c.model_arg(t("OX")).unwrap(), "p/opus:off");
-        assert_eq!(c.model_arg(t("GX")).unwrap(), "p/gemini:off");
+        // A model with no efforts (O, G) and one with efforts (H: 1,3; S: 0,1,3).
+        assert_eq!(c.model_arg(t("OX")).unwrap(), "p/opus");
+        assert_eq!(c.model_arg(t("GX")).unwrap(), "p/gemini");
+        assert_eq!(c.model_arg(t("HX")).unwrap(), "p/haiku");
+        assert_eq!(c.model_arg(t("SX")).unwrap(), "p/sonnet");
+        for x in ["OX", "GX", "HX", "SX"] {
+            assert!(!c.model_arg(t(x)).unwrap().contains(':'), "{x}");
+        }
         assert_eq!(c.model_arg(t("H3")).unwrap(), "p/haiku:high");
+        assert_eq!(c.model_arg(t("H1")).unwrap(), "p/haiku:low");
         assert_eq!(c.model_arg(t("S0")).unwrap(), "p/sonnet:off");
         assert_eq!(
-            c.model_arg(t("HX")).unwrap_err().code(),
+            c.model_arg(t("H0")).unwrap_err().code(),
             ErrorCode::TierInvalid
         );
     }
 
+    /// R4: next never lands on X on a model with efforts: from `<L>X` it goes to the lowest offered effort >= 1, from
+    /// effort 0 too, and leaving a letter lands on the lowest effort >= 1; a model with no efforts keeps X as its rung.
     #[test]
-    fn tiers_order_by_the_ladder_g_h_s_o_then_effort_with_x_lowest() {
+    fn tier_x_next_climbs_to_the_lowest_effort_from_1() {
+        let mut c = gappy();
+        c.g = model("gemini", &[0, 1, 3]);
+        c.h = model("haiku", &[0, 2, 3]);
+        c.s = model("sonnet", &[0, 1, 3]);
+        let all = Range {
+            floor: t("GX"),
+            ceiling: t("OX"),
+        };
+        assert_eq!(c.next_in(all, t("GX")), Some(t("G1")));
+        assert_eq!(c.next_in(all, t("G0")), Some(t("G1")));
+        assert_eq!(
+            c.next_in(all, t("G3")),
+            Some(t("H2")),
+            "leaving G: H's lowest effort >= 1"
+        );
+        assert_eq!(c.next_in(all, t("HX")), Some(t("H2")));
+        assert_eq!(c.next_in(all, t("H3")), Some(t("S1")));
+        assert_eq!(
+            c.next_in(all, t("S3")),
+            Some(t("OX")),
+            "O offers no efforts: X is its rung"
+        );
+        // The whole climb: X only where the model has no efforts.
+        let mut walk = vec![t("GX")];
+        while let Some(next) = c.next_in(all, *walk.last().unwrap()) {
+            walk.push(next);
+            assert!(walk.len() < 20, "the climb ends");
+        }
+        let names: Vec<String> = walk.iter().map(Tier::to_string).collect();
+        assert_eq!(names, ["GX", "G1", "G3", "H2", "H3", "S1", "S3", "OX"]);
+    }
+
+    #[test]
+    fn tiers_order_by_the_ladder_g_h_s_o_then_effort_with_x_between_0_and_1() {
         let mut tiers: Vec<Tier> = [
             "OX", "S3", "G2", "H4", "GX", "O0", "H0", "SX", "G0", "S1", "O4", "HX",
         ]
@@ -116,12 +210,12 @@ mod tests {
         assert_eq!(
             sorted,
             [
-                "GX", "G0", "G2", "HX", "H0", "H4", "SX", "S1", "S3", "OX", "O0", "O4"
+                "G0", "GX", "G2", "H0", "HX", "H4", "S1", "SX", "S3", "O0", "OX", "O4"
             ]
         );
         assert!(t("H4") < t("SX"), "a higher letter beats any effort");
         assert!(t("S4") < t("OX"));
-        assert!(t("GX") < t("G0"), "X is the lowest of its letter");
+        assert!(t("G0") < t("GX"), "X is above effort 0 and below effort 1");
         assert!(t("O3") > t("O2"));
     }
 

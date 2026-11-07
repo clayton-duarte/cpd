@@ -114,6 +114,7 @@ mod spec;
 mod swr_badge;
 mod swr_cmd;
 mod swr_health;
+mod tier_x_pi_args;
 mod worker_runner;
 mod worker_runner_durable;
 mod worker_runner_report;
