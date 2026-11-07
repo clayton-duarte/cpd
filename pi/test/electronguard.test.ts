@@ -36,7 +36,7 @@ test("electronBypass refuses the Electron.app binary path", () => {
   assert.equal(electronBypass(`${p} .`), p);
 });
 
-test("electronBypass passes cpd app, build scripts and electron as a plain argument", () => {
+test("electronBypass passes cpd desktop, build scripts and electron as a plain argument", () => {
   const passes = [
     "echo electron",
     "grep electron f",
@@ -44,20 +44,26 @@ test("electronBypass passes cpd app, build scripts and electron as a plain argum
     "pnpm run build:electron",
     "pnpm --filter cpd-web-client run build:electron",
     "ls node_modules/.bin/electron-builder",
-    "cpd app",
-    "cpd app --status",
+    "cpd desktop",
+    "cpd desktop --status",
     "sh -c 'electron .'",
   ];
   for (const c of passes) assert.equal(electronBypass(c), undefined, c);
   assert.equal(electronBypass("echo electron; electron ."), "electron"); // only the second command is judged
 });
 
-test("the electron reason is one line naming cpd app and its four flags", () => {
+test("the electron reason is one line naming cpd desktop and its four flags", () => {
   assert.equal(
     reasonText("pnpm exec electron"),
-    "φ: agents do not run the electron binary; use cpd app (--preview, --reload, --status, --off) (commands.md §15.28); refused: pnpm exec electron",
+    "φ: agents do not run the electron binary; use cpd desktop (--preview, --reload, --status, --off) (commands.md §15.28); refused: pnpm exec electron",
   );
   assert.ok(!reasonText("electron").includes("\n"));
+});
+
+test("hint names cpd desktop", () => {
+  const hint = reasonText("electron");
+  assert.ok(hint.includes("use cpd desktop"), hint);
+  assert.ok(!hint.includes("use cpd app"), hint);
 });
 
 type Result = { block?: boolean; reason?: string } | undefined;
@@ -75,6 +81,6 @@ test("the adapter blocks a bash electron call of every role", async (t) => {
     const r = await call("electron .");
     assert.equal(r?.block, true, role);
     assert.equal(r?.reason, reasonText("electron"), role);
-    assert.equal(await call("cpd app --status"), undefined, role);
+    assert.equal(await call("cpd desktop --status"), undefined, role);
   }
 });
