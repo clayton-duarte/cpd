@@ -12,7 +12,7 @@ cpd app
 
 `cpd app` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `app_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
 
-These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. Electron downloads its binary lazily on the first launch, so the first run needs network access. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
+These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. The `allowBuilds: electron: false` setting in `pnpm-workspace.yaml` stops the postinstall download of the Electron binary, so worktrees and CI have no binary. When the binary is missing, `cpd install` and `cpd app` run `node web/node_modules/electron/install.js` to download it; if that fails, the install or app step fails before plutil runs. When the binary is present, no extra command runs. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
 
 Prerequisites:
 
@@ -21,6 +21,10 @@ Prerequisites:
 - Maple Mono is installed on the system. It is not bundled; without it the terminal falls back to the generic monospace font.
 
 Why `allowBuilds` in `pnpm-workspace.yaml` sets `electron` and `node-pty` to `false`: frozen installs, typecheck and vitest in worktrees and CI need no compiler and no Electron binary. node-pty is imported only in the Electron main process and is mocked in tests.
+
+## Boot order
+
+The Electron boot sequence ensures the mode is applied only after the window exists. `prepare()` (called by `app.whenReady()`) runs paths, env and native shell setup. When ready, the window is created. Then the mode controller's `init()` applies the persisted UI mode (TUI or WebUI) with menu and window calls. Finally the renderer loads with the result. The mode is applied after the window exists, so no mode apply touches the window before it is created.
 
 ## Module contract
 
