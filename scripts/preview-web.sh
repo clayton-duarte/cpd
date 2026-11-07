@@ -8,6 +8,8 @@
 #   sh scripts/preview-web.sh off               dev server on the primary checkout again, watchdog stopped
 #   sh scripts/preview-web.sh reload [<worktree>]  typecheck, build:electron, then SIGUSR1 to the Electron of the health file
 #   sh scripts/preview-web.sh status            prints '<worktree> <sha>' or 'no web preview'
+#   sh scripts/preview-web.sh serve [<worktree>]   the worktree + deps + Vite steps of `on`, no watchdog, no printed command
+#   sh scripts/preview-web.sh unserve            stops only that dev server (the `web` window)
 #
 # The default worktree is ${CPD_WEB_PREVIEW_WORKTREE:-<repo>/../cpd.preview.web}, created
 # from origin/main on branch preview/web when missing, and never touched when present.
@@ -29,7 +31,7 @@ wd_pid="$dir/watchdog.pid"
 dev_url="http://localhost:5173/electron.html"
 
 usage() {
-  echo "usage: sh $0 on [<worktree>] | off | status | reload [<worktree>]" >&2
+  echo "usage: sh $0 on [<worktree>] | off | status | reload [<worktree>] | serve [<worktree>] | unserve" >&2
   exit 2
 }
 
@@ -146,6 +148,32 @@ off() {
   echo "dev server is back on $repo" >&2
 }
 
+# serve_only [<worktree>]: the worktree + deps + Vite steps of `on`, without the watchdog,
+# the printed Electron command, `web-state` or `@cpd_web_preview`. Idempotent; used by the
+# in-place WebUI Preview client on switching to the preview.
+serve_only() {
+  worktree=${1:-${CPD_WEB_PREVIEW_WORKTREE:-$repo/../cpd.preview.web}}
+  read_config
+  if [ ! -d "$worktree" ]; then
+    git -C "$repo" fetch origin main >&2
+    git -C "$repo" worktree add -B preview/web "$worktree" origin/main >&2
+    pnpm --dir "$worktree" install --frozen-lockfile >&2
+  fi
+  if [ ! -f "$worktree/web/dist-electron/main.js" ]; then
+    pnpm --dir "$worktree" --filter cpd-web-client run build:electron >&2
+  fi
+  serve on "$worktree"
+}
+
+# unserve: stops only the dev server of `serve_only` (the `web` window). It touches neither the
+# watchdog, `web-state` nor `@cpd_web_preview`; safe to rerun.
+unserve() {
+  read_config
+  if tmux_cmd list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx web; then
+    tmux_cmd kill-window -t "=$work:web"
+  fi
+}
+
 status() {
   if [ -f "$state" ]; then
     paste -sd' ' "$state"
@@ -159,5 +187,7 @@ case ${1:-} in
   off) [ $# -eq 1 ] || usage; off ;;
   status) [ $# -eq 1 ] || usage; status ;;
   reload) [ $# -le 2 ] || usage; reload "${2:-}" ;;
+  serve) [ $# -le 2 ] || usage; serve_only "${2:-}" ;;
+  unserve) [ $# -eq 1 ] || usage; unserve ;;
   *) usage ;;
 esac

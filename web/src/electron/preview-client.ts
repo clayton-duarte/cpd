@@ -110,7 +110,7 @@ export function createPreviewClient(deps: PreviewClientDeps): PreviewClient {
     async tick(): Promise<void> {
       if (!active) return;
       await deps.watchdog.tick();
-      if (loaded) return;
+      if (!active || loaded) return;
       const record = await deps.readHealth();
       if (record === null || record.status !== "healthy") return;
       loaded = true;
