@@ -1,9 +1,11 @@
+import { toArgv, type CpdCommand } from '../../server/cpd-argv.ts';
 import type { UpdateExec, UpdateFs, UpdateTimers } from './types';
 
 const stampPath = (root: string) => `${root}/target/.cli-installed-sha`;
 const logOf = (r: { stderr: string; stdout: string }) => `${r.stderr}${r.stdout}`;
 
-async function cpdJson(exec: UpdateExec, root: string, args: string[]): Promise<unknown> {
+async function cpdJson(exec: UpdateExec, root: string, cmd: CpdCommand): Promise<unknown> {
+  const args = toArgv(cmd);
   const name = `cpd ${args.join(' ')}`;
   const r = await exec('cpd', args, { cwd: root });
   if (r.code !== 0) throw new Error(`${name} failed (exit ${r.code}): ${r.stderr}`);
@@ -15,10 +17,10 @@ async function cpdJson(exec: UpdateExec, root: string, args: string[]): Promise<
 }
 
 export async function countRunningAttempts(exec: UpdateExec, root: string): Promise<number> {
-  const plans = (await cpdJson(exec, root, ['plan', 'list'])) as { plans: { id: string }[] };
+  const plans = (await cpdJson(exec, root, { kind: 'plan.list' })) as { plans: { id: string }[] };
   let count = 0;
   for (const { id } of plans.plans) {
-    const list = (await cpdJson(exec, root, ['attempt', 'list', '--active', '--plan', id])) as { attempts: { status: string }[] };
+    const list = (await cpdJson(exec, root, { kind: 'attempt.list', planId: id, active: true })) as { attempts: { status: string }[] };
     count += list.attempts.filter((a) => a.status === 'running').length;
   }
   return count;

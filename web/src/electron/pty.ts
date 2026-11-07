@@ -1,3 +1,4 @@
+import { tuiAttachCommand } from "../server/cpd-argv.ts";
 import type { PtySize } from "./channels.ts";
 
 export interface PtyProcess {
@@ -26,7 +27,7 @@ export interface PtySession {
   resize(size: PtySize): void;
   kill(): void;
 }
-export const CPD_TUI_COMMAND = { file: "cpd", args: ["tui", "--attach"] } as const;
+export const CPD_TUI_COMMAND = tuiAttachCommand();
 export interface StartPtyOptions {
   backend: PtyBackend;
   size: PtySize;

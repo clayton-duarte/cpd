@@ -26,6 +26,7 @@ export type CpdCommand =
   | { readonly kind: "plan.unarchive"; readonly planId: string }
   | { readonly kind: "plan.delete"; readonly planId: string }
   | { readonly kind: "plan.decide"; readonly review: string; readonly decision: "approve" | "reject"; readonly planId: string; readonly feedbackFile?: string }
+  | { readonly kind: "tui.attach" }
   | { readonly kind: "session.list"; readonly archived?: boolean }
   | { readonly kind: "session.show"; readonly sessionId: string }
   | { readonly kind: "session.send"; readonly sessionId: string; readonly text: string; readonly unblocks: string; readonly origin?: string }
@@ -42,8 +43,9 @@ export type CpdCommand =
   | { readonly kind: "inbox.dismiss"; readonly itemId: number }
   | { readonly kind: "inbox.claim"; readonly itemId: number }
   | { readonly kind: "inbox.approve"; readonly itemId: number }
+  | { readonly kind: "attempt.list"; readonly planId: string; readonly active?: boolean }
   | { readonly kind: "events.list"; readonly eventKind: string; readonly since: number; readonly limit: number }
-  | { readonly kind: "events.follow"; readonly since?: number; readonly untilIdle?: boolean }
+  | { readonly kind: "events.follow"; readonly eventKind?: string; readonly since?: number; readonly untilIdle?: boolean }
   | { readonly kind: "watch.ensure" }
   | { readonly kind: "pr.post"; readonly verb: "post" | "repost"; readonly workflow: string; readonly planId: string }
   | { readonly kind: "pr.merge"; readonly pull: string }
@@ -98,6 +100,7 @@ export function toArgv(cmd: CpdCommand): string[] {
       argv.push("--plan", cmd.planId);
       return argv;
     }
+    case "tui.attach": return ["tui", "--attach"];
     case "session.list": return cmd.archived === true ? ["session", "list", "--archived"] : ["session", "list"];
     case "session.show": return ["session", "show", cmd.sessionId];
     case "session.send": {
@@ -119,9 +122,16 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "inbox.dismiss": return ["inbox", "dismiss", String(cmd.itemId)];
     case "inbox.claim": return ["inbox", "claim", String(cmd.itemId)];
     case "inbox.approve": return ["inbox", "approve", String(cmd.itemId)];
+    case "attempt.list": {
+      const argv = ["attempt", "list"];
+      if (cmd.active === true) argv.push("--active");
+      argv.push("--plan", cmd.planId);
+      return argv;
+    }
     case "events.list": return ["events", "list", "--kind", cmd.eventKind, "--since", String(cmd.since), "--limit", String(cmd.limit)];
     case "events.follow": {
       const argv = ["events", "follow"];
+      if (cmd.eventKind !== undefined && cmd.eventKind !== "") argv.push("--kind", cmd.eventKind);
       if (cmd.since !== undefined) argv.push("--since", String(cmd.since));
       if (cmd.untilIdle === true) argv.push("--until-idle");
       return argv;
@@ -137,6 +147,13 @@ export function toArgv(cmd: CpdCommand): string[] {
       return argv;
     }
   }
+}
+
+/** One TUI tab (pty.ts, pty-tabs.ts): `cpd tui --attach`, or `ssh -t <alias> cpd tui --attach` for a
+ * remote tab. The cpd argv comes from `toArgv`, so no call site builds it. */
+export function tuiAttachCommand(sshAlias?: string): { file: string; args: string[] } {
+  const cpd = toArgv({ kind: "tui.attach" });
+  return sshAlias === undefined ? { file: "cpd", args: cpd } : { file: "ssh", args: ["-t", sshAlias, "cpd", ...cpd] };
 }
 
 const TIERS: TiersArgv = { auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" };
@@ -171,6 +188,7 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "plan.decide", review: "r1", decision: "approve", planId: "p1" },
     { kind: "plan.decide", review: "r1", decision: "reject", planId: "p1" },
     { kind: "plan.decide", review: "r1", decision: "reject", planId: "p1", feedbackFile: "/tmp/f.md" },
+    { kind: "tui.attach" },
     { kind: "session.list" },
     { kind: "session.list", archived: true },
     { kind: "session.show", sessionId: "s1" },
@@ -190,9 +208,13 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "inbox.dismiss", itemId: 4 },
     { kind: "inbox.claim", itemId: 4 },
     { kind: "inbox.approve", itemId: 4 },
+    { kind: "attempt.list", planId: "p1" },
+    { kind: "attempt.list", planId: "p1", active: true },
     { kind: "events.list", eventKind: "attempt-ended", since: 0, limit: 5000 },
     { kind: "events.follow", since: 0 },
     { kind: "events.follow", since: 0, untilIdle: true },
+    { kind: "events.follow", eventKind: "pr-merged" },
+    { kind: "events.follow", eventKind: "pr-merged", since: 7 },
     { kind: "watch.ensure" },
     { kind: "pr.post", verb: "post", workflow: "w1", planId: "p1" },
     { kind: "pr.post", verb: "repost", workflow: "w1", planId: "p1" },

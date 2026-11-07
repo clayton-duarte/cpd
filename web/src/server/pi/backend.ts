@@ -18,6 +18,7 @@ import type {
 import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { Cpd } from "../cockpit/cli.ts";
+import { toArgv } from "../cpd-argv.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
 import type { SessionEmit, SessionHandle, SessionBackend } from "../hub/connection.ts";
 import type { GitBoundary } from "../../protocol/runtime.ts";
@@ -31,10 +32,12 @@ import type { FileBoundary } from "./window.ts";
 
 export type { Disposable };
 
-// Local copies of the argv builders of cockpit/actions.ts (sessionSendArgs, sessionRetierArgs, CONTRACT 6.3).
+// The chat argv builders of cockpit/actions.ts (CONTRACT 6.3), through the shared builder (docs/contract.md §5.6).
 const WEB_UNBLOCKS = "User message from the web chat";
-const sessionSendArgs = (id: string, text: string): readonly string[] => ["session", "send", id, "--origin", "webui", "--unblocks", WEB_UNBLOCKS, "--", text];
-const sessionRetierArgs = (id: string, tier: string): readonly string[] => ["session", "retier", id, "--tier", tier];
+const sessionSendArgs = (id: string, text: string): readonly string[] =>
+  toArgv({ kind: "session.send", sessionId: id, text, unblocks: WEB_UNBLOCKS, origin: "webui" });
+const sessionRetierArgs = (id: string, tier: string): readonly string[] =>
+  toArgv({ kind: "session.retier", sessionId: id, tier });
 
 const REASON = {
   steer: "`cpd session send` cannot steer a running pi turn; send a follow-up instead",
@@ -96,7 +99,7 @@ export function createPiBackend(deps: {
 
     const readShow = async (): Promise<ShowStats> => {
       try {
-        const reply = await deps.cpd.json(["session", "show", sessionId]);
+        const reply = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
         const row = reply.session;
         const o = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
         const s = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
@@ -350,7 +353,7 @@ export function createPiBackend(deps: {
             try {
               await nodeFs.stat(askPath);
               await nodeFs.rm(askPath, { force: true });
-              const shown = await deps.cpd.json(["session", "show", sessionId]);
+              const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
               const pane =
                 typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
                   ? ((shown["session"] as Record<string, unknown>)["tmux_pane"] as string)
@@ -384,12 +387,14 @@ export function createPiBackend(deps: {
         if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
         const n = dialogId.slice("review:".length);
         const plan = ref.key.split(":")[1] as string;
-        if (response.outcome === "approve") await deps.cpd.json(["plan", "decide", n, "--approve", "--plan", plan]);
-        else if (response.outcome === "reject") await deps.cpd.json(["plan", "decide", n, "--reject", "--plan", plan]);
+        const decide = (decision: "approve" | "reject", feedbackFile?: string): string[] =>
+          toArgv({ kind: "plan.decide", review: n, decision, planId: plan, feedbackFile });
+        if (response.outcome === "approve") await deps.cpd.json(decide("approve"));
+        else if (response.outcome === "reject") await deps.cpd.json(decide("reject"));
         else {
           const path = `${deps.cpdHome}/run/${plan}/feedback-${n}.md`;
           await deps.fs.write(path, new TextEncoder().encode(response.feedback));
-          await deps.cpd.json(["plan", "decide", n, "--reject", "--feedback-file", path, "--plan", plan]);
+          await deps.cpd.json(decide("reject", path));
         }
       },
       dispose() {

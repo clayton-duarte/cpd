@@ -1,3 +1,4 @@
+import { toArgv } from '../../server/cpd-argv.ts';
 import type { UpdateTimers } from './types';
 
 export function parseEventId(line: string): number {
@@ -12,7 +13,8 @@ export function parseEventId(line: string): number {
 export interface FollowProcess { onLine(cb: (line: string) => void): void; onExit(cb: (code: number | null) => void): void; kill(): void }
 export type SpawnFollow = (args: string[]) => FollowProcess;
 
-const BASE = ['events', 'follow', '--kind', 'pr-merged'];
+const followArgv = (since: number | null): string[] =>
+  toArgv(since === null ? { kind: 'events.follow', eventKind: 'pr-merged' } : { kind: 'events.follow', eventKind: 'pr-merged', since });
 
 export function followMerges(deps: { spawn: SpawnFollow; timers: UpdateTimers; onMerged: () => void; onError: (e: Error) => void; restartMs?: number }): { stop(): void } {
   const restartMs = deps.restartMs ?? 5000;
@@ -23,7 +25,7 @@ export function followMerges(deps: { spawn: SpawnFollow; timers: UpdateTimers; o
 
   const start = (): void => {
     timer = null;
-    proc = deps.spawn(lastId === null ? BASE : [...BASE, '--since', String(lastId)]);
+    proc = deps.spawn(followArgv(lastId));
     proc.onLine((line) => {
       if (stopped) return;
       try {
