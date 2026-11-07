@@ -185,6 +185,6 @@ fn kinds_codes_and_protocol() {
     }
 
     // The protocol number: 19 before the rename (`core/src/events/kind.rs:38`, `pi/lib/event.ts:9`), 21
-    // with the wire (contract §5.2, research §3.5).
-    assert_eq!(PROTOCOL, 22);
+    // with the wire (contract §5.2, research §3.5), 23 with the Lead-less `shaping` phase.
+    assert_eq!(PROTOCOL, 23);
 }
