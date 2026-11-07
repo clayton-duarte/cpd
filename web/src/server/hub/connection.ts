@@ -134,6 +134,9 @@ export function createHubConnection(deps: HubDeps): HubConnection {
 
   const dispatch = async (m: ClientMessage): Promise<void> => {
     switch (m.type) {
+      case "ping":
+        send({ type: "pong" });
+        return;
       case "cockpit.subscribe": return subscribe();
       case "cockpit.selectPlan":
         try {

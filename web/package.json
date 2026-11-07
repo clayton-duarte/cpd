@@ -26,7 +26,8 @@
     "@aurigax-ai/ghostty-web": "0.3.9",
     "@base-ui/react": "1.9.0",
     "@earendil-works/chord": "1.5.0",
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@shadcn/react": "0.3.1",
