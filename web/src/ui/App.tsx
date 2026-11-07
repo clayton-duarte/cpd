@@ -36,7 +36,8 @@ const MemoInbox = memo(Inbox);
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
 
 export type { FileReaderBoundary };
-export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void }
+// `onHealthy` is a stub: accepted, never called yet.
+export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void; onHealthy?: () => void }
 
 export function App(props: AppProps): ReactElement {
   const { transport, scheduler, reader, newId, onCrash } = props;
