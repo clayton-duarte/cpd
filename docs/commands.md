@@ -283,6 +283,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd preset set` (§14.6) | Manager | yes | no |
 | `cpd config tiers set` (§14.2) | none | yes | no |
 | `cpd config experimental` (§14.2b) | none | yes | no |
+| `cpd config concurrency set <n>` (§14.2c) | none | no | no |
 | `cpd context curation` (§3.16, internal) | none | yes | yes |
 | `cpd context retire` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
@@ -4746,11 +4747,12 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config [--migrate]
 cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
 cpd config experimental [<feature> <on|off>]
+cpd config concurrency set <n>
 ```
 
 Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-`config tiers set` (§14.2a) writes the four Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features.
+`config tiers set` (§14.2a) writes the four Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive), then `worker-runner-to-experimental` (Plan `experimental-config`: the top-level `worker_runner = "durable"` becomes `durable_workers = true` in `[experimental]`, and `worker_runner = "pi"` is only dropped)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -4828,6 +4830,41 @@ The Experimental Features (CONTEXT.md) are the five switches of the `[experiment
 ```
 
 Idempotence: yes, a rerun with the same feature and state leaves the file as it is. Callers: none, the User at a shell (§2); cockpit: yes (§2, the Settings popup, §13.2).
+
+### 14.2c `config concurrency set`
+
+```
+cpd config concurrency set <n>
+```
+
+Sets the machine-wide `concurrency` key of `$CPD_HOME/config.toml` (contract §8.2): the count of Attempts not ended the machine runs at once (contract §3.4 "The built-in resource `workers`"). `<n>` is required and is the only argument. Callers: none, the User at a shell (§2); cockpit: no (§2).
+
+**Validation.** The checks run in the order of the table below, and every one of them runs before any write. The file is read first and parsed (the typed key walk of contract §8.1), the key's line is then rewritten, and the new text is parsed again: the file is written only when the result parses. The rewrite keeps every other byte of the file (comments, formatting, every other key):
+
+- a changed key's line is replaced whole by `concurrency = <n>`;
+- an absent key is inserted after the last top-level `key = value` line before the first `[table]` header, as `config tiers set` inserts (§14.2a);
+- setting the key to its current value rewrites the same bytes.
+
+The file is written atomically (a temporary file in the same directory, then a rename: contract §8.1 "Every write is atomic"). It opens no store and never waits on the setup lock (hs-n278; contract §4.2), as plain `cpd config` and `config experimental` (§14.2b) do not.
+
+| Refusal | Code | Exit |
+|---|---|---|
+| a missing or extra argument, or an `<n>` that is not an integer | `usage` | 2 |
+| `<n>` outside the accepted range 1 to 16 inclusive; `details.key` is `concurrency` | `config_invalid` | 1 |
+| `config.toml` does not parse, before or after the change; `details.key` names the key that breaks it | `config_invalid` | 1 |
+| `config.toml` is missing (it is read first) | `config_missing` | 1 |
+| the write of the file fails | `internal` | 1 |
+
+The bound is the whole rule: a value outside 1 to 16 is refused loudly, no clamp and no silent default (air-d70); a hand-edited `config.toml` is no exception — a value outside the range is `config_invalid` (`details.key` `concurrency`) when the file is loaded, by plain `cpd config` as by the engine (contract §8.2).
+
+**Effects.** Only the `concurrency` line is written; no row, no Event. The engine reads the count from the config file on each tick (contract §8.2), so the set takes effect without a restart; a lowered count stops nothing — it gates new starts only, and the running tenants keep their slots to the end (air-d71, contract §3.7 E3). The next Attempt started is gated by the new count, and an urgent Job may still take the one slot beyond `concurrency` (contract §3.7 E3).
+
+```json
+{"ok": true, "changed": ["concurrency"], "already": false,
+ "config": {"version": 1, "machine": "hs", "concurrency": 8, "...": "..."}}
+```
+
+`changed` is `["concurrency"]` when the effective value changes and `[]` when `<n>` equals the current value, in which case `already` is `true` and nothing is written (the file is not touched). `config` is the effective configuration after the write, as plain `cpd config` prints it (§14.2). Idempotence: yes, a rerun with the same value writes nothing (`already`).
 
 ### 14.3 `tiers`
 
