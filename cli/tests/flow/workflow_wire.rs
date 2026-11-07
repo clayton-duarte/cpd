@@ -2,7 +2,7 @@
 //! `ren-red-wire`; research `docs/research/glossary-rename.md` §3.3 and §3.5): the closed Event kind set
 //! (contract §5.2) accepts the `workflow-*` kinds and no longer the object `pr-*` ones, the `data` keys
 //! the adapter reads become `workflow`/`workflows`, the object refusal codes are `workflow_*`, and
-//! `PROTOCOL` is 22. Red today: every name is still the old one.
+//! `PROTOCOL` is 23 (22 at the rename, 23 with `session-message`'s optional `data.origin`, Plan ui-origin).
 //!
 //! The closed [`Kind`] set and its [`Spec`] `data` keys are cpd's side of the adapter protocol; the pi
 //! adapter mirrors them in `pi/lib/event.ts` (`pi/test/event.test.ts`, the `ren-red-pi` Job).
@@ -185,6 +185,7 @@ fn kinds_codes_and_protocol() {
     }
 
     // The protocol number: 19 before the rename (`core/src/events/kind.rs:38`, `pi/lib/event.ts:9`), 21
-    // with the wire (contract §5.2, research §3.5).
-    assert_eq!(PROTOCOL, 22);
+    // with the wire (contract §5.2, research §3.5), 23 with `session-message`'s optional `data.origin`
+    // (Plan ui-origin).
+    assert_eq!(PROTOCOL, 23);
 }

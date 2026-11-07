@@ -160,7 +160,7 @@ describe("pi backend", () => {
   it("send maps to cpd session send with the text", async () => {
     const s = await attached();
     await s.handle.submit({ clientSubmissionId: "c1", text: "-hello there", images: [], whenBusy: "followUp" });
-    expect(s.cpd.calls).toContainEqual(["session", "send", "s1", "--unblocks", "User message from the web chat", "--", "-hello there"]);
+    expect(s.cpd.calls).toContainEqual(["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", "-hello there"]);
     const ack = s.out.find((m) => m.type === "session.submitAck");
     expect(ack).toMatchObject({ sessionId: "s1", clientSubmissionId: "c1", queued: false });
     const sends = () => s.cpd.calls.filter((c) => c[1] === "send").length;
@@ -186,7 +186,7 @@ describe("pi backend", () => {
     const s = await attached();
     const inlined = 'look at this\n<file name="notes.txt">\nline one\n</file>';
     await s.handle.submit({ clientSubmissionId: "c1", text: inlined, images: [], whenBusy: "followUp" });
-    expect(s.cpd.calls.at(-1)).toEqual(["session", "send", "s1", "--unblocks", "User message from the web chat", "--", inlined]);
+    expect(s.cpd.calls.at(-1)).toEqual(["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", inlined]);
     expect(s.handle.capabilities.images.supported).toBe(true);
   });
 
