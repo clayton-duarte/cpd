@@ -1,3 +1,4 @@
+import type { UiMode } from "./channels.ts";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
 import type { RestorePoints } from "./restore-points.ts";
@@ -28,6 +29,20 @@ export interface WatchdogOptions {
 
 export interface Watchdog {
   tick(): Promise<void>;
+}
+
+/** The in-place preview's rollback: the generic watchdog, but the rollback returns to the production WebUI. */
+export interface PreviewWatchdogPorts {
+  now(): number;
+  readHealth(): Promise<HealthRecord | null>;
+  pidAlive(pid: number): boolean;
+  setMode(mode: UiMode): Promise<void>;
+  showErrorBox(title: string, content: string): void;
+  log(entry: object): Promise<void>;
+}
+
+export function createPreviewWatchdog(_ports: PreviewWatchdogPorts, _options?: WatchdogOptions): Watchdog {
+  throw new Error("createPreviewWatchdog is not implemented");
 }
 
 export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = {}): Watchdog {
