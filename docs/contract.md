@@ -3529,6 +3529,22 @@ The web backend (`web/src/server/`) carries the frames of this command to the re
 | `STREAM_PROBE_MS` | 30 s | the interval of the watchdog's `refresh` probe on the serve stream; the safety tick's cadence |
 | `STREAM_PROBE_TIMEOUT_MS` | 10 s | how long after a probe the watchdog waits for any frame before it reports the stall |
 
+### 5.6 The web-to-CLI argv contract (air-d54, air-d57)
+
+The WebUI backend builds `cpd` command lines and spawns the `cpd` binary in three spawn flavours of `web/src/server/plugin.ts` (`cpdExec.run`, `follow.start`, `stream`) and in the Electron paths (`web/src/electron/update/`, `web/src/electron/pty.ts`, `web/src/electron/pty-tabs.ts`). This section fixes how those command lines are built and how the build is proven against the real CLI grammar. It is normative for Jobs that touch web argv; the code itself is added by Jobs `argv-tests` and `argv-impl`, not by this section.
+
+- **No hand-built argv.** No web code may spawn `cpd` with a command line written at the call site. Every command goes through one shared module, `web/src/server/cpd-argv.ts`, which exposes:
+  - a discriminated union `CpdCommand` — one variant per cpd command the web sends, with a `kind` discriminator and typed fields for the command's arguments (§2.1 conventions: unions with a discriminator, never optional-flag bags); and
+  - `toArgv(cmd: CpdCommand): string[]` — the argv after the program name `cpd` (so `"inbox"` is its first element, not `"cpd"`).
+  Every spawn flavour consumes only argv produced by `toArgv`: the web modules that build cpd argv (`web/src/server/cockpit/` — `plugin.ts`, `actions.ts`, `settings.ts`, `status.ts`, `readmodel.ts`, `cost.ts`, `logs.ts`, `cli.ts`, `stream.ts`, `completion-store.ts` —, `pi/backend.ts`, `durable/backend.ts`, and `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) construct `CpdCommand` values and never their own arrays.
+- **`cpd argv-check`, the parse-only check command.** A hidden, internal subcommand parses argv with the real clap parser and touches nothing else:
+  - **Input.** stdin is a JSON array of string arrays. Each inner array is one argv **after the program name**: `[["inbox","list"],["plan","show","--plan","p1"]]` is the two commands `cpd inbox list` and `cpd plan show --plan p1`.
+  - **Parsing.** Each inner array is parsed with the real clap parser, `Cli::try_parse_from` prepended with the program name (cli/src/cli.rs `Cli`, the `#[command(name = "cpd")]` parser). Parse only: no dispatch, no store access, no write, no `$CPD_HOME` read — the command has no side effects.
+  - **Output, success.** When every argv parses, stdout is exactly `{"ok":true}` and the exit code is 0.
+  - **Output, failure.** When any argv fails to parse, stdout is `{"ok":false,"failures":[{"argv":[...],"error":"..."}]}` — one entry per failing argv, in input order, `argv` the exact inner array as received and `error` the parser's message — and the exit code is non-zero. argv that parsed are not listed.
+  - **Hidden.** The command is internal tooling for this contract test, not a user command: it carries `#[command(hide = true)]`, so it is absent from `cpd --help`, the root help tree and every user-facing command listing.
+- **The Gate test.** One vitest test, `web/src/server/cockpit/argv-contract.test.ts`, is the proof that the web's argv grammar matches the CLI's: it builds every cpd argv the web sends — every `CpdCommand` variant, including every optional-flag combination the call sites produce — from `web/src/server/cpd-argv.ts` alone, feeds the arrays to one `cpd argv-check` process on stdin, and fails when the reply is not `ok: true` or the exit is non-zero, naming the failing argv and the parser's error. It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate, and a web argv added without a `CpdCommand` variant has no test.
+
 ## 6. The tmux host
 
 ### 6.1 The server
