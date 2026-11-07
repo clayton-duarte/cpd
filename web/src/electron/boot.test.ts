@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { readPreviewMode } from './preview-mode';
+import { createModeController, type ModeFs } from './mode';
 import { boot, type BootDeps, type BootWindow } from './boot';
 
-function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void>; loadDevUrl?: BootDeps['loadDevUrl'] } = {}) {
+function setup(opts: { env?: Record<string, string>; state?: string; destroyed?: boolean; deferReady?: boolean; reloadServer?: () => Promise<void>; loadDevUrl?: BootDeps['loadDevUrl']; initMode?: BootDeps['initMode']; onWindow?: (w: BootWindow) => void } = {}) {
   const log: string[] = [];
   const handlers: Record<string, () => void> = {};
   const titles: unknown[] = [];
@@ -16,6 +17,7 @@ function setup(opts: { env?: Record<string, string>; state?: string; destroyed?:
     constructor(options: { title: string }) {
       titles.push(options.title);
       log.push('window');
+      opts.onWindow?.(this);
     }
   }
   const deps: BootDeps = {
@@ -25,6 +27,7 @@ function setup(opts: { env?: Record<string, string>; state?: string; destroyed?:
     process: { on: (s, h) => void (handlers[s] = h) },
     startAutoUpdate: async () => (log.push('startAutoUpdate'), { bootstrap: { state: opts.state ?? 'ready' } }),
     startServices: () => void log.push('startServices'),
+    initMode: opts.initMode ?? (async () => void log.push('initMode')),
     registerIpc: () => void log.push('registerIpc'),
     registerWebuiIpc: () => void log.push('registerWebuiIpc'),
     loadDevUrl: opts.loadDevUrl ?? (async (_w, url) => void log.push(`loadDevUrl:${url}`)),
@@ -52,7 +55,7 @@ describe('boot', () => {
   it('boot registers IPC and starts the update before loading the renderer', async () => {
     const s = setup();
     await boot(s.deps);
-    const order = s.log.filter((l) => !l.startsWith('setName') && l !== 'whenReady' && l !== 'window');
+    const order = s.log.filter((l) => !l.startsWith('setName') && l !== 'whenReady' && l !== 'window' && l !== 'initMode');
     expect(order).toHaveLength(5);
     expect(order.slice(0, 4)).toEqual(['registerIpc', 'registerWebuiIpc', 'startAutoUpdate', 'startServices']);
     expect(order[4]).toMatch(/^loadFile:/);
@@ -150,5 +153,46 @@ describe('boot', () => {
     expect(s.reloads()).toBe(0);
     expect(s.log).toContain('reloadServer');
     expect(s.log).not.toContain('reloadRenderer');
+  });
+  it('boot applies the mode after the window is created', async () => {
+    const s = setup();
+    await boot(s.deps);
+    expect(s.log.filter((l) => l === 'initMode')).toHaveLength(1);
+    expect(s.log.indexOf('initMode')).toBeGreaterThan(s.log.indexOf('window'));
+    expect(s.log.indexOf('initMode')).toBeLessThan(s.log.findIndex((l) => l.startsWith('loadFile:')));
+  });
+  it('boot does not apply the mode when whenReady resolves', async () => {
+    const s = setup();
+    await boot(s.deps);
+    const order = s.log.filter((l) => ['whenReady', 'window', 'initMode'].includes(l) || l.startsWith('loadFile:'));
+    expect(order).toEqual(['whenReady', 'window', 'initMode', 'loadFile:renderer/electron.html']);
+  });
+  it('boot with no ui-mode.json never touches an absent window', async () => {
+    let created: BootWindow | undefined;
+    const sent: string[] = [];
+    const use = (): void => {
+      if (!created) throw new Error('mode applied before the window exists');
+    };
+    const fs: ModeFs = {
+      readFile: async (p) => Promise.reject(Object.assign(new Error('ENOENT ' + p), { code: 'ENOENT' })),
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+    };
+    const controller = createModeController({
+      fs,
+      file: '/h/run/ui-mode.json',
+      platform: 'darwin',
+      menu: { setApplicationMenu: () => undefined },
+      window: {
+        setIgnoreMenuShortcuts: () => use(),
+        sendMode: (m) => (use(), void sent.push(m)),
+      },
+      onError: (e) => {
+        throw e;
+      },
+    });
+    const s = setup({ onWindow: (w) => (created = w), initMode: () => controller.init() });
+    await expect(boot(s.deps)).resolves.toBeUndefined();
+    expect(sent).toEqual(['tui']);
   });
 });

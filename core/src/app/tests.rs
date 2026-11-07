@@ -56,6 +56,7 @@ impl Rig {
             .clone()
             .route("pnpm", Arc::new(Always(Reply::ok(""))))
             .route("plutil", Arc::new(Always(Reply::ok(""))))
+            .route("node", Arc::new(Always(Reply::ok(""))))
             .route("sh", Arc::new(Always(Reply::ok("script text\n"))));
         Rig {
             _tmp: tmp,

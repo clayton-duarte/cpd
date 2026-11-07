@@ -185,6 +185,18 @@ pub fn ensure(ports: &Ports, app: &App, rebuild: bool) -> Result<(), CpdError> {
         }
     }
     if app.macos {
+        let electron_dir = web.join("node_modules/electron");
+        if !electron_dir.join("dist/Electron.app").exists()
+            || !electron_dir.join("path.txt").is_file()
+        {
+            let mut cmd = Command::new("node");
+            cmd.arg(electron_dir.join("install.js")).current_dir(&web);
+            finished(
+                ports.runner.output(&mut cmd, "node", PNPM_DEADLINE),
+                ErrorCode::InstallFailed,
+                "electron install.js",
+            )?;
+        }
         let plist = web.join("node_modules/electron/dist/Electron.app/Contents/Info.plist");
         for key in ["CFBundleName", "CFBundleDisplayName"] {
             let mut cmd = Command::new("plutil");
