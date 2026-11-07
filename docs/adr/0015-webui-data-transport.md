@@ -1,10 +1,10 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # ADR 0015: The WebUI data transport
 
-**Proposed, not decided.** The audit of the whole WebUI data path was the deliverable of Plan `webui-data` (air-d30); this ADR is the target design it asked for. No option below is Accepted and no final decision is recorded: the User picks the option at the ADR review after this lands. What stands regardless of the pick is the audit (below), the comparison criteria, and the separate frame-timeout/seq-watchdog requirement (Failure modes, point 2).
+**Accepted, 2026-11-07 (air-d46).** The audit of the whole WebUI data path was the deliverable of Plan `webui-data` (air-d30); this ADR is the target design it asked for. At the ADR review the User picked **option B** (air-d46): one WebSocket transport shared by the Electron desktop and the browser build, with a ping/pong heartbeat, plus the serve-stream watchdog on top. The audit (below) and the comparison criteria stand as the recorded baseline; the frame-timeout/seq-watchdog requirement (Failure modes, point 2) is decided with them. The build is Plan `webui-ws`; §The plan (accepted) is its concrete file plan.
 
 ## Context
 
