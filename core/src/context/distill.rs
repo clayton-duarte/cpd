@@ -481,7 +481,10 @@ impl Batch<'_> {
 
     /// The problems of `id` in `rejected`.
     fn problems_of<'p>(&self, rejected: &'p [Problem], id: &RecordId) -> Vec<&'p Problem> {
-        rejected.iter().filter(|p| p.id.as_ref() == Some(id)).collect()
+        rejected
+            .iter()
+            .filter(|p| p.id.as_ref() == Some(id))
+            .collect()
     }
 
     /// One parseable line of `text` per batch record that appears exactly once, by id.
@@ -715,10 +718,12 @@ impl Run<'_> {
             "run": ran.figures(),
         });
         if !clamped.is_empty() {
-            out["clamped"] = json!(clamped
-                .iter()
-                .map(|c| json!({"id": c.id.to_string(), "bytes": c.bytes}))
-                .collect::<Vec<_>>());
+            out["clamped"] = json!(
+                clamped
+                    .iter()
+                    .map(|c| json!({"id": c.id.to_string(), "bytes": c.bytes}))
+                    .collect::<Vec<_>>()
+            );
         }
         Ok(out)
     }
@@ -732,9 +737,9 @@ impl Run<'_> {
         upto: u64,
         state: &State,
         batch: &Batch<'_>,
-    ) -> Result<Result<(Ran, Checked, String, Vec<Clamp>), Fault>, CpdError> {
+    ) -> Result<Result<Stepped, Fault>, CpdError> {
         match self.run_pi(tier, upto, STEP_FILES)? {
-            Ok((ran, text)) => self.checks(tier, upto, state, batch, batch.records, ran, text),
+            Ok(done) => self.checks(tier, upto, state, batch, batch.records, done),
             // An empty final assistant message retries once with a smaller batch, at the same Tier (GXD1,
             // commands.md §3.12); every other fault ends the run.
             Err(fault) if is_empty_answer(&fault) => {
@@ -742,7 +747,7 @@ impl Run<'_> {
                 let dir = self.home.context_digest_dir(self.context);
                 self.write_inputs(&dir, &smaller, state, &batch.hits, None)?;
                 match self.run_pi(tier, upto, STEP_FILES)? {
-                    Ok((ran, text)) => self.checks(tier, upto, state, batch, &smaller, ran, text),
+                    Ok(done) => self.checks(tier, upto, state, batch, &smaller, done),
                     Err(fault) => Ok(Err(fault)),
                 }
             }
@@ -752,7 +757,7 @@ impl Run<'_> {
 
     /// The checks of one distiller call (contract §4.6 step 5) with the re-ask, the clamp and the failure of a run
     /// that accepts no line. `records` is what the call was run over; `batch` carries the Context's records in
-    /// force and their grep hits.
+    /// force and their grep hits; `done` is the last pi run and its output.
     fn checks(
         &mut self,
         tier: Tier,
@@ -760,9 +765,9 @@ impl Run<'_> {
         state: &State,
         batch: &Batch<'_>,
         records: &[&Indexed],
-        mut ran: Ran,
-        mut text: String,
-    ) -> Result<Result<(Ran, Checked, String, Vec<Clamp>), Fault>, CpdError> {
+        done: (Ran, String),
+    ) -> Result<Result<Stepped, Fault>, CpdError> {
+        let (mut ran, mut text) = done;
         let current = Batch {
             records,
             in_force: batch.in_force.clone(),
@@ -1229,6 +1234,9 @@ struct Clamp {
     bytes: usize,
 }
 
+/// What a successful step yields: the last pi run, the checked lines, the last output and the clamps.
+type Stepped = (Ran, Checked, String, Vec<Clamp>);
+
 /// The non-silent clamp (commands.md §3.12): a `short` the re-asks could not fit is cut to at most
 /// `SHORT_MAX` bytes on one line — every newline becomes a space, the longest valid UTF-8 prefix of at most
 /// `SHORT_MAX` bytes is taken, then cut back to its last space — and never left empty.
@@ -1313,7 +1321,10 @@ fn reask_md(records: &[&Indexed], rejected: &[Problem]) -> String {
         out.push_str(record.text.trim_end());
         out.push('\n');
         let mut first = true;
-        for p in rejected.iter().filter(|p| p.id.as_ref() == Some(&record.id)) {
+        for p in rejected
+            .iter()
+            .filter(|p| p.id.as_ref() == Some(&record.id))
+        {
             out.push_str(if first { "error: " } else { "; " });
             first = false;
             out.push_str(&p.what);
