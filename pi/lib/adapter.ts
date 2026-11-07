@@ -25,6 +25,7 @@ import { registerReloadCommand } from "./reload-command.ts";
 import { start, stop } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
+import { registerOriginTag } from "./origin.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
@@ -46,6 +47,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReminderCheck(host);
   registerLoopGuard(host);
   registerQuestionGuard(host);
+  registerOriginTag(pi); // §15.3: the surface and view tag on interactively typed User input
 
   registerLiveStream(pi, host.env); // contract §6.21
 

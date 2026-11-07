@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
@@ -453,6 +455,39 @@ test("a delivery gated to nextTurn does not reset the loop guard counters", asyn
   assert.equal(f.pi.delivered().length, 2);
   assert.deepEqual(f.pi.delivered()[1]!.options, { triggerTurn: false, deliverAs: "nextTurn" });
   assert.ok((await readCall(f))?.block, "the streak kept its value");
+});
+
+/** A live view marker in the fixture's `$CPD_HOME` (never the real User's), read by the tag. */
+const markView = (f: Fixture, view: "tui" | "webui" | "webui-preview"): void => {
+  mkdirSync(join(f.cpdHome, "run"), { recursive: true });
+  writeFileSync(join(f.cpdHome, "run", "ui-view.json"), JSON.stringify({ view, pid: process.pid }));
+};
+
+test("a webui session-message is prefixed with the tag", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  markView(f, "webui");
+  f.emit(message(101, null, { data: { from: null, text: "ship it", origin: "webui" } }));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  await f.drain();
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11 +05:30): [via WebUI · view: WebUI] ship it");
+});
+
+test("an engine session-message is untagged", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  markView(f, "webui");
+  // an engine message carries no origin; a WebUI one does, and is the control that keeps this red until the tag exists
+  f.emit(
+    message(101, null, { data: { from: null, text: "ship it" } }),
+    message(102, null, { data: { from: null, text: "ship it", origin: "webui" } }),
+  );
+  await waitFor("both messages", () => f.pi.delivered().length === 2);
+  await f.drain();
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11 +05:30): ship it", "an engine message is untagged");
+  assert.equal(f.pi.delivered()[1]!.message.content, "Message from the User (03:11 +05:30): [via WebUI · view: WebUI] ship it");
 });
 
 test("a delivery that starts no turn does not reset the loop guard counters", async (t) => {
