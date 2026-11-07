@@ -454,7 +454,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (plan, review, context, lead, title): (String, String, String, String, Option<String>) = (
+        let (plan, review, context, lead, title): (String, String, String, Option<String>, Option<String>) = (
             row.get(0)?,
             row.get(1)?,
             row.get(2)?,
@@ -475,7 +475,10 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
             job: None,
-            session: Some(id("Session id", &lead, SessionId::parse)?),
+            session: lead
+                .as_deref()
+                .map(|lead| id("Session id", lead, SessionId::parse))
+                .transpose()?,
             record: None,
             event: None,
             opened_at: None,

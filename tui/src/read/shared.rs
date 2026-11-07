@@ -362,7 +362,8 @@ pub struct PlanHead {
     pub title: String,
     pub jira: Option<String>,
     pub phase: Phase,
-    pub lead_session: SessionId,
+    /// The Plan's Lead Session; none while the Plan is Lead-less (contract §2.2, air-d19, air-d22).
+    pub lead_session: Option<SessionId>,
     pub pr: Option<Pr>,
     pub counts: JobCounts,
     /// Escalations still `open`.
@@ -484,7 +485,7 @@ pub(super) fn plan_heads(
         let pid: String = r.get(0)?;
         let plan = id("Plan id", &pid, PlanId::parse)?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {plan} has {name} {value:?}"));
-        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
+        let (context, phase, lead): (String, String, Option<String>) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
         let workflow = match (
@@ -516,7 +517,11 @@ pub(super) fn plan_heads(
         };
         heads.push(PlanHead {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
-            lead_session: SessionId::parse(&lead).map_err(|_| field("lead_session", &lead))?,
+            lead_session: lead
+                .as_deref()
+                .map(SessionId::parse)
+                .transpose()
+                .map_err(|_| field("lead_session", lead.as_deref().unwrap_or("")))?,
             title: r.get(2)?,
             jira: r.get(3)?,
             counts: counts.remove(&pid).unwrap_or_default(),

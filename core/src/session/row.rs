@@ -536,8 +536,8 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cpd
 pub(super) fn plan_lead(
     conn: &Connection,
     plan: &PlanId,
-) -> Result<Option<(ContextId, String)>, CpdError> {
-    let found: Option<(String, String)> = conn
+) -> Result<Option<(ContextId, Option<String>)>, CpdError> {
+    let found: Option<(String, Option<String>)> = conn
         .query_row(
             "SELECT context, lead_session FROM plans WHERE id = ?1",
             [plan.as_str()],

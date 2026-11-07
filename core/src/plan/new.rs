@@ -370,10 +370,7 @@ fn already(
                 Some(started.window.as_str().to_owned()),
             )
         }
-        pane => (
-            pane,
-            env.store.read(|conn| lead::last_window(conn, lead))?,
-        ),
+        pane => (pane, env.store.read(|conn| lead::last_window(conn, lead))?),
     };
     let workflows = env.store.read(|conn| listed(conn, &plan.id))?;
     Ok(Output::success(json!({

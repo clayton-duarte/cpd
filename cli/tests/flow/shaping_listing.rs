@@ -68,9 +68,9 @@ fn shaping_listing_plan_show_has_null_lead() {
     let fx = env();
     shaping(&fx.env, "shape1");
     let out = fx.cpd(&["plan", "show", "--plan", "shape1"]).ok();
-    assert_eq!(out["phase"], json!("shaping"));
+    assert_eq!(out["plan"]["phase"], json!("shaping"));
     assert_eq!(
-        out["lead_session"],
+        out["plan"]["lead_session"],
         Value::Null,
         "plan show does not crash on the null lead_session"
     );

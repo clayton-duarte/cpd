@@ -225,9 +225,9 @@ INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acce
          ('pay', NULL, 'b', 'B', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'scout', 'queued', 1, '0000000000000000000000000000000000000000000000000000000000000000', 1, 't');
 INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'a', 'b');
 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-  VALUES ('pay', 'a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a1', '/w', 't');
+  VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a-a1', '/w', 't');
 INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-  VALUES ('pay', 'a1-q1', 'a', 1, 'What?', 'open', 1, 't');
+  VALUES ('pay', 'a-a1-q1', 'a-a1', 1, 'What?', 'open', 1, 't');
 COMMIT;";
 
 #[test]

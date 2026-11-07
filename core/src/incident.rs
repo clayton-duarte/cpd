@@ -164,9 +164,10 @@ pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
             .query_row(
                 "SELECT p.lead_session FROM incident_plans ip JOIN plans p ON p.id = ip.plan ORDER BY ip.plan LIMIT 1",
                 [],
-                |r| r.get::<_, String>(0),
+                |r| r.get::<_, Option<String>>(0),
             )
             .optional()?
+            .flatten()
         {
             Some(id) => id,
             None => return Ok(None),
@@ -224,7 +225,7 @@ pub fn start(
                 return Err(CpdError::plan_not_found(plan));
             }
         }
-        let lead: String = tx.query_row("SELECT lead_session FROM plans WHERE id = ?1", [plans[0].as_str()], |r| r.get(0))?;
+        let lead: Option<String> = tx.query_row("SELECT lead_session FROM plans WHERE id = ?1", [plans[0].as_str()], |r| r.get(0))?;
         if let Some((until_plan, key)) = &until {
             if !plans.contains(until_plan) {
                 return Err(CpdError::new(
@@ -268,7 +269,7 @@ pub fn start(
                 for plan in plans {
                     tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES (?1, ?2)", params![plan.as_str(), tx.id()])?;
                 }
-                tx.execute("UPDATE incident SET lead = ?1 WHERE id = 1", [lead.as_str()])?;
+                tx.execute("UPDATE incident SET lead = ?1 WHERE id = 1", [lead.as_deref()])?;
             }
             if until_changed {
                 tx.execute(
