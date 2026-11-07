@@ -176,8 +176,7 @@ async function boot(): Promise<void> {
   })();
 
   mountWebui(webuiRoot, {
-    sendWeb: bridge.sendWeb,
-    onWebMessage: bridge.onWebMessage,
+    webSocketUrl: bridge.webSocketUrl,
     reportCrash: bridge.reportCrash,
     reportHealthy: () => bridge.reportHealthy(startup),
   });
