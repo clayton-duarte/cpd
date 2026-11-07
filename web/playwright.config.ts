@@ -15,6 +15,9 @@ export default defineConfig({
   testDir: "./src/testing",
   testMatch: "e2e-*.spec.ts",
   outputDir: join(tmpdir(), "cpd-web-e2e"),
+  // Once per run, before any worker: the app's pty host needs node-pty's `spawn-helper` executable
+  // (e2e-setup.ts), which the frozen install does not guarantee.
+  globalSetup: "./src/testing/e2e-setup.ts",
   fullyParallel: false,
   workers: 1,
   retries: 0,
