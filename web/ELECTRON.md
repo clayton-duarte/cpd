@@ -388,7 +388,7 @@ Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal
 
 ### Overview
 
-The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. A changed `main.js` or `preload.cjs` waits for the User's click on `Restart to Apply Update`.
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) relaunches the Electron main process with `app.relaunch()` + `app.exit()`. A renderer-only change keeps the in-place renderer reload.
 
 Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
@@ -413,7 +413,7 @@ export type UpdateState = { phase: 'idle' } | { phase: 'syncing' } | { phase: 'b
 export function electronOutDir(env: Record<string, string | undefined>): string
 ```
 
-Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js` and `preload.cjs` under this directory; the default is unchanged.
+Returns `env.CPD_ELECTRON_OUT`, or `dist-electron` when it is unset. Throws an `Error` when the value is not a single relative segment of `[A-Za-z0-9._-]`: absolute paths, `/`, `.` and `..` are refused. `vite.electron.config.ts` builds the renderer, `main.js`, `server.js` and `preload.cjs` under this directory; the default is unchanged.
 
 #### checkout.ts
 
@@ -451,7 +451,7 @@ export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
 
 `readBuiltSha` reads `<root>/web/dist-electron/.built-sha`, trimmed, and returns `null` when it is missing.
 
-`swapBundle` sets `mainChanged` to true when the text of `main.js` or of `preload.cjs` differs between `web/dist-electron` and `web/dist-electron.next`; a missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
+`swapBundle` sets `mainChanged` to true when any non-renderer build artefact differs between `web/dist-electron` and `web/dist-electron.next`: the artefacts of the main and preload builds — `main.js`, `preload.cjs`, `server.js` — plus any other main-side artefact the build emits. The renderer output is excluded. A missing current file counts as different. It then renames `web/dist-electron` to `web/dist-electron.prev`, `web/dist-electron.next` to `web/dist-electron`, and removes `web/dist-electron.prev`. If the second rename throws, it renames `.prev` back and rethrows.
 
 #### cli.ts
 
@@ -517,7 +517,7 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> }
 
 1. `onState({ phase: 'syncing' })`, then `sync()`. A `skipped` result logs the reason, calls `onState({ phase: 'idle' })` and ends: no build and no CLI install.
 2. `sha = headSha()`.
-3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, or `restart-needed` was already set earlier in this process (sticky), it calls `onState({ phase: 'restart-needed' })` and does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
+3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, it calls `onState({ phase: 'restart-needed' })` and then relaunches the Electron main process with `app.relaunch()` followed by `app.exit(0)`, through an injected port like every other external effect; it does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
 4. CLI flow, concurrent with the bundle flow, when `cliSha() !== sha`: `installCli(sha)`. A failure is only logged; it never sets the `error` state.
 
 `check()` is single-flight. A call made during a run returns that run's promise, and queues exactly one trailing run after it.
@@ -556,7 +556,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 
 The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
 
-A changed `main.js` or `preload.cjs` never reloads the renderer: it shows `Restart to Apply Update` in the menu, and only the User's click applies it. That click is the only path that loads new main-process or preload code. The restart-needed state is sticky for the rest of the process.
+A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed` and relaunches the Electron main process with `app.relaunch()` + `app.exit(0)`, so the new main-process, preload and server code load in a fresh process. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
 
 ## Verification checklist
 
