@@ -99,12 +99,16 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
   // never says `hello` is a stall. The probe writes one `refresh` on the child's stdin; a stall is raised loud on
   // the error path (the renderer's cockpit.error toast), resynced, and the child restarted with the existing backoff
   // if still silent past the second deadline.
+  const requestRefresh = (): void => {
+    try { child?.write(`${JSON.stringify({ t: "refresh" })}\n`); } catch { /* the child is gone; its exit follows */ }
+  };
   const watchdog = createStreamWatchdog({
     scheduler: deps.scheduler,
-    probe: () => { try { child?.write(`${JSON.stringify({ t: "refresh" })}\n`); } catch { /* the child is gone; its exit follows */ } },
+    probe: requestRefresh,
     resync: () => {
       reported = true; // the stall toast below is the one loud report; the restart must not repeat it
       fail(new WebError("cpd_failed", "the serve stream stalled: no frame answered the refresh probe", { cpdCode: "stalled" }));
+      requestRefresh(); // ask the child for a fresh full snapshot (the resync)
     },
     restart: () => {
       // Kill the current child; its exit relaunches through the existing restart backoff (13.7).
