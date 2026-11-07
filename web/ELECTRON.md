@@ -10,7 +10,7 @@ Launch the app with `cpd desktop`:
 cpd desktop
 ```
 
-`cpd desktop` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `desktop_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
+`cpd desktop` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `desktop_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a). The launch removes the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER`, `CPD_JOB_KIND` (contract §6.6) — from the child's environment, and the app strips the same five from its own environment at boot (Boot order, below), so no agent Session's identity reaches the app or the `cpd` children it spawns; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and the rest of the environment stay.
 
 These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. The `allowBuilds: electron: false` setting in `pnpm-workspace.yaml` stops the postinstall download of the Electron binary, so worktrees and CI have no binary. When the binary is missing, `cpd install` and `cpd desktop` run `node web/node_modules/electron/install.js` to download it; if that fails, the install or app step fails before plutil runs. When the binary is present, no extra command runs. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
 
@@ -25,6 +25,8 @@ Why `allowBuilds` in `pnpm-workspace.yaml` sets `electron` and `node-pty` to `fa
 ## Boot order
 
 The Electron boot sequence ensures the mode is applied only after the window exists. `prepare()` (called by `app.whenReady()`) runs paths, env and native shell setup. When ready, the window is created. Then the mode controller's `init()` applies WebUI, the only launch view, with menu and window calls, and deletes the dropped `$CPD_HOME/run/ui-mode.json` once, with a log line. Finally the renderer loads with the result. The view is applied after the window exists, so no view apply touches the window before it is created.
+
+The boot strips the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the same five the `cpd desktop` launch removes (commands.md §14.4a; contract §6.6) — from `process.env`, before any cpd child is spawned (every `cpd` call of the updater inherits the app's environment); `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable stay, so the app still finds the home.
 
 ## Module contract
 
@@ -461,13 +463,14 @@ export function installCli(deps: { exec: UpdateExec; fs: UpdateFs; timers: Updat
 export function readInstalledSha(fs: UpdateFs, root: string): string | null
 ```
 
-`countRunningAttempts` runs `exec('cpd', ['plan','list'], { cwd: root })`, which prints JSON `{ plans: [{ id }] }`. For each plan it runs `exec('cpd', ['attempt','list','--active','--plan', id], { cwd: root })`, which prints JSON `{ attempts: [{ status }] }`. It counts the attempts whose status is `running`. A non-zero exit or invalid JSON throws an `Error` that names the command.
+`countRunningAttempts` runs `exec('cpd', ['plan','list'], { cwd: root })`, which prints JSON `{ plans: [{ id }] }`. For each plan it runs `exec('cpd', ['attempt','list','--active','--plan', id], { cwd: root })`, which prints JSON `{ attempts: [{ status }] }`. It counts the attempts whose status is `running`. A non-zero exit or invalid JSON throws an `Error` whose message is `<name> failed (exit <code>): <stderr>`, `<name>` being `cpd <args>`. When stderr is empty, the message parses the captured stdout as cpd's one JSON error envelope (commands.md §1.2; cpd prints every error, a refusal included, on stdout and leaves stderr empty) and the message names the envelope's `error.code` and `error.message`: a refused call (exit 3) is logged with its code and message, not as an empty tail.
 
-`installCli` runs in three steps:
+`installCli` runs in four steps:
 
 1. `exec('scripts/cargo.sh', ['build','--release','--locked','-p','cpd'], { cwd: root })`. Non-zero: returns `{ ok: false, log }`.
-2. Loop: `countRunningAttempts`. When the count is above 0, it logs a line through `deps.log` and waits `retryMs` (default 60000) with `timers.setTimeout`, then counts again. A throw from counting returns `{ ok: false, log: <its message> }`.
-3. When the count is 0: `exec('scripts/install-cpd.sh', [], { cwd: root })` (A7). Non-zero: returns `{ ok: false, log }`. Success writes `sha` to `<root>/target/.cli-installed-sha` and returns `{ ok: true }`.
+2. The install, at once and without waiting for running attempts: `exec('scripts/install-cpd.sh', ['--no-follow-up'], { cwd: root })` (A7). `--no-follow-up` (commands.md §14.4) skips the install's disruptive follow-ups; the binary write inside the install stays atomic (copied to `.cpd.tmp.<pid>`, then `rename`d over `~/.local/bin/cpd`), so a running `cpd` keeps its old inode and installing while attempts run is safe. Non-zero: returns `{ ok: false, log }`.
+3. The follow-ups, deferred: loop `countRunningAttempts`. When the count is above 0, it logs a line through `deps.log` and waits `retryMs` (default 60000) with `timers.setTimeout`, then counts again. A throw from counting returns `{ ok: false, log: <its message> }`.
+4. When the count is 0: `exec('scripts/install-cpd.sh', [], { cwd: root })`, which runs the follow-ups (the view respawn and the engine restart) on the already-swapped binary. Non-zero: returns `{ ok: false, log }`. Success writes `sha` to `<root>/target/.cli-installed-sha` and returns `{ ok: true }`.
 
 `readInstalledSha` reads `<root>/target/.cli-installed-sha`, trimmed, and returns `null` when it is missing.
 
@@ -551,7 +554,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 |---|---|---|
 | Sync skipped (`fetch-failed`, `diverged`, `rebase-conflict`) | Nothing in the cockpit. The menu item reads `Up to Date`. The app keeps the bundle it has. | The updater's `log` line with the reason. |
 | Build failed (`pnpm install` or `build:electron` exits non-zero) | The menu item reads `Update Failed (see log)`, disabled. The old bundle stays and the renderer is not reloaded. | The updater's `log` line: the failing command's stdout and stderr. The last line is the menu's message. |
-| CLI install failed (`cargo build`, the attempt count, or `install-cpd.sh` fails) | Nothing. A CLI failure never sets the error state, and the bundle update is unaffected. `target/.cli-installed-sha` is not written, so the next run retries. | The updater's `log` line: the failing command's output, or the counting error's message. |
+| CLI install failed (the `cargo build`, either `install-cpd.sh` run, or the attempt count fails) | Nothing. A CLI failure never sets the error state, and the bundle update is unaffected. `target/.cli-installed-sha` is not written, so the next run retries. | The updater's `log` line: the failing command's output, or the counting error's message, which names a refused cpd call's `error.code` and `error.message` when stderr was empty. |
 | Bootstrap failed: no checkout, `install-cpd.sh` exits non-zero, or `~/.local/bin/cpd` is still missing after exit 0 | The overlay `cpd command tool install failed`, with the error and the log path. | `~/.cpd/run/cli-bootstrap.log` holds the stdout and stderr of `install-cpd.sh`. The file is written only when the script exits non-zero, so with no checkout the overlay text is the only report. |
 
 The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
