@@ -473,6 +473,36 @@ pub fn head_contains_base(
     Ok(matches!(compare.status.as_str(), "ahead" | "identical"))
 }
 
+/// The repo settings a `swr_repos` row holds, as `gh api repos/{owner}/{repo}` prints them (air-n70).
+#[derive(Deserialize)]
+struct RawRepoSettings {
+    default_branch: Option<String>,
+    archived: bool,
+    #[serde(default)]
+    allow_auto_merge: bool,
+    allow_merge_commit: bool,
+    allow_squash_merge: bool,
+    allow_rebase_merge: bool,
+    delete_branch_on_merge: bool,
+}
+
+/// The repo's settings (`gh api repos/{owner}/{repo}`), one read (air-n70): the REST fields map onto the `swr_repos`
+/// row. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`; a tolerated reply is parsed once here.
+pub fn repo_settings(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<RepoMeta, CpdError> {
+    let endpoint = format!("repos/{repo}");
+    let args = ["api", endpoint.as_str()];
+    let raw: RawRepoSettings = parse(&args, &run_on(runner, cwd, &args)?)?;
+    Ok(RepoMeta {
+        default_branch: raw.default_branch,
+        is_archived: raw.archived,
+        auto_merge_allowed: raw.allow_auto_merge,
+        squash_merge_allowed: raw.allow_squash_merge,
+        merge_commit_allowed: raw.allow_merge_commit,
+        rebase_merge_allowed: raw.allow_rebase_merge,
+        delete_branch_on_merge: raw.delete_branch_on_merge,
+    })
+}
+
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`. When GitHub refuses because the pull request is the base of a
 /// stack, it falls back to the asynchronous REST merge endpoint (`merge-async`, pro-d355). It still does not pass `--delete-branch`: GitHub's own
@@ -582,21 +612,42 @@ pub fn post_review(
 
 // The poller (contract §7.6, commands.md §9.2): one search, one lookup.
 
-/// The fields of a pull request, as the search and the lookup both select them.
-macro_rules! pr_fields {
+/// The repository selection, the settings form of it carrying the fields the poll fills `swr_repos` from (air-n71).
+macro_rules! repo_node {
     () => {
-        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
-         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
-         reviewThreads(first: 100) { nodes { id isResolved } }"
+        "repository { nameWithOwner defaultBranchRef { name } }"
+    };
+    (settings) => {
+        "repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge }"
     };
 }
 
-/// The fields of a pull request the review-requested search selects: `pr_fields!` without the reviews, the checks rollup and
-/// the review threads, which nothing reads for a pull request the User neither owns nor authored (A7, pro-d392).
+/// The fields of a pull request, as the search and the lookup both select them; `$repo` is the [`repo_node!`] selection.
+macro_rules! pr_fields {
+    () => {
+        pr_fields!(repo_node!())
+    };
+    ($repo:expr) => {
+        concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
+         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+         reviewThreads(first: 100) { nodes { id isResolved } }")
+    };
+}
+
+/// [`pr_fields!`] of the search, whose `repository` node carries the settings (air-n71): the poll writes `swr_repos`
+/// from this document, never a second read.
+macro_rules! search_pr_fields {
+    () => {
+        pr_fields!(repo_node!(settings))
+    };
+}
+
+/// The fields of a pull request the review-requested search selects: `search_pr_fields!` without the reviews, the checks rollup
+/// and the review threads, which nothing reads for a pull request the User neither owns nor authored (A7, pro-d392).
 macro_rules! slim_pr_fields {
     () => {
-        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
-         mergeable mergeStateStatus"
+        concat!(repo_node!(settings), " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+         mergeable mergeStateStatus")
     };
 }
 
@@ -607,7 +658,7 @@ macro_rules! slim_pr_fields {
 pub const SEARCH_QUERY: &str = concat!(
     "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
-    pr_fields!(),
+    search_pr_fields!(),
     " } } } reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
     slim_pr_fields!(),
@@ -676,6 +727,9 @@ pub struct Search {
     pub issue_count: u32,
     pub prs: Vec<Listed>,
     pub rate: Rate,
+    /// The settings the search's `repository` nodes carried, one per repo, in first-seen order (air-n71): empty when a
+    /// canned reply did not select them, and the poll then writes no row.
+    pub repo_settings: Vec<(String, RepoMeta)>,
 }
 
 #[derive(Deserialize)]
@@ -727,9 +781,35 @@ struct RawRepoName {
     default_branch_ref: Option<RawBranch>,
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
-    /// Absent in the search reply; the direct read requires it.
+    /// Absent from a canned reply that lacks it; the poll writes no `swr_repos` row when one is (air-n71).
     #[serde(rename = "isArchived", default)]
     is_archived: Option<bool>,
+    #[serde(rename = "autoMergeAllowed", default)]
+    auto_merge_allowed: Option<bool>,
+    #[serde(rename = "squashMergeAllowed", default)]
+    squash_merge_allowed: Option<bool>,
+    #[serde(rename = "mergeCommitAllowed", default)]
+    merge_commit_allowed: Option<bool>,
+    #[serde(rename = "rebaseMergeAllowed", default)]
+    rebase_merge_allowed: Option<bool>,
+    #[serde(rename = "deleteBranchOnMerge", default)]
+    delete_branch_on_merge: Option<bool>,
+}
+
+impl RawRepoName {
+    /// The repo settings the node carries, when GitHub answered every flag (air-n71): a reply that lacks one is `None`,
+    /// so the poll writes no row and no flag is ever invented.
+    fn settings(&self) -> Option<RepoMeta> {
+        Some(RepoMeta {
+            default_branch: self.default_branch_ref.as_ref().map(|b| b.name.clone()),
+            is_archived: self.is_archived?,
+            auto_merge_allowed: self.auto_merge_allowed?,
+            squash_merge_allowed: self.squash_merge_allowed?,
+            merge_commit_allowed: self.merge_commit_allowed?,
+            rebase_merge_allowed: self.rebase_merge_allowed?,
+            delete_branch_on_merge: self.delete_branch_on_merge?,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -1302,9 +1382,16 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     };
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
+    let mut repo_settings: Vec<(String, RepoMeta)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
+            let settings = raw.repository.settings();
             let pr = reply.polled(raw, bots)?;
+            if let Some(meta) = settings
+                && !repo_settings.iter().any(|(repo, _)| repo == &pr.repo)
+            {
+                repo_settings.push((pr.repo.clone(), meta));
+            }
             let at = match prs
                 .iter()
                 .position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number))
@@ -1329,6 +1416,7 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     Ok(Search {
         issue_count,
         prs,
+        repo_settings,
         rate: Rate {
             cost: rate.cost,
             remaining: rate.remaining,
@@ -2013,10 +2101,10 @@ mod tests {
         assert_eq!(
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus } } } \
              rateLimit { cost remaining resetAt } }"
         );
@@ -2660,7 +2748,7 @@ pub struct PollNode {
 }
 
 /// A repository's metadata (`m<i>`).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RepoMeta {
     pub default_branch: Option<String>,
     pub is_archived: bool,

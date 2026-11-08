@@ -373,13 +373,16 @@ pub(super) fn run(engine: &mut Engine) {
         })
         .collect();
     // pro-d199: the runner is re-read before Attempts start; a config that does not parse starts none (no stale value).
-    let runner = match cpd_core::config::Config::load(&engine.home) {
-        Ok(fresh) => fresh.experimental.durable_workers,
+    // The Worker cap is read from the same fresh config, so a `cpd config concurrency set` takes effect next tick
+    // (contract §8.2, §3.7 E3) without an engine restart.
+    let fresh = match cpd_core::config::Config::load(&engine.home) {
+        Ok(fresh) => fresh,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
     let mut config = engine.config.clone();
-    config.experimental.durable_workers = runner;
-    let (home, concurrency) = (engine.home.clone(), engine.config.concurrency);
+    config.experimental.durable_workers = fresh.experimental.durable_workers;
+    config.concurrency = fresh.concurrency;
+    let (home, concurrency) = (engine.home.clone(), fresh.concurrency);
     let mut remaining = ready;
     // The walk names the Jobs to start and the Jobs it skips. A start that fails (a tier outside the Worker range, a tampered Job,
     // a lost race) takes no slot, so the walk runs again without the Jobs tried.

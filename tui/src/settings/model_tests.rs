@@ -1,6 +1,7 @@
 //! The Agent Tiers state machine, from hand-built reads: no process, no drawing.
 
 use super::model::*;
+use super::view_tests::{Act, Commands, call, popup, reads, workers_screen};
 use cpd_core::config::{Catalog, Letter, Role, RoleTiers, Tier, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -491,4 +492,40 @@ fn escape_closes_an_open_list_first_and_then_the_view_without_writing() {
     // The pending step stays unwritten: Esc never returns Save.
     assert_eq!(m.steps().len(), 2);
     assert_eq!(m.key(key(KeyCode::Char('q'))), Effect::Close);
+}
+
+/// The Workers screen driven through the popup: the count `cpd config` carries, the editor, the Save's argv.
+/// It runs the view loop too (the fake `cpd config`, in process), but it pins the screen's rows and the command
+/// the popup builds, so it lives here beside the state-machine tests.
+#[test]
+fn the_workers_screen_shows_the_current_concurrency_and_saves_it() {
+    let commands = Commands::new();
+    let acts = vec![
+        Act::Key(KeyCode::Down),
+        Act::Key(KeyCode::Enter),
+        Act::Snap,
+        Act::Key(KeyCode::Enter),
+        Act::Type("12"),
+        Act::Snap,
+        Act::Key(KeyCode::Enter),
+        Act::Click("[ Save ]", "[ Save ]"),
+    ];
+    let run = popup(&commands, acts);
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(
+        run.snaps[0].rows(),
+        workers_screen("5"),
+        "the count the fake `cpd config` carries"
+    );
+    assert_eq!(
+        run.snaps[1].rows(),
+        workers_screen("12▌"),
+        "the editor shows the digits typed so far and the cursor"
+    );
+    let mut want = reads();
+    want.push(call(&["config", "concurrency", "set", "12"]));
+    assert_eq!(
+        run.calls, want,
+        "Save runs the new value through the command"
+    );
 }

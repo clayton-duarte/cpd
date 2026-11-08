@@ -1,4 +1,5 @@
 import type { Completion } from "../protocol/domain.ts";
+import { toArgv } from "./cpd-argv.ts";
 
 /** The `cpd` boundary: run `cpd <args>` and resolve the parsed JSON line it printed. Rejects on a non-zero exit. */
 export type CpdRunner = (args: readonly string[]) => Promise<unknown>;
@@ -17,7 +18,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 export function createCompletionStore(deps: { cpd: CpdRunner }): CompletionStore {
   return {
     async get(sessionId) {
-      const reply = await deps.cpd(["swr", "badge", "get", sessionId]);
+      const reply = await deps.cpd(toArgv({ kind: "swr.badge.get", sessionId }));
       const badge = isRecord(reply) ? reply["badge"] : null;
       if (!isRecord(badge)) return null;
       const completion = {
@@ -30,8 +31,8 @@ export function createCompletionStore(deps: { cpd: CpdRunner }): CompletionStore
       return { entryId: String(badge["entry_id"]), completion };
     },
     async put(sessionId, entryId, c) {
-      const others = c.others !== undefined && c.others.length > 0 ? ["--others", JSON.stringify(c.others)] : [];
-      await deps.cpd(["swr", "badge", "put", sessionId, "--entry", entryId, "--label", c.label, "--score", String(c.score), "--text", c.text, "--tone", c.tone, ...others]);
+      const others = c.others !== undefined && c.others.length > 0 ? JSON.stringify(c.others) : undefined;
+      await deps.cpd(toArgv({ kind: "swr.badge.put", sessionId, entryId, label: c.label, score: c.score, text: c.text, tone: c.tone, ...(others !== undefined ? { others } : {}) }));
     },
   };
 }

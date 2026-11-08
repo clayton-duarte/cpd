@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ContextNode, ContextTreeModel, PlanNode, SessionNode, InboxModel, PlanViewModel } from "../protocol/cockpit.ts";
-import type { Capabilities, Dialog, FooterStats, SessionRef, WireError } from "../protocol/domain.ts";
+import type { Capabilities, Dialog, FooterStats, SessionRef, ToolItem, WireError } from "../protocol/domain.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { createStore, initialState, reduce, type AppState, type StoreAction } from "./store.ts";
 
@@ -89,18 +89,29 @@ describe("store", () => {
     expect(s3.session?.pending).toEqual([]);
   });
 
-  it("failed submit marks the pending submission failed", () => {
+  it("a failed submission drops the pending row and raises the error toast", () => {
     const s1 = run(selected(), attached(), { type: "submitPending", submission: pending("c1") }, { type: "submitPending", submission: pending("c2") });
     const s2 = run(s1, server({ type: "session.error", sessionId: "s1", clientSubmissionId: "c1", error: err }));
-    expect(s2.session?.pending).toEqual([
-      { ...pending("c1"), state: "failed", error: err },
-      { ...pending("c2"), state: "sending" },
-    ]);
+    // 15.1: the failed row leaves the transcript; no inline text stays in the chat.
+    expect(s2.session?.pending).toEqual([{ ...pending("c2"), state: "sending" }]);
     expect(s2.session?.error).toBeNull();
+    // 11.7: the failure appears once in the cockpit error toast (activeError = lastError ?? cockpit.error).
+    expect(s2.lastError ?? s2.cockpit.error).toEqual(err);
     const s3 = run(s2, server({ type: "session.error", sessionId: "s1", error: err }));
     expect(s3.session?.error).toEqual(err);
     const s4 = run(s3, server({ type: "session.error", sessionId: null, error: err }));
     expect(s4.lastError).toEqual(err);
+  });
+
+  it("a failed tool result raises the error toast", () => {
+    const running: ToolItem = { kind: "tool", id: "tool:c1", callId: "c1", name: "bash", args: { command: "x" }, status: "running" };
+    const failed: ToolItem = { ...running, status: "failed", result: { text: "\nboom\nmore", isError: true } };
+    const s1 = run(selected(), attached(), server({ type: "session.window", sessionId: "s1", mode: "tail", window: { items: [running], hasEarlier: false, cursor: null } }));
+    expect(s1.lastError ?? s1.cockpit.error).toBeNull();
+    const s2 = run(s1, server({ type: "session.update", sessionId: "s1", items: [failed] }));
+    expect(s2.session?.transcript.items).toEqual([failed]);
+    // 15.1: the reason goes to the toast with code tool_failed; the row stays the transcript's record.
+    expect(s2.lastError ?? s2.cockpit.error).toMatchObject({ code: "tool_failed", message: "boom" });
   });
 
   it("busy state and queued submissions come from session status", () => {

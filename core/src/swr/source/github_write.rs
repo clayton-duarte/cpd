@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 
 use super::github::GithubSource;
 use super::{Cx, ExecOutcome};
+use crate::clock::timestamp;
 use crate::error::CpdError;
 use crate::output::Output;
 use crate::pr::auto_merge::{self, Outcome};
@@ -78,6 +79,39 @@ pub fn queued(
     fields["mutation_id"] = json!(id);
     fields["effective"] = effective;
     Ok(Output::success(fields))
+}
+
+/// The one `swr_repos` write (air-n70, air-n71): the row of `repo` upserted from `meta`, with `fetched_at` `now`. The
+/// SWR source's commit, `pr poll`'s fill and the merge's on-demand read all write the row through here.
+pub(crate) fn write_repo_settings(
+    tx: &WriteTxn<'_>,
+    repo: &str,
+    meta: &gh::RepoMeta,
+    now: OffsetDateTime,
+) -> Result<(), CpdError> {
+    tx.execute(
+        "INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
+           merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (repo) DO UPDATE SET default_branch = excluded.default_branch,
+           is_archived = excluded.is_archived, auto_merge_allowed = excluded.auto_merge_allowed,
+           squash_merge_allowed = excluded.squash_merge_allowed,
+           merge_commit_allowed = excluded.merge_commit_allowed,
+           rebase_merge_allowed = excluded.rebase_merge_allowed,
+           delete_branch_on_merge = excluded.delete_branch_on_merge, fetched_at = excluded.fetched_at",
+        rusqlite::params![
+            repo,
+            meta.default_branch,
+            meta.is_archived,
+            meta.auto_merge_allowed,
+            meta.squash_merge_allowed,
+            meta.merge_commit_allowed,
+            meta.rebase_merge_allowed,
+            meta.delete_branch_on_merge,
+            timestamp(now)
+        ],
+    )?;
+    Ok(())
 }
 
 /// [`merge_method`] inside the caller's transaction, from `swr_repos`: the first allowed of squash, merge, rebase;

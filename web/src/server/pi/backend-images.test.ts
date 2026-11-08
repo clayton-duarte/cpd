@@ -114,6 +114,21 @@ describe("pi backend images", () => {
     expect(s.fs.writes.map((w) => w.path)).toEqual(["/tmp/a/s1-9-0.png", "/tmp/a/s1-9-1.jpg", "/tmp/a/s1-9-2.gif", "/tmp/a/s1-9-3.webp"]);
   });
 
+  it("an image with no text is accepted and its path is sent", async () => {
+    const s = await setup({ text: "", now: 55 });
+    await submit(s, "", [img("image/png", "AQID")]);
+    expect(s.fs.writes.map((w) => [w.path, [...w.bytes]])).toEqual([["/att/s1-55-0.png", [1, 2, 3]]]);
+    expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", "[Attached image: /att/s1-55-0.png]"]]);
+  });
+
+  it("an image with no text sends no leading blank line in the text", async () => {
+    const s = await setup({ text: "", now: 55 });
+    await submit(s, "", [img("image/png", "AQID"), img("image/jpeg", "BAUG")]);
+    const text = send(s.cpd.calls)[0]?.at(-1);
+    expect(text).toBe("[Attached image: /att/s1-55-0.png]\n[Attached image: /att/s1-55-1.jpg]");
+    expect(text?.startsWith("\n")).toBe(false);
+  });
+
   it("a text too long once the paths are appended is refused invalid_submission", async () => {
     const s = await setup({ text: "" });
     const err = await rejects(submit(s, "x".repeat(PI_SEND_TEXT_MAX - 5), [img("image/png", "AQID")]));

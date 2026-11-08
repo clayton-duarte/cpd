@@ -29,6 +29,8 @@ mod asks;
 mod closed;
 #[cfg(test)]
 mod closed_tests;
+#[cfg(test)]
+mod concurrency_tests;
 mod curate;
 #[cfg(test)]
 mod curate_tests;

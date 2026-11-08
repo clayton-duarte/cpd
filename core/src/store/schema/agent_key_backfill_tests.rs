@@ -297,8 +297,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261107T2331-pr-base-contained")
-    );
+        Some("20261107T2331-pr-base-contained")    );
 }
 
 #[test]

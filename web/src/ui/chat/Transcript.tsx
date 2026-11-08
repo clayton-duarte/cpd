@@ -65,7 +65,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../components/tooltip.tsx";
-import { glyphClass } from "../dango-status.ts";
 import { CompactionRow, FoldRow, formatClock } from "./Folds.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { groupRows } from "./rows.ts";
@@ -717,9 +716,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                           <UserAttachments attachments={pendingAttachments} />
                           <Bubble
                             align="end"
-                            variant={
-                              p.state === "failed" ? "destructive" : "muted"
-                            }
+                            variant="muted"
                             data-part="bubble"
                             className="max-w-full min-w-0 overflow-hidden"
                           >
@@ -731,32 +728,15 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                             </BubbleContent>
                           </Bubble>
                           <MessageFooter className="gap-1.5">
-                            {p.state === "failed" ? (
-                              <span
-                                data-part="pending-status"
-                                data-state="failed"
-                                role="alert"
-                                className="flex items-center gap-1.5 font-mono text-destructive"
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className={glyphClass.blocked}
-                                />
-                                {`failed: ${p.error?.message ?? "unknown error"}`}
-                              </span>
-                            ) : (
-                              <>
-                                <span
-                                  data-part="pending-status"
-                                  data-state={p.state}
-                                >
-                                  {clock === null ? "You" : `You · ${clock}`}
-                                </span>
-                                {p.text !== "" ? (
-                                  <CopyTurnButton value={p.text} />
-                                ) : null}
-                              </>
-                            )}
+                            <span
+                              data-part="pending-status"
+                              data-state={p.state === "sent" ? "sent" : "sending"}
+                            >
+                              {clock === null ? "You" : `You · ${clock}`}
+                            </span>
+                            {p.text !== "" ? (
+                              <CopyTurnButton value={p.text} />
+                            ) : null}
                           </MessageFooter>
                         </MessageContent>
                       </Message>

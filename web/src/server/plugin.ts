@@ -9,6 +9,7 @@ import type { Runner } from "../protocol/domain.ts";
 import type { GitBoundary, Scheduler } from "../protocol/runtime.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { createCpd, type CpdExec, type FollowBoundary } from "./cockpit/cli.ts";
+import { toArgv } from "./cpd-argv.ts";
 import { createCockpitService, type CockpitService, type Extras } from "./cockpit/events.ts";
 import { readCosts, type CostFile } from "./cockpit/cost.ts";
 import { readLogs } from "./cockpit/logs.ts";
@@ -152,7 +153,7 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
       const node = (cockpit.snapshot().tree?.contexts ?? []).flatMap((c) => c.plans.flatMap((p) => p.sessions)).find((n) => n.ref.id === ref.id);
       const planId = node?.planId ?? null;
       if (planId === null) return null;
-      return buildPlanView(parsePlanShow(await cpd.json(["plan", "show", "--plan", planId])));
+      return buildPlanView(parsePlanShow(await cpd.json(toArgv({ kind: "plan.show", planId }))));
     },
   });
   return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send, ...(completion === undefined ? {} : { completion }) }) };

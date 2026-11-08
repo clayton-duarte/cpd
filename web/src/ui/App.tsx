@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { HealthBeacon } from "./HealthBeacon.tsx";
 import type { CrashReport } from "../electron/health.ts";
 import { activeLeadPlanId as leadPlanIdOf, loadSelection, saveSelection, visiblePlan as visiblePlanOf } from "./state/selection.ts";
 import { ChatPane } from "./ChatPane.tsx";
@@ -36,15 +37,16 @@ const MemoInbox = memo(Inbox);
 
 const STANDING_IDS: readonly string[] = ["cpd", "host", "codereview"];
 
+const noErrors = (): number => 0;
 /** The unread Inbox rows already hidden this session. Module-level, not a per-mount ref, so a remount does
  *  not send a second hide for a row whose item the engine has already closed (air-n11 B2). */
 const dismissedUnread = new Set<number>();
 
 export type { FileReaderBoundary };
-export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void }
+export interface AppProps { transport: Transport; scheduler: Scheduler; reader: FileReaderBoundary; newId?: () => string; onCrash?: (r: CrashReport) => void; onHealthy?: () => void; errors?: () => number }
 
 export function App(props: AppProps): ReactElement {
-  const { transport, scheduler, reader, newId, onCrash } = props;
+  const { transport, scheduler, reader, newId, onCrash, onHealthy, errors } = props;
   const crash = onCrash === undefined ? {} : { onCrash };
   const { store, connection } = useMemo(() => {
     const s = createStore();
@@ -109,6 +111,14 @@ export function App(props: AppProps): ReactElement {
     setReport((r) => (r === null ? null : { ...r, failure: lastError ?? { code: "cpd_failed", message: "the report could not be sent" } }));
   }, [report, pendingActionIds, completedActionIds, lastError, onDismissError]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
+  // web/CONTRACT.md §15.2: the beacon reports health:ok once, only after the first cockpit.snapshot
+  // (cockpit.tree goes from null to a tree); a painted shell with no data is not health.
+  const sentinel = useRef<HTMLSpanElement>(null);
+  const healthRoot = useCallback((): HTMLElement | null => {
+    const parent = sentinel.current?.parentElement ?? null;
+    if (parent === null) return null;
+    return [...parent.children].some((child) => child !== sentinel.current) ? parent : null;
+  }, []);
   const selectedPlanId = cockpit.selectedPlanId;
   const restored = useRef(false);
   useEffect(() => {
@@ -292,10 +302,13 @@ export function App(props: AppProps): ReactElement {
     <SettingsDialog
       open={settingsOpen}
       read={cockpit.settings}
-      error={saved !== null && !saved.ok && !saving ? saved.error.message : null}
       onSave={onSaveSettings}
       onCancel={() => setSettingsOpen(false)}
     />
+    {onHealthy === undefined ? null : (
+      <HealthBeacon live={live} root={healthRoot} errors={errors ?? noErrors} onHealthy={onHealthy} />
+    )}
+    <span ref={sentinel} hidden />
     </>
   );
 }

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Disposable, Transport } from "../../protocol/runtime.ts";
+import { FakeScheduler } from "../../testing/scheduler.ts";
 import { mount } from "../../testing/render.tsx";
+import { App } from "../App.tsx";
 import { LegendDialog } from "./LegendDialog.tsx";
 import { LogsDialog } from "./LogsDialog.tsx";
 import type { LogEvent } from "./LogsDialog.tsx";
@@ -102,4 +105,77 @@ it("the settings dialog saves only changed values", () => {
   const save = Array.from(body.querySelectorAll("button")).find((b) => b.textContent === "Save") ?? null;
   click(save);
   expect(onSave).toHaveBeenCalledExactlyOnceWith({ experimental: { write_curation: false } });
+});
+
+class FakeTransport implements Transport {
+  sent: unknown[] = [];
+  private messageHandlers: ((raw: unknown) => void)[] = [];
+  private statusHandlers: ((s: "open" | "closed") => void)[] = [];
+  connect(): void {}
+  send(raw: unknown): void { this.sent.push(raw); }
+  close(): void {}
+  onMessage(h: (raw: unknown) => void): Disposable {
+    this.messageHandlers.push(h);
+    return { dispose: () => { this.messageHandlers = this.messageHandlers.filter((x) => x !== h); } };
+  }
+  onStatus(h: (s: "open" | "closed") => void): Disposable {
+    this.statusHandlers.push(h);
+    return { dispose: () => { this.statusHandlers = this.statusHandlers.filter((x) => x !== h); } };
+  }
+  emitMessage(raw: unknown): void { for (const h of [...this.messageHandlers]) h(raw); }
+  emitStatus(s: "open" | "closed"): void { for (const h of [...this.statusHandlers]) h(s); }
+}
+
+it("the Agent Tiers Save shows a refusal as the error toast with the whole message", () => {
+  // The CLI's whole refusal text, uncut: the toast must carry every line, not a first line or a truncated one.
+  const refusal = "the following required arguments were not provided:\n  --auxiliar <T>\n  --manager <T>\n\nUsage: cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>";
+  const transport = new FakeTransport();
+  const reader = { readBase64: async () => "", readText: async () => "" };
+  mounted = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+  act(() => transport.emitStatus("open"));
+  click(body.querySelector('[data-part="settings"]'));
+  act(() => transport.emitMessage({ type: "settings.result", settings: read }));
+  const dialog = body.querySelector('[data-part="agent-tiers-dialog"]');
+  expect(dialog).not.toBeNull();
+  click(Array.from(dialog?.querySelectorAll("button") ?? []).find((b) => b.textContent === "Save") ?? null);
+  expect(transport.sent).toContainEqual({ type: "settings.save", changes: {} });
+  act(() => transport.emitMessage({ type: "settings.saved", ok: false, error: { code: "cpd_failed", message: refusal } }));
+  const toasts = body.querySelectorAll('[data-part="cockpit-error-toast"]');
+  expect(toasts).toHaveLength(1);
+  const toast = toasts[0];
+  expect(toast?.querySelector('[data-slot="alert-title"]')?.textContent).toBe("cpd_failed");
+  expect(toast?.querySelector('[data-slot="alert-description"]')?.textContent).toBe(refusal);
+  expect(dialog?.querySelector('[data-part="settings-error"]')).toBeNull();
+});
+
+it("the Agent Tiers Save shows a refused concurrency as the error toast with the whole message", () => {
+  // The CLI's whole refusal text, uncut: the toast must carry every line, not a first line or a truncated one.
+  const refusal = "concurrency must be an integer from 1 to 16 inclusive\n  key: concurrency\n  value: 99";
+  const readWithConcurrency = { ...read, concurrency: 3 } as SettingsRead;
+  const transport = new FakeTransport();
+  const reader = { readBase64: async () => "", readText: async () => "" };
+  mounted = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+  act(() => transport.emitStatus("open"));
+  click(body.querySelector('[data-part="settings"]'));
+  act(() => transport.emitMessage({ type: "settings.result", settings: readWithConcurrency }));
+  const dialog = body.querySelector('[data-part="agent-tiers-dialog"]');
+  expect(dialog).not.toBeNull();
+  // The Worker count is a numeric field of the Models + Tiers section (web/CONTRACT.md §19.1, commands.md §14.2c).
+  const input = body.querySelector('[aria-label="concurrency"]') as HTMLInputElement | null;
+  expect(input).not.toBeNull();
+  if (input === null) throw new Error("the Agent Tiers dialog must show the Worker concurrency");
+  act(() => { input.value = "99"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  click(Array.from(dialog?.querySelectorAll("button") ?? []).find((b) => b.textContent === "Save") ?? null);
+  expect(transport.sent).toContainEqual({ type: "settings.save", changes: { concurrency: 99 } });
+  const sentBefore = transport.sent.length;
+  act(() => transport.emitMessage({ type: "settings.saved", ok: false, error: { code: "config_invalid", message: refusal } }));
+  const toasts = body.querySelectorAll('[data-part="cockpit-error-toast"]');
+  expect(toasts).toHaveLength(1);
+  const toast = toasts[0];
+  expect(toast?.querySelector('[data-slot="alert-title"]')?.textContent).toBe("config_invalid");
+  expect(toast?.querySelector('[data-slot="alert-description"]')?.textContent).toBe(refusal);
+  // Never inline, and a refused save stops the remaining writes: nothing more is sent and the dialog stays open.
+  expect(dialog?.querySelector('[data-part="settings-error"]')).toBeNull();
+  expect(transport.sent.length).toBe(sentBefore);
+  expect(body.querySelector('[data-part="agent-tiers-dialog"]')).not.toBeNull();
 });

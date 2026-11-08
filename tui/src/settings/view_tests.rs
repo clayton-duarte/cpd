@@ -245,6 +245,7 @@ const BIFROST: [&str; 4] = [
 pub(super) fn config(experimental: &Value) -> Value {
     json!({"config": {
         "experimental": experimental,
+        "concurrency": 5,
         "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3",
         "presets": {"bifrost": {"O": BIFROST[0], "S": BIFROST[1], "H": BIFROST[2], "G": BIFROST[3]}},
     }})
@@ -327,6 +328,9 @@ impl Commands {
             ["models", "show"] => Output::success(models()),
             ["preset", "set", ..] => Output::success(json!({"preset": "set"})),
             ["config", "tiers", "set", ..] => Output::success(json!({"tiers": "set"})),
+            ["config", "concurrency", "set", _n] => {
+                Output::success(json!({"changed": ["concurrency"], "already": false}))
+            }
             ["session", "retier", "--all"] => Output::success(json!({"retiered": []})),
             other => panic!("the view ran a command nobody expects: {other:?}"),
         })
@@ -455,6 +459,45 @@ pub(super) fn first_screen() -> Vec<String> {
     ])
 }
 
+/// A whole 64 x 24 screen with a section `title` and the content `rows` under it.
+pub(super) fn titled(name: &str, rows: &[&str]) -> Vec<String> {
+    let area = Rect::new(0, 0, 64, 3);
+    let mut buf = Buffer::empty(area);
+    SectionTitle::new(name, None).render(area, &mut buf);
+    let title = buffer_rows(&buf)[1].clone();
+    let mut all: Vec<String> = std::iter::repeat_with(String::new).take(24).collect();
+    for (i, r) in rows.iter().enumerate() {
+        all[i] = (*r).to_owned();
+    }
+    all[1] = title;
+    all
+}
+
+/// The popup's first screen: the menu of two entries (docs/commands.md §13.2, Screen 1).
+pub(super) fn menu_screen() -> Vec<String> {
+    titled(
+        "Settings",
+        &["", "", "", "   ▸ Agent Tiers", "     Workers"],
+    )
+}
+
+/// The Workers screen (docs/commands.md §13.2, Screens 5-7): its one row `concurrency` with `value`, and the buttons.
+pub(super) fn workers_screen(value: &str) -> Vec<String> {
+    let row = format!("   ▸ concurrency  {value}");
+    titled(
+        "Workers",
+        &[
+            "",
+            "",
+            "",
+            " Workers  the Attempts the machine runs at once",
+            &row,
+            "",
+            "                        [ Save ]  [ Cancel ]",
+        ],
+    )
+}
+
 fn cell_of(buf: &Buffer, text: &str) -> (u16, u16) {
     let rows = buffer_rows(buf);
     let y = rows
@@ -471,14 +514,88 @@ fn red() -> Option<ratatui::style::Color> {
 
 #[test]
 fn the_initial_screen_is_exactly_the_documented_rows() {
-    let run = popup(&Commands::new(), vec![Act::Snap, Act::Key(KeyCode::Esc)]);
+    let run = popup(
+        &Commands::new(),
+        vec![Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)],
+    );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(run.snaps[0].rows(), first_screen());
 }
 
 #[test]
+fn the_settings_popup_opens_on_the_agent_tiers_and_workers_menu() {
+    // The first screen is the menu with both entries; Enter opens the focused entry, Agent Tiers.
+    let run = popup(
+        &Commands::new(),
+        vec![
+            Act::Snap,
+            Act::Key(KeyCode::Enter),
+            Act::Snap,
+            Act::Key(KeyCode::Esc),
+            Act::Key(KeyCode::Esc),
+        ],
+    );
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), menu_screen());
+    assert_eq!(
+        run.snaps[1].rows(),
+        first_screen(),
+        "Agent Tiers is today's rows, unchanged"
+    );
+    assert_eq!(run.calls, reads(), "the menu and its screens write nothing");
+
+    // `q` leaves the menu too.
+    let run = popup(
+        &Commands::new(),
+        vec![Act::Snap, Act::Key(KeyCode::Char('q'))],
+    );
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), menu_screen());
+    assert_eq!(run.calls, reads());
+}
+
+#[test]
+fn the_workers_screen_keeps_the_error_and_stops_on_a_refused_concurrency() {
+    let commands = Commands::new().failing(
+        &["config", "concurrency", "set"],
+        1,
+        refusal(
+            ErrorCode::ConfigInvalid,
+            "concurrency must be between 1 and 16, got 17.",
+        ),
+    );
+    let acts = vec![
+        Act::Key(KeyCode::Down),
+        Act::Key(KeyCode::Enter),
+        Act::Key(KeyCode::Enter),
+        Act::Type("17"),
+        Act::Key(KeyCode::Enter),
+        Act::Snap,
+        Act::Click("[ Save ]", "[ Save ]"),
+        Act::Snap,
+        Act::Key(KeyCode::Esc),
+    ];
+    let run = popup(&commands, acts);
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), workers_screen("17*"));
+    let kept = run.snaps[1].rows();
+    assert_eq!(kept[3], " Workers  the Attempts the machine runs at once");
+    assert_eq!(kept[4], "   ▸ concurrency  17*", "the screen stays open");
+    assert_eq!(kept[6], "                        [ Save ]  [ Cancel ]");
+    assert_eq!(
+        kept[23], "config_invalid: concurrency must be between 1 and 16, got 17.",
+        "the footer shows the whole error"
+    );
+    assert_eq!(run.snaps[1].buffer[(0, 23)].fg, red().unwrap());
+    let mut want = reads();
+    want.push(call(&["config", "concurrency", "set", "17"]));
+    assert_eq!(run.calls, want, "no further write runs");
+}
+
+#[test]
 fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
     let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)]);
     acts.extend([Act::Snap, Act::Key(KeyCode::Esc)]);
     let run = popup(&Commands::new(), acts);
@@ -521,6 +638,7 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
 fn typing_narrows_the_list_by_substring() {
     // not in the listed names on purpose: pins the filter line `filter: <text>` the docs give
     let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([
         Act::Key(KeyCode::Enter),
         Act::Type("O"),
@@ -544,6 +662,7 @@ fn typing_narrows_the_list_by_substring() {
 #[test]
 fn a_changed_value_ends_with_a_star_and_an_invalid_one_is_red_and_ends_with_a_bang() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Click("Provider  bifrost", "bifrost ▾"),
@@ -586,6 +705,7 @@ fn the_footer_shows_a_refusal_in_red() {
         ),
     );
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
         Act::Click(
             "( ) vertex/claude-sonnet-5-5",
@@ -610,6 +730,7 @@ fn the_footer_shows_a_refusal_in_red() {
 #[test]
 fn the_body_scrolls_with_the_wheel_when_it_is_taller_than_the_popup() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Snap,
         Act::Wheel(MouseEventKind::ScrollDown),
         Act::Snap,
@@ -651,6 +772,7 @@ fn the_body_scrolls_with_the_wheel_when_it_is_taller_than_the_popup() {
 #[test]
 fn a_click_on_a_value_opens_its_list_and_a_click_on_an_entry_picks_it() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
         Act::Snap,
         Act::Click(
@@ -693,6 +815,7 @@ fn a_click_on_a_value_opens_its_list_and_a_click_on_an_entry_picks_it() {
 
 fn change_manager_and_o_then(finish: Act) -> Vec<Act> {
     vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
@@ -793,6 +916,7 @@ fn a_refused_step_keeps_the_view_open_and_a_second_save_retries_only_that_step()
 fn a_click_on_cancel_closes_without_running_a_write_command() {
     let commands = Commands::new();
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Wheel(MouseEventKind::ScrollDown),

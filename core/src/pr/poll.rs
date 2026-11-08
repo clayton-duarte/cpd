@@ -346,7 +346,11 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
-    let dirty = !follows.is_empty()
+    // The repo-settings cache (air-n71): the repos the search read whose `swr_repos` row is cold are written from the
+    // settings the search document already carried - no extra `gh` call.
+    let settings = cold_repo_settings(&mut env.store, &search.repo_settings)?;
+    let dirty = !settings.is_empty()
+        || !follows.is_empty()
         || contained.iter().any(|c| !c.held)
         || env.store.read(|conn| {
             for listed in &seen {
@@ -383,6 +387,7 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         env.store.write(COMMAND, |tx| {
             apply(
                 tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &contained,
+                &settings,
                 now,
             )
         })?
@@ -480,8 +485,13 @@ fn apply(
     tiers: &[(PlanId, WorkflowKey, Tier)],
     armed: &[Armed],
     contained: &[Contained],
+    settings: &[(String, gh::RepoMeta)],
     now: time::OffsetDateTime,
 ) -> Result<Outcome, CpdError> {
+    // The repo-settings cache fill (air-n71): the cold rows the read phase fetched.
+    for (repo, meta) in settings {
+        github_write::write_repo_settings(tx, repo, meta, now)?;
+    }
     let tier_of = |plan: &PlanId, key: &WorkflowKey| -> Result<Tier, CpdError> {
         tiers
             .iter()
@@ -602,6 +612,28 @@ fn apply(
 }
 
 /// The comments read of the pull request `listed`, if this poll made one.
+/// The repos of `from_search` whose `swr_repos` row is cold, returned for the write transaction (air-n71): the search
+/// document already read their settings, so the poll adds no `gh` call and only the cold rows are written.
+fn cold_repo_settings(
+    store: &mut Store,
+    from_search: &[(String, gh::RepoMeta)],
+) -> Result<Vec<(String, gh::RepoMeta)>, CpdError> {
+    store.read(|c| {
+        let mut stmt = c.prepare("SELECT 1 FROM swr_repos WHERE repo = ?1")?;
+        let mut cold = Vec::new();
+        for (repo, meta) in from_search {
+            if stmt
+                .query_row([repo], |r| r.get::<_, i64>(0))
+                .optional()?
+                .is_none()
+            {
+                cold.push((repo.clone(), meta.clone()));
+            }
+        }
+        Ok(cold)
+    })
+}
+
 fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
     reads
         .iter()

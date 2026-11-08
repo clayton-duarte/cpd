@@ -79,6 +79,24 @@ pub enum ConfigCommand {
     Tiers(TiersCommand),
     /// Print or set the Experimental Features (§14.2b)
     Experimental(ExperimentalArgs),
+    /// Set the machine-wide Attempt limit, `concurrency` (§14.2c)
+    #[command(subcommand)]
+    Concurrency(ConcurrencyCommand),
+}
+
+/// The subcommands of `cpd config concurrency` (§14.2c).
+#[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum ConcurrencyCommand {
+    /// Set `concurrency` in config.toml (§14.2c)
+    Set(SetConcurrencyArgs),
+}
+
+/// `cpd config concurrency set <n>` (§14.2c): the machine-wide Attempt limit, 1 to 16.
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct SetConcurrencyArgs {
+    /// The machine-wide Attempt limit, 1 to 16
+    #[arg(value_name = "N")]
+    pub count: u32,
 }
 
 /// `cpd config experimental [<feature> <on|off>]` (§14.2b): print the four flags, or set one.
@@ -132,6 +150,9 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
     }
     if let Some(ConfigCommand::Experimental(experimental)) = args.command {
         return experimental_command(&home, experimental);
+    }
+    if let Some(ConfigCommand::Concurrency(ConcurrencyCommand::Set(set))) = args.command {
+        return concurrency_set(&home, set);
     }
     if args.migrate {
         return migrate(&home);
@@ -230,6 +251,61 @@ fn migrate(home: &CpdHome) -> Result<Output, CpdError> {
         "path": path.display().to_string(),
         "migrated": applied,
     })))
+}
+
+/// `cpd config concurrency set <n>` (§14.2c): validates the bound before any write, then rewrites only the
+/// `concurrency` line. Every refusal happens before the write; the new text is parsed again.
+fn concurrency_set(home: &CpdHome, args: SetConcurrencyArgs) -> Result<Output, CpdError> {
+    let count = args.count;
+    if !(1..=16).contains(&count) {
+        return Err(CpdError::new(
+            ErrorCode::ConfigInvalid,
+            format!("concurrency must be between 1 and 16, got {count}."),
+        )
+        .with("key", "concurrency"));
+    }
+    let path = home.config();
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        let code = if e.kind() == std::io::ErrorKind::NotFound {
+            ErrorCode::ConfigMissing
+        } else {
+            ErrorCode::ConfigInvalid
+        };
+        CpdError::new(code, format!("cannot read config.toml: {e}."))
+            .with("path", path.display().to_string())
+    })?;
+    let (current, _) = Config::parse(&text, &path)?;
+    if count == current.concurrency {
+        return Ok(Output::success(json!({
+            "changed": [],
+            "already": true,
+            "config": current,
+        })));
+    }
+    let new = set_concurrency_in_text(&text, count);
+    let (config, _) = Config::parse(&new, &path)?;
+    crate::atomic::write_atomic(&path, &new).map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("cannot write config.toml: {e}."),
+        )
+    })?;
+    Ok(Output::success(json!({
+        "changed": ["concurrency"],
+        "already": false,
+        "config": config,
+    })))
+}
+
+/// `text` with `concurrency = <n>`: a present line is replaced whole, an absent key is inserted after the
+/// last top-level `key = value` line before the first table (as `config tiers set` inserts, §14.2a). Every
+/// other byte is unchanged.
+fn set_concurrency_in_text(text: &str, count: u32) -> String {
+    let line = format!("concurrency = {count}");
+    match migrate::top_level_line(text, "concurrency") {
+        Some((start, body_end, _, _)) => format!("{}{line}{}", &text[..start], &text[body_end..]),
+        None => runner::insert_top_level(text, &line),
+    }
 }
 
 /// `cpd tiers` (§14.3): the models of the selected key and the efforts pi supports for each.

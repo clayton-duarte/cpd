@@ -79,7 +79,13 @@ impl Counts {
 }
 
 pub(super) fn run(engine: &mut Engine) {
-    let limit = engine.config.concurrency;
+    // pro-d199: read afresh every tick; a config that does not parse sets nothing (no stale fallback).
+    // `M` (the cap) comes from the same fresh config, so a `cpd config concurrency set` shows on the next tick.
+    let fresh = match Config::load(&engine.home) {
+        Ok(fresh) => fresh,
+        Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
+    };
+    let limit = fresh.concurrency;
     let now = engine.ports.clock.utc();
     let read = engine
         .store
@@ -89,11 +95,7 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
     let (long, short) = (counts.long(), counts.short());
-    // pro-d199: read afresh every tick; a config that does not parse sets nothing (no stale fallback).
-    let runner = match Config::load(&engine.home) {
-        Ok(fresh) => fresh.worker_runner(),
-        Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
-    };
+    let runner = fresh.worker_runner();
     // What was last set: the two workers texts and the incident value, one string (no value holds a newline).
     let incident_state = match &incident {
         Some(elapsed) => format!("on:{elapsed}"),

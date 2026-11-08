@@ -187,6 +187,12 @@ fn run_scoped(
     terminal: bool,
 ) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
+    // `cpd argv-check` (docs/contract.md §5.6): the web-to-CLI argv contract test's parse-only
+    // check. Handled before clap so it stays out of `cpd --help`, the root help tree and the two
+    // generated files a clap command would change (docs/interface.md, pi/test/cpd-usage.json).
+    if argv.get(1).and_then(|word| word.to_str()) == Some("argv-check") {
+        return crate::argv_check::run();
+    }
     let root_help =
         matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
