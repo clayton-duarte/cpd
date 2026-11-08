@@ -20,6 +20,10 @@ use crate::store::Store;
 use crate::swr::github::{effective_pr, pr_key};
 use crate::swr::outbox::{self, Coalesce, Mutation, Op};
 
+#[cfg(test)]
+#[path = "github_write_uptodate_tests.rs"]
+mod github_write_uptodate_tests;
+
 /// How long a transient failure waits before the drain tries again.
 const RETRY: Duration = Duration::from_secs(60);
 

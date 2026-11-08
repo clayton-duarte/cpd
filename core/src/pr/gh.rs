@@ -453,6 +453,19 @@ pub fn head_ref_oid_on(
     parse::<Head>(&args, &run_on(runner, cwd, &args)?).map(|h| h.oid)
 }
 
+/// Whether `head` contains the current head of `base`, read fresh through GitHub's compare API. Stub: not implemented.
+#[allow(dead_code)]
+pub fn head_contains_base(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    base: &str,
+    head: &str,
+) -> Result<bool, CpdError> {
+    let _ = (runner, cwd, repo, base, head);
+    unimplemented!("head_contains_base is not implemented yet")
+}
+
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`. When GitHub refuses because the pull request is the base of a
 /// stack, it falls back to the asynchronous REST merge endpoint (`merge-async`, pro-d355). It still does not pass `--delete-branch`: GitHub's own

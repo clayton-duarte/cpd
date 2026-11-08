@@ -194,6 +194,10 @@ fn refuse_unless_required_passed(
 const STORE_BUSY_MS: u64 = 5000;
 
 #[cfg(test)]
+#[path = "merge_uptodate_tests.rs"]
+mod merge_uptodate_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

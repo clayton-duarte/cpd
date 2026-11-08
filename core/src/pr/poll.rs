@@ -1063,6 +1063,10 @@ fn due_reads(
 }
 
 #[cfg(test)]
+#[path = "poll_uptodate_tests.rs"]
+mod poll_uptodate_tests;
+
+#[cfg(test)]
 mod due_reads_tests {
     use super::super::comments::{Item, Kind};
     use super::super::status::{MergeState, Mergeable, ReviewDecision};
