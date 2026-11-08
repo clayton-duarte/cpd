@@ -16,6 +16,24 @@ test("createViewToggle hides the terminal and shows the webui root", () => {
   expect(webui.hidden).toBe(false);
 });
 
+test("createViewToggle hides the tab bar when the mode is not tui", () => {
+  // The host tab bar belongs to the TUI view alone (air-d50): WebUI and WebUI Preview both hide it.
+  for (const mode of ["webui", "webui-preview"] as const) {
+    const terminal = { hidden: false };
+    const webui = { hidden: false };
+    const tabBar = { hidden: false };
+    createViewToggle(terminal, webui, tabBar)(false, mode);
+    expect(tabBar.hidden, mode).toBe(true);
+  }
+
+  // The TUI view keeps it.
+  const terminal = { hidden: true };
+  const webui = { hidden: false };
+  const tabBar = { hidden: true };
+  createViewToggle(terminal, webui, tabBar)(true, "tui");
+  expect(tabBar.hidden).toBe(false);
+});
+
 test("host tabs are shown in the tui view", () => {
   expect(hostTabsVisible("tui")).toBe(true);
 });

@@ -56,14 +56,14 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 |---|---|---|
 | protocol | `web/src/protocol/domain.ts`, `wire.ts` (also `parseClientMessage`, 10.9), `cockpit.ts` (also `parseCockpitAction`, 10.9), `runtime.ts` (also `GitBoundary`, 10.9) | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
 | state | `web/src/state/transcript.ts`, `store.ts`, `connection.ts` | `transcript.test.ts`, `store.test.ts`, `connection.test.ts` |
-| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12) | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12) |
+| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12), `settings.ts` (19), `status.ts`, `cost.ts`, `logs.ts`, `liveness.ts` | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12), `settings.test.ts` (19), `status.test.ts`, `cost.test.ts`, `logs.test.ts`, `argv-contract.test.ts` (18) |
 | durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `ops.ts` (Phase 2, 10.8), `backend.ts` | `client.test.ts`, `frames.test.ts`, `ops.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
 | ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `ManagerView.tsx`, `Inbox.tsx`, `Shell.tsx`, `Header.tsx`, `StatusBar.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx`, `Header.test.tsx`, `StatusBar.test.tsx` |
 | ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx`, and Phase 2: `rows.ts` (10.4), `virtual.ts` (10.4), `Markdown.tsx` (10.6) | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx`, `rows.test.ts`, `virtual.test.ts`, `Markdown.test.tsx` |
 | ui-composer | `web/src/ui/composer/attachments.ts`, `drafts.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx` (also the draft tests of 6.9), `TierSelector.test.tsx` |
-| ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx` |
+| ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx`, `SettingsDialog.tsx` (17, 19), `DocsDialog.tsx`, `LogsDialog.tsx`, `LegendDialog.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx`, `StatusDialogs.test.tsx` (17, 19), `DocsDialog.test.tsx` |
 | app | `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`, `web/src/ui/app.css` | `web/src/ui/App.test.tsx` |
 | ui-chat (Phase 2) | see the ui-chat row | the Phase 2 pure modules `rows.ts`, `virtual.ts` and the `splitMarkdown` function are tested without a DOM |
 | test helpers | `web/src/testing/render.tsx`, `web/src/testing/scheduler.ts` | (helpers; used by the tests above) |
@@ -451,7 +451,7 @@ Carried as JSON text frames over the one WebSocket of §15 (A1, amended by 15): 
 
 ```ts
 import type { Attachment, Cursor, ConfigureChange, DialogResponse, WhenBusy, WireImage } from "./domain.ts";
-import type { CockpitAction } from "./cockpit.ts";
+import type { CockpitAction, SettingsChanges } from "./cockpit.ts";
 
 export type ClientMessage =
   | { type: "ping" } // the client's wire heartbeat (15.2); the server answers { type: "pong" } at once, with no cockpit or session involvement
@@ -467,6 +467,9 @@ export type ClientMessage =
   | { type: "session.compact"; sessionId: string; instructions?: string }
   | { type: "session.configure"; sessionId: string; change: ConfigureChange }
   | { type: "session.listModels"; sessionId: string }
+  | { type: "logs.read" } // answered with logs.result
+  | { type: "settings.read" } // answered with settings.result (19): the Agent Tiers dialog's read
+  | { type: "settings.save"; changes: SettingsChanges } // answered with settings.saved (19); only the values the User changed
   | { type: "dialog.respond"; sessionId: string; dialogId: string; response: DialogResponse };
 ```
 
@@ -479,7 +482,7 @@ export type ClientMessage =
 
 ```ts
 import type { Capabilities, Cursor, Dialog, DialogOutcome, FooterStats, ModelChoice, QueuedSubmission, SessionRef, TranscriptItem, Window, WireError } from "./domain.ts";
-import type { ContextTreeModel, PlanViewModel, InboxModel, ActionOutput } from "./cockpit.ts";
+import type { ContextTreeModel, PlanViewModel, InboxModel, ActionOutput, SettingsModel } from "./cockpit.ts";
 
 export type CockpitPane = "tree" | "plan" | "inbox";
 export type CockpitPaneData =
@@ -498,6 +501,9 @@ export type ServerMessage =
   | { type: "cockpit.error"; error: WireError } // a refresh failed; the previous snapshot stays valid
   | { type: "action.result"; actionId: string; ok: true; output: ActionOutput }
   | { type: "action.result"; actionId: string; ok: false; error: WireError }
+  | { type: "settings.result"; settings: SettingsModel } // the Agent Tiers dialog's read (19)
+  | { type: "settings.saved"; ok: true } // the save ran to its last write (19)
+  | { type: "settings.saved"; ok: false; error: WireError } // a refusal: shown once in the cockpit error toast (17.2, 19), never inline
   // session lifecycle
   | { type: "session.attached"; sessionId: string; capabilities: Capabilities; title: string | null; meta: SessionMeta }
   | { type: "session.window"; sessionId: string; mode: "tail" | "earlier"; window: Window } // tail replaces the transcript; earlier is prepended
@@ -547,6 +553,7 @@ Both are pure and throw `WebError`:
 - `session.configure`: exactly one `change.kind` of `model|thinking|tier`;
 - `dialog.respond`: `response.method`/`outcome` pair from `DialogResponse`; `changes` needs `feedback.trim() !== ""`;
 - `cockpit.action`: the action goes through `parseCockpitAction` (section 5.5), whose failures are `unknown_action` (unknown kind) and `invalid_message` (bad field of a known kind);
+- `settings.save`: `changes` is parsed once at the boundary (19): every tier a `TIER` string, every switch a bool, and `concurrency`, when present, an integer in 1 to 16 inclusive; a bad value is `invalid_message` with `details.field` naming the field;
 - `Dialog` objects, `Window`s (`cursor === null` iff `!hasEarlier`) and `TranscriptItem`s are checked structurally (kind discriminator, required fields, FoldItem `foldKind` in the five kinds (superseded by 10.1: the four kinds, `"cpd"` is the fifth)).
 
 Extra unknown properties are ignored by the parsers and dropped from the parsed value. Inside the program the parsed types are trusted; no later code re-validates.
@@ -2134,7 +2141,7 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 - **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
 - **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
-- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent or `null` (the desktop renderer runs from `file://` in production) or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it.
+- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in.
 - **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
 
 ### 15.2 The heartbeat and the stall watchdog (air-d46)
@@ -2143,6 +2150,7 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 - **The client's wire ping.** The client sends a wire `ping` (4.1, amended by 15) every `WS_CLIENT_PING_MS` and requires the server's wire `pong` (4.2, amended by 15) within `WS_CLIENT_PONG_TIMEOUT_MS`; a `pong` that misses the deadline closes the socket from the client side, so a hung server is seen too. The client pings on the wire because a browser `WebSocket` cannot send protocol ping frames. The hub answers each `ping` with a `pong` at once (6.6, amended by 15.1), with no cockpit or session involvement; `pong` carries no state and the reducer changes nothing on it.
 - **The stall watchdog** (in `web/src/server/cockpit/`, on the stream boundary 13.1 owns). A serve child that stays alive but stops emitting (the air-n13/n14/n15 freeze) is detected here, and the watchdog runs **whatever `ready()` says** (13.2): while the stream is ready, the safety tick skips the pane refresh (6.3 rule 6, 13.6) and the `events follow` fallback early-returns (13.6) — that gate is exactly what froze the panes. Because the stream is silent while the cockpit is idle, a bare idle timer would fire on healthy children, so the watchdog elicits frames: every `STREAM_PROBE_MS` while the stream is connected it writes a `refresh` request on the serve child's stdin (13.1; the child answers it at once, 13.8/§11a) and arms `STREAM_PROBE_TIMEOUT_MS`; any frame of any `t` inside the window answers the probe. A stall is declared when either signal fires: the **frame deadline** — the window closes with no frame at all; or the **`seq` non-advance** — the answering `snapshot`'s `seq` is not greater than the last `seq` seen from this serve process (every snapshot advances `seq`, §11a). A `hello` of the same child — the in-place re-exec of 13.9 — starts a new generation and resets the watchdog's `seq` baseline, so snapshot 1 of the re-exec is fresh, never read as a non-advance.
 - **The stall's reaction.** On a stall the stream reports it loud once — one error on the stream's error path (13.8/13.9's error update), so the renderer gets `cockpit.error` and the cockpit error toast shows it — and **requests a resync**: the service reloads the panes by spawn (the fallback refresh of 6.3 rule 3), whatever `ready()` said. The serve child is then **restarted if it is still silent**: if the child still emits nothing, it is killed and relaunched with the restart backoff of 13.7, whose `hello` re-arms the watchdog. Probing stops while the stall is handled and resumes with the next child.
+- **The desktop's health report (Plan `webui-empty`).** The desktop renderer reports `health:ok` to the main process — the report the main process records as the preview's health — **only after the first `cockpit.snapshot` arrives on the WebSocket transport**. A painted shell is not health: the earlier mount-time report (the shell rendered non-empty with no errors and the startup IPC resolved) said nothing about data, so a boot whose stream was dead still recorded healthy (air-n52: a healthy preview-health.json beside zero WebSocket frames). With the gate, a renderer that never receives a snapshot never reports, the boot stays `loading`, and the boot watchdog's loading grace flags it — the same "seen loud, never silent" rule the watchdogs above apply to the socket and the serve stream.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -2176,3 +2184,47 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text and no images; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3, amended above), and the submission is echoed, queued and delivered like any other.
+
+## 18. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
+
+Normative for every web module that builds a `cpd` command line. The full statement — the rule, the `cpd argv-check` command interface and the Gate test — is **docs/contract.md §5.6 "The web-to-CLI argv contract"**; where the two differ, docs/contract.md wins (this file's preamble rule, section 10 excepted).
+
+- **One shared argv module.** No web code spawns `cpd` with hand-built argv: every command line is built by `web/src/server/cpd-argv.ts`, which exposes the discriminated union `CpdCommand` (one variant per cpd command the web sends) and `toArgv(cmd: CpdCommand): string[]` — the argv after the program name. Every spawn flavour (the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, and the Electron paths `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) consumes only `toArgv` output; the call-site modules (`web/src/server/cockpit/`, `web/src/server/pi/backend.ts`, `web/src/server/durable/backend.ts`, and the Electron paths) construct `CpdCommand` values, never their own arrays.
+- **The Worker count's argv is in the contract (Plan `settings-workers`, air-d69).** The Agent Tiers dialog's save (17, 19) sends `cpd config concurrency set <n>` (commands.md §14.2c) as the `CpdCommand` variant `{ readonly kind: "config.concurrency.set"; readonly n: number }`, whose `toArgv` returns `["config", "concurrency", "set", String(n)]`. The builder's enumeration list `allCpdCommands()` carries the variant, so the Gate test below covers the argv with no change to the test: it enumerates every variant, and an argv with no variant has no test.
+- **The Gate test.** `web/src/server/cockpit/argv-contract.test.ts` builds every `CpdCommand` variant from `cpd-argv.ts` alone, spawns one `cpd argv-check` process, feeds the argv arrays on stdin, and fails on any parse error (docs/contract.md §5.6 states the command's stdin/stdout/exit interface exactly). It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate before merge.
+
+## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
+
+Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
+
+### 17.1 The Save sends all four role Tiers
+
+- The Save runs `cpd config tiers set` with **all four** role Tiers — `--auxiliar`, `--worker`, `--lead` and `--manager`, the values the dialog shows, whether or not the User changed them — because `cpd config tiers set` accepts a save only with all four role Tiers (its `--help` usage line is `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`).
+- The rest of the save keeps its TUI order: the experimental switches are set one by one, then `cpd session retier --all` runs when a Tier value differs from the read; a refusal stops the save at the first failing step. **Amended by 19.2 (Plan `settings-workers`):** when the Worker count changed, `cpd config concurrency set <n>` runs right after the Tiers write, before the switches.
+
+### 17.2 A Save refusal is shown through the cockpit error toast
+
+- A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
+- The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+
+
+## 19. The Agent Tiers dialog shows and saves the Worker concurrency (Plan `settings-workers`; air-d69)
+
+Normative. Plan `settings-workers` decides the points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the WebUI half of the settings surface of air-d69; the TUI half is commands.md §15 and docs/contract.md's TUI settings section). `web/src/server/cockpit/settings.ts` is the server module that reads and saves; `web/src/protocol/cockpit.ts` holds `SettingsModel` and `SettingsChanges` (§4); `cpd config concurrency set <n>` (commands.md §14.2c) is the one write path, shared with the TUI (§17.1's argv is untouched).
+
+### 19.1 The settings payload carries `concurrency`
+
+- `SettingsModel` gains `concurrency: number`: the machine-wide Worker count (config `concurrency`, docs/contract.md §8.2, commands.md §14.2c). It comes from the **same read as the Tiers**: the top-level `concurrency` key of the `cpd config` JSON (docs/commands.md §14.2's example carries it), so there is **no second read argv** and no new `CpdCommand` variant for the read — `readSettings` (settings.ts) reads it from the reply of `toArgv({kind:"config.read"})` it already holds. A reply whose `concurrency` is not an integer in 1 to 16 inclusive is refused `cpd_malformed_json` naming the field `concurrency` (the same `bad(field)` refusal the Tier keys get, §6.3's error mapping).
+- `SettingsChanges` gains `concurrency?: number`: present only when the User changed the value. The wire boundary parses it once (§4.3): an integer 1 to 16 inclusive, else `invalid_message` with `details.field` `concurrency` — no clamp, no silent default (air-d70).
+- **Where the field is shown:** in the Agent Tiers dialog, inside the **"Models + Tiers" section, after the four role-Tier inputs** (the config's `concurrency` is the machine-wide Attempt limit, the count the StatusBar's workers pill shows after the `/` of its `workers Q·R·T/M` text, `data-part="workers"`). The field is a numeric input with the accessible label `concurrency` (`aria-label="concurrency"`, the role inputs' `aria-label="<role> tier"` pattern), prefilled with the read's value. A value outside 1 to 16 marks the input invalid (`aria-invalid`, the same mechanism the Tier inputs use) and disables Save; the value is never clamped (air-d70).
+
+### 19.2 The Save writes all four role Tiers and then the count
+
+- The Save keeps §17.1's order and adds the count right after the Tiers: `cpd config tiers set` with all four role Tiers (when any Tier changed), then **`cpd config concurrency set <n>` (when the count changed)**, then the experimental switches one by one, then `cpd session retier --all` when a Tier changed. A count that equals the read's value writes nothing.
+- The count's argv goes through the **shared argv builder** (18): the variant `{ readonly kind: "config.concurrency.set"; readonly n: number }` of the `CpdCommand` union, whose `toArgv` returns `["config", "concurrency", "set", String(n)]`. No call site builds the array itself; `saveSettings` constructs the `CpdCommand` value and calls `toArgv`.
+
+### 19.3 Refusals: the range, the toast, and what a lowered count stops
+
+- **The range and its refusal (air-d70).** The accepted range is **1 to 16 inclusive**. A value outside it is refused loudly — `config_invalid` (`details.key` `concurrency`), no clamp, no silent default — both by the command (commands.md §14.2c) and, a hand-edited `config.toml` no exception, when the file is loaded (docs/contract.md §8.2). The refusal reaches the web as any CLI refusal does (`cpd_failed` with the CLI's message, §6.3's mapping) and is shown like any Save refusal (17.2).
+- **A refused save stops the remaining writes and is shown as the error toast (air-d44), never inline.** The first failing write stops the save: the writes after it do not run (the same first-refusal rule §17.1 states for the switches), the dialog stays open with the values the User typed, and the whole CLI refusal text appears **once in the cockpit error toast** (the toast surface of 16.1) — never as an inline line in the dialog (the `data-part="settings-error"` paragraph of 17.2 stays gone). A successful save still closes the dialog.
+- **Lowering the count stops nothing (air-d71).** A save that lowers `concurrency` below the number of running Workers stops nothing: the engine reads the count from the config file on each tick, so the set takes effect without a restart, and it gates **new starts only** — the running tenants keep their slots to the end and the urgent one-beyond-`concurrency` rule is unchanged (docs/contract.md §3.7 E3, §8.2). Nothing in the web waits on or re-reads the count after the save; the workers pill (its `/M`, `data-part="workers"`) picks the new value up on the engine's next tick.

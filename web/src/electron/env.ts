@@ -15,6 +15,27 @@ export function parseMarkedPath(stdout: string): string {
   }
   return stdout.slice(begin + PATH_BEGIN.length, end);
 }
+/**
+ * The one canonical list of the per-session cpd variables (contract §6.6),
+ * mirroring core's `SESSION_ENV_KEYS` (core/src/host/pi/launch.rs).
+ */
+export const SESSION_ENV_KEYS = [
+  "CPD_SESSION",
+  "CPD_PLAN",
+  "CPD_ATTEMPT",
+  "CPD_QUIT_MARKER",
+  "CPD_JOB_KIND",
+] as const;
+
+/**
+ * A copy of `env` with exactly the per-session cpd variables removed; every
+ * other variable — `CPD_HOME`, `PATH` — stays (contract §6.6).
+ */
+export function stripSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const stripped = { ...env };
+  for (const key of SESSION_ENV_KEYS) delete stripped[key];
+  return stripped;
+}
 export async function resolveLoginPath(options: LoginPathOptions): Promise<string> {
   if (options.platform !== "darwin") {
     return options.currentPath ?? "";

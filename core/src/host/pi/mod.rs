@@ -14,6 +14,7 @@ mod packages;
 mod session_file;
 
 pub use dirs::{PiDirs, project_settings};
+pub use launch::SESSION_ENV_KEYS;
 pub use launch::{
     Launch, LeadLaunch, LeadStart, WORKER_EXCLUDED_TOOLS, WorkerLaunch, distiller, lead,
     lead_candidates, worker, worker_candidates, worker_env,

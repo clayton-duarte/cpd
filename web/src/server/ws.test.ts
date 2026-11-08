@@ -3,6 +3,7 @@ import type { ServerMessage } from "../protocol/wire.ts";
 import { FakeScheduler } from "../testing/scheduler.ts";
 import type { HubConnection } from "./hub/connection.ts";
 import {
+  acceptsOrigin,
   createWsServer,
   type NewConnection,
   type WsRequest,
@@ -112,7 +113,8 @@ describe("ws server", () => {
     const h = harness();
     createWsServer(h.deps);
 
-    // An absent Origin, the desktop's "null" (file://) and every loopback host are accepted.
+    // An absent Origin, "null" and every loopback host are accepted (the desktop renderer's own
+    // `file://` Origin is pinned by the next test).
     const accepted = [NO_ORIGIN, request("null"), request("http://127.0.0.1:5173"), request("http://localhost:5173"), request("http://[::1]:5173")];
     for (const req of accepted) {
       const socket = new FakeSocket();
@@ -128,6 +130,27 @@ describe("ws server", () => {
       expect(socket.terminated).toBe(true);
     }
     expect(h.hubs).toHaveLength(accepted.length);
+  });
+
+  it("accepts the file:// origin the production Electron renderer sends", async () => {
+    // The production window loads the renderer with `loadFile` (web/CONTRACT.md §15.1), so Chromium
+    // serializes its Origin as the string `file://` — not `null`.
+    expect(acceptsOrigin("file://")).toBe(true);
+    // Every other Origin still stays rejected.
+    expect(acceptsOrigin("http://evil.example")).toBe(false);
+
+    const h = harness();
+    createWsServer(h.deps);
+    const socket = new FakeSocket();
+    h.server.connect(socket, request("file://"));
+    expect(socket.terminated).toBe(false);
+    expect(h.hubs).toHaveLength(1);
+
+    // The frame routes through the hub exactly as it does for an accepted loopback Origin.
+    socket.emitMessage(JSON.stringify({ type: "cockpit.subscribe" }));
+    await flush();
+    expect(h.hubs[0]!.handled).toEqual([{ type: "cockpit.subscribe" }]);
+    expect(socket.sent).toEqual([JSON.stringify(reply)]);
   });
 
   it("routes a client message through one hub connection", async () => {

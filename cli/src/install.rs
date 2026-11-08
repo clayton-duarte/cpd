@@ -12,25 +12,31 @@ use serde_json::json;
 
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::install::{self, Install};
+use cpd_core::install::{self, Install, InstallOptions};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 
-/// `cpd install --root <checkout>` (commands.md §14.4).
+/// `cpd install --root <checkout> [--no-follow-up]` (commands.md §14.4).
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct Args {
     /// The checkout to install from: a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`.
     #[arg(long)]
     pub root: PathBuf,
+    /// Write the binary and the adapter, but run no follow-up: a running engine and its views are left as they are.
+    #[arg(long)]
+    pub no_follow_up: bool,
 }
 
 /// Resolves the install from `args` and this process's environment, runs it, writes its human text to
 /// stderr, and returns the one output value on success or the envelope whose message is its last line
 /// on a non-zero exit.
 pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    let options = InstallOptions {
+        no_follow_up: args.no_follow_up,
+    };
     let install = resolve(args)?;
     let mut stderr = Vec::new();
-    let exit = install::run(ports, &install, &mut stderr);
+    let exit = install::run_with_options(ports, &install, options, &mut stderr);
     let _ = std::io::stderr().write_all(&stderr);
     if exit == 0 {
         return Ok(Output::success(json!({

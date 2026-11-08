@@ -94,6 +94,20 @@ fn push_mcp_codemode_extensions(argv: &mut Vec<String>, extensions: &[String]) {
 /// Silences pi's own update banner in every pane cpd starts (contract §6.5).
 const SKIP_VERSION_CHECK: (&str, &str) = ("PI_SKIP_VERSION_CHECK", "1");
 
+/// The one canonical list of the *per-session* cpd variables: the launching
+/// Session's own identity. `cpd desktop` removes exactly these from the
+/// Electron child's environment, and the app removes the same five from
+/// `process.env` at boot (contract §6.6 "The per-session environment and the
+/// desktop strip"). Everything else — `CPD_HOME`, `PI_SKIP_VERSION_CHECK`,
+/// `PATH` — is not session identity and stays.
+pub const SESSION_ENV_KEYS: &[&str] = &[
+    "CPD_SESSION",
+    "CPD_PLAN",
+    "CPD_ATTEMPT",
+    "CPD_QUIT_MARKER",
+    "CPD_JOB_KIND",
+];
+
 /// `PATH` of a Session: `$CPD_HOME/bin`, where the `git` wrapper is, first, then the `PATH` of this process (contract §6.5, hs-d310).
 fn session_path(home: &CpdHome) -> (String, String) {
     (
