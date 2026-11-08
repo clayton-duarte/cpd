@@ -70,6 +70,11 @@ Slack message by itself: E8 only labels an overdue post `review overdue`, pro-d3
 is not a daemon per Plan or a scheduler per Workflow
 ([CONTEXT — Engine](../CONTEXT.md)).
 
+The SWR sources split across two steps ([swr.md §12](swr.md)): **E5 owns the
+GitHub pass** — its poll and its outbox drain — and **E24 runs every other SWR
+source** (`slack`, `jira`; E15 runs `models`). Exactly one step polls GitHub per
+tick, never two.
+
 ## The three parts and the store
 
 ```mermaid
