@@ -2337,6 +2337,69 @@ fn migrating_marker(pid: u32) -> Value {
     json!({"migrating": true, "pid": pid, "started_unix_ms": now_ms(), "from": 3, "to": 20, "command": "cpd test-migration"})
 }
 
+/// store-lock (air-n99), contract §4.2: `locks/store.lock` guards only the store's one-time setup, so an
+/// up-to-date store is opened with no setup lock at all: a held `store.lock` does not make its open wait or
+/// fail. A missing database (the WAL switch of a new one) and a pending migration still take it.
+///
+/// Red on origin/main: every `open_catalog` takes the `flock` first, so the up-to-date open below times out
+/// with `lock_timeout` behind the held lock.
+#[test]
+fn a_cpd_open_against_an_up_to_date_db_takes_no_setup_lock() {
+    // Up to date: `Home::new` migrated the store, and a held `store.lock` is never touched: the open is instant.
+    let up = Home::new();
+    let up_home = home(&up);
+    let _up_lock = hold_setup_lock(&up_home, None);
+    let clock = ManualClock::new();
+    Store::open_with(&clock, &up_home, 300, None)
+        .expect("an up-to-date store opens with no setup lock, although one is held");
+    assert_eq!(
+        clock.elapsed(),
+        Duration::ZERO,
+        "an up-to-date open waited on the setup lock"
+    );
+
+    // A missing database: its WAL switch is one-time setup, so it still takes the lock and times out behind it.
+    let missing = Home::empty();
+    let missing_home = home(&missing);
+    let _missing_lock = hold_setup_lock(&missing_home, None);
+    let err = Store::open_with(&ManualClock::new(), &missing_home, 300, None)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        ErrorCode::LockTimeout,
+        "a missing database must take the setup lock: {err}"
+    );
+
+    // A pending migration: `user_version` is this binary's, but a named migration it knows is not applied, so
+    // the store needs a migration. It still takes the lock.
+    let pending = Home::new();
+    let pending_home = home(&pending);
+    let conn = raw(&pending);
+    conn.execute_batch("DROP TRIGGER schema_migrations_no_delete")
+        .unwrap();
+    let name = cpd_core::store::testing::named_migrations()
+        .last()
+        .expect("this binary has named migrations")
+        .0;
+    assert_eq!(
+        conn.execute("DELETE FROM schema_migrations WHERE name = ?1", [name])
+            .unwrap(),
+        1,
+        "the named migration {name} was not applied"
+    );
+    drop(conn);
+    let _pending_lock = hold_setup_lock(&pending_home, None);
+    let err = Store::open_with(&ManualClock::new(), &pending_home, 300, None)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        ErrorCode::LockTimeout,
+        "a pending migration must take the setup lock: {err}"
+    );
+}
+
 /// hs-n278: a holder that migrates is waited out for longer than `store_busy_ms`, then the open succeeds.
 #[test]
 fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
