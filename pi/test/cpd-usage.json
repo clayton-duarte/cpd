@@ -643,6 +643,7 @@
   "install": {
     "flags": {
       "--help": false,
+      "--no-follow-up": false,
       "--root": true
     },
     "positionals": {
