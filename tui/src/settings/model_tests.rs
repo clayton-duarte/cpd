@@ -175,7 +175,8 @@ fn the_rows_are_preset_provider_o_s_h_g_j_then_decide_auxiliar_worker_lead_manag
 }
 
 #[test]
-fn the_range_column_is_default_only_for_the_decide_and_auxiliar_and_floor_dots_ceiling_for_the_others() {
+fn the_range_column_is_default_only_for_the_decide_and_auxiliar_and_floor_dots_ceiling_for_the_others()
+ {
     let mut m = model();
     let ranges = |m: &Model| m.rows().into_iter().map(|r| r.range).collect::<Vec<_>>();
     assert_eq!(

@@ -136,13 +136,7 @@ pub enum Step {
 }
 
 /// The catalog's letters, as `cpd tiers` reports them (J first in the ladder, but the backend prints O, S, H, G, J).
-const LETTERS: [Letter; 5] = [
-    Letter::O,
-    Letter::S,
-    Letter::H,
-    Letter::G,
-    Letter::J,
-];
+const LETTERS: [Letter; 5] = [Letter::O, Letter::S, Letter::H, Letter::G, Letter::J];
 /// The four letters a preset holds (contract §8.2): `cpd preset set` takes O, S, H and G, never J.
 const PRESET_LETTERS: [Letter; 4] = [Letter::O, Letter::S, Letter::H, Letter::G];
 /// The roles, ascending (contract §9): decide < auxiliar < worker < lead < manager.
