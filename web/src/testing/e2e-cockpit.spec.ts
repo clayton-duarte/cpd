@@ -196,10 +196,23 @@ async function assertLiveData(page: import("playwright").Page): Promise<void> {
   await expect(root.locator(`[data-kind="assistant"]`)).toContainText(TRANSCRIPT_TEXT, { timeout: 30_000 });
 }
 
-test("the browser WebUI loads live data — tree, inbox, status bar and a transcript (air-d53, air-d87)", async ({ page }) => {
+// NOTE (red on origin/main): the browser surface is empty today because the dev-server transport
+// never creates a hub connection for an accepted upgrade — `createUpgradeFactory` (web/src/server/
+// ws.ts) emits `connection` on its `ws` server but never subscribes `onConnection` to it, so the
+// renderer's every frame has no hub. That is the dead transport web/CONTRACT.md §20.2 pins: the
+// browser WebUI must load with live data, so this test fails until the upgrade factory wires its
+// `onConnection` (the desktop's `createListenerFactory` does).
+test("the browser WebUI loads live data — tree, inbox, status bar and a transcript (air-d53, air-d87)", async ({ electronApp }) => {
   // The browser build connects same-origin to the dev server's `/cpd-ws` (web/CONTRACT.md §15.1):
-  // loading the Vite-served WebUI over http is the surface a User's browser uses.
-  await page.goto(browserUrl, { waitUntil: "domcontentloaded" });
+  // loading the Vite-served WebUI over http is the surface a User's browser uses. It opens in its
+  // own hidden window (air-d68), so the desktop window is left untouched.
+  const opened = electronApp.waitForEvent("window");
+  await electronApp.evaluate(({ BrowserWindow }, url) => {
+    const win = new BrowserWindow({ show: false, width: 1280, height: 900 });
+    void win.loadURL(url);
+  }, browserUrl);
+  const page = await opened;
+  await page.waitForLoadState("domcontentloaded");
   await assertLiveData(page);
 });
 
