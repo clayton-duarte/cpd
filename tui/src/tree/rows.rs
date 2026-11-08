@@ -778,8 +778,14 @@ fn project_items(
         .iter()
         .filter(|c| c.id.permanent().is_none() && !c.is_archived())
         .collect();
-    // The live Contexts by tier then creation, newest first (hs-d686, pro-d48).
-    live.sort_by_key(|a| a.dot.order_key(&a.created_at));
+    // The live Contexts with the selected Manager's in the chat slot pinned first, then the rest by tier then
+    // creation, newest first (hs-d686, pro-d48). The sort is stable, so each group keeps the current order.
+    live.sort_by_key(|a| {
+        (
+            a.manager_place != Some(Place::Chat),
+            a.dot.order_key(&a.created_at),
+        )
+    });
     let mut rows: Vec<FlatRow> = Vec::new();
     let last_live = live.len().saturating_sub(1);
     for (i, c) in live.iter().enumerate() {
