@@ -10,6 +10,18 @@ describe("parseClientMessage", () => {
   it("parseClientMessage rejects an unknown message type with invalid_message", () => {
     expect(() => parseClientMessage({ type: "bogus" })).toThrowError(expect.objectContaining({ code: "invalid_message" }));
   });
+
+  it("J is a valid tier letter", () => {
+    // The decide letter J (contract §9, air-d113, air-d115, air-d120): J3 and JX are Tiers,
+    // and an effort J's model does not offer (J5) is still refused.
+    const j3 = { type: "settings.save", changes: { tiers: { worker: "J3" } } };
+    expect(parseClientMessage(j3)).toEqual(j3);
+    const jx = { type: "settings.save", changes: { tiers: { auxiliar: "JX" } } };
+    expect(parseClientMessage(jx)).toEqual(jx);
+    expect(() => parseClientMessage({ type: "settings.save", changes: { tiers: { worker: "J5" } } })).toThrowError(
+      expect.objectContaining({ code: "invalid_message" }),
+    );
+  });
 });
 
 describe("parseServerMessage", () => {

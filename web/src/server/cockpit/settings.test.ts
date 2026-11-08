@@ -33,6 +33,15 @@ describe("settings", () => {
     });
   });
 
+  it("a decide tier of JX round-trips", async () => {
+    // The decide role's default is JX (contract §9, air-d113, air-d115, air-d120): the settings read
+    // carries it like every other role's Tier, and a J Tier is not mistaken for an unknown letter.
+    const config = { ok: true, config: { decide_tier: "JX", context_distill_tier: "GX", worker_tier: "H3", lead_tier: "S3", manager_tier: "O3" } };
+    const { cpd } = fake({ config, "config experimental": experimental });
+    const read = await readSettings(cpd);
+    expect((read.tiers as unknown as Record<string, string>).decide).toBe("JX");
+  });
+
   it("settings.read fails loud on a malformed Tier", async () => {
     const bad = { ok: true, config: { ...config.config, lead_tier: "Z9" } };
     const { cpd } = fake({ config: bad, "config experimental": experimental });

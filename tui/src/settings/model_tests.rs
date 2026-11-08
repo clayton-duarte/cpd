@@ -529,3 +529,35 @@ fn the_workers_screen_shows_the_current_concurrency_and_saves_it() {
         "Save runs the new value through the command"
     );
 }
+
+/// The decide letter J (contract §9, air-d113, air-d115, air-d120): the settings rows offer it
+/// and label it `jev`, one model row per Tier letter.
+#[test]
+fn the_settings_rows_offer_the_j_letter() {
+    let m = model();
+    let j = m
+        .rows()
+        .into_iter()
+        .find(|r| r.label.starts_with("J  "))
+        .unwrap_or_else(|| {
+            panic!(
+                "no J letter row: {:?}",
+                m.rows().into_iter().map(|r| r.label).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        matches!(j.row, Row::Model(_)),
+        "the J row is a model row: {:?}",
+        j.row
+    );
+    assert_eq!(j.label, "J  jev", "the decide letter J is labelled jev");
+}
+
+/// The Tier parser admits the decide letter J: JX and J3 parse, while J4 stays refused
+/// (J's model offers efforts 0, 1, 2 and 3, never 4; contract §9, air-d113, air-d115, air-d120).
+#[test]
+fn the_tier_parser_accepts_jx() {
+    assert!(Tier::parse("JX").is_ok(), "JX must parse");
+    assert!(Tier::parse("J3").is_ok(), "J3 must parse");
+    assert!(Tier::parse("J4").is_err(), "J4 is not an effort of J's model");
+}
