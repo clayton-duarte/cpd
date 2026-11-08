@@ -931,6 +931,22 @@ impl NewEvent {
             json!({"by": by, "ended_at": ended_at, "cause": cause}),
         )
     }
+
+    /// `bug-breach` (contract §5.2, §3.7 E25): an open bug breached the bug report protocol, `reason`
+    /// `unmitigated_past_bound` or `recurring_symptom`, `bound` the 900 s mitigation bound.
+    pub fn bug_protocol_breach(
+        text: impl Into<String>,
+        bug: &str,
+        reason: &str,
+        symptom: &str,
+        bound: i64,
+    ) -> NewEvent {
+        make(
+            Kind::BugProtocolBreach,
+            text,
+            json!({"bug": bug, "reason": reason, "symptom": symptom, "bound": bound}),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1095,6 +1111,7 @@ mod tests {
                 NewEvent::incident_plans(T, s, [s], Some(s)),
             ],
             Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s, s)],
+            Kind::BugProtocolBreach => vec![NewEvent::bug_protocol_breach(T, s, s, s, n)],
         }
     }
 

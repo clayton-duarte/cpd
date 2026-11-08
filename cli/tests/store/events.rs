@@ -548,6 +548,13 @@ const SPEC: &[SpecRow] = &[
         &["until_workflow"],
     ),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
+    (
+        "bug-breach",
+        "",
+        "cp",
+        &["bug", "reason", "symptom", "bound"],
+        &[],
+    ),
 ];
 
 fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {
