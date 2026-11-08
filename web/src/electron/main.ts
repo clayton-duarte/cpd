@@ -25,6 +25,7 @@ import { resolveSshHosts } from "./ssh-config.ts";
 import type { SshHost } from "./ssh-config.ts";
 import { createExternalLinkHandler, resolveAssetPaths, setupNativeShell } from "./native.ts";
 import type { MenuTemplate } from "./menu.ts";
+import { promoteOnLaunch } from "./update/controller.ts";
 import { nodeExec, nodeFs, nodeSpawnFollow, nodeTimers } from "./update/node.ts";
 import { startAutoUpdate } from "./update/start.ts";
 import type { BootstrapStatus, UpdateState } from "./update/types.ts";
@@ -118,6 +119,20 @@ async function main(): Promise<void> {
   let previewTimer: ReturnType<typeof setInterval> | undefined;
   let previewPrevious: UiMode = "webui";
   const disposers: (() => void)[] = [];
+  // §19.2: the View-change seam. `initMode`'s setMode wrapper emits here; `startUpdate` subscribes so
+  // `whenApplicable` resolves on a View change even while the window is focused (air-d76).
+  const viewChangeHandlers = new Set<() => void>();
+  const viewChanges = {
+    onViewChange(handler: () => void): () => void {
+      viewChangeHandlers.add(handler);
+      return () => {
+        viewChangeHandlers.delete(handler);
+      };
+    },
+  };
+  const emitViewChange = (): void => {
+    for (const handler of [...viewChangeHandlers]) handler();
+  };
   let services!: ReturnType<typeof createServices>;
   let started!: Promise<void>;
   let markStarted: () => void = () => {};
@@ -322,6 +337,7 @@ async function main(): Promise<void> {
     } else if (before === "webui-preview") {
       await previewClient?.leave();
     }
+    emitViewChange();
   };
   };
 
@@ -486,6 +502,7 @@ async function main(): Promise<void> {
       spawnFollow: nodeSpawnFollow,
       isFocused: () => w.isFocused(),
       systemIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      viewChanges,
       reloadRenderer: () => w.webContents.reloadIgnoringCache(),
       onState: (state) => {
         latestState = state;
@@ -512,6 +529,19 @@ async function main(): Promise<void> {
     powerMonitor,
     process,
     startAutoUpdate: startUpdate,
+    promoteOnLaunch: async () => {
+      const root = await readCheckoutRoot(env);
+      if (!root) return;
+      try {
+        await promoteOnLaunch({
+          fs: nodeFs,
+          root,
+          headSha: async () => (await nodeExec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim(),
+        });
+      } catch (error) {
+        log(`promote on launch failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
     startServices,
     reloadServer,
     registerIpc: registerIpcNow,

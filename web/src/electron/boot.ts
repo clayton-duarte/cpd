@@ -8,6 +8,8 @@ export interface BootDeps {
   powerMonitor: unknown;
   process: { on(signal: string, handler: () => void): unknown };
   startAutoUpdate(win: BootWindow): Promise<{ bootstrap: { state: string } }>;
+  /** §19.1: promotes a ready `web/dist-electron.next` before the window opens. */
+  promoteOnLaunch?(): Promise<void>;
   startServices(): void;
   initMode(win: BootWindow): Promise<void>;
   registerIpc(): void;
@@ -37,6 +39,9 @@ export async function boot(deps: BootDeps): Promise<void> {
     mark('whenReady-start');
     await deps.app.whenReady();
     mark('whenReady-done');
+    mark('promote-start');
+    await deps.promoteOnLaunch?.();
+    mark('promote-done');
     const win = new deps.BrowserWindow({ title: 'CPD', show: !hidden });
     mark('window-created');
     await deps.initMode(win);

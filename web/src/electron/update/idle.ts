@@ -7,10 +7,23 @@ export function whenApplicable(deps: { isFocused: () => boolean; systemIdleSecon
   const pollMs = deps.pollMs ?? 30000;
   const idleSeconds = deps.idleSeconds ?? 300;
   return new Promise((resolve) => {
-    const check = (): void => {
-      if (!deps.isFocused() || deps.systemIdleSeconds() >= idleSeconds) resolve();
-      else deps.timers.setTimeout(check, pollMs);
+    let timer: unknown;
+    let unsubscribe: (() => void) | undefined;
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) deps.timers.clearTimeout(timer);
+      unsubscribe?.();
+      resolve();
     };
+    const check = (): void => {
+      // §19.2: a View menu change is an applicability moment even while the window is focused and
+      // the system is not idle, so the pending swap runs at that moment.
+      if (!deps.isFocused() || deps.systemIdleSeconds() >= idleSeconds) finish();
+      else timer = deps.timers.setTimeout(check, pollMs);
+    };
+    unsubscribe = deps.viewChanges?.onViewChange(finish);
     check();
   });
 }

@@ -1,3 +1,4 @@
+import { BUILT_SHA_FILE, swapBundle } from './bundle';
 import type { SyncResult } from './checkout';
 import type { UpdateFs, UpdateState } from './types';
 
@@ -8,10 +9,13 @@ export interface PromoteDeps { fs: UpdateFs; root: string; headSha(): Promise<st
 /**
  * Launch promote (web/CONTRACT.md §19.1): before the window opens, `web/dist-electron.next` is swapped
  * into `web/dist-electron` when its `.built-sha` equals `git rev-parse HEAD`; otherwise nothing happens.
- * Stub only: the red tests in controller.test.ts pin the behaviour.
  */
-export async function promoteOnLaunch(_deps: PromoteDeps): Promise<void> {
-  throw new Error('promoteOnLaunch: not implemented');
+export async function promoteOnLaunch(deps: PromoteDeps): Promise<void> {
+  const nextSha = deps.fs.readText(`${deps.root}/web/dist-electron.next/${BUILT_SHA_FILE}`)?.trim();
+  if (!nextSha) return;
+  const head = (await deps.headSha()).trim();
+  if (nextSha !== head) return;
+  swapBundle(deps.fs, deps.root);
 }
 
 export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
