@@ -100,22 +100,26 @@ function WorkflowsDisplay({ wfs }: { wfs: readonly PlanWorkflowSummary[] }): Rea
       : "border-mizu/45 bg-mizu/10 text-mizu-bright";
   return (
     <span data-part="plan-workflows" className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
-      <HoverCard open={open} onOpenChange={setOpen} openDelay={10} closeDelay={100}>
-        <HoverCardTrigger asChild>
-          <button
-            type="button"
-            data-part="wf-pr-summary"
-            onFocus={() => setOpen(true)}
-            className={cn(
-              "inline-flex h-4 cursor-pointer items-center gap-1 rounded-[4px] border px-1.5 font-mono text-[10px]",
-              tone,
-            )}
-          >
-            <GitPullRequestIcon aria-hidden="true" className="size-2.5 shrink-0" />
-            <span>{`${wfs.length} PRs`}</span>
-            <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 opacity-70" />
-          </button>
-        </HoverCardTrigger>
+      <HoverCard open={open} onOpenChange={setOpen}>
+        <HoverCardTrigger
+          delay={10}
+          closeDelay={100}
+          render={
+            <button
+              type="button"
+              data-part="wf-pr-summary"
+              onFocus={() => setOpen(true)}
+              className={cn(
+                "inline-flex h-4 cursor-pointer items-center gap-1 rounded-[4px] border px-1.5 font-mono text-[10px]",
+                tone,
+              )}
+            >
+              <GitPullRequestIcon aria-hidden="true" className="size-2.5 shrink-0" />
+              <span>{`${wfs.length} PRs`}</span>
+              <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 opacity-70" />
+            </button>
+          }
+        />
         <HoverCardContent
           align="end"
           data-part="wf-pr-hover-list"

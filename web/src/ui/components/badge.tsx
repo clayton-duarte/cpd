@@ -1,7 +1,8 @@
 import * as React from "react"
+import { mergeProps } from "@base-ui/react/merge-props"
+import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
 import { toneClasses, type Tone } from "../dango-status.ts"
-import { Slot } from "radix-ui"
 import { cn } from "../../lib/utils.ts"
 
 const badgeVariants = cva(
@@ -27,29 +28,40 @@ const badgeVariants = cva(
   }
 )
 
+type BadgeProps = Omit<useRender.ComponentProps<"span">, "className"> & {
+  className?: string
+} &
+  VariantProps<typeof badgeVariants> & {
+    tone?: Tone
+  }
+
 function Badge({
   className,
   variant = "default",
-  asChild = false,
   tone,
+  render,
   ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean; tone?: Tone }) {
+}: BadgeProps) {
   const shown = tone === undefined ? variant : "outline"
-  const Comp = asChild ? Slot.Root : "span"
 
-  return (
-    <Comp
-      data-slot="badge"
-      data-variant={shown}
-      className={cn(
-        badgeVariants({ variant: shown }),
-        tone !== undefined && [toneClasses[tone].text, toneClasses[tone].border, toneClasses[tone].tint],
-        className
-      )}
-      {...props}
-    />
-  )
+  return useRender({
+    defaultTagName: "span",
+    props: mergeProps<"span">(
+      {
+        className: cn(
+          badgeVariants({ variant: shown }),
+          tone !== undefined && [toneClasses[tone].text, toneClasses[tone].border, toneClasses[tone].tint],
+          className
+        ),
+      },
+      props
+    ),
+    render,
+    state: {
+      slot: "badge",
+      variant: shown,
+    },
+  })
 }
 
 export { Badge, badgeVariants }

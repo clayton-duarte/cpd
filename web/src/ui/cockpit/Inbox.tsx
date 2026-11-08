@@ -482,7 +482,7 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
   if (row.kind === "engine-down") return item;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+      <ContextMenuTrigger render={item} />
       <Menu {...props} />
     </ContextMenu>
   );
@@ -592,7 +592,7 @@ export function Inbox(props: {
         value="all"
         data-tier-filter="all"
         onClick={() => setSelectedTiers("all")}
-        className="h-6 gap-1.5 px-1.5 text-xs text-fg-strong hover:text-fg-strong data-[state=on]:text-fg-strong"
+        className="h-6 gap-1.5 px-1.5 text-xs text-fg-strong hover:text-fg-strong aria-pressed:text-fg-strong"
       >
         <span>all</span>
         <span className="font-mono text-[10px] opacity-80">{rows.length}</span>
@@ -650,26 +650,28 @@ export function Inbox(props: {
           <>
         {collapsed ? (
           <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-part="inbox-filters-trigger"
-                aria-label="Filter inbox by tier"
-                className="h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
-              >
-                <ListFilterIcon className="size-3.5 text-muted-foreground" />
-                <span>
-                  {allSelected
-                    ? "all"
-                    : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`}
-                </span>
-                <span className="font-mono text-[10px] opacity-80">
-                  {filteredRows.length}
-                </span>
-              </Button>
-            </PopoverTrigger>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-part="inbox-filters-trigger"
+                  aria-label="Filter inbox by tier"
+                  className="h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
+                >
+                  <ListFilterIcon className="size-3.5 text-muted-foreground" />
+                  <span>
+                    {allSelected
+                      ? "all"
+                      : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`}
+                  </span>
+                  <span className="font-mono text-[10px] opacity-80">
+                    {filteredRows.length}
+                  </span>
+                </Button>
+              }
+            />
             <PopoverContent
               align="end"
               className="w-auto min-w-[8.5rem] p-1.5"
