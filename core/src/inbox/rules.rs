@@ -1570,9 +1570,9 @@ mod tests {
         };
         f.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                        mergeable, authored, review_requested, merge_state, base_ref, default_branch)
+                                        mergeable, authored, review_requested, merge_state, base_ref, default_branch, base_contained)
              VALUES ('acme/shop', {n}, 'https://github.com/acme/shop/pull/{n}', 'T', 0, 'open', '{review}', '{checks}', '{T}', '{T}',
-                     '{mergeable}', 1, 0, '{merge_state}', 'main', 'main');"
+                     '{mergeable}', 1, 0, '{merge_state}', 'main', 'main', 1);"
         ));
     }
 
