@@ -309,7 +309,8 @@ test("cpd-lead: the skill text states the bounds the guards enforce (air-d66, ai
   const tests = section(spec, "## Test Jobs");
   assert.match(tests, /`pi\/test\/<file>\.test\.ts::<title>`/);
   assert.match(tests, /`web\/<file>\.test\.ts\(x\)::<title>`/);
-  assert.match(tests, /as nextest filters it/);
+  assert.match(tests, /exactly as nextest names it/);
+  assert.match(tests, /the area name never in the id/);
 });
 
 test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is the Gate's", () => {
