@@ -35,11 +35,12 @@ describe("settings", () => {
     await expect(readSettings(cpd)).rejects.toMatchObject({ code: "cpd_malformed_json" });
   });
 
-  it("settings.save sends all four Tiers, the changed ones over the current ones", async () => {
+  it("settings.save sends all four Tiers, the changed ones over the current ones, then each switch, then retier all, in order", async () => {
     const { cpd, calls } = fake({ config, "config experimental": experimental });
     await saveSettings(cpd, { tiers: { worker: "H2", lead: "S2" }, experimental: { write_curation: false, durable_workers: true } });
-    const writes = calls.filter((c) => c.startsWith("config tiers set") || c.startsWith("config experimental ") || c.startsWith("session retier"));
-    expect(writes).toEqual([
+    expect(calls).toEqual([
+      "config",
+      "config experimental",
       "config tiers set --auxiliar GX --worker H2 --lead S2 --manager O3",
       "config experimental durable_workers on",
       "config experimental write_curation off",
@@ -56,10 +57,6 @@ describe("settings", () => {
   it("settings.save stops at the first refusal", async () => {
     const { cpd, calls } = fake({ config, "config experimental": experimental }, "config experimental write_curation off");
     await expect(saveSettings(cpd, { tiers: { lead: "S2" }, experimental: { write_curation: false, failure_triage: false } })).rejects.toThrow("refused");
-    const writes = calls.filter((c) => c.startsWith("config tiers set") || c.startsWith("config experimental ") || c.startsWith("session retier"));
-    expect(writes).toEqual([
-      "config tiers set --auxiliar GX --worker H3 --lead S2 --manager O3",
-      "config experimental write_curation off",
-    ]);
+    expect(calls).toEqual(["config", "config experimental", "config tiers set --auxiliar GX --worker H3 --lead S2 --manager O3", "config experimental write_curation off"]);
   });
 });

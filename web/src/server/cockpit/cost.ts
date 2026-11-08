@@ -1,3 +1,4 @@
+import { toArgv } from "../cpd-argv.ts";
 export interface CostFile { readonly text: string; readonly mtimeMs: number; readonly size: number }
 export interface CostDeps {
   cpd(argv: readonly string[]): Promise<string>;
@@ -72,12 +73,12 @@ const total = (xs: (number | null)[]): number | null => (xs.some((x) => x !== nu
 const PAGE = 5000;
 
 export async function readCosts(deps: CostDeps): Promise<Record<string, number>> {
-  const contexts = arr(obj(JSON.parse(await deps.cpd(["context", "list"])))?.["contexts"]);
-  const sessions = arr(obj(JSON.parse(await deps.cpd(["session", "list", "--archived"])))?.["sessions"]);
+  const contexts = arr(obj(JSON.parse(await deps.cpd(toArgv({ kind: "context.list" }))))?.["contexts"]);
+  const sessions = arr(obj(JSON.parse(await deps.cpd(toArgv({ kind: "session.list", archived: true }))))?.["sessions"]);
   const stored = new Map<string, number>();
   let since = 0;
   for (;;) {
-    const r = obj(JSON.parse(await deps.cpd(["events", "list", "--kind", "attempt-ended", "--since", String(since), "--limit", String(PAGE)])));
+    const r = obj(JSON.parse(await deps.cpd(toArgv({ kind: "events.list", eventKind: "attempt-ended", since, limit: PAGE }))));
     const events = arr(r?.["events"]);
     for (const e of events) {
       const c = obj(e["data"])?.["cost_usd"];

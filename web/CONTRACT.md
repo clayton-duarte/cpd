@@ -2178,6 +2178,13 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text and no images; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3, amended above), and the submission is echoed, queued and delivered like any other.
 
+## 18. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
+
+Normative for every web module that builds a `cpd` command line. The full statement — the rule, the `cpd argv-check` command interface and the Gate test — is **docs/contract.md §5.6 "The web-to-CLI argv contract"**; where the two differ, docs/contract.md wins (this file's preamble rule, section 10 excepted).
+
+- **One shared argv module.** No web code spawns `cpd` with hand-built argv: every command line is built by `web/src/server/cpd-argv.ts`, which exposes the discriminated union `CpdCommand` (one variant per cpd command the web sends) and `toArgv(cmd: CpdCommand): string[]` — the argv after the program name. Every spawn flavour (the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, and the Electron paths `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) consumes only `toArgv` output; the call-site modules (`web/src/server/cockpit/`, `web/src/server/pi/backend.ts`, `web/src/server/durable/backend.ts`, and the Electron paths) construct `CpdCommand` values, never their own arrays.
+- **The Gate test.** `web/src/server/cockpit/argv-contract.test.ts` builds every `CpdCommand` variant from `cpd-argv.ts` alone, spawns one `cpd argv-check` process, feeds the argv arrays on stdin, and fails on any parse error (docs/contract.md §5.6 states the command's stdin/stdout/exit interface exactly). It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate before merge.
+
 ## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
 
 Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
@@ -2191,4 +2198,5 @@ Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dia
 
 - A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
 - The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+
 

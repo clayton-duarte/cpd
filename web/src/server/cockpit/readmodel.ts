@@ -6,6 +6,7 @@ import type {
 import { WebError, type SessionRole, type SessionState } from "../../protocol/domain.ts";
 import type { CockpitPane } from "../../protocol/wire.ts";
 import type { Cpd } from "./cli.ts";
+import { toArgv } from "../cpd-argv.ts";
 
 type Reply = Readonly<Record<string, unknown>>;
 type Obj = Readonly<Record<string, unknown>>;
@@ -447,11 +448,11 @@ export function createReadModel(cpd: Cpd): ReadModel {
     const wantSessions = wantTree || panes.has("inbox");
     const wantPlan = panes.has("plan") && planId !== null;
     const [ctxR, planR, sessR, inboxR, showR] = await Promise.all([
-      wantTree ? cpd.json(["context", "list"]) : undefined,
-      wantInbox ? cpd.json(["plan", "list"]) : undefined,
-      wantSessions ? cpd.json(["session", "list"]) : undefined,
-      wantInbox ? cpd.json(["inbox", "list"]) : undefined,
-      wantPlan ? cpd.json(["plan", "show", "--plan", planId]).catch(() => null) : undefined,
+      wantTree ? cpd.json(toArgv({ kind: "context.list" })) : undefined,
+      wantInbox ? cpd.json(toArgv({ kind: "plan.list" })) : undefined,
+      wantSessions ? cpd.json(toArgv({ kind: "session.list" })) : undefined,
+      wantInbox ? cpd.json(toArgv({ kind: "inbox.list" })) : undefined,
+      wantPlan ? cpd.json(toArgv({ kind: "plan.show", planId })).catch(() => null) : undefined,
     ]);
     const out: { tree?: ContextTreeModel; plan?: PlanViewModel | null; inbox?: InboxModel } = {};
     const inbox = inboxR === undefined ? undefined : parseInboxList(inboxR);
@@ -473,7 +474,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
         await Promise.all(
           curateContexts.map(async (ctxId) => {
             try {
-              const r = await cpd.json(["context", "curation", `--context=${ctxId}`, "--limit=10"]);
+              const r = await cpd.json(toArgv({ kind: "context.curation", contextId: ctxId, limit: 10 }));
               curationByContext.set(ctxId, parseCuration(r));
             } catch {
               // ignore curation fetch failure so inbox still loads

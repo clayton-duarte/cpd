@@ -1,5 +1,6 @@
 import { WebError } from "../../protocol/domain.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
+import { toArgv } from "../cpd-argv.ts";
 
 export interface CpdResult { readonly stdout: string; readonly stderr: string; readonly exitCode: number }
 export interface CpdExec { run(args: readonly string[]): Promise<CpdResult> }
@@ -51,5 +52,5 @@ function parseObject(text: string): Record<string, unknown> | null {
   }
 }
 export function followArgs(since: number): readonly string[] {
-  return ["events", "follow", "--since", String(since)];
+  return toArgv({ kind: "events.follow", since });
 }
