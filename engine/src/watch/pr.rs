@@ -1,10 +1,12 @@
 //! E5, the GitHub step (contract §3.7, §7.6; hs-d96, hs-d97; docs/architecture/swr.md §12): E5 owns the `github`
 //! source — its `due()`, its `fetch()` and its outbox drain (swr-github.md §4, §9). `pr_poll_seconds` after the end of
 //! the previous pass, at its due time (the engine wakes for it between ticks), whether or not any Plan is in `deploy`:
-//! one pass covers every open pull request of the User. The pass runs first, in E5's poll thread; the legacy `cpd pr poll`
-//! then runs the post-processing (its Events and its Workflow merges) on the same cycle — a stopgap until that work moves
-//! into the source's commit (Lead answer github-pass-impl-a1-q1). `cpd` is the executable the engine started from
-//! (`Spawn::self_exe`), as for the drivers of E3 (hs-d151): not `PATH`.
+//! one pass covers every open pull request of the User. The pass IS E5's poll: the source's fetch replaces the legacy
+//! `cpd pr poll` spawn, and the legacy effects (the pr-feedback, pr-merged and pr-closed Events, the Workflow merges and
+//! unstack, and the changed/feedback/merged/done counts) are applied from that same read, so the tick polls GitHub once
+//! per `pr_poll_seconds` (D9's target; Lead answer github-pass-poll-fix-a1-q1).
+//!
+//! Skeleton: the implementation lands next.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
