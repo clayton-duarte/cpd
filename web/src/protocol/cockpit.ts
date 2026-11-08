@@ -124,6 +124,7 @@ export type CockpitAction =
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
   | { kind: "plan.new"; planId: string; contextId: string; title: string }
+  | { kind: "context.new"; contextId: string; title: string; owner: string }
   | { kind: "context.rename"; contextId: string; title: string }
   | { kind: "plan.rename"; planId: string; title: string }
   | { kind: "session.rename"; sessionId: string; name: string }
@@ -167,6 +168,8 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
     "plan.new": ["planId", "contextId", "title"],
+    // stub: the required-field list is incomplete — `owner` is not required yet (red tests pin it).
+    "context.new": ["contextId", "title"],
     "context.rename": ["contextId", "title"],
     "plan.rename": ["planId", "title"],
     "session.rename": ["sessionId", "name"],
