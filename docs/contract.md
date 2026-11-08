@@ -3554,6 +3554,10 @@ The WebUI backend builds `cpd` command lines and spawns the `cpd` binary in thre
   - **Hidden.** The command is internal tooling for this contract test, not a user command: it carries `#[command(hide = true)]`, so it is absent from `cpd --help`, the root help tree and every user-facing command listing.
 - **The Gate test.** One vitest test, `web/src/server/cockpit/argv-contract.test.ts`, is the proof that the web's argv grammar matches the CLI's: it builds every cpd argv the web sends — every `CpdCommand` variant, including every optional-flag combination the call sites produce — from `web/src/server/cpd-argv.ts` alone, feeds the arrays to one `cpd argv-check` process on stdin, and fails when the reply is not `ok: true` or the exit is non-zero, naming the failing argv and the parser's error. It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate, and a web argv added without a `CpdCommand` variant has no test.
 
+### 5.7 The refusal miner (the guard record's backfill)
+
+Skeleton: filled in by Job `mine-docs` (Plan `agent-refusals`).
+
 ## 6. The tmux host
 
 ### 6.1 The server
