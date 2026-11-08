@@ -2990,7 +2990,15 @@ struct Says(Arc<Mutex<String>>);
 
 impl Says {
     fn set(&self, mergeable: &str, merge_state: &str) {
-        *self.0.lock().unwrap() = common::pay_search(mergeable, merge_state);
+        *self.0.lock().unwrap() = swr_reply_one(
+            "acme/pay",
+            812,
+            "OPEN",
+            mergeable,
+            merge_state,
+            "U1",
+            json!(null),
+        );
     }
 }
 
@@ -3024,9 +3032,14 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
     fx.add_merged_api();
     fx.add_draft_in("repo", "later");
     fx.add_job("blocked", &["later"], "");
-    let says = Says(Arc::new(Mutex::new(common::pay_search(
+    let says = Says(Arc::new(Mutex::new(swr_reply_one(
+        "acme/pay",
+        812,
+        "OPEN",
         "MERGEABLE",
         "CLEAN",
+        "U1",
+        json!(null),
     ))));
     let text = says.0.clone();
     fx.route_fn("gh", move |_| Reply::ok(&text.lock().unwrap()));
@@ -3240,9 +3253,6 @@ fn in_pr(fx: &Ip) {
     );
 }
 
-/// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
-const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
-
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 /// The legacy `cdp pr poll` search; E5's poll is the GitHub SWR pass now ([`swr_reply`]).
 fn search_reply(remaining: u32, reset_at: &str) -> String {
@@ -3278,6 +3288,37 @@ fn swr_reply_with(remaining: u32, reset_at: &str, aliases: serde_json::Map<Strin
         data.insert(key, value);
     }
     json!({"data": data}).to_string()
+}
+
+/// One pull request of the GitHub SWR document's `Light` (with `Heavy` fields the alias query asks for), as the source's
+/// `parse_poll` reads it: the fields the `Light` and `Heavy` fragments select, so a scripted alias answers a whole node.
+fn swr_pr(repo: &str, number: i64, state: &str, mergeable: &str, merge_state: &str, updated_at: &str, merged_at: Value) -> Value {
+    json!({
+        "number": number, "state": state, "isDraft": false, "mergeable": mergeable,
+        "mergeStateStatus": merge_state, "reviewDecision": null,
+        "baseRefName": "main", "headRefName": "feat", "headRefOid": "h1",
+        "updatedAt": updated_at, "title": "Pay", "url": format!("https://github.com/{repo}/pull/{number}"),
+        "createdAt": "2026-10-01T00:00:00.000Z", "mergedAt": merged_at,
+        "author": {"login": "ada"},
+        "repository": {"nameWithOwner": repo, "defaultBranchRef": {"name": "main"}, "isArchived": false},
+        "labels": {"nodes": []},
+        "autoMergeRequest": null,
+        "commits": {"nodes": [{"commit": {"oid": "h1", "statusCheckRollup": {"state": "SUCCESS", "contexts": {"nodes": []}}}}]},
+        "latestReviews": {"nodes": []},
+        "reviewThreads": {"nodes": []},
+        "comments": {"nodes": []},
+        "viewerDidAuthor": true,
+        "viewerLatestReviewRequest": null
+    })
+}
+
+/// [`swr_reply_with`] for one aliased pull request `p0` and its repository `m0` (the repo metadata the pass reads when
+/// the `swr_repos` row is cold).
+fn swr_reply_one(repo: &str, number: i64, state: &str, mergeable: &str, merge_state: &str, updated_at: &str, merged_at: Value) -> String {
+    let mut aliases = serde_json::Map::new();
+    aliases.insert("p0".into(), json!({"pullRequest": swr_pr(repo, number, state, mergeable, merge_state, updated_at, merged_at)}));
+    aliases.insert("m0".into(), json!({"defaultBranchRef": {"name": "main"}, "isArchived": false, "autoMergeAllowed": true, "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": false, "deleteBranchOnMerge": true}));
+    swr_reply_with(4987, "2099-01-01T00:00:00Z", aliases)
 }
 
 /// `gh` answers every search with an empty result that takes `takes`; the time of each call, on the `ManualClock`, is noted.
@@ -3344,15 +3385,15 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
         Mutex::new(go_rx),
         Mutex::new(ended_tx),
     );
-    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2099-01-01T00:00:00.000Z"}});
-    fx.route_fn("cpd", move |_| {
+    // E5's pass: its `gh` call says it began, waits for the test to let it go, and lasts 0.1 s.
+    fx.route_fn("gh", move |_| {
         entered_tx.lock().unwrap().send(()).unwrap();
         go_rx
             .lock()
             .unwrap()
             .recv_timeout(WAIT)
             .expect("the engine held at its nap lets the poll go");
-        Reply::ok(&poll.to_string()).takes(Duration::from_millis(100))
+        Reply::ok(&swr_reply(5000, "2099-01-01T00:00:00.000Z")).takes(Duration::from_millis(100))
     });
 
     let lock = fx.home().watch_lock();
@@ -3391,7 +3432,7 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
             "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {ticks:?}"
         );
     }
-    assert_eq!(fx.calls("cpd").len(), 3);
+    assert_eq!(fx.calls("gh").len(), 3);
     assert_eq!(fx.events("error").len(), 0);
 }
 
@@ -3423,15 +3464,14 @@ fn e5_a_poll_handed_over_late_does_not_slip_to_the_next_tick() {
         Mutex::new(ended_tx),
         Mutex::new(release_rx),
     );
-    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2099-01-01T00:00:00.000Z"}});
-    fx.route_fn("cpd", move |_| {
+    fx.route_fn("gh", move |_| {
         let _ = entered_tx.lock().unwrap().send(());
         go_rx
             .lock()
             .unwrap()
             .recv_timeout(WAIT)
             .expect("the engine held at its nap lets the poll go");
-        Reply::ok(&poll.to_string()).takes(Duration::from_millis(100))
+        Reply::ok(&swr_reply(5000, "2099-01-01T00:00:00.000Z")).takes(Duration::from_millis(100))
     });
 
     let lock = fx.home().watch_lock();
@@ -3498,15 +3538,17 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
     .unwrap();
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
     let (clock, noted) = (fx.fakes.clock.clone(), starts.clone());
-    fx.route_fn("gh", move |call| {
-        if is_search(call) {
-            noted.lock().unwrap().push(clock.elapsed());
-            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
-        } else if let Some(query) = call.args.iter().find(|arg| arg.contains("comments(last:")) {
-            Reply::ok(&common::empty_comments(query))
-        } else {
-            Reply::ok(LOOKUP_OPEN)
-        }
+    fx.route_fn("gh", move |_| {
+        noted.lock().unwrap().push(clock.elapsed());
+        Reply::ok(&swr_reply_one(
+            "acme/pay",
+            7,
+            "OPEN",
+            "MERGEABLE",
+            "CLEAN",
+            "U1",
+            json!(null),
+        ))
     });
 
     let seen = starts.clone();
@@ -3603,7 +3645,7 @@ fn gh_failing_until_healed(fx: &Ip, failure: Reply) -> Arc<AtomicBool> {
     let flag = healed.clone();
     fx.route_fn("gh", move |_| {
         if flag.load(Ordering::SeqCst) {
-            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+            Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z"))
         } else {
             failure.clone()
         }
@@ -3619,7 +3661,7 @@ fn e5_a_gh_502_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heal
 
     polls(&fx, 3);
     let record = failing(&fx).expect("the engine's record of the failure");
-    assert_eq!(record["call"], "search");
+    assert_eq!(record["call"], "poll");
     let since = parse_time(record["since"].as_str().unwrap());
     assert!(
         (OffsetDateTime::now_utc() - since).whole_seconds() < 60,
@@ -3644,7 +3686,7 @@ fn e5_a_gh_502_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heal
     );
     let log = engine_log(&fx);
     assert!(
-        log.contains("pr poll: gh search failed transiently (HTTP 502), failing since "),
+        log.contains("pr poll: gh poll failed transiently (HTTP 502), failing since "),
         "{log}"
     );
     assert!(log.contains("): retrying at the next poll"), "{log}");
@@ -3667,10 +3709,10 @@ fn e5_a_gh_timeout_is_transient_too() {
     );
     let log = engine_log(&fx);
     assert!(
-        log.contains("pr poll: gh search failed transiently (timeout), failing since "),
+        log.contains("pr poll: gh poll failed transiently (timeout), failing since "),
         "{log}"
     );
-    assert_eq!(failing(&fx).unwrap()["call"], "search");
+    assert_eq!(failing(&fx).unwrap()["call"], "poll");
 }
 
 /// An engine home with a Manager, a `gh` that always answers `failure` and `run/pr-poll-failing.json` for `minutes` minutes of failing.
@@ -3678,7 +3720,7 @@ fn polling_with_manager_failing(minutes: i64, failure: Reply) -> Ip {
     let fx = polling("");
     fx.manager("mgr1");
     fx.route_fn("gh", move |_| failure.clone());
-    fail_since(&fx, "search", minutes);
+    fail_since(&fx, "poll", minutes);
     fx
 }
 
@@ -3692,7 +3734,7 @@ fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_befor
             (fx.events("error").len(), messages(&fx)),
             (0, Vec::<String>::new())
         );
-        assert_eq!(failing(&fx).unwrap()["call"], "search");
+        assert_eq!(failing(&fx).unwrap()["call"], "poll");
     }
 
     // Eleven: one error Event for the machine, and one message to the Manager, not one per tick.
@@ -3718,7 +3760,7 @@ fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_befor
             &details["exit"]
         ),
         (
-            &json!("search"),
+            &json!("poll"),
             &since,
             &json!(11),
             &json!("HTTP 502"),
@@ -3779,7 +3821,7 @@ fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_
     polls(&fx, 3);
     assert_eq!(
         failing(&fx).expect("the engine's record of the failure")["call"],
-        "search"
+        "poll"
     );
     assert_eq!(
         (fx.events("error").len(), messages(&fx)),
@@ -3801,7 +3843,7 @@ fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_
     let log = engine_log(&fx);
     assert!(
         log.contains(
-            "pr poll: gh search failed transiently (unexpected end of JSON input), failing since "
+            "pr poll: gh poll failed transiently (unexpected end of JSON input), failing since "
         ),
         "{log}"
     );
@@ -3818,7 +3860,7 @@ fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
             (fx.events("error").len(), messages(&fx)),
             (0, Vec::<String>::new())
         );
-        assert_eq!(failing(&fx).unwrap()["call"], "search");
+        assert_eq!(failing(&fx).unwrap()["call"], "poll");
     }
 
     // Eleven: one error Event and one message to the Manager, not one per tick.
@@ -3843,7 +3885,7 @@ fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
             &details["exit"]
         ),
         (
-            &json!("search"),
+            &json!("poll"),
             &since,
             &json!(11),
             &json!("unexpected end of JSON input"),
@@ -3901,7 +3943,7 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
                 &json!("watch"),
                 &json!("gh_failed"),
                 &json!(false),
-                &json!("search")
+                &json!("poll")
             ),
             "{name}"
         );
@@ -4194,28 +4236,13 @@ fn e5_removes_the_poll_now_request_when_it_starts_the_poll() {
     let file = poll_now_file(&fx);
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "").unwrap();
-    // The faked poll child never removes the request. Without E5's removal the engine never naps (a request is always
-    // pending), so the nap bound could not end the run: after 5 polls the fake plays the real child and removes it.
-    let (polled, request) = (Arc::new(Mutex::new(0_usize)), file.clone());
-    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
-    fx.route_fn("cpd", move |_| {
-        let mut polled = polled.lock().unwrap();
-        *polled += 1;
-        if *polled >= 5 {
-            let _ = fs::remove_file(&request);
-        }
-        Reply::ok(&poll.to_string())
-    });
+    // The engine's faked `gh` (the fixture default) answers E5's pass; the request is E5's own to remove as it starts.
 
     // A fixed 100 naps (10 virtual ticks): the test cannot hang.
     fx.watch_steps(|nap| nap >= 100).unwrap();
 
     assert!(!file.exists(), "E5 left run/pr-poll-now in place");
-    let polls: Vec<_> = fx
-        .calls("cpd")
-        .into_iter()
-        .filter(|call| call.args.starts_with(&["pr".to_owned(), "poll".to_owned()]))
-        .collect();
+    let polls: Vec<_> = fx.calls("gh");
     assert_eq!(polls.len(), 1, "E5 polled every tick: {polls:?}");
     assert_eq!(fx.events("error").len(), 0);
 }
@@ -4249,25 +4276,14 @@ fn e3_does_not_start_a_job_in_its_backoff() {
 /// it must see no call).
 #[test]
 fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
+    // E5's poll is the GitHub pass now (D9's target): it calls `gh` through the runner, never a `cpd` on `PATH`.
     let fx = engine("");
     let installed = fx.env.root().join("cpd-installed");
     fx.fakes.spawn.set_self_exe(&installed);
-    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
-    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
 
     fx.watch_first_tick().unwrap();
 
-    let polls = fx.calls("cpd-installed");
-    assert_eq!(
-        polls
-            .iter()
-            .map(|call| (call.program.as_str(), call.args.as_slice()))
-            .collect::<Vec<_>>(),
-        [(
-            installed.to_str().unwrap(),
-            ["pr".to_owned(), "poll".to_owned()].as_slice()
-        )]
-    );
+    assert!(!fx.calls("gh").is_empty(), "E5 polled no GitHub");
     assert_eq!(
         fx.calls("cpd"),
         Vec::<Call>::new(),
@@ -4317,17 +4333,18 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
          INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
         repo = web.display()
     ));
-    // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
-    let merged = r#"{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}"#;
-    fx.route_fn("gh", move |call| {
-        if is_search(call) {
-            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
-        } else {
-            Reply::ok(&format!(
-                r#"{{"data":{{"p0":{{"pullRequest":{merged}}}}}}}"#
-            ))
-        }
-    });
+    // E5's one read: the GitHub SWR document, whose `p0` alias answers PR 7 MERGED (the pass stores the merge, and its
+    // legacy effects merge the Workflow and unstack `web`).
+    let merged = swr_reply_one(
+        "acme/pay",
+        7,
+        "MERGED",
+        "UNKNOWN",
+        "UNKNOWN",
+        "U1",
+        json!("2026-10-14T10:00:00Z"),
+    );
+    fx.route_fn("gh", move |_| Reply::ok(&merged));
 
     // The engine is held at its first nap until the poll the first tick started has ended ([`Ip::watch_gated`]): the second tick takes
     // its result and, in that tick, E7 starts `web`.
