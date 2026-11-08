@@ -137,6 +137,14 @@ struct InboxCli {
     command: crate::inbox::cmd::Command,
 }
 
+/// The `status` pane (contract §20.1): the Workers counts and the incident state, read fresh from the
+/// store on every snapshot. **Stub:** the code Job fills it from the store through the same queries the
+/// `@cpd_workers` step uses; until then the envelope alone is emitted, so the red tests fail on the
+/// missing `workers`/`incident` fields, never on the build.
+fn status_pane(_env: &mut Env) -> Result<Value, CpdError> {
+    Ok(json!({"ok": true}))
+}
+
 /// The four panes: what the list commands print (same functions), read through `env`.
 fn panes(env: &mut Env) -> Result<Value, CpdError> {
     let crate::context::Command::List(_) = ContextCli::parse_from(["cpd", "list"]).command else {
@@ -163,6 +171,7 @@ fn panes(env: &mut Env) -> Result<Value, CpdError> {
         "plan": pane(crate::plan::list::list_in(env, plan))?,
         "session": pane(crate::session::row::list_in(env, session))?,
         "inbox": pane(crate::inbox::cmd::list_in(env, inbox))?,
+        "status": status_pane(env)?,
     }))
 }
 
