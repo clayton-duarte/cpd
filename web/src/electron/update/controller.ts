@@ -1,7 +1,18 @@
 import type { SyncResult } from './checkout';
-import type { UpdateState } from './types';
+import type { UpdateFs, UpdateState } from './types';
 
 export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; relaunch?(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; onState(s: UpdateState): void; log(line: string): void }
+
+export interface PromoteDeps { fs: UpdateFs; root: string; headSha(): Promise<string> }
+
+/**
+ * Launch promote (web/CONTRACT.md §19.1): before the window opens, `web/dist-electron.next` is swapped
+ * into `web/dist-electron` when its `.built-sha` equals `git rev-parse HEAD`; otherwise nothing happens.
+ * Stub only: the red tests in controller.test.ts pin the behaviour.
+ */
+export async function promoteOnLaunch(_deps: PromoteDeps): Promise<void> {
+  throw new Error('promoteOnLaunch: not implemented');
+}
 
 export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
   let restartNeeded = false;
