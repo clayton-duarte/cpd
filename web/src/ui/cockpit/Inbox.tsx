@@ -31,6 +31,7 @@ import type {
 } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
+import { Empty } from "../components/empty.tsx";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -712,9 +713,11 @@ export function Inbox(props: {
       {inbox === null ? (
         <p className="px-[14px] text-fg-dim">Loading inbox…</p>
       ) : filteredRows.length === 0 ? (
-        <p data-empty className="px-[14px] py-3 text-muted-foreground">
+        <Empty
+          className="flex-none items-start justify-start gap-0 p-0 px-[14px] py-3 text-left text-muted-foreground"
+        >
           up to date, drink some water
-        </p>
+        </Empty>
       ) : (
         <ScrollArea data-part="inbox-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
         <ItemGroup className="gap-2 px-2.5 py-1.5">

@@ -227,7 +227,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
 
   if (context === null) {
     // 14.2 (air-d28): the empty state is text, not the flowchart; CpdFlowCanvas renders only in the Documentation dialog.
-    return <p data-part="manager-empty" className="grid h-full place-items-center text-muted-foreground">Select a lead to see plans</p>;
+    return <Empty data-part="manager-empty" className="h-full text-muted-foreground">Select a lead to see plans</Empty>;
   }
 
   const plans = livePlans(context);

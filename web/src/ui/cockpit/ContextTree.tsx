@@ -9,6 +9,7 @@ import { dotDisplay, sessionDisplay } from "../dango-status.ts";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/context-menu.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
 import { Button } from "../components/button.tsx";
+import { Empty } from "../components/empty.tsx";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Input } from "../components/input.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
@@ -565,7 +566,12 @@ export function ContextTree(props: {
               {tree === null ? (
                 <p data-part="loading" className="px-2 text-fg-dim">Loading contexts…</p>
               ) : all.length === 0 ? (
-                <p data-part="empty" className="px-2 text-fg-dim">No contexts</p>
+                <Empty
+                  data-part="empty"
+                  className="flex-none items-start justify-start gap-0 p-0 px-2 text-left text-fg-dim"
+                >
+                  No contexts
+                </Empty>
               ) : (
                 <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
               )}
