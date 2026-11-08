@@ -1554,10 +1554,15 @@
   "session report": {
     "flags": {
       "--code": true,
+      "--command": true,
       "--details": true,
       "--help": false,
+      "--kind": true,
       "--message": true,
+      "--protocol": true,
       "--session": true,
+      "--source": true,
+      "--tool": true,
       "--what": true
     },
     "positionals": {

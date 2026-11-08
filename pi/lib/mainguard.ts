@@ -3,6 +3,9 @@ import { lstatSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { PREFIXES, simpleCommands } from "./shell.ts";
 
+/** The breached protocol's name (contract §5.2), the `protocol` of a `protocol-breach` Event (§10.18). */
+export const PROTOCOL_NAME = "primary checkout";
+
 /** The rule's reason, one line naming it and the alternatives (§15.16). */
 export const reasonText = (matched: string): string =>
   `φ: no agent moves HEAD or changes the files of a repo's primary checkout; fetching is allowed, then read origin/main with 'git show origin/main:<path>', 'git log origin/main' or 'git diff origin/main', or in a throwaway 'git worktree add $(mktemp -d) origin/main' that you remove afterwards; to change files, work on a branch in a worktree ('git worktree add -b <branch> <dir> origin/main', or the worktree of your Job) and let a Workflow's pull request carry the change; refused: ${matched}`;

@@ -344,18 +344,33 @@ pub struct RetitleArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReportArgs {
-    /// What failed
+    /// What failed (the `error` leg; required without `--kind`)
     #[arg(long, value_name = "text")]
-    what: report::Short,
-    /// The adapter's error code
+    what: Option<report::Short>,
+    /// The adapter's error code (the `error` leg; required without `--kind`)
     #[arg(long, value_name = "code")]
-    code: report::Code,
-    /// The error's message
+    code: Option<report::Code>,
+    /// The error's message, or (with `--kind protocol-breach`) the guard's refusal reason
     #[arg(long, value_name = "text")]
-    message: report::Short,
+    message: Option<report::Short>,
     /// More details, a JSON object
     #[arg(long, value_name = "json")]
     details: Option<report::Details>,
+    /// The breach leg: `protocol-breach` only (contract §5.2, commands.md §10.18)
+    #[arg(long, value_name = "kind")]
+    kind: Option<report::Kind>,
+    /// The breached protocol (with `--kind protocol-breach`)
+    #[arg(long, value_name = "name")]
+    protocol: Option<report::Protocol>,
+    /// The emitting guard (with `--kind protocol-breach`)
+    #[arg(long, value_name = "name")]
+    source: Option<report::Source>,
+    /// The refused tool's name (with `--kind protocol-breach`)
+    #[arg(long, value_name = "name")]
+    tool: Option<report::Tool>,
+    /// The refused call's first line, at most 200 characters (with `--kind protocol-breach`)
+    #[arg(long, value_name = "text")]
+    command: Option<report::Command>,
     /// The Session reporting [default: $CPD_SESSION]
     #[arg(long, value_name = "id", env = "CPD_SESSION", hide_env = true)]
     session: Option<SessionRef>,

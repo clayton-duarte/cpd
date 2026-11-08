@@ -1,4 +1,4 @@
-import { tooLong, unseen } from "./askguard.ts";
+import { PROTOCOL_NAME as ASK_PROTOCOL, tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
@@ -10,15 +10,15 @@ import { homedir } from "node:os";
 import { exploreGuard, leadExploreGuard } from "./explore.ts";
 import { fileURLToPath } from "node:url";
 import { pinAdapter } from "./adapter-pin.ts";
-import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
+import { PROTOCOL_NAME as MAIN_PROTOCOL, primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
 import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
 import { installQuitMarker } from "./quit.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
-import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { PROTOCOL_NAME as SECRET_PROTOCOL, reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
 import { electronBypass, reasonText as electronReasonText } from "./electronguard.ts";
-import { externalBlock } from "./externalguard.ts";
+import { PROTOCOL_NAME as EXTERNAL_PROTOCOL, externalBlock } from "./externalguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -77,28 +77,60 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     noteQuestionTool(host, event.toolName);
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return { block: true, reason: looped };
+    // commands.md §10.18, contract §5.2: a guard's refusal also records one `protocol-breach` Event in the Ledger,
+    // with the protocol it enforces, the guard, the refused tool and the refused command line (none for a question).
+    const breach = (protocol: string, source: string, tool: string, command: string | undefined, reason: string): void => {
+      const id = host.run?.id ?? host.env.CPD_SESSION;
+      const args = ["session", "report", "--kind", "protocol-breach", "--protocol", protocol, "--source", source, "--tool", tool, "--message", reason, ...(command === undefined ? [] : ["--command", command]), ...(id === undefined ? [] : ["--session", id])];
+      host.call(args).catch((e) => host.deliver("protocol breach", e)); // L4: a failed call is logged, never retried
+    };
     const role = host.run?.info.role;
-    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" }); if (external) return { block: true, reason: external };
+    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
+    if (external) {
+      const command = typeof (event.input as { command?: unknown }).command === "string" ? (event.input as { command: string }).command : undefined;
+      breach(EXTERNAL_PROTOCOL, "externalguard", event.toolName, command, external);
+      return { block: true, reason: external };
+    }
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
     if (led !== undefined) return { block: true, reason: led.block };
     if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
       const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
-      if (written !== undefined) return { block: true, reason: mainReasonText(written) };
+      if (written !== undefined) {
+        const reason = mainReasonText(written);
+        breach(MAIN_PROTOCOL, "mainguard", event.toolName, undefined, reason);
+        return { block: true, reason };
+      }
     }
     const bashCommand = (event.input as { command?: unknown }).command;
     if (host.run && event.toolName === "bash" && typeof bashCommand === "string") {
-      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir()); if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
-      const secret = secretBypass(bashCommand); if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir());
+      if (moved !== undefined) {
+        const reason = mainReasonText(moved);
+        breach(MAIN_PROTOCOL, "mainguard", "bash", bashCommand, reason);
+        return { block: true, reason };
+      }
+      const secret = secretBypass(bashCommand);
+      if (secret !== undefined) {
+        const reason = secretReasonText(secret);
+        breach(SECRET_PROTOCOL, "secretguard", "bash", bashCommand, reason);
+        return { block: true, reason };
+      }
       const electron = electronBypass(bashCommand); if (electron !== undefined) return { block: true, reason: electronReasonText(electron) };
       const hostApprove = hostApproveBypass(bashCommand); if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
-      if (long !== undefined) return { block: true, reason: long };
+      if (long !== undefined) {
+        breach(ASK_PROTOCOL, "askguard", "ask_user_question", undefined, long);
+        return { block: true, reason: long };
+      }
       const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.parentToolCallId ?? event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
-      if (unseenReason !== undefined) return { block: true, reason: unseenReason };
+      if (unseenReason !== undefined) {
+        breach(ASK_PROTOCOL, "askguard", "ask_user_question", undefined, unseenReason);
+        return { block: true, reason: unseenReason };
+      }
       host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
       return undefined;
     }
