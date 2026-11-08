@@ -6440,6 +6440,12 @@ fn a_failed_curate_run_raises_an_error_event() {
         1,
         "a failed curate run raises one E9 error Event: {errors:?}"
     );
+    assert!(
+        errors
+            .iter()
+            .all(|text| text.contains("E9 (Context digests)")),
+        "only E9 may report the curate run's failure: {errors:?}"
+    );
 }
 
 // ---- E2 liveness: a blank list-panes line (air-n104; curate-scout §3) ----
@@ -6473,6 +6479,15 @@ fn the_e2_tick_skips_a_blank_list_panes_line() {
     assert!(
         e2.is_empty(),
         "a blank list-panes line aborted the E2 tick: {e2:?}"
+    );
+    assert!(
+        fx.fakes
+            .runner
+            .calls()
+            .iter()
+            .any(|c| c.program.ends_with("tmux") && c.args.iter().any(|a| a == "list-panes")),
+        "the E2 tick never listed the panes, so the blank line was never parsed: {:?}",
+        fx.fakes.runner.calls()
     );
     assert_eq!(
         fx.env

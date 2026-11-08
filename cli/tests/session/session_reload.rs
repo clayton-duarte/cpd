@@ -688,7 +688,8 @@ fn is_asleep(fx: &Fx, id: &str) -> bool {
 /// air-n103, air-n104 (contract §3.7 E13, commands.md §10.6 "A reload is not activity"): a reload stops and starts pi,
 /// and the adapter's `session state stopped` then `session state idle` round trip moves the Session's `state_at` to
 /// now. That round trip is no turn, so E13 does not read it as activity and a finished Lead still sleeps after
-/// `timeouts.sleep_seconds`. A real turn (`working` → `idle`) does restart the clock and keeps its Lead awake.
+/// `timeouts.sleep_seconds`. A real turn (`working` → `idle`) does restart the clock and keeps its Lead awake, and a
+/// finished Lead with no event at all (`quiet-lead`, the control) sleeps: the reload is the only difference from it.
 #[test]
 fn a_reload_does_not_restart_the_sleep_clock() {
     let fx = sleep_engine();
@@ -698,10 +699,12 @@ fn a_reload_does_not_restart_the_sleep_clock() {
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay', 'done', 'pay-lead', 't', 't', '{long_ago}'),
-                  ('turn', 'ctx', 'Turn', 'done', 'turn-lead', 't', 't', '{long_ago}');
+                  ('turn', 'ctx', 'Turn', 'done', 'turn-lead', 't', 't', '{long_ago}'),
+                  ('quiet', 'ctx', 'Quiet', 'done', 'quiet-lead', 't', 't', '{long_ago}');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
            VALUES ('pay-lead', 'lead', 'ctx', 'pay', 'Pay Lead', '/', 'O3', 'idle', '{now}', 't', 'durable'),
-                  ('turn-lead', 'lead', 'ctx', 'turn', 'Turn Lead', '/', 'O3', 'idle', '{now}', 't', 'durable');
+                  ('turn-lead', 'lead', 'ctx', 'turn', 'Turn Lead', '/', 'O3', 'idle', '{now}', 't', 'durable'),
+                  ('quiet-lead', 'lead', 'ctx', 'quiet', 'Quiet Lead', '/', 'O3', 'idle', '{long_ago}', 't', 'durable');
          -- The reload's round trip for `pay-lead`: pi stops, the new pi starts and reports idle, just now.
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
            VALUES (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'pay-lead',
@@ -722,5 +725,9 @@ fn a_reload_does_not_restart_the_sleep_clock() {
     assert!(
         !is_asleep(&fx, "turn-lead"),
         "a real working-to-idle turn restarts the sleep clock"
+    );
+    assert!(
+        is_asleep(&fx, "quiet-lead"),
+        "a finished Lead with no event at all sleeps: the fixture's conditions hold"
     );
 }
