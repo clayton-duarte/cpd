@@ -28,13 +28,13 @@ mod slack_write_tests;
 #[cfg(test)]
 mod github_poll_tests;
 #[cfg(test)]
-mod registry_tests;
-#[cfg(test)]
 mod github_tests;
 #[cfg(test)]
 mod github_write_tests;
 #[cfg(test)]
 mod models_tests;
+#[cfg(test)]
+mod registry_tests;
 
 /// A query key `<system>:<kind>:<id>` (swr.md §4).
 pub type QueryKey = String;
