@@ -4805,14 +4805,14 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 
 ```
 cpd config [--migrate]
-cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
+cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>
 cpd config experimental [<feature> <on|off>]
 cpd config concurrency set <n>
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `decide_tier`, `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `decide_tier` `JX` (the decide role's default: the Tier of the cheap decisions — routing, classification, logic gates such as the loop-guard verdicts and tier selection; one step only, no ladder, air-d113, air-d115, air-d120; contract §9 "Roles and ranges"), `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-`config tiers set` (§14.2a) writes the four Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
+`config tiers set` (§14.2a) writes the five Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive), then `worker-runner-to-experimental` (Plan `experimental-config`: the top-level `worker_runner = "durable"` becomes `durable_workers = true` in `[experimental]`, and `worker_runner = "pi"` is only dropped)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -4827,13 +4827,14 @@ With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive m
 ### 14.2a `config tiers set`
 
 ```
-cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
+cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>
 ```
 
-Sets the four Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All four flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
+Sets the five Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--decide` is `decide_tier`, `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All five flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
 
 | Argument | Meaning |
 |---|---|
+| `--decide <T>` | the decide role's default, `decide_tier` (§9 "Roles and ranges") |
 | `--auxiliar <T>` | the auxiliar role's default, `context_distill_tier` (§9 "Roles and ranges") |
 | `--worker <T>` | the worker role's default, `worker_tier` |
 | `--lead <T>` | the lead role's default, `lead_tier` |
@@ -4844,15 +4845,15 @@ Sets the four Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--auxiliar
 | Precondition | Code | Exit |
 |---|---|---|
 | `config.toml` exists (it is read first) | `config_missing` | 1 |
-| each of the four values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
-| the new text parses as a Config: each key's own rules hold, and the four defaults strictly ascend, `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
+| each of the five values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
+| the new text parses as a Config: each key's own rules hold, and the five defaults strictly ascend, `decide_tier` < `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
 | `host.toml` exists and parses, or is absent (the built-in default applies); a file that does not parse is `policy_invalid` (`details.file`) | `policy_invalid` | 1 |
 | the store cannot be opened for the catalog, or the migration wait ends (as `cpd tiers`) | `lock_timeout` | 5 |
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each model read for the catalog (the `[model]` refs of `host.toml`) is in the catalog | `tier_model_unknown` | 1 |
 | each value is a valid rung of its letter's model: a digit only for an effort the model offers, `X` for every model (§9 "Valid efforts per model", air-d16, air-d17, air-d21); `details.key` and `details.efforts` (the model's valid efforts) | `tier_invalid` | 2 |
-| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
+| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar and the decide), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
 
 **Effects.** Only a key whose effective value changes is written; an absent key has its default as its value. The rewrite keeps every other byte of the file:
 - a changed key's line is replaced whole by `<key> = "<T>" # set by the Agent Tiers dialog, <YYYY-MM-DD>`, the date from cpd's ports clock;
@@ -4939,22 +4940,22 @@ Kept from cpd 1 §7 and §11; output of §9.
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each model read is in the catalog: the configured one of each letter, or the `--model` candidate that replaces it | `tier_model_unknown` | 1 |
-| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
+| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `J`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
 
 **`--model <L>=<ref>`** (repeatable) names a candidate model for the letter `L`, for this call only. The catalog is read for the candidate instead of the configured model of `L`, and the output's `tiers.<L>.model` and `efforts` are the candidate's. Nothing is written to `host.toml` or `config.toml`; the candidate's catalog rows are cached like any model's (a cache, no Event). The output shape is unchanged, and `tiers.<L>.model` shows the candidate:
 
 ```json
-{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}, "J": {"model": "openrouter/typesafe/jev-router", "efforts": [0, 1, 2, 3]}}}
 ```
 
-The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S` and `G` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
+The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S`, `G` and `J` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
 
 It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
 Effects: the cache is keyed by `install/current-version` and the fingerprint of `<agentDir>/models.json` (`models_sha`: lowercase hex SHA-256 of its bytes, `""` when the file does not exist; any other read error is `catalog_failed` with the path in `details`), so the key is `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp; contract §4.4, §9). When either differs from the cached rows, one transaction inserting `tier_catalog` rows (append-only; old rows stay) (a cache: no Event). The rows of every letter are cached, `G` included (contract §4.4, §9). No tmux, no git.
 
 ```json
-{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}, "J": {"model": "openrouter/typesafe/jev-router", "efforts": [0, 1, 2, 3]}}}
 ```
 
 The `efforts` above are an illustration, not verified values. `G` reads like the other letters (pro-d328 to pro-d332): its model here has only `off`, so its `efforts` are `[]` and `GX` is its one valid Tier; a model with an effort level gives `G` efforts like any letter. Efforts are 0–4 (`minimal` and `max` are dropped, §9). Idempotent: yes.
@@ -5091,10 +5092,10 @@ Effects: the `swr_models` row written for each provider that has a good list; th
 cpd preset list
 cpd preset show <name>
 cpd preset apply <name>
-cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref> --J <ref>
 ```
 
-The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the four refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
+The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, air-d115, air-d120): a named set of five model refs — the `O`, `S`, `H`, `G` and `J` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the five refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
 
 **`preset list`** prints every preset with the provider of its `O` ref. No precondition, no effect (one read of `config.toml`, no store):
 
@@ -5115,8 +5116,10 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 {"ok": true, "name": "fast",
  "O": "github-copilot/claude-haiku-4.5", "S": "github-copilot/claude-sonnet-5.5",
  "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash",
+ "J": "openrouter/typesafe/jev-router",
  "host": {"O": "github-copilot/claude-opus-5.5", "S": "github-copilot/claude-sonnet-5.5",
-          "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash"}}
+          "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash",
+          "J": "openrouter/typesafe/jev-router"}}
 ```
 
 `host` is the machine scope's `[model]` refs read from `$CPD_HOME/policy/host.toml`, or the built-in default of contract §8.3 when the file has no `[model]` table. No registry is read and nothing is validated: `show` reports, it never checks. Idempotent: read-only.
@@ -5125,19 +5128,19 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 
 1. **The name.** `<name>` must be a `[presets.<name>]` table of `config.toml`, else `preset_unknown` (exit 4).
 2. **The host file.** `$CPD_HOME/policy/host.toml` must exist and hold a `[model]` table, else `policy_invalid` (exit 1, `details.file`, `details.key` `model`): there is nothing to rewrite.
-3. **Equality.** When the preset's four refs equal the current host `[model]` refs of step 2, `apply` is a no-op: no write, no Event, `"already": true` (idempotent).
-4. **The one-provider invariant.** The preset's four refs must have one provider, the invariant contract §8.3 holds of a written model table; else `policy_invalid` (exit 1, `details.file`, `details.key` `model`), before anything external runs.
+3. **Equality.** When the preset's five refs equal the current host `[model]` refs of step 2, `apply` is a no-op: no write, no Event, `"already": true` (idempotent).
+4. **The one-provider invariant.** The preset's five refs must have one provider, the invariant contract §8.3 holds of a written model table; else `policy_invalid` (exit 1, `details.file`, `details.key` `model`), before anything external runs.
 5. **The registry** (D3). The command lists pi's **full** registry on this machine — every provider pi can use, the built-in providers included, each with its offered model ids — by running the model-discovery helper (`pi/lib/models-list.ts`, the helper §14.5's `models refresh` and the engine's E15 run with no argument) in its `--all` mode, through the host runner, under pi's Node, in its own process group, with the deadline of `models refresh`'s (120 s). **The cached `run/models-<provider>.json` files are never the source**: they exclude the built-in providers, so the registry is always listed at apply time. The registry listing's own failures are the helper's codes (`pi_not_found`, `spawn_failed`, `tool_timeout` exit 5, `models_helper_failed`, …), writing nothing. Then:
    - a ref whose provider is not in the registry refuses `preset_provider_unconfigured` (exit 3);
    - a ref that is not among its provider's offered ids refuses `preset_model_unoffered` (exit 3).
-6. **The write** (D4). The `[model]` table of `host.toml` is rewritten: the section header `[model]` and its `O`/`S`/`H`/`G` lines are replaced by the preset's four refs, in that order, and every other byte of the file is unchanged. The write is atomic: a temporary file in the same directory, then a rename over `host.toml` (`write_atomic`). `host.toml` stays the **only** place `[model]` is written (pro-d25): no owner or repo policy file and no dotfiles template.
+6. **The write** (D4). The `[model]` table of `host.toml` is rewritten: the section header `[model]` and its `O`/`S`/`H`/`G`/`J` lines are replaced by the preset's five refs, in that order, and every other byte of the file is unchanged. The write is atomic: a temporary file in the same directory, then a rename over `host.toml` (`write_atomic`). `host.toml` stays the **only** place `[model]` is written (pro-d25): no owner or repo policy file and no dotfiles template.
 7. **The live Sessions** (D5). After the write, the command recomputes the model each live (not archived) Lead and Manager Session resolves at its tier's letter — the `model` of `cpd session show` (§10.2), i.e. the ref contract §8.3's resolution gives the letter of the Session's stored tier, so a letter whose effective ref an owner or repo file overrides is unchanged. For every Session whose model differs under the pre-write and the post-write host `[model]`, ONE `session-model-changed` Event is appended, scoped to it (`context` and `plan` when it has them; `data` `{from, to}` = the resolved refs under the pre-write and the post-write `host.toml`), all in one store transaction, in the same style as `session-retiered` (contract §5.2, §5.3). A Session whose letter's model is unchanged gets none. Nothing else is written for Sessions.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `<name>` is a `[presets.<name>]` table of `config.toml` (step 1) | `preset_unknown` | 4 |
 | `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
-| the preset's four refs are one provider — the invariant of contract §8.3 for the written table; `details.file`, `details.key` `model` (step 4) | `policy_invalid` | 1 |
+| the preset's five refs are one provider — the invariant of contract §8.3 for the written table; `details.file`, `details.key` `model` (step 4) | `policy_invalid` | 1 |
 | the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
 | the registry can be listed: the helper starts | `spawn_failed` | 1 |
 | the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
@@ -5159,10 +5162,10 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 ### 14.6a `preset set`
 
 ```
-cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref> --J <ref>
 ```
 
-The switch of `preset apply` with the four refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All four flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
+The switch of `preset apply` with the five refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All five flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
 
 | Argument | Meaning |
 |---|---|
@@ -5170,11 +5173,12 @@ The switch of `preset apply` with the four refs given as flags instead of a `[pr
 | `--S <ref>` | the model ref of the `S` letter |
 | `--H <ref>` | the model ref of the `H` letter |
 | `--G <ref>` | the model ref of the `G` letter |
+| `--J <ref>` | the model ref of the `J` letter |
 
 **Steps, in order.** Every refusal happens before any write: nothing is written and no Event is appended.
 
-1. **The refs.** Each `--O`, `--S`, `--H` and `--G` parses as a model ref (`usage` otherwise), before anything is read.
-2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' four refs as the preset's: the host file must hold a `[model]` table; when the four refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the four refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
+1. **The refs.** Each `--O`, `--S`, `--H`, `--G` and `--J` parses as a model ref (`usage` otherwise), before anything is read.
+2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' five refs as the preset's: the host file must hold a `[model]` table; when the five refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the five refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
 3. **The write and the live Sessions.** Exactly `preset apply`'s steps 6 and 7: the `[model]` table of `host.toml` is rewritten atomically, and one `session-model-changed` Event is appended for each live Lead and Manager whose model changed, in one store transaction.
 
 **Effects.** The `[model]` rewrite of `host.toml` and the Events of step 3, and nothing else: no `config.toml` write, no other row, and no write at all on a refusal or on the no-op of step 2.
