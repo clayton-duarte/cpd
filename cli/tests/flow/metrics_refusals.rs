@@ -8,8 +8,8 @@
 use crate::common::fx::Fx;
 use serde_json::json;
 
-/// A fixture store: the Context `ctx`, the Sessions `s1` (worker, S2) and `s2` (lead, O3), and
-/// six `guard` Events over two UTC days — three per day.
+/// A fixture store: the Context `ctx`, the Session `s1`, and six `guard` Events over two UTC
+/// days — three per day — whose `data` carries the refusal's own role, tier and model.
 fn fixture() -> Fx {
     let fx = Fx::with_ports();
     let env = &fx.env;
@@ -18,8 +18,7 @@ fn fixture() -> Fx {
         "INSERT INTO contexts (id, title, owner, created_at, created_on)
            VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-           VALUES ('s1', 'worker', 'ctx', 'W1', '/', 'S2', 'idle', 't', 't'),
-                  ('s2', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
+           VALUES ('s1', 'manager', 'ctx', 'Mgr', '/', 'O3', 'idle', 't', 't');
          INSERT INTO events (txn, at, kind, context, session, text, data)
            VALUES
              (cpd_txn(), '2026-11-06T09:00:00.000Z', 'guard', 'ctx', 's1', 'φ: usage',
@@ -28,9 +27,9 @@ fn fixture() -> Fx {
               '{\"code\":\"usage\",\"role\":\"worker\",\"tier\":\"S2\",\"model\":\"p/sonnet\",\"tool\":\"bash\",\"excerpt\":\"cat y\"}'),
              (cpd_txn(), '2026-11-06T11:00:00.000Z', 'guard', 'ctx', 's1', 'φ: network',
               '{\"code\":\"network\",\"role\":\"worker\",\"tier\":\"S2\",\"model\":\"p/sonnet\",\"tool\":\"bash\",\"excerpt\":\"curl x\"}'),
-             (cpd_txn(), '2026-11-07T09:00:00.000Z', 'guard', 'ctx', 's2', 'φ: usage',
+             (cpd_txn(), '2026-11-07T09:00:00.000Z', 'guard', 'ctx', 's1', 'φ: usage',
               '{\"code\":\"usage\",\"role\":\"lead\",\"tier\":\"O3\",\"model\":\"p/opus\",\"tool\":\"bash\",\"excerpt\":\"cat z\"}'),
-             (cpd_txn(), '2026-11-07T10:00:00.000Z', 'guard', 'ctx', 's2', 'φ: network',
+             (cpd_txn(), '2026-11-07T10:00:00.000Z', 'guard', 'ctx', 's1', 'φ: network',
               '{\"code\":\"network\",\"role\":\"lead\",\"tier\":\"O3\",\"model\":\"p/opus\",\"tool\":\"bash\",\"excerpt\":\"curl z\"}'),
              (cpd_txn(), '2026-11-07T11:00:00.000Z', 'guard', 'ctx', 's1', 'φ: scope',
               '{\"code\":\"scope\",\"role\":\"worker\",\"tier\":\"S2\",\"model\":\"p/sonnet\",\"tool\":\"bash\",\"excerpt\":\"rg /\"}');
