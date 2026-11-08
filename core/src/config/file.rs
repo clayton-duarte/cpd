@@ -182,6 +182,12 @@ pub struct Watch {
     pub error_repeat_seconds: u32,
     /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
     pub pr_poll_transient_minutes: u32,
+    /// The count of one Session's `guard` Events inside [`Watch::refusal_alert_minutes`] at or above which E25 records the
+    /// `refusal_threshold` `error` Event and wakes the Context's Manager, and E8 opens the red `refusal-alert` item
+    /// (§3.7 E25, §2.2; Plan `agent-refusals`).
+    pub refusal_alert_threshold: u32,
+    /// The sliding window of that count, in minutes, read at every tick (§3.7 E25).
+    pub refusal_alert_minutes: u32,
 }
 
 /// The `[swr]` table (contract §8.2; docs/architecture/swr.md §4).
@@ -423,6 +429,8 @@ impl Config {
             janitor_minutes: positive(&mut r, "watch.janitor_minutes", 60)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
+            refusal_alert_threshold: positive(&mut r, "watch.refusal_alert_threshold", 10)?,
+            refusal_alert_minutes: positive(&mut r, "watch.refusal_alert_minutes", 60)?,
         };
         let swr = Swr {
             gc_days: positive(&mut r, "swr.gc_days", 7)?,
