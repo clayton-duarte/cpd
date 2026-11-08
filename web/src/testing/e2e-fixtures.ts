@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -14,6 +14,34 @@ const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
+
+/** The scripted fake cpd (`e2e-fake-cpd`) the data plane boots against, never a real cpd. */
+const fakeCpdSource = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
+
+/** The PATH the runner started with, before any spec prepends its private bin dir. */
+const basePath = process.env["PATH"] ?? "";
+
+/**
+ * Stage the suite's private data plane in `staging`: a `bin` dir holding a `cpd` symlink to the
+ * scripted fake cpd, and a fake login shell that reports the app's PATH unchanged (the app runs
+ * `$SHELL -ilc` to resolve the login path, and the real shell would drop the fake dir, so the pty's
+ * `cpd tui --attach` would spawn a real cpd). Sets CPD_BIN, SHELL and PATH so the app spawns the
+ * fake only. The caller removes `staging` in `afterAll`.
+ */
+export function stageFakeCpd(staging: string): void {
+  const fakeBin = join(staging, "bin");
+  const fakeShell = join(staging, "shell");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeShell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(fakeShell, 0o755);
+  symlinkSync(fakeCpdSource, join(fakeBin, "cpd"));
+  process.env["CPD_BIN"] = fakeCpdSource;
+  process.env["SHELL"] = fakeShell;
+  process.env["PATH"] = `${fakeBin}:${basePath}`;
+}
 
 /**
  * Headless Electron on Linux needs these: the bundled `chrome-sandbox` is not SUID (--no-sandbox),
