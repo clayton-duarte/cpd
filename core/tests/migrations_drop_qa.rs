@@ -74,6 +74,10 @@ const LATER: &[(&str, &str)] = &[
         "pull_requests",
         "ALTER TABLE pull_requests DROP COLUMN author_login; ALTER TABLE pull_requests DROP COLUMN reviews_json; ALTER TABLE pull_requests DROP COLUMN labels_json",
     ),
+    (
+        "event_kinds",
+        "DELETE FROM event_kinds WHERE name = 'bug-breach'",
+    ),
 ];
 
 /// Makes the store as it was before the migration: it and the later ones are not recorded as applied.
