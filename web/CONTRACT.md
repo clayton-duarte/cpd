@@ -56,14 +56,14 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 |---|---|---|
 | protocol | `web/src/protocol/domain.ts`, `wire.ts` (also `parseClientMessage`, 10.9), `cockpit.ts` (also `parseCockpitAction`, 10.9), `runtime.ts` (also `GitBoundary`, 10.9) | covered by the tests of the modules that parse (`state/connection.test.ts`, `server/hub/connection.test.ts`, `server/cockpit/*.test.ts`) |
 | state | `web/src/state/transcript.ts`, `store.ts`, `connection.ts` | `transcript.test.ts`, `store.test.ts`, `connection.test.ts` |
-| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12) | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12) |
+| cockpit-srv | `web/src/server/cockpit/cli.ts`, `readmodel.ts`, `events.ts`, `actions.ts`, `stream.ts` (12), `settings.ts` (19), `status.ts`, `cost.ts`, `logs.ts`, `liveness.ts` | `readmodel.test.ts`, `events.test.ts`, `actions.test.ts`, `stream.test.ts` (12), `settings.test.ts` (19), `status.test.ts`, `cost.test.ts`, `logs.test.ts`, `argv-contract.test.ts` (18) |
 | durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `ops.ts` (Phase 2, 10.8), `backend.ts` | `client.test.ts`, `frames.test.ts`, `ops.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
 | ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `ManagerView.tsx`, `Inbox.tsx`, `Shell.tsx`, `Header.tsx`, `StatusBar.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx`, `Header.test.tsx`, `StatusBar.test.tsx` |
 | ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx`, and Phase 2: `rows.ts` (10.4), `virtual.ts` (10.4), `Markdown.tsx` (10.6) | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx`, `rows.test.ts`, `virtual.test.ts`, `Markdown.test.tsx` |
 | ui-composer | `web/src/ui/composer/attachments.ts`, `drafts.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx` (also the draft tests of 6.9), `TierSelector.test.tsx` |
-| ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx` |
+| ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx`, `SettingsDialog.tsx` (17, 19), `DocsDialog.tsx`, `LogsDialog.tsx`, `LegendDialog.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx`, `StatusDialogs.test.tsx` (17, 19), `DocsDialog.test.tsx` |
 | app | `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`, `web/src/ui/app.css` | `web/src/ui/App.test.tsx` |
 | ui-chat (Phase 2) | see the ui-chat row | the Phase 2 pure modules `rows.ts`, `virtual.ts` and the `splitMarkdown` function are tested without a DOM |
 | test helpers | `web/src/testing/render.tsx`, `web/src/testing/scheduler.ts` | (helpers; used by the tests above) |
@@ -451,7 +451,7 @@ Carried as JSON text frames over the one WebSocket of §15 (A1, amended by 15): 
 
 ```ts
 import type { Attachment, Cursor, ConfigureChange, DialogResponse, WhenBusy, WireImage } from "./domain.ts";
-import type { CockpitAction } from "./cockpit.ts";
+import type { CockpitAction, SettingsChanges } from "./cockpit.ts";
 
 export type ClientMessage =
   | { type: "ping" } // the client's wire heartbeat (15.2); the server answers { type: "pong" } at once, with no cockpit or session involvement
@@ -467,6 +467,9 @@ export type ClientMessage =
   | { type: "session.compact"; sessionId: string; instructions?: string }
   | { type: "session.configure"; sessionId: string; change: ConfigureChange }
   | { type: "session.listModels"; sessionId: string }
+  | { type: "logs.read" } // answered with logs.result
+  | { type: "settings.read" } // answered with settings.result (19): the Agent Tiers dialog's read
+  | { type: "settings.save"; changes: SettingsChanges } // answered with settings.saved (19); only the values the User changed
   | { type: "dialog.respond"; sessionId: string; dialogId: string; response: DialogResponse };
 ```
 
@@ -479,7 +482,7 @@ export type ClientMessage =
 
 ```ts
 import type { Capabilities, Cursor, Dialog, DialogOutcome, FooterStats, ModelChoice, QueuedSubmission, SessionRef, TranscriptItem, Window, WireError } from "./domain.ts";
-import type { ContextTreeModel, PlanViewModel, InboxModel, ActionOutput } from "./cockpit.ts";
+import type { ContextTreeModel, PlanViewModel, InboxModel, ActionOutput, SettingsModel } from "./cockpit.ts";
 
 export type CockpitPane = "tree" | "plan" | "inbox";
 export type CockpitPaneData =
@@ -498,6 +501,9 @@ export type ServerMessage =
   | { type: "cockpit.error"; error: WireError } // a refresh failed; the previous snapshot stays valid
   | { type: "action.result"; actionId: string; ok: true; output: ActionOutput }
   | { type: "action.result"; actionId: string; ok: false; error: WireError }
+  | { type: "settings.result"; settings: SettingsModel } // the Agent Tiers dialog's read (19)
+  | { type: "settings.saved"; ok: true } // the save ran to its last write (19)
+  | { type: "settings.saved"; ok: false; error: WireError } // a refusal: shown once in the cockpit error toast (17.2, 19), never inline
   // session lifecycle
   | { type: "session.attached"; sessionId: string; capabilities: Capabilities; title: string | null; meta: SessionMeta }
   | { type: "session.window"; sessionId: string; mode: "tail" | "earlier"; window: Window } // tail replaces the transcript; earlier is prepended
@@ -547,6 +553,7 @@ Both are pure and throw `WebError`:
 - `session.configure`: exactly one `change.kind` of `model|thinking|tier`;
 - `dialog.respond`: `response.method`/`outcome` pair from `DialogResponse`; `changes` needs `feedback.trim() !== ""`;
 - `cockpit.action`: the action goes through `parseCockpitAction` (section 5.5), whose failures are `unknown_action` (unknown kind) and `invalid_message` (bad field of a known kind);
+- `settings.save`: `changes` is parsed once at the boundary (19): every tier a `TIER` string, every switch a bool, and `concurrency`, when present, an integer in 1 to 16 inclusive; a bad value is `invalid_message` with `details.field` naming the field;
 - `Dialog` objects, `Window`s (`cursor === null` iff `!hasEarlier`) and `TranscriptItem`s are checked structurally (kind discriminator, required fields, FoldItem `foldKind` in the five kinds (superseded by 10.1: the four kinds, `"cpd"` is the fifth)).
 
 Extra unknown properties are ignored by the parsers and dropped from the parsed value. Inside the program the parsed types are trusted; no later code re-validates.
