@@ -888,7 +888,6 @@ impl NewEvent {
     /// refused. `code` is the guard rule (an adapter refusal) or the envelope's code (a CLI refusal), and
     /// `excerpt` the refused command line or path, cut to 200 characters. `role`, `tier` and `model` are the
     /// refusing Session's own, so a refusal is rankable per guard, role, model and day with no join.
-    #[allow(clippy::too_many_arguments)]
     pub fn guard(
         text: impl Into<String>,
         code: &str,
