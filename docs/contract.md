@@ -844,7 +844,7 @@ The record of a bug and of its protocol state (air-d104; commands.md §33): what
 | `closed_at` | time? | when `protocol bug close` ran |
 | `closed_by` | text? | the caller's Session id, or null outside a Session |
 
-The record is written by the three commands only: `protocol bug report` inserts the row (`status` `open`, `mitigation`, `mitigated_by`, `mitigated_at`, `root_fix`, `regression_test`, `closed_at` and `closed_by` null); `protocol bug mitigate` sets `mitigation`, `mitigated_by` and `mitigated_at` (and `cause` when `--cause` is given); `protocol bug close` sets `root_fix`, `regression_test`, `status` `closed`, `closed_at` and `closed_by`, and is refused `root_fix_required` (exit 3, nothing written) until a root-fix link and a regression test are recorded (air-d107). Nothing else writes the table, and no field is updated after `status` is `closed`.
+The record is written by the three commands only: `protocol bug report` inserts the row (`status` `open`, `mitigation`, `mitigated_by`, `mitigated_at`, `root_fix`, `regression_test`, `closed_at` and `closed_by` null); `protocol bug mitigate` sets `mitigation`, `mitigated_by` and `mitigated_at` (and `cause` when `--cause` is given; without it a recorded `cause` stands); `protocol bug close` sets `root_fix`, `regression_test`, `status` `closed`, `closed_at` and `closed_by`, and is refused `root_fix_required` (exit 3, nothing written) until a root-fix link and a regression test are recorded (air-d107). Nothing else writes the table, and no field is updated after `status` is `closed`.
 
 ### 2.3 Fingerprints
 

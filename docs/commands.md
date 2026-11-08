@@ -7988,7 +7988,7 @@ Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b
 | the bug's `status` is `open` | `illegal_transition` | 3 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
-**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set when `--cause` is given and null otherwise. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
+**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
 
 **Output:** the `bug` object of §33.1, with the new values.
 
