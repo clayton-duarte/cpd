@@ -5228,7 +5228,55 @@ The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Le
 - `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
 - `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
 
-**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day, with a threshold crossing over a window that records an Event and alerts the Manager and the Inbox. The surface is the CLI only; nothing here feeds an exporter.
+**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day (below).
+
+**`cpd metrics refusals`** is the one aggregate of the refusals this machine's agents suffered: the rate over the guard Events, per guard, role, model and day. Read-only, as its parent is: it opens the store read-only, reads the `guard` Events, prints one JSON value and writes nothing. Callers `[Manager, Lead]` (§2).
+
+```
+cpd metrics refusals [--since <date>] [--until <date>] [--limit <n>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--since <date>` | the window's start, **inclusive**; an RFC 3339 timestamp or a bare `YYYY-MM-DD` date (`YYYY-MM-DD` is `00:00:00Z` of that day). Default: 7 days before `--until` |
+| `--until <date>` | the window's end, **exclusive**, in the same two forms. Default: now, on the reading process's clock |
+| `--limit <n>` | at most this many rows of each table, `0` for every row. Default `20` |
+
+**The window and what it counts.** One guard Event is counted when its `at` is at or after `--since` and before `--until`: every refusal the adapter guards and the agent-caused CLI refusals appended (contract §5.2 "The guard Event"), of every role and every Plan. The window is echoed in the value as `{since, until, days}`, `days` its length in days (`until − since` in seconds, divided by 86400), the divisor of every rate.
+
+**The value**, one JSON object:
+
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+- `window`: `{since, until, days}` as above, `since` and `until` in RFC 3339 UTC.
+- `total`: the count of the counted guard Events.
+- `per_guard`, `per_role`, `per_model`: the three tables of the same Events — one row per `data.code` (the guard rule, or the envelope's code, contract §5.2), per `data.role` (`manager`, `lead`, `worker`) and per `data.model` (the model ref) — as `{guard|role|model, count, per_day}`, highest `count` first, a tie by name ascending.
+- `per_day`: the same Events by day, oldest day first, as `{day, count, per_guard}`, `per_guard` an object of `code` → count for that day; only days with at least one counted Event appear.
+
+**The rate** is `per_day` on every row: its `count` divided by the window's `days`, rounded to two decimals, so 70 refusals over a 7-day window is `10.0` and 1 refusal over the same is `0.14`. The `day` of `per_day` is the **UTC calendar day** of the Event's `at` (the store keeps `at` in UTC, contract §5.2): the metric is machine-wide and applies no local zone, so the same store read in any zone gives the same tables.
+
+```json
+{"ok": true, "store": "/home/clayton/.cpd/cpd.db",
+ "window": {"since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z", "days": 7.0},
+ "total": 34,
+ "per_guard": [{"guard": "usage", "count": 21, "per_day": 3.0},
+               {"guard": "explore timeout", "count": 7, "per_day": 1.0}],
+ "per_role": [{"role": "worker", "count": 26, "per_day": 3.71},
+              {"role": "lead", "count": 8, "per_day": 1.14}],
+ "per_model": [{"model": "deepseek/deepseek-v4", "count": 19, "per_day": 2.71},
+               {"model": "github-copilot/claude-sonnet-5.5", "count": 15, "per_day": 2.14}],
+ "per_day": [{"day": "2026-11-06", "count": 12, "per_guard": {"usage": 7, "explore timeout": 5}},
+             {"day": "2026-11-07", "count": 22, "per_guard": {"usage": 14, "explore timeout": 2, "test": 6}}]}
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--since` or `--until` is neither an RFC 3339 timestamp nor a `YYYY-MM-DD` date | `usage` | 2 |
+| `--until` is not after `--since` | `usage` | 2 |
+| `--limit` is not a non-negative integer | `usage` | 2 |
+
+Idempotent: read-only, so a rerun over an unchanged store prints the same value. **There is no `--format` on it:** `--format prometheus` (below) exposes the Attempts' aggregates and nothing else, because a refusal rate feeds no exporter. The surface is the CLI only.
+
+**The threshold alert is the engine's, not this command's** (Plan `agent-refusals`; air-d85, air-d105, air-d64; contract §3.7 E25). Engine step E25 counts the `guard` Events of each Session over a sliding window at every tick, and at or above the configured threshold it (1) appends one structured `error` Event with the code `refusal_threshold`, (2) messages the Context's Manager with a waking `session-message`, the air-d64 pattern so that the Manager acts at once instead of finding the crossing in the Inbox, and (3) leaves a red `refusal-alert` Inbox item for the User, which E8 opens and closes with the count. `cpd metrics refusals` takes no part in the alert: it reads the same Events and reports them, and it is where a Manager sees whether the crossing was real. Its only reader is a command line — no daemon, no scrape, no exported metric.
 
 **`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
 
