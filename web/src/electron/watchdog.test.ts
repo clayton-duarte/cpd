@@ -335,6 +335,9 @@ function healthSetup(initial: { build?: Build } = {}) {
       calls.push(`revert:${build}`);
       state.build = build;
     },
+    // The restart is a port of its own (air-d127): the watchdog relaunches after it commits the
+    // recovery Event, so this fake records nothing and the call log stays as it was.
+    relaunch: async () => {},
     reloadRenderer: async () => {
       calls.push("reload-renderer");
     },

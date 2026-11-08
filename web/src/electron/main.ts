@@ -306,8 +306,7 @@ async function main(): Promise<void> {
     const relaunchInProduction = (): void => {
       app.relaunch({ args: [...process.argv.slice(1), `${MODE_ARG}production`] });
       app.exit(0);
-    };
-    const watchdog = createHealthWatchdog({
+    };    const watchdog = createHealthWatchdog({
       now: () => Date.now(),
       readHealth: async () => {
         try {
@@ -333,6 +332,10 @@ async function main(): Promise<void> {
           await fs.rm(displaced, { recursive: true, force: true });
         }
         currentBuild = build;
+      },
+      // The restart comes after the recovery Event, through this port, so the Event is on disk before
+      // the process exits (air-d127) and the relaunch still carries production mode (air-d95).
+      relaunch: async () => {
         relaunchInProduction();
       },
       reloadRenderer: async () => {

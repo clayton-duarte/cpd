@@ -238,8 +238,19 @@ export interface HealthWatchdogPorts {
   readHealth(): Promise<CockpitHealth | null>;
   /** The build the view runs from now. */
   build(): Build;
-  /** Swap to another build kept on disk and relaunch the app (a ladder step). */
+  /**
+   * Apply another build kept on disk as the current one (a ladder step): swap it into the prod build
+   * dir and report it as the build in force. It must NOT restart the app — the recovery Event is
+   * committed after this returns and before the relaunch, so the Event can never race the restart
+   * (air-d127).
+   */
   revert(build: Build): Promise<void>;
+  /**
+   * Restart the app after a ladder step, asking for `mode` explicitly so the rollback relaunch boots
+   * production and loads the built renderer, carried past Electron's environment-preserving relaunch
+   * (air-d126, air-d95).
+   */
+  relaunch(mode: "production"): Promise<void>;
   /** Reload the renderer in place: the app process and the view stay (not a ladder step). */
   reloadRenderer(): Promise<void>;
   /** Commit one structured Event (air-d81). */
@@ -284,11 +295,14 @@ export function createHealthWatchdog(
       return;
     }
     await ports.revert(next);
+    // The rung is applied: announce the recovery before the restart, so the Event is committed and
+    // cannot be lost to the process exiting mid-write (air-d127).
     await ports.report({
       kind: "watchdog.recovery",
       text: `CPD watchdog recovered from ${brk.kind} by reverting to ${next}`,
       data: { detection: brk.kind, build: next },
     });
+    await ports.relaunch("production");
   };
 
   const reload = async (brk: Break): Promise<void> => {
