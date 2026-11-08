@@ -1,6 +1,7 @@
 -- cpd-migration: breaking after 124
 -- The Inbox kind `bug` (the owner's wake and the User's breach indicator, contract §2.2 "Inbox item",
--- "Bug record"; air-d104, air-d105, air-n120) and the Event kind `bug-breach` (contract §5.2, §3.7 E25).
+-- "Bug record"; air-d104, air-d105, air-n120) and the Event kind `protocol-breach` (contract §5.2, §3.7 E25;
+-- D14, air-d119: one kind for every protocol's breach, `data.protocol` naming it).
 -- `inbox_items` is rebuilt with `bug` in its kind check, as `pr-closed-kind` rebuilt it, from the shape
 -- `codereview-followup` left it (`head_oid`, `reviewed_oid`); SQLite cannot alter a CHECK constraint.
 CREATE TABLE inbox_items_new (
@@ -32,4 +33,4 @@ DROP TABLE inbox_items;
 ALTER TABLE inbox_items_new RENAME TO inbox_items;
 CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
 CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
-INSERT INTO event_kinds (name) VALUES ('bug-breach');
+INSERT INTO event_kinds (name) VALUES ('protocol-breach');

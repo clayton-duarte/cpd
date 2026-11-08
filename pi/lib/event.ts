@@ -6,7 +6,7 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * or the output of a command the adapter runs changes in a way the adapter depends on.
  * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`, 22 is `workflow-reopened`, 23 is the Lead-less `shaping` phase: `plans.lead_session` may be null and a Plan's phase may be `shaping`, which `plan show`, `plan list` and `context pending` carry, 24 is `session-message`'s optional `data.origin`.
  */
-export const PROTOCOL = 24;
+export const PROTOCOL = 25;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
@@ -20,7 +20,7 @@ export const KINDS = [
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "session-resumed", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed", "inbox-claimed",
   "workflow-added", "workflow-edited", "workflow-described", "workflow-cancelled", "workflow-reopened", "workflow-started", "workflow-base-changed", "pr-opened", "pr-merged",
-  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "bug-breach", "error", "mcp-attached",
+  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "protocol-breach", "error", "mcp-attached",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 

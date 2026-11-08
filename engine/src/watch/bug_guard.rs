@@ -3,7 +3,7 @@
 //! `bug_records` rows and
 //!   - wakes each bug's owner once, ever: a waking `session-message` (`from` null, `wake` true) whose
 //!     text begins `Bug <id> is open`, so a sleeping or idle owner is resumed;
-//!   - appends one `bug-breach` Event per bug and reason when the bug is past the 15-minute bound with
+//!   - appends one `protocol-breach` Event per bug and reason when the bug is past the 15-minute bound with
 //!     no mitigation (`unmitigated_past_bound`) or repeats an open bug's normalized symptom
 //!     (`recurring_symptom`), and, in the same transaction, one waking `session-message` whose text
 //!     begins `Bug <id> breached`;
@@ -46,7 +46,7 @@ enum Action {
         owner: SessionId,
         title: String,
     },
-    /// One `bug-breach` Event and, for a live owner, its waking message (`Bug <id> breached`).
+    /// One `protocol-breach` Event and, for a live owner, its waking message (`Bug <id> breached`).
     Breach {
         id: String,
         owner: Option<SessionId>,
@@ -138,10 +138,10 @@ fn woken(conn: &Connection, id: &str) -> Result<bool, CpdError> {
     )?)
 }
 
-/// Whether the `bug-breach` Event of bug `id` and `reason` is already recorded.
+/// Whether the `protocol-breach` Event of bug `id` and `reason` is already recorded.
 fn breached(conn: &Connection, id: &str, reason: &str) -> Result<bool, CpdError> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM events WHERE kind = 'bug-breach'
+        "SELECT EXISTS (SELECT 1 FROM events WHERE kind = 'protocol-breach'
                           AND json_extract(data, '$.bug') = ?1 AND json_extract(data, '$.reason') = ?2)",
         rusqlite::params![id, reason],
         |r| r.get(0),
@@ -196,7 +196,7 @@ fn actions(store: &mut Store, now: OffsetDateTime, bugs: &[Bug]) -> Result<Vec<A
     Ok(out)
 }
 
-/// The actions in the caller's transaction: the owner messages and the `bug-breach` Events.
+/// The actions in the caller's transaction: the owner messages and the `protocol-breach` Events.
 fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
     let mut n = 0;
     for action in actions {
@@ -215,7 +215,7 @@ fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
             } => {
                 let text = breach_text(id, title, reason);
                 let mut event =
-                    NewEvent::bug_protocol_breach(text.clone(), id, reason, symptom, BOUND);
+                    NewEvent::protocol_breach_bug(text.clone(), id, reason, symptom, BOUND);
                 if let Some(plan) = plan {
                     event = event.plan(plan.clone());
                 }
