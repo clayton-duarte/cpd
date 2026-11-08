@@ -380,3 +380,43 @@ it("Send to cpd sends to the bare Context id and keeps the toast open when the s
   expect(toast?.textContent).toContain("session_not_found");
   view.unmount();
 });
+
+
+it("shows sending and deduplicates report clicks until the result", () => {
+  const { transport, view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  const button = reportBtn() as HTMLButtonElement;
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(transport.sent.filter((m) => (m as { action?: { kind?: string } }).action?.kind === "error.report")).toHaveLength(1);
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe("Sending…");
+  view.unmount();
+});
+
+it("acknowledges a successful report after dismissing the error toast", () => {
+  const { transport, view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  click(reportBtn());
+  act(() => transport.emitMessage({ type: "action.result", actionId: sentReport(transport).actionId, ok: true, output: {} }));
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).toBeNull();
+  expect(document.body.querySelector('[role="status"]')?.textContent).toContain("Report sent");
+  view.unmount();
+});
+
+it("keeps the failure actionable and deduplicates retry clicks", () => {
+  const { transport, view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  click(reportBtn());
+  act(() => transport.emitMessage({ type: "action.result", actionId: sentReport(transport).actionId, ok: false, error: { code: "cpd_failed", message: "session_not_found" } }));
+  const toast = document.body.querySelector('[data-part="cockpit-error-toast"]');
+  expect(toast?.textContent).toContain("session_not_found");
+  const retry = toast?.querySelector<HTMLButtonElement>('[data-part="error-toast-retry"]');
+  expect(retry?.disabled).toBe(false);
+  act(() => {
+    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(transport.sent.filter((m) => (m as { action?: { kind?: string } }).action?.kind === "error.report")).toHaveLength(2);
+  expect((reportBtn() as HTMLButtonElement).disabled).toBe(true);
+  view.unmount();
+});
