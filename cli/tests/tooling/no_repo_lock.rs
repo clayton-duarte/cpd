@@ -99,6 +99,10 @@ fn catalog() -> Catalog {
         efforts: vec![0, 1, 2, 3, 4, 5],
     };
     Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".to_owned(),
         o: model("p/opus"),
         s: model("p/sonnet"),

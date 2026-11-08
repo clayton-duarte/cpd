@@ -65,6 +65,10 @@ pub(super) fn catalog() -> Catalog {
         efforts: vec![1, 2, 3],
     };
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),
@@ -102,6 +106,7 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
         catalog: &catalog,
         retry_cap: 3,
         roles: crate::config::RoleTiers {
+            decide: crate::config::Tier::x(crate::config::Letter::O),
             auxiliar: Tier::parse("GX").unwrap(),
             worker: Tier::parse("H0").unwrap(),
             lead: Tier::parse("S4").unwrap(),

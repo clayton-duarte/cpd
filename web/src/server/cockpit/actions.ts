@@ -28,6 +28,7 @@ export function actionArgs(action: CockpitAction): CpdCommand {
     case "session.retier": return { kind: "session.retier", sessionId: action.sessionId, tier: action.tier };
     case "plan.reject": return { kind: "plan.decide", review: action.review, decision: "reject", planId: action.planId };
     case "plan.new": return { kind: "plan.new", planId: action.planId, contextId: action.contextId, title: action.title };
+    case "context.new": return { kind: "context.new", contextId: action.contextId, title: action.title, owner: action.owner };
     case "context.rename": return { kind: "context.rename", contextId: action.contextId, title: action.title };
     case "plan.rename": return { kind: "plan.rename", planId: action.planId, title: action.title };
     case "session.rename": return { kind: "session.rename", sessionId: action.sessionId, name: action.name };

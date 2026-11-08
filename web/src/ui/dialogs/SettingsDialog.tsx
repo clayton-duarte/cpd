@@ -12,15 +12,31 @@ export type SwitchName = SettingsSwitch;
 /** The read of `cpd config` / `cpd config experimental` the dialog shows. */
 export type SettingsRead = SettingsModel;
 
-const TIER = /^[GHSO]([0-4]|X)$/;
+// The Tier letters in ladder order, J first (contract §9, air-d113, air-d115, air-d120): J's model
+// offers efforts 0-3, so `J4` (like `J5`) is refused while the other letters still take 0-4 or X.
+const TIER = /^(?:[GHSO](?:[0-4]|X)|J(?:[0-3]|X))$/;
+/** The dialog's Tier rows: the decide role (contract §9, air-d113) above the four role Tiers. */
+const TIER_ROLES = ["decide", ...SETTINGS_ROLES] as const;
+type TierRole = (typeof TIER_ROLES)[number];
+const TIER_ROLE_LABEL: Readonly<Record<TierRole, string>> = {
+  decide: "decisioning", auxiliar: "auxiliar", worker: "worker", lead: "lead", manager: "manager",
+};
+/** The decide role's default (contract §9): a read that predates `decide_tier` still shows it. */
+const DECIDE_DEFAULT = "JX";
+/** The dialog's Tier values, the decide role defaulted when the read omits its key. */
+const readTiers = (read: SettingsRead): Record<TierRole, string> =>
+  Object.fromEntries(TIER_ROLES.map((r) => {
+    const t = (read.tiers as Readonly<Record<string, string | undefined>>)[r];
+    return [r, t ?? (r === "decide" ? DECIDE_DEFAULT : "")];
+  })) as Record<TierRole, string>;
 
 function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): void; onCancel(): void }): ReactElement {
   const { read } = props;
-  const [tiers, setTiers] = useState<Record<SettingsRole, string>>({ ...read.tiers });
+  const [tiers, setTiers] = useState<Record<TierRole, string>>(() => readTiers(read));
   const [flags, setFlags] = useState<Record<SettingsSwitch, boolean>>({ ...read.experimental });
   const [concurrency, setConcurrency] = useState<string>(read.concurrency === undefined ? "" : String(read.concurrency));
   const concurrencyRef = useRef<HTMLInputElement>(null);
-  const valid = SETTINGS_ROLES.every((r) => TIER.test(tiers[r]));
+  const valid = TIER_ROLES.every((r) => TIER.test(tiers[r]));
   const save = (): void => {
     const changedTiers = SETTINGS_ROLES.filter((r) => tiers[r] !== read.tiers[r]);
     const changedFlags = SETTINGS_SWITCHES.filter((k) => flags[k] !== read.experimental[k]);
@@ -43,13 +59,14 @@ function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): voi
           <Button type="button" variant="outline" size="xs" disabled>Load</Button>
         </div>
         <p className="text-meta text-fg-dim">the default of each role; its range follows</p>
-        {SETTINGS_ROLES.map((r) => (
+        <p className="text-meta text-fg-dim">decisioning runs the cheap decisions: routing, classification and the logic gates</p>
+        {TIER_ROLES.map((r) => (
           <label key={r} className="flex items-center gap-2">
-            <span className="w-24 font-mono text-meta">{r}</span>
+            <span className="w-24 font-mono text-meta">{TIER_ROLE_LABEL[r]}</span>
             <input
               aria-label={`${r} tier`}
               value={tiers[r]}
-              onChange={(e) => setTiers({ ...tiers, [r]: e.target.value.toUpperCase() })}
+              onInput={(e) => setTiers({ ...tiers, [r]: e.currentTarget.value.toUpperCase() })}
               aria-invalid={!TIER.test(tiers[r])}
               className="h-7 w-16 rounded-md border border-border bg-background px-2 font-mono text-meta"
             />

@@ -4,13 +4,14 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::ports::Ports;
 use cpd_core::swr::outbox::{self, Retry};
 use cpd_core::swr::source::jira;
 use cpd_core::swr::source::{self, Cx, ExecOutcome, Source};
@@ -183,6 +184,33 @@ fn report_failed(engine: &mut Engine, failed: Vec<(outbox::Mutation, String)>) {
             ),
         );
     }
+}
+
+/// E5's pass of the `github` source (swr.md §12, swr-github.md §4): its `fetch()`, which IS E5's poll now (D9's target).
+/// E5's poll runs on a thread of its own ([`super::pr`]), so the pass opens a store of its own from `home`. The pass
+/// applies the legacy poll's effects from its single read and returns E5's poll result: the counts and the rate limit,
+/// or the failure the pass recorded on the `github` endpoint (`record_failure`, swr-github.md §7).
+pub(super) fn github_pass(
+    ports: &Ports,
+    home: &cpd_core::home::CpdHome,
+    busy_ms: u64,
+) -> Result<Value, Failure> {
+    static GITHUB: source::github::GithubSource = source::github::GithubSource {
+        excused_labels: Vec::new(),
+    };
+    let mut store = cpd_core::store::Store::open(home, busy_ms).map_err(|e| Failure::from(&e))?;
+    store.use_clock(ports.clock.clone());
+    let config = cpd_core::config::Config::load(home).map_err(|e| Failure::from(&e))?;
+    let now = ports.clock.utc();
+    let mut cx = Cx {
+        store: &mut store,
+        ports,
+        home,
+        config: &config,
+    };
+    GITHUB
+        .pass_with_effects(&mut cx, now)
+        .map_err(|e| Failure::from(&e))
 }
 
 /// The `github` outbox drain (swr-github.md §9), run by E5's step each tick: a write command only enqueues, this calls GitHub through

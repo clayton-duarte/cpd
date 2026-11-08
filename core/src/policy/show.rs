@@ -316,6 +316,7 @@ pub(super) fn typed_keys(
                 ("S", value(&m.s)),
                 ("H", value(&m.h)),
                 ("G", value(&m.g)),
+                ("J", value(&m.j)),
             ]
         }
         Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],

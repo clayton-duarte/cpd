@@ -68,16 +68,19 @@ fn write_config(fx: &Fx, extra: &str) {
         adapter.display()
     );
     fx.env.write_config(&text);
-    machine_models(fx, ["p/m-opus", "p/m-sonnet", "p/m-low", "p/m-aux"]);
+    machine_models(
+        fx,
+        ["p/m-opus", "p/m-sonnet", "p/m-low", "p/m-aux", "p/m-aux"],
+    );
 }
 
-/// The machine policy's `[model]`: the refs of `O`, `S`, `H` and `G`.
-fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
+/// The machine policy's `[model]`: the refs of `O`, `S`, `H`, `G` and `J`.
+fn machine_models(fx: &Fx, [o, s, h, g, j]: [&str; 5]) {
     let path = fx.env.cpd_home().join("policy/host.toml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
         path,
-        format!("[model]\nO = \"{o}\"\nS = \"{s}\"\nH = \"{h}\"\nG = \"{g}\"\n"),
+        format!("[model]\nO = \"{o}\"\nS = \"{s}\"\nH = \"{h}\"\nG = \"{g}\"\nJ = \"{j}\"\n"),
     )
     .unwrap();
 }
@@ -420,7 +423,7 @@ fn tiers_fail_for_a_model_pi_does_not_have() {
         ),
     )
     .unwrap();
-    machine_models(&fx, ["p/m-opus", "p/nope", "p/m-low", "p/m-aux"]);
+    machine_models(&fx, ["p/m-opus", "p/nope", "p/m-low", "p/m-aux", "p/m-aux"]);
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "tiers", "error", "tier_model_unknown");

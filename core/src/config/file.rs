@@ -39,6 +39,8 @@ pub struct Config {
     pub concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
+    /// The decide role's default, `decide_tier` (contract §9 "Roles and ranges"; air-d113, air-d115, air-d120).
+    pub decide_tier: Tier,
     pub lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
@@ -257,9 +259,10 @@ impl Config {
         }
     }
 
-    /// The four role defaults, ascending (checked at parse).
+    /// The five role defaults, ascending (checked at parse).
     pub fn role_tiers(&self) -> RoleTiers {
         RoleTiers {
+            decide: self.decide_tier,
             auxiliar: self.context_distill_tier,
             worker: self.worker_tier,
             lead: self.lead_tier,
@@ -334,7 +337,7 @@ impl Config {
         // 16 is refused here, so neither plain `cpd config` nor the engine can load it.
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, 16))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
-        // Tier model v2: each role default is a Tier by syntax only (the catalog is not read here) and the four
+        // Tier model v2: each role default is a Tier by syntax only (the catalog is not read here) and the five
         // strictly ascend on the ladder (checked below).
         let tier_key = |r: &mut Reader, key: &str, default: &str| {
             r.get(key, Tier::parse(default).expect("a valid Tier"), |v| {
@@ -343,12 +346,19 @@ impl Config {
         };
         let lead_tier = tier_key(&mut r, "lead_tier", "O2")?;
         let manager_tier = tier_key(&mut r, "manager_tier", "O4")?;
+        let decide_tier = tier_key(&mut r, "decide_tier", "JX")?;
         let context_distill_tier = tier_key(&mut r, "context_distill_tier", "GX")?;
         let context_curation_min_records =
             r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let worker_tier = tier_key(&mut r, "worker_tier", "H3")?;
         for (below_key, below, key, above) in [
+            (
+                "decide_tier",
+                decide_tier,
+                "context_distill_tier",
+                context_distill_tier,
+            ),
             (
                 "context_distill_tier",
                 context_distill_tier,
@@ -508,6 +518,7 @@ impl Config {
             machine,
             concurrency,
             retry_cap,
+            decide_tier,
             lead_tier,
             manager_tier,
             context_distill_tier,

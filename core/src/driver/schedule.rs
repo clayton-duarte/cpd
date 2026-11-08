@@ -5,10 +5,10 @@
 
 /// One pool of slots as E3 sees it at this tick, `workers` included.
 ///
-/// `workers`: `free` = `concurrency` minus the tenant Jobs (never below 0; a `failed` Job and a retried `queued` Job are
-/// tenants), and `urgent_free` = 1 while those tenants are at most `concurrency` (the one slot beyond, which only an urgent
-/// Job may take), else 0. Every other pool: `free` = `slots` minus the Job tenants minus the held command slots (contract §1.4),
-/// `urgent_free` = 0.
+/// `workers`: `free` = `concurrency` minus the live Attempts of the tenant Jobs (never below 0; a `cancelled`, `failed` or
+/// requeued Job whose every Attempt has ended holds no slot, air-n90), and `urgent_free` = 1 while those live Attempts are at
+/// most `concurrency` (the one slot beyond, which only an urgent Job may take), else 0. Every other pool: `free` = `slots` minus
+/// the Job tenants minus the held command slots (contract §1.4), `urgent_free` = 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pool {
     /// Slots any Job may take.

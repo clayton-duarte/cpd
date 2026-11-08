@@ -261,6 +261,15 @@ pub(super) fn one_worker_slot_taken() -> Fx {
 #[test]
 fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
     let fx = one_worker_slot_taken();
+    // A `failed` Job `d` whose every Attempt has ended: it holds its Spec resources but no Worker slot (contract §3.4 "Tenancy",
+    // air-n90), so it is no holder of `workers`.
+    fixture(
+        &fx.env,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+           VALUES ('pl', 'repo', 'd', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 'crashed', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
+           VALUES ('pl', 'd-a1', 'd', 1, 'S2', 'ladder', 'ended', 'failed', 'crashed', 'cpd/pl--d-a1', '/w', '2026-10-26T21:40:00.000Z', 't');",
+    );
 
     let b = shown(&fx, "b");
     let c = shown(&fx, "c");
@@ -282,7 +291,11 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
             "{entry}"
         );
         let holders = entry["holders"].as_array().unwrap();
-        assert_eq!(holders.len(), 1, "{entry}");
+        assert_eq!(
+            holders.len(),
+            1,
+            "the live Attempt of `a` alone; the `failed` Job `d` holds no slot: {entry}"
+        );
         assert_eq!(
             (
                 &holders[0]["by"],
@@ -297,27 +310,12 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
     // A running Job has none.
     assert!(shown(&fx, "a").get("waiting_for").is_none());
 
-    // `a` fails and its Attempt ends: a `failed` Job keeps its worker (contract §3.4 "Tenancy"), so `b` and `c` still wait for `workers`.
-    fixture(&fx.env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';
-                      UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE plan = 'pl' AND key = 'a';");
-    for job in ["b", "c"] {
-        let waiting = shown(&fx, job)["waiting_for"].clone();
-        assert_eq!(
-            waiting.as_array().map(Vec::len),
-            Some(1),
-            "{job} still waits for the worker the failed Job keeps: {waiting}"
-        );
-        assert_eq!(
-            (&waiting[0]["resource"], &waiting[0]["holders"][0]["job"]),
-            (&json!("workers"), &json!("a"))
-        );
-    }
-
-    // The Lead cancels `a`, with no live Attempt: the slot frees at once and the entry goes (no other resource is held: `c`'s
-    // `e2e-port` is free).
+    // The Lead cancels `a` and its Attempt ends: its Worker slot frees at once (contract §3.4 "Tenancy", air-n90), so `b` and
+    // `c` no longer wait (no other resource is held: `c`'s `e2e-port` is free).
     fixture(
         &fx.env,
-        "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE plan = 'pl' AND key = 'a';",
+        "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE id = 'a-a1';
+         UPDATE jobs SET status = 'cancelled', cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE plan = 'pl' AND key = 'a';",
     );
     assert!(
         shown(&fx, "b").get("waiting_for").is_none(),

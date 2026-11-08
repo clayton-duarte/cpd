@@ -2338,10 +2338,93 @@ fn migrating_marker(pid: u32) -> Value {
     json!({"migrating": true, "pid": pid, "started_unix_ms": now_ms(), "from": 3, "to": 20, "command": "cpd test-migration"})
 }
 
-/// hs-n278: a holder that migrates is waited out for longer than `store_busy_ms`, then the open succeeds.
+/// store-lock (air-n99), contract §4.2: `locks/store.lock` guards only the store's one-time setup, so an
+/// up-to-date store is opened with no setup lock at all: a held `store.lock` does not make its open wait or
+/// fail. A missing database (the WAL switch of a new one) and a pending migration still take it.
+///
+/// Red on origin/main: every `open_catalog` takes the `flock` first, so the up-to-date open below times out
+/// with `lock_timeout` behind the held lock.
+#[test]
+fn a_cpd_open_against_an_up_to_date_db_takes_no_setup_lock() {
+    // Up to date: `Home::new` migrated the store, and a held `store.lock` is never touched: the open is instant.
+    let up = Home::new();
+    let up_home = home(&up);
+    let _up_lock = hold_setup_lock(&up_home, None);
+    let clock = ManualClock::new();
+    Store::open_with(&clock, &up_home, 300, None)
+        .expect("an up-to-date store opens with no setup lock, although one is held");
+    assert_eq!(
+        clock.elapsed(),
+        Duration::ZERO,
+        "an up-to-date open waited on the setup lock"
+    );
+
+    // A missing database: its WAL switch is one-time setup, so it still takes the lock and times out behind it.
+    let missing = Home::empty();
+    let missing_home = home(&missing);
+    let _missing_lock = hold_setup_lock(&missing_home, None);
+    let err = Store::open_with(&ManualClock::new(), &missing_home, 300, None)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        ErrorCode::LockTimeout,
+        "a missing database must take the setup lock: {err}"
+    );
+
+    // A pending migration: `user_version` is this binary's, but a named migration it knows is not applied, so
+    // the store needs a migration. It still takes the lock.
+    let pending = Home::new();
+    let pending_home = home(&pending);
+    let conn = raw(&pending);
+    conn.execute_batch("DROP TRIGGER schema_migrations_no_delete")
+        .unwrap();
+    let name = cpd_core::store::testing::named_migrations()
+        .last()
+        .expect("this binary has named migrations")
+        .0;
+    assert_eq!(
+        conn.execute("DELETE FROM schema_migrations WHERE name = ?1", [name])
+            .unwrap(),
+        1,
+        "the named migration {name} was not applied"
+    );
+    drop(conn);
+    let _pending_lock = hold_setup_lock(&pending_home, None);
+    let err = Store::open_with(&ManualClock::new(), &pending_home, 300, None)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        ErrorCode::LockTimeout,
+        "a pending migration must take the setup lock: {err}"
+    );
+}
+
+/// store-lock (gate fix), contract §1.4: an open of an up-to-date store takes no setup lock, but the store's
+/// `locks/` directory must exist after it. A process that opens an up-to-date store and then takes a resource lock
+/// writes its file inside `locks/` without creating the directory, so a missing one is a `NotFound` at that point.
+#[test]
+fn an_up_to_date_open_leaves_the_locks_directory_where_a_resource_lock_needs_it() {
+    let env = Home::new();
+    let h = home(&env);
+    fs::remove_dir_all(h.locks_dir()).unwrap();
+    assert!(!h.locks_dir().exists());
+    drop(open(&env));
+    assert!(
+        h.locks_dir().is_dir(),
+        "the locks directory is gone after an up-to-date open"
+    );
+    // The file a resource lock creates next lives in it, with no `create_dir_all` in the caller, as the engine's.
+    fs::write(h.locks_dir().join("resource.repo.acme.pay.pool.1.lock"), "").unwrap();
+}
+
+/// hs-n278 (air-n99), contract §4.2: a holder that migrates is waited out for longer than `store_busy_ms`. A
+/// store that needs its setup still takes the lock; here a missing database, whose WAL switch and first
+/// migration are that setup.
 #[test]
 fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
-    let env = Home::new();
+    let env = Home::empty();
     let h = home(&env);
     let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
     // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
@@ -2356,10 +2439,10 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
     );
 }
 
-/// hs-n278, contract §4.2: a waiter that saw the migrating holder's marker keeps waiting while the same holder
-/// holds the lock after the marker is gone, until the release, whatever its own `busy_ms`.
+/// air-n99, contract §4.2: an up-to-date store takes no setup lock, so a `store.lock` held by a migrating
+/// process does not make its open wait either: the opener opens at once without taking the lock.
 #[test]
-fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone() {
+fn an_up_to_date_store_opens_at_once_while_a_migrating_holder_holds_the_lock() {
     let env = Home::new();
     let h = home(&env);
     let holder = std::sync::Arc::new(std::sync::Mutex::new(Some(hold_setup_lock(
@@ -2367,8 +2450,7 @@ fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone()
         Some(migrating_marker(std::process::id())),
     ))));
     let (clearing, releasing) = (holder.clone(), holder);
-    // The waiter (1 ms bound) polls every 20 ms, so it reads the marker in its first poll, then the lock stays held
-    // for 300 ms more without a marker.
+    // The steps only matter for a waiter; this open never naps, so the holder keeps the lock until the test drops it.
     let clock = ScriptedClock::new()
         .at(Duration::from_millis(300), move || {
             clearing
@@ -2381,12 +2463,13 @@ fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone()
         .at(Duration::from_millis(600), move || {
             drop(releasing.lock().unwrap().take())
         });
-    let store = Store::open_with(&clock, &h, 1, None);
-    store.expect("the waiter outlasts the marker, until the release");
-    assert!(
-        clock.elapsed() >= Duration::from_millis(550),
-        "did not wait for the release: {:?}",
-        clock.elapsed()
+    Store::open_with(&clock, &h, 1, None)
+        .map(drop)
+        .expect("an up-to-date store opens at once, although a migrating holder holds the lock");
+    assert_eq!(
+        clock.elapsed(),
+        Duration::ZERO,
+        "the up-to-date open waited on the setup lock"
     );
 }
 
@@ -2448,8 +2531,10 @@ fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
 }
 
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
+/// air-n99, contract §4.2: an up-to-date store takes no setup lock, so a `store.lock` held by a process that is
+/// not migrating (no marker, or a marker that is not a live migration) neither blocks its open nor makes it wait.
 #[test]
-fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
+fn an_up_to_date_store_opens_although_a_non_migrating_process_holds_the_setup_lock() {
     let env = Home::new();
     let h = home(&env);
     for marker in [
@@ -2459,25 +2544,36 @@ fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
         ),
     ] {
         let _holder = hold_setup_lock(&h, marker);
-        let err = Store::open_with(&ManualClock::new(), &h, 300, None)
+        let clock = ManualClock::new();
+        Store::open_with(&clock, &h, 300, None)
             .map(drop)
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+            .expect("an up-to-date store opens with no setup lock, although one is held");
+        assert_eq!(
+            clock.elapsed(),
+            Duration::ZERO,
+            "the up-to-date open waited on the setup lock"
+        );
     }
 }
 
-/// hs-n278: a marker of a process that is gone does not make anyone wait.
+/// air-n99, contract §4.2: an up-to-date store takes no setup lock, so a marker of a process that is gone does
+/// not make its open wait either: the opener never reads the lock at all.
 #[test]
-fn a_marker_of_a_dead_process_does_not_block() {
+fn an_up_to_date_store_opens_although_a_dead_pid_marker_is_in_the_held_lock() {
     let env = Home::new();
     let h = home(&env);
     // A pid no process has: above every system's `pid_max` (no child to spawn and reap).
     let dead = i32::MAX as u32;
     let _holder = hold_setup_lock(&h, Some(migrating_marker(dead)));
-    let err = Store::open_with(&ManualClock::new(), &h, 300, None)
+    let clock = ManualClock::new();
+    Store::open_with(&clock, &h, 300, None)
         .map(drop)
-        .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+        .expect("an up-to-date store opens with no setup lock, although one is held");
+    assert_eq!(
+        clock.elapsed(),
+        Duration::ZERO,
+        "the up-to-date open waited on the setup lock"
+    );
 }
 
 /// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file

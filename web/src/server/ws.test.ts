@@ -76,11 +76,32 @@ function fakeServer() {
   };
 }
 
+/** One service generation's start gate: pending until its `start()` resolves (web/CONTRACT.md §20.1). */
+interface Gate {
+  readonly promise: Promise<void>;
+  resolve: () => void;
+}
+
+function pendingGate(): Gate {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  promise.catch(() => undefined);
+  return { promise, resolve };
+}
+
+function resolvedGate(): Gate {
+  const gate = pendingGate();
+  gate.resolve();
+  return gate;
+}
+
 type HubRecord = { handled: unknown[]; closes: number; send: (m: ServerMessage) => void };
 
 const reply = { type: "cockpit.error", error: { code: "internal", message: "boom" } } as unknown as ServerMessage;
 
-function harness() {
+function harness(options: { gate?: () => Promise<void> } = {}) {
   const scheduler = new FakeScheduler();
   const server = fakeServer();
   const hubs: HubRecord[] = [];
@@ -100,7 +121,14 @@ function harness() {
     };
     return hub;
   };
-  const deps: WsServerDeps = { newConnection, server: server.factory, scheduler, started: Promise.resolve(), pingMs: 30_000, pongTimeoutMs: 10_000 };
+  // The start gate. By default it is the plain, resolved `Promise` the other tests expect. The
+  // re-arm test passes `gate`, the `() => Promise<void>` accessor of the current service generation
+  // (web/CONTRACT.md §20.1): the cast keeps this file compiling against origin/main, which still
+  // declares `started: Promise<void>`; the fix this test pins reads the accessor per frame.
+  const deps: WsServerDeps = {
+    newConnection, server: server.factory, scheduler, started: (options.gate ?? Promise.resolve()) as unknown as Promise<void>,
+    pingMs: 30_000, pongTimeoutMs: 10_000,
+  };
   return { deps, server, hubs, scheduler };
 }
 
@@ -170,6 +198,33 @@ describe("ws server", () => {
     h.server.connect(second);
     expect(h.hubs).toHaveLength(2);
     expect(h.hubs[0]!.handled).toEqual([{ type: "cockpit.subscribe" }]);
+  });
+
+  it("the ws start gate is re-armed after a hot reload", async () => {
+    // The boot generation's start has resolved long ago; the endpoint holds its gate as a function
+    // of the current generation and reads it per frame (web/CONTRACT.md §20.1).
+    let gate = resolvedGate();
+    const h = harness({ gate: () => gate.promise });
+    createWsServer(h.deps);
+    const socket = new FakeSocket();
+    h.server.connect(socket);
+
+    // A SIGUSR1 hot reload arms a fresh, pending gate before it starts the new services. If the
+    // endpoint still falls back to the boot-time promise, this frame reaches the still-empty hub and
+    // the cockpit answers 'cockpit not ready' — permanently, since the client never re-subscribes.
+    gate = pendingGate();
+
+    socket.emitMessage(JSON.stringify({ type: "cockpit.subscribe" }));
+    await flush();
+    // The reload's start is still pending: the frame is held, never handed to the hub.
+    expect(h.hubs[0]!.handled).toEqual([]);
+    expect(socket.sent).toEqual([]);
+
+    // When the reload's start resolves, the held frame reaches the fresh hub.
+    gate.resolve();
+    await flush();
+    expect(h.hubs[0]!.handled).toEqual([{ type: "cockpit.subscribe" }]);
+    expect(socket.sent).toEqual([JSON.stringify(reply)]);
   });
 
   it("terminates a socket that misses the pong deadline", () => {

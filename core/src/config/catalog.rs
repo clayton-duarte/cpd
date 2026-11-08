@@ -175,9 +175,15 @@ pub fn load_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError
 }
 
 fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
-    let refs = [models.o.as_str(), models.s.as_str(), models.h.as_str()];
+    let refs = [
+        models.o.as_str(),
+        models.s.as_str(),
+        models.h.as_str(),
+        models.g.as_str(),
+        models.j.as_str(),
+    ];
     let sha = models_sha(&pi.agent_dir)?;
-    if let Some(cached) = cache::read(store, &pi.version, &sha, refs, &models.g)? {
+    if let Some(cached) = cache::read_refs(store, &pi.version, &sha, refs)? {
         return Ok(cached);
     }
     let catalog = read(pi, models, NODE_DEADLINE)?;
@@ -216,6 +222,7 @@ pub fn read_with(
         (Letter::S, &models.s),
         (Letter::H, &models.h),
         (Letter::G, &models.g),
+        (Letter::J, &models.j),
     ];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -257,6 +264,15 @@ pub fn read_with(
     let mut models = Vec::new();
     for (letter, model) in tiers {
         let Some(entry) = levels.get(&letter.to_string()) else {
+            // `J` is the decide role's letter: a catalog computed before it existed has no row for it, so
+            // the letter is left empty rather than refused (a scripted catalog in the tests does the same).
+            if letter == Letter::J {
+                models.push(TierModel {
+                    model: String::new(),
+                    efforts: Vec::new(),
+                });
+                continue;
+            }
             return Err(catalog_failed(format!(
                 "the catalog module printed nothing for Tier {letter}."
             ))
@@ -299,13 +315,14 @@ pub fn read_with(
         .with("missing", missing)
         .with("pi_version", pi.version.clone()));
     }
-    let [o, s, h, g]: [TierModel; 4] = models.try_into().expect("one model per letter");
+    let [o, s, h, g, j]: [TierModel; 5] = models.try_into().expect("one model per letter");
     Ok(Catalog {
         pi_version: pi.version.clone(),
         o,
         s,
         h,
         g,
+        j,
     })
 }
 
@@ -347,6 +364,7 @@ mod tests {
                 model: models.g.clone(),
                 efforts: vec![],
             },
+            j: tier(&models.j),
         };
         cache::write(&mut store, "", &cached).unwrap();
 

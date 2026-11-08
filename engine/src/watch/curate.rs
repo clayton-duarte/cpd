@@ -68,6 +68,15 @@ fn tick(
                 engine.log.line(&format!(
                     "E9: curate run of Context {context} failed ({how}); backing off {delay:?}"
                 ));
+                // A run that ended non-zero is not silent: it raises one `error` Event for E9
+                // (contract §3.7 E9), once until it clears, so a judge unreachable or a crash is
+                // visible in `cpd events`, not only in `run/watch.log`.
+                let failure = CpdError::new(
+                    ErrorCode::DistillFailed,
+                    format!("The curate run of Context {context} failed ({how})."),
+                )
+                .with("context", context.as_str());
+                engine.fail(Step::E9, About::Machine, &failure);
             }
         }
     }

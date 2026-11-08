@@ -14,6 +14,7 @@ export type CpdCommand =
   | { readonly kind: "config.concurrency.set"; readonly n: number }
   | { readonly kind: "context.list" }
   | { readonly kind: "context.curation"; readonly contextId: string; readonly limit: number }
+  | { readonly kind: "context.new"; readonly contextId: string; readonly title: string; readonly owner: string }
   | { readonly kind: "context.rename"; readonly contextId: string; readonly title: string }
   | { readonly kind: "context.archive"; readonly contextId: string }
   | { readonly kind: "context.unarchive"; readonly contextId: string }
@@ -54,8 +55,9 @@ export type CpdCommand =
   | { readonly kind: "swr.badge.get"; readonly sessionId: string }
   | { readonly kind: "swr.badge.put"; readonly sessionId: string; readonly entryId: string; readonly label: string; readonly score: number; readonly text: string; readonly tone: string; readonly others?: string };
 
-/** One `--role <tier>` of `config tiers set` (commands.md §14.2a). */
+/** One `--role <tier>` of `config tiers set` (commands.md §14.2a): decide first, then the four role Tiers (contract §9). */
 export interface TiersArgv {
+  readonly decide: string;
   readonly auxiliar: string;
   readonly worker: string;
   readonly lead: string;
@@ -71,6 +73,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "config.experimental.read": return ["config", "experimental"];
     case "config.tiers.set":
       return ["config", "tiers", "set",
+        "--decide", cmd.tiers.decide,
         "--auxiliar", cmd.tiers.auxiliar,
         "--worker", cmd.tiers.worker,
         "--lead", cmd.tiers.lead,
@@ -79,6 +82,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "config.concurrency.set": return ["config", "concurrency", "set", String(cmd.n)];
     case "context.list": return ["context", "list"];
     case "context.curation": return ["context", "curation", `--context=${cmd.contextId}`, `--limit=${cmd.limit}`];
+    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`];
     case "context.rename": return ["context", "rename", cmd.contextId, `--title=${cmd.title}`];
     case "context.archive": return ["context", "archive", cmd.contextId];
     case "context.unarchive": return ["context", "unarchive", cmd.contextId];
@@ -158,7 +162,7 @@ export function tuiAttachCommand(sshAlias?: string): { file: string; args: strin
   return sshAlias === undefined ? { file: "cpd", args: cpd } : { file: "ssh", args: ["-t", sshAlias, "cpd", ...cpd] };
 }
 
-const TIERS: TiersArgv = { auxiliar: "GX", worker: "H2", lead: "S2", manager: "O3" };
+const TIERS: TiersArgv = { decide: "JX", auxiliar: "GX", worker: "H2", lead: "S2", manager: "O3" };
 
 /** Every command the web can send, for the argv contract test: one per variant, plus the
  * optional-flag combinations the call sites produce (commands.md §5.6). */
@@ -174,6 +178,7 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "config.concurrency.set", n: 4 },
     { kind: "context.list" },
     { kind: "context.curation", contextId: "c1", limit: 10 },
+    { kind: "context.new", contextId: "c1", title: "T", owner: "clayton-duarte" },
     { kind: "context.rename", contextId: "c1", title: "T" },
     { kind: "context.archive", contextId: "c1" },
     { kind: "context.unarchive", contextId: "c1" },

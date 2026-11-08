@@ -76,6 +76,8 @@ export interface PluginBoundaries {
   tmux(args: readonly string[]): Promise<string>;
   /** Reads a whole text file with its stat; null when it does not exist. */
   readText(path: string): Promise<CostFile | null>;
+  /** The policy-owner stems under `cpdHome/policy` (CONTRACT 20.1); absent, the tree carries no owners. */
+  owners?(): Promise<readonly string[]>;
 }
 export interface Services {
   cockpit: CockpitService;
@@ -129,7 +131,7 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
     settings: () => readSettings(cpd),
     saveSettings: (changes) => saveSettings(cpd, changes),
   };
-  const cockpit = createCockpitService({ readModel: createReadModel(cpd), cpd, follow: b.follow, scheduler: b.scheduler, extras, ...(b.stream !== undefined ? { stream: createCockpitStream({ spawn: b.stream, scheduler: b.scheduler }) } : {}) });
+  const cockpit = createCockpitService({ readModel: createReadModel(cpd, b.owners), cpd, follow: b.follow, scheduler: b.scheduler, extras, ...(b.stream !== undefined ? { stream: createCockpitStream({ spawn: b.stream, scheduler: b.scheduler }) } : {}) });
   const registry = createRegistry({ snapshot: () => cockpit.snapshot(), cpdHome: b.cpdHome });
   // lazy: a backend is built on first attach so a host without sockets or files starts cleanly
   const lazy = (build: () => SessionBackend): SessionBackend => {
@@ -192,6 +194,31 @@ export interface ChildBoundary {
     on(event: "close", h: (code: number | null) => void): unknown;
     kill(): unknown;
   };
+}
+
+/** A GitHub owner login (core/src/ids.rs OwnerLogin::parse): `^[a-z0-9](-?[a-z0-9])*$`, 1-39 chars. */
+const isOwnerLogin = (name: string): boolean =>
+  name.length >= 1 && name.length <= 39 && /^[a-z0-9](-?[a-z0-9])*$/.test(name);
+
+/** The policy-owner stems under `cpdHome/policy` (core/src/policy/known.rs `known_owners`): the names whose `<stem>/owner.toml` is a file (symlinks resolved), sorted, valid owner logins only. */
+async function knownOwners(cpdHome: string): Promise<readonly string[]> {
+  const dir = join(cpdHome, "policy");
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(dir);
+  } catch {
+    return [];
+  }
+  const owners: string[] = [];
+  for (const name of entries) {
+    if (!isOwnerLogin(name)) continue;
+    try {
+      if ((await fsp.stat(join(dir, name, "owner.toml"))).isFile()) owners.push(name);
+    } catch {
+      // a missing or dangling owner.toml is not an owner
+    }
+  }
+  return owners.sort();
 }
 
 /** `<dir of the cpd binary>/../share/cpd/pi/lib/classify.ts` (core/src/config/file.rs pi_adapter_dir), null when absent. */
@@ -344,6 +371,7 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
         throw e;
       }
     },
+    owners: () => knownOwners(env["CPD_HOME"] ?? `${homedir()}/.cpd`),
     scheduler,
     cpdHome: env["CPD_HOME"] ?? `${homedir()}/.cpd`,
   };
@@ -358,7 +386,12 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
       const boundaries = options?.boundaries ?? realBoundaries(process.env);
       const services = createServices(boundaries);
       let closed = false;
-      const started = services.cockpit.start().catch((e: unknown) => {
+      const started = services.cockpit.start();
+      // The gate is the raw start promise: it rejects on a failed start so the endpoint surfaces the
+      // failure on its error path instead of resolving a gate while no service runs (20.1). A terminal
+      // load failure fails the start at once (the retry is only for a lock-waited store, air-n101), so the
+      // dev server is not held up by the retry budget; the failure is logged exactly once here.
+      const logged = started.catch((e: unknown) => {
         server.config.logger.error(`cpd-web: cockpit failed to start: ${e instanceof Error ? e.message : String(e)}`);
       });
       // The dev server hosts the one WebSocket endpoint on its own httpServer (web/CONTRACT.md §15.1),
@@ -369,7 +402,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
             newConnection: (send) => services.newConnection(send),
             server: createUpgradeFactory(server.httpServer as unknown as WebSocketUpgradeServer),
             scheduler: boundaries.scheduler,
-            started,
+            started: () => started,
             onError: (e: unknown) => server.config.logger.error(`cpd-web: ${e instanceof Error ? e.message : String(e)}`),
             path: WS_PATH,
           });
@@ -380,7 +413,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
         services.cockpit.stop();
       };
       server.httpServer?.once("close", () => { void closeAll?.(); });
-      await started;
+      await logged;
     },
     closeBundle() {
       return closeAll?.();

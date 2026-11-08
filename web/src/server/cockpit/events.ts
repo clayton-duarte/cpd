@@ -55,6 +55,8 @@ export interface Extras {
 export interface CockpitService {
   start(): Promise<void>;
   stop(): void;
+  /** Resolves once the first `loadAll` has landed; rejects when the bounded retries are exhausted (air-n101). */
+  ready(): Promise<void>;
   snapshot(): CockpitSnapshot;
   selectedPlanId(): string | null;
   selectPlan(planId: string | null): Promise<void>;
@@ -65,6 +67,20 @@ export interface CockpitService {
   saveSettings(changes: SettingsChanges): Promise<void>;
 }
 const RESTART_CAP_MS = 30_000;
+// air-n101: a store read that queues on the setup lock is slow — or fails `lock_timeout` — but that is a
+// normal startup wait, not a terminal state. The first load is retried with backoff before it gives up.
+const LOAD_RETRY_BASE_MS = 500;
+const LOAD_RETRY_MAX_MS = 10_000;
+const LOAD_ATTEMPTS = 8;
+// The retry is only for that normal startup wait, never for a terminal failure: a bad command or a broken
+// store failed the load at once before the retry and must keep doing so (it would otherwise hold the start
+// for the whole backoff budget, and the dev server would log the failure far too late). `lock_timeout` is
+// the wait for the store's setup lock; `store_busy` is a busy store (both exit-5 timeout codes).
+function isTransientLoadError(e: unknown): boolean {
+  if (!(e instanceof WebError)) return false;
+  const code = e.details?.["cpdCode"];
+  return code === "lock_timeout" || code === "store_busy";
+}
 const SESSION_STATES: readonly string[] = ["working", "waiting", "blocked", "idle", "stopped"];
 type Obj = Record<string, unknown>;
 type RawPanes = { context: Obj; plan: Obj; session: Obj; inbox: Obj };
@@ -77,6 +93,29 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   let planId: string | null = null;
   let started = false;
   let stopped = false;
+  let readyResolved = false;
+  let resolveReady: () => void = () => {};
+  let rejectReady: (e: unknown) => void = () => {};
+  const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  readyPromise.catch(() => undefined);
+  const markReady = (): void => { if (!readyResolved) { readyResolved = true; resolveReady(); } };
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => { scheduler.after(ms, resolve); });
+  const loadInitial = async (): Promise<void> => {
+    let attempt = 1;
+    for (;;) {
+      try {
+        const all = await readModel.loadAll(planId);
+        snap = all;
+        lastCursor = all.tree.cursor;
+        markReady();
+        return;
+      } catch (e) {
+        if (attempt >= LOAD_ATTEMPTS || !isTransientLoadError(e)) throw e;
+        await delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS));
+        attempt += 1;
+      }
+    }
+  };
   let lastCursor = 0;
   let restarts = 0;
   let proc: FollowProcess | null = null;
@@ -273,10 +312,8 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       if (started) return;
       started = true;
       try {
-        const all = await readModel.loadAll(planId);
-        snap = all;
-        lastCursor = all.tree.cursor;
-      } catch (e) { started = false; throw e; }
+        await loadInitial();
+      } catch (e) { started = false; rejectReady(e); throw e; }
       if (stopped) return;
       if (stream !== undefined) {
         stream.onSnapshot(onSnapshot);
@@ -289,6 +326,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       scheduleSafety();
       void refreshExtras();
     },
+    ready: () => readyPromise,
     stop() {
       stopped = true;
       stream?.stop();

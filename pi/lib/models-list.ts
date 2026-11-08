@@ -61,8 +61,9 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 /** `text` with the key removed, whatever a server or a library echoed back. */
 const redact = (text: string, key: string): string => (key === "" ? text : text.split(key).join("***"));
 
-/** One custom provider: `GET <baseUrl>/models` with the key pi resolved. */
-async function listCustom(deps: ListDeps, provider: string, baseUrl: string): Promise<Entry> {
+/** One custom provider: `GET <baseUrl>/models` with the key pi resolved. `undefined` when pi resolves no key for it:
+ * a provider this machine cannot use is skipped, never a failed entry (air-n102, air-d110). */
+async function listCustom(deps: ListDeps, provider: string, baseUrl: string): Promise<Entry | undefined> {
   const failed = (code: string, message: string, details: Record<string, unknown> = {}): Entry => ({ provider, ...fail(code, message, details) });
   if (!SAFE_NAME.test(provider)) return failed("models_unparseable", `The provider name ${JSON.stringify(provider)} is not a file-name-safe token.`);
   let url: URL;
@@ -74,10 +75,10 @@ async function listCustom(deps: ListDeps, provider: string, baseUrl: string): Pr
   let key = "";
   try {
     key = (await deps.rt.getAuth(provider))?.auth.apiKey ?? "";
-  } catch (e) {
-    return failed("models_key_unset", messageOf(e));
+  } catch {
+    return undefined;
   }
-  if (key === "") return failed("models_key_unset", `pi resolves no API key for provider ${provider}.`);
+  if (key === "") return undefined;
 
   const doFetch = deps.fetch ?? fetch;
   let body: string;

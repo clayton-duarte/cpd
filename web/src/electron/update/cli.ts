@@ -51,10 +51,9 @@ export async function countRunningAttempts(exec: UpdateExec, root: string): Prom
 }
 
 /**
- * Writes the binary at once, without waiting for running attempts: `--no-follow-up` skips the install's disruptive
- * follow-ups, and the binary write inside the install is atomic (renamed over the destination), so a running `cpd`
- * keeps its old inode. Non-fatal: the install at zero running attempts runs the whole install again, follow-ups
- * included, so a failure here is logged and retried there.
+ * Writes the binary at once: `--no-follow-up` skips the install's disruptive follow-ups, and the binary write inside
+ * the install is atomic (renamed over the destination), so a running `cpd` keeps its old inode. The full install that
+ * follows carries the follow-ups, the engine restart included; restarting with running attempts is safe.
  */
 async function installBinary(deps: { exec: UpdateExec; log: (line: string) => void }, root: string): Promise<void> {
   try {
@@ -65,22 +64,10 @@ async function installBinary(deps: { exec: UpdateExec; log: (line: string) => vo
   }
 }
 
-export async function installCli(deps: { exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; log: (line: string) => void; retryMs?: number }, root: string, sha: string): Promise<{ ok: true } | { ok: false; log: string }> {
+export async function installCli(deps: { exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; log: (line: string) => void }, root: string, sha: string): Promise<{ ok: true } | { ok: false; log: string }> {
   const build = await deps.exec('scripts/cargo.sh', ['build', '--release', '--locked', '-p', 'cpd'], { cwd: root });
   if (build.code !== 0) return { ok: false, log: logOf(build) };
-  const retryMs = deps.retryMs ?? 60000;
   await installBinary(deps, root);
-  for (;;) {
-    let count: number;
-    try {
-      count = await countRunningAttempts(deps.exec, root);
-    } catch (e) {
-      return { ok: false, log: (e as Error).message };
-    }
-    if (count === 0) break;
-    deps.log(`cli install waiting: ${count} attempt(s) running`);
-    await new Promise<void>((resolve) => deps.timers.setTimeout(resolve, retryMs));
-  }
   const install = await deps.exec('scripts/install-cpd.sh', [], { cwd: root });
   if (install.code !== 0) return { ok: false, log: logOf(install) };
   deps.fs.writeText(stampPath(root), sha);

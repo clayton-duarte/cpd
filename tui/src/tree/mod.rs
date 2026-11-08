@@ -58,6 +58,8 @@ mod menu;
 #[cfg(test)]
 mod no_confirm_tests;
 #[cfg(test)]
+mod pin_tests;
+#[cfg(test)]
 mod prepared_tests;
 mod rows;
 #[cfg(test)]

@@ -34,8 +34,8 @@ function renderBadge(completion: Completion): JSX.Element {
   );
   if (!hasCard) return badge;
   return (
-    <HoverCard openDelay={10} closeDelay={100}>
-      <HoverCardTrigger asChild>{badge}</HoverCardTrigger>
+    <HoverCard>
+      <HoverCardTrigger delay={10} closeDelay={100} render={badge} />
       <HoverCardContent data-part="completion-scores" className="flex w-auto flex-col gap-1">
         <div className="text-xs font-semibold">kev-4b scores</div>
         {others.map((o) => (

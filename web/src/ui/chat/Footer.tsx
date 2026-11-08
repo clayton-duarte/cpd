@@ -76,22 +76,26 @@ export function Footer(props: {
           </Button>
         </span>
       ) : null}
-      <HoverCard openDelay={10} closeDelay={100}>
-        <HoverCardTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-stat="context"
-            className="shrink-0"
-          >
-            {pct === null ? (
-              <Value stat={f.contextPercent} format={(v) => `${v}% context`} />
-            ) : (
-              `${pct}% context`
-            )}
-          </Button>
-        </HoverCardTrigger>
+      <HoverCard>
+        <HoverCardTrigger
+          delay={10}
+          closeDelay={100}
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-stat="context"
+              className="shrink-0"
+            >
+              {pct === null ? (
+                <Value stat={f.contextPercent} format={(v) => `${v}% context`} />
+              ) : (
+                `${pct}% context`
+              )}
+            </Button>
+          }
+        />
         <HoverCardContent align="end" className="flex w-64 flex-col gap-3">
           <div className="flex items-center justify-end gap-3 text-sm">
             <span className="font-medium">Context</span>
