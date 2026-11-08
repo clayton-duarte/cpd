@@ -16,6 +16,8 @@
 
 "use strict";
 
+const { existsSync } = await import("node:fs");
+
 // ---- output ---------------------------------------------------------------
 
 /** One NDJSON line on stdout. */
@@ -26,6 +28,23 @@ function emit(value) {
 // ---- pane replies: the shape the app's parsers expect ---------------------
 
 const cursor = 0;
+
+/**
+ * The serve `status` pane (CONTRACT §20): the engine's Worker counts and incident state, as
+ * `cpd cockpit serve` carries it on every snapshot. The suite's status path reads it directly,
+ * with no tmux scrape, so the Workers segment and the incident pill show live serve data.
+ * CPD_FAKE_INCIDENT=1 makes the fake report an open incident (the incident-pill scenario);
+ * otherwise incident is off. The counts are fixed so the Workers segment's text is predictable.
+ */
+const statusPane = () => ({
+  ok: true,
+  workers: { queued: 3, waiting: 2, running: 4, limit: 6 },
+  incident:
+    process.env.CPD_FAKE_INCIDENT === "1"
+      ? { on: true, started_at: new Date().toISOString(), lead: null }
+      : { on: false, started_at: null, lead: null },
+});
+
 const contextPane = () => ({ ok: true, events_cursor: cursor, contexts: [] });
 const planPane = () => ({ ok: true, events_cursor: cursor, plans: [] });
 const sessionPane = () => ({ ok: true, events_cursor: cursor, sessions: [] });
@@ -37,7 +56,7 @@ const inboxPane = () => ({
   engine: { running: false },
 });
 
-/** A full snapshot of the four panes; `seq` counts from 1. */
+/** A full snapshot of the panes; `seq` counts from 1. */
 function snapshot(seq) {
   return {
     t: "snapshot",
@@ -47,6 +66,7 @@ function snapshot(seq) {
       plan: planPane(),
       session: sessionPane(),
       inbox: inboxPane(),
+      status: statusPane(),
     },
   };
 }
@@ -96,8 +116,35 @@ function readLines(onLine, onEnd) {
 
 function cockpitServe() {
   emit({ t: "hello", protocol: 1 });
-  let seq = 1;
-  emit(snapshot(seq));
+  let seq = 0;
+  let opened = false;
+  let pending = false;
+  const emitSnapshot = () => {
+    seq += 1;
+    emit(snapshot(seq));
+  };
+  // CPD_FAKE_GATE names a file to wait for before the first snapshot. The workers spec sets it so
+  // the app's initial (no-pane) status read lands first, then opens the gate: the pane-triggered
+  // status read is then the last write, with no last-writer-wins race. Unset, the fake emits at once.
+  const gate = process.env.CPD_FAKE_GATE;
+  const release = () => {
+    if (opened) return;
+    opened = true;
+    emitSnapshot();
+    if (pending) {
+      pending = false;
+      emitSnapshot();
+    }
+  };
+  if (gate === undefined) release();
+  else {
+    const watch = setInterval(() => {
+      if (existsSync(gate)) {
+        clearInterval(watch);
+        release();
+      }
+    }, 25);
+  }
   readLines(
     (line) => {
       let request;
@@ -109,8 +156,8 @@ function cockpitServe() {
       }
       const t = request && typeof request === "object" ? request.t : undefined;
       if (t === "refresh") {
-        seq += 1;
-        emit(snapshot(seq));
+        if (opened) emitSnapshot();
+        else pending = true;
       } else if (t === "plan_show") {
         const id = typeof request.id === "string" ? request.id : null;
         const plan = typeof request.plan === "string" ? request.plan : "";

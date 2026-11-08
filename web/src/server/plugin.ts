@@ -123,7 +123,7 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
     }
   };
   const extras: Extras = {
-    status: () => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null, env: process.env, drift: (root) => readDrift({ exec: updateExec, mtimeMs: (path) => { try { return statSync(path).mtimeMs; } catch { return null; } }, now: Date.now }, root) }),
+    status: (pane) => readStatus({ cpd: cpdText, tmux: b.tmux, readFile: async (path) => (await b.readText(path))?.text ?? null, env: process.env, drift: (root) => readDrift({ exec: updateExec, mtimeMs: (path) => { try { return statSync(path).mtimeMs; } catch { return null; } }, now: Date.now }, root), statusPane: pane }),
     costs: () => readCosts({ cpd: cpdText, readFile: b.readText, durableCost }),
     logs: () => readLogs({ cpd: cpdText }),
     settings: () => readSettings(cpd),

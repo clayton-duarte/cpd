@@ -243,6 +243,7 @@ export function App(props: AppProps): ReactElement {
           onLogs={onLogs}
           onCosts={onCosts}
           onSettings={onSettings}
+          onSelectSession={onSelectSession}
         />
       }
       tree={
