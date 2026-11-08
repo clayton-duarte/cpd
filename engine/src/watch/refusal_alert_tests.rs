@@ -38,16 +38,17 @@ fn refusal_of(fx: &mut Fx, session: &str, at: &str, code: &str, model: &str) {
     ));
 }
 
-/// The open `refusal-alert` items: `(subject, label, context, plan, session)`, oldest first.
-fn alert_items(
-    fx: &mut Fx,
-) -> Vec<(
+/// One open `refusal-alert` item: `(subject, label, context, plan, session)`.
+type AlertRow = (
     String,
     String,
     Option<String>,
     Option<String>,
     Option<String>,
-)> {
+);
+
+/// The open `refusal-alert` items, oldest first.
+fn alert_items(fx: &mut Fx) -> Vec<AlertRow> {
     fx.engine
         .store
         .read(|conn| {
