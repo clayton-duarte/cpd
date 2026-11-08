@@ -351,12 +351,7 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("context", Value::from(input.context)),
         (
             "writing_for_agents",
-            Value::from(
-                input
-                    .touches
-                    .iter()
-                    .any(|t| t.starts_with("pi/skills/")),
-            ),
+            Value::from(input.touches.iter().any(|t| t.starts_with("pi/skills/"))),
         ),
         ("touches", Value::from(input.touches.to_vec())),
         ("acceptance", Value::from(input.acceptance.to_vec())),
