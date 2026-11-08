@@ -381,10 +381,10 @@ fn insert(
             workflow = workflow.key
         )
     } else if update {
-        let merges = if matches!(cause, Some(Cause::BaseMerged | Cause::Behind)) {
-            "its base moved, so it merges the new base"
-        } else {
-            "it merges the base only on a conflict"
+        let merges = match cause {
+            Some(Cause::BaseMerged) => "its base Workflow merged, so it merges the new base",
+            Some(Cause::Behind) => "its head is behind the base, so it merges the new base",
+            _ => "it merges the base only on a conflict",
         };
         format!(
             "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes Workflow {workflow}'s Lead Branch when it is done. \
