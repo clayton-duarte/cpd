@@ -7,6 +7,7 @@ import { WebError, toWireError } from "../../protocol/domain.ts";
 import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from "./cli.ts";
 import { runAction } from "./actions.ts";
 import { buildPlanView, mapPanes, parsePlanShow, type PaneUpdate, type ReadModel } from "./readmodel.ts";
+import type { StatusPane } from "./status.ts";
 import type { CockpitStream, StreamPanes, StreamSnapshot } from "./stream.ts";
 
 export interface CpdEvent { readonly id: number; readonly kind: string; readonly plan: string | null; readonly context: string | null; readonly session: string | null; readonly job: string | null; readonly attempt: string | null; readonly at: string; readonly text: string; readonly data: Readonly<Record<string, unknown>> }
@@ -45,7 +46,8 @@ export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanView
 
 /** The machine status, costs, logs and settings reads; absent in tests of the panes alone. */
 export interface Extras {
-  status(): Promise<StatusModel>;
+  /** The machine status; `pane` is the serve status pane (CONTRACT §20) the snapshot last carried, or null before one arrives. */
+  status(pane: StatusPane | null): Promise<StatusModel>;
   costs(): Promise<CostModel>;
   logs(): Promise<LogRow[]>;
   settings(): Promise<SettingsModel>;
@@ -130,14 +132,22 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     return loop;
   };
   const livePanes = (): Set<CockpitPane> => new Set<CockpitPane>(planId !== null ? ["tree", "inbox", "plan"] : ["tree", "inbox"]);
-  const refreshExtras = async (): Promise<void> => {
+  // The serve status pane (CONTRACT §20): the engine's Worker counts and incident state ride the serve snapshot's
+  // fifth pane. Held raw, it is the input of the status read; a snapshot whose pane differs rebuilds and emits the
+  // status (20.2), and the safety refresh keeps the non-pane fields (version, preview, drift) current.
+  let serveStatus: StatusPane | null = null;
+  const refreshStatus = async (): Promise<void> => {
     if (extras === undefined) return;
     try {
-      const status = await extras.status();
+      const status = await extras.status(serveStatus);
       if (stopped) return;
       snap = { ...snap, status };
       emit({ kind: "pane", pane: "status", data: status });
     } catch (e) { emitError(e); }
+  };
+  const refreshExtras = async (): Promise<void> => {
+    if (extras === undefined) return;
+    await refreshStatus();
     try {
       const costs = await extras.costs();
       if (stopped) return;
@@ -236,6 +246,14 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     if (stopped) return;
     stopFollow();
     try { raw = toRaw(s.panes); } catch (e) { emitError(e); return; }
+    if (s.panes.status !== undefined) {
+      let pane: StatusPane;
+      try { pane = checkOk(s.panes.status, "status") as unknown as StatusPane; } catch (e) { emitError(e); return; }
+      if (JSON.stringify(pane) !== JSON.stringify(serveStatus)) {
+        serveStatus = pane;
+        void refreshStatus();
+      }
+    }
     if (snapEmit === null) {
       snapEmit = scheduler.after(COALESCE_MS, () => {
         snapEmit = null;

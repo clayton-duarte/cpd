@@ -5,7 +5,8 @@ import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol
 import type { Cpd, FollowBoundary, FollowProcess } from "./cli.ts";
 import type { PaneSet, PaneUpdate, ReadModel } from "./readmodel.ts";
 import type { CockpitStream, StreamSnapshot } from "./stream.ts";
-import { COALESCE_MS, SAFETY_REFRESH_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate } from "./events.ts";
+import { COALESCE_MS, SAFETY_REFRESH_MS, FOLLOW_RESTART_BASE_MS, createCockpitService, type CockpitUpdate, type Extras } from "./events.ts";
+import type { StatusPane } from "./status.ts";
 
 const tree = (cursor: number): ContextTreeModel => ({ contexts: [], cursor });
 const inbox: InboxModel = { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 };
@@ -138,6 +139,55 @@ describe("cockpit service events", () => {
     expect(loads).toEqual([]);
     expect(updates).toEqual([]);
     expect(scheduler.pending()).toBe(0);
+  });
+
+  it("a snapshot's status pane reaches the emitted status and is emitted only on change", async () => {
+    const scheduler = new FakeScheduler();
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: tree(1), plan: null, inbox }; },
+      async loadPanes() { return {}; },
+    };
+    const cpd: Cpd = { json: async () => ({ ok: true }) };
+    const follow: FollowBoundary = { start: () => { throw new Error("no follow process in this test"); } };
+    const pane: StatusPane = { workers: { queued: 3, waiting: 2, running: 9, limit: 6 }, incident: { on: true, started_at: "2026-10-14T21:10:00.000Z", lead: "lead-1" } };
+    const seen: (StatusPane | null)[] = [];
+    const extras: Extras = {
+      async status(p) {
+        seen.push(p);
+        return {
+          runner: null,
+          preview: null,
+          incident: p === null || !p.incident.on || p.incident.started_at === null ? null : { startedAt: p.incident.started_at, lead: p.incident.lead },
+          workers: p === null ? null : { queued: p.workers.queued, waiting: p.workers.waiting, tenants: p.workers.running, limit: p.workers.limit },
+          version: null,
+          hostAlert: false,
+          mode: "production",
+          drift: null,
+        };
+      },
+      async costs() { return {}; },
+      async logs() { return []; },
+      async settings() { throw new Error("settings are not read in this test"); },
+      async saveSettings() {},
+    };
+    const stream = new ReadyStream();
+    const service = createCockpitService({ readModel, cpd, follow, scheduler, extras, stream });
+    const updates: CockpitUpdate[] = [];
+    service.subscribe((u) => updates.push(u));
+    await service.start();
+    await flush();
+    const raw = rawPanes([], [], { context: 1, plan: 1, session: 1, inbox: 1 });
+    stream.snapshot({ ...raw, status: { ok: true, ...pane } }, 1);
+    await flush();
+    stream.snapshot({ ...raw, status: { ok: true, ...pane } }, 2);
+    await flush();
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBeNull();
+    expect(seen[1]).toMatchObject(pane);
+    const statusUpdates = updates.filter((u) => u.kind === "pane" && u.pane === "status");
+    expect(statusUpdates).toHaveLength(2);
+    expect(statusUpdates[1]).toMatchObject({ data: { workers: { queued: 3, waiting: 2, tenants: 9, limit: 6 }, incident: { startedAt: "2026-10-14T21:10:00.000Z", lead: "lead-1" } } });
+    service.stop();
   });
 });
 
