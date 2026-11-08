@@ -72,6 +72,15 @@ const RESTART_CAP_MS = 30_000;
 const LOAD_RETRY_BASE_MS = 500;
 const LOAD_RETRY_MAX_MS = 10_000;
 const LOAD_ATTEMPTS = 8;
+// The retry is only for that normal startup wait, never for a terminal failure: a bad command or a broken
+// store failed the load at once before the retry and must keep doing so (it would otherwise hold the start
+// for the whole backoff budget, and the dev server would log the failure far too late). `lock_timeout` is
+// the wait for the store's setup lock; `store_busy` is a busy store (both exit-5 timeout codes).
+function isTransientLoadError(e: unknown): boolean {
+  if (!(e instanceof WebError)) return false;
+  const code = e.details?.["cpdCode"];
+  return code === "lock_timeout" || code === "store_busy";
+}
 const SESSION_STATES: readonly string[] = ["working", "waiting", "blocked", "idle", "stopped"];
 type Obj = Record<string, unknown>;
 type RawPanes = { context: Obj; plan: Obj; session: Obj; inbox: Obj };
@@ -101,7 +110,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
         markReady();
         return;
       } catch (e) {
-        if (attempt >= LOAD_ATTEMPTS) throw e;
+        if (attempt >= LOAD_ATTEMPTS || !isTransientLoadError(e)) throw e;
         await delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS));
         attempt += 1;
       }
