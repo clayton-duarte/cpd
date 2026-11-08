@@ -32,7 +32,7 @@ fn letter_j_parses_and_round_trips() {
         );
     }
     let catalog = letter_catalog();
-    let j4 = Tier::parse("J4").expect("J4 is within the syntax <Letter><0-4|X>");
+    let j4 = Tier::new(Letter::J, 4).expect("J4 is within the syntax <Letter><0-4|X>");
     assert!(
         !catalog.is_valid(j4),
         "J's model offers efforts 0, 1, 2 and 3"
@@ -45,10 +45,12 @@ fn letter_j_parses_and_round_trips() {
     let err = Tier::parse("Z").unwrap_err();
     assert_eq!(err.code(), ErrorCode::TierInvalid);
     let hint = err.message();
-    let at = |ch: char| {
-        hint.find(ch)
-            .unwrap_or_else(|| panic!("the parse hint names {ch}: {hint}"))
-    };
+    assert!(hint.contains('J'), "the parse hint names J: {hint}");
+    assert!(
+        hint.contains('G') && hint.contains('H') && hint.contains('S') && hint.contains('O'),
+        "the parse hint names the five letters: {hint}"
+    );
+    let at = |ch: char| hint.find(ch).expect("present above");
     assert!(
         at('J') < at('G') && at('G') < at('H') && at('H') < at('S') && at('S') < at('O'),
         "the letters are in ladder order J < G < H < S < O: {hint}"
@@ -64,7 +66,7 @@ fn letter_rank_puts_j_below_g() {
         "JX < G0"
     );
     assert!(
-        Tier::parse("J4").unwrap() < Tier::parse("G0").unwrap(),
+        Tier::new(Letter::J, 4).unwrap() < Tier::parse("G0").unwrap(),
         "a J effort is below every G rung"
     );
     let mut tiers: Vec<Tier> = ["GX", "G0", "JX", "J0", "J1"]
