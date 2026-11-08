@@ -121,6 +121,7 @@ pub const TABLE: &[Entry] = &[
     ("config", &[], false),
     ("config tiers set", &[], true),
     ("config experimental", &[], true),
+    ("config concurrency set", &[], false),
     ("tiers", &[Lead], false),
     ("models refresh", &[Manager, Lead], false),
     ("models show", &[Manager, Lead], false),

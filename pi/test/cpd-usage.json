@@ -158,6 +158,16 @@
     },
     "required": []
   },
+  "config concurrency set": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "config experimental": {
     "flags": {
       "--help": false
