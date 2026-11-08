@@ -147,3 +147,35 @@ it("the Agent Tiers Save shows a refusal as the error toast with the whole messa
   expect(toast?.querySelector('[data-slot="alert-description"]')?.textContent).toBe(refusal);
   expect(dialog?.querySelector('[data-part="settings-error"]')).toBeNull();
 });
+
+it("the Agent Tiers Save shows a refused concurrency as the error toast with the whole message", () => {
+  // The CLI's whole refusal text, uncut: the toast must carry every line, not a first line or a truncated one.
+  const refusal = "concurrency must be an integer from 1 to 16 inclusive\n  key: concurrency\n  value: 99";
+  const readWithConcurrency = { ...read, concurrency: 3 } as SettingsRead;
+  const transport = new FakeTransport();
+  const reader = { readBase64: async () => "", readText: async () => "" };
+  mounted = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+  act(() => transport.emitStatus("open"));
+  click(body.querySelector('[data-part="settings"]'));
+  act(() => transport.emitMessage({ type: "settings.result", settings: readWithConcurrency }));
+  const dialog = body.querySelector('[data-part="agent-tiers-dialog"]');
+  expect(dialog).not.toBeNull();
+  // The Worker count is a numeric field of the Models + Tiers section (web/CONTRACT.md §19.1, commands.md §14.2c).
+  const input = body.querySelector('[aria-label="concurrency"]') as HTMLInputElement | null;
+  expect(input).not.toBeNull();
+  if (input === null) throw new Error("the Agent Tiers dialog must show the Worker concurrency");
+  act(() => { input.value = "99"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  click(Array.from(dialog?.querySelectorAll("button") ?? []).find((b) => b.textContent === "Save") ?? null);
+  expect(transport.sent).toContainEqual({ type: "settings.save", changes: { concurrency: 99 } });
+  const sentBefore = transport.sent.length;
+  act(() => transport.emitMessage({ type: "settings.saved", ok: false, error: { code: "config_invalid", message: refusal } }));
+  const toasts = body.querySelectorAll('[data-part="cockpit-error-toast"]');
+  expect(toasts).toHaveLength(1);
+  const toast = toasts[0];
+  expect(toast?.querySelector('[data-slot="alert-title"]')?.textContent).toBe("config_invalid");
+  expect(toast?.querySelector('[data-slot="alert-description"]')?.textContent).toBe(refusal);
+  // Never inline, and a refused save stops the remaining writes: nothing more is sent and the dialog stays open.
+  expect(dialog?.querySelector('[data-part="settings-error"]')).toBeNull();
+  expect(transport.sent.length).toBe(sentBefore);
+  expect(body.querySelector('[data-part="agent-tiers-dialog"]')).not.toBeNull();
+});
