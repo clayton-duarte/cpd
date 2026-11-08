@@ -577,7 +577,10 @@ pub fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 fn corrupt_plan(id: &str, e: CpdError) -> CpdError {
     CpdError::new(
         ErrorCode::StoreFailed,
-        format!("Bug {id} names a Plan that does not parse: {}.", e.message()),
+        format!(
+            "Bug {id} names a Plan that does not parse: {}.",
+            e.message()
+        ),
     )
     .with("bug", id)
 }

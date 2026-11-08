@@ -360,11 +360,7 @@ impl Kind {
             ),
             IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_workflow"]),
             IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
-            BugProtocolBreach => spec(
-                [M, M, N, N, N],
-                &["bug", "reason", "symptom", "bound"],
-                &[],
-            ),
+            BugProtocolBreach => spec([M, M, N, N, N], &["bug", "reason", "symptom", "bound"], &[]),
             Error => spec(
                 [M, M, M, M, M],
                 &["source", "code", "message", "details"],

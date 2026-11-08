@@ -62,9 +62,11 @@ pub(super) fn run(engine: &mut Engine) {
     match tick(engine) {
         Ok(0) => {}
         Ok(n) => engine.log.line(&format!("E25: {n} bug protocol write(s)")),
-        Err(e) => engine
-            .log
-            .line(&format!("E25 failed: {} ({})", e.message(), e.code().as_str())),
+        Err(e) => engine.log.line(&format!(
+            "E25 failed: {} ({})",
+            e.message(),
+            e.code().as_str()
+        )),
     }
 }
 
@@ -212,7 +214,8 @@ fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
                 symptom,
             } => {
                 let text = breach_text(id, title, reason);
-                let mut event = NewEvent::bug_protocol_breach(text.clone(), id, reason, symptom, BOUND);
+                let mut event =
+                    NewEvent::bug_protocol_breach(text.clone(), id, reason, symptom, BOUND);
                 if let Some(plan) = plan {
                     event = event.plan(plan.clone());
                 }
