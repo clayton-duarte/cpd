@@ -1,5 +1,5 @@
 //! The drain of a queued `pr merge` and `pr rerun` asks E5 for a poll at once (decision pro-d394, assumption A6): it writes the run
-//! file `run/pr-poll-now` after its successful GitHub write, and not after a failed one; the commands themselves call no GitHub.
+//! file `run/pr-poll-now` after its successful GitHub write, and not after a failed one; `pr merge` makes only the containment read.
 //! In process on the janitor's `Rig`, with `gh` scripted on the runner; no process, no sleep. (The other commands are in
 //! `cli/tests/workflow/pr_poll_now.rs`.)
 
@@ -33,6 +33,10 @@ impl Handler for Gh {
             }
         };
         match args[..] {
+            // The up-to-date gate's fresh read: the head contains `main`, so the merge is queued.
+            ["api", _, ..] if args[1].starts_with("repos/acme/pay/compare/") => {
+                Reply::ok(r#"{"status":"ahead"}"#)
+            }
             ["pr", "view", _, "--repo", _, ..] => Reply::ok(&format!(
                 r#"{{"state":"OPEN","mergeStateStatus":"CLEAN","headRefOid":"{SHA}","title":"T"}}"#
             )),
@@ -113,13 +117,20 @@ fn drain(rig: &Rig) -> bool {
     all
 }
 
-/// Queues the merge, then drains it: whether GitHub took it. The command itself never calls `gh`.
+/// Queues the merge, then drains it: whether GitHub took it. The command's only `gh` call is the containment read.
 fn merge_it(rig: &Rig) -> bool {
     let args = Merge::try_parse_from(["merge", "acme/pay#801"])
         .unwrap()
         .args;
     Ports::scope(&rig.fakes.ports, || merge::merge(&rig.fakes.ports, args)).expect("queued");
-    assert!(rig.fakes.runner.calls().iter().all(|c| c.tool != "gh"));
+    // The command's only `gh` call is the containment read: it writes nothing (the drain does).
+    assert!(rig.fakes.runner.calls().iter().all(|c| {
+        c.tool != "gh"
+            || (c.args.first().map(String::as_str) == Some("api")
+                && c.args
+                    .iter()
+                    .any(|a| a.starts_with("repos/acme/pay/compare/")))
+    }));
     drain(rig)
 }
 

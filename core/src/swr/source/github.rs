@@ -286,28 +286,7 @@ impl GithubSource {
             let key = format!("github:repo:{repo}");
             let hash = sha(&format!("{meta:?}"));
             let changed = cache::commit(cx.store, &key, &hash, now, started, |tx| {
-                tx.execute(
-                    "INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
-                       merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                     ON CONFLICT (repo) DO UPDATE SET default_branch = excluded.default_branch,
-                       is_archived = excluded.is_archived, auto_merge_allowed = excluded.auto_merge_allowed,
-                       squash_merge_allowed = excluded.squash_merge_allowed,
-                       merge_commit_allowed = excluded.merge_commit_allowed,
-                       rebase_merge_allowed = excluded.rebase_merge_allowed,
-                       delete_branch_on_merge = excluded.delete_branch_on_merge, fetched_at = excluded.fetched_at",
-                    params![
-                        repo,
-                        meta.default_branch,
-                        meta.is_archived,
-                        meta.auto_merge_allowed,
-                        meta.squash_merge_allowed,
-                        meta.merge_commit_allowed,
-                        meta.rebase_merge_allowed,
-                        meta.delete_branch_on_merge,
-                        timestamp(now)
-                    ],
-                )?;
+                super::github_write::write_repo_settings(tx, repo, meta, now)?;
                 if meta.is_archived {
                     tx.execute(
                         "UPDATE pull_requests SET archived = 1 WHERE repo = ?1",

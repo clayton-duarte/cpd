@@ -22,6 +22,10 @@ struct Gh;
 impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        // The up-to-date gate's fresh read: the head contains `main`, so the merge is queued.
+        if args.len() >= 2 && args[1].starts_with("repos/acme/api/compare/") {
+            return Reply::ok(r#"{"status":"ahead"}"#);
+        }
         match args[..2] {
             ["api", "graphql"] => {
                 let node = format!(

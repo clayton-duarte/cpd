@@ -40,6 +40,8 @@ fn fx_with(merge_state: &str) -> Fx {
                                 rebase_merge_allowed, delete_branch_on_merge, fetched_at)
            VALUES ('o/r', 'main', 0, 1, 1, 0, 0, 1, 't');"
     ));
+    // The up-to-date gate's containment read: the head contains `main`.
+    fx.fake_gh(Reply::ok(r#"{"status":"ahead"}"#));
     fx
 }
 
@@ -139,7 +141,14 @@ fn the_action_queues_the_merge_calls_no_gh_and_a_success_says_nothing() {
         queued(&fx.env),
         [("github:pr:o/r#7".to_owned(), "pending".to_owned())]
     );
-    assert!(args_of(&fx, "gh").is_empty(), "{:?}", args_of(&fx, "gh"));
+    assert_eq!(
+        args_of(&fx, "gh"),
+        [vec![
+            "api".to_owned(),
+            format!("repos/o/r/compare/main...{SHA}")
+        ]],
+        "the action reads the containment, and never writes"
+    );
     let tmux = args_of(&fx, "tmux");
     assert!(
         naming(tmux.clone(), "display-popup").is_empty()

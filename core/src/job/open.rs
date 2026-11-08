@@ -150,7 +150,7 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
                 "Features, refactors or fixes that the conflict does not need",
             ]),
         ),
-        Cause::BaseMerged => (
+        Cause::BaseMerged | Cause::Behind => (
             format!(
                 "Bring the pull request of Workflow {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it, resolve any conflicts, and submit.",
                 key = workflow.key
@@ -234,6 +234,9 @@ pub enum Cause {
     /// GitHub repointed the pull request from a base Workflow's Lead Branch to the default branch, which holds commits
     /// the Lead Branch lacks without a conflict: the Worker merges that base even without one (§3.7 E5, hs-d794).
     BaseMerged,
+    /// `pr merge` found the head behind the default branch: the Worker merges `origin/<default branch>` into the Lead
+    /// Branch unconditionally, like [`Cause::BaseMerged`], so the head contains the default branch again (commands.md §9.10).
+    Behind,
 }
 
 impl Cause {
@@ -241,12 +244,13 @@ impl Cause {
         match self {
             Cause::Conflict => "conflict",
             Cause::BaseMerged => "base-merged",
+            Cause::Behind => "behind",
         }
     }
 
     /// The cause a `reason` spells (the inverse of [`Cause::as_str`]); `None` for a reason no cause spells.
     pub fn parse(text: &str) -> Option<Cause> {
-        [Cause::Conflict, Cause::BaseMerged]
+        [Cause::Conflict, Cause::BaseMerged, Cause::Behind]
             .into_iter()
             .find(|cause| cause.as_str() == text)
     }
@@ -377,10 +381,10 @@ fn insert(
             workflow = workflow.key
         )
     } else if update {
-        let merges = if cause == Some(Cause::BaseMerged) {
-            "its base Workflow merged, so it merges the new base"
-        } else {
-            "it merges the base only on a conflict"
+        let merges = match cause {
+            Some(Cause::BaseMerged) => "its base Workflow merged, so it merges the new base",
+            Some(Cause::Behind) => "its head is behind the base, so it merges the new base",
+            _ => "it merges the base only on a conflict",
         };
         format!(
             "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes Workflow {workflow}'s Lead Branch when it is done. \
