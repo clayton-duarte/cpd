@@ -21,5 +21,5 @@ it('builds the prod view from the main checkout', async () => {
   const build = fx.calls.find((c) => c.cmd === 'pnpm');
   expect(build?.cwd).toBe(ROOT);
   expect(build?.env?.['CPD_ELECTRON_OUT']).toBe(PROD_VIEW_DIR);
-  expect(fs.readText(`${ROOT}/${PROD_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
+  expect(fs.readText(`${ROOT}/web/${PROD_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
 });
