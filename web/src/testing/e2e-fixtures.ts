@@ -21,7 +21,8 @@ const electronExecutable = createRequire(import.meta.url)("electron") as string;
  * (--disable-dev-shm-usage). macOS keeps its plain launch: the window is hidden and isolated, and
  * these switches are neither needed nor harmless there.
  */
-const headlessLinuxArgs = process.platform === "linux" ? ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] : [];
+export const headlessLinuxArgs: string[] =
+  process.platform === "linux" ? ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] : [];
 
 /** The built renderer the suite points the app at; overridable for a scenario that serves its own. */
 const rendererDir = process.env["CPD_E2E_RENDERER_DIR"] ?? join(webRoot, "dist-electron", "renderer");

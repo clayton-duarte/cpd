@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "playwright";
-import { test as base, expect } from "./e2e-fixtures";
+import { headlessLinuxArgs, test as base, expect } from "./e2e-fixtures";
 
 const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
@@ -69,7 +69,7 @@ const test = base.extend<{ electronApp: unknown }>({
   electronApp: async ({ cpdHome, rendererServer }, use) => {
     const app = await electron.launch({
       executablePath: electronExecutable,
-      args: [".", `--user-data-dir=${userDataDir}`],
+      args: [...headlessLinuxArgs, ".", `--user-data-dir=${userDataDir}`],
       cwd: webRoot,
       env: {
         ...process.env,
