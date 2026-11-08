@@ -246,6 +246,18 @@ async function currentView(): Promise<ViewTarget | null> {
   return { url: page.url ?? "", title: page.title ?? "" };
 }
 
+/**
+ * Every page target Chromium reports now -- each one's URL and title -- or a plain `none` when
+ * there is none. The loaded-view phase logs this, so a failed step names the view that actually
+ * loaded instead of a bare timeout (a stale page, a blank one, or no target at all).
+ */
+async function describeTargets(): Promise<string> {
+  const targets = await readTargets(debugPort);
+  const pages = (targets ?? []).filter((target) => target.type === "page");
+  if (pages.length === 0) return "none";
+  return pages.map((page) => `${JSON.stringify(page.title ?? "")} <${page.url ?? ""}>`).join(", ");
+}
+
 /** Stage one rung: the real main process, its server, and a renderer page that names its build. */
 function stageRung(dir: string, build: string): void {
   rmSync(dir, { recursive: true, force: true });
@@ -411,14 +423,19 @@ function eventKeys(cpdHome: string): string[] {
     );
 }
 
+/** The view marker the app wrote (air-n19): its view and pid, the boot mode and the build. */
+function readMarker(cpdHome: string): { view?: string; mode?: string; build?: string; pid?: number } {
+  try {
+    return JSON.parse(readFileSync(markerFile(cpdHome), "utf8")) as { view?: string; mode?: string; build?: string; pid?: number };
+  } catch {
+    return {};
+  }
+}
+
 /** The main pid the app last wrote into its view marker, or `null` while it has written none. */
 function markerPid(cpdHome: string): number | null {
-  try {
-    const marker = JSON.parse(readFileSync(markerFile(cpdHome), "utf8")) as { pid?: number };
-    return typeof marker.pid === "number" && marker.pid > 0 ? marker.pid : null;
-  } catch {
-    return null;
-  }
+  const marker = readMarker(cpdHome);
+  return typeof marker.pid === "number" && marker.pid > 0 ? marker.pid : null;
 }
 
 /** Whether a pid is still alive (EPERM counts as alive: it exists, we just may not signal it). */
@@ -583,13 +600,22 @@ async function walkStep(step: WalkStep): Promise<number> {
 
   // The view that is loaded names the rung: the page Electron loaded sets its own title, and the
   // URL it was loaded from says the rollback relaunch carried production mode — the built renderer
-  // from disk, never the preview dev URL (air-d95).
+  // from disk, never the preview dev URL (air-d95). Whatever the outcome, the phase logs every
+  // page target's URL and title (or that there is none) and the marker's view, mode and build, so a
+  // Linux failure (the relaunched process's stdout is /dev/null) names the view that loaded.
   await phase(`rung->${step.nextRung}: loaded view`, WAIT.viewTitle, async () => {
-    await expect
-      .poll(async () => (await currentView())?.title ?? null, { timeout: WAIT.viewTitle, intervals: [100] })
-      .toBe(`${TITLE_PREFIX}${RUNG[step.nextRung]}`);
-    const view = await currentView();
-    expect(view?.url).toBe(rendererUrl());
+    try {
+      await expect
+        .poll(async () => (await currentView())?.title ?? null, { timeout: WAIT.viewTitle, intervals: [100] })
+        .toBe(`${TITLE_PREFIX}${RUNG[step.nextRung]}`);
+      const view = await currentView();
+      expect(view?.url).toBe(rendererUrl());
+    } finally {
+      const marker = readMarker(cpdHome);
+      log(
+        `loaded view: targets ${await describeTargets()}; marker view ${marker.view ?? "?"} mode ${marker.mode ?? "?"} build ${marker.build ?? "?"}`,
+      );
+    }
   });
   return pid;
 }
