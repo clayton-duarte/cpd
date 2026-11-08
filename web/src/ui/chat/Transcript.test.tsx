@@ -107,7 +107,6 @@ it("compaction renders as a collapsed trace", () => {
 // `at` is added to PendingSubmission by the store change (DESIGN-chat 2.7).
 const pending = [
   { clientSubmissionId: "p1", text: "sending text", imageCount: 0, whenBusy: "followUp", state: "sending", at: "2026-05-01T14:05:00Z" },
-  { clientSubmissionId: "p2", text: "bad text", imageCount: 0, whenBusy: "followUp", state: "failed", error: { code: "internal", message: "boom" } },
 ] as unknown as PendingSubmission[];
 
 it("queued messages render after the transcript", () => {
@@ -127,13 +126,25 @@ it("queued messages render after the transcript", () => {
   expect(sending.textContent).toContain("sending text");
   expect(sending.textContent).not.toContain("sending…");
   expect(sending.querySelector('[data-part="pending-status"]')?.textContent).toMatch(/^You · \d{2}:\d{2}$/);
-  expect(list.querySelector('li[data-pending="failed"] [role="alert"]')?.textContent).toContain("failed: boom");
   const row = m.container.querySelector('[data-kind="user"]') as HTMLElement;
   expect(row.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   m.unmount();
   const m2 = mount(<Transcript {...base} items={[user]} />);
   expect(m2.container.querySelector('ul[aria-label="Queued messages"]')).toBeNull();
   m2.unmount();
+});
+
+it("the transcript renders no inline failed text", () => {
+  const failed: ToolItem = { kind: "tool", id: "tool:t1", callId: "t1", name: "bash", args: { command: "x" }, status: "failed", result: { text: "boom", isError: true } };
+  // A failed submission's row leaves the transcript (15.1); the cast stands in for the removed state.
+  const failedPending = {
+    clientSubmissionId: "p1", text: "bad text", imageCount: 0, whenBusy: "followUp", state: "failed", error: { code: "internal", message: "boom" },
+  } as unknown as PendingSubmission;
+  const m = mount(<Transcript {...base} tools="expanded" items={[failed]} pending={[failedPending]} />);
+  expect(m.container.textContent ?? "").not.toMatch(/failed:/i);
+  expect(m.container.querySelector('[data-part="pending-status"][data-state="failed"]')).toBeNull();
+  expect(m.container.querySelector('li[data-pending="failed"] [role="alert"]')).toBeNull();
+  m.unmount();
 });
 
 it("an empty transcript shows the empty state", () => {

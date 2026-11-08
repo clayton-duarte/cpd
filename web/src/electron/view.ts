@@ -1,12 +1,19 @@
 import type { UiMode } from "./channels.ts";
 
+/**
+ * Toggles the terminal and WebUI containers, and — when the tab bar is given — the host tab bar,
+ * which only the `tui` mode shows (air-d50). `mode` is the app-level view mode; the tab bar is
+ * left untouched when it is omitted.
+ */
 export function createViewToggle(
   terminal: { hidden: boolean },
   webui: { hidden: boolean },
-): (terminalVisible: boolean) => void {
-  return (terminalVisible) => {
+  tabBar: { hidden: boolean } | null = null,
+): (terminalVisible: boolean, mode?: UiMode) => void {
+  return (terminalVisible, mode) => {
     terminal.hidden = !terminalVisible;
     webui.hidden = terminalVisible;
+    if (tabBar !== null && mode !== undefined) tabBar.hidden = !hostTabsVisible(mode);
   };
 }
 

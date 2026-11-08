@@ -2,6 +2,7 @@
 //! The shared core is the `cpd-core` crate (`core/`), the cockpit the `cpd-tui` crate (`tui/`).
 
 pub mod app;
+pub mod argv_check;
 pub mod cli;
 pub mod install;
 pub mod interface;

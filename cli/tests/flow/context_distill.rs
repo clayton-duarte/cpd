@@ -11,6 +11,7 @@ use std::io::ErrorKind;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::fx::Fx as InProcess;
 use common::pi::{FakePi, says};
@@ -743,6 +744,20 @@ fn pi_answers(lines: &[String]) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+/// Scripts the fake pi: `first` answers its next call, `then` every later one (a re-ask).
+fn answers_then(fx: &Fx, first: &str, then: &str) {
+    let first = says(first);
+    let then = says(then);
+    let calls = AtomicUsize::new(0);
+    fx.pi.set(move |_| {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            first.clone()
+        } else {
+            then.clone()
+        }
+    });
+}
+
 fn two_decisions(fx: &Fx) {
     fx.insert(
         CONTEXT,
@@ -1012,37 +1027,43 @@ fn a_short_over_120_bytes_rejects_its_line_and_the_other_lines_are_curated() {
     let fx = fx().one_step();
     notes(&fx, 4);
     // hs-n2: 121 bytes. hs-n3: 120 bytes of 3-byte characters... 40 of them, which is 120 bytes and valid.
-    fx.pi.answers(&pi_answers(&[
+    // hs-n2's line is re-asked (one call, then at most two extra ones); still over the limit, it is clamped
+    // to 120 bytes and curated, never silently rejected.
+    let over = pi_answers(&[
         line("hs-n1", "notes", "one", "null"),
         line("hs-n2", "notes", &"x".repeat(121), "null"),
         line("hs-n3", "notes", &"€".repeat(40), "null"),
         line("hs-n4", "notes", "four", "null"),
-    ]));
+    ]);
+    let still = pi_answers(&[line("hs-n2", "notes", &"x".repeat(121), "null")]);
+    answers_then(&fx, &over, &still);
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["curated"], json!(4), "{out}");
     assert_eq!(
-        (out["curated"].clone(), rejected_of(&out)),
-        (json!(3), vec![(Some(s("hs-n2")), 2)]),
+        rejected_of(&out),
+        vec![],
+        "the clamped line is not rejected"
+    );
+    assert_eq!(
+        out["clamped"].clone(),
+        json!([{"id": "hs-n2", "bytes": 120}]),
         "{out}"
     );
     assert_eq!(
         curated_ids(&fx),
-        ["hs-n1", "hs-n3", "hs-n4"],
-        "hs-n2 stays uncurated"
+        ["hs-n1", "hs-n2", "hs-n3", "hs-n4"],
+        "the clamped line is curated with the others"
     );
     assert_eq!(curated_events(&fx).len(), 1);
-    assert_eq!(curated_events(&fx)[0]["curated"], 3);
+    assert_eq!(curated_events(&fx)[0]["curated"], 4);
     assert!(
         fx.errors().is_empty(),
         "a run with accepted lines is no failure"
     );
-    // The next run takes the rejected record.
-    fx.pi
-        .answers(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
-    let again = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(
-        (again["curated"].clone(), rejected_of(&again)),
-        (json!(1), vec![]),
-        "{again}"
+        fx.pi_calls(),
+        3,
+        "the over-limit short is re-asked twice before the clamp"
     );
     assert_eq!(curation_rows(&fx).len(), 4);
 }
@@ -1309,11 +1330,18 @@ fn a_record_missing_from_the_output_stays_uncurated_and_the_run_succeeds() {
 fn a_run_with_no_accepted_line_is_distill_invalid_listing_every_rejection() {
     let fx = fx().one_step();
     notes(&fx, 3);
-    fx.pi.answers(&pi_answers(&[
+    // No line is accepted: hs-n1 and hs-n2 are re-asked and still fail (a bad topic, never a `short` the
+    // clamp could take), the third line is not a curation line at all.
+    let first = pi_answers(&[
         line("hs-n1", "Notes", "bad topic", "null"),
-        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n2", "Notes", "bad topic", "null"),
         "this is not JSON".to_owned(),
-    ]));
+    ]);
+    let reask = pi_answers(&[
+        line("hs-n1", "Notes", "bad topic", "null"),
+        line("hs-n2", "Notes", "bad topic", "null"),
+    ]);
+    answers_then(&fx, &first, &reask);
     let error = refused(
         &fx.cpd(&["context", "distill", "--context", CONTEXT]),
         "distill_invalid",
@@ -1343,7 +1371,8 @@ fn a_run_with_no_accepted_line_is_distill_invalid_listing_every_rejection() {
     assert!(
         fs::read_to_string(invalid_file(&fx))
             .unwrap()
-            .contains("this is not JSON")
+            .contains(&reask),
+        "the kept raw text is the last answer (the re-ask's)"
     );
     assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
     assert_eq!(fx.errors().len(), 1);
@@ -1360,9 +1389,10 @@ fn a_run_with_no_accepted_line_is_distill_invalid_listing_every_rejection() {
 fn the_rejected_lines_are_in_the_output_the_run_log_and_the_kept_raw_text() {
     let fx = fx().one_step();
     notes(&fx, 3);
+    // hs-n2 has a bad topic: a rejection the checks keep (an over-limit `short` is clamped, not rejected).
     let answer = [
         line("hs-n1", "notes", "one", "null"),
-        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n2", "Notes", "bad topic", "null"),
         line("hs-n3", "notes", "three", "null"),
     ];
     fx.pi.answers(&pi_answers(&answer));
@@ -1394,9 +1424,10 @@ fn the_rejected_lines_are_in_the_output_the_run_log_and_the_kept_raw_text() {
 fn a_clean_run_removes_the_kept_raw_text() {
     let fx = fx().one_step();
     notes(&fx, 3);
+    // hs-n2 has a bad topic: a rejection the checks keep (an over-limit `short` is clamped, not rejected).
     fx.pi.answers(&pi_answers(&[
         line("hs-n1", "notes", "one", "null"),
-        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n2", "Notes", "bad topic", "null"),
         line("hs-n3", "notes", "three", "null"),
     ]));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();

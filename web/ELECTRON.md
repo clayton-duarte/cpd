@@ -582,6 +582,20 @@ Run each check against the built app (`pnpm --filter cpd-web-client run electron
 
 ## Automated checks
 
+Part of the manual verification checklist above is automated by the Playwright Electron e2e suite under `web/src/testing/`: it drives the real Electron binary against the scripted fake cpd backend and guards the boot, tree and update scenarios the unit tests could not catch (air-n31, air-n37). It is the one named exception to the tests-mock-everything rule, never runs in the Gate, and runs in a separate, non-blocking CI job (docs/implementing.md, `The Electron e2e exception (air-d53)`; decisions air-d53 and air-d55).
+
+Run the e2e suite locally from the repository root:
+
+```sh
+pnpm --filter cpd-web-client run e2e
+```
+
+On a headless Linux box (no display server):
+
+```sh
+xvfb-run -a pnpm --filter cpd-web-client run e2e
+```
+
 Run these from the repository root:
 
 ```sh

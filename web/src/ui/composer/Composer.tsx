@@ -39,6 +39,7 @@ export interface ComposerSubmit {
 }
 export interface ComposerHandle {
   addFiles(files: readonly FileLike[]): Promise<void>;
+  focus(): void;
 }
 
 interface ComposerProps {
@@ -66,6 +67,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const archived = props.archived ?? false;
   const canSend = capabilities !== null && !archived;
@@ -85,7 +87,10 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
     }
     setRejections(res.rejected);
   };
-  useImperativeHandle(ref, () => ({ addFiles: handleFiles }));
+  useImperativeHandle(ref, () => ({
+    addFiles: handleFiles,
+    focus: () => textareaRef.current?.focus(),
+  }));
 
   const send = (): void => {
     if (!canSubmit) return;
@@ -242,6 +247,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           </InputGroupAddon>
         )}
         <InputGroupTextarea
+          ref={textareaRef}
           aria-label="Message"
           disabled={!canSend}
           rows={1}

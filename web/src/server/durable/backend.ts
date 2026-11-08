@@ -18,7 +18,7 @@ import {
   type Window,
   type WireImage,
 } from "../../protocol/domain.ts";
-import { sessionRetierArgs } from "../cockpit/actions.ts";
+import { toArgv } from "../cpd-argv.ts";
 import { createDialect, dialogFromRequest } from "./frames.ts";
 import type { TranscriptItem } from "../../protocol/domain.ts";
 import type { Disposable, GitBoundary, Scheduler } from "../../protocol/runtime.ts";
@@ -457,8 +457,8 @@ export function createDurableBackend(deps: {
         async configure(change: ConfigureChange) {
           guard();
           if (change.kind === "tier") {
-            await deps.cpd.json(sessionRetierArgs(sessionId, change.tier));
-            const shown = await deps.cpd.json(["session", "show", sessionId]);
+            await deps.cpd.json(toArgv({ kind: "session.retier", sessionId, tier: change.tier }));
+            const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
             const sw = shown["switch"];
             const busy = typeof sw === "object" && sw !== null && (sw as { code?: unknown }).code === "host_busy";
             if (!busy) tier = change.tier; // on host_busy the footer keeps the applied Tier
@@ -499,11 +499,11 @@ export function createDurableBackend(deps: {
             const plan = session.ref.key.split(":")[1];
             if (!review || !plan) throw invalid("no plan review in this session");
             if (response.outcome === "approve") {
-              await deps.cpd.json(["plan", "decide", review, "--approve", "--plan", plan]);
+              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "approve", planId: plan }));
             } else if (response.outcome === "reject") {
-              await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
             } else if (response.outcome === "changes") {
-              await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
               await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
             }
             dialogs.delete(dialogId);
@@ -537,7 +537,7 @@ export function createDurableBackend(deps: {
               const review = summary?.kind === "fold" ? /^Plan review (.+) summary$/.exec(summary.title)?.[1] : undefined;
               const plan = session.ref.key.split(":")[1];
               if (review === undefined || plan === undefined) throw invalid("no plan review to reject in this session");
-              await deps.cpd.json(["plan", "decide", review, "--reject", "--plan", plan]);
+              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
               dialogs.delete(dialogId);
               send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
               return;

@@ -1,4 +1,5 @@
 import { WebError } from "../../protocol/domain.ts";
+import { toArgv } from "../cpd-argv.ts";
 import type { CpdEvent } from "./events.ts";
 import { parseEventLine } from "./events.ts";
 import { createStreamWatchdog } from "./liveness.ts";
@@ -31,7 +32,7 @@ export interface CockpitStream {
 
 export const STREAM_RESTART_BASE_MS = 500;
 export const STREAM_RESTART_CAP_MS = 10_000;
-export const cockpitServeArgs = (): string[] => ["cockpit", "serve"];
+export const cockpitServeArgs = (): string[] => toArgv({ kind: "cockpit.serve" });
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
