@@ -834,15 +834,15 @@ The record of a bug and of its protocol state (air-d104; commands.md §33): what
 | `symptom` | text | what was seen: the failure, its surface and when it showed, 1 to 20000 characters with no NUL |
 | `cause` | text? | the diagnosed cause; null until recorded (`report --cause`, or `mitigate --cause`) |
 | `mitigation` | text? | the stopgap applied, as air-d103 defines it; null = mitigation applied: no |
-| `mitigated_by` | text? | the Session id of the agent who applied it; set only with `mitigation` |
+| `mitigated_by` | text? | the Session id of the agent who applied it, or null outside a Session; set only with `mitigation` |
 | `mitigated_at` | time? | when it was applied; set only with `mitigation` |
 | `root_fix` | text? | the root-fix Work as a reference: a Plan id, a Workflow `<plan>/<key>` (§2.2 "A Workflow reference") or a Job `<plan>/<workflow>/<key>`; stored text, 1 to 200 characters with no NUL; cpd does not resolve it |
 | `regression_test` | text? | the test that pins the fix, named as the repo names its tests (a test function, file or filter), 1 to 200 characters with no NUL |
 | `status` | text | `open` or `closed`; a CHECK holds the pair |
-| `reported_by` | text | the Session id of the agent that ran `protocol bug report` |
+| `reported_by` | text? | the caller's Session id (`CPD_SESSION`, commands.md §33.1); null when the command ran outside a Session |
 | `reported_at` | time | when it ran |
 | `closed_at` | time? | when `protocol bug close` ran |
-| `closed_by` | text? | the Session id of the agent that ran it |
+| `closed_by` | text? | the caller's Session id, or null outside a Session |
 
 The record is written by the three commands only: `protocol bug report` inserts the row (`status` `open`, `mitigation`, `mitigated_by`, `mitigated_at`, `root_fix`, `regression_test`, `closed_at` and `closed_by` null); `protocol bug mitigate` sets `mitigation`, `mitigated_by` and `mitigated_at` (and `cause` when `--cause` is given); `protocol bug close` sets `root_fix`, `regression_test`, `status` `closed`, `closed_at` and `closed_by`, and is refused `root_fix_required` (exit 3, nothing written) until a root-fix link and a regression test are recorded (air-d107). Nothing else writes the table, and no field is updated after `status` is `closed`.
 
