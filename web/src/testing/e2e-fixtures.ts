@@ -24,6 +24,48 @@ const electronExecutable = createRequire(import.meta.url)("electron") as string;
 export const headlessLinuxArgs: string[] =
   process.platform === "linux" ? ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] : [];
 
+type LaunchAppOptions = {
+  /** A per-run `CPD_HOME`, isolated and removed by the caller after the run. */
+  cpdHome: string;
+  /** A per-run Electron `userData` dir, isolated and removed by the caller after the run. */
+  userDataDir: string;
+  /** The renderer URL the app is told to load (`CPD_ELECTRON_DEV_URL`). */
+  rendererUrl: string;
+  /** Extra env for a scenario (for example `CPD_CHECKOUT`); it never overrides the hidden/isolation keys. */
+  env?: Record<string, string>;
+};
+
+/**
+ * The one launcher for the suite's Electron app. It pins what every launch must have: the Linux
+ * headless flags (`headlessLinuxArgs`), a hidden window (`CPD_ELECTRON_HIDDEN`; air-d68: the suite
+ * never shows a window on the User's screen) and isolation from the User's real profile (a temp
+ * `--user-data-dir` and `CPD_HOME`). A scenario adds its own seams through `env`, and the app's own
+ * stdout/stderr is surfaced in the Playwright output so a boot crash is visible instead of a bare
+ * firstWindow timeout.
+ */
+export async function launchApp(options: LaunchAppOptions): Promise<ElectronApplication> {
+  const app = await electron.launch({
+    executablePath: electronExecutable,
+    // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and app
+    // data) in a temp dir, so the run never touches the User's real profile.
+    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, "."],
+    cwd: webRoot,
+    env: {
+      ...process.env,
+      ...options.env,
+      CPD_HOME: options.cpdHome,
+      // Create the app window hidden: no window ever appears on the User's screen.
+      CPD_ELECTRON_HIDDEN: "1",
+      CPD_MODE: "preview",
+      CPD_ELECTRON_DEV_URL: options.rendererUrl,
+    },
+  });
+  const child = app.process();
+  child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[electron] ${chunk.toString()}`));
+  child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(`[electron] ${chunk.toString()}`));
+  return app;
+}
+
 /** The built renderer the suite points the app at; overridable for a scenario that serves its own. */
 const rendererDir = process.env["CPD_E2E_RENDERER_DIR"] ?? join(webRoot, "dist-electron", "renderer");
 
@@ -107,27 +149,12 @@ export const test = base.extend<Fixtures>({
   },
 
   electronApp: async ({ cpdHome, userDataDir, rendererServer }, use) => {
-    const app = await electron.launch({
-      executablePath: electronExecutable,
-      // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and
-      // app data) in a temp dir, so the run never touches the User's real profile.
-      args: [...headlessLinuxArgs, `--user-data-dir=${userDataDir}`, "."],
-      cwd: webRoot,
-      env: {
-        ...process.env,
-        CPD_HOME: cpdHome,
-        // Create the app window hidden: no window ever appears on the User's screen.
-        CPD_ELECTRON_HIDDEN: "1",
-        CPD_MODE: "preview",
-        CPD_CHECKOUT: webRoot,
-        CPD_ELECTRON_DEV_URL: rendererServer.url,
-      },
+    const app = await launchApp({
+      cpdHome,
+      userDataDir,
+      rendererUrl: rendererServer.url,
+      env: { CPD_CHECKOUT: webRoot },
     });
-    // Surface the app's own stdout/stderr in the Playwright output, so a boot crash or an error the
-    // main process logs is visible instead of a bare firstWindow timeout.
-    const child = app.process();
-    child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[electron] ${chunk.toString()}`));
-    child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(`[electron] ${chunk.toString()}`));
     await use(app);
     await app.close();
   },

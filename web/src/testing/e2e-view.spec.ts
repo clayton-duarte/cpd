@@ -15,16 +15,12 @@
 // (air-n13/n15): this spec pins that switching is in place, not a second process.
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { _electron as electron } from "playwright";
-import { headlessLinuxArgs, test as base, expect } from "./e2e-fixtures";
+import { launchApp, test as base, expect } from "./e2e-fixtures";
 
 const webRoot = fileURLToPath(new URL("../..", import.meta.url));
-/** The pinned Electron binary the app runs on (the `electron` devDependency). */
-const electronExecutable = createRequire(import.meta.url)("electron") as string;
 /** The PATH the runner started with, before any spec prepends its private bin dir. */
 const basePath = process.env["PATH"] ?? "";
 
@@ -60,26 +56,24 @@ esac
 `;
 
 /**
- * The shared launcher, extended with the two seams this scenario needs and the shared file cannot
- * carry: the staged checkout root the in-place preview runs its serve-only script from
- * (`CPD_CHECKOUT`, so no real tmux/preview server runs) and a hidden window with a private
- * `userData` (air-d68). Everything else is the e2e-config fixture, verbatim.
+ * The shared `launchApp` helper, extended with the one seam this scenario needs: the staged
+ * checkout root the in-place preview runs its serve-only script from (`CPD_CHECKOUT`, so no real
+ * tmux/preview server runs). The helper itself pins the hidden window, the private `userData` dir
+ * and the Linux flags (air-d68), and this fixture proves the window never showed before hiding it.
  */
 const test = base.extend<{ electronApp: unknown }>({
   electronApp: async ({ cpdHome, rendererServer }, use) => {
-    const app = await electron.launch({
-      executablePath: electronExecutable,
-      args: [...headlessLinuxArgs, ".", `--user-data-dir=${userDataDir}`],
-      cwd: webRoot,
-      env: {
-        ...process.env,
-        CPD_HOME: cpdHome,
-        CPD_MODE: "preview",
-        CPD_CHECKOUT: previewRoot,
-        CPD_ELECTRON_DEV_URL: rendererServer.url,
-      },
+    const app = await launchApp({
+      cpdHome,
+      userDataDir,
+      rendererUrl: rendererServer.url,
+      // The staged checkout root the in-place preview runs its serve-only script from (so no real
+      // tmux/preview server runs).
+      env: { CPD_CHECKOUT: previewRoot },
     });
     const first = await app.firstWindow();
+    // The window is created hidden (air-d68): prove it never showed, before any hide() call.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
     const window = await app.browserWindow(first);
     await window.evaluate((w) => w.hide());
     await use(app);
