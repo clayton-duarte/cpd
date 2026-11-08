@@ -51,6 +51,12 @@ impl Handler for Gh {
     }
 }
 
+/// What E5's legacy `cpd pr poll` prints: no pull request changed, room in the rate limit.
+fn poll_ok() -> String {
+    json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}})
+        .to_string()
+}
+
 /// The pull request `acme/pay#801` as the reply carries it: open, with the head [`HEAD`].
 fn pull_request() -> Value {
     json!({
@@ -83,10 +89,16 @@ fn pull_request() -> Value {
 
 #[test]
 fn a_tick_fills_the_head_oid_from_the_github_pass() {
-    // The home, on a `Fakes` runner that answers the pass's `gh api graphql`.
+    // The home, on a `Fakes` runner that answers the pass's `gh api graphql` and E5's legacy poll cleanly (so a tick
+    // leaves no failed-process Event behind).
     let mut fx = Fx::new("");
     let fakes = Fakes::new();
-    let _ = (*fakes.runner).clone().route("gh", Arc::new(Gh));
+    fakes.spawn.set_self_exe("/opt/cpd/bin/cpd");
+    let _ = (*fakes.runner).clone().route("gh", Arc::new(Gh)).on(
+        "cpd",
+        |_| true,
+        Reply::ok(&poll_ok()),
+    );
     fx.engine.ports = fakes.ports.clone();
     // An open pull request of the Workflow's repo, with the head the last legacy poll left (none yet): the pass is the
     // only thing that fills it (air-n82).
@@ -96,8 +108,12 @@ fn a_tick_fills_the_head_oid_from_the_github_pass() {
                  '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', 1, NULL);",
     );
 
-    // One engine tick's E5 step, which owns the GitHub source: after it the SWR pass has run against the scripted reply.
+    // One engine tick's E5 steps, which own the GitHub source: after them the SWR pass has run against the scripted
+    // reply. (`pr::start` starts E5's poll and `pr::reap` runs E5's in-tick GitHub work; `pr::finish` drains whatever
+    // poll a start left, so no thread outlives the test.)
     pr::reap(&mut fx.engine);
+    pr::start(&mut fx.engine);
+    pr::finish(&mut fx.engine);
 
     assert_eq!(
         fx.query::<Option<String>>(
