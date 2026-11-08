@@ -391,7 +391,7 @@ export type ErrorCode =
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
   | "invalid_submission" // empty text with no images (16.2), or text longer than the backend allows
-  | "tool_failed" // a tool result arrived with status "failed" (16.1); message = the reason, shown in the cockpit error toast, never inline in the row
+  | "tool_failed" // a tool result arrived with status "failed" (16.1); no toast is raised for it (16.1, amended by air-d77): a failed agent tool call shows as a failed tool row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
@@ -1499,7 +1499,7 @@ export function Footer(props: { footer: FooterStats | null; contextWindow?: numb
 **ToolRow DOM** (scout-pi §4, compact-tools). `<details data-kind="tool" data-tool="<name>" data-status="<status>">`, `open` attribute set only for `name === "edit"` (edit's body shows as a bounded preview by default, scout-pi §4). `<summary>`: `<span data-part="name">` (name with a leading `mcp__` removed, so `mcp__srv__tool` shows `srv__tool`), `<span data-part="detail">`, `<span data-part="status">`:
 
 - **detail** by tool: the table of DESIGN-chat 3.2 (paths and commands cut at 100 characters, other details at 160).
-- **status** text: `running` -> `Running`; **Amended by 16.1 (air-d44):** `failed` -> `Failed`, with no inline reason — the failure's reason text goes to the cockpit error toast with code `tool_failed` (16.1), while the row keeps its failed tone and the tool group's failed count; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
+- **status** text: `running` -> `Running`; **Amended by 16.1 (air-d44, air-d77):** `failed` -> `Failed`, with no inline reason in the status text — no toast is raised for a failed agent tool call (16.1): the failure's record is the row itself, which keeps its failed tone and the tool group's failed count; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
 - **body** (inside the row's closed `TraceCollapsibleContent`): DESIGN-chat 3.6 (a `CodeBlock`, the first 10 lines, `Show N more lines`).
 
 `OrphanRow`: `<article data-kind="orphan-result">` with `Result of <name> (call not loaded)` and the same output body rules.
@@ -1664,7 +1664,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unknown_action` | `parseCockpitAction`, `actions.runAction` | action `kind` not in 5.4 | `{kind}` |
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
-| `tool_failed` | `store.ts` (the state layer) | a tool result with status `failed` is applied to the selected session's transcript; `message` = the reason, the first non-empty line of `result.text` (6.8, 16.1) | `{itemId?}` |
+| `tool_failed` | nothing raises it (16.1, amended by air-d77) | a tool result with status `failed` is applied to the selected session's transcript; no error and no toast is raised — the failure shows as a failed tool row (16.1) | — |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
 | `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
@@ -2168,10 +2168,11 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.8 or 11.3 is marked "Amended by 16.x", section 16 wins and the older statement is void.
 
-### 16.1 Every error is shown through the cockpit error toast (air-d44)
+### 16.1 Every error of the User's own actions is shown through the cockpit error toast (air-d44, amended by air-d77)
 
-- In the WebUI every error is shown through the cockpit error toast (the error Alert of 11.7, with its Report button). An error rendered inline in the chat breaks the standard. A failed submission leaves no row and no inline text in the transcript: its error appears once in the cockpit error toast, and the User retypes the message.
-- A failed tool's row is the transcript's record, not an error display: it keeps its failed tone, its failed count and its place in the Chain of Thought, and the failure's reason text goes to the cockpit error toast with code `tool_failed` instead of being rendered inline in the row (6.8's status text, amended above).
+- In the WebUI every error of the User's own actions is shown through the cockpit error toast (the error Alert of 11.7, with its Report button). An error rendered inline in the chat breaks the standard. A failed submission leaves no row and no inline text in the transcript: its error appears once in the cockpit error toast, and the User retypes the message.
+- **Amended by air-d77 (Plan `tool-style`): toasts are for the User's own actions only.** The cockpit error toast is raised only for an error of the User's own actions — a failed submit, a refused save, a refused merge or dismissal and the like. No agent tool failure raises a toast, at any point: not when the failed result first arrives, and not when a tail window carrying old failures is replayed as the transcript attaches or reconnects — a reloaded transcript raises no toast for the failures it replays.
+- A failed agent tool call shows as a failed tool row: the row keeps its failed tone, its failed count and its place in the Chain of Thought, and the failure's record is the row itself (6.8's status text, amended above) — never the cockpit error toast.
 
 ### 16.2 An image-only chat message is valid and delivered (air-d43)
 
