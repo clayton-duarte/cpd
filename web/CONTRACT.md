@@ -2199,4 +2199,30 @@ Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dia
 - A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
 - The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
 
+## 19. The desktop update promote and the Preview readiness contract (Plan `desktop-fix`)
+
+Normative. Plan `desktop-fix` decides the points below after the bugs air-n67 (a stale Electron bundle survived a relaunch) and air-d76 (a focused window never received its update), and air-d77 (refines air-d44, recency wins). The updater and View-menu statements of web/ELECTRON.md carry the same statements; where they differ, this section wins. Paths are repo-relative.
+
+### 19.1 The launch promotes a ready `.next` bundle (air-n67)
+
+- At launch, before the window opens, the main process runs one promote step: when `web/dist-electron.next/.built-sha` exists and equals `git rev-parse HEAD` (run in the checkout root), `swapBundle` (`web/src/electron/update/bundle.ts`) renames `.next` into `web/dist-electron`, so no stale bundle survives a relaunch. The promoted `.built-sha` is HEAD, so the updater's catch-up check finds nothing to build.
+- When `web/dist-electron.next` is missing, or its `.built-sha` does not match HEAD, nothing is promoted: the `.next` build is not a build of this HEAD, and the updater's catch-up check rebuilds it as usual.
+- A promoted main-side artefact (`main.js`, `preload.cjs`, `server.js`) loads at the next launch; the process that ran the promote keeps the code it was started with.
+
+### 19.2 A View change applies a pending update (air-d76)
+
+- With the window focused, the next View menu change is also an applicability moment for the updater: `whenApplicable` (`web/src/electron/update/idle.ts`) resolves not only when the window is unfocused or the system has been idle ≥ 300 s, but on every View menu change, even while the window is focused and the system is not idle. A ready `web/dist-electron.next` the updater already built is therefore swapped in at that moment.
+- When the swap changes a main-side artefact (`main.js`, `preload.cjs`, `server.js`), the updater reports `restart-needed` and shows the existing tray item `Restart to Apply Update`; the new main-process code loads at the next launch. The app never relaunches itself, and a View change is never blocked or slowed by the update (air-d76).
+
+### 19.3 Preview readiness is independent of the running app's health (air-d76)
+
+- The WebUI Preview loads its dev URL once the preview server is ready, within a bounded readiness wait; it does not wait for the running app's health (`preview-health.json` is not the gate). The earlier circular wait — the preview tick loop loaded the dev URL only once the app's `healthy` record existed, and that record was produced only by the renderer the dev URL itself loads — is gone; the wait never hangs.
+- A Preview start or load failure — a failed serve, a failed dev-URL load, or the readiness timeout — is shown once in the cockpit error toast (the toast surface of 16.1), never a native `showErrorBox` modal, and the app returns to the mode it was in. Selecting WebUI Preview is the User's own action, so a Preview start/load failure still gets a toast (air-d77 refines air-d44: the WebUI raises an error toast for the User's own actions — send, save, merge, dismiss — and Preview selection is one of them).
+- Leaving the Preview — the User's next View menu change, a watchdog rollback included — restores the production renderer: the window reloads the built renderer (`web/dist-electron/renderer/electron.html`), so the View change is never blocked. The View-menu state stays what the User chose.
+
+### 19.4 The host tab strip and the health report (air-d50, air-n52)
+
+- The desktop's WebUI and WebUI Preview show no host tab strip: the host tabs (`local` plus every remote tab) show only in the TUI view (air-d50; web/ELECTRON.md, Remote TUI tabs over ssh, "Visibility and the view").
+- The desktop renderer reports `health:ok` only after the first `cockpit.snapshot` arrives on the WebSocket transport — a painted shell is not health (§15.2, "The desktop's health report"; already shipped by #961, no change here).
+
 

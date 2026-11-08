@@ -169,6 +169,8 @@ export function createModeController(deps: ModeControllerDeps): ModeController;
 
 Run-only view marker (air-n19): the controller writes `$CPD_HOME/run/ui-view.json` on launch and on every switch, as one JSON object `{"view":"tui" | "webui" | "webui-preview","pid":<electron main pid>}` where `pid` is the pid of the Electron main process. The file is removed on graceful quit. It is a marker only: it is never read as a launch default. A reader treats a missing file, a malformed file or a dead pid as view unknown.
 
+- View change as an applicability moment (air-d76): every View menu change — from the View menu or the tray's switch items — signals the updater, so a pending swap of a ready `web/dist-electron.next` runs at that moment, even while the window is focused and the system is not idle (see Auto-update and CLI bootstrap, `idle.ts`). When the swap changes a main-side artefact, the tray item `Restart to Apply Update` appears and the new main-process code loads at the next launch; the app never relaunches itself, and the View change is never blocked by the update (air-d76).
+
 ### bridge.ts (preload bridge, bundled into the sandboxed preload)
 
 ```ts
@@ -390,7 +392,11 @@ Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal
 
 ### Overview
 
-The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. Nothing stops for it: the renderer reloads only while the window is unfocused or the system has been idle for 300 s, and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) relaunches the Electron main process with `app.relaunch()` + `app.exit()`. A renderer-only change keeps the in-place renderer reload.
+The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. At launch, before the window opens, a ready `web/dist-electron.next` whose `.built-sha` equals `git rev-parse HEAD` is promoted into `web/dist-electron` (see Launch promote, below), so no stale bundle survives a relaunch (air-n67). Nothing stops for it: the swap runs while the window is unfocused, the system has been idle for 300 s, or at the next View menu change (air-d76), and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) shows the tray item `Restart to Apply Update`; the new main-process code loads at the next launch, and the app never relaunches itself (air-d76). A renderer-only change keeps the in-place renderer reload.
+
+### Launch promote
+
+Before the window opens — in the boot sequence, before the window is created — the main process runs one promote step. When `web/dist-electron.next/.built-sha` exists and equals `git rev-parse HEAD` (run in the checkout root), it promotes `.next` into the current bundle with `swapBundle` (`web/src/electron/update/bundle.ts`): the current bundle's `.built-sha` becomes HEAD, so the updater's catch-up check finds nothing to build and the launch never starts a stale bundle (air-n67). When `.next` is missing, or its `.built-sha` does not match HEAD, nothing is promoted: the `.next` build is not a build of this HEAD, and the updater's catch-up check rebuilds it as usual. A promoted main-side artefact (`main.js`, `preload.cjs`, `server.js`) loads at the next launch; the process that ran the promote keeps the code it was started with.
 
 Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
@@ -507,7 +513,7 @@ export function followMerges(deps: { spawn: SpawnFollow; timers: UpdateTimers; o
 export function whenApplicable(deps: { isFocused: () => boolean; systemIdleSeconds: () => number; timers: UpdateTimers; pollMs?: number; idleSeconds?: number }): Promise<void>
 ```
 
-Resolves when `!isFocused()` or `systemIdleSeconds() >= idleSeconds` (default 300). It checks at once, then every `pollMs` (default 30000) through `timers.setTimeout`.
+Resolves when `!isFocused()`, when `systemIdleSeconds() >= idleSeconds` (default 300), or when the User changes the View menu (air-d76): the mode controller signals the updater on every View menu change, so a pending swap runs even while the window is focused and the system is not idle. It checks at once, then every `pollMs` (default 30000) through `timers.setTimeout`.
 
 #### controller.ts
 
@@ -520,7 +526,7 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> }
 
 1. `onState({ phase: 'syncing' })`, then `sync()`. A `skipped` result logs the reason, calls `onState({ phase: 'idle' })` and ends: no build and no CLI install.
 2. `sha = headSha()`.
-3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, it calls `onState({ phase: 'restart-needed' })` and then relaunches the Electron main process with `app.relaunch()` followed by `app.exit(0)`, through an injected port like every other external effect; it does NOT call `reloadRenderer`. Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
+3. Bundle flow, when `builtSha() !== sha`: `onState({ phase: 'building' })`, then `build({ lockfileChanged, sha })`, where `lockfileChanged` is the `lockfileChanged` of the sync when it was `updated`, else `true`. A failure logs the log and calls `onState({ phase: 'error', message })`, where `message` is the log's last line; the old bundle is kept. A success calls `onState({ phase: 'waiting' })`, awaits `whenApplicable()`, then `swap()`. When `mainChanged` is true, it calls `onState({ phase: 'restart-needed' })` and ends: it does NOT call `reloadRenderer` and does not relaunch itself — the tray item `Restart to Apply Update` carries the relaunch (`app.relaunch()` + `app.exit(0)`, on the tray click), so the new main-process code loads at the next launch and the View change is never blocked (air-d76). Otherwise it calls `reloadRenderer()` and then `onState({ phase: 'idle' })`. When `builtSha() === sha`, there is no build and the state is `idle`.
 4. CLI flow, concurrent with the bundle flow, when `cliSha() !== sha`: `installCli(sha)`. A failure is only logged; it never sets the `error` state.
 
 `check()` is single-flight. A call made during a run returns that run's promise, and queues exactly one trailing run after it.
@@ -559,7 +565,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: Boot
 
 The updater's `log` is injected by the composition root, and this contract does not fix a file for it. Where those lines land is unverified for the running app.
 
-A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed` and relaunches the Electron main process with `app.relaunch()` + `app.exit(0)`, so the new main-process, preload and server code load in a fresh process. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
+A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed`, and the tray item `Restart to Apply Update` (`menu.ts`, `updateMenuItem`) carries the relaunch — its click runs `app.relaunch()` + `app.exit(0)`; the new main-process, preload and server code load in a fresh process at the next launch. The app never relaunches itself while the User works (air-d76): the running process keeps the bundle it was started with until that restart. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
 
 ## Verification checklist
 
