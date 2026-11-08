@@ -8,10 +8,10 @@ import { rebuildViews } from './preview';
 import { followMerges } from './follow';
 import type { SpawnFollow } from './follow';
 import { readPreviewMode } from '../preview-mode';
-import { whenApplicable } from './idle';
+import { whenApplicable, type ViewChanges } from './idle';
 import type { BootstrapStatus, UpdateExec, UpdateFs, UpdateState, UpdateTimers } from './types';
 
-export interface AutoUpdateDeps { env: Record<string, string | undefined>; bundleDir: string; home: string; platform: string; exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; spawnFollow: SpawnFollow; isFocused: () => boolean; systemIdleSeconds: () => number; reloadRenderer: () => void; onState: (s: UpdateState) => void; onBootstrap: (s: BootstrapStatus) => void; log: (line: string) => void }
+export interface AutoUpdateDeps { env: Record<string, string | undefined>; bundleDir: string; home: string; platform: string; exec: UpdateExec; fs: UpdateFs; timers: UpdateTimers; spawnFollow: SpawnFollow; isFocused: () => boolean; systemIdleSeconds: () => number; viewChanges?: ViewChanges; reloadRenderer: () => void; onState: (s: UpdateState) => void; onBootstrap: (s: BootstrapStatus) => void; log: (line: string) => void }
 
 export async function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap: BootstrapStatus; stop(): void }> {
   const root = resolveCheckout({ env: deps.env, bundleDir: deps.bundleDir, fs: deps.fs });
@@ -29,7 +29,7 @@ export async function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap
     cliSha: () => readInstalledSha(deps.fs, root),
     build: (opts) => buildBundle({ exec: deps.exec, fs: deps.fs }, root, opts),
     swap: () => swapBundle(deps.fs, root),
-    whenApplicable: () => whenApplicable({ isFocused: deps.isFocused, systemIdleSeconds: deps.systemIdleSeconds, timers: deps.timers }),
+    whenApplicable: () => whenApplicable({ isFocused: deps.isFocused, systemIdleSeconds: deps.systemIdleSeconds, timers: deps.timers, viewChanges: deps.viewChanges }),
     reloadRenderer: deps.reloadRenderer,
     installCli: (sha) => installCli({ exec: deps.exec, fs: deps.fs, timers: deps.timers, log: deps.log }, root, sha),
     rebuildViews: async () => {

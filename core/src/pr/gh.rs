@@ -61,10 +61,24 @@ pub struct PrRef {
 fn failed(argv: &[&str], message: String, exit: Option<i32>, stderr: &str) -> CpdError {
     let mut all = vec!["gh"];
     all.extend_from_slice(argv);
-    CpdError::new(ErrorCode::GhFailed, message)
+    let e = CpdError::new(ErrorCode::GhFailed, message)
         .with("argv", json!(all))
         .with("exit", json!(exit))
-        .with("stderr", tail(stderr, TAIL_LINES))
+        .with("stderr", tail(stderr, TAIL_LINES));
+    if rate_limited("", stderr) {
+        e.with("rate_limited", true)
+    } else {
+        e
+    }
+}
+
+/// Whether `gh` said GitHub's rate limit is spent: a GraphQL `RATE_LIMITED` error or an "API rate limit" message in stdout or
+/// stderr. Shared by the poll [`Reply`] (E5) and the CLI [`failed`] path (the merge). Never transient; the merge classifies it
+/// as a transient provider failure and E5 pauses on the mark.
+fn rate_limited(stdout: &str, stderr: &str) -> bool {
+    stdout.contains("\"RATE_LIMITED\"")
+        || stdout.contains("API rate limit")
+        || stderr.contains("API rate limit")
 }
 
 /// What a finished `gh` call printed; `exit` is `None` when a signal ended it.
@@ -936,9 +950,7 @@ impl Reply<'_> {
     /// Whether `gh` said GitHub's rate limit is spent: a GraphQL `RATE_LIMITED` error or an "API rate limit" message. Never
     /// transient and never retried (A2); E5 pauses on the mark.
     fn rate_limited(&self) -> bool {
-        self.out.stdout.contains("\"RATE_LIMITED\"")
-            || self.out.stdout.contains("API rate limit")
-            || self.out.stderr.contains("API rate limit")
+        rate_limited(&self.out.stdout, &self.out.stderr)
     }
 
     /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its

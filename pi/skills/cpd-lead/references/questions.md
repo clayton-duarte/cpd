@@ -45,7 +45,7 @@ ask_user_question({questions: [
      {label: "None", description: "Report the failure at once; the caller retries"}]}]})
 ```
 
-Assumptions (state them in the question, as text or a preview; the preview holds at most a few lines, or only the count; too long for 1500 characters: write them to a file outside the repo and point to it in chat):
+Assumptions (state them in the question, as text or a preview; the preview holds at most a few lines, or only the count; too long for the call's 1500-character limit (summed over every question, header, option label, description and preview): write them to a file outside the repo and point to it in chat):
 
 ```ts
 ask_user_question({questions: [{

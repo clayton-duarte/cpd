@@ -1138,11 +1138,8 @@ fn assert_open_attempt_crashed(live: &Live, attempt: &Value, prefix: &str) {
 #[test]
 fn an_open_jobs_gh_failure_at_the_adoption_check_ends_the_attempt_crashed_with_gh_failed() {
     let live = open_live();
-    live.runner().on(
-        "gh",
-        |_| true,
-        Reply::exit(1, "", "GraphQL: API rate limit already exceeded\n"),
-    );
+    live.runner()
+        .on("gh", |_| true, Reply::exit(1, "", "gh: boom\n"));
     let before = live.remote("cpd/pay/repo");
 
     let (attempt, _) = live.run_job("open-repo", submit_only);

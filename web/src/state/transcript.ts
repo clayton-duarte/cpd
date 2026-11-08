@@ -1,4 +1,4 @@
-import { WebError, type Cursor, type ToolItem, type TranscriptItem, type Window } from "../protocol/domain.ts";
+import { WebError, type Cursor, type TranscriptItem, type Window } from "../protocol/domain.ts";
 
 export interface TranscriptState {
   readonly items: readonly TranscriptItem[];
@@ -8,14 +8,6 @@ export interface TranscriptState {
 }
 
 export const emptyTranscript: TranscriptState = { items: [], hasEarlier: false, cursor: null, tailEpoch: 0 };
-
-/** 15.1: the toast reason for a failed tool: its result's first non-empty, trimmed line; "" when none. */
-export function toolFailureReason(tool: ToolItem): string {
-  return (tool.result?.text ?? "")
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l !== "") ?? "";
-}
 
 /** Moves an orphan result `orphan:<callId>` into the tool item that now has that callId. */
 function adopt(items: readonly TranscriptItem[]): readonly TranscriptItem[] {
