@@ -88,7 +88,7 @@ fn guard_event_carries_the_refusal_fields() {
             tx.execute_batch(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                  INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('sess', 'worker', 'ctx', 'Worker', '/w', 'H3', 'working', 't', 't');",
+                   VALUES ('sess', 'manager', 'ctx', 'Worker', '/w', 'H3', 'working', 't', 't');",
             )?;
             Ok(())
         })
