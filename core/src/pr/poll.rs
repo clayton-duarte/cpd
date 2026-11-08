@@ -96,6 +96,18 @@ struct Armed {
     contained: bool,
 }
 
+/// The persisted containment flag of one open pull request (contract §2.2 "Ready to merge", §7.6): the value the
+/// poll writes to `pull_requests.base_contained`, read before the write transaction.
+struct Contained {
+    repo: String,
+    number: i64,
+    /// `Some(1)` when the head contains the current default-branch head, `Some(0)` when it does not, `None` for a
+    /// stacked pull request (its base is not the default branch) or one whose head is not known yet.
+    value: Option<i64>,
+    /// Whether the stored row already holds `value`; false says the poll must write.
+    held: bool,
+}
+
 /// What the transaction did.
 #[derive(Default)]
 struct Outcome {
@@ -387,6 +399,29 @@ fn poll_pass(
         }
     }
 
+    // The containment flag (contract §2.2 "Ready to merge", §7.6): one fresh compare read per open pull request
+    // whose base is its default branch, before the write transaction, so `ready_to_merge_sql` reads a current flag.
+    let rows = env.store.read(containment_rows)?;
+    let mut contained: Vec<Contained> = Vec::with_capacity(rows.len());
+    for (repo, number, base, default, head, stored) in rows {
+        let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
+            (Some(base), Some(default), Some(head)) if base == default => Some(
+                if gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)? {
+                    1
+                } else {
+                    0
+                },
+            ),
+            _ => None,
+        };
+        contained.push(Contained {
+            repo,
+            number,
+            value,
+            held: stored == value,
+        });
+    }
+
     // The owned Workflows whose pull request a search lists with a base other than the Workflow's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
     // The base Workflow's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
@@ -398,6 +433,7 @@ fn poll_pass(
     let settings = cold_repo_settings(&mut env.store, &search.repo_settings)?;
     let dirty = !settings.is_empty()
         || !follows.is_empty()
+        || contained.iter().any(|c| !c.held)
         || env.store.read(|conn| {
             for listed in &seen {
                 match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
@@ -432,8 +468,8 @@ fn poll_pass(
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
             apply(
-                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &settings,
-                now,
+                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &contained,
+                &settings, now,
             )
         })?
     } else {
@@ -529,6 +565,7 @@ fn apply(
     ahead: &[Ahead],
     tiers: &[(PlanId, WorkflowKey, Tier)],
     armed: &[Armed],
+    contained: &[Contained],
     settings: &[(String, gh::RepoMeta)],
     now: time::OffsetDateTime,
 ) -> Result<Outcome, CpdError> {
@@ -548,6 +585,14 @@ fn apply(
             })
     };
     let mut out = Outcome::default();
+    // The containment flag, in this same transaction (contract §2.2 "Ready to merge", §7.6): written independently of
+    // the row's other values, which is why it is not part of `pulls::upsert`.
+    for c in contained {
+        tx.execute(
+            "UPDATE pull_requests SET base_contained = ?1 WHERE repo = ?2 AND number = ?3",
+            rusqlite::params![c.value, c.repo, c.number],
+        )?;
+    }
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
         let mut listed = listed.clone();
@@ -1241,6 +1286,36 @@ fn due_reads(
     due
 }
 
+/// Every open pull request read for the containment flag, as `(repo, number, base_ref, default_branch, head_oid,
+/// base_contained)`: the flag the poll persists, and the row's own base and head (contract §2.2 "Ready to merge", §7.6).
+type ContainmentRow = (
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+);
+
+fn containment_rows(conn: &rusqlite::Connection) -> Result<Vec<ContainmentRow>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT repo, number, base_ref, default_branch, head_oid, base_contained
+           FROM pull_requests WHERE state = 'open' ORDER BY id",
+    )?;
+    Ok(stmt
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// The armed pull requests of `owned` (commands.md §9.10), as `(repo, number, default branch, head)`: an open row whose
 /// `merge_armed` is set and whose `base_ref` is its default branch, with the head and default branch to compare.
 fn armed_reads(
@@ -1322,6 +1397,10 @@ pub(crate) fn arm_for_behind_head(
 #[cfg(test)]
 #[path = "poll_uptodate_tests.rs"]
 mod poll_uptodate_tests;
+
+#[cfg(test)]
+#[path = "poll_ready_tests.rs"]
+mod poll_ready_tests;
 
 #[cfg(test)]
 mod due_reads_tests {

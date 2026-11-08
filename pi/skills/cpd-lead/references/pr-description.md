@@ -36,7 +36,7 @@ Use this template exactly, one line per section header, and omit any section wit
 
 **How:** The approach, key decisions, trade-offs and shortcomings. Why this approach, not another. What was sacrificed. What is known to be rough. Enough that a reviewer can judge whether the change is sound and whether it fits the system.
 
-**Acceptance criteria:** A checklist. Each item is checkable: it describes something testable (a test run, a command output, a manual observation) and ends with its evidence once known. A reviewer should see what was promised and what proved it. Examples: "`timeout 60 npm run build` succeeds"; "`npm run test -- test/auth.test.ts` passes"; "No regressions in the main app: verified by hand on the staging build at commit 62f4e9a".
+**Acceptance criteria:** A checklist. Each item is checkable: it describes something testable (a test run, a command output, a manual observation) and ends with its evidence once known. A reviewer should see what was promised and what proved it. Examples: "`timeout 25 npm run build` succeeds"; "`npm run test -- test/auth.test.ts` passes"; "No regressions in the main app: verified by hand on the staging build at commit 62f4e9a".
 
 **Out of scope and follow-ups:** What was deliberately left, naming registered Job and Workflow keys for follow-up work (for example, "Caching is not implemented; see Workflow cache"; "Error reporting for malformed tokens is a follow-up: Workflow error-reporting"). A reviewer reading this knows the boundary and can ask for what should have been done instead.
 
