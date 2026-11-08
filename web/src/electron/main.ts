@@ -7,9 +7,12 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog as electronDialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import { boot } from "./boot.ts";
 import { createPreviewClient, type PreviewClient } from "./preview-client.ts";
-import { createPreviewWatchdog } from "./watchdog.ts";
-import { parseHealth, type HealthRecord } from "./health.ts";
-import { DEFAULT_DEV_URL } from "./preview-mode.ts";
+import { createHealthWatchdog, createPreviewWatchdog, productionEnv } from "./watchdog.ts";
+import type { Build } from "./watchdog.ts";
+import { parseCockpitHealth, parseHealth, type HealthRecord } from "./health.ts";
+import { previousBuildDirs } from "./update/bundle.ts";
+import { createEventReporter } from "./events.ts";
+import { DEFAULT_DEV_URL, readPreviewMode } from "./preview-mode.ts";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
@@ -117,6 +120,7 @@ async function main(): Promise<void> {
   let previewClient: PreviewClient | undefined;
   let previewTimer: ReturnType<typeof setInterval> | undefined;
   let previewPrevious: UiMode = "webui";
+  let healthWatchdogTimer: ReturnType<typeof setInterval> | undefined;
   const disposers: (() => void)[] = [];
   let services!: ReturnType<typeof createServices>;
   let started!: Promise<void>;
@@ -275,6 +279,77 @@ async function main(): Promise<void> {
     return client;
   };
 
+  // The health watchdog (air-d88): it ticks in every view mode, not only preview, reading the
+  // cockpit/transport report the renderer writes. A break walks the revert ladder (air-d95) —
+  // `cockpit not ready` reloads the renderer only — and every detection and recovery is one
+  // structured Event, shown to the User (air-d81).
+  const startHealthWatchdog = async (): Promise<void> => {
+    const root = await readCheckoutRoot(env);
+    const healthFile = path.join(cpdHome, "run", "cockpit-health.json");
+    const events = createEventReporter({
+      file: path.join(cpdHome, "run", "watchdog-events.jsonl"),
+      append: async (file, line) => {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.appendFile(file, line);
+      },
+    });
+    const ladderDir = (build: Build): string | null => {
+      if (root === null) return null;
+      if (build === "preview") return path.join(root, "web", "dist-electron.preview");
+      if (build === "prod") return path.join(root, "web", "dist-electron");
+      return previousBuildDirs(root)[build === "head-1" ? 0 : 1];
+    };
+    let currentBuild: Build = readPreviewMode(env).mode === "preview" ? "preview" : "prod";
+    // The rung above prod is loaded by relaunching the app in production mode (air-d95): CPD_MODE
+    // and the preview's dev URL go, so the app boots the built renderer.
+    const relaunchInProduction = (): void => {
+      process.env = productionEnv(process.env) as NodeJS.ProcessEnv;
+      app.relaunch();
+      app.exit(0);
+    };
+    const watchdog = createHealthWatchdog({
+      now: () => Date.now(),
+      readHealth: async () => {
+        try {
+          return parseCockpitHealth(await fs.readFile(healthFile, "utf8"));
+        } catch {
+          return null;
+        }
+      },
+      build: () => currentBuild,
+      revert: async (build) => {
+        const dst = ladderDir("prod");
+        const src = ladderDir(build);
+        if (dst === null || src === null) throw new Error("no checkout root to revert to");
+        if (path.resolve(src) !== path.resolve(dst)) {
+          // Load `build`'s kept dir as the current prod build, keeping the displaced one as HEAD-1.
+          const staging = `${dst}.revert`;
+          await fs.rm(staging, { recursive: true, force: true });
+          await fs.cp(src, staging, { recursive: true });
+          const displaced = `${dst}.displaced`;
+          await fs.rm(displaced, { recursive: true, force: true });
+          await fs.rename(dst, displaced);
+          await fs.rename(staging, dst);
+          await fs.rm(displaced, { recursive: true, force: true });
+        }
+        currentBuild = build;
+        relaunchInProduction();
+      },
+      reloadRenderer: async () => {
+        if (win.isDestroyed()) return;
+        if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
+      },
+      report: async (event) => {
+        await events.report(event);
+        electronDialog.showErrorBox("CPD WebUI", event.text);
+      },
+      log: async (entry) => console.log(`health-watchdog ${JSON.stringify(entry)}`),
+    });
+    healthWatchdogTimer = setInterval(() => {
+      void watchdog.tick().catch((error: unknown) => console.error(error));
+    }, 500);
+  };
+
   const initMode = async (_window: unknown): Promise<void> => {
   controller = createModeController({
     fs: {
@@ -326,6 +401,7 @@ async function main(): Promise<void> {
       await previewClient?.leave();
     }
   };
+  await startHealthWatchdog();
   };
 
 
@@ -422,6 +498,10 @@ async function main(): Promise<void> {
     if (previewTimer) {
       clearInterval(previewTimer);
       previewTimer = undefined;
+    }
+    if (healthWatchdogTimer) {
+      clearInterval(healthWatchdogTimer);
+      healthWatchdogTimer = undefined;
     }
     if (previewClient && !quitting) {
       // Graceful quit: `unserve` once and drop the run marker, then let the quit proceed.
