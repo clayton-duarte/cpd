@@ -294,10 +294,11 @@ export function createPiBackend(deps: {
       },
       async submit(input) {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
-        if (input.text.trim() === "") throw new WebError("invalid_submission", "the message is empty");
+        if (input.text.trim() === "" && input.images.length === 0) throw new WebError("invalid_submission", "the message is empty");
         const stamp = deps.now();
         const paths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
-        const text = paths.length === 0 ? input.text : `${input.text}\n\n${paths.map((p) => `[Attached image: ${p}]`).join("\n")}`;
+        const attached = paths.map((p) => `[Attached image: ${p}]`).join("\n");
+        const text = paths.length === 0 ? input.text : input.text.trim() === "" ? attached : `${input.text}\n\n${attached}`;
         if (text.length > PI_SEND_TEXT_MAX) {
           throw new WebError("invalid_submission", `the message is longer than ${PI_SEND_TEXT_MAX} characters`);
         }

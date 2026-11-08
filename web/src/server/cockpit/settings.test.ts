@@ -35,7 +35,7 @@ describe("settings", () => {
     await expect(readSettings(cpd)).rejects.toMatchObject({ code: "cpd_malformed_json" });
   });
 
-  it("settings.save runs tiers, then each switch, then retier all, in order", async () => {
+  it("settings.save sends all four Tiers, the changed ones over the current ones, then each switch, then retier all, in order", async () => {
     const { cpd, calls } = fake({ config, "config experimental": experimental });
     await saveSettings(cpd, { tiers: { worker: "H2", lead: "S2" }, experimental: { write_curation: false, durable_workers: true } });
     expect(calls).toEqual([

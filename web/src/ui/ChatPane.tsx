@@ -50,6 +50,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         if (!hasFiles(e)) return;
         e.preventDefault();
         void composer.current?.addFiles(filesFromDrop(e.dataTransfer));
+        composer.current?.focus();
       }}
     >
       <ChatHeader

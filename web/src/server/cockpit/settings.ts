@@ -39,6 +39,7 @@ export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
 export async function saveSettings(cpd: Cpd, changes: SettingsChanges): Promise<void> {
   const roles = SETTINGS_ROLES.filter((r) => changes.tiers?.[r] !== undefined);
   if (roles.length > 0) {
+    // `cpd config tiers set` requires all four role flags (air-n37): send the changed Tiers over the current ones.
     const current = await readSettings(cpd);
     const tiers = Object.fromEntries(SETTINGS_ROLES.map((r) => [r, changes.tiers?.[r] ?? current.tiers[r]])) as Record<SettingsRole, string>;
     await cpd.json(toArgv({ kind: "config.tiers.set", tiers }));

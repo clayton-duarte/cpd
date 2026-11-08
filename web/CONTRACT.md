@@ -391,6 +391,7 @@ export type ErrorCode =
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
   | "invalid_submission" // empty text with no images (16.2), or text longer than the backend allows
+  | "tool_failed" // a tool result arrived with status "failed" (16.1); message = the reason, shown in the cockpit error toast, never inline in the row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
@@ -820,7 +821,7 @@ export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed"
 
 export interface PendingSubmission {
   readonly clientSubmissionId: string; readonly text: string; readonly imageCount: number; readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "failed"; readonly error?: WireError;
+  readonly state: "sending"; // Amended by 16.1 (air-d44): no "failed" state — a session.error with a clientSubmissionId drops the row and shows its error once in the cockpit error toast (11.7), so the row never carries an error; 10.3 adds "sent"
 }
 export interface SessionView {
   readonly id: string;
@@ -1421,7 +1422,7 @@ Behaviours:
   - **Manager:** refused without a cpd call: `session.error {sessionId, clientSubmissionId, error: {code: "manager_not_archivable", message: "A Manager is archived only with its Context.", details: {sessionId}}}`.
   - **Plan Lead** (the `leadSessionId` of its Plan, 5.1): runs `plan.archive` for its Plan. **Any other Lead or side fork:** runs `session.archive`. Both go through `runAction` (`actions.ts`, 5.4) with its park-and-retry for `in_chat_slot`, so `blockers()` is enforced exactly as for the cockpit.
   - **Success:** no reply for the submission and no `action.result`. The archive reaches the client as a tree change, which the web handles as DESIGN 3h says.
-  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. The Composer marks that pending row `failed` (6.2) and the User stays where they are.
+  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. **Amended by 16.1 (air-d44):** the pending row is dropped instead of being marked `failed` (6.2), and its error is shown once in the cockpit error toast (11.7); the User stays where they are.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
 
 #### `plugin.ts`: the Vite plugin and the real boundaries (thin, ONE place)
@@ -1663,6 +1664,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unknown_action` | `parseCockpitAction`, `actions.runAction` | action `kind` not in 5.4 | `{kind}` |
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
+| `tool_failed` | `store.ts` (the state layer) | a tool result with status `failed` is applied to the selected session's transcript; `message` = the reason, the first non-empty line of `result.text` (6.8, 16.1) | `{itemId?}` |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
 | `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
@@ -1766,7 +1768,7 @@ In both dialects an entry of kind `"cpd-chat"` (the host writes it for text type
 
 ### 10.3 State layer (`web/src/state/*`)
 
-1. `PendingSubmission.state` is `"sending" | "sent" | "failed"`. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
+1. **Amended by 16.1 (air-d44):** `PendingSubmission.state` is `"sending" | "sent"`, never `"failed"`: a `session.error` carrying a `clientSubmissionId` drops its pending row and shows the error once in the cockpit error toast (11.7) instead of marking the row. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
 2. `TranscriptState` gains `tailEpoch: number` (`emptyTranscript` has 0): `setTail(window, previous?)` returns `(previous?.tailEpoch ?? 0) + 1`; `prependEarlier`, `appendItems`, `updateItems` and `applyDelta` keep it.
 3. `applyDelta` locates its item searching from the END of the list (the streaming item is last) and copies only the changed item; every other item keeps reference identity. `mergeById` uses one id->index `Map`.
 4. Frame coalescing: `StoreAction` gains `{type: "serverBatch"; messages: ServerMessage[]}` which reduces the messages in order and produces ONE new state (one listener notification). `createConnection` buffers messages of type `session.append`, `session.update` and `session.delta` whose `sessionId` is the selected session; the first buffered message arms `scheduler.after(FRAME_MS, flush)` (`FRAME_MS = 16`, exported); `flush` dispatches one `serverBatch`. Adjacent buffered `session.delta` messages with the same `sessionId`, `itemId`, `blockIndex` and `blockType` are merged by concatenating `text`. Any other server message flushes the buffer synchronously first (order is preserved) and is then dispatched as before. `selectSession` and `close` drop the buffer and dispose the timer. A parse failure of a buffered message surfaces as `session.error` exactly as in Phase 1 (parse happens before buffering).
@@ -2175,9 +2177,25 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text and no images; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3, amended above), and the submission is echoed, queued and delivered like any other.
 
-## 17. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
+## 18. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
 
 Normative for every web module that builds a `cpd` command line. The full statement — the rule, the `cpd argv-check` command interface and the Gate test — is **docs/contract.md §5.6 "The web-to-CLI argv contract"**; where the two differ, docs/contract.md wins (this file's preamble rule, section 10 excepted).
 
 - **One shared argv module.** No web code spawns `cpd` with hand-built argv: every command line is built by `web/src/server/cpd-argv.ts`, which exposes the discriminated union `CpdCommand` (one variant per cpd command the web sends) and `toArgv(cmd: CpdCommand): string[]` — the argv after the program name. Every spawn flavour (the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, and the Electron paths `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) consumes only `toArgv` output; the call-site modules (`web/src/server/cockpit/`, `web/src/server/pi/backend.ts`, `web/src/server/durable/backend.ts`, and the Electron paths) construct `CpdCommand` values, never their own arrays.
 - **The Gate test.** `web/src/server/cockpit/argv-contract.test.ts` builds every `CpdCommand` variant from `cpd-argv.ts` alone, spawns one `cpd argv-check` process, feeds the argv arrays on stdin, and fails on any parse error (docs/contract.md §5.6 states the command's stdin/stdout/exit interface exactly). It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate before merge.
+
+## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
+
+Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
+
+### 17.1 The Save sends all four role Tiers
+
+- The Save runs `cpd config tiers set` with **all four** role Tiers — `--auxiliar`, `--worker`, `--lead` and `--manager`, the values the dialog shows, whether or not the User changed them — because `cpd config tiers set` accepts a save only with all four role Tiers (its `--help` usage line is `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`).
+- The rest of the save keeps its TUI order: the experimental switches are set one by one, then `cpd session retier --all` runs when a Tier value differs from the read; a refusal stops the save at the first failing step.
+
+### 17.2 A Save refusal is shown through the cockpit error toast
+
+- A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
+- The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+
+

@@ -292,7 +292,6 @@ export function App(props: AppProps): ReactElement {
     <SettingsDialog
       open={settingsOpen}
       read={cockpit.settings}
-      error={saved !== null && !saved.ok && !saving ? saved.error.message : null}
       onSave={onSaveSettings}
       onCancel={() => setSettingsOpen(false)}
     />
