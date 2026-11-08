@@ -34,7 +34,7 @@ fn started(fx: &mut Fx) -> i64 {
 
 #[test]
 fn the_worker_cap_follows_the_config_file_each_tick() {
-    let mut fx = Fx::with_plan("dispatch", "concurrency = 1\n");
+    let mut fx = Fx::with_plan("concurrency = 1\n");
     add_explore(&mut fx, "scout", "H1", "one", &[], "");
     add_explore(&mut fx, "scout", "H2", "two", &[], "");
     let fakes = Fakes::new();
