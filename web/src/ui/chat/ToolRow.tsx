@@ -282,7 +282,7 @@ export const ToolRow = memo(function ToolRow(props: {
     (tool.result !== undefined && tool.result.text.trim() !== "");
 
   const line = (
-    <TraceLine status={traceStatus} className="text-sm font-sans">
+    <TraceLine status={traceStatus}>
       <TraceIcon data-part="glyph" data-tone={tone} data-glyph={tone}>
         <ToolIcon name={tool.name} status={tool.status} />
       </TraceIcon>
