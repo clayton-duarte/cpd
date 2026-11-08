@@ -53,6 +53,11 @@ const LEAD_AWAITING_CHANGES: &str = concat!(
 /// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
 /// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is
 /// recent. Times are §1.3's, so they compare as text.
+///
+/// **A reload is not activity** (contract §3.7 E13; air-n103, air-n104): a `cpd install` reloads pi, and the
+/// adapter's `stopped` → `idle` round trip (§10.6) moves `state_at` to now. It is no turn, so a Session whose
+/// latest `session-state` Event is that reload does not count its `state_at`, and a finished Lead still sleeps
+/// after `timeouts.sleep_seconds`.
 fn ready_sql() -> String {
     format!(
         "SELECT s.id, s.context, s.plan FROM sessions s LEFT JOIN plans p ON p.id = s.plan
@@ -67,7 +72,10 @@ fn ready_sql() -> String {
    AND max(
          CASE s.role WHEN 'lead' THEN coalesce(p.done_at, p.changes_requested_at, '')
                      ELSE coalesce((SELECT max(q.done_at) FROM plans q WHERE q.context = s.context AND q.phase = 'done'), '') END,
-         s.state_at,
+         CASE WHEN coalesce((SELECT json_extract(e.data, '$.from') = 'stopped' AND json_extract(e.data, '$.to') = 'idle'
+                              FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
+                              ORDER BY e.id DESC LIMIT 1), 0)
+              THEN '' ELSE s.state_at END,
          coalesce((SELECT max(i.closed_at) FROM inbox_items i WHERE i.session = s.id), '')) <= ?2
  ORDER BY s.created_at, s.id"
     )
