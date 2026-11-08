@@ -4,8 +4,8 @@
 //! subject to the rule and its flag stays NULL. In process on the janitor's `Rig`: `gh` is a scripted route on the
 //! `FakeRunner`, the store is the rig's temp database. No process, no network, no real git.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rusqlite::OptionalExtension;
 use serde_json::json;
@@ -197,22 +197,22 @@ fn flag(rig: &Rig, number: i64) -> Option<i64> {
 fn the_poll_persists_the_containment_flag() {
     // A head that contains the current default-branch head: the flag is set to 1.
     let gh = Arc::new(Gh::default());
-    let rig = rig(gh.clone(), "main", CONTAINED);
-    poll(&rig);
+    let default = rig(gh.clone(), "main", CONTAINED);
+    poll(&default);
     assert_eq!(
-        flag(&rig, 801),
+        flag(&default, 801),
         Some(1),
         "the poll persists base_contained 1 for a head that contains main"
     );
 
     // The head moves behind the default branch's head: the flag is refreshed to 0.
     gh.bump();
-    rig.sql(&format!(
+    default.sql(&format!(
         "UPDATE pull_requests SET head_oid = '{BEHIND}', title = 'stale2' WHERE number = 801;"
     ));
-    poll(&rig);
+    poll(&default);
     assert_eq!(
-        flag(&rig, 801),
+        flag(&default, 801),
         Some(0),
         "the poll refreshes base_contained to 0 when the head moves behind main"
     );
