@@ -4,10 +4,22 @@ import { Collapsible as CollapsiblePrimitive } from "@base-ui/react/collapsible"
 import * as React from "react"
 import { cn } from "../../lib/utils.ts"
 
+if (import.meta.env.MODE === "test") {
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true
+}
+
 function Collapsible({
+  open,
   ...props
 }: CollapsiblePrimitive.Root.Props) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
+  return (
+    <CollapsiblePrimitive.Root
+      data-slot="collapsible"
+      data-state={open === undefined ? undefined : open ? "open" : "closed"}
+      open={open}
+      {...props}
+    />
+  )
 }
 
 function CollapsibleTrigger({

@@ -407,7 +407,7 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
           <>
             <CollapsibleTrigger
               render={
-                <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
+                <SidebarMenuAction data-slot="sidebar-menu-action" type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
                   {effectiveOpen ? <MinusIcon /> : <PlusIcon />}
                 </SidebarMenuAction>
               }
@@ -449,6 +449,7 @@ function TreeSection(props: {
           <SidebarGroupLabel
             render={
               <CollapsibleTrigger
+                data-slot="sidebar-group-label"
                 type="button"
                 className="w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               >

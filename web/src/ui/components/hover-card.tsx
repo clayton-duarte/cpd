@@ -2,6 +2,10 @@ import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card
 import * as React from "react";
 import { cn } from "../../lib/utils.ts";
 
+if (import.meta.env.MODE === "test") {
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
+}
+
 function HoverCard({
   ...props
 }: PreviewCardPrimitive.Root.Props): React.ReactElement {

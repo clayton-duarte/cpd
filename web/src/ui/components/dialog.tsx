@@ -5,6 +5,13 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { ScrollArea } from "./scroll-area.tsx"
 import { cn } from "../../lib/utils.ts"
 
+// Base UI defers a popup's unmount until its exit animation reports finished; the test
+// environment's `getAnimations` shim resolves on a later frame, so callers would see a stale
+// node. Disabling Base UI's animation wait under test makes the unmount synchronous.
+if (import.meta.env.MODE === "test") {
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true
+}
+
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }

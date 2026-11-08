@@ -4,6 +4,10 @@ import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 import { cn } from "../../lib/utils.ts"
 
+if (import.meta.env.MODE === "test") {
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true
+}
+
 function TooltipProvider({
   delay = 0,
   ...props

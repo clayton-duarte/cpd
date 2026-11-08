@@ -3,6 +3,10 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import * as React from "react";
 import { cn } from "../../lib/utils.ts";
 
+if (import.meta.env.MODE === "test") {
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
+}
+
 function Select<Value, Multiple extends boolean | undefined = false>(
   props: SelectPrimitive.Root.Props<Value, Multiple>
 ): React.ReactElement {
