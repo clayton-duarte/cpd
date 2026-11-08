@@ -7,6 +7,8 @@ mod append;
 #[cfg(test)]
 mod bug_tests;
 mod kind;
+#[cfg(test)]
+mod protocol_breach_tests;
 mod notify;
 pub mod repeat;
 mod select;
