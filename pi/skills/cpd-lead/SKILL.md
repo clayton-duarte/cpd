@@ -48,11 +48,11 @@ A key is fixed: never rename a session.
 - Session commands (`session show`, `open`, `close`, `fork`, `park`, `send`, `--session`) take an agent key ([Agent keys](#agent-keys)).
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
-- **Bug report protocol — all steps required on every bug report:**
-  1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix.
-  2. Apply the mitigation ASAP, fixing the symptom fast to stop the bleeding.
+- **Bug report protocol — all steps required on every bug report, recorded as you go with the `cpd protocol bug` commands (commands.md §33; a Worker reports a bug to you, you record it):**
+  1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix. Record the bug: `cpd protocol bug report --title "<title>" --symptom "<what was seen>" [--cause "<cause>"] [--plan <p>]`. A bug of your Plan takes `--plan <p>` and you own it; a cross-Plan bug takes no `--plan` — you report it to your Manager, who owns it.
+  2. Apply the mitigation ASAP — a stopgap you apply that removes or contains the User's symptom now (handing the User manual steps is not a mitigation unless the User chooses it) — then record it: `cpd protocol bug mitigate <id> --mitigation "<what you applied>"`. Until then the bug reads `mitigation applied: no`, visible with `cpd protocol bug show <id>` and queryable with `cpd protocol bug list --mitigated no`.
   3. Queue the follow-up root-cause fix (Workflow / Job) to address the bug in source.
-  4. Include regression tests so the bug can never be reintroduced.
+  4. Include regression tests so the bug can never be reintroduced. When the fix is in, close the record: `cpd protocol bug close <id> --root-fix <plan/workflow | plan/workflow/job> --regression-test <test>`, refused until both are named (air-d107).
 - **Every Workflow's pull request passes CI on its own.** Each Workflow's pull request is self-contained: its checks and its clean merge come from its own commits, so it stays green and mergeable without another Workflow's commits or merge. On `pr-feedback` with `checks_failed`, on a pull request that is `conflicting`, and on `job-failed`, queue the fix Job or retry (`cpd job retry <k> --tier <T>`) in the same turn. End each turn with every red or conflicting Workflow pull request holding a Job queued or running, or the User's answer pending, so the adapter's reminder has nothing to send.
 - **Resolve first, ask second.** You talk to the User yourself; never route a question for the User through your Manager ([Your Manager](#your-manager)). A Worker escalates to you; only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager.
 - **Stay free for the User.** Answer at once and go idle; anything that takes time (a poll, a sleep, a loop) runs in the background and reports back as an event. The adapter refuses a bash call of yours that waits longer than 30 seconds. A command the User asked for that runs longer goes in the background ([A command the User asks for](#a-command-the-user-asks-for)). After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
@@ -98,7 +98,7 @@ Three ways to communicate are distinct:
 Lateral comms:
 
 - A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
-- The `cpd` Manager applies the bug report protocol.
+- The `cpd` Manager applies the bug report protocol (`cpd protocol bug report|mitigate|close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 

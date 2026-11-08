@@ -52,11 +52,11 @@ A key is fixed: never rename a session.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
-- **Bug report protocol — all steps required on every bug report:**
-  1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix.
-  2. Apply the mitigation ASAP, fixing the symptom fast to stop the bleeding.
+- **Bug report protocol — all steps required on every bug report, recorded as you go with the `cpd protocol bug` commands (commands.md §33; a Worker reports a bug to you, you record it):**
+  1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix. Record the bug: `cpd protocol bug report --title "<title>" --symptom "<what was seen>" [--cause "<cause>"] [--plan <p>]`. A bug of one Plan takes `--plan <p>` and that Plan's Lead owns it; a cross-Plan bug takes no `--plan` and you own it.
+  2. Apply the mitigation ASAP — a stopgap you apply that removes or contains the User's symptom now (handing the User manual steps is not a mitigation unless the User chooses it) — then record it: `cpd protocol bug mitigate <id> --mitigation "<what you applied>"`. Until then the bug reads `mitigation applied: no`, visible with `cpd protocol bug show <id>` and queryable with `cpd protocol bug list --mitigated no`.
   3. Queue the follow-up root-cause fix (Plan / Workflow / Job) to address the bug in source.
-  4. Include regression tests so the bug can never be reintroduced.
+  4. Include regression tests so the bug can never be reintroduced. When the fix is in, close the record: `cpd protocol bug close <id> --root-fix <plan | plan/workflow | plan/workflow/job> --regression-test <test>`, refused until both are named (air-d107).
 - **Exact CLI syntax (never guess flags or subcommands):**
   - `cpd context decide --context <c> "<decision>"` (positional `<TEXT>`, NO `--title` or `--body`; the sibling command is `cpd context note`, and there is no `context add`).
   - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes. On your own shaping Plan the form is `cpd plan new <id> --context <c> --title "<t>" --shaping` (`--brief-file` and `--by-user` are refused with `--shaping`).
@@ -166,7 +166,7 @@ Three ways to communicate are distinct:
 Lateral comms:
 
 - A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
-- The `cpd` Manager applies the bug report protocol.
+- The `cpd` Manager applies the bug report protocol (`cpd protocol bug report|mitigate|close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 

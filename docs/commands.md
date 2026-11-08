@@ -8021,7 +8021,7 @@ Closes a bug whose root fix is in and its regression test recorded (air-d107). `
 cpd protocol bug list [--plan <id>] [--status open|closed] [--mitigated yes|no]
 ```
 
-Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <id>` the bugs of one Plan (`plan_not_found`, exit 4, when it names no existing, undeleted Plan; `plan_not_found` also for a Plan no bug names, which lists nothing only when combined with no other refusal — no: `--plan` is validated like `report`'s, then filters), `--status` open or closed bugs, `--mitigated yes` the bugs with a mitigation recorded, `--mitigated no` the bugs with **mitigation applied: no** (air-d104: the state is queryable). Read-only; no Worker check.
+Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <id>` the bugs of one Plan (`--plan` is validated as §33.1 validates it, `plan_not_found` exit 4, and then filters: a Plan no bug names lists the empty array), `--status` open or closed bugs, `--mitigated yes` the bugs with a mitigation recorded, `--mitigated no` the bugs with **mitigation applied: no** (air-d104: the state is queryable). Read-only; no Worker check.
 
 | Precondition | Code | Exit |
 |---|---|---|
