@@ -101,11 +101,9 @@ impl Gh {
     /// The answer to E5's one GitHub read: the viewer, the rate limit, the two empty searches and one node per `p<i>`
     /// alias the plan asked for, read from the stored `pull_requests`/`workflows` rows (so a stacked PR keeps its base).
     fn poll_reply(&self, text: &str) -> String {
-        let conn = Connection::open_with_flags(
-            self.home.join("cpd.db"),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
+        let conn =
+            Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
         let mut data = serde_json::Map::new();
         data.insert("viewer".into(), json!({"login": "clayton-duarte"}));
@@ -194,8 +192,7 @@ fn repo_meta() -> Value {
 
 /// Whether `text` is E5's one GitHub read, the SWR poll document the source's `build_poll_query` sends.
 fn is_github_poll(text: &str) -> bool {
-    text.contains("fragment Light on PullRequest")
-        && text.contains("authored: search(type: ISSUE")
+    text.contains("fragment Light on PullRequest") && text.contains("authored: search(type: ISSUE")
 }
 
 /// The pull request numbers of the document's `p<i>` aliases, in document order.
