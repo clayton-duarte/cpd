@@ -239,7 +239,9 @@ async function main(): Promise<void> {
     },
     server: createListenerFactory(),
     scheduler: boundaries.scheduler,
-    started,
+    // Read per frame: a SIGUSR1 hot reload re-arms `started`, and the endpoint always asks for the
+    // current generation's gate (20.1).
+    started: () => started,
     onError: (error) => console.error(error),
     host: "127.0.0.1",
     port: 0,
@@ -469,6 +471,14 @@ async function main(): Promise<void> {
     const old = services;
     services = fresh.createServices(fresh.realBoundaries(env));
     await Promise.resolve(old.cockpit.stop());
+    // Re-arm the start gate: the fresh services' `start()` must gate frames until it lands, or a
+    // subscribe racing this reload reaches the still-empty hub and is refused 'cockpit not ready'
+    // (20.1). The old gate resolved long ago; a new one is pending until the fresh start resolves.
+    started = new Promise<void>((resolve, reject) => {
+      markStarted = resolve;
+      failStarted = reject;
+    });
+    started.catch(() => undefined);
     startServices();
   };
 

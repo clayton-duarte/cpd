@@ -11,6 +11,10 @@ type Listener = Parameters<HubDeps["cockpit"]["subscribe"]>[0];
 
 const caps = {} as Handle["capabilities"];
 
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+
 class FakeHandle {
   calls: Array<[string, ...unknown[]]> = [];
   disposed = 0;
@@ -42,7 +46,7 @@ class FakeBackend {
 
 const refOf = (id: string, runner: "pi" | "durable") => ({ id, key: id, runner, role: "worker", state: "idle", title: null });
 
-const setup = () => {
+const setup = (opts: { ready?: Promise<void> } = {}) => {
   const sent: ServerMessage[] = [];
   const listeners: Listener[] = [];
   let subscriptions = 0;
@@ -55,6 +59,8 @@ const setup = () => {
   let actionResult: () => Promise<unknown> = () => Promise.resolve({ stdout: "ok" });
   const cockpit = {
     snapshot: () => snap,
+    // the cockpit service's readiness: it resolves when the first `readModel.loadAll` has landed
+    ready: () => opts.ready ?? Promise.resolve(),
     selectPlan: (p: string | null) => { selected.push(p); return Promise.resolve(); },
     subscribe: (l: Listener): Disposable => {
       subscriptions += 1;
@@ -291,5 +297,59 @@ describe("hub connection", () => {
       expect(handle.calls.map(([n, i]) => [n, (i as { text: string }).text])).toEqual([["submit", "/query"], ["submit", "/q now"]]);
       expect(t.actions.length).toBe(1);
     });
+  });
+});
+
+describe("hub cockpit readiness", () => {
+  // air-n100/air-n99: a client that connects while the cockpit service is still reading the store (a
+  // `loadAll` waiting on the setup lock) must get the snapshot once the read lands, never 'cockpit not ready'.
+  it("a client that connects before the first load gets the snapshot", async () => {
+    let completeFirstLoad: () => void = () => undefined;
+    const firstLoad = new Promise<void>((resolve) => { completeFirstLoad = resolve; });
+    const t = setup({ ready: firstLoad });
+    // the first `readModel.loadAll` has not completed: the shared snapshot is still all-null
+    t.setSnapshot({ tree: null, plan: null, inbox: null } as never);
+
+    const connecting = t.hub.handle({ type: "cockpit.subscribe" });
+    await flush();
+
+    // a normal startup wait must never surface as 'cockpit not ready'
+    expect(t.sent.filter((m) => m.type === "cockpit.error")).toEqual([]);
+
+    // the first load lands and the client receives the snapshot
+    t.setSnapshot({ tree: t.tree, plan: null, inbox: t.inbox } as never);
+    completeFirstLoad();
+    await connecting;
+
+    expect(t.sent).toEqual([{ type: "cockpit.snapshot", tree: t.tree, plan: null, inbox: t.inbox }]);
+    expect(t.subs().subscriptions).toBe(1); // and the client is subscribed to later updates
+    t.listeners[0]?.({ kind: "pane", pane: "inbox", data: t.inbox });
+    expect(t.sent[1]).toEqual({ type: "cockpit.patch", pane: "inbox", data: t.inbox });
+  });
+
+  it("the cockpit stays ready when the store read is lock-waited", async () => {
+    let releaseLock: () => void = () => undefined;
+    const lock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const t = setup({ ready: lock });
+    // the store read is waiting on the setup lock: tree and inbox are transiently null
+    t.setSnapshot({ tree: null, plan: null, inbox: null } as never);
+
+    const connecting = t.hub.handle({ type: "cockpit.subscribe" });
+    await flush();
+
+    // the lock wait is not a failure: nothing is sent while the read is in flight
+    expect(t.sent.filter((m) => m.type === "cockpit.error")).toEqual([]);
+    expect(t.sent).toEqual([]);
+
+    // the read completes: the cockpit is ready and the client gets the snapshot
+    t.setSnapshot({ tree: t.tree, plan: null, inbox: t.inbox } as never);
+    releaseLock();
+    await connecting;
+
+    expect(t.sent.filter((m) => m.type === "cockpit.error")).toEqual([]);
+    expect(t.sent).toEqual([{ type: "cockpit.snapshot", tree: t.tree, plan: null, inbox: t.inbox }]);
+    expect(t.subs().subscriptions).toBe(1);
+    t.listeners[0]?.({ kind: "pane", pane: "tree", data: t.tree });
+    expect(t.sent[1]).toEqual({ type: "cockpit.patch", pane: "tree", data: t.tree });
   });
 });
