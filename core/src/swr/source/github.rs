@@ -34,13 +34,13 @@ const RATE_GRACE: Duration = Duration::from_secs(3);
 /// still holds, so the engine's rate guard reads a usable value and raises nothing.
 fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<Value, CpdError> {
     let row = endpoint::get(store, "github")?;
-    let remaining = row
-        .as_ref()
-        .and_then(|r| r.rate_remaining)
-        .unwrap_or(5000);
+    let remaining = row.as_ref().and_then(|r| r.rate_remaining).unwrap_or(5000);
     let reset_at = row
         .and_then(|r| r.rate_reset_at)
-        .and_then(|at| at.format(&time::format_description::well_known::Rfc3339).ok())
+        .and_then(|at| {
+            at.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
         .unwrap_or_else(|| "2099-01-01T00:00:00Z".to_owned());
     Ok(serde_json::json!({
         "polled": 0,
@@ -229,7 +229,11 @@ impl GithubSource {
 
     /// [`GithubSource::pass`], returning E5's poll result: the legacy effects (the counts and the rate limit) from that
     /// single read. The engine's E5 polls through this (D9's target); the trait's `fetch` keeps `pass`.
-    pub fn pass_with_effects(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<Value, CpdError> {
+    pub fn pass_with_effects(
+        &self,
+        cx: &mut Cx<'_>,
+        now: OffsetDateTime,
+    ) -> Result<Value, CpdError> {
         if endpoint::get(cx.store, "github")?.is_some_and(|row| endpoint::is_paused(&row, now)) {
             return no_effects(cx.store, now);
         }

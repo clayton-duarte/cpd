@@ -3269,7 +3269,11 @@ fn swr_reply(remaining: u32, reset_at: &str) -> String {
 }
 
 /// [`swr_reply`] with the `p<i>` / `m<i>` aliases the plan asked for merged into the data object.
-fn swr_reply_with(remaining: u32, reset_at: &str, aliases: serde_json::Map<String, Value>) -> String {
+fn swr_reply_with(
+    remaining: u32,
+    reset_at: &str,
+    aliases: serde_json::Map<String, Value>,
+) -> String {
     let mut data = serde_json::Map::new();
     data.insert("viewer".into(), json!({"login": "ada"}));
     data.insert(
@@ -3292,7 +3296,15 @@ fn swr_reply_with(remaining: u32, reset_at: &str, aliases: serde_json::Map<Strin
 
 /// One pull request of the GitHub SWR document's `Light` (with `Heavy` fields the alias query asks for), as the source's
 /// `parse_poll` reads it: the fields the `Light` and `Heavy` fragments select, so a scripted alias answers a whole node.
-fn swr_pr(repo: &str, number: i64, state: &str, mergeable: &str, merge_state: &str, updated_at: &str, merged_at: Value) -> Value {
+fn swr_pr(
+    repo: &str,
+    number: i64,
+    state: &str,
+    mergeable: &str,
+    merge_state: &str,
+    updated_at: &str,
+    merged_at: Value,
+) -> Value {
     json!({
         "number": number, "state": state, "isDraft": false, "mergeable": mergeable,
         "mergeStateStatus": merge_state, "reviewDecision": null,
@@ -3314,7 +3326,15 @@ fn swr_pr(repo: &str, number: i64, state: &str, mergeable: &str, merge_state: &s
 
 /// [`swr_reply_with`] for one aliased pull request `p0` and its repository `m0` (the repo metadata the pass reads when
 /// the `swr_repos` row is cold).
-fn swr_reply_one(repo: &str, number: i64, state: &str, mergeable: &str, merge_state: &str, updated_at: &str, merged_at: Value) -> String {
+fn swr_reply_one(
+    repo: &str,
+    number: i64,
+    state: &str,
+    mergeable: &str,
+    merge_state: &str,
+    updated_at: &str,
+    merged_at: Value,
+) -> String {
     let mut aliases = serde_json::Map::new();
     aliases.insert("p0".into(), json!({"pullRequest": swr_pr(repo, number, state, mergeable, merge_state, updated_at, merged_at)}));
     aliases.insert("m0".into(), json!({"defaultBranchRef": {"name": "main"}, "isArchived": false, "autoMergeAllowed": true, "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": false, "deleteBranchOnMerge": true}));
@@ -4199,7 +4219,7 @@ fn pr_poll_now_file_triggers_immediate_poll() {
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             fs::write(&file, "").unwrap();
         }
-        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
+        Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
     });
 
     let seen = starts.clone();

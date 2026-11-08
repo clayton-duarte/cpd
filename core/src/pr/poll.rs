@@ -168,15 +168,21 @@ fn listed_from_read(read: &PollRead) -> Vec<Listed> {
     let mut merged: std::collections::BTreeMap<(String, i64), Listed> =
         std::collections::BTreeMap::new();
     for node in &read.authored {
-        let entry = merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+        let entry = merged
+            .entry(node.id())
+            .or_insert_with(|| node.listed.clone());
         entry.membership.authored = true;
     }
     for node in &read.reviews {
-        let entry = merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+        let entry = merged
+            .entry(node.id())
+            .or_insert_with(|| node.listed.clone());
         entry.membership.review_requested = true;
     }
     for node in read.aliases.iter().flatten() {
-        merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+        merged
+            .entry(node.id())
+            .or_insert_with(|| node.listed.clone());
     }
     merged.into_values().collect()
 }
