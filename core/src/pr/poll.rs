@@ -387,8 +387,7 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         env.store.write(COMMAND, |tx| {
             apply(
                 tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &contained,
-                &settings,
-                now,
+                &settings, now,
             )
         })?
     } else {
