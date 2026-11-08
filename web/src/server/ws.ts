@@ -76,14 +76,18 @@ export interface WsServerDeps {
 }
 
 /**
- * The Origin check (web/CONTRACT.md §15.1): absent and `null` (the production `file://`
- * renderer) are accepted, a loopback host (`localhost`, `127.0.0.1`, `[::1]`) is accepted,
- * every other Origin is rejected.
+ * The Origin check (web/CONTRACT.md §15.1): absent and `null` are accepted, `file://` (the
+ * production `loadFile` renderer's Origin) is accepted, a loopback host (`localhost`,
+ * `127.0.0.1`, `[::1]`) is accepted, every other Origin is rejected.
  */
 export function acceptsOrigin(origin: string | string[] | undefined): boolean {
   if (origin === undefined) return true;
   if (Array.isArray(origin)) return origin.every((o) => acceptsOrigin(o));
   if (origin === "null") return true;
+  // The production Electron renderer is a `file://` page (`loadFile`, web/CONTRACT.md §15.1),
+  // so Chromium serializes its Origin as `file://`. A page loaded from this machine's disk is
+  // as local as `null`, so it is accepted; no foreign `http(s)` origin slips in.
+  if (origin === "file://") return true;
   let host: string;
   try {
     host = new URL(origin).hostname;
