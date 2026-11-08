@@ -25,7 +25,13 @@ export interface InstallDeps {
  * should have packed the app.
  */
 export function detectBrokenInstall(deps: InstallDeps): BrokenInstallation | null {
-  // Stub: the implementing change detects the missing app dir and reports the structured event.
-  void deps;
-  return null;
+  if (deps.exists(deps.appDir)) return null;
+  const event: BrokenInstallation = {
+    source: 'install',
+    code: 'app_dir_missing',
+    message: `cpd desktop is broken: the app dir ${deps.appDir} does not exist; run scripts/install-cpd.sh`,
+    details: { appDir: deps.appDir },
+  };
+  deps.report(event);
+  return event;
 }

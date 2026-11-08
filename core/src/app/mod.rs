@@ -273,7 +273,6 @@ pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
             pid,
         });
     }
-    let web = app.root.join("web");
     let log = app.cpd_home.join("run/app.log");
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir).map_err(|e| {
@@ -283,13 +282,31 @@ pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
             )
         })?;
     }
-    let electron = web.join("node_modules/.bin/electron");
+    // The installed app, not the checkout's Electron (air-d89 point 1): on macOS the launcher
+    // spawns the packaged bundle in the app dir, `<home>/.local/share/cpd/app/CPD.app`, which the
+    // install packaged from the checkout (`scripts/install-cpd.sh`); elsewhere only the checkout's
+    // Electron runs, because `web/electron-builder.yml` defines only the `mac` target.
+    let (program, args, cwd) = if app.macos {
+        (
+            app.home
+                .join(".local/share/cpd/app/CPD.app/Contents/MacOS/CPD"),
+            Vec::new(),
+            None,
+        )
+    } else {
+        let web = app.root.join("web");
+        (
+            web.join("node_modules/.bin/electron"),
+            vec![".".to_owned()],
+            Some(web),
+        )
+    };
     let pid = ports
         .spawn
         .spawn(&spawn::Launch {
-            program: electron.display().to_string(),
-            args: vec![".".to_owned()],
-            cwd: Some(web),
+            program: program.display().to_string(),
+            args,
+            cwd,
             setsid: true,
             stdout_to: Some(log),
             // The launching Session's identity is not the app's: strip exactly the
@@ -301,7 +318,7 @@ pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
         .map_err(|e| {
             fail(
                 ErrorCode::SpawnFailed,
-                format!("cannot start {}: {e}", electron.display()),
+                format!("cannot start {}: {e}", program.display()),
             )
         })?;
     Ok(Launch {
