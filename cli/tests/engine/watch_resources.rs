@@ -430,28 +430,38 @@ fn watch_skip_order_is_cleared_when_the_job_starts() {
 
 #[test]
 fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
-    // Two Worker slots. `api` failed: its Attempt ended, and it is still the tenant of `e2e-port` and of one worker.
+    // Two Worker slots. `api` failed: its last Attempt ended, so it holds no Worker slot, though it stays the tenant of
+    // `e2e-port` (contract §3.4 "Tenancy", air-n90).
     let fx = engine_with(POLICY, 2);
     tenant(&fx, "api", &["e2e-port"], &[PORT_POOL], true);
+    // Its driver had started before the Attempt ended: no spawn-failure back-off holds the retry below.
+    fx.env
+        .sql("UPDATE attempts SET driver_pid = 4242 WHERE id = 'api-a1';");
     add(&fx, "other", &["e2e-port"], "");
     add(&fx, "web", &[], "");
     add(&fx, "late", &[], "");
 
     fx.watch_ticks(2).unwrap();
 
-    // `other` misses the port the failed Job keeps; `web` takes the one worker the failed Job leaves; `late` finds none.
-    assert_eq!(started(&fx), ["web"]);
+    // `other` misses the port the failed Job keeps; the failed Job holds no Worker, so `web` and `late` both take one.
+    assert_eq!(started(&fx), ["web", "late"]);
     assert_eq!(
         (
             status(&fx, "other"),
             status(&fx, "web"),
             status(&fx, "late")
         ),
-        ("queued".into(), "running".into(), "queued".into())
+        ("queued".into(), "running".into(), "running".into())
     );
     assert_eq!(
-        (skipped_n(&fx, "other"), skipped_n(&fx, "late")),
-        (Some(1), Some(2))
+        skipped_n(&fx, "other"),
+        Some(1),
+        "only `other` waits: for the port, not the Worker"
+    );
+    assert_eq!(
+        skipped_n(&fx, "late"),
+        None,
+        "`late` is not skipped: the failed Job's Worker slot is free"
     );
     assert_eq!(status(&fx, "api"), "failed");
     assert_eq!(
@@ -459,6 +469,19 @@ fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
         1,
         "the failed Job's rows stay, and nobody else writes one"
     );
+    assert_eq!(all_errors(&fx), 0);
+
+    // A retry re-acquires a Worker slot: its new Attempt counts as a live Attempt of `workers` from the moment it starts.
+    fx.env.sql(
+        "UPDATE jobs SET status = 'queued', retry_tier = 'S2', failed_cause = NULL WHERE plan = 'pay' AND key = 'api';",
+    );
+    fx.watch_first_tick().unwrap();
+    assert_eq!(
+        started(&fx),
+        ["web", "late", "api"],
+        "the retry starts and holds a Worker slot again"
+    );
+    assert_eq!(status(&fx, "api"), "running");
     assert_eq!(all_errors(&fx), 0);
 }
 
