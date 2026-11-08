@@ -3697,6 +3697,8 @@ Output:
 
 `event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
+**A report of a refusal carries the `guard` kind** (contract §5.2, Plan `agent-refusals`): when the report is a refusal of the reporting Session's own tool call or command — an adapter guard refusal (a `toolResult` whose text starts with `φ: ` and whose `details` are empty) or an agent-caused CLI refusal (the `{"ok":false,"error":{…}}` envelope) — the appended Event is a `guard` Event instead of an `error` Event, with `data` `{code, role, tier, model, tool, excerpt}` (`code` the guard rule or the envelope's error code, `excerpt` the refused command line or path cut to 200 characters) and the scope columns of the reporting Session; the dedupe window above is the same, matched on `code` and `excerpt` instead of `code` and `message`. Any other report keeps the `error` kind exactly as the Effects above state.
+
 ### 10.18a `session switch-failed` (internal)
 
 ```
