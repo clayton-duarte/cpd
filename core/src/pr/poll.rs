@@ -33,7 +33,8 @@ use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
 use crate::policy::Checks;
 use crate::ports::Ports;
-use crate::store::WriteTxn;
+use crate::store::{Store, WriteTxn};
+use crate::swr::source::github_write;
 
 const COMMAND: &str = "pr poll";
 
@@ -81,6 +82,18 @@ struct Ahead {
     workflow: WorkflowKey,
     /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
     ahead: bool,
+}
+
+/// An armed pull request read before the write (commands.md §9.10): `pr merge` refused a head behind the default
+/// branch, left the merge intent and queued the update Job. When the head contains the default branch again and the
+/// checks pass, the poll enqueues the merge op.
+struct Armed {
+    repo: String,
+    number: i64,
+    /// The cached head the compare was read at; the merge op is pinned to it.
+    head: String,
+    /// Whether that head contains the default branch's head.
+    contained: bool,
 }
 
 /// What the transaction did.
@@ -278,6 +291,20 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         }
     }
 
+    // The armed pull requests (`pr merge` refused a head behind the default branch, commands.md §9.10): one fresh
+    // compare read each, before the write transaction, so the write enqueues the merge of a head that now contains
+    // the default branch.
+    let mut armed: Vec<Armed> = Vec::new();
+    for (repo, number, base, head) in env.store.read(|conn| armed_reads(conn, &owned))? {
+        let contained = gh::head_contains_base(&*env.ports.runner, &root, &repo, &base, &head)?;
+        armed.push(Armed {
+            repo,
+            number,
+            head,
+            contained,
+        });
+    }
+
     // The owned Workflows whose pull request a search lists with a base other than the Workflow's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
     // The base Workflow's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
@@ -315,9 +342,12 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         }
     }
     // A poll that finds nothing new opens no write transaction (D5).
+    let now = env.ports.clock.utc();
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
-            apply(tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers)
+            apply(
+                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, now,
+            )
         })?
     } else {
         Outcome::default()
@@ -411,6 +441,8 @@ fn apply(
     follows: &[Follow],
     ahead: &[Ahead],
     tiers: &[(PlanId, WorkflowKey, Tier)],
+    armed: &[Armed],
+    now: time::OffsetDateTime,
 ) -> Result<Outcome, CpdError> {
     let tier_of = |plan: &PlanId, key: &WorkflowKey| -> Result<Tier, CpdError> {
         tiers
@@ -437,6 +469,13 @@ fn apply(
         let after = &change.after;
         if after.state == "merged" {
             inbox::close_pr_ready(tx, &after.repo, after.number)?;
+        }
+        // A merged or closed pull request has no intent left to merge (commands.md §9.10).
+        if after.state != "open" {
+            tx.execute(
+                "UPDATE pull_requests SET merge_armed = 0 WHERE id = ?1 AND merge_armed <> 0",
+                [after.id],
+            )?;
         }
         // A row only the comments read changed (its feedback and `updated_at`) is no change of the pull request.
         if change
@@ -467,6 +506,25 @@ fn apply(
                 {
                     out.update_jobs
                         .push((plan.clone(), key.clone(), job, Cause::Conflict));
+                }
+            }
+            // The armed merge: once the checks passed on a head that contains the default branch, the merge is queued
+            // (commands.md §9.10). The intent stays until the merge, a close or a cancel clears it.
+            if after.state == "open" && after.checks == "passed" {
+                let contained = armed.iter().find(|a| {
+                    a.repo == after.repo && a.number == after.number && a.contained
+                });
+                if let Some(a) = contained {
+                    if let Some(method) = github_write::merge_method_tx(tx, &after.repo)? {
+                        github_write::enqueue_merge_tx(
+                            tx,
+                            now,
+                            &after.repo,
+                            after.number,
+                            &a.head,
+                            method,
+                        )?;
+                    }
                 }
             }
         }
@@ -911,6 +969,9 @@ pub(super) enum Trigger {
     /// GitHub repointed the Workflow from a base Workflow's Lead Branch to the default branch, and the default
     /// branch holds commits the Lead Branch lacks without a conflict.
     BaseMerged,
+    /// `pr merge` (or the drain) found the head behind the default branch: merge `origin/<default branch>` in
+    /// unconditionally (commands.md §9.10). No ahead decision: a head behind the default branch always merges it in.
+    Behind,
 }
 
 /// Queues Workflow `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the Workflow already has one `queued`
@@ -930,6 +991,7 @@ pub(super) fn queue_update_for(
         Trigger::Conflict => Cause::Conflict,
         Trigger::BaseMerged if ahead => Cause::BaseMerged,
         Trigger::BaseMerged => return Ok(None),
+        Trigger::Behind => Cause::Behind,
     };
     let archived: bool = tx.query_row(
         "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
@@ -1060,6 +1122,86 @@ fn due_reads(
         }
     }
     due
+}
+
+/// The armed pull requests of `owned` (commands.md §9.10), as `(repo, number, default branch, head)`: an open row whose
+/// `merge_armed` is set and whose `base_ref` is its default branch, with the head and default branch to compare.
+fn armed_reads(
+    conn: &rusqlite::Connection,
+    owned: &[Owned],
+) -> Result<Vec<(String, i64, String, String)>, CpdError> {
+    let mut out = Vec::new();
+    for (_, _, row) in owned {
+        if row.state != "open" {
+            continue;
+        }
+        let (armed, head): (bool, Option<String>) = conn.query_row(
+            "SELECT merge_armed, head_oid FROM pull_requests WHERE id = ?1",
+            [row.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let (Some(base), Some(default), Some(head)) = (
+            row.base_ref.as_deref(),
+            row.default_branch.as_deref(),
+            head,
+        ) else {
+            continue;
+        };
+        if armed && base == default {
+            out.push((row.repo.clone(), row.number, default.to_owned(), head));
+        }
+    }
+    Ok(out)
+}
+
+/// Whether `head` contains the current head of `base`, through GitHub's compare API (`crate::pr::gh`, which `pr` owns):
+/// the seam `swr::source::github_write` uses for the drain's up-to-date re-check (commands.md §9.10).
+pub(crate) fn head_contains_base(
+    runner: &dyn crate::host::runner::Runner,
+    cwd: &Path,
+    repo: &str,
+    base: &str,
+    head: &str,
+) -> Result<bool, CpdError> {
+    gh::head_contains_base(runner, cwd, repo, base, head)
+}
+
+/// Arms `repo#number`'s merge intent and queues its open Workflow's `update` Job for the `behind` cause (commands.md
+/// §9.10): `pr merge`'s refusal and the drain's re-check both call it, in one transaction. A pull request no open Workflow
+/// points at is only armed: there is no Job to queue. The Job's Tier is the config's `worker_tier`, as `workflow add`
+/// gives its `open` Job; `home` is the caller's.
+pub(crate) fn arm_for_behind_head(
+    store: &mut Store,
+    home: &crate::home::CpdHome,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
+    let target: Option<(String, String)> = store.read(|c| {
+        Ok(c.query_row(
+            "SELECT w.plan, w.key FROM workflows w JOIN pull_requests q ON q.id = w.pull_request\n             WHERE q.repo = ?1 AND q.number = ?2 AND w.status = 'open'",
+            rusqlite::params![repo, number],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+    })?;
+    let workflow = match target {
+        Some((plan, key)) => {
+            let tier = crate::config::Config::load(home)?.worker_tier;
+            Some((PlanId::parse(&plan)?, WorkflowKey::parse(&key)?, tier))
+        }
+        None => None,
+    };
+    store.write(COMMAND, |tx| {
+        tx.execute(
+            "UPDATE pull_requests SET merge_armed = 1 WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+        )?;
+        if let Some((plan, key, tier)) = &workflow {
+            queue_update_for(tx, plan, key, Trigger::Behind, true, *tier)?;
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]

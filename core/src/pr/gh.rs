@@ -453,8 +453,9 @@ pub fn head_ref_oid_on(
     parse::<Head>(&args, &run_on(runner, cwd, &args)?).map(|h| h.oid)
 }
 
-/// Whether `head` contains the current head of `base`, read fresh through GitHub's compare API. Stub: not implemented.
-#[allow(dead_code)]
+/// Whether `head` contains the current head of `base`, read fresh through GitHub's compare API
+/// (`gh api repos/{owner}/{repo}/compare/{base}...{head}`): `status` is `ahead` or `identical` when the base's head is an
+/// ancestor of `head`, `diverged` or `behind` when it is not. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`.
 pub fn head_contains_base(
     runner: &dyn Runner,
     cwd: &Path,
@@ -462,8 +463,14 @@ pub fn head_contains_base(
     base: &str,
     head: &str,
 ) -> Result<bool, CpdError> {
-    let _ = (runner, cwd, repo, base, head);
-    unimplemented!("head_contains_base is not implemented yet")
+    #[derive(Deserialize)]
+    struct Compare {
+        status: String,
+    }
+    let endpoint = format!("repos/{repo}/compare/{base}...{head}");
+    let args = ["api", endpoint.as_str()];
+    let compare: Compare = parse(&args, &run_on(runner, cwd, &args)?)?;
+    Ok(matches!(compare.status.as_str(), "ahead" | "identical"))
 }
 
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub

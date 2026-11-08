@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde_json::json;
 
+use super::gh;
 use super::poll;
 use super::status::{Required, required_states};
 use super::swr_read::checks_of_detail;
@@ -98,6 +99,37 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("merge_state", e.row.merge_state.as_str()));
     }
     refuse_unless_required_passed(&home, &repo, number, &e.row.checks, e.detail.as_ref())?;
+    let Some(head) = e.head_oid.clone() else {
+        return Err(CpdError::new(
+            ErrorCode::ItemNotFound,
+            format!(
+                "{repo}#{number} has no head commit in the cache yet: the poll has not read it."
+            ),
+        )
+        .with("repo", repo.as_str())
+        .with("number", number));
+    };
+    // The up-to-date gate (commands.md §9.10): a head that is behind the default branch is refused and the Workflow's
+    // update Job is queued to merge the default branch in, with the merge armed for when the checks pass again.
+    if let (Some(base), Some(default)) =
+        (e.row.base_ref.as_deref(), e.row.default_branch.as_deref())
+        && base == default
+    {
+        let contained =
+            gh::head_contains_base(&*ports.runner, home.root(), &repo, default, &head)?;
+        if !contained {
+            poll::arm_for_behind_head(&mut store, &home, &repo, number)?;
+            return Err(CpdError::new(
+                ErrorCode::HeadBehindMain,
+                format!(
+                    "{repo}#{number} is behind {default}, updated, waiting for gate."
+                ),
+            )
+            .with("repo", repo.as_str())
+            .with("number", number)
+            .with("base", default));
+        }
+    }
     let method = match merge_method(&mut store, &repo)? {
         Some(Ok(method)) => method,
         Some(Err(methods)) => {
@@ -119,16 +151,6 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
             )
             .with("repo", repo.as_str()));
         }
-    };
-    let Some(head) = e.head_oid.clone() else {
-        return Err(CpdError::new(
-            ErrorCode::ItemNotFound,
-            format!(
-                "{repo}#{number} has no head commit in the cache yet: the poll has not read it."
-            ),
-        )
-        .with("repo", repo.as_str())
-        .with("number", number));
     };
     let id = enqueue(
         &mut store,
