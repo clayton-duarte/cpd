@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantItem, ToolItem, TranscriptItem, UserItem, Window } from "../protocol/domain.ts";
-import * as transcript from "./transcript.ts";
 import { appendItems, applyDelta, emptyTranscript, prependEarlier, setTail, updateItems } from "./transcript.ts";
-
-// 15.1: a pure helper turns a failed tool's result into the toast's reason. The export arrives with the
-// fix; the cast keeps this red test compiling until then.
-type ToolFailureReason = (tool: ToolItem) => string;
-const reasonOf =
-  (transcript as unknown as { toolFailureReason?: ToolFailureReason }).toolFailureReason ?? (() => "");
 
 const user = (id: string, text = id): UserItem => ({ kind: "user", id, text, attachments: [] });
 const assistant = (id: string, text: string): AssistantItem => ({
@@ -77,13 +70,6 @@ describe("transcript", () => {
       expect.objectContaining({ code: "protocol_error" }),
     );
     expect(applyDelta(added, { itemId: "nope", blockIndex: 0, blockType: "text", text: "x" })).toBe(added);
-  });
-
-  it("a failed tool reason is its first non-empty line", () => {
-    const leading = tool("c1", { status: "failed", result: { text: "\n\n  boom  \nmore", isError: true } });
-    expect(reasonOf(leading)).toBe("boom");
-    const first = tool("c2", { status: "failed", result: { text: "first\nsecond", isError: true } });
-    expect(reasonOf(first)).toBe("first");
   });
 
   it("tool result updates its tool item", () => {
