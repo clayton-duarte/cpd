@@ -215,6 +215,32 @@ fn app_launch_spawns_detached_when_no_electron_runs() {
 }
 
 #[test]
+fn app_launch_strips_session_env() {
+    let rig = Rig::new();
+    let launched = launch(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(launched.action, LaunchAction::Launched);
+    let launches = rig.fakes.spawn.launches();
+    assert_eq!(launches.len(), 1, "{launches:?}");
+    let removed = &launches[0].env_remove;
+    for key in [
+        "CPD_SESSION",
+        "CPD_PLAN",
+        "CPD_ATTEMPT",
+        "CPD_QUIT_MARKER",
+        "CPD_JOB_KIND",
+    ] {
+        assert!(
+            removed.iter().any(|k| k == key),
+            "{key} must be stripped from Electron's env: {removed:?}"
+        );
+    }
+    assert!(
+        !removed.iter().any(|k| k == "CPD_HOME"),
+        "CPD_HOME must be kept: {removed:?}"
+    );
+}
+
+#[test]
 fn app_launch_reloads_with_sigusr1_when_electron_runs() {
     let rig = Rig::new();
     let pid = rig.running_electron();

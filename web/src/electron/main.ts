@@ -15,7 +15,7 @@ import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
 import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode } from "./channels.ts";
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
-import { resolveLoginPath } from "./env.ts";
+import { resolveLoginPath, stripSessionEnv } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
@@ -76,10 +76,34 @@ const backend: PtyBackend = {
   spawn: (file, args, options) => nodePty.spawn(file, args, options),
 };
 
+/** The part of a BrowserWindow that `sendToWindow` touches: its liveness and its webContents. */
+export interface SendTarget {
+  isDestroyed(): boolean;
+  webContents: { isDestroyed(): boolean; send(channel: string, payload: unknown): void };
+}
+
+/**
+ * Send `payload` on `channel` to `win`'s renderer. Exported so the pty-teardown regression
+ * (web/src/electron/main.test.ts, air-n62) can drive this path with a window double. A destroyed
+ * window must be rejected before `webContents` is read: reading it on a closed BrowserWindow
+ * throws `Object has been destroyed`. The `webContents.isDestroyed()` check stays as the last
+ * guard for a window whose native handle survives while its renderer is gone.
+ */
+export function sendToWindow(win: SendTarget | undefined, channel: string, payload: unknown): void {
+  if (!win || win.isDestroyed()) return;
+  if (!win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+}
+
 async function main(): Promise<void> {
+  // The cpd Session that launched the app is not the app: strip its per-session
+  // identity from `process.env` once, before any cpd child is spawned. Every
+  // cpd call of the updater inherits `{ ...process.env }` (update/node.ts), so
+  // this covers them all; CPD_HOME, PATH and every other variable stay
+  // (contract §6.6; web/ELECTRON.md "Boot order").
+  process.env = stripSessionEnv(process.env);
   let win!: BrowserWindow;
   const send = (channel: string, payload: unknown): void => {
-    if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+    sendToWindow(win, channel, payload);
   };
   let env: NodeJS.ProcessEnv = process.env;
   let cpdHome = "";
@@ -351,6 +375,10 @@ async function main(): Promise<void> {
     });
     disposers.push(() => ipc.dispose());
     disposers.push(() => ipcMain.removeHandler(CHANNELS.ptyHosts));
+    // The window closed (air-n62): stop every pty behind these sinks before anything can emit.
+    // ipc.dispose() kills the singleton session and disposes the tab registry, dropping every
+    // node-pty data listener, so no stream keeps calling send for a dead window.
+    win.on("closed", () => ipc.dispose());
   };
 
   // The endpoint and services are bound in `prepare` (before the window, for the preload URL);

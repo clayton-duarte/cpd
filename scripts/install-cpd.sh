@@ -6,5 +6,5 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 CPD_COMMIT=$(git -C "$root" rev-parse --short HEAD) "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
-"${CARGO_TARGET_DIR:-$root/target}/release/cpd" install --root "$root"
+"${CARGO_TARGET_DIR:-$root/target}/release/cpd" install --root "$root" "$@"
 

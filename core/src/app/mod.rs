@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
+use crate::host::pi::SESSION_ENV_KEYS;
 use crate::host::spawn::{self, Pid, Signal};
 use crate::ports::Ports;
 
@@ -291,6 +292,10 @@ pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
             cwd: Some(web),
             setsid: true,
             stdout_to: Some(log),
+            // The launching Session's identity is not the app's: strip exactly the
+            // five per-session cpd variables (contract §6.6). CPD_HOME, PATH and
+            // every other variable stay.
+            env_remove: SESSION_ENV_KEYS.iter().map(|k| (*k).to_owned()).collect(),
             ..spawn::Launch::default()
         })
         .map_err(|e| {
