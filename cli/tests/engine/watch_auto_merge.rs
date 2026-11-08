@@ -22,7 +22,7 @@ use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::store::Store;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{Value, json};
 
 /// `watch.error_repeat_seconds` of the tests that do not look at it: far above the virtual time of any run.
@@ -45,16 +45,25 @@ struct Script {
     fail: Option<String>,
 }
 
-/// The `gh` route: the viewer lookup of E8, the auto-merge read query and the mutation. Every call is kept.
+/// The `gh` route: E5's in-process GitHub SWR poll ([`is_github_poll`]), the viewer lookup of E8, the auto-merge read
+/// query and the mutation. Every call is kept.
 struct Gh {
     script: Mutex<Script>,
     seen: Mutex<Vec<String>>,
+    /// The engine's home: the SWR poll document's `p<i>` aliases are answered from the stored rows, so a test that stacks
+    /// one PR on another's Lead Branch gets the base GitHub would report, not the default branch.
+    home: PathBuf,
 }
 
 impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
         let text = call.args.join(" ");
         self.seen.lock().unwrap().push(text.clone());
+        // E5's poll IS the GitHub SWR pass (D9): the engine reads this one document in-process, before the auto-merge
+        // read and mutation below (which the poll document does not carry).
+        if is_github_poll(&text) {
+            return Reply::ok(&self.poll_reply(&text));
+        }
         let script = self.script.lock().unwrap();
         if text.contains("viewer") {
             return Reply::ok(r#"{"data":{"viewer":{"login":"clayton-duarte"}}}"#);
@@ -86,6 +95,121 @@ impl Handler for Gh {
         }
         Reply::exit(9, "", &format!("unexpected gh call: {text}\n"))
     }
+}
+
+impl Gh {
+    /// The answer to E5's one GitHub read: the viewer, the rate limit, the two empty searches and one node per `p<i>`
+    /// alias the plan asked for, read from the stored `pull_requests`/`workflows` rows (so a stacked PR keeps its base).
+    fn poll_reply(&self, text: &str) -> String {
+        let conn = Connection::open_with_flags(
+            self.home.join("cpd.db"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let mut data = serde_json::Map::new();
+        data.insert("viewer".into(), json!({"login": "clayton-duarte"}));
+        data.insert(
+            "rateLimit".into(),
+            json!({"remaining": 4987, "resetAt": "2099-01-01T00:00:00Z", "cost": 1}),
+        );
+        for alias in ["authored", "reviews"] {
+            data.insert(
+                alias.into(),
+                json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}),
+            );
+        }
+        for (i, number) in poll_aliases(text).into_iter().enumerate() {
+            data.insert(
+                format!("p{i}"),
+                json!({"pullRequest": self.node(&conn, number)}),
+            );
+        }
+        for i in 0..64 {
+            if !text.contains(&format!("m{i}: repository(owner: ")) {
+                break;
+            }
+            data.insert(format!("m{i}"), repo_meta());
+        }
+        json!({"data": data}).to_string()
+    }
+
+    /// The pull request `number` of `acme/pay` as the SWR document's `Light` (with `Heavy`) selects it: the stored state
+    /// and its open Workflow's base.
+    fn node(&self, conn: &Connection, number: i64) -> Value {
+        let (url, title, state, head): (String, String, String, Option<String>) = conn
+            .query_row(
+                "SELECT url, title, state, head_oid FROM pull_requests WHERE repo = 'acme/pay' AND number = ?1",
+                [number],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        let base: String = conn
+            .query_row(
+                "SELECT base FROM workflows WHERE plan = 'pay' AND status = 'open'
+                   AND pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = ?1)",
+                [number],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+            .unwrap_or_else(|| "main".to_owned());
+        let state = match state.as_str() {
+            "merged" => "MERGED",
+            "closed" => "CLOSED",
+            _ => "OPEN",
+        };
+        let head = head.unwrap_or_else(|| "h1".to_owned());
+        let merged_at = if state == "MERGED" {
+            json!("2026-10-27T18:00:00Z")
+        } else {
+            json!(null)
+        };
+        json!({
+            "number": number, "state": state, "isDraft": false, "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN", "reviewDecision": null,
+            "baseRefName": base, "headRefName": "feat", "headRefOid": head,
+            "updatedAt": "U1", "title": title, "url": url,
+            "createdAt": "2026-10-01T00:00:00.000Z", "mergedAt": merged_at,
+            "author": {"login": "ada"},
+            "repository": {"nameWithOwner": "acme/pay", "defaultBranchRef": {"name": "main"}, "isArchived": false},
+            "labels": {"nodes": []},
+            "autoMergeRequest": null,
+            "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"state": "SUCCESS", "contexts": {"nodes": []}}}}]},
+            "latestReviews": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "comments": {"nodes": []},
+            "viewerDidAuthor": true,
+            "viewerLatestReviewRequest": null
+        })
+    }
+}
+
+/// The repository metadata (`m<i>`) of `acme/pay`.
+fn repo_meta() -> Value {
+    json!({"defaultBranchRef": {"name": "main"}, "isArchived": false, "autoMergeAllowed": true,
+           "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": false,
+           "deleteBranchOnMerge": true})
+}
+
+/// Whether `text` is E5's one GitHub read, the SWR poll document the source's `build_poll_query` sends.
+fn is_github_poll(text: &str) -> bool {
+    text.contains("fragment Light on PullRequest")
+        && text.contains("authored: search(type: ISSUE")
+}
+
+/// The pull request numbers of the document's `p<i>` aliases, in document order.
+fn poll_aliases(text: &str) -> Vec<i64> {
+    let mut numbers = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("pullRequest(number: ") {
+        rest = &rest[at + "pullRequest(number: ".len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(number) = digits.parse() {
+            numbers.push(number);
+        }
+    }
+    numbers
 }
 
 /// What a test reads while the engine runs: `Clone` and `'static`, so a step of the run holds one.
@@ -224,6 +348,7 @@ fn merge(repeat: u32) -> Merge {
             fail: None,
         }),
         seen: Mutex::new(Vec::new()),
+        home: fx.env.cpd_home(),
     });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let now = fx.stamp_ago(0);
@@ -234,7 +359,7 @@ fn merge(repeat: u32) -> Merge {
            VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, '{now}');"
     ));
     fx.env.sql(&format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('pay-lead', 'lead', 'ctx', 'pay', 'Lead pay', '/', 'O3', 'stopped', '{now}', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
