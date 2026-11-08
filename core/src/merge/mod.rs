@@ -20,6 +20,9 @@ mod touches_tests;
 #[cfg(test)]
 mod triage_tests;
 
+#[cfg(test)]
+mod rate_limit_retry_tests;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
