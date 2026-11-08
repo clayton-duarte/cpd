@@ -277,23 +277,25 @@ function CopyTurnButton(props: { value: string }): JSX.Element {
   return (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            data-action="copy-turn"
-            aria-label={copied ? "Copied" : "Copy message"}
-            onClick={onCopy}
-            className="size-5 text-muted-foreground hover:text-foreground"
-          >
-            {copied ? (
-              <CheckIcon className="size-3" />
-            ) : (
-              <CopyIcon className="size-3" />
-            )}
-          </Button>
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              data-action="copy-turn"
+              aria-label={copied ? "Copied" : "Copy message"}
+              onClick={onCopy}
+              className="size-5 text-muted-foreground hover:text-foreground"
+            >
+              {copied ? (
+                <CheckIcon className="size-3" />
+              ) : (
+                <CopyIcon className="size-3" />
+              )}
+            </Button>
+          }
+        />
         <TooltipContent side="bottom">
           {copied ? "Copied" : "Copy"}
         </TooltipContent>
