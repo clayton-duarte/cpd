@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 125
+-- cpd-migration: breaking after 124
 -- The Inbox kind `refusal-alert` (contract §2.2 "Inbox item", §3.7 E25, §4.4; Plan `agent-refusals`,
 -- air-d85, air-d105): `inbox_items` is rebuilt with it in the kind check, as `pr-closed-kind` rebuilt it.
 CREATE TABLE inbox_items_new (
