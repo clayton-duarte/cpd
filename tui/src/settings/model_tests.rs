@@ -12,7 +12,7 @@ fn t(s: &str) -> Tier {
 
 fn tiers(a: &str, w: &str, l: &str, m: &str) -> RoleTiers {
     RoleTiers {
-        decide: cpd_core::config::Tier::x(cpd_core::config::Letter::O),
+        decide: t("JX"),
         auxiliar: t(a),
         worker: t(w),
         lead: t(l),
@@ -29,10 +29,7 @@ fn tm(model: &str, efforts: &[u8]) -> TierModel {
 
 fn catalog_of(o: &[u8], s: &[u8], h: &[u8], g: &[u8]) -> Catalog {
     Catalog {
-        j: cpd_core::config::TierModel {
-            model: String::new(),
-            efforts: Vec::new(),
-        },
+        j: tm("bifrost/vertex/jev-router", &[0, 1, 2, 3]),
         pi_version: "1.5.0".into(),
         o: tm("bifrost/vertex/gemini-4-argon", o),
         s: tm("bifrost/vertex/claude-sonnet-5-5", s),
@@ -126,13 +123,14 @@ fn err(code: ErrorCode, message: &str) -> CpdError {
     CpdError::new(code, message)
 }
 
+const DECIDE: Row = Row::Tier(Role::Decide);
 const AUX: Row = Row::Tier(Role::Auxiliar);
 const WORKER: Row = Row::Tier(Role::Worker);
 const LEAD: Row = Row::Tier(Role::Lead);
 const MANAGER: Row = Row::Tier(Role::Manager);
 
 #[test]
-fn the_rows_are_preset_provider_o_s_h_g_then_auxiliar_worker_lead_manager() {
+fn the_rows_are_preset_provider_o_s_h_g_j_then_decide_auxiliar_worker_lead_manager() {
     let m = model();
     let got: Vec<(Row, String, String)> = m
         .rows()
@@ -154,6 +152,8 @@ fn the_rows_are_preset_provider_o_s_h_g_then_auxiliar_worker_lead_manager() {
             "G  gemini",
             "vertex/gemini-3.8-flash",
         ),
+        (Row::Model(Letter::J), "J  jev", "vertex/jev-router"),
+        (DECIDE, "decide", "JX"),
         (AUX, "auxiliar", "GX"),
         (WORKER, "worker", "H3"),
         (LEAD, "lead", "S4"),
@@ -165,7 +165,7 @@ fn the_rows_are_preset_provider_o_s_h_g_then_auxiliar_worker_lead_manager() {
     assert_eq!(
         rows.iter().map(|r| r.focused).collect::<Vec<_>>(),
         [
-            true, false, false, false, false, false, false, false, false, false
+            true, false, false, false, false, false, false, false, false, false, false, false
         ]
     );
     assert!(
@@ -175,7 +175,7 @@ fn the_rows_are_preset_provider_o_s_h_g_then_auxiliar_worker_lead_manager() {
 }
 
 #[test]
-fn the_range_column_is_default_only_for_the_auxiliar_and_floor_dots_ceiling_for_the_others() {
+fn the_range_column_is_default_only_for_the_decide_and_auxiliar_and_floor_dots_ceiling_for_the_others() {
     let mut m = model();
     let ranges = |m: &Model| m.rows().into_iter().map(|r| r.range).collect::<Vec<_>>();
     assert_eq!(
@@ -187,6 +187,8 @@ fn the_range_column_is_default_only_for_the_auxiliar_and_floor_dots_ceiling_for_
             "",
             "",
             "",
+            "",
+            "default only",
             "default only",
             "H3..S3",
             "S4..O2",
@@ -204,6 +206,8 @@ fn the_range_column_is_default_only_for_the_auxiliar_and_floor_dots_ceiling_for_
             "",
             "",
             "",
+            "",
+            "default only",
             "default only",
             "H3..S1",
             "S2..O2",
@@ -276,11 +280,12 @@ fn load_fills_the_provider_and_the_four_models_from_the_preset_and_writes_nothin
     // Picking a preset only selects it.
     assert_eq!(row(&m, Row::Provider).value, "bifrost");
     assert!(m.steps().is_empty());
-    let want = COPILOT
+    let mut want: Vec<(Letter, String)> = COPILOT
         .iter()
         .zip([Letter::O, Letter::S, Letter::H, Letter::G])
         .map(|(r, l)| (l, r.to_string()))
         .collect();
+    want.push((Letter::J, "bifrost/vertex/jev-router".to_string()));
     assert_eq!(m.load(), Effect::Reread(want));
     assert_eq!(row(&m, Row::Provider).value, "github-copilot");
     let values: Vec<String> = [Letter::O, Letter::S, Letter::H, Letter::G]
@@ -300,13 +305,14 @@ fn load_fills_the_provider_and_the_four_models_from_the_preset_and_writes_nothin
 }
 
 #[test]
-fn picking_a_model_asks_for_a_reread_with_the_four_candidates() {
+fn picking_a_model_asks_for_a_reread_with_the_five_candidates() {
     let mut m = model();
     let want = vec![
         (Letter::O, BIFROST[0].to_string()),
         (Letter::S, BIFROST[0].to_string()),
         (Letter::H, BIFROST[2].to_string()),
         (Letter::G, BIFROST[3].to_string()),
+        (Letter::J, "bifrost/vertex/jev-router".to_string()),
     ];
     assert_eq!(
         pick(&mut m, Row::Model(Letter::S), "vertex/gemini-4-argon"),
@@ -346,11 +352,11 @@ fn a_failed_reread_blocks_the_tiers_section_and_shows_its_reason() {
     assert_eq!(m.blocked(), Some(why.clone()));
     assert_eq!(m.footer(), Some(why));
     assert_eq!(m.save(), Effect::None);
-    for r in [AUX, WORKER, LEAD, MANAGER] {
+    for r in [DECIDE, AUX, WORKER, LEAD, MANAGER] {
         assert!(row(&m, r).dimmed, "{r:?}");
         assert!(m.offered(r).is_empty(), "{r:?}");
     }
-    for l in [Letter::O, Letter::S, Letter::H, Letter::G] {
+    for l in [Letter::O, Letter::S, Letter::H, Letter::G, Letter::J] {
         assert!(!row(&m, Row::Model(l)).dimmed);
     }
 }
@@ -472,6 +478,7 @@ fn the_filter_narrows_an_open_list_by_substring_and_enter_picks() {
         (Letter::S, BIFROST[1].to_string()),
         (Letter::H, BIFROST[2].to_string()),
         (Letter::G, BIFROST[3].to_string()),
+        (Letter::J, "bifrost/vertex/jev-router".to_string()),
     ];
     assert_eq!(m.key(key(KeyCode::Enter)), Effect::Reread(want));
     assert_eq!(m.list(), None);
@@ -558,14 +565,19 @@ fn the_settings_rows_offer_the_j_letter() {
     assert_eq!(j.label, "J  jev", "the decide letter J is labelled jev");
 }
 
-/// The Tier parser admits the decide letter J: JX and J3 parse, while J4 stays refused
-/// (J's model offers efforts 0, 1, 2 and 3, never 4; contract §9, air-d113, air-d115, air-d120).
+/// The Tier parser admits the decide letter J: JX and J3 parse, and J4 parses too, since
+/// `Tier::parse` is syntax only (`^[JGHSO]([0-4]|X)$`, contract §9); only J's model's catalog refuses J4,
+/// because it offers efforts 0, 1, 2 and 3, never 4 (contract §9, air-d113, air-d115, air-d120).
 #[test]
 fn the_tier_parser_accepts_jx() {
     assert!(Tier::parse("JX").is_ok(), "JX must parse");
     assert!(Tier::parse("J3").is_ok(), "J3 must parse");
-    assert!(
-        Tier::parse("J4").is_err(),
-        "J4 is not an effort of J's model"
+    let j4 = Tier::parse("J4").expect("J4 is within the syntax <Letter><0-4|X>");
+    let catalog = catalog();
+    assert!(!catalog.is_valid(j4), "J4 is not an effort of J's model");
+    assert_eq!(
+        catalog.check(j4).unwrap_err().code(),
+        ErrorCode::TierInvalid,
+        "the catalog refuses J4 with tier_invalid"
     );
 }
