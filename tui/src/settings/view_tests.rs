@@ -245,6 +245,7 @@ const BIFROST: [&str; 4] = [
 pub(super) fn config(experimental: &Value) -> Value {
     json!({"config": {
         "experimental": experimental,
+        "concurrency": 5,
         "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3",
         "presets": {"bifrost": {"O": BIFROST[0], "S": BIFROST[1], "H": BIFROST[2], "G": BIFROST[3]}},
     }})
@@ -327,6 +328,9 @@ impl Commands {
             ["models", "show"] => Output::success(models()),
             ["preset", "set", ..] => Output::success(json!({"preset": "set"})),
             ["config", "tiers", "set", ..] => Output::success(json!({"tiers": "set"})),
+            ["config", "concurrency", "set", _n] => {
+                Output::success(json!({"ok": true, "changed": ["concurrency"], "already": false}))
+            }
             ["session", "retier", "--all"] => Output::success(json!({"retiered": []})),
             other => panic!("the view ran a command nobody expects: {other:?}"),
         })
@@ -455,6 +459,44 @@ pub(super) fn first_screen() -> Vec<String> {
     ])
 }
 
+/// A whole 64 x 24 screen with a section `title` and the content `rows` under it.
+pub(super) fn titled(name: &str, rows: &[&str]) -> Vec<String> {
+    let area = Rect::new(0, 0, 64, 3);
+    let mut buf = Buffer::empty(area);
+    SectionTitle::new(name, None).render(area, &mut buf);
+    let title = buffer_rows(&buf)[1].clone();
+    let mut all: Vec<String> = std::iter::repeat_with(String::new).take(24).collect();
+    for (i, r) in rows.iter().enumerate() {
+        all[i] = (*r).to_owned();
+    }
+    all[1] = title;
+    all
+}
+
+/// The popup's first screen: the menu of two entries (docs/commands.md §13.2, Screen 1).
+pub(super) fn menu_screen() -> Vec<String> {
+    titled(
+        "Settings",
+        &["", "", "", "   ▸ Agent Tiers", "     Workers"],
+    )
+}
+
+/// The Workers screen (docs/commands.md §13.2, Screens 5-7): its one row `concurrency` with `value`, and the buttons.
+pub(super) fn workers_screen(value: &str) -> Vec<String> {
+    let row = format!("   ▸ concurrency  {value}");
+    titled(
+        "Workers",
+        &[
+            "",
+            "",
+            " Workers  the Attempts the machine runs at once",
+            &row,
+            "",
+            "                        [ Save ]  [ Cancel ]",
+        ],
+    )
+}
+
 fn cell_of(buf: &Buffer, text: &str) -> (u16, u16) {
     let rows = buffer_rows(buf);
     let y = rows
@@ -474,6 +516,76 @@ fn the_initial_screen_is_exactly_the_documented_rows() {
     let run = popup(&Commands::new(), vec![Act::Snap, Act::Key(KeyCode::Esc)]);
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(run.snaps[0].rows(), first_screen());
+}
+
+#[test]
+fn the_settings_popup_opens_on_the_agent_tiers_and_workers_menu() {
+    // The first screen is the menu with both entries; Enter opens the focused entry, Agent Tiers.
+    let run = popup(
+        &Commands::new(),
+        vec![
+            Act::Snap,
+            Act::Key(KeyCode::Enter),
+            Act::Snap,
+            Act::Key(KeyCode::Esc),
+            Act::Key(KeyCode::Esc),
+        ],
+    );
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), menu_screen());
+    assert_eq!(
+        run.snaps[1].rows(),
+        first_screen(),
+        "Agent Tiers is today's rows, unchanged"
+    );
+    assert_eq!(run.calls, reads(), "the menu and its screens write nothing");
+
+    // `q` leaves the menu too.
+    let run = popup(
+        &Commands::new(),
+        vec![Act::Snap, Act::Key(KeyCode::Char('q'))],
+    );
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), menu_screen());
+    assert_eq!(run.calls, reads());
+}
+
+#[test]
+fn the_workers_screen_keeps_the_error_and_stops_on_a_refused_concurrency() {
+    let commands = Commands::new().failing(
+        &["config", "concurrency", "set"],
+        1,
+        refusal(
+            ErrorCode::ConfigInvalid,
+            "concurrency must be between 1 and 16, got 17.",
+        ),
+    );
+    let acts = vec![
+        Act::Key(KeyCode::Down),
+        Act::Key(KeyCode::Enter),
+        Act::Key(KeyCode::Enter),
+        Act::Type("17"),
+        Act::Key(KeyCode::Enter),
+        Act::Snap,
+        Act::Click("[ Save ]", "[ Save ]"),
+        Act::Snap,
+        Act::Key(KeyCode::Esc),
+    ];
+    let run = popup(&commands, acts);
+    assert!(run.result.is_ok(), "{:?}", run.result.err());
+    assert_eq!(run.snaps[0].rows(), workers_screen("17*"));
+    let kept = run.snaps[1].rows();
+    assert_eq!(kept[3], " Workers  the Attempts the machine runs at once");
+    assert_eq!(kept[4], "   ▸ concurrency  17*", "the screen stays open");
+    assert_eq!(kept[6], "                        [ Save ]  [ Cancel ]");
+    assert_eq!(
+        kept[23], "config_invalid: concurrency must be between 1 and 16, got 17.",
+        "the footer shows the whole error"
+    );
+    assert_eq!(run.snaps[1].buffer[(0, 23)].fg, red().unwrap());
+    let mut want = reads();
+    want.push(call(&["config", "concurrency", "set", "17"]));
+    assert_eq!(run.calls, want, "no further write runs");
 }
 
 #[test]
