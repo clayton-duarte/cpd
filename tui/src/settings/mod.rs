@@ -108,7 +108,9 @@ fn open(run_command: RunFn) -> Result<Model, CpdError> {
     let tiers = read(run_command, &["tiers"])?;
     let models = read(run_command, &["models", "show"])?;
     Ok(Model::new(Reads::parse(&config, &tiers, &models)?)
-        .with_experimental(model::experimental(&config)?))
+        .with_experimental(model::experimental(&config)?)
+        .with_concurrency(model::concurrency(&config)?)
+        .at_menu())
 }
 
 /// The words of the command a Save step runs.
@@ -137,6 +139,11 @@ fn words(step: &Step) -> Vec<String> {
                 .into_iter()
                 .flat_map(|(flag, tier)| [flag.to_owned(), tier.to_string()]),
             )
+            .collect(),
+        Step::Concurrency(n) => ["config", "concurrency", "set"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain([n.to_string()])
             .collect(),
         Step::Experimental(feature, on) => ["config", "experimental", feature.key()]
             .into_iter()
@@ -234,6 +241,14 @@ fn click(model: &mut Model, hit: view::Hit) -> Effect {
                 }
                 _ => Effect::None,
             }
+        }
+        view::Hit::Menu(i) => {
+            model.enter(i);
+            Effect::None
+        }
+        view::Hit::Concurrency => {
+            model.edit_concurrency();
+            Effect::None
         }
         view::Hit::Load => model.load(),
         view::Hit::Save => model.save(),

@@ -2,7 +2,7 @@
 //! list inline under its row, the buttons) and the footer. The body is built as lines that know what a click on
 //! each column lands on, so what is drawn and what is hit are one thing.
 
-use super::model::{Feature, Model, Row, RowView};
+use super::model::{Feature, Level, Model, Row, RowView};
 use crate::box_widget::SectionTitle;
 use crate::dialog::scroll::Scroll;
 use crate::palette;
@@ -22,6 +22,10 @@ pub enum Hit {
     Flip(Feature),
     /// An entry of the open list.
     Entry(usize),
+    /// An entry of the menu.
+    Menu(usize),
+    /// The Workers count's value.
+    Concurrency,
     Load,
     Save,
     Cancel,
@@ -33,7 +37,30 @@ const TIERS_AT: usize = 6;
 const VALUE_COL: usize = 15;
 /// The column of the first button of the buttons row.
 const BUTTONS_COL: usize = 24;
-const TITLE: &str = "Agent Tiers";
+
+/// The title of each level (commands.md §13.2).
+fn title(level: Level) -> &'static str {
+    match level {
+        Level::Menu => "Settings",
+        Level::Tiers => "Agent Tiers",
+        Level::Workers => "Workers",
+    }
+}
+
+/// The buttons row, shared by every level.
+fn buttons_line(model: &Model) -> BodyLine {
+    let mut b = Builder::default();
+    let save = if model.blocked().is_some() {
+        palette::muted_text()
+    } else {
+        palette::clickable_text()
+    };
+    b.text(" ".repeat(BUTTONS_COL), Style::default());
+    b.hit("[ Save ]", save, Hit::Save);
+    b.text("  ", Style::default());
+    b.hit("[ Cancel ]", palette::clickable_text(), Hit::Cancel);
+    b.done()
+}
 
 /// One line of the body and what a click on its columns `start..end` lands on.
 struct BodyLine {
@@ -147,6 +174,53 @@ struct Body {
 }
 
 fn body(model: &Model) -> Body {
+    match model.level() {
+        Level::Menu => menu_body(model),
+        Level::Workers => workers_body(model),
+        Level::Tiers => tiers_body(model),
+    }
+}
+
+/// The menu: one hit line per entry, the focused one marked `▸` in column 3.
+fn menu_body(model: &Model) -> Body {
+    let mut lines = Vec::new();
+    let mut focus = (0, 0);
+    for (i, name) in super::model::MENU.iter().enumerate() {
+        let focused = i == model.menu_focus();
+        let mark = if focused { "   ▸ " } else { "     " };
+        let mut b = Builder::default();
+        b.hit(format!("{mark}{name}"), Style::default(), Hit::Menu(i));
+        let at = lines.len();
+        lines.push(b.done());
+        if focused {
+            focus = (at, at);
+        }
+    }
+    Body { lines, focus }
+}
+
+/// The Workers screen: the header, the count's row (no list, so no arrow), the buttons.
+fn workers_body(model: &Model) -> Body {
+    let mut lines = vec![header("Workers", "the Attempts the machine runs at once")];
+    let suffix = if model.concurrency_changed() { "*" } else { "" };
+    let mut b = Builder::default();
+    b.text("   ▸ ", Style::default());
+    b.text("concurrency", Style::default());
+    b.hit(
+        format!("  {}{suffix}", model.concurrency_value()),
+        Style::default(),
+        Hit::Concurrency,
+    );
+    lines.push(b.done());
+    lines.push(blank());
+    lines.push(buttons_line(model));
+    Body {
+        lines,
+        focus: (1, 1),
+    }
+}
+
+fn tiers_body(model: &Model) -> Body {
     let mut lines = Vec::new();
     let mut focus = (0, 0);
     let list = model.list();
@@ -220,17 +294,7 @@ fn body(model: &Model) -> Body {
         }
     }
     lines.push(blank());
-    let mut b = Builder::default();
-    let save = if model.blocked().is_some() {
-        palette::muted_text()
-    } else {
-        palette::clickable_text()
-    };
-    b.text(" ".repeat(BUTTONS_COL), Style::default());
-    b.hit("[ Save ]", save, Hit::Save);
-    b.text("  ", Style::default());
-    b.hit("[ Cancel ]", palette::clickable_text(), Hit::Cancel);
-    lines.push(b.done());
+    lines.push(buttons_line(model));
     Body { lines, focus }
 }
 
@@ -245,7 +309,7 @@ fn body_area(area: Rect) -> Rect {
 pub fn draw(f: &mut Frame, model: &Model, scroll: &mut Scroll, follow: bool) {
     let area = f.area();
     f.render_widget(
-        SectionTitle::new(TITLE, None),
+        SectionTitle::new(title(model.level()), None),
         Rect::new(
             area.x,
             area.y,
