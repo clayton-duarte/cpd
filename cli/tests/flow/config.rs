@@ -1128,11 +1128,14 @@ fn a_cache_without_a_g_row_is_a_miss_and_is_written_again_with_four_rows() {
     assert_eq!(fx.calls("node").len(), 1, "now the four rows serve it");
 }
 
-/// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
-/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end. The migration is held until
-/// 1500 ms of the `ManualClock`'s time have passed, which the waiter's own retries pass.
+/// hs-n278 (air-n99), contract §4.2: `cpd tiers` opens the store (`catalog::load`) and takes the setup lock when the
+/// store's schema cannot be read: the holder is not migrating the store, it holds the database exclusively (a
+/// rollback-journal `BEGIN EXCLUSIVE`, as a migration's WAL switch does) so the follower's read-only schema check
+/// cannot land, and its setup lock carries a live migration marker so the wait runs on the fake clock. The follower
+/// waits the holder out for longer than `store_busy_ms`, says so once on stderr, and prints its one JSON value at the
+/// end. The holder is released 1500 ms into the `ManualClock`'s time, which the waiter's own retries pass.
 #[test]
-fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
+fn tiers_waits_out_a_holder_whose_schema_cannot_be_read_longer_than_store_busy_ms() {
     let mut fx = Fx::with_ports();
     write_tiers_config(&fx.env, TIERS_MODELS);
     fx.env
@@ -1154,9 +1157,10 @@ fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
     );
 }
 
-/// `cpd config` reads only the config files: a migration in progress does not delay it, and it says nothing.
+/// `cpd config` reads only the config files: a held store (a migration in progress) does not delay it, and it says
+/// nothing: it never opens the database, so the held setup lock and the excluded store are invisible to it.
 #[test]
-fn config_does_not_wait_for_a_migration() {
+fn config_does_not_wait_for_a_held_store() {
     let mut fx = Fx::with_ports();
     fx.env.write_config(MINIMAL);
     fx.hold_store_migration(Duration::from_millis(3000));

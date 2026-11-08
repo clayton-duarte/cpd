@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 
 use nix::fcntl::{Flock, FlockArg};
 use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
+use rusqlite::Connection;
 use time::OffsetDateTime;
 
 use cpd_core::clock::{Clock, ManualClock};
@@ -547,10 +548,12 @@ impl Fx {
 
     /// Makes a process migrate the store, as `Store::open` of another `cpd` does (contract §1.4): `locks/store.lock` is
     /// held (a real `flock` on a file of the env, which conflicts with the product's own open of it in this process) with
-    /// the marker of a live migrating pid (running in the `FakeSpawn`), until `hold` of the `ManualClock`'s time has
-    /// passed: the first `sleep` or `now` after that releases it, so a waiter's retries are what pass the time. Replaces
-    /// the `Ports`' clock by one that does it; `fakes.clock` is still the `ManualClock` under it (`elapsed`, `naps`).
-    /// The lock drops with the `Fx`. Only on [`Fx::with_ports`]; once.
+    /// the marker of a live migrating pid (running in the `FakeSpawn`), and the store is held exclusively (a
+    /// rollback-journal `BEGIN EXCLUSIVE`, as a migration's WAL switch does) so a follower's read-only schema check cannot
+    /// land and it must take the setup lock, until `hold` of the `ManualClock`'s time has passed: the first `sleep` or
+    /// `now` after that releases both, so a waiter's retries are what pass the time. Replaces the `Ports`' clock by one
+    /// that does it; `fakes.clock` is still the `ManualClock` under it (`elapsed`, `naps`). It all drops with the `Fx`.
+    /// Only on [`Fx::with_ports`]; once.
     pub fn hold_store_migration(&mut self, hold: Duration) {
         assert!(
             self.on_fake_ports && self.migration.is_none(),
@@ -580,8 +583,19 @@ impl Fx {
         let marker = serde_json::json!({"migrating": true, "pid": pid.0, "started_unix_ms": u64::MAX, "from": 3, "to": 20, "command": "cpd migrating-holder"});
         lock.write_all(marker.to_string().as_bytes())
             .expect("write the marker");
+        // The migrating holder also holds the database itself: a migration's WAL switch holds it exclusively, so a
+        // follower's read-only schema check cannot land (contract §4.2) and it must take the setup lock and wait. A
+        // rollback-journal `BEGIN EXCLUSIVE` is what blocks a read-only connection; a WAL one would not.
+        let store = Connection::open(self.env.cpd_home().join("cpd.db")).expect("open cpd.db");
+        store
+            .pragma_update(None, "journal_mode", "DELETE")
+            .expect("rollback journal");
+        store
+            .execute_batch("BEGIN EXCLUSIVE")
+            .expect("hold the store");
         let migration = Arc::new(Migration {
             lock: Mutex::new(Some(lock)),
+            store: Mutex::new(Some(store)),
             release_at: hold,
             clock: self.fakes.clock.clone(),
         });
@@ -1700,18 +1714,30 @@ impl Clock for AskNapClock {
     }
 }
 
-/// The fixture of [`Fx::hold_store_migration`]: the held `flock` and when it is released.
+/// The fixture of [`Fx::hold_store_migration`]: the held `flock`, the exclusively held store, and when they are released.
 struct Migration {
     lock: Mutex<Option<Flock<File>>>,
+    /// The `BEGIN EXCLUSIVE` write transaction that keeps a follower's read-only schema check from landing.
+    store: Mutex<Option<Connection>>,
     release_at: Duration,
     clock: Arc<ManualClock>,
 }
 
 impl Migration {
-    /// As the holder does at the end of its setup: empties the file (the marker goes first), then releases the `flock`.
+    /// As the holder does at the end of its setup: releases the store first (a waiter on the `flock` proceeds as soon
+    /// as it is free), then empties the file (the marker goes first) and releases the `flock`.
     fn release_when_due(&self) {
         if self.clock.elapsed() < self.release_at {
             return;
+        }
+        if let Some(store) = self
+            .store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            let _ = store.execute_batch("ROLLBACK");
+            drop(store);
         }
         if let Some(lock) = self
             .lock
