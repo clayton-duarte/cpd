@@ -7,7 +7,7 @@
 // that the incident pill shows `Incident Mode: <elapsed>` while the fake reports an incident open.
 // No fake tmux is staged: the point is that the WebUI no longer scrapes tmux for the Workers segment.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,8 @@ const WORKERS = { queued: 3, waiting: 2, running: 4, limit: 6 };
 const WORKERS_TEXT = `workers ${WORKERS.queued}\u{f0798}${WORKERS.waiting}\u{f0798}${WORKERS.running}/${WORKERS.limit}`;
 
 let staging = "";
+/** The file the fake's serve stream waits for before its first snapshot (CPD_FAKE_GATE). */
+let gate = "";
 
 /**
  * The shared `launchApp` helper, extended with the one seam this scenario needs: `incident` sets
@@ -39,7 +41,7 @@ const test = base.extend<{ incident: boolean }>({
       cpdHome,
       userDataDir,
       rendererUrl: rendererServer.url,
-      env: { CPD_CHECKOUT: webRoot, ...(incident ? { CPD_FAKE_INCIDENT: "1" } : {}) },
+      env: { CPD_CHECKOUT: webRoot, CPD_FAKE_GATE: gate, ...(incident ? { CPD_FAKE_INCIDENT: "1" } : {}) },
     });
     await use(app);
     await app.close();
@@ -50,18 +52,35 @@ test.beforeAll(() => {
   // The private data plane: a `cpd` symlink to the scripted fake, plus the fake login shell. No fake
   // tmux (the Workers segment no longer scrapes it).
   staging = mkdtempSync(join(tmpdir(), "cpd-e2e-workers-"));
+  gate = join(staging, "serve-gate");
   stageFakeCpd(staging);
   if (!existsSync(join(webRoot, "dist-electron", "main.js"))) {
     execFileSync("pnpm", ["--filter", "cpd-web-client", "run", "build:electron"], { cwd: webRoot, stdio: "inherit" });
   }
 });
 
+test.afterEach(() => {
+  // Leave no gate behind: the next case's app must launch with the serve stream held.
+  rmSync(gate, { force: true });
+});
+
 test.afterAll(() => {
   rmSync(staging, { recursive: true, force: true });
 });
 
+/**
+ * Open the serve gate and wait for the pane's status to land. The app's initial status read (before
+ * any serve pane) has already emitted when the mode pill first renders, so releasing the snapshot
+ * only now makes the pane-triggered read the last write -- no last-writer-wins race.
+ */
+async function openGate(page: import("playwright").Page): Promise<void> {
+  await expect(page.locator('[data-part="status-bar"]').locator('[data-part="mode"]')).toBeVisible();
+  writeFileSync(gate, "");
+}
+
 test("the Workers segment shows the serve status pane's live counts (long form)", async ({ page }) => {
   await expect(page.locator("#webui-root")).toBeVisible();
+  await openGate(page);
   // The pill renders only when the status carries workers. The fake answers one-shot lists empty and
   // carries the numbers only in its `cpd cockpit serve` snapshot's `status` pane, so the known text
   // can appear only once that pane reached the bar. Playwright's expect polls; no sleep, no retry.
@@ -73,6 +92,7 @@ test.describe("while the fake reports an incident open", () => {
 
   test("the incident pill shows Incident Mode with the elapsed time", async ({ page }) => {
     await expect(page.locator("#webui-root")).toBeVisible();
+    await openGate(page);
     // started_at is now at snapshot time, so the elapsed text is 0m for the whole first minute.
     await expect(page.locator('[data-part="status-bar"]').locator('[data-part="incident"]')).toHaveText("Incident Mode: 0m");
   });
