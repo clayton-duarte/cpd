@@ -181,6 +181,7 @@
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
+      "--decide": true,
       "--help": false,
       "--lead": true,
       "--manager": true,

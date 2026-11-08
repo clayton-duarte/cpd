@@ -34,6 +34,10 @@ pub(super) fn ago_seconds(seconds: i64) -> String {
 /// The catalog pi would give (contract §9): O1-O5, S0-S5, H0-H3.
 fn catalog() -> Catalog {
     Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".into(),
         o: TierModel {
             model: "p/opus".into(),

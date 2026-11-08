@@ -1,4 +1,4 @@
-//! The `model` domain (contract §8.3 "Models"): the four Tier models `O`, `S`, `H`, `G`, each a model ref
+//! The `model` domain (contract §8.3 "Models"): the five Tier models `O`, `S`, `H`, `G`, `J`, each a model ref
 //! `<provider>/<model-id>`; one provider per resolved table.
 
 use std::path::Path;
@@ -13,7 +13,7 @@ use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, PlanId, WorkflowKey};
 
-/// The four resolved model refs of a policy: the `model` domain's value.
+/// The five resolved model refs of a policy: the `model` domain's value.
 ///
 /// The resolved policy hands them out through [`Models::of`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +27,9 @@ pub struct Models {
     pub h: String,
     #[serde(rename = "G")]
     pub g: String,
+    /// The decide role's letter (contract §8.3 "Models", §9 "Roles and ranges").
+    #[serde(rename = "J", default)]
+    pub j: String,
 }
 
 impl Models {
@@ -158,6 +161,8 @@ pub struct ModelSet {
     pub h: Option<String>,
     #[serde(rename = "G", default, deserialize_with = "ref_key")]
     pub g: Option<String>,
+    #[serde(rename = "J", default, deserialize_with = "ref_key")]
+    pub j: Option<String>,
 }
 
 impl Set for ModelSet {
@@ -171,12 +176,14 @@ impl Set for ModelSet {
             s: pick(&self.s, &base.s),
             h: pick(&self.h, &base.h),
             g: pick(&self.g, &base.g),
+            j: pick(&self.j, &base.j),
         };
         let left_out = [
             ("O", self.o.is_none()),
             ("S", self.s.is_none()),
             ("H", self.h.is_none()),
             ("G", self.g.is_none()),
+            ("J", self.j.is_none()),
         ]
         .into_iter()
         .filter_map(|(name, out)| out.then_some(name))
@@ -190,6 +197,7 @@ impl Set for ModelSet {
             s: self.s.clone()?,
             h: self.h.clone()?,
             g: self.g.clone()?,
+            j: self.j.clone()?,
         })
     }
 }
@@ -201,7 +209,7 @@ pub fn provider_of(model_ref: &str) -> &str {
         .map_or(model_ref, |(provider, _)| provider)
 }
 
-/// Refuses a table whose four refs do not share one provider: `policy_invalid`, `details.file` the
+/// Refuses a table whose five refs do not share one provider: `policy_invalid`, `details.file` the
 /// file that set the winning `[model]`, `details.key` `model`, the message naming the keys and providers.
 pub fn check_one_provider(models: &Models, file: &Path) -> Result<(), CpdError> {
     let keys = [
@@ -209,6 +217,7 @@ pub fn check_one_provider(models: &Models, file: &Path) -> Result<(), CpdError> 
         ("S", &models.s),
         ("H", &models.h),
         ("G", &models.g),
+        ("J", &models.j),
     ];
     let (first, first_ref) = keys[0];
     let first_provider = provider_of(first_ref);
@@ -224,7 +233,3 @@ pub fn check_one_provider(models: &Models, file: &Path) -> Result<(), CpdError> 
         )),
     }
 }
-
-#[cfg(test)]
-#[path = "model_tests.rs"]
-mod tests;

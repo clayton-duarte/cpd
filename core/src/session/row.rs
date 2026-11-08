@@ -385,6 +385,7 @@ pub(crate) fn model_and_level(
         Letter::S => &models.s,
         Letter::H => &models.h,
         Letter::G => &models.g,
+        Letter::J => &models.j,
     };
     Ok((model.clone(), tier.thinking()))
 }

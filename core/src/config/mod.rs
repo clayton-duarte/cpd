@@ -74,7 +74,7 @@ pub struct ConfigArgs {
 /// The subcommands of `cpd config` (§14.2a).
 #[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
 pub enum ConfigCommand {
-    /// Set the four Tier keys of config.toml (§14.2a)
+    /// Set the five Tier keys of config.toml (§14.2a)
     #[command(subcommand)]
     Tiers(TiersCommand),
     /// Print or set the Experimental Features (§14.2b)
@@ -111,13 +111,16 @@ pub struct ExperimentalArgs {
 /// The subcommands of `cpd config tiers` (§14.2a).
 #[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
 pub enum TiersCommand {
-    /// Set the four Tier keys of config.toml (§14.2a)
+    /// Set the five Tier keys of config.toml (§14.2a)
     Set(SetTiersArgs),
 }
 
-/// `cpd config tiers set` (§14.2a): the four Tiers.
+/// `cpd config tiers set` (§14.2a): the five Tiers.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct SetTiersArgs {
+    /// `decide_tier`
+    #[arg(long, value_name = "T")]
+    pub decide: String,
     /// `context_distill_tier`
     #[arg(long, value_name = "T")]
     pub auxiliar: String,
@@ -326,7 +329,7 @@ pub fn tiers(args: TiersArgs) -> Result<Output, CpdError> {
     let catalog = catalog::load_with(&models, &mut env.store)?;
     let mut out = json!({
         "pi_version": catalog.pi_version,
-        "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h, "G": catalog.g},
+        "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h, "G": catalog.g, "J": catalog.j},
     });
     if let Some(key) = key {
         let (owner, repo) = match &key {
@@ -351,7 +354,8 @@ fn apply_candidate(models: &mut Models, candidate: &str) -> Result<(), CpdError>
         "S" => &mut models.s,
         "H" => &mut models.h,
         "G" => &mut models.g,
-        other => return Err(usage(format!("{other:?} is not one of O, S, H, G"))),
+        "J" => &mut models.j,
+        other => return Err(usage(format!("{other:?} is not one of O, S, H, G, J"))),
     };
     *slot = model_ref;
     Ok(())
@@ -372,6 +376,7 @@ fn tiers_set(home: &CpdHome, args: SetTiersArgs) -> Result<Output, CpdError> {
     })?;
     let (current, _) = Config::parse(&text, &path)?;
     let keyed = [
+        ("decide_tier", &args.decide, current.decide_tier),
         (
             "context_distill_tier",
             &args.auxiliar,
@@ -405,6 +410,7 @@ fn tiers_set(home: &CpdHome, args: SetTiersArgs) -> Result<Output, CpdError> {
     let catalog = catalog::load_with(&models, &mut env.store)?;
     for (key, _, _) in keyed {
         let tier = match key {
+            "decide_tier" => config.decide_tier,
             "context_distill_tier" => config.context_distill_tier,
             "worker_tier" => config.worker_tier,
             "lead_tier" => config.lead_tier,
@@ -414,6 +420,7 @@ fn tiers_set(home: &CpdHome, args: SetTiersArgs) -> Result<Output, CpdError> {
     }
     let roles = config.role_tiers();
     for (role, key) in [
+        (Role::Decide, "decide_tier"),
         (Role::Auxiliar, "context_distill_tier"),
         (Role::Worker, "worker_tier"),
         (Role::Lead, "lead_tier"),
