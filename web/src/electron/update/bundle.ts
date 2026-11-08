@@ -8,6 +8,13 @@ export const MAIN_ARTEFACTS = ['main.js', 'preload.cjs', 'server.js'] as const;
 const cur = (root: string) => `${root}/web/dist-electron`;
 const next = (root: string) => `${root}/web/dist-electron.next`;
 
+/**
+ * Where the previous prod builds are kept on disk after a swap, newest first: HEAD-1 then HEAD-2
+ * (air-d95). The current build stays at `web/dist-electron`; these are the slots of the revert
+ * ladder below prod (air-d88), so a bad build always has a previous build to roll back to.
+ */
+export const previousBuildDirs = (root: string): readonly [string, string] => [`${cur(root)}.head-1`, `${cur(root)}.head-2`];
+
 export async function buildBundle(deps: { exec: UpdateExec; fs: UpdateFs }, root: string, opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }> {
   deps.fs.remove(next(root));
   const fail = (r: { stdout: string; stderr: string }) => ({ ok: false as const, log: `${r.stderr}\n${r.stdout}` });
