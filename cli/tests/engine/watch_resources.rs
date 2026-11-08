@@ -340,12 +340,13 @@ fn skipped_n(fx: &Fx, key: &str) -> Option<i64> {
 }
 
 /// Job `key` as a tenant: `running` with its first Attempt, its `job_pools` rows `pools` (the starter's), and its driver gone:
-/// its Attempt `ended` as `failed` when `failed`, and the Job `failed` with it. Lists `resources` in its Spec.
+/// its Attempt `ended` as `failed` when `failed`, and the Job `failed` with it. Lists `resources` in its Spec. The Attempt keeps
+/// its `driver_pid` (a driver that had started): no spawn-failure back-off holds a later retry of it.
 fn tenant(fx: &Fx, key: &str, resources: &[&str], pools: &[&str], failed: bool) {
     let mut then = format!(
         "UPDATE jobs SET status = 'running' WHERE plan = '{PLAN}' AND key = '{key}';
-         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-           VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't');"
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+           VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't', 4242);"
     );
     // The Attempt turned `running`: E2 reads this Event for a live Attempt, as `Fx::add_running` writes it.
     then += &format!(
@@ -430,7 +431,8 @@ fn watch_skip_order_is_cleared_when_the_job_starts() {
 
 #[test]
 fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
-    // Two Worker slots. `api` failed: its Attempt ended, and it is still the tenant of `e2e-port` and of one worker.
+    // Two Worker slots. `api` failed: its last Attempt ended, so it holds no Worker slot, though it stays the tenant of
+    // `e2e-port` (contract §3.4 "Tenancy", air-n90).
     let fx = engine_with(POLICY, 2);
     tenant(&fx, "api", &["e2e-port"], &[PORT_POOL], true);
     add(&fx, "other", &["e2e-port"], "");
@@ -439,19 +441,25 @@ fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
 
     fx.watch_ticks(2).unwrap();
 
-    // `other` misses the port the failed Job keeps; `web` takes the one worker the failed Job leaves; `late` finds none.
-    assert_eq!(started(&fx), ["web"]);
+    // `other` misses the port the failed Job keeps; the failed Job holds no Worker, so `web` and `late` both take one.
+    assert_eq!(started(&fx), ["web", "late"]);
     assert_eq!(
         (
             status(&fx, "other"),
             status(&fx, "web"),
             status(&fx, "late")
         ),
-        ("queued".into(), "running".into(), "queued".into())
+        ("queued".into(), "running".into(), "running".into())
     );
     assert_eq!(
-        (skipped_n(&fx, "other"), skipped_n(&fx, "late")),
-        (Some(1), Some(2))
+        skipped_n(&fx, "other"),
+        Some(1),
+        "only `other` waits: for the port, not the Worker"
+    );
+    assert_eq!(
+        skipped_n(&fx, "late"),
+        None,
+        "`late` is not skipped: the failed Job's Worker slot is free"
     );
     assert_eq!(status(&fx, "api"), "failed");
     assert_eq!(
@@ -459,6 +467,19 @@ fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
         1,
         "the failed Job's rows stay, and nobody else writes one"
     );
+    assert_eq!(all_errors(&fx), 0);
+
+    // A retry re-acquires a Worker slot: its new Attempt counts as a live Attempt of `workers` from the moment it starts.
+    fx.env.sql(
+        "UPDATE jobs SET status = 'queued', retry_tier = 'S2', failed_cause = NULL WHERE plan = 'pay' AND key = 'api';",
+    );
+    fx.watch_first_tick().unwrap();
+    assert_eq!(
+        started(&fx),
+        ["web", "late", "api"],
+        "the retry starts and holds a Worker slot again"
+    );
+    assert_eq!(status(&fx, "api"), "running");
     assert_eq!(all_errors(&fx), 0);
 }
 

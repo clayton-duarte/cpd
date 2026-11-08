@@ -63,8 +63,12 @@ export interface WsServerDeps {
   newConnection: NewConnection;
   server: WsServerFactory;
   scheduler: Scheduler;
-  /** The cockpit's start; a frame waits on it before it reaches its hub (web/ELECTRON.md). */
-  started: Promise<void>;
+  /**
+   * The cockpit's start gate. A function of the current service generation is read per frame so a
+   * SIGUSR1 hot reload re-arms it (20.1); a bare promise (the boot-time constant, and the unit
+   * tests' default) is read once.
+   */
+  started: Promise<void> | (() => Promise<void>);
   onError?: (error: unknown) => void;
   /** Called once with the bound port (loopback, bind port 0, web/CONTRACT.md §15.1). */
   onListening?: (port: number) => void;
@@ -160,7 +164,8 @@ export function createWsServer(deps: WsServerDeps): Disposable {
       } catch {
         raw = text;
       }
-      void deps.started
+      const gate = typeof deps.started === "function" ? deps.started() : deps.started;
+      void gate
         .then(() => hub.handle(raw))
         .catch((error: unknown) => deps.onError?.(error));
     });
@@ -252,6 +257,9 @@ export function createUpgradeFactory(server: WebSocketUpgradeServer): WsServerFa
   return {
     listen(options, onConnection, onListening) {
       const wss = new WebSocketServer({ noServer: true });
+      // The accepted upgrade must reach the hub: `handleUpgrade` emits `connection` on the noServer
+      // `ws` server, so subscribe the endpoint's handler to it (the desktop's listener factory does).
+      wss.on("connection", (socket, request) => onConnection(socket, request));
       const onUpgrade = (request: unknown, socket: unknown, head: unknown): void => {
         const url = (request as { url?: string }).url ?? "";
         const path = url.split("?")[0] ?? "";

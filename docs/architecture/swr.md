@@ -455,7 +455,7 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 
 ## 12. The engine step E24 and gc
 
-Step E24 (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`** and **`models`**: E5's own thread runs `github` through the same trait, and E15 runs `models` through it (`swr-models.md` §1, §3). For each source it:
+Step E24 (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`** and **`models`**: E5's own thread runs `github` through the same trait, and E15 runs `models` through it (`swr-models.md` §1, §3). Exactly one step polls GitHub per tick, never two: **E5 owns the `github` source** — its poll (its `fetch`, [swr-github.md §4](swr-github.md)) and its outbox drain (§9 of that page, `engine/src/watch/pr.rs`) both run in E5's step — and E24 never polls `github`. The engine wake that runs E24 between ticks (`engine/src/watch/wake.rs`) adds no second GitHub poll: the pass still runs only in E5. For each source it:
 
 1. skips the source while any of its endpoints is paused (`is_paused`);
 2. calls `fetch` for the keys `due` returns;

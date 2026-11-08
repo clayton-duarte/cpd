@@ -36,7 +36,7 @@ Use this template exactly, one line per section header, and omit any section wit
 
 **How:** The approach, key decisions, trade-offs and shortcomings. Why this approach, not another. What was sacrificed. What is known to be rough. Enough that a reviewer can judge whether the change is sound and whether it fits the system.
 
-**Acceptance criteria:** A checklist. Each item is checkable: it describes something testable (a test run, a command output, a manual observation) and ends with its evidence once known. A reviewer should see what was promised and what proved it. Examples: "`timeout 25 npm run build` succeeds"; "`npm run test -- test/auth.test.ts` passes"; "No regressions in the main app: verified by hand on the staging build at commit 62f4e9a".
+**Acceptance criteria:** A checklist. Each item is checkable: it describes something testable (a test run, a command output, a manual observation) and ends with its evidence once known. A reviewer should see what was promised and what proved it. Examples: "`timeout 25 npm run build` succeeds"; "`npm run test -- test/auth.test.ts` passes"; "No regressions in the main app: verified by hand on the staging build at commit 62f4e9a". Every command in an example is bounded by the Attempt's `attempt_minutes`, never by a fixed `timeout` over 30 s: that bound is a Lead's, a Manager's and an explore Worker's session rule, and an example that shows a larger number seeds it where it does not apply.
 
 **Out of scope and follow-ups:** What was deliberately left, naming registered Job and Workflow keys for follow-up work (for example, "Caching is not implemented; see Workflow cache"; "Error reporting for malformed tokens is a follow-up: Workflow error-reporting"). A reviewer reading this knows the boundary and can ask for what should have been done instead.
 
@@ -89,7 +89,7 @@ Use Redis with a 1-minute TTL for article list queries. Cache key is articles:<p
 
 - [x] `npm run test -- test/cache.test.ts` passes (cache layer unit tests)
 - [x] `npm run test -- test/articles.test.ts` passes (integration tests with cache)
-- [x] `timeout 120 npm run load-test` shows mean latency under 50ms with 1000 requests (was 200ms)
+- [x] `npm run load-test` shows mean latency under 50ms with 1000 requests (was 200ms), inside the Attempt's `attempt_minutes`
 - [x] Manual test: clear cache, load /articles, verify first request hits DB; second request is cached
 
 ## Out of scope and follow-ups

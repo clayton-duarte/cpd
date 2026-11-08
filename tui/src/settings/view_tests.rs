@@ -241,12 +241,14 @@ const BIFROST: [&str; 4] = [
     "bifrost/vertex/claude-haiku-5-5",
     "bifrost/vertex/gemini-3.8-flash",
 ];
+/// The decide letter J's model (contract §9): a fifth letter, outside every preset.
+const JEV: &str = "bifrost/vertex/jev-router";
 
 pub(super) fn config(experimental: &Value) -> Value {
     json!({"config": {
         "experimental": experimental,
         "concurrency": 5,
-        "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3",
+        "decide_tier": "JX", "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3",
         "presets": {"bifrost": {"O": BIFROST[0], "S": BIFROST[1], "H": BIFROST[2], "G": BIFROST[3]}},
     }})
 }
@@ -257,13 +259,14 @@ fn tiers() -> Value {
         "S": {"model": BIFROST[1], "efforts": [0, 1, 2, 3, 4]},
         "H": {"model": BIFROST[2], "efforts": [0, 1, 2, 3, 4]},
         "G": {"model": BIFROST[3], "efforts": []},
+        "J": {"model": JEV, "efforts": [0, 1, 2, 3]},
     }})
 }
 
 fn models() -> Value {
     json!({"providers": [
         {"provider": "bifrost", "ids": ["vertex/gemini-4-argon", "vertex/claude-sonnet-5-5",
-            "vertex/claude-haiku-5-5", "vertex/gemini-3.8-flash"]},
+            "vertex/claude-haiku-5-5", "vertex/gemini-3.8-flash", "vertex/jev-router"]},
         {"provider": "github-copilot", "ids": ["claude-opus-5.5", "claude-sonnet-5.5",
             "claude-haiku-4.5", "gemini-3.8-flash"]},
     ]})
@@ -370,6 +373,8 @@ fn candidates(o: &str) -> Vec<String> {
         &format!("H={}", BIFROST[2]),
         "--model",
         &format!("G={}", BIFROST[3]),
+        "--model",
+        &format!("J={JEV}"),
     ])
 }
 
@@ -442,8 +447,10 @@ pub(super) fn first_screen() -> Vec<String> {
         "     S  sonnet vertex/claude-sonnet-5-5 ▾",
         "     H  haiku  vertex/claude-haiku-5-5 ▾",
         "     G  gemini vertex/gemini-3.8-flash ▾",
+        "     J  jev    vertex/jev-router ▾",
         "",
         " Tiers  the default of each role; its range follows",
+        "     decide    JX ▾  default only",
         "     auxiliar  GX ▾  default only",
         "     worker    H3 ▾  H3..S3",
         "     lead      S4 ▾  S4..O2",
@@ -453,8 +460,6 @@ pub(super) fn first_screen() -> Vec<String> {
         "     durable_workers      off",
         "     write_curation       on",
         "     failure_triage       on",
-        "     turn_question_guard  on",
-        "",
         "",
     ])
 }
@@ -594,7 +599,7 @@ fn the_workers_screen_keeps_the_error_and_stops_on_a_refused_concurrency() {
 
 #[test]
 fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
-    let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    let mut acts: Vec<Act> = (0..10).map(|_| Act::Key(KeyCode::Down)).collect();
     acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)]);
     acts.extend([Act::Snap, Act::Key(KeyCode::Esc)]);
@@ -606,12 +611,12 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
             "",
             "",
             "",
-            "     O  opus   vertex/gemini-4-argon ▾",
-            "     S  sonnet vertex/claude-sonnet-5-5 ▾",
             "     H  haiku  vertex/claude-haiku-5-5 ▾",
             "     G  gemini vertex/gemini-3.8-flash ▾",
+            "     J  jev    vertex/jev-router ▾",
             "",
             " Tiers  the default of each role; its range follows",
+            "     decide    JX ▾  default only",
             "     auxiliar  GX ▾  default only",
             "     worker    H3 ▾  H3..S3",
             "   ▸ lead      S4 ▴  S4..O2",
@@ -637,7 +642,7 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
 #[test]
 fn typing_narrows_the_list_by_substring() {
     // not in the listed names on purpose: pins the filter line `filter: <text>` the docs give
-    let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    let mut acts: Vec<Act> = (0..10).map(|_| Act::Key(KeyCode::Down)).collect();
     acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([
         Act::Key(KeyCode::Enter),
@@ -719,7 +724,11 @@ fn the_footer_shows_a_refusal_in_red() {
     let run = popup(&commands, acts);
     let snap = &run.snaps[0];
     let rows = snap.rows();
-    assert_eq!(rows[5], "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
+    let o_row = rows
+        .iter()
+        .find(|r| r.contains("O  opus"))
+        .expect("the O row is drawn after the scroll");
+    assert_eq!(o_row, "   ▸ O  opus   vertex/claude-sonnet-5-5* ▾");
     assert_eq!(
         rows[23],
         "preset_model_unoffered: bifrost does not offer O's model"
@@ -759,10 +768,10 @@ fn the_body_scrolls_with_the_wheel_when_it_is_taller_than_the_popup() {
             "     S  sonnet vertex/claude-sonnet-5-5 ▾",
             "     H  haiku  vertex/claude-haiku-5-5 ▾",
             "     G  gemini vertex/gemini-3.8-flash ▾",
+            "     J  jev    vertex/jev-router ▾",
             "",
             " Tiers  the default of each role; its range follows",
-            "     auxiliar  GX ▾  default only",
-            "     worker    H3 ▾  H3..S3",
+            "     decide    JX ▾  default only",
             "",
         ])
     );
@@ -849,6 +858,8 @@ fn tiers_set() -> Vec<String> {
         "config",
         "tiers",
         "set",
+        "--decide",
+        "JX",
         "--auxiliar",
         "GX",
         "--worker",

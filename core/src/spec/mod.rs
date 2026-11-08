@@ -20,6 +20,9 @@ use crate::home::{CpdHome, Hook};
 use crate::ids::{AttemptId, EscalationId, PlanId};
 
 #[cfg(test)]
+mod agent_refusals_tests;
+
+#[cfg(test)]
 mod resources_tests;
 
 #[cfg(test)]
@@ -346,6 +349,10 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ),
         ("goal", Value::from(input.goal)),
         ("context", Value::from(input.context)),
+        (
+            "writing_for_agents",
+            Value::from(input.touches.iter().any(|t| t.starts_with("pi/skills/"))),
+        ),
         ("touches", Value::from(input.touches.to_vec())),
         ("acceptance", Value::from(input.acceptance.to_vec())),
         ("out_of_scope", Value::from(input.out_of_scope.to_vec())),

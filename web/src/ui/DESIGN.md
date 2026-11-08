@@ -646,7 +646,7 @@ A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model
 
 - **Save** runs the writes below in order, as the TUI does (`tui/src/settings/model.rs:681-733`, `tui/src/settings/mod.rs:115-181`). Each step runs only when its value changed.
   1. `cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>` when a model or the Provider changed.
-  2. `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers.
+  2. `cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers (all five roles, the decide role included, contract §9).
   3. `cpd config experimental <feature> on|off`, once per changed switch.
   4. `cpd session retier --all`, only when step 1 or 2 changed something. It re-tiers every live Lead and Manager.
 - Save is blocked, and the reason is shown in red: a model is unset, a re-read failed, or a Tier is not a rung of the model it runs on. Save with nothing changed closes the dialog. A failed step stops the run and shows its error; the next Save runs only the steps that did not succeed.
@@ -658,7 +658,7 @@ A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model
 | Read | Command or source | Field | Used by |
 |---|---|---|---|
 | Runner, switches | `cpd config experimental` | `.experimental.{durable_workers,write_curation,failure_triage,turn_question_guard}` | Runner, Agent Tiers rows 10 to 13 |
-| Tiers, presets | `cpd config` | `.config.{context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
+| Tiers, presets | `cpd config` | `.config.{decide_tier,context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
 | Models, rungs | `cpd tiers` | `.tiers.{O,S,H,G}.{model,efforts}` | Agent Tiers rows 2 to 5 and ranges |
 | Provider lists | `cpd models show` | `.providers[].{provider,ids}` | Agent Tiers rows 1 and 2 to 5 |
 | Incident | `cpd incident status` | `on`, `incident.started_at` | Incident |
@@ -1118,6 +1118,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New context; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
 | pro-d87 header bar removed | the full-width Header bar (φ link, Location breadcrumb, engine pill) and the Shell `header` slot are removed; the three column `TopPaneHeader`s form the top row; the engine pill and breadcrumb navigation are a known loss, not rebuilt | 2a, 3a, 3c, 3e; DESIGN-panes 4.1 (superseded) |
 | pro-d88 fixed pane header and plan collapse control | the ManagerView and PlanView headers stay fixed while their bodies scroll (`plan-scroll`, DESIGN-panes 1, 1j); the collapse control moves into `TopPaneHeader` through `PlanCollapseContext`; `TopPaneHeader` is not sticky (supersedes the `sticky` of the pro-d84..86 row); Shell's ScrollArea around the plan and its floating controls are removed; the Plan pane is not `inert` when collapsed | 3c, 3i, 5.3; DESIGN-panes 1, 1b, 1j |
+| air-d121 Inbox card interaction (Plan `inbox-cards`) | the card click opens the owning Lead or Manager (`onSelectPlan` + `onSelectSession`); a row with no owner opens its `url`, else nothing; the top-right slot is the external-link anchor (`ExternalLinkIcon`, `target="_blank"`, `rel="noopener noreferrer"`) whenever `row.url` is non-null, else `ChevronRight`; the title is not a link; the action button keeps the primary-action ladder (`row.actions` -> Start -> Approve -> Claim -> Merge/Post/RePost -> Curate -> Dismiss) and never an owner-link or an external link; action errors go through the cockpit error toast (air-d44), never inline | DESIGN-panes 2.5, 2.6, 2.7, 4.8; CONTRACT 6.7 |
 
 **Resolutions recorded while writing (for the Lead).** (1) pro-d51 says the Inbox row is an `asChild <a>`; the approved preview renders a `role="button"` root, and DESIGN-panes 2.5 follows the preview. (2) pro-d57 says Send is always enabled; the preview disables it for an empty composer, and DESIGN-compose 1.4 follows the preview. (3) pro-d56 puts the Footer context HoverCard in the chat; the preview does not mount it, and DESIGN-compose 3 mounts it where main does. (4) The composer's drop cue is kept from main; the preview lacks it. (5) pi plan reviews are interactive, as the preview does; pro-d60 names only `ask_user_question`.
 

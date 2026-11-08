@@ -897,6 +897,7 @@ impl Run<'_> {
             Letter::S => &models.s,
             Letter::H => &models.h,
             Letter::G => &models.g,
+            Letter::J => &models.j,
         };
         let model = crate::config::with_level(model, tier.thinking());
         let launch = pi::distiller(&model, files);

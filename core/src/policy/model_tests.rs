@@ -1,6 +1,6 @@
 //! Red tests of the `model` domain's one-provider rule (contract §8.3 "Models").
 
-use super::{Models, check_one_provider, provider_of};
+use super::model::{ModelSet, Models, check_one_provider, provider_of};
 use crate::error::ErrorCode;
 use serde_json::json;
 use std::path::Path;
@@ -13,6 +13,64 @@ fn models(o: &str, s: &str, h: &str, g: &str) -> Models {
         s: s.into(),
         h: h.into(),
         g: g.into(),
+        j: "gc/j".into(),
+    }
+}
+
+/// A `[model]` table of the five keys `O`, `S`, `H`, `G`, `J` (contract §8.3 "Models").
+fn models5(o: &str, s: &str, h: &str, g: &str, j: &str) -> Models {
+    Models {
+        o: o.into(),
+        s: s.into(),
+        h: h.into(),
+        g: g.into(),
+        j: j.into(),
+    }
+}
+
+/// The five refs of a scope `[model]` table, one key each.
+const FIVE_KEYS: &str =
+    "O = \"p/o\"\nS = \"p/s\"\nH = \"p/h\"\nG = \"p/g\"\nJ = \"openrouter/typesafe/jev-router\"\n";
+
+/// J is the fifth `[model]` key: a scope table holding it parses, and the compiled default names its model
+/// (`github-copilot/gemini-3.8-flash`, contract §8.3 "Models").
+#[test]
+fn the_model_table_takes_a_fifth_key_j() {
+    let parsed: Result<ModelSet, _> = toml::from_str(FIVE_KEYS);
+    assert!(
+        parsed.is_ok(),
+        "a [model] table takes the five keys O, S, H, G, J: {:?}",
+        parsed.err()
+    );
+    assert_eq!(
+        crate::policy::default_policy().model.j,
+        "github-copilot/gemini-3.8-flash",
+        "the compiled default names J's model"
+    );
+}
+
+/// The one-provider rule holds at the five keys, with no exemption for J (contract §8.3 "Models":
+/// "the rule is unchanged at the five keys `O`, `S`, `H`, `G` and `J`").
+#[test]
+fn one_provider_holds_with_five_keys() {
+    let m = models5("gc/a", "gc/b", "gc/c/d", "gc/e", "gc/f");
+    assert!(
+        check_one_provider(&m, Path::new(FILE)).is_ok(),
+        "five refs of one provider are accepted"
+    );
+    let mixed = models5("gc/o", "gc/s", "gc/h", "gc/g", "bifrost/j");
+    let result = check_one_provider(&mixed, Path::new(FILE));
+    assert!(
+        result.is_err(),
+        "a J ref from another provider is refused, as any key's is"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PolicyInvalid);
+    assert_eq!(error.details().get("file"), Some(&json!(FILE)));
+    assert_eq!(error.details().get("key"), Some(&json!("model")));
+    let message = error.message();
+    for word in ["J", "bifrost", "gc"] {
+        assert!(message.contains(word), "{message}");
     }
 }
 

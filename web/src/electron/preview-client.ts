@@ -2,6 +2,13 @@ import type { UiMode } from "./channels.ts";
 import type { HealthRecord } from "./health.ts";
 import type { Watchdog } from "./watchdog.ts";
 
+/**
+ * The bounded readiness wait of the WebUI Preview (CONTRACT.md §19.3): the client loads its dev URL
+ * once the preview server is ready, and a server that never becomes ready fails after this many
+ * milliseconds instead of hanging. The wait starts at `open()`.
+ */
+export const PREVIEW_READINESS_TIMEOUT_MS = 15_000;
+
 export interface PreviewRunOptions {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -30,6 +37,13 @@ export interface PreviewClientDeps {
   run(file: string, args: readonly string[], options: PreviewRunOptions): Promise<PreviewRunResult>;
   readHealth(): Promise<HealthRecord | null>;
   writeHealth(record: HealthRecord): Promise<void>;
+  /**
+   * Resolves true once the preview dev server answers and can serve `devUrl`; polled by `tick()`
+   * during the bounded readiness wait (CONTRACT.md §19.3). The readiness gate is the server, never
+   * the running app's health. Optional so a caller without a probe keeps building; the readiness
+   * test supplies it.
+   */
+  isPreviewServerReady?(): Promise<boolean>;
   showLoading(): void;
   loadDevUrl(url: string): Promise<void>;
   showErrorBox(title: string, content: string): void;
@@ -57,6 +71,8 @@ export function createPreviewClient(deps: PreviewClientDeps): PreviewClient {
   let closed = false;
   let loaded = false;
   let reloadEpoch = 0;
+  // The bounded readiness wait of §19.3 starts at `open()`, not at process start.
+  let openedAt = 0;
 
   const run = (args: readonly string[]): Promise<PreviewRunResult> =>
     deps.run("sh", [script, ...args], { cwd: deps.root, env: deps.env });
@@ -91,6 +107,7 @@ export function createPreviewClient(deps: PreviewClientDeps): PreviewClient {
         }
         served = true;
       }
+      openedAt = deps.now();
       reloadEpoch += 1;
       await deps.writeHealth({
         status: "loading",
@@ -111,8 +128,15 @@ export function createPreviewClient(deps: PreviewClientDeps): PreviewClient {
       if (!active) return;
       await deps.watchdog.tick();
       if (!active || loaded) return;
-      const record = await deps.readHealth();
-      if (record === null || record.status !== "healthy") return;
+      // §19.3: readiness is the preview server, bounded by PREVIEW_READINESS_TIMEOUT_MS — never
+      // the running app's health (which the dev-URL load itself produces: the old circular wait).
+      if (deps.now() - openedAt >= PREVIEW_READINESS_TIMEOUT_MS) {
+        loaded = false;
+        active = false;
+        await fail(`the preview server was not ready within ${PREVIEW_READINESS_TIMEOUT_MS} ms`);
+        return;
+      }
+      if (deps.isPreviewServerReady !== undefined && !(await deps.isPreviewServerReady())) return;
       loaded = true;
       try {
         await deps.loadDevUrl(deps.devUrl);

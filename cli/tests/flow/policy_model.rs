@@ -66,9 +66,9 @@ impl Models {
     }
 }
 
-const LETTERS: [&str; 4] = ["O", "S", "H", "G"];
+const LETTERS: [&str; 5] = ["O", "S", "H", "G", "J"];
 
-/// A `[model]` table whose four refs are `github-copilot/<prefix>-<letter>`.
+/// A `[model]` table whose five refs are `github-copilot/<prefix>-<letter>`.
 fn table(prefix: &str) -> String {
     let lines: Vec<String> = LETTERS
         .iter()
@@ -104,6 +104,7 @@ fn m1_default_models_are_todays_tiers() {
             ("S", "github-copilot/claude-sonnet-5.5"),
             ("H", "github-copilot/claude-haiku-4.5"),
             ("G", "github-copilot/gemini-3.8-flash"),
+            ("J", "github-copilot/gemini-3.8-flash"),
         ] {
             assert_eq!(
                 key(&out, letter),
@@ -190,6 +191,7 @@ fn m3_the_owner_replaces_the_machine_whole_and_the_rest_is_the_default() {
         ("S", "github-copilot/claude-sonnet-5.5"),
         ("H", "github-copilot/claude-haiku-4.5"),
         ("G", "github-copilot/gemini-3.8-flash"),
+        ("J", "github-copilot/gemini-3.8-flash"),
     ] {
         assert_eq!(
             key(&out, letter),
@@ -201,7 +203,7 @@ fn m3_the_owner_replaces_the_machine_whole_and_the_rest_is_the_default() {
 
 // ------------------------------------------------------------------ m4: one provider per table
 
-const BIFROST: &str = "[model]\nO = \"bifrost/vertex/o\"\nS = \"bifrost/vertex/s\"\nH = \"bifrost/vertex/h\"\nG = \"bifrost/vertex/g\"\n";
+const BIFROST: &str = "[model]\nO = \"bifrost/vertex/o\"\nS = \"bifrost/vertex/s\"\nH = \"bifrost/vertex/h\"\nG = \"bifrost/vertex/g\"\nJ = \"bifrost/vertex/j\"\n";
 
 fn assert_mixed(error: &Value, file: &str) {
     assert_eq!(error["details"]["file"], file, "{error}");
@@ -230,7 +232,7 @@ fn m4_four_refs_of_one_other_provider_are_accepted() {
     let fx = Models::new();
     fx.write("acme/owner.toml", BIFROST);
     let out = fx.owner().ok();
-    for (letter, model) in [("O", "o"), ("S", "s"), ("H", "h"), ("G", "g")] {
+    for (letter, model) in [("O", "o"), ("S", "s"), ("H", "h"), ("G", "g"), ("J", "j")] {
         assert_eq!(
             key(&out, letter)["value"],
             format!("bifrost/vertex/{model}"),

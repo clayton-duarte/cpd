@@ -327,6 +327,10 @@ fn provider_error_is_a_cause_the_ledger_stores_and_reads_back() {
         efforts: vec![0, 1, 2, 3, 4, 5],
     };
     let catalog = Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".to_owned(),
         o: model("p/opus"),
         s: model("p/sonnet"),
@@ -340,6 +344,7 @@ fn provider_error_is_a_cause_the_ledger_stores_and_reads_back() {
         catalog: &catalog,
         retry_cap: 2,
         roles: cpd_core::config::RoleTiers {
+            decide: cpd_core::config::Tier::x(cpd_core::config::Letter::O),
             auxiliar: Tier::parse("GX").unwrap(),
             worker: Tier::parse("H0").unwrap(),
             lead: Tier::parse("S4").unwrap(),

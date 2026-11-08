@@ -31,10 +31,10 @@ describe("cdp argv", () => {
       argvList.some((argv) => argv.join(" ") === "plan list"),
       "missing the cockpit `plan list` command",
     ).toBe(true);
-    // ... and the settings' `config tiers set` with all four role flags (the air-n37 bug).
+    // ... and the settings' `config tiers set` with all five role flags, decide first (the air-n37 bug, contract §9).
     const tiers = argvList.find((argv) => argv.slice(0, 3).join(" ") === "config tiers set");
     expect(tiers, "missing the settings `config tiers set` command").toBeDefined();
-    for (const role of ["auxiliar", "worker", "lead", "manager"]) {
+    for (const role of ["decide", "auxiliar", "worker", "lead", "manager"]) {
       expect(tiers ?? [], `config tiers set is missing --${role}`).toContain(`--${role}`);
     }
 

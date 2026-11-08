@@ -179,3 +179,23 @@ it("the Agent Tiers Save shows a refused concurrency as the error toast with the
   expect(transport.sent.length).toBe(sentBefore);
   expect(body.querySelector('[data-part="agent-tiers-dialog"]')).not.toBeNull();
 });
+
+it("the settings dialog accepts a decide tier of JX", () => {
+  // The decide role's default is JX (contract §9, air-d113, air-d115, air-d120): the dialog shows it,
+  // keeps Save enabled, and still locks Save on a letter that is not a Tier letter.
+  const readWithDecide = {
+    tiers: { decide: "JX", auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
+    experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true },
+  } as unknown as SettingsRead;
+  show(<SettingsDialog open read={readWithDecide} onSave={vi.fn()} onCancel={vi.fn()} />);
+  const decide = body.querySelector('[aria-label="decide tier"]') as HTMLInputElement | null;
+  expect(decide).not.toBeNull();
+  expect(decide?.value).toBe("JX");
+  expect(decide?.getAttribute("aria-invalid")).toBe("false");
+  const saveButton = (): HTMLButtonElement | undefined =>
+    Array.from(body.querySelectorAll("button")).find((b) => b.textContent === "Save") as HTMLButtonElement | undefined;
+  expect(saveButton()?.disabled).toBe(false);
+  if (decide === null) throw new Error("the Agent Tiers dialog must show a decide tier");
+  act(() => { decide.value = "Z9"; decide.dispatchEvent(new Event("input", { bubbles: true })); });
+  expect(saveButton()?.disabled).toBe(true);
+});

@@ -402,6 +402,20 @@ impl Fx {
         self.engine_routes_polling();
         let merged = merged.clone();
         self.route_fn("gh", move |call| {
+            // E5's poll IS the GitHub SWR pass now (D9): its one document carries `viewer { login }` and the `authored:`
+            // search, so answer it before the legacy empty search below (which has no viewer).
+            if call
+                .args
+                .iter()
+                .any(|arg| arg.contains("authored: search(type: ISSUE"))
+            {
+                return Reply::ok(&swr_poll_reply(merged.load(Ordering::SeqCst)));
+            }
+            // The containment compare (main's poll per open default-branch pull request) is not the poll document
+            // (D10): answer it before the lookup fallback below, which would otherwise be read as a compare.
+            if call.args.iter().any(|arg| arg.contains("/compare/")) {
+                return Reply::ok(r#"{"status":"ahead"}"#);
+            }
             if call.args.iter().any(|arg| arg.contains("search(type: ISSUE")) {
                 return Reply::ok(EMPTY_SEARCH);
             }
@@ -456,6 +470,42 @@ impl Fx {
         self.scoped(|| self.watch_ticks(n))
             .expect("the engine ends cleanly");
     }
+}
+
+/// GitHub's answer to E5's one read, the SWR poll document (the source's `build_poll_query`): the viewer, the rate limit,
+/// the two empty searches, the `acme/a1#1` node (`p0`) and the repo metadata (`m0`). `a1` is merged once `merged` is set.
+fn swr_poll_reply(merged: bool) -> String {
+    let (state, at) = if merged {
+        ("MERGED", json!("2026-10-14T10:00:00Z"))
+    } else {
+        ("OPEN", json!(null))
+    };
+    json!({"data": {
+        "viewer": {"login": "ada"},
+        "rateLimit": {"remaining": 4987, "resetAt": "2026-10-20T11:00:00Z", "cost": 1},
+        "authored": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
+        "reviews": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
+        "p0": {"pullRequest": {
+            "number": 1, "state": state, "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+            "reviewDecision": null, "baseRefName": "main", "headRefName": "feat", "headRefOid": "h1",
+            "updatedAt": "U1", "title": "T", "url": "https://github.com/acme/a1/pull/1",
+            "createdAt": "t", "mergedAt": at,
+            "author": {"login": "ada"},
+            "repository": {"nameWithOwner": "acme/a1", "defaultBranchRef": {"name": "main"}, "isArchived": false},
+            "labels": {"nodes": []},
+            "autoMergeRequest": null,
+            "commits": {"nodes": [{"commit": {"oid": "h1", "statusCheckRollup": {"state": "SUCCESS", "contexts": {"nodes": []}}}}]},
+            "latestReviews": {"nodes": []},
+            "reviewThreads": {"nodes": []},
+            "comments": {"nodes": []},
+            "viewerDidAuthor": true,
+            "viewerLatestReviewRequest": null
+        }},
+        "m0": {"defaultBranchRef": {"name": "main"}, "isArchived": false, "autoMergeAllowed": true,
+               "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": false,
+               "deleteBranchOnMerge": true}
+    }})
+    .to_string()
 }
 
 /// What a step of [`Fx::engine_until`] reads of the store.
