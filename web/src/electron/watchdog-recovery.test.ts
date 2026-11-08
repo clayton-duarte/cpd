@@ -28,6 +28,9 @@ function portsRecord(state: { build: string }, clock: { now: number }): { ports:
     reloadRenderer: async () => {
       recorded.calls.push("reload-renderer");
     },
+    stopChildren: async () => {
+      recorded.calls.push("stop-children");
+    },
     report: async (event) => {
       recorded.events.push(event);
       recorded.calls.push(`report:${event.kind}:${event.data["build"] ?? event.data["recovery"] ?? event.data["detection"]}`);
@@ -52,10 +55,30 @@ describe("the ladder step's order (air-d127)", () => {
 
     await watchdog.tick();
 
-    expect(recorded.calls).toEqual(["report:watchdog.break:empty-data", "apply:prod", "report:watchdog.recovery:prod", "relaunch:production"]);
+    expect(recorded.calls).toEqual(["report:watchdog.break:empty-data", "apply:prod", "report:watchdog.recovery:prod", "stop-children", "relaunch:production"]);
     expect(recorded.events[1]).toMatchObject({ kind: "watchdog.recovery", data: { detection: "empty-data", build: "prod" } });
     // The rung is the one in force when the Event is committed, and the restart asks for production.
     expect(state.build).toBe("prod");
+  });
+
+  it("stops the update pass's follow child before the relaunch, on every rollback relaunch", async () => {
+    // The rollback relaunch exits through app.exit(0), which never runs the before-quit teardown, so
+    // the follow child would survive holding the sockets it inherited; on Linux the inherited
+    // DevTools listening socket keeps the relaunched process from binding its reserved
+    // --remote-debugging-port, and the ladder's prod rung never loads. The stop must sit between
+    // the recovery Event (committed) and the relaunch (process exits), every time the walk relaunches.
+    const state = { build: "preview" };
+    const { ports, recorded } = portsRecord(state, LATE);
+    ports.readHealth = async () => emptyData(1, T0);
+    const watchdog = createHealthWatchdog(ports, { snapshotGraceMs: 10_000, heartbeatTimeoutMs: 5_000 });
+
+    await watchdog.tick();
+
+    const stop = recorded.calls.indexOf("stop-children");
+    const recovery = recorded.calls.indexOf("report:watchdog.recovery:prod");
+    const relaunch = recorded.calls.indexOf("relaunch:production");
+    expect(stop).toBeGreaterThan(recovery);
+    expect(stop).toBeLessThan(relaunch);
   });
 
   it("reports nothing and does not relaunch when the rung cannot be applied", async () => {
@@ -70,8 +93,8 @@ describe("the ladder step's order (air-d127)", () => {
 
     await expect(watchdog.tick()).rejects.toThrow("copy failed");
 
-    // A recovery that did not happen is never announced, and the app is not restarted onto the build
-    // that is still in place.
+    // A recovery that did not happen is never announced, no child is stopped (the app keeps
+    // running), and the app is not restarted onto the build that is still in place.
     expect(recorded.calls).toEqual(["report:watchdog.break:empty-data", "apply:head-1"]);
   });
 

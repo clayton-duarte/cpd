@@ -341,6 +341,7 @@ function healthSetup(initial: { build?: Build } = {}) {
     reloadRenderer: async () => {
       calls.push("reload-renderer");
     },
+    stopChildren: async () => {},
     report: async (event: WatchdogEvent) => {
       events.push(event);
     },

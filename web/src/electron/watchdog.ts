@@ -253,6 +253,14 @@ export interface HealthWatchdogPorts {
   relaunch(mode: "production"): Promise<void>;
   /** Reload the renderer in place: the app process and the view stay (not a ladder step). */
   reloadRenderer(): Promise<void>;
+  /**
+   * Stop the app's long-lived children (the update pass's `cpd events follow`) before the relaunch.
+   * The relaunch ends the process with `app.exit(0)`, which never runs the before-quit teardown, so
+   * without this the follow child survives the exit holding the sockets it inherited; on Linux the
+   * inherited DevTools listening socket keeps the relaunched process from binding its reserved
+   * `--remote-debugging-port`, and no page target is ever reported.
+   */
+  stopChildren(): Promise<void>;
   /** Commit one structured Event (air-d81). */
   report(event: WatchdogEvent): Promise<void>;
   log(entry: Record<string, unknown>): Promise<void>;
@@ -302,6 +310,11 @@ export function createHealthWatchdog(
       text: `CPD watchdog recovered from ${brk.kind} by reverting to ${next}`,
       data: { detection: brk.kind, build: next },
     });
+    // The follow child is stopped before the restart: the relaunch exits through `app.exit(0)`,
+    // which skips the before-quit teardown, so this is the only chance to release the child's
+    // inherited sockets before the relaunched process binds its own (air-d127's walk order plus
+    // this stop is what the Linux runner needs to load the rung's view).
+    await ports.stopChildren();
     await ports.relaunch("production");
   };
 

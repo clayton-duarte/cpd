@@ -342,6 +342,13 @@ async function main(): Promise<void> {
         if (win.isDestroyed()) return;
         if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
       },
+      // The rollback relaunch exits through `app.exit(0)`, which never runs the before-quit
+      // teardown, so the update pass's `cpd events follow` child would survive the exit holding the
+      // sockets it inherited; on Linux the inherited DevTools listening socket keeps the relaunched
+      // process from binding its reserved `--remote-debugging-port`. Stop the child between the
+      // recovery Event and the relaunch, on every rollback relaunch (graceful quit is already
+      // covered by before-quit, and stopping twice is harmless).
+      stopChildren: async () => stopUpdate(),
       report: async (event) => {
         await events.report(event);
         electronDialog.showErrorBox("CPD WebUI", event.text);
