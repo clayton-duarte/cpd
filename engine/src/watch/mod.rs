@@ -94,6 +94,18 @@ mod provider_hold_e3_tests;
 mod provider_hold_tests;
 #[cfg(test)]
 mod repeated_asks_tests;
+// E25: the refusal threshold (contract §3.7 E25, Plan `agent-refusals`). A stub so the red tests
+// of [`refusal_alert_tests`] build; the implementation replaces it with its own module.
+#[cfg(test)]
+mod refusal_alert {
+    use super::engine::Engine;
+
+    pub(super) fn run(_engine: &mut Engine) {
+        todo!("E25: the refusal threshold")
+    }
+}
+#[cfg(test)]
+mod refusal_alert_tests;
 mod report;
 #[cfg(test)]
 mod report_restart_tests;

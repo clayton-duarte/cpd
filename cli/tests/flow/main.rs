@@ -69,6 +69,7 @@ mod job_resources;
 mod job_touches_stacked;
 mod job_verify;
 mod metrics;
+mod metrics_refusals;
 mod models_cmd;
 mod plan;
 mod plan_archive_drafts;
