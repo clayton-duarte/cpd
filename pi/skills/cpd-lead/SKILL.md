@@ -48,7 +48,7 @@ A key is fixed: never rename a session.
 - Session commands (`session show`, `open`, `close`, `fork`, `park`, `send`, `--session`) take an agent key ([Agent keys](#agent-keys)).
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
-- **Bug report protocol — all steps required on every bug report, recorded as you go with the `cpd protocol bug` commands (commands.md §33; a Worker reports a bug to you, you record it):**
+- **Bug report protocol — all steps required on every bug report, recorded as you go with the `cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close` commands (commands.md §33; a Worker reports a bug to you, you record it):**
   1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix. Record the bug: `cpd protocol bug report --title "<title>" --symptom "<what was seen>" [--cause "<cause>"] [--plan <p>]`. A bug of your Plan takes `--plan <p>` and you own it; a cross-Plan bug takes no `--plan` — you report it to your Manager, who owns it.
   2. Apply the mitigation ASAP — a stopgap you apply that removes or contains the User's symptom now (handing the User manual steps is not a mitigation unless the User chooses it) — then record it: `cpd protocol bug mitigate <id> --mitigation "<what you applied>"`. Until then the bug reads `mitigation applied: no`, visible with `cpd protocol bug show <id>` and queryable with `cpd protocol bug list --mitigated no`.
   3. Queue the follow-up root-cause fix (Workflow / Job) to address the bug in source.
@@ -98,7 +98,7 @@ Three ways to communicate are distinct:
 Lateral comms:
 
 - A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
-- The `cpd` Manager applies the bug report protocol (`cpd protocol bug report|mitigate|close`, commands.md §33).
+- The `cpd` Manager applies the bug report protocol (`cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 
