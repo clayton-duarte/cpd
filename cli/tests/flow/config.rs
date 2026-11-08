@@ -938,7 +938,8 @@ export function getSupportedThinkingLevels(model) {
 "#;
 
 /// The machine policy's `[model]` keys of the tests of `cpd tiers`.
-const TIERS_MODELS: &str = "O = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\nJ = \"p/jev-router\"\n";
+const TIERS_MODELS: &str =
+    "O = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\nJ = \"p/jev-router\"\n";
 
 /// [`cpd_isolated`] in this process: `PATH` is the env's `bin/` alone for the one call.
 fn fx_isolated(fx: &Fx, args: &[&str]) -> Run {
