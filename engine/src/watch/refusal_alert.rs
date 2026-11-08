@@ -46,9 +46,7 @@ pub(super) fn run(engine: &mut Engine) {
     let since = now - time::Duration::minutes(i64::from(minutes));
     let since_text = timestamp(since);
 
-    let found = engine
-        .store
-        .read(|conn| crossings(conn, since, threshold));
+    let found = engine.store.read(|conn| crossings(conn, since, threshold));
     let found = match found {
         Ok(found) => found,
         Err(e) => {
@@ -76,7 +74,8 @@ pub(super) fn run(engine: &mut Engine) {
                 && manager != crossing.session
             {
                 // The air-d64 wake: a message from the User's side (`from` null) that wakes the Manager at once.
-                let message = NewEvent::session_message(text.clone(), None::<String>, &text, true, None)?;
+                let message =
+                    NewEvent::session_message(text.clone(), None::<String>, &text, true, None)?;
                 events::append(tx, message.session(SessionId::parse(&manager)?))?;
             }
             Ok(true)

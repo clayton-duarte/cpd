@@ -506,7 +506,9 @@ pub fn refusals_to_output(args: RefusalsArgs) -> Result<Output, CpdError> {
 
     let mut env = Env::open()?;
     let store = env.store.path().display().to_string();
-    let events = env.store.read(|conn| read_guard_events(conn, since, until))?;
+    let events = env
+        .store
+        .read(|conn| read_guard_events(conn, since, until))?;
 
     let mut total: u64 = 0;
     let mut per_guard: BTreeMap<String, u64> = BTreeMap::new();
@@ -616,7 +618,8 @@ fn parse_boundary(text: &str) -> Option<OffsetDateTime> {
     if parts.next().is_some() {
         return None;
     }
-    let date = time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+    let date =
+        time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
     Some(date.midnight().assume_utc())
 }
 
