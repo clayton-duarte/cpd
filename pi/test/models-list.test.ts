@@ -139,21 +139,26 @@ test("custom provider list: the ids come from GET <baseUrl>/models with the prov
   }
 });
 
-test("custom provider list: an unset key is models_key_unset and nothing is fetched", async () => {
+test("custom provider list: a provider whose key pi cannot resolve is skipped, not a failed entry", async () => {
   const gateway = await serve(models("a"));
+  const keyed = await serve(models("m1"));
   try {
     const { rt } = runtime({
       custom: {
         thrown: { baseUrl: `${gateway.origin}/v1`, key: "throws" },
         nothing: { baseUrl: `${gateway.origin}/v1`, key: "none" },
+        keyed: { baseUrl: `${keyed.origin}/v1` },
       },
     });
     const answer = await listModels({ rt, piVersion: PI_VERSION });
 
-    for (const provider of ["thrown", "nothing"]) assert.equal(failure(answer, provider).code, "models_key_unset", provider);
-    assert.equal(gateway.hits.length, 0, "no request is made without a key");
+    assert.ok(answer.ok, JSON.stringify(answer));
+    assert.deepEqual(answer.providers.map((e) => e.provider), ["keyed"], "a keyless provider is skipped");
+    assert.equal(answer.providers.some((e) => "error" in e), false, "no failed entry");
+    assert.equal(JSON.stringify(answer).includes("models_key_unset"), false, "no models_key_unset");
+    assert.equal(gateway.hits.length, 0, "nothing is fetched for a provider pi cannot resolve a key for");
   } finally {
-    await gateway.close();
+    await Promise.all([gateway.close(), keyed.close()]);
   }
 });
 
@@ -259,7 +264,7 @@ test("the helper never prints the key", async () => {
     assert.equal(stdout.trimEnd().split("\n").length, 1, "ONE JSON value on stdout");
     const answer = JSON.parse(stdout) as Answer;
     assert.ok(answer.ok);
-    assert.equal(answer.providers.length, 4);
+    assert.equal(answer.providers.length, 3, "the keyless `unset` provider is skipped");
     assert.equal(stdout.includes(KEY), false, "stdout");
     assert.equal(err.join("").includes(KEY), false, "stderr");
     assert.equal(JSON.stringify(await listModels({ rt, piVersion: PI_VERSION })).includes(KEY), false, "the answer, details included");
