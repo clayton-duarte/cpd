@@ -6386,3 +6386,96 @@ fn a_recorded_launch_runs_once_in_process_and_its_pid_ends_with_the_exit_code() 
     );
     assert!(children.run_pending().is_empty(), "a launch runs once");
 }
+
+// ---- E9 curate: a failed run is an error Event (air-n103, air-n104; curate-scout §1) ----
+
+/// What the E9 curation tick needs of pi to locate it (`locate_pi`, `docs/contract.md` §9): a `pi` on `PATH` with a
+/// complete install above it. The run never executes it: the judge is `node`, and the test routes that.
+fn an_installed_pi(fx: &Ip) {
+    let install = fx.env.root().join("install");
+    fs::create_dir_all(&install).unwrap();
+    fs::write(install.join("current-version"), "1.0.0\n").unwrap();
+    let scope = install.join("releases/1.0.0/node_modules/@earendil-works");
+    for package in ["pi-coding-agent", "pi-ai"] {
+        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
+        fs::write(scope.join(package).join("dist").join("index.js"), "").unwrap();
+    }
+    fx.env.fake_pi("");
+}
+
+/// air-n103, air-n104 (contract §3.7 E9): a write-time curate run that ends non-zero — the judge unreachable, as when
+/// `BIFROST_VIRTUAL_KEY` is unset (curate-scout §1) — raises one E9 `error` Event. Today the tick only logs it to
+/// `run/watch.log` and backs off.
+#[test]
+fn a_failed_curate_run_raises_an_error_event() {
+    let fx = engine("context_curation_min_records = 1\n");
+    an_installed_pi(&fx);
+    // The judge is pi's `node` helper: unreachable, as a missing key makes it.
+    fx.route_fn("node", |_| Reply::exit(1, "", ""));
+    // Two similar notes, so the run reaches the judge for their pair.
+    let now = fx.stamp_ago(0);
+    fx.env.sql(&format!(
+        "INSERT INTO context_records (context, id, kind, at, machine, text)
+           VALUES ('ctx', 'm1-n1', 'note', '{now}', 'm1', 'Postgres is the database.'),
+                  ('ctx', 'm1-n2', 'note', '{now}', 'm1', 'Postgres is the database.');"
+    ));
+
+    // Long enough for the run to start, fail, and the next tick to see it end.
+    drive_for(&fx, 3 * SECOND);
+
+    let launches = fx.fakes.spawn.launches();
+    assert!(
+        launches.iter().any(|l| l.args.get(1).map(String::as_str) == Some("curate")),
+        "the curate run was not started: {launches:?}"
+    );
+    let errors = fx.texts("error");
+    let e9: Vec<&String> = errors
+        .iter()
+        .filter(|text| text.contains("E9 (Context digests)"))
+        .collect();
+    assert_eq!(
+        e9.len(),
+        1,
+        "a failed curate run raises one E9 error Event: {errors:?}"
+    );
+}
+
+// ---- E2 liveness: a blank list-panes line (air-n104; curate-scout §3) ----
+
+/// air-n104 (contract §3.7 E2; curate-scout §3): tmux can print one blank line among its `list-panes` lines (a pane torn
+/// down mid-format, the 21:33 EST tick of the incident's `tmux_failed`). The blank line names no pane, so the E2 tick
+/// skips it instead of aborting every Session check. Today `list_panes` rejects it and the whole tick fails.
+#[test]
+fn the_e2_tick_skips_a_blank_list_panes_line() {
+    let fx = engine_on_tmux();
+    // A live Session whose pane is in the listing: E2 finds it and leaves it alone.
+    fx.env.sql(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('live', 'ctx', 'Live', 'dispatch', 'live', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
+           VALUES ('live', 'lead', 'ctx', 'live', 'Live', '/', 'O3', 'idle', 't', 't', '%1');",
+    );
+    let _ = (*fx.fakes.runner).clone().on(
+        "tmux",
+        |call| call.args.iter().any(|a| a == "list-panes"),
+        Reply::ok("%1\t@1\tcpd\twork\t0\t\t12345\t\t\n\n"),
+    );
+
+    fx.watch_ticks(1).unwrap();
+
+    let errors = fx.texts("error");
+    let e2: Vec<&String> = errors
+        .iter()
+        .filter(|text| text.contains("E2 (liveness)"))
+        .collect();
+    assert!(
+        e2.is_empty(),
+        "a blank list-panes line aborted the E2 tick: {e2:?}"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT state FROM sessions WHERE id = 'live'"),
+        "idle",
+        "the live Session was left alone"
+    );
+}
