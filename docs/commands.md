@@ -43,6 +43,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 29. [`janitor`](#29-janitor)
 30. [`resource`](#30-resource)
 32. [`swr`](#32-swr)
+33. [`protocol`](#33-protocol)
 
 ## 1. Conventions
 
@@ -303,6 +304,11 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
 | `cpd desktop` (§14.4a) | none | no | no |
+| `cpd protocol bug report` (§33.1) | Lead, Manager | no | no |
+| `cpd protocol bug mitigate` (§33.2) | Lead, Manager | no | no |
+| `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
+| `cpd protocol bug list` (§33.4) | Manager, Lead, Worker | no | no |
+| `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -7938,3 +7944,106 @@ Effects: one write transaction on the row of `<endpoint>` in `swr_endpoints`. `o
 ```
 
 Idempotent: `ok` yes; `error` no, each call counts one failure.
+
+## 33. `protocol`
+
+The bug record (air-d104; contract §2.2 "Bug record"): the bug report protocol (pro-d204) as commands, not prose. One row per bug in the `bug_records` table; no Event kind is appended and the protocol number does not change (contract §5.2). **Callers:** `report`, `mitigate` and `close` are the Lead's and the Manager's; a Worker that finds or is handed a bug reports it to its Lead, and the commands refuse it `not_a_lead` (exit 3, nothing written) when `CPD_ATTEMPT` is set and non-empty, as `job addendum` is. `list` and `show` are every agent's, read-only. **'Mitigation'** (air-d103): an agent-applied stopgap that removes or contains the User's symptom now; handing the User manual steps is not a mitigation unless the User chooses it. **Ownership** (air-d104): the Manager owns a cross-Plan bug (`plan` null), a Plan's Lead owns a bug of its Plan. The bug id is `b<k>`, the highest `<k>` in the table plus one, starting at 1, never reused.
+
+### 33.1 `protocol bug report`
+
+```
+cpd protocol bug report --title <text> --symptom <text> [--cause <text>] [--plan <id>]
+```
+
+Records a bug and opens its protocol state. `--title` is the one-line name (1 to 200 characters with no NUL), `--symptom` what was seen (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is known at report time, `--plan` the Plan the bug belongs to; without `--plan` the bug is cross-Plan and the Manager owns it. Every text flag is required to be non-empty (`usage`, exit 2); `--plan` must name a Plan that exists and is not deleted (`plan_not_found`, exit 4).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--title` and `--symptom` present, 1 to 200 and 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `--plan`, if present, names a Plan that exists and is not deleted | `plan_not_found` | 4 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction, one insert into `bug_records` (contract §2.2 "Bug record"): `id` the next `b<k>`, `status` `open`, `reported_by` the caller's Session id (`CPD_SESSION`; null when unset), `reported_at` the transaction's time, `cause` from `--cause`, every other field null. **No Event is appended.**
+
+**Output:**
+
+```json
+{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
+```
+
+**Not idempotent:** every call reports a new bug.
+
+### 33.2 `protocol bug mitigate`
+
+```
+cpd protocol bug mitigate <id> --mitigation <text> [--cause <text>]
+```
+
+Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--mitigation` present, 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `<id>` names a `bug_records` row | `bug_not_found` | 4 |
+| the bug's `status` is `open` | `illegal_transition` | 3 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set when `--cause` is given and null otherwise. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
+
+**Output:** the `bug` object of §33.1, with the new values.
+
+**Idempotent:** the same `--mitigation` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
+
+### 33.3 `protocol bug close`
+
+```
+cpd protocol bug close <id> --root-fix <ref> --regression-test <text>
+```
+
+Closes a bug whose root fix is in and its regression test recorded (air-d107). `--root-fix` is the root-fix Work as a reference: a Plan id, a Workflow `<plan>/<key>` ("A Workflow reference", contract §2.2) or a Job `<plan>/<workflow>/<key>`; cpd stores it and does not resolve it. `--regression-test` names the test that pins the fix, as the repo names its tests (a test function, file or filter). Both flags are required and non-empty: a missing or empty one is refused `root_fix_required` (exit 3, nothing written, `details` `{"missing": ["root-fix" | "regression-test"]}`), the refusal air-d107 names — a close without a root-fix link and a regression test does not happen. Malformed text (over 200 characters, a NUL) is `usage` (exit 2).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--root-fix` and `--regression-test` present, 1 to 200 characters each, no NUL (`details` `{"missing": [...]}`) | `root_fix_required` | 3 |
+| `<id>` names a `bug_records` row | `bug_not_found` | 4 |
+| the bug's `status` is `open` | `illegal_transition` | 3 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction: `root_fix` and `regression_test` set from the flags, `status` `closed`, `closed_at` the transaction's time, `closed_by` the caller's Session id (`CPD_SESSION`; null when unset). **No Event is appended.** Nothing else changes: the root-fix Job or Workflow is queued and merged by the Plan's own machinery, never by this command.
+
+**Output:** the `bug` object of §33.1, `status` `closed`.
+
+**Idempotent:** a close of a bug whose `status` is already `closed` is `{"ok": true, "already": true}` with the `bug` object, nothing written, whatever the flags say.
+
+### 33.4 `protocol bug list`
+
+```
+cpd protocol bug list [--plan <id>] [--status open|closed] [--mitigated yes|no]
+```
+
+Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <id>` the bugs of one Plan (`plan_not_found`, exit 4, when it names no existing, undeleted Plan; `plan_not_found` also for a Plan no bug names, which lists nothing only when combined with no other refusal — no: `--plan` is validated like `report`'s, then filters), `--status` open or closed bugs, `--mitigated yes` the bugs with a mitigation recorded, `--mitigated no` the bugs with **mitigation applied: no** (air-d104: the state is queryable). Read-only; no Worker check.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--status`, if present, is `open` or `closed`; `--mitigated`, if present, is `yes` or `no` | `usage` | 2 |
+| `--plan`, if present, names a Plan that exists and is not deleted | `plan_not_found` | 4 |
+
+**Output:**
+
+```json
+{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
+```
+
+**Idempotent:** a read; the same store gives the same list.
+
+### 33.5 `protocol bug show`
+
+```
+cpd protocol bug show <id>
+```
+
+One bug record, every field (contract §2.2 "Bug record"), so **mitigation applied: no** is visible (`mitigation`, `mitigated_by` and `mitigated_at` null). `<id>` that no row holds is `bug_not_found` (exit 4). Read-only; no Worker check.
+
+**Output:** the `bug` object of §33.1.
+
+**Idempotent:** a read.
