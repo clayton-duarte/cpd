@@ -1,7 +1,10 @@
 //! E5, the GitHub step (contract §3.7, §7.6; hs-d96, hs-d97; docs/architecture/swr.md §12): E5 owns the `github`
-//! source — one pass per tick, its `due()` and `fetch()`, and its outbox drain (swr-github.md §4, §9). `pr_poll_seconds`
-//! after the end of the previous pass, at its due time (the engine wakes for it between ticks), whether or not any Plan is
-//! in `deploy`: one pass covers every open pull request of the User. Exactly one engine step polls GitHub per tick, never two.
+//! source — its `due()`, its `fetch()` and its outbox drain (swr-github.md §4, §9). `pr_poll_seconds` after the end of
+//! the previous pass, at its due time (the engine wakes for it between ticks), whether or not any Plan is in `deploy`:
+//! one pass covers every open pull request of the User. The pass runs first, in E5's poll thread; the legacy `cpd pr poll`
+//! then runs the post-processing (its Events and its Workflow merges) on the same cycle — a stopgap until that work moves
+//! into the source's commit (Lead answer github-pass-impl-a1-q1). `cpd` is the executable the engine started from
+//! (`Spawn::self_exe`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
@@ -75,8 +78,15 @@ pub(super) fn start(engine: &mut Engine) {
     // A request written during this poll is served by the next one (contract §3.7).
     cpd_core::pr::clear_poll_now_in(&engine.home);
     let root = engine.home.root().to_path_buf();
+    let home = engine.home.clone();
+    let busy_ms = u64::from(engine.config.timeouts.store_busy_ms);
     let ports = engine.ports.clone();
     engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || {
+        // E5 owns the `github` source (docs/architecture/swr.md §12): its pass (due + fetch) writes the pull request
+        // headers, `swr_repos` and `swr_pr_detail`. Stopgap (Lead answer github-pass-impl-a1-q1): the legacy poll's
+        // post-processing (its Events and its Workflow merges) runs next on the same poll cycle, until that work moves
+        // into the source's commit; the pass records its own endpoint failure, so its error does not abort the tick.
+        let _pass = super::swr::github_pass(&ports, &home, busy_ms);
         poll(&ports, &root)
     }));
 }
