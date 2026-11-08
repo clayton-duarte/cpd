@@ -6,8 +6,6 @@
 //! unstack, and the changed/feedback/merged/done counts) are applied from that same read, so the tick polls GitHub once
 //! per `pr_poll_seconds` (D9's target; Lead answer github-pass-poll-fix-a1-q1).
 //!
-//! Skeleton: the implementation lands next.
-//!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
 //! `gh_rate_limited` tells the User; it clears when polling resumes.
