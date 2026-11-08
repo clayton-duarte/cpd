@@ -15,15 +15,39 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::env::Env;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 
-/// `cpd metrics` takes an output format only.
+/// `cpd metrics` takes an output format, and an optional section (`refusals`) that is its own aggregate.
 #[derive(clap::Args, Clone, Debug)]
 pub struct MetricsArgs {
+    /// The section: the refusal aggregate (commands.md §14.7). Without it, the Ledger aggregate.
+    #[command(subcommand)]
+    pub command: Option<MetricsCommand>,
     /// The output format: `json` (the default) or `prometheus`
     #[arg(long, value_enum, default_value_t = Format::Json)]
     pub format: Format,
+}
+
+/// The sections of `cpd metrics` that are not the default aggregate (commands.md §14.7).
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum MetricsCommand {
+    /// The refusal rate per guard, role, model and day over the `guard` Events (commands.md §14.7)
+    Refusals(RefusalsArgs),
+}
+
+/// The flags of `cpd metrics refusals` (commands.md §14.7).
+#[derive(clap::Args, Clone, Debug)]
+pub struct RefusalsArgs {
+    /// The window's start, inclusive: an RFC 3339 timestamp or a bare `YYYY-MM-DD` (that day at `00:00:00Z`). Default: 7 days before `--until`
+    #[arg(long)]
+    pub since: Option<String>,
+    /// The window's end, exclusive, in the same two forms. Default: now, on the reading process's clock
+    #[arg(long)]
+    pub until: Option<String>,
+    /// At most this many rows of each table, `0` for every row. Default `20`
+    #[arg(long, default_value_t = 20)]
+    pub limit: u64,
 }
 
 /// The output formats of `cpd metrics` (commands.md §14.7).
@@ -33,8 +57,11 @@ pub enum Format {
     Prometheus,
 }
 
-/// `cpd metrics` (§14.7): the aggregate, printed in `args.format`.
+/// `cpd metrics` (§14.7): the aggregate, printed in `args.format`, or the refusal aggregate.
 pub fn run(args: MetricsArgs) -> Result<Output, CpdError> {
+    if let Some(MetricsCommand::Refusals(refusals)) = args.command {
+        return refusals_to_output(refusals);
+    }
     let mut env = Env::open()?;
     let report = Report::read(&mut env)?;
     match args.format {
@@ -445,6 +472,170 @@ fn escape(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+}
+
+/// The refusal aggregate (`cpd metrics refusals`, commands.md §14.7, Plan `agent-refusals`): the rate over the `guard`
+/// Events of a half-open window, per guard, role, model and UTC day. Read-only: it opens the store and writes nothing.
+pub fn refusals_to_output(args: RefusalsArgs) -> Result<Output, CpdError> {
+    let now = OffsetDateTime::now_utc();
+    let until = match &args.until {
+        Some(text) => parse_boundary(text).ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::Usage,
+                format!("--until is neither an RFC 3339 timestamp nor a YYYY-MM-DD date: {text}"),
+            )
+        })?,
+        None => now,
+    };
+    let since = match &args.since {
+        Some(text) => parse_boundary(text).ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::Usage,
+                format!("--since is neither an RFC 3339 timestamp nor a YYYY-MM-DD date: {text}"),
+            )
+        })?,
+        None => until - time::Duration::days(7),
+    };
+    if until <= since {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "--until is not after --since".to_owned(),
+        ));
+    }
+    let days = (until - since).as_seconds_f64() / 86_400.0;
+
+    let mut env = Env::open()?;
+    let store = env.store.path().display().to_string();
+    let events = env
+        .store
+        .read(|conn| read_guard_events(conn, since, until))?;
+
+    let mut total: u64 = 0;
+    let mut per_guard: BTreeMap<String, u64> = BTreeMap::new();
+    let mut per_role: BTreeMap<String, u64> = BTreeMap::new();
+    let mut per_model: BTreeMap<String, u64> = BTreeMap::new();
+    let mut per_day: BTreeMap<time::Date, (u64, BTreeMap<String, u64>)> = BTreeMap::new();
+    for event in &events {
+        total += 1;
+        *per_guard.entry(event.guard.clone()).or_insert(0) += 1;
+        *per_role.entry(event.role.clone()).or_insert(0) += 1;
+        *per_model.entry(event.model.clone()).or_insert(0) += 1;
+        let day = per_day.entry(event.at.date()).or_default();
+        day.0 += 1;
+        *day.1.entry(event.guard.clone()).or_insert(0) += 1;
+    }
+
+    let rows = |entries: BTreeMap<String, u64>, named: &str| -> Value {
+        let mut rows: Vec<(String, u64)> = entries.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        if args.limit > 0 {
+            rows.truncate(args.limit as usize);
+        }
+        Value::Array(
+            rows.into_iter()
+                .map(|(name, count)| {
+                    json!({ named: name, "count": count, "per_day": round2(count as f64 / days) })
+                })
+                .collect(),
+        )
+    };
+    let days_rows: Vec<Value> = per_day
+        .into_iter()
+        .map(|(day, (count, by_guard))| {
+            json!({ "day": day.to_string(), "count": count, "per_guard": by_guard })
+        })
+        .collect();
+
+    Ok(Output::success(json!({
+        "store": store,
+        "window": {
+            "since": rfc3339(since),
+            "until": rfc3339(until),
+            "days": days,
+        },
+        "total": total,
+        "per_guard": rows(per_guard, "guard"),
+        "per_role": rows(per_role, "role"),
+        "per_model": rows(per_model, "model"),
+        "per_day": days_rows,
+    })))
+}
+
+/// One counted `guard` Event, reduced to what the refusal aggregate reads.
+struct GuardEvent {
+    at: OffsetDateTime,
+    guard: String,
+    role: String,
+    model: String,
+}
+
+/// Reads the `guard` Events whose `at` is at or after `since` and before `until` (commands.md §14.7).
+fn read_guard_events(
+    conn: &rusqlite::Connection,
+    since: OffsetDateTime,
+    until: OffsetDateTime,
+) -> Result<Vec<GuardEvent>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT at, json_extract(data, '$.code'), json_extract(data, '$.role'), json_extract(data, '$.model')
+         FROM events WHERE kind = 'guard' ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (at, guard, role, model) = row?;
+        let Some(at) = parse_offset(&at) else {
+            continue;
+        };
+        if at < since || at >= until {
+            continue;
+        }
+        events.push(GuardEvent {
+            at,
+            guard: guard.unwrap_or_else(|| "unknown".to_owned()),
+            role: role.unwrap_or_else(|| "unknown".to_owned()),
+            model: model.unwrap_or_else(|| "unknown".to_owned()),
+        });
+    }
+    Ok(events)
+}
+
+/// A boundary (`--since`/`--until`): an RFC 3339 timestamp, or a bare `YYYY-MM-DD` as `00:00:00Z` of that day.
+fn parse_boundary(text: &str) -> Option<OffsetDateTime> {
+    if let Some(t) = parse_offset(text) {
+        return Some(t);
+    }
+    let mut parts = text.split('-');
+    let year: i32 = parts.next()?.parse().ok()?;
+    let month: u8 = parts.next()?.parse().ok()?;
+    let day: u8 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let date =
+        time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+    Some(date.midnight().assume_utc())
+}
+
+/// An RFC 3339 timestamp, or None when it does not parse.
+fn parse_offset(text: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(text, &Rfc3339).ok()
+}
+
+/// `time` in the RFC 3339 form the window is echoed in (`2026-11-01T00:00:00Z`).
+fn rfc3339(t: OffsetDateTime) -> String {
+    t.format(&Rfc3339).unwrap_or_else(|_| t.to_string())
+}
+
+/// A rate rounded to two decimals (commands.md §14.7).
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }
 
 /// The seconds since the epoch of an RFC 3339 timestamp, or None when it does not parse.

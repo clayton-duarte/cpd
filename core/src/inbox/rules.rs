@@ -57,17 +57,29 @@ pub fn conditions_on(
     home: &CpdHome,
 ) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
+    let now = ports.clock.utc();
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team {
         bot_reviewers: &config.inbox.bot_reviewers,
     });
-    conditions_with(
+    let mut all = conditions_with(
         store,
         home,
-        ports.clock.utc(),
+        now,
         config.loop_guard_turns,
         config.context_curation_min_records,
         team,
-    )
+    )?;
+    // The `refusal-alert` kind is the one condition with no argument in `conditions_with` (it reads only the two
+    // `watch.refusal_alert_*` keys), so E8 adds it here, from the same config read and the same query E25 uses.
+    all.extend(store.read(|conn| {
+        refusal_alerts(
+            conn,
+            now,
+            config.watch.refusal_alert_minutes,
+            config.watch.refusal_alert_threshold,
+        )
+    })?);
+    Ok(all)
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.
@@ -199,6 +211,71 @@ fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         });
     }
     Ok(out)
+}
+
+/// `refusal-alert` (contract §2.2 "Inbox item", §3.7 E25, Plan `agent-refusals`; air-d85, air-d105): a Session that is
+/// not archived whose counted `guard` Events over the last `minutes` reach `threshold`. One item per Session, subject
+/// `refusals:<session>`; the label is fixed when it opens (the count and the window), the links are the Session, its
+/// Plan and its Context. It closes when the count falls back below the threshold (the window slides past the older
+/// refusals) or the Session is archived (the shared query leaves an archived Session out).
+fn refusal_alerts(
+    conn: &Connection,
+    now: OffsetDateTime,
+    minutes: u32,
+    threshold: u32,
+) -> Result<Vec<Condition>, CpdError> {
+    let minutes = minutes.max(1);
+    let since = now - time::Duration::minutes(i64::from(minutes));
+    let threshold = u64::from(threshold);
+    let mut out = Vec::new();
+    for refusal in super::refusals::over_window(conn, since)? {
+        if refusal.count < threshold {
+            continue;
+        }
+        let session = id("Session id", &refusal.session, SessionId::parse)?;
+        out.push(Condition {
+            kind: Kind::RefusalAlert,
+            urgency: Urgency::Red,
+            subject: format!("refusals:{session}"),
+            label: format!(
+                "{}: {} refusals in {} min",
+                who(&refusal),
+                refusal.count,
+                minutes
+            ),
+            url: None,
+            context: Some(id("Context id", &refusal.context, ContextId::parse)?),
+            plan: refusal
+                .plan
+                .map(|p| id("Plan id", &p, PlanId::parse))
+                .transpose()?,
+            job: None,
+            session: Some(session),
+            record: None,
+            event: None,
+            opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
+        });
+    }
+    Ok(out)
+}
+
+/// The tree's label of a refused Session (the `<who>` of the `refusal-alert` label, §2.2): its Plan id for a Plan
+/// Lead, the Context id for a Manager, `<plan>·<suffix>` for a fork or a Worker of a Plan, else the first 8
+/// characters of its id.
+fn who(refusal: &super::refusals::Refusal) -> String {
+    match (&refusal.plan, refusal.plan_lead, refusal.role == "manager") {
+        (Some(plan), true, _) => plan.clone(),
+        (_, _, true) => refusal.context.clone(),
+        (Some(plan), false, false) => {
+            format!(
+                "{plan}·{}",
+                refusal.session.chars().take(4).collect::<String>()
+            )
+        }
+        (None, _, false) => refusal.session.chars().take(8).collect(),
+    }
 }
 
 /// A stored value that does not parse: the database was written outside cpd.

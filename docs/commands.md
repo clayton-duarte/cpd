@@ -4398,6 +4398,7 @@ The header's lines are colour 8 and its two pills are read-only title pills (col
   | `dialog`, `unread` | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there) |
   | `plan-review` | a `Link` widget: the label is the Link's text, the cue `󱆭` follows and a plain left click on them opens the item's `url` when present; with no `url` the label draws with no link and a plain click jumps to the Lead instead (no url, no link drawn, the row's jump rule applies). An item with no `url` still jumps; if that jump fails the failure is a `text` dialog (§17 "No notes") |  
   | `loop-guard` (pro-d372) | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there). The Session is the one the loop guard tripped on; the trip is cleared by the User's next prompt there (L5) or by `cpd session resume` (§10.17) |
+  | `refusal-alert` (Plan `agent-refusals`; contract §2.2, §3.7 E25) | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there). The Session is the one whose refusals crossed the threshold; the rate behind the count is `cpd metrics refusals` (§14.7). No link is drawn and no dialog opens |
   | `drafts-parked` (hs-d731, hs-d733) | jumps to the Plan's Lead Session, as `plan-review` with no `url` does: no link is drawn and no command runs; the contract's rule (§2.2) gives the item its label `<plan>: <N> parked drafts` |
   | `pr-failing`, `pr-changes` (history rows only: hs-d470 dropped the kind, E8 opens none; no check or review state opens an Inbox item, hs-d470) | nothing; no jump, no click action |
   | `pr-ready` (the User's open authored pull request, in every state; the row's colour is the state, contract §2.2 "The authored pull request rule") | the glyph U+F12F4 is drawn in the item's urgency colour. The label is a `Link` widget (the label is the Link's text, the cue `󱆭` follows): a plain left click on it opens the item's `url` (the GitHub pull request page). A click on the rest of the row runs `session open <lead>`, then `select-pane` on the chat slot when a Plan owns the pull request (its Lead Session) and does nothing when none does. While that pull request's merge is running (the merge marker, below, hs-d495) the glyph cell is the yellow spinner and a click does nothing |
@@ -5228,7 +5229,55 @@ The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Le
 - `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
 - `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
 
-**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day, with a threshold crossing over a window that records an Event and alerts the Manager and the Inbox. The surface is the CLI only; nothing here feeds an exporter.
+**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day (below).
+
+**`cpd metrics refusals`** is the one aggregate of the refusals this machine's agents suffered: the rate over the guard Events, per guard, role, model and day. Read-only, as its parent is: it opens the store read-only, reads the `guard` Events, prints one JSON value and writes nothing. Callers `[Manager, Lead]` (§2).
+
+```
+cpd metrics refusals [--since <date>] [--until <date>] [--limit <n>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--since <date>` | the window's start, **inclusive**; an RFC 3339 timestamp or a bare `YYYY-MM-DD` date (`YYYY-MM-DD` is `00:00:00Z` of that day). Default: 7 days before `--until` |
+| `--until <date>` | the window's end, **exclusive**, in the same two forms. Default: now, on the reading process's clock |
+| `--limit <n>` | at most this many rows of each table, `0` for every row. Default `20` |
+
+**The window and what it counts.** One guard Event is counted when its `at` is at or after `--since` and before `--until`: every refusal the adapter guards and the agent-caused CLI refusals appended (contract §5.2 "The guard Event"), of every role and every Plan. The window is echoed in the value as `{since, until, days}`, `days` its length in days (`until − since` in seconds, divided by 86400), the divisor of every rate.
+
+**The value**, one JSON object:
+
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+- `window`: `{since, until, days}` as above, `since` and `until` in RFC 3339 UTC.
+- `total`: the count of the counted guard Events.
+- `per_guard`, `per_role`, `per_model`: the same Events in the three other dimensions — one row per `data.code` for `per_guard` (the guard rule, or the CLI envelope's code, contract §5.2), per `data.role` for `per_role` (`manager`, `lead`, `worker`) and per `data.model` for `per_model` (the model ref) — each row `{guard|role|model, count, per_day}`, highest `count` first, a tie by name ascending.
+- `per_day`: the same Events by day, oldest day first, as `{day, count, per_guard}`, `per_guard` an object of `code` → count for that day; only days with at least one counted Event appear.
+
+**The rate** is `per_day` on every row: its `count` divided by the window's `days`, rounded to two decimals, so 70 refusals over a 7-day window is `10.0` and 1 refusal over the same is `0.14`. The `day` of `per_day` is the **UTC calendar day** of the Event's `at` (the store keeps `at` in UTC, contract §5.2): the metric is machine-wide and applies no local zone, so the same store read in any zone gives the same tables.
+
+```json
+{"ok": true, "store": "/home/clayton/.cpd/cpd.db",
+ "window": {"since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z", "days": 7.0},
+ "total": 34,
+ "per_guard": [{"guard": "usage", "count": 21, "per_day": 3.0},
+               {"guard": "explore timeout", "count": 7, "per_day": 1.0}],
+ "per_role": [{"role": "worker", "count": 26, "per_day": 3.71},
+              {"role": "lead", "count": 8, "per_day": 1.14}],
+ "per_model": [{"model": "deepseek/deepseek-v4", "count": 19, "per_day": 2.71},
+               {"model": "github-copilot/claude-sonnet-5.5", "count": 15, "per_day": 2.14}],
+ "per_day": [{"day": "2026-11-06", "count": 12, "per_guard": {"usage": 7, "explore timeout": 5}},
+             {"day": "2026-11-07", "count": 22, "per_guard": {"usage": 14, "explore timeout": 2, "test": 6}}]}
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--since` or `--until` is neither an RFC 3339 timestamp nor a `YYYY-MM-DD` date | `usage` | 2 |
+| `--until` is not after `--since` | `usage` | 2 |
+| `--limit` is not a non-negative integer | `usage` | 2 |
+
+Idempotent: read-only, so a rerun over an unchanged store prints the same value. **There is no `--format` on it:** `--format prometheus` (below) exposes the Attempts' aggregates and nothing else, because a refusal rate feeds no exporter. The surface is the CLI only.
+
+**The threshold alert is the engine's, not this command's** (Plan `agent-refusals`; air-d85, air-d105, air-d64; contract §3.7 E25). Engine step E25 counts the `guard` Events of each Session over a sliding window at every tick, and at or above the configured threshold it (1) appends one structured `error` Event with the code `refusal_threshold`, (2) messages the Context's Manager with a waking `session-message`, the air-d64 pattern so that the Manager acts at once instead of finding the crossing in the Inbox, and (3) leaves a red `refusal-alert` Inbox item for the User, which E8 opens and closes with the count. `cpd metrics refusals` takes no part in the alert: it reads the same Events and reports them, and it is where a Manager sees whether the crossing was real. Its only reader is a command line — no daemon, no scrape, no exported metric.
 
 **`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
 
@@ -6468,7 +6517,7 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 
 ## 21. `inbox`
 
-Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `drafts-parked` (magenta, label `<plan>: <N> parked drafts`, links the Plan and its Lead, opened from engine E20's wake, contract §2.2, §3.7 "Parked drafts"; hs-d731, hs-d733), `unread` and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314 and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) `pr-closed` (red: a closed-unmerged PR; contract §2.2, §3.8), and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels and their `url` is the pull request's page).
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `refusal-alert` (red, label `<who>: <N> refusals in <M> min`, one item per Session whose `guard` Events of the last `watch.refusal_alert_minutes` reach `watch.refusal_alert_threshold`, opened and closed by E8 from that count; Plan `agent-refusals`, contract §2.2, §3.7 E25, and the same crossing wakes the Context's Manager as a message by E25), `drafts-parked` (magenta, label `<plan>: <N> parked drafts`, links the Plan and its Lead, opened from engine E20's wake, contract §2.2, §3.7 "Parked drafts"; hs-d731, hs-d733), `unread` and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314 and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) `pr-closed` (red: a closed-unmerged PR; contract §2.2, §3.8), and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels and their `url` is the pull request's page).
 
 An item as printed:
 

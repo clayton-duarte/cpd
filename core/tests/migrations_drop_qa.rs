@@ -36,6 +36,15 @@ const LATER: &[(&str, &str)] = &[
         "DELETE FROM event_kinds WHERE name = 'guard'",
     ),
     (
+        "event_kinds",
+        "DELETE FROM event_kinds WHERE name = 'guard'",
+    ),
+    (
+        "event_kinds",
+        "DELETE FROM event_kinds WHERE name = 'guard'",
+    ),
+    ("inbox_items", "SELECT 1"),
+    (
         "pull_requests",
         "ALTER TABLE pull_requests DROP COLUMN base_contained",
     ),

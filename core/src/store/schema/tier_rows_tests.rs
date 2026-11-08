@@ -364,7 +364,7 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
         count(&mut store, "SELECT count(*) FROM history"),
         // the one `workflow-reopened` row of `event_kinds` (`workflow-reopen`), the one `guard` row of `event_kinds`
         // (`guard-event`) and the `context_reads` and `record_topics` rows of `history_tables` (`context-reads`,
-        // `record-topics`)
+        // `record-topics`); `refusal-alert-kind` rebuilds `inbox_items` and writes no history row
         history + 4,
         "the copy writes no history row"
     );
