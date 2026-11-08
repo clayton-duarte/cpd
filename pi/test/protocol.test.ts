@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { installedIdentity } from "../lib/cpd.ts";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
@@ -148,4 +150,66 @@ test("installedIdentity changes with the file and is undefined without a cpd", a
   f.reinstall();
   assert.notEqual(installedIdentity(), before);
   assert.equal(installedIdentity("/nonexistent"), undefined);
+});
+
+// ---- the guards' Ledger leg: every refusal reports one `protocol-breach` Event (D14, air-d119; commands.md §10.18) ----
+
+/** The `cpd session report --kind protocol-breach` calls a refusal makes, flags read by name. */
+const breaches = (f: Fixture) =>
+  f
+    .argvs()
+    .filter((a) => a[0] === "session" && a[1] === "report" && a.includes("--kind"))
+    .map((argv) => {
+      const flag = (n: string) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
+      return { kind: flag("--kind"), protocol: flag("--protocol"), source: flag("--source"), tool: flag("--tool"), command: flag("--command"), session: flag("--session") };
+    });
+
+/** The Session's directory, as the adapter reads it at a tool call (the guard needs a real primary checkout). */
+const inCwd = (f: Fixture, dir: string) => {
+  const ctx = f.pi.ctx.bind(f.pi);
+  f.pi.ctx = () => ({ ...ctx(), cwd: dir });
+};
+
+const call = async (f: Fixture, toolName: string, input: unknown) =>
+  (await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input }))[0] as { block?: boolean; reason?: string } | undefined;
+
+test("a host repair guard emits a ProtocolBreach", async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "protocol-breach-"));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const primary = join(tmp, "repo");
+  mkdirSync(join(primary, ".git"), { recursive: true }); // a primary checkout: `.git` is a directory
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  inCwd(f, tmp);
+  const command = `git -C ${primary} commit -m x`;
+  const r = await call(f, "bash", { command });
+  assert.equal(r?.block, true, "the mainguard refuses the primary-checkout write");
+  await f.quiet();
+  const [b] = breaches(f);
+  assert.ok(b, `no \`protocol-breach\` report; the session reports are ${JSON.stringify(f.reports().map((x) => x.argv))}`);
+  assert.equal(b!.kind, "protocol-breach");
+  assert.equal(b!.protocol, "primary checkout");
+  assert.equal(b!.source, "mainguard");
+  assert.equal(b!.tool, "bash");
+  assert.equal(b!.command, command);
+  assert.equal(b!.session, ID);
+});
+
+test("a secret guard emits a ProtocolBreach", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  const command = "op item get x";
+  const r = await call(f, "bash", { command });
+  assert.equal(r?.block, true, "the secretguard refuses the raw `op` call");
+  await f.quiet();
+  const [b] = breaches(f);
+  assert.ok(b, `no \`protocol-breach\` report; the session reports are ${JSON.stringify(f.reports().map((x) => x.argv))}`);
+  assert.equal(b!.kind, "protocol-breach");
+  assert.equal(b!.protocol, "secrets");
+  assert.equal(b!.source, "secretguard");
+  assert.equal(b!.tool, "bash");
+  assert.equal(b!.command, command);
+  assert.equal(b!.session, ID);
 });
