@@ -374,3 +374,33 @@ test("--all: a built-in whose auth check throws is one failed entry, never hidin
   const answer = await listModels({ rt, piVersion: PI_VERSION, all: true });
   assert.equal(failure(answer, "anthropic").code, "models_refresh_failed");
 });
+
+test("a custom provider whose key pi cannot resolve is skipped", async () => {
+  const gateway = await serve(models("m1"));
+  try {
+    const { rt } = runtime({
+      custom: {
+        // getAuth throws for an unset key pi cannot resolve.
+        thrown: { baseUrl: `${gateway.origin}/v1`, key: "throws" },
+        // getAuth answers nothing: the provider has no key at all.
+        nothing: { baseUrl: `${gateway.origin}/v1`, key: "none" },
+        // A provider pi does have a key for is still listed.
+        keyed: { baseUrl: `${gateway.origin}/v1` },
+      },
+    });
+    const answer = await listModels({ rt, piVersion: PI_VERSION });
+
+    assert.ok(answer.ok, JSON.stringify(answer));
+    // A provider pi cannot resolve a key for is skipped, not a failed entry: it never appears in the answer.
+    assert.deepEqual(answer.providers.map((e) => e.provider), ["keyed"], JSON.stringify(answer));
+    assert.equal(answer.providers.some((e) => "error" in e), false, "no failed entry");
+    assert.equal(JSON.stringify(answer).includes("models_key_unset"), false, "no models_key_unset");
+    // The provider pi has a key for still appears with its ids.
+    const keyed = listed(entry(answer, "keyed"));
+    assert.equal(keyed.auth, "custom");
+    assert.deepEqual(keyed.ids, ["m1"]);
+    assert.equal(gateway.hits.length, 1, "only the provider with a key is fetched");
+  } finally {
+    await gateway.close();
+  }
+});
