@@ -275,6 +275,10 @@ impl Store {
         };
         let needs_setup = missing || !Self::is_up_to_date(&path, catalog, busy_ms)?;
         if !needs_setup {
+            // §1.4: the setup lock creates `locks/` on its way; this open takes no lock, but must still leave
+            // the directory, since other parts of cpd write files in it (resource locks, the writer's record)
+            // without creating it themselves.
+            Self::ensure_locks_dir(home)?;
             let mut store =
                 Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
             Self::finish_open(&mut store, home, catalog, busy_ms)?;
@@ -307,6 +311,19 @@ impl Store {
             Err(e) if is_transient(&e) => Ok(false),
             Err(e) => Err(enrich(e, path, busy_ms)),
         }
+    }
+
+    /// Ensures the store's `locks/` directory exists (§1.4). [`setup_lock`] creates it on its way; an open that
+    /// takes no setup lock (an up-to-date store) must still leave it, cheap and idempotent.
+    fn ensure_locks_dir(home: &CpdHome) -> Result<(), CpdError> {
+        let dir = home.locks_dir();
+        fs::create_dir_all(&dir).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot create {}: {e}.", dir.display()),
+            )
+            .with("path", dir.display().to_string())
+        })
     }
 
     /// The body every open shares after its setup (if any): the connection's busy timeout is `busy_ms` again, and

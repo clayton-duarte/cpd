@@ -2400,6 +2400,24 @@ fn a_cpd_open_against_an_up_to_date_db_takes_no_setup_lock() {
     );
 }
 
+/// store-lock (gate fix), contract §1.4: an open of an up-to-date store takes no setup lock, but the store's
+/// `locks/` directory must exist after it. A process that opens an up-to-date store and then takes a resource lock
+/// writes its file inside `locks/` without creating the directory, so a missing one is a `NotFound` at that point.
+#[test]
+fn an_up_to_date_open_leaves_the_locks_directory_where_a_resource_lock_needs_it() {
+    let env = Home::new();
+    let h = home(&env);
+    fs::remove_dir_all(h.locks_dir()).unwrap();
+    assert!(!h.locks_dir().exists());
+    drop(open(&env));
+    assert!(
+        h.locks_dir().is_dir(),
+        "the locks directory is gone after an up-to-date open"
+    );
+    // The file a resource lock creates next lives in it, with no `create_dir_all` in the caller, as the engine's.
+    fs::write(h.locks_dir().join("resource.repo.acme.pay.pool.1.lock"), "").unwrap();
+}
+
 /// hs-n278 (air-n99), contract §4.2: a holder that migrates is waited out for longer than `store_busy_ms`. A
 /// store that needs its setup still takes the lock; here a missing database, whose WAL switch and first
 /// migration are that setup.
