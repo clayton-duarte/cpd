@@ -1,8 +1,7 @@
-//! E5, pull request poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
-//! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
-//! end of the previous poll, at its due time (the engine wakes for it between ticks),
-//! whether or not any Plan is in `deploy`: one poll covers every open pull request of the User. `cpd` is the executable the engine started
-//! from (`Spawn::self_exe`), as for the drivers of E3 (hs-d151): not `PATH`.
+//! E5, the GitHub step (contract §3.7, §7.6; hs-d96, hs-d97; docs/architecture/swr.md §12): E5 owns the `github`
+//! source — one pass per tick, its `due()` and `fetch()`, and its outbox drain (swr-github.md §4, §9). `pr_poll_seconds`
+//! after the end of the previous pass, at its due time (the engine wakes for it between ticks), whether or not any Plan is
+//! in `deploy`: one pass covers every open pull request of the User. Exactly one engine step polls GitHub per tick, never two.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
