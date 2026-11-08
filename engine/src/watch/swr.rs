@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
@@ -186,22 +186,21 @@ fn report_failed(engine: &mut Engine, failed: Vec<(outbox::Mutation, String)>) {
     }
 }
 
-/// E5's pass of the `github` source (swr.md §12, swr-github.md §4): its `due()` and its `fetch()`. E5's poll runs on a
-/// thread of its own ([`super::pr`]), so the pass opens a store of its own from `home`. A failure is recorded on the
-/// `github` endpoint by the pass itself (`record_failure`, swr-github.md §7); the pass returns it, and E5's poll keeps
-/// its legacy post-processing on the same poll cycle. It is a stopgap until the poll's Events and merges move into the
-/// source's commit (Lead answer github-pass-impl-a1-q1).
+/// E5's pass of the `github` source (swr.md §12, swr-github.md §4): its `fetch()`, which IS E5's poll now (D9's target).
+/// E5's poll runs on a thread of its own ([`super::pr`]), so the pass opens a store of its own from `home`. The pass
+/// applies the legacy poll's effects from its single read and returns E5's poll result: the counts and the rate limit,
+/// or the failure the pass recorded on the `github` endpoint (`record_failure`, swr-github.md §7).
 pub(super) fn github_pass(
     ports: &Ports,
     home: &cpd_core::home::CpdHome,
     busy_ms: u64,
-) -> Result<(), CpdError> {
+) -> Result<Value, Failure> {
     static GITHUB: source::github::GithubSource = source::github::GithubSource {
         excused_labels: Vec::new(),
     };
-    let mut store = cpd_core::store::Store::open(home, busy_ms)?;
+    let mut store = cpd_core::store::Store::open(home, busy_ms).map_err(|e| Failure::from(&e))?;
     store.use_clock(ports.clock.clone());
-    let config = cpd_core::config::Config::load(home)?;
+    let config = cpd_core::config::Config::load(home).map_err(|e| Failure::from(&e))?;
     let now = ports.clock.utc();
     let mut cx = Cx {
         store: &mut store,
@@ -209,11 +208,9 @@ pub(super) fn github_pass(
         home,
         config: &config,
     };
-    let keys = GITHUB.due(&mut cx, now)?;
-    if !keys.is_empty() {
-        GITHUB.fetch(&mut cx, &keys, now)?;
-    }
-    Ok(())
+    GITHUB
+        .pass_with_effects(&mut cx, now)
+        .map_err(|e| Failure::from(&e))
 }
 
 /// The `github` outbox drain (swr-github.md §9), run by E5's step each tick: a write command only enqueues, this calls GitHub through

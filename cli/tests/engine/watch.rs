@@ -3244,10 +3244,40 @@ fn in_pr(fx: &Ip) {
 const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay","isArchived":false},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","updatedAt":"U1","reviewThreads":{"nodes":[]},"mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
 
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
+/// The legacy `cdp pr poll` search; E5's poll is the GitHub SWR pass now ([`swr_reply`]).
 fn search_reply(remaining: u32, reset_at: &str) -> String {
     format!(
         r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#
     )
+}
+
+/// What the fake `gh` answers to E5's one read (the GitHub SWR document of `swr::source::github`) when it listed no
+/// pull request: the viewer, the rate limit and the two empty searches. A test with a stored pull request uses
+/// [`swr_reply_with`] to add the `p<i>` / `m<i>` aliases the plan asked for.
+fn swr_reply(remaining: u32, reset_at: &str) -> String {
+    swr_reply_with(remaining, reset_at, serde_json::Map::new())
+}
+
+/// [`swr_reply`] with the `p<i>` / `m<i>` aliases the plan asked for merged into the data object.
+fn swr_reply_with(remaining: u32, reset_at: &str, aliases: serde_json::Map<String, Value>) -> String {
+    let mut data = serde_json::Map::new();
+    data.insert("viewer".into(), json!({"login": "ada"}));
+    data.insert(
+        "rateLimit".into(),
+        json!({"cost": 1, "remaining": remaining, "resetAt": reset_at}),
+    );
+    data.insert(
+        "authored".into(),
+        json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}),
+    );
+    data.insert(
+        "reviews".into(),
+        json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}),
+    );
+    for (key, value) in aliases {
+        data.insert(key, value);
+    }
+    json!({"data": data}).to_string()
 }
 
 /// `gh` answers every search with an empty result that takes `takes`; the time of each call, on the `ManualClock`, is noted.
@@ -3256,7 +3286,7 @@ fn gh_noting_starts(fx: &Ip, takes: Duration) -> Arc<Mutex<Vec<Duration>>> {
     let (clock, noted) = (fx.fakes.clock.clone(), starts.clone());
     fx.route_fn("gh", move |_| {
         noted.lock().unwrap().push(clock.elapsed());
-        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
+        Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
     });
     starts
 }
@@ -3905,9 +3935,9 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap();
             *stamped.lock().unwrap() = Some(reset_at.clone());
-            Reply::ok(&search_reply(50, &reset_at))
+            Reply::ok(&swr_reply(50, &reset_at))
         } else {
-            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+            Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z"))
         }
     });
 
@@ -3977,7 +4007,7 @@ fn gh_limited_after_a_poll(
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap();
                 *stamped.lock().unwrap() = Some(clock.elapsed() + Duration::from_secs(60));
-                Reply::ok(&search_reply(4987, &reset_at))
+                Reply::ok(&swr_reply(4987, &reset_at))
             }
             2 => then.clone(),
             _ => last.clone(),
@@ -3993,7 +4023,7 @@ fn rate_limited_reply_pauses_until_reset() {
     let (starts, reset) = gh_limited_after_a_poll(
         &fx,
         gh_rate_limited(),
-        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")),
+        Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z")),
     );
 
     let seen = starts.clone();
@@ -4036,7 +4066,7 @@ fn rate_limited_reply_by_message_pauses_until_reset_too() {
     let (starts, reset) = gh_limited_after_a_poll(
         &fx,
         secondary,
-        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")),
+        Reply::ok(&swr_reply(4987, "2099-01-01T00:00:00Z")),
     );
 
     let seen = starts.clone();

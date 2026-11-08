@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::comments::{self, Read};
 use super::deploys;
 use super::feedback;
-use super::gh::{self, Listed};
+use super::gh::{self, Listed, PollRead};
 use super::posts;
 use super::pulls::{self, Change, PostFacts, Reason};
 use super::row::PlanWorkflows;
@@ -118,17 +118,77 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     // A pass that reopened a Workflow is run again: the Workflow is owned now, so its policy, comments and checks are read as
     // any owned Workflow's are (each pass reopens fewer: a reopened Workflow is no longer a candidate).
     loop {
-        let (out, again) = poll_pass(&mut env, &selected)?;
+        let root = env.home.root().to_owned();
+        let search = gh::search_open(&*env.ports.runner, &root, &env.config.inbox.bot_reviewers)?;
+        let (out, again) = poll_pass(&mut env, &selected, search, None)?;
+        if !again {
+            return Ok(Output::success(out));
+        }
+    }
+}
+
+/// Whether any open Workflow points at a pull request: the effects of the GitHub source's pass ([`apply_pass_effects`])
+/// are needed only then. The pass itself always runs.
+pub(crate) fn any_owned(store: &mut Store) -> Result<bool, CpdError> {
+    Ok(!store.read(pulls::owned_open)?.is_empty())
+}
+
+/// D9's target: applies the legacy poll's effects (the Events, the Workflow merges and unstack, the counts) from the
+/// GitHub source's single read, in the engine's E5 step. The source's `fetch` is E5's poll now, so this is the write
+/// phase of the legacy `cpd pr poll` without the legacy `gh` read: the listing comes from `read`, the comments and the
+/// checks come from the same read (no second `gh` call). It opens its own store, as the source's pass does.
+pub(crate) fn apply_pass_effects(
+    ports: &Ports,
+    home: &crate::home::CpdHome,
+    read: &PollRead,
+) -> Result<Value, CpdError> {
+    let mut env = Env::open_home_with(ports, home.clone())?;
+    let search = gh::Search {
+        issue_count: 0,
+        prs: listed_from_read(read),
+        rate: gh::Rate {
+            cost: 0,
+            remaining: read.remaining.max(0) as u32,
+            reset_at: read.reset_at.clone(),
+        },
+        repo_settings: Vec::new(),
+    };
+    let selected = None;
+    loop {
+        let (out, again) = poll_pass(&mut env, &selected, search.clone(), Some(Vec::new()))?;
         if !again {
             return Ok(out);
         }
     }
 }
 
-fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool), CpdError> {
+/// The legacy poll's listing from the GitHub source's one read: every node the document listed or aliased, once, with
+/// the searches that carried it. The same merge the source's `commit` makes, as `Listed`s the write phase reads.
+fn listed_from_read(read: &PollRead) -> Vec<Listed> {
+    let mut merged: std::collections::BTreeMap<(String, i64), Listed> =
+        std::collections::BTreeMap::new();
+    for node in &read.authored {
+        let entry = merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+        entry.membership.authored = true;
+    }
+    for node in &read.reviews {
+        let entry = merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+        entry.membership.review_requested = true;
+    }
+    for node in read.aliases.iter().flatten() {
+        merged.entry(node.id()).or_insert_with(|| node.listed.clone());
+    }
+    merged.into_values().collect()
+}
+
+fn poll_pass(
+    env: &mut Env,
+    selected: &Option<PlanId>,
+    search: gh::Search,
+    given_reads: Option<Vec<Read>>,
+) -> Result<(Value, bool), CpdError> {
     let root = env.home.root().to_owned();
 
-    let search = gh::search_open(&*env.ports.runner, &root, &env.config.inbox.bot_reviewers)?;
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned Workflow's `pr.feedback.checks`, resolved before anything is written (§8.3). A Workflow whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
@@ -154,140 +214,154 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
         }
     }
 
-    // The stored open pull requests a search missed are read directly (§7.6 step 3): owned and listed by neither search,
-    // or flagged for a search that did not list them. A search's absence deletes, moves and unflags nothing.
-    let stored = env.store.read(pulls::stored_open)?;
-    let listed_in = |row: &pulls::PullRequest| {
-        search
+    // The listing comes from the caller: the legacy `gh::search_open` (through `read_absent`), or the GitHub source's one
+    // read, whose comments and checks are already in hand (`given_reads`).
+    let mut seen: Vec<Listed>;
+    let reads: Vec<Read>;
+    let absent = if given_reads.is_none() {
+        // The stored open pull requests a search missed are read directly (§7.6 step 3): owned and listed by neither search,
+        // or flagged for a search that did not list them. A search's absence deletes, moves and unflags nothing.
+        let stored = env.store.read(pulls::stored_open)?;
+        let listed_in = |row: &pulls::PullRequest| {
+            search
+                .prs
+                .iter()
+                .find(|l| l.pr.repo == row.repo && l.pr.number == row.number)
+        };
+        let candidates: Vec<&pulls::PullRequest> = stored
+            .iter()
+            .filter(|row| {
+                let found = listed_in(row).map(|l| l.membership).unwrap_or_default();
+                let is_owned = owned.iter().any(|(_, _, o)| o.id == row.id);
+                // An archived PR was read once and is parked until a search lists it again (A4, pro-d392).
+                !row.archived
+                    && ((is_owned && listed_in(row).is_none())
+                        || (row.authored && !found.authored)
+                        || (row.review_requested && !found.review_requested))
+            })
+            .collect();
+        let keys: Vec<(String, i64)> = candidates
+            .iter()
+            .map(|row| (row.repo.clone(), row.number))
+            .collect();
+        let read = gh::read_absent(
+            &*env.ports.runner,
+            &root,
+            &keys,
+            &env.config.inbox.bot_reviewers,
+        )?;
+        seen = search
             .prs
             .iter()
-            .find(|l| l.pr.repo == row.repo && l.pr.number == row.number)
-    };
-    let candidates: Vec<&pulls::PullRequest> = stored
-        .iter()
-        .filter(|row| {
-            let found = listed_in(row).map(|l| l.membership).unwrap_or_default();
-            let is_owned = owned.iter().any(|(_, _, o)| o.id == row.id);
-            // An archived PR was read once and is parked until a search lists it again (A4, pro-d392).
-            !row.archived
-                && ((is_owned && listed_in(row).is_none())
-                    || (row.authored && !found.authored)
-                    || (row.review_requested && !found.review_requested))
-        })
-        .collect();
-    let keys: Vec<(String, i64)> = candidates
-        .iter()
-        .map(|row| (row.repo.clone(), row.number))
-        .collect();
-    let read = gh::read_absent(
-        &*env.ports.runner,
-        &root,
-        &keys,
-        &env.config.inbox.bot_reviewers,
-    )?;
-    let mut seen: Vec<Listed> = search
-        .prs
-        .iter()
-        .filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number)))
-        .cloned()
-        .collect();
-    for (row, read) in candidates.iter().zip(read) {
-        let found = listed_in(row);
-        match read {
-            // `OPEN`: the read is fresher; each flag a search listed it in stays, and the read adds its own.
-            Some(Listed { pr, membership }) if pr.state == PrState::Open => {
-                let search_flags = found.map(|l| l.membership).unwrap_or_default();
-                let membership = gh::Membership {
-                    authored: search_flags.authored || membership.authored,
-                    review_requested: search_flags.review_requested || membership.review_requested,
-                };
-                seen.push(Listed { pr, membership });
+            .filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number)))
+            .cloned()
+            .collect();
+        for (row, read) in candidates.iter().zip(read) {
+            let found = listed_in(row);
+            match read {
+                // `OPEN`: the read is fresher; each flag a search listed it in stays, and the read adds its own.
+                Some(Listed { pr, membership }) if pr.state == PrState::Open => {
+                    let search_flags = found.map(|l| l.membership).unwrap_or_default();
+                    let membership = gh::Membership {
+                        authored: search_flags.authored || membership.authored,
+                        review_requested: search_flags.review_requested
+                            || membership.review_requested,
+                    };
+                    seen.push(Listed { pr, membership });
+                }
+                // `MERGED` or `CLOSED`: the row takes the state, with no flag.
+                Some(decided) => seen.push(decided),
+                // Not found: an unowned row loses its flags and keeps its state; an owned row is unchanged.
+                None if !owned.iter().any(|(_, _, o)| o.id == row.id) => {
+                    seen.push(Listed {
+                        pr: row.polled()?,
+                        membership: Default::default(),
+                    });
+                }
+                None => seen.extend(found.cloned()),
             }
-            // `MERGED` or `CLOSED`: the row takes the state, with no flag.
-            Some(decided) => seen.push(decided),
-            // Not found: an unowned row loses its flags and keeps its state; an owned row is unchanged.
-            None if !owned.iter().any(|(_, _, o)| o.id == row.id) => {
-                seen.push(Listed {
-                    pr: row.polled()?,
-                    membership: Default::default(),
-                });
-            }
-            None => seen.extend(found.cloned()),
         }
-    }
-
-    // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
-    // written, so that a failed read writes nothing.
-    let due = due_reads(&owned, &seen);
-    let reads = gh::read_comments(
-        &*env.ports.runner,
-        &root,
-        &due,
-        &env.config.inbox.bot_reviewers,
-    )?;
+        // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
+        // written, so that a failed read writes nothing.
+        let due = due_reads(&owned, &seen);
+        reads = gh::read_comments(
+            &*env.ports.runner,
+            &root,
+            &due,
+            &env.config.inbox.bot_reviewers,
+        )?;
+        true
+    } else {
+        seen = search.prs.clone();
+        reads = given_reads.clone().expect("given_reads is Some");
+        false
+    };
+    let legacy = absent;
 
     // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
     // empty, or whose rollup says `passed` or `none` while its `required_checks` is not empty (hs-d743): one call, before anything is written. Each Workflow's summary is the one rule with its own list.
-    let mut confirm: Vec<(String, i64)> = Vec::new();
-    let mut lists: Vec<(Vec<String>, Vec<String>, Vec<String>)> = Vec::new();
-    for listed in &seen {
-        let (repo, number) = (&listed.pr.repo, listed.pr.number);
-        if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
-            continue;
+    if legacy {
+        let mut confirm: Vec<(String, i64)> = Vec::new();
+        let mut lists: Vec<(Vec<String>, Vec<String>, Vec<String>)> = Vec::new();
+        for listed in &seen {
+            let (repo, number) = (&listed.pr.repo, listed.pr.number);
+            if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
+                continue;
+            }
+            let is_owned = owned
+                .iter()
+                .any(|(_, _, row)| row.repo == *repo && row.number == number);
+            // A PR the User neither owns nor authored is read for nothing here (A7, pro-d392).
+            if !is_owned && !listed.membership.authored {
+                continue;
+            }
+            let mine = owned
+                .iter()
+                .filter(|(_, _, row)| row.repo == *repo && row.number == number)
+                .filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
+            // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a Workflow no Plan resolved a policy for has its repo's `required_checks` alone.
+            let mut policies: Vec<Policy> = mine
+                .map(|r| {
+                    (
+                        r.checks == Checks::Any || !r.excused_labels.is_empty(),
+                        r.human_gated.clone(),
+                        r.required.clone(),
+                        r.excused_labels.clone(),
+                    )
+                })
+                .collect();
+            if policies.is_empty() {
+                policies.push((
+                    false,
+                    Vec::new(),
+                    repo_required(&env.home, repo).unwrap_or_default(),
+                    Vec::new(),
+                )); // an unreadable policy is reported for the owned Workflows above
+            }
+            let wanted = |(any, gated, required, _): &&Policy| match listed.pr.checks {
+                ChecksSummary::Failed => *any,
+                ChecksSummary::Pending => !gated.is_empty(),
+                ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
+            };
+            if let Some((_, gated, required, excused)) = policies.iter().find(wanted) {
+                confirm.push((repo.clone(), number));
+                lists.push((gated.clone(), required.clone(), excused.clone()));
+            }
         }
-        let is_owned = owned
-            .iter()
-            .any(|(_, _, row)| row.repo == *repo && row.number == number);
-        // A PR the User neither owns nor authored is read for nothing here (A7, pro-d392).
-        if !is_owned && !listed.membership.authored {
-            continue;
-        }
-        let mine = owned
-            .iter()
-            .filter(|(_, _, row)| row.repo == *repo && row.number == number)
-            .filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
-        // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a Workflow no Plan resolved a policy for has its repo's `required_checks` alone.
-        let mut policies: Vec<Policy> = mine
-            .map(|r| {
-                (
-                    r.checks == Checks::Any || !r.excused_labels.is_empty(),
-                    r.human_gated.clone(),
-                    r.required.clone(),
-                    r.excused_labels.clone(),
-                )
-            })
-            .collect();
-        if policies.is_empty() {
-            policies.push((
-                false,
-                Vec::new(),
-                repo_required(&env.home, repo).unwrap_or_default(),
-                Vec::new(),
-            )); // an unreadable policy is reported for the owned Workflows above
-        }
-        let wanted = |(any, gated, required, _): &&Policy| match listed.pr.checks {
-            ChecksSummary::Failed => *any,
-            ChecksSummary::Pending => !gated.is_empty(),
-            ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
-        };
-        if let Some((_, gated, required, excused)) = policies.iter().find(wanted) {
-            confirm.push((repo.clone(), number));
-            lists.push((gated.clone(), required.clone(), excused.clone()));
-        }
-    }
-    let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
-    for listed in &mut seen {
-        if let Some(i) = confirm
-            .iter()
-            .position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number)
-        {
-            listed.pr.checks = ChecksSummary::of(
-                &confirmed[i].checks,
-                &lists[i].0,
-                &lists[i].1,
-                status::policy_hold(&confirmed[i].labels, &lists[i].2),
-            );
+        let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
+        for listed in &mut seen {
+            if let Some(i) = confirm
+                .iter()
+                .position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number)
+            {
+                listed.pr.checks = ChecksSummary::of(
+                    &confirmed[i].checks,
+                    &lists[i].0,
+                    &lists[i].1,
+                    status::policy_hold(&confirmed[i].labels, &lists[i].2),
+                );
+            }
         }
     }
 
@@ -295,14 +369,16 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     // compare read each, before the write transaction, so the write enqueues the merge of a head that now contains
     // the default branch.
     let mut armed: Vec<Armed> = Vec::new();
-    for (repo, number, base, head) in env.store.read(|conn| armed_reads(conn, &owned))? {
-        let contained = gh::head_contains_base(&*env.ports.runner, &root, &repo, &base, &head)?;
-        armed.push(Armed {
-            repo,
-            number,
-            head,
-            contained,
-        });
+    if legacy {
+        for (repo, number, base, head) in env.store.read(|conn| armed_reads(conn, &owned))? {
+            let contained = gh::head_contains_base(&*env.ports.runner, &root, &repo, &base, &head)?;
+            armed.push(Armed {
+                repo,
+                number,
+                head,
+                contained,
+            });
+        }
     }
 
     // The owned Workflows whose pull request a search lists with a base other than the Workflow's `base`.
@@ -390,7 +466,7 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     if let Some(workflows) = printed_prs {
         out["workflows"] = Value::Array(workflows);
     }
-    Ok((Output::success(out), !reopened.is_empty()))
+    Ok((out, !reopened.is_empty()))
 }
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`] on `ports.clock`: `lock_timeout` (exit 5). The

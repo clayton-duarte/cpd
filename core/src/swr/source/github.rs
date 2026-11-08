@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rusqlite::params;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
@@ -25,6 +26,33 @@ const META_TTL: Duration = Duration::from_secs(24 * 3600);
 const SLACK_WINDOW: i64 = 7 * 24 * 3600;
 /// How long a hard `RATE_LIMITED` answer pauses the endpoint when GitHub gave no reset.
 const RATE_LIMITED_PAUSE: Duration = Duration::from_secs(15 * 60);
+/// The wait added to a hard `RATE_LIMITED` reply's stored reset, so the first poll at the reset instant is not refused
+/// again (the engine's `RATE_GRACE`, pro-d392).
+const RATE_GRACE: Duration = Duration::from_secs(3);
+
+/// E5's poll result when the pass ran nothing (the endpoint is paused): no effects, and the rate limit the endpoint
+/// still holds, so the engine's rate guard reads a usable value and raises nothing.
+fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<Value, CpdError> {
+    let row = endpoint::get(store, "github")?;
+    let remaining = row
+        .as_ref()
+        .and_then(|r| r.rate_remaining)
+        .unwrap_or(5000);
+    let reset_at = row
+        .and_then(|r| r.rate_reset_at)
+        .and_then(|at| at.format(&time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_else(|| "2099-01-01T00:00:00Z".to_owned());
+    Ok(serde_json::json!({
+        "polled": 0,
+        "changed": [],
+        "base_changed": [],
+        "feedback": [],
+        "update_jobs": [],
+        "merged": [],
+        "done": [],
+        "rate_limit": {"cost": 0, "remaining": remaining, "reset_at": reset_at},
+    }))
+}
 
 /// What the previous pass's searches listed, per store: engine memory (D5), so after a restart the first pass confirms nobody
 /// and the next one confirms every flagged row the first one did not list.
@@ -196,8 +224,14 @@ impl GithubSource {
 
     /// One engine pass: plan, one `gh api graphql` call through the Runner, commit key by key (swr-github.md §4).
     pub fn pass(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<(), CpdError> {
+        self.pass_with_effects(cx, now).map(|_| ())
+    }
+
+    /// [`GithubSource::pass`], returning E5's poll result: the legacy effects (the counts and the rate limit) from that
+    /// single read. The engine's E5 polls through this (D9's target); the trait's `fetch` keeps `pass`.
+    pub fn pass_with_effects(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<Value, CpdError> {
         if endpoint::get(cx.store, "github")?.is_some_and(|row| endpoint::is_paused(&row, now)) {
-            return Ok(());
+            return no_effects(cx.store, now);
         }
         let plan = self.plan(cx, now)?;
         let poll_started_at = now;
@@ -230,8 +264,10 @@ impl GithubSource {
         self.commit(cx, &plan, read, now, poll_started_at)
     }
 
-    /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6).
-    fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<(), CpdError> {
+    /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
+    /// until its stored reset plus the grace (or [`RATE_LIMITED_PAUSE`] when none is known) and is returned to E5, which
+    /// pauses its own poll; it is not an error.
+    fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
         let flag = |name: &str| {
             e.details()
                 .get(name)
@@ -239,7 +275,12 @@ impl GithubSource {
                 .unwrap_or(false)
         };
         if flag("rate_limited") {
-            return endpoint::pause_until(cx.store, "github", now + RATE_LIMITED_PAUSE);
+            let until = endpoint::get(cx.store, "github")?
+                .and_then(|row| row.rate_reset_at)
+                .map(|reset| reset + RATE_GRACE)
+                .unwrap_or(now + RATE_LIMITED_PAUSE);
+            endpoint::pause_until(cx.store, "github", until)?;
+            return Err(e);
         }
         let kind = if flag("transient") {
             endpoint::Kind::Transient
@@ -257,7 +298,16 @@ impl GithubSource {
         read: PollRead,
         now: OffsetDateTime,
         started: OffsetDateTime,
-    ) -> Result<(), CpdError> {
+    ) -> Result<Value, CpdError> {
+        // E5's poll IS this pass (D9's target): the legacy effects (the pr-feedback/pr-merged/pr-closed Events, the
+        // Workflow merges and unstack, the counts) are applied from this same read, before the header writes below, so
+        // the write phase sees the pre-pass rows and the transitions. Only when an open Workflow points at a pull
+        // request; nothing else is affected.
+        let effects = if crate::pr::poll::any_owned(cx.store)? {
+            crate::pr::poll::apply_pass_effects(cx.ports, cx.home, &read)?
+        } else {
+            no_effects(cx.store, now)?
+        };
         // The viewer. `cache::commit` rejects a key with one colon (`system()` wants `<system>:<kind>:<id>`), and the key is
         // `github:viewer` (swr.md §4), so its row is written here, with the same rule: unchanged data opens no write.
         let login = read.viewer.clone();
@@ -421,7 +471,7 @@ impl GithubSource {
             .expect("listed memory")
             .get_or_insert_with(HashMap::new)
             .insert(cx.store.path().display().to_string(), listed);
-        Ok(())
+        Ok(effects)
     }
 }
 
@@ -448,7 +498,7 @@ impl Source for GithubSource {
         _keys: &[QueryKey],
         poll_started_at: OffsetDateTime,
     ) -> Result<(), CpdError> {
-        self.pass(cx, poll_started_at)
+        self.pass(cx, poll_started_at).map(|_| ())
     }
     fn execute(&self, cx: &mut Cx<'_>, m: &Mutation) -> ExecOutcome {
         self.run_one(cx, m)
