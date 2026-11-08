@@ -2,6 +2,13 @@ import type { UiMode } from "./channels.ts";
 import type { HealthRecord } from "./health.ts";
 import type { Watchdog } from "./watchdog.ts";
 
+/**
+ * The bounded readiness wait of the WebUI Preview (CONTRACT.md §19.3): the client loads its dev URL
+ * once the preview server is ready, and a server that never becomes ready fails after this many
+ * milliseconds instead of hanging. The wait starts at `open()`.
+ */
+export const PREVIEW_READINESS_TIMEOUT_MS = 15_000;
+
 export interface PreviewRunOptions {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -30,6 +37,13 @@ export interface PreviewClientDeps {
   run(file: string, args: readonly string[], options: PreviewRunOptions): Promise<PreviewRunResult>;
   readHealth(): Promise<HealthRecord | null>;
   writeHealth(record: HealthRecord): Promise<void>;
+  /**
+   * Resolves true once the preview dev server answers and can serve `devUrl`; polled by `tick()`
+   * during the bounded readiness wait (CONTRACT.md §19.3). The readiness gate is the server, never
+   * the running app's health. Optional so a caller without a probe keeps building; the readiness
+   * test supplies it.
+   */
+  isPreviewServerReady?(): Promise<boolean>;
   showLoading(): void;
   loadDevUrl(url: string): Promise<void>;
   showErrorBox(title: string, content: string): void;
