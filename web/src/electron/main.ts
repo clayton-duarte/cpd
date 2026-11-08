@@ -84,12 +84,14 @@ export interface SendTarget {
 
 /**
  * Send `payload` on `channel` to `win`'s renderer. Exported so the pty-teardown regression
- * (web/src/electron/main.test.ts, air-n62) can drive this path with a window double. The guard
- * still reads `win.webContents` unconditionally: desktop-destroy-impl adds the `win.isDestroyed()`
- * check.
+ * (web/src/electron/main.test.ts, air-n62) can drive this path with a window double. A destroyed
+ * window must be rejected before `webContents` is read: reading it on a closed BrowserWindow
+ * throws `Object has been destroyed`. The `webContents.isDestroyed()` check stays as the last
+ * guard for a window whose native handle survives while its renderer is gone.
  */
 export function sendToWindow(win: SendTarget | undefined, channel: string, payload: unknown): void {
-  if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+  if (!win || win.isDestroyed()) return;
+  if (!win.webContents.isDestroyed()) win.webContents.send(channel, payload);
 }
 
 async function main(): Promise<void> {
@@ -373,6 +375,10 @@ async function main(): Promise<void> {
     });
     disposers.push(() => ipc.dispose());
     disposers.push(() => ipcMain.removeHandler(CHANNELS.ptyHosts));
+    // The window closed (air-n62): stop every pty behind these sinks before anything can emit.
+    // ipc.dispose() kills the singleton session and disposes the tab registry, dropping every
+    // node-pty data listener, so no stream keeps calling send for a dead window.
+    win.on("closed", () => ipc.dispose());
   };
 
   // The endpoint and services are bound in `prepare` (before the window, for the preload URL);
