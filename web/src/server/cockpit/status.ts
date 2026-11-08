@@ -6,12 +6,19 @@ export interface StatusDeps {
   readFile(path: string): Promise<string | null>;
   readonly env: Readonly<Record<string, string | undefined>>;
   drift(root: string): Promise<DriftSummary>;
+  /** The serve status pane (CONTRACT §20): the engine's Worker counts and incident state, from the serve stream. */
+  readonly statusPane?: StatusPane | null;
 }
 export interface DriftSummary { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean }
+/** The serve status pane (web/CONTRACT.md §20), as the engine writes it. */
+export interface StatusPane {
+  readonly workers: { readonly queued: number; readonly waiting: number; readonly running: number; readonly limit: number };
+  readonly incident: { readonly on: boolean; readonly started_at: string | null; readonly lead: string | null };
+}
 export interface Status {
   readonly runner: string | null;
   readonly preview: string | null;
-  readonly incident: { readonly startedAt: string } | null;
+  readonly incident: { readonly startedAt: string; readonly lead: string | null } | null;
   readonly workers: { readonly queued: number; readonly waiting: number; readonly tenants: number; readonly limit: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
@@ -34,7 +41,7 @@ export async function readStatus(deps: StatusDeps): Promise<Status> {
     attempt(async () => {
       const o = json(await deps.cpd(toArgv({ kind: "incident.status" })));
       const at = obj(o?.["incident"])?.["started_at"];
-      return o?.["on"] === true && typeof at === "string" ? { startedAt: at } : null;
+      return o?.["on"] === true && typeof at === "string" ? { startedAt: at, lead: null } : null;
     }),
     attempt(async () => {
       const d = obj(obj(json(await deps.cpd(toArgv({ kind: "config.read" })))?.["config"])?.["experimental"])?.["durable_workers"];

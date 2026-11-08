@@ -11,8 +11,8 @@ import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
 export interface StatusModel {
   readonly runner: "pi" | "durable" | null;
   readonly preview: string | null;
-  /** Elapsed text of an open incident (`5m`, `2h 5m`, `3d`); null when no incident is on. */
-  readonly incident: string | null;
+  /** The open incident: its elapsed text (`5m`, `2h 5m`, `3d`) and its Lead's Session id; null when none is on. */
+  readonly incident: { readonly elapsed: string; readonly lead: string | null } | null;
   readonly workers: { readonly queued: number; readonly ready: number; readonly tenants: number; readonly concurrency: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
@@ -34,7 +34,7 @@ export function barStatus(s: WireStatus, nowMs: number): StatusModel {
   return {
     runner: s.runner === "pi" || s.runner === "durable" ? s.runner : null,
     preview: s.preview,
-    incident: s.incident === null ? null : elapsed(s.incident.startedAt, nowMs),
+    incident: s.incident === null ? null : { elapsed: elapsed(s.incident.startedAt, nowMs), lead: null },
     workers: s.workers === null ? null : { queued: s.workers.queued, ready: s.workers.waiting, tenants: s.workers.tenants, concurrency: s.workers.limit },
     version: s.version,
     hostAlert: s.hostAlert,
@@ -53,6 +53,7 @@ export interface StatusBarProps {
   readonly onLogs?: () => void;
   readonly onCosts?: () => void;
   readonly onSettings?: () => void;
+  readonly onSelectSession?: (sessionId: string) => void;
   readonly runner?: Runner | null;
   readonly state?: SessionState | null;
   readonly version?: Stat<string> | null;
