@@ -559,5 +559,8 @@ fn the_settings_rows_offer_the_j_letter() {
 fn the_tier_parser_accepts_jx() {
     assert!(Tier::parse("JX").is_ok(), "JX must parse");
     assert!(Tier::parse("J3").is_ok(), "J3 must parse");
-    assert!(Tier::parse("J4").is_err(), "J4 is not an effort of J's model");
+    assert!(
+        Tier::parse("J4").is_err(),
+        "J4 is not an effort of J's model"
+    );
 }
