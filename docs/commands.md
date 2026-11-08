@@ -5106,7 +5106,7 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, ai
 
 `presets` is sorted by name, `[]` when the config has none. Idempotent: read-only.
 
-**`preset show <name>`** prints the preset's four refs and the current host `[model]`:
+**`preset show <name>`** prints the preset's five refs and the current host `[model]`:
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5187,7 +5187,7 @@ The switch of `preset apply` with the five refs given as flags instead of a `[pr
 |---|---|---|
 | a ref does not parse as a model ref of §8.3, or a flag is missing (step 1) | `usage` | 2 |
 | `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
-| the four refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the five refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
 | the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
 | the registry can be listed: the helper starts | `spawn_failed` | 1 |
 | the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
@@ -5204,7 +5204,7 @@ It opens the store only to append the Events of step 3, so it waits out a migrat
    {"session": "596d007f-…", "role": "lead", "from": "github-copilot/claude-opus-5.5", "to": "github-copilot/claude-sonnet-5.5", "event": 48221}]}
 ```
 
-The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same four refs is the no-op above.
+The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same five refs is the no-op above.
 
 ### 14.7 `metrics`
 
