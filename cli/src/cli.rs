@@ -16,8 +16,8 @@ use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use cpd_core::{
     ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp,
-    metrics, models, plan, policy, pr, protocol, prune, resource, secret, session, swr, tag, testsel,
-    version_sync,
+    metrics, models, plan, policy, pr, protocol, prune, resource, secret, session, swr, tag,
+    testsel, version_sync,
 };
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};

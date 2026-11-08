@@ -212,7 +212,9 @@ fn next_id(conn: &Connection) -> Result<String, CpdError> {
 fn caller() -> Result<Option<String>, CpdError> {
     match std::env::var_os("CPD_SESSION").filter(|v| !v.is_empty()) {
         Some(value) => Ok(Some(
-            SessionId::parse(&value.to_string_lossy())?.as_str().to_owned(),
+            SessionId::parse(&value.to_string_lossy())?
+                .as_str()
+                .to_owned(),
         )),
         None => Ok(None),
     }
@@ -366,26 +368,29 @@ fn close(store: &mut Store, args: CloseArgs) -> Result<Output, CpdError> {
 /// `cpd protocol bug list` (commands.md §33.4): every bug, id ascending, with its mitigation state; the filters
 /// combine. Read-only.
 fn list(store: &mut Store, args: ListArgs) -> Result<Output, CpdError> {
-    if let Some(status) = &args.status {
-        if status != "open" && status != "closed" {
-            return Err(CpdError::new(
-                ErrorCode::Usage,
-                "A --status is `open` or `closed`.",
-            )
-            .with("status", status.as_str()));
-        }
+    if let Some(status) = &args.status
+        && status != "open"
+        && status != "closed"
+    {
+        return Err(
+            CpdError::new(ErrorCode::Usage, "A --status is `open` or `closed`.")
+                .with("status", status.as_str()),
+        );
     }
-    if let Some(mitigated) = &args.mitigated {
-        if mitigated != "yes" && mitigated != "no" {
-            return Err(CpdError::new(ErrorCode::Usage, "A --mitigated is `yes` or `no`.")
-                .with("mitigated", mitigated.as_str()));
-        }
+    if let Some(mitigated) = &args.mitigated
+        && mitigated != "yes"
+        && mitigated != "no"
+    {
+        return Err(
+            CpdError::new(ErrorCode::Usage, "A --mitigated is `yes` or `no`.")
+                .with("mitigated", mitigated.as_str()),
+        );
     }
     let bugs = store.read(|conn| {
-        if let Some(plan) = &args.plan {
-            if crate::plan::row::find(conn, plan)?.is_none() {
-                return Err(CpdError::plan_not_found(plan));
-            }
+        if let Some(plan) = &args.plan
+            && crate::plan::row::find(conn, plan)?.is_none()
+        {
+            return Err(CpdError::plan_not_found(plan));
         }
         let mut sql = format!("SELECT {COLUMNS} FROM bug_records");
         let mut conditions: Vec<&str> = Vec::new();
