@@ -40,6 +40,12 @@ type LaunchAppOptions = {
   /** Extra env for a scenario (for example `CPD_CHECKOUT`); it never overrides the hidden/isolation keys. */
   env?: Record<string, string>;
   /**
+   * Extra Chromium/Electron switches for a scenario, appended after the app path so they win over
+   * the launcher's own. The rollback relaunch repeats `process.argv.slice(1)`, so a switch here (for
+   * example a reserved `--remote-debugging-port`) is in force in every relaunched process too.
+   */
+  extraArgs?: readonly string[];
+  /**
    * Create the window hidden (`CPD_ELECTRON_HIDDEN=1`). Default true: the suite never shows a
    * window on the User's screen (air-d68). The shared fixture passes false on Linux (the CI runner
    * has no User screen under xvfb), while the view spec keeps the default so its "no window is
@@ -87,7 +93,7 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
     // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and app
     // data) in a temp dir, so the run never touches the User's real profile. The last argument is
     // the Electron app path: `"."` is the checkout's `web/`, or the staged installed app dir.
-    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? "."],
+    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? ".", ...(options.extraArgs ?? [])],
     cwd: webRoot,
     env: {
       ...process.env,
