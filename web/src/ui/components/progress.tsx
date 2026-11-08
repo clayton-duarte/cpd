@@ -6,25 +6,26 @@ import { cn } from "../../lib/utils.ts"
 
 function Progress({
   className,
+  value,
   children,
   ...props
 }: ProgressPrimitive.Root.Props) {
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
-      className={cn("flex w-full flex-wrap items-center", className)}
+      value={value}
+      className={cn(
+        "relative flex h-1.5 w-full items-center overflow-x-hidden rounded-full bg-muted",
+        className
+      )}
       {...props}
     >
       {children}
-      <ProgressPrimitive.Track
-        data-slot="progress-track"
-        className="relative flex h-1.5 w-full items-center overflow-x-hidden rounded-full bg-muted"
-      >
-        <ProgressPrimitive.Indicator
-          data-slot="progress-indicator"
-          className="h-full bg-primary transition-all"
-        />
-      </ProgressPrimitive.Track>
+      <ProgressPrimitive.Indicator
+        data-slot="progress-indicator"
+        className="size-full flex-1 bg-primary transition-all"
+        style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+      />
     </ProgressPrimitive.Root>
   )
 }

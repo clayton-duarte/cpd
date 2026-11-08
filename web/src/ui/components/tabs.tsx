@@ -18,7 +18,11 @@ function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
   )
 }
 
-function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
+function TabsTrigger({
+  className,
+  onMouseDown,
+  ...props
+}: TabsPrimitive.Tab.Props) {
   return (
     <TabsPrimitive.Tab
       data-slot="tabs-trigger"
@@ -26,6 +30,14 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
         "inline-flex items-center justify-center rounded-sm px-3 py-1 text-sm whitespace-nowrap transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 data-active:bg-background data-active:text-foreground",
         className,
       )}
+      onMouseDown={(event) => {
+        // Radix switched tabs on a primary-button mousedown; the base registry switches on click.
+        // Replay a primary mousedown as a click so a mousedown alone still selects the tab.
+        if (event.button === 0 && !event.defaultPrevented) {
+          event.currentTarget.click()
+        }
+        onMouseDown?.(event)
+      }}
       {...props}
     />
   )

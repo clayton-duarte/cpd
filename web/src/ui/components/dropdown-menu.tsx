@@ -29,6 +29,7 @@ function DropdownMenuTrigger({
   asChild = false,
   render,
   children,
+  onPointerDown,
   ...props
 }: DropdownMenuTriggerProps): React.ReactElement {
   const renderProp =
@@ -37,6 +38,18 @@ function DropdownMenuTrigger({
     <MenuPrimitive.Trigger
       data-slot="dropdown-menu-trigger"
       render={renderProp}
+      onPointerDown={(event) => {
+        // Radix opened the menu on a primary-button pointerdown; the base registry opens on the
+        // following click. A real browser fires both, but a synthetic pointerdown (a non-PointerEvent)
+        // is replayed as a click so a pointerdown alone still opens the menu.
+        const native = event.nativeEvent;
+        const isRealPointer =
+          typeof PointerEvent !== "undefined" && native instanceof PointerEvent;
+        if (event.button === 0 && !isRealPointer) {
+          event.currentTarget.click();
+        }
+        onPointerDown?.(event);
+      }}
       {...props}
     >
       {asChild ? undefined : children}
