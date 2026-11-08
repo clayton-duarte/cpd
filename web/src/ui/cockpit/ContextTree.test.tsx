@@ -1185,3 +1185,48 @@ it("selecting a session no longer needs to open a Contexts section but still ope
   expect(q(m.container, '[data-archived] [data-context="gone"] [aria-current="true"]')).not.toBeNull();
   m.unmount();
 });
+
+// ---- tree-menu rules (CONTRACT 20, air-d111) ----
+
+it("empty tree space offers New Context", () => {
+  const p = withMenu();
+  const empty: ContextTreeModel = { cursor: 1, contexts: [] };
+  const m = mount(<ContextTree {...p} tree={empty} />);
+  const area = q(m.container, '[data-part="empty"]');
+  expect(area, "the empty area is the menu trigger").not.toBeNull();
+  rightClick(area);
+  expect(menuOf()?.getAttribute("data-menu-kind"), "menu kind").toBe("empty");
+  expect(labels()).toEqual([`New Context${E}`]);
+  click(item(`New Context${E}`));
+  expect(dialog(), "the New Context dialog opens").not.toBeNull();
+  expect(dialog()?.textContent, "dialog title").toContain("New Context");
+  m.unmount();
+});
+
+/** The tree with the Plan's Lead removed: a Plan with no Lead is not deletable (CONTRACT 20.1). */
+const noLeadTree = (): ContextTreeModel => {
+  const c = tree.contexts[0]!;
+  const p = c.plans[0]!;
+  return { cursor: 1, contexts: [{ ...c, plans: [{ ...p, leadSessionId: null, sessions: p.sessions.filter((s) => s.ref.id !== "s-lead") }] }] };
+};
+
+it("Delete is offered only on archived or asleep rows", () => {
+  const noLead = mount(<ContextTree {...withMenu()} tree={noLeadTree()} />);
+  rightClick(q(noLead.container, planRow("p1")));
+  expect(labels(), "a Plan with no Lead is not deletable").not.toContain("Delete");
+  noLead.unmount();
+  const asleep = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(asleep.container, planRow("p1")));
+  expect(labels(), "an asleep Plan is deletable").toContain("Delete");
+  asleep.unmount();
+  const fork = mount(<ContextTree {...withMenu()} tree={quietTree()} />);
+  rightClick(q(fork.container, 'button[data-session="s-cfork"]'));
+  expect(labels(), "a fork never carries Delete").not.toContain("Delete");
+  fork.unmount();
+});
+
+it("the selected manager context sorts first", () => {
+  const m = mount(<ContextTree {...props({ tree: layered, selectedSessionId: "m-old" })} />);
+  expect(ids(section(m.container, "contexts"))).toEqual(["old", "hot", "new", "cpd", "host", "codereview"]);
+  m.unmount();
+});

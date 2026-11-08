@@ -14,6 +14,7 @@ export type CpdCommand =
   | { readonly kind: "config.concurrency.set"; readonly n: number }
   | { readonly kind: "context.list" }
   | { readonly kind: "context.curation"; readonly contextId: string; readonly limit: number }
+  | { readonly kind: "context.new"; readonly contextId: string; readonly title: string; readonly owner: string }
   | { readonly kind: "context.rename"; readonly contextId: string; readonly title: string }
   | { readonly kind: "context.archive"; readonly contextId: string }
   | { readonly kind: "context.unarchive"; readonly contextId: string }
@@ -81,6 +82,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "config.concurrency.set": return ["config", "concurrency", "set", String(cmd.n)];
     case "context.list": return ["context", "list"];
     case "context.curation": return ["context", "curation", `--context=${cmd.contextId}`, `--limit=${cmd.limit}`];
+    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`];
     case "context.rename": return ["context", "rename", cmd.contextId, `--title=${cmd.title}`];
     case "context.archive": return ["context", "archive", cmd.contextId];
     case "context.unarchive": return ["context", "unarchive", cmd.contextId];
@@ -176,6 +178,7 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "config.concurrency.set", n: 4 },
     { kind: "context.list" },
     { kind: "context.curation", contextId: "c1", limit: 10 },
+    { kind: "context.new", contextId: "c1", title: "T", owner: "clayton-duarte" },
     { kind: "context.rename", contextId: "c1", title: "T" },
     { kind: "context.archive", contextId: "c1" },
     { kind: "context.unarchive", contextId: "c1" },
