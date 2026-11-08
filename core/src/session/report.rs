@@ -95,29 +95,34 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
     // A refusal report carries the refusal rule in `details.guard`, with the refused call in
     // `details.{tool, excerpt}` (contract §5.2, Plan `agent-refusals`): the adapter's guard refusal, or an
     // agent-caused CLI refusal whose `guard` is the envelope's `code`. The Event is a `guard` Event.
-    if let Some(rule) = details.get("guard").and_then(Value::as_str).map(str::to_owned) {
+    if let Some(rule) = details
+        .get("guard")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
         let tool = string_field(&details, "tool");
         let excerpt = string_field(&details, "excerpt");
         let session = env.store.read(|c| row::load(c, &id))?;
-        let model = row::model_and_level(&row::models_of(&mut env, &session)?, &session.id, &session.tier)?.0;
+        let model = row::model_and_level(
+            &row::models_of(&mut env, &session)?,
+            &session.id,
+            &session.tier,
+        )?
+        .0;
         let role = session.role.as_str();
         let text = format!("{role} {} refused: {rule}: {excerpt}", session.id);
-        let guard = NewEvent::guard(
-            text,
-            &rule,
-            role,
-            &session.tier,
-            &model,
-            &tool,
-            &excerpt,
-        )
-        .context(session.context.clone())
-        .session(session.id.clone());
+        let guard = NewEvent::guard(text, &rule, role, &session.tier, &model, &tool, &excerpt)
+            .context(session.context.clone())
+            .session(session.id.clone());
         let guard = match session.plan.clone() {
             Some(plan) => guard.plan(plan),
             None => guard,
         };
-        let guard = match session.attempt.as_deref().and_then(|a| crate::ids::AttemptId::parse(a).ok()) {
+        let guard = match session
+            .attempt
+            .as_deref()
+            .and_then(|a| crate::ids::AttemptId::parse(a).ok())
+        {
             Some(attempt) => guard.attempt(attempt),
             None => guard,
         };
@@ -149,7 +154,11 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
 
 /// A string field of the report's `details`, or `""` when it is absent or not a string.
 fn string_field(details: &Map<String, Value>, key: &str) -> String {
-    details.get(key).and_then(Value::as_str).unwrap_or("").to_owned()
+    details
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
 }
 
 /// Appends the `guard` Event unless an earlier one of the same Session carries the same `code` and `excerpt`
