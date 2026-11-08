@@ -138,6 +138,12 @@ test.afterAll(() => {
  * served placeholder so the boot load never 404s.
  */
 function resetStaging(): void {
+  // Each run starts without build stamps/artifacts: only this run's updater may decide the views
+  // are built, never a reused checkout from an earlier test or worker run.
+  rmSync(join(checkout, "web", "dist-electron"), { recursive: true, force: true });
+  rmSync(join(previewCheckout, "web", "dist-electron.preview"), { recursive: true, force: true });
+  mkdirSync(join(checkout, "web", "dist-electron", "renderer"), { recursive: true });
+  mkdirSync(join(previewCheckout, "web", "dist-electron.preview", "renderer"), { recursive: true });
   writeFileSync(join(checkout, "web", "dist-electron", ".built-sha"), HEAD_SHA);
   writeFileSync(join(checkout, "target", ".cli-installed-sha"), OLD_CLI_SHA);
   writeFileSync(join(checkout, "web", "dist-electron", "renderer", "electron.html"), PLACEHOLDER);
