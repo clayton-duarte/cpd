@@ -207,7 +207,7 @@ export const test = base.extend<Fixtures>({
  * The app's first window. `firstWindow()` waits for the "window" event; if that event does not fire
  * (or fired before the fixture ran) fall back to polling `windows()` — no sleep.
  */
-async function firstWindow(app: ElectronApplication): Promise<Page> {
+export async function firstWindow(app: ElectronApplication): Promise<Page> {
   try {
     return await app.firstWindow({ timeout: 20_000 });
   } catch (error) {
