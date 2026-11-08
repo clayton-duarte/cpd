@@ -479,6 +479,7 @@ export type ClientMessage =
 
 > **Amended by 12:** adds the server message `session.remove` (12.1 L1).
 > **Amended by 15:** adds the server message `pong` (the answer to the client's `ping`; `parseServerMessage` accepts it, and it carries no session or cockpit state).
+> **Amended by 20 (Plan `status-workers`):** the cockpit `status` pane rides this wire: `cockpit.snapshot` carries the optional `status` field and `cockpit.patch` carries `pane: "status"`, both already parsed and filed by the store. §20 states the pane, its fields and the serve-stream pane they come from.
 
 ```ts
 import type { Capabilities, Cursor, Dialog, DialogOutcome, FooterStats, ModelChoice, QueuedSubmission, SessionRef, TranscriptItem, Window, WireError } from "./domain.ts";
@@ -2096,7 +2097,7 @@ Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line
 | Frame (`t`) | Accepted shape | Effect on the cockpit |
 |---|---|---|
 | `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). On a child that already said hello, it is an in-place restart (13.9): the stream stays ready. Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
-| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox`, each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. A snapshot also clears `lastError` when its `details.cpdCode` is `store_too_new`, as it already clears `cockpit.error`. |
+| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox` (**amended by 20:** and `status`, §20.1), each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. A snapshot also clears `lastError` when its `details.cpdCode` is `store_too_new`, as it already clears `cockpit.error`. |
 | `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
 | `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
 | `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. A `store_too_new` code: the heal of 13.6 instead, with no error update. |
@@ -2229,3 +2230,42 @@ Normative. Plan `settings-workers` decides the points below for the Agent Tiers 
 - **The range and its refusal (air-d70).** The accepted range is **1 to 16 inclusive**. A value outside it is refused loudly — `config_invalid` (`details.key` `concurrency`), no clamp, no silent default — both by the command (commands.md §14.2c) and, a hand-edited `config.toml` no exception, when the file is loaded (docs/contract.md §8.2). The refusal reaches the web as any CLI refusal does (`cpd_failed` with the CLI's message, §6.3's mapping) and is shown like any Save refusal (17.2).
 - **A refused save stops the remaining writes and is shown as the error toast (air-d44), never inline.** The first failing write stops the save: the writes after it do not run (the same first-refusal rule §17.1 states for the switches), the dialog stays open with the values the User typed, and the whole CLI refusal text appears **once in the cockpit error toast** (the toast surface of 16.1) — never as an inline line in the dialog (the `data-part="settings-error"` paragraph of 17.2 stays gone). A successful save still closes the dialog.
 - **Lowering the count stops nothing (air-d71).** A save that lowers `concurrency` below the number of running Workers stops nothing: the engine reads the count from the config file on each tick, so the set takes effect without a restart, and it gates **new starts only** — the running tenants keep their slots to the end and the urgent one-beyond-`concurrency` rule is unchanged (docs/contract.md §3.7 E3, §8.2). Nothing in the web waits on or re-reads the count after the save; the workers pill (its `/M`, `data-part="workers"`) picks the new value up on the engine's next tick.
+
+## 20. The cockpit status pane on the serve stream (Plan `status-workers`)
+
+Normative. Plan `status-workers` decides the points below: the Workers counts and the incident state the StatusBar shows are carried by `cpd cockpit serve` itself, as one more pane of the snapshot it already writes (the frame grammar of commands.md §11a), so the WebUI reads the engine's own numbers — one source of truth (the User's request of 2026-11-07 22:46 EST; TUI parity, air-d98) with no second computation and no second transport. No new frame kind: the stream still speaks only `hello`, `snapshot`, `event`, `plan_show` and `error` (the `Frame` enum of core/src/cockpit/mod.rs).
+
+Grounding: `$CPD_HOME/run/status-workers/explore/scout-ws-workers.md`, `scout-webui-status.md`, `scout-tui-status.md` (the explore artefacts of this Plan, cited as `scout-<x> §n`).
+
+### 20.1 The serve snapshot's fifth pane: `status`
+
+- **The pane's exact name is `status`.** The `snapshot` frame's `panes` object gains the key `status` beside the four it has: `{"t":"snapshot","seq":N,"panes":{"context":V,"plan":V,"session":V,"inbox":V,"status":S}}`. The four existing panes and their values are unchanged; each snapshot stays full (no diffs), the status pane included.
+- **`S` is read fresh from the store on every snapshot**, through the one open Env `serve` already holds (commands.md §11a "Lifecycle"; no second store connection), and it carries `ok: true` like every pane value, so the parse rule of 13.8 ("a pane whose `ok` is not `true` rejects the whole snapshot") applies to it unchanged. Its fields are the engine's own numbers, exactly as the `@cpd_workers` step computes them (engine/src/watch/workers.rs:34-53, 86-93), all four counts read in one read transaction (workers.rs:56-66):
+
+```json
+S = {
+  "ok": true,
+  "workers": {
+    "queued":  <u32>, // every Job with status 'queued', the waiting ones included (QUEUED, engine/src/watch/workers.rs:37)
+    "waiting": <u32>, // the Ready Jobs, E3's rule: the one shared READY query (engine/src/watch/schedule.rs:101, read at workers.rs:62)
+    "running": <u32>, // the tenant Jobs of pool 'workers', the starter's occupancy, a failed Job included: the one shared tenancy query (core/src/resource/mod.rs:38, HELD at engine/src/watch/workers.rs:34)
+    "limit":   <u32>  // config `concurrency`, read fresh on every snapshot (engine/src/watch/workers.rs:86-93)
+  },
+  "incident": {
+    "on":         <boolean>,      // incident mode is on: the `incident` row exists (cpd_core::incident::is_on, core/src/incident.rs:121)
+    "started_at": <string|null>,  // RFC 3339, the `incident` row's `started_at` (engine/src/watch/workers.rs:146-148); null when `on` is false
+    "lead":       <string|null>   // the incident Lead's Session id (incident::lead, core/src/incident.rs:151-179); null when `on` is false or no Lead resolves
+  }
+}
+```
+
+- The invariant of `incident`: `on` is true exactly when the `incident` row exists; when `on` is false, `started_at` and `lead` are null. There is no state where the counts or the incident are half-carried: a failed read of the pane is a store error and ends `serve` as commands.md §11a says any store error does — no partial or stale pane value is ever written.
+- **The four counts are the TUI's `workers Q·W·N/M` numbers in its display order** (engine/src/watch/workers.rs:73-80): `queued` = Q, `waiting` = W (the count the WebUI's `StatusModel.workers` names `ready`, mapped by 6.7's `barStatus`), `running` = N (the count `StatusModel.workers` names `tenants`), `limit` = M (`concurrency`). The pane keeps the engine's field names; the renderer's mapping to the pill's labels is unchanged.
+- **Protocol-version rule: adding the pane does not raise the serve stream's `protocol`** (the `1` of `hello`, core/src/cockpit/mod.rs:68). The change is additive in both directions, so no reader is broken: a web built before the pane checks the four pane keys it knows and ignores the unknown one (`parseFrame` reads `panes["context"|"plan"|"session"|"inbox"]` and passes the rest through, web/src/server/cockpit/stream.ts:57-62), and a web built after it reads a snapshot without `status` as "this stream carries no status pane" and keeps the spawn/extras status read it already has (6.3, `status.ts`) — degraded freshness, never a misread. The rule for the future: the serve stream's `protocol` is raised only when a change would make an older web misread a frame it already accepts; adding a pane key is not such a change.
+
+### 20.2 How the pane is delivered
+
+- **On the serve stream, the pane travels on the `snapshot` only.** No event kind carries the counts (the `@cpd_workers` step writes no Event, engine/src/watch/workers.rs:4-6) and the stream has no patch frame to carry a pane delta, so none is invented. This is enough: every batch of committed changes ends in a snapshot (commands.md §11a "Batches and latency"), and the watchdog's `refresh` request forces one on demand (15.2), so any committed change that moves a count or the incident reaches the WebUI backend with the next snapshot — even when the batch's Events name no pane the service refreshes.
+- **On the WebUI's one WebSocket (§15), it is delivered both ways the wire already has — no new message type:** the cockpit service maps the serve snapshot's `status` pane onto the optional `status` field of `cockpit.snapshot` (§4.2, amended), and emits `cockpit.patch` with `pane: "status"` when a fresh snapshot's pane differs from the one held. Both shapes are the ones the store's reducer already files (`state/store.ts`, the `cockpit.snapshot` merge and the computed-key `cockpit.patch` branch); `CockpitPane` (§4.2) gains `"status"`, which the server already sends and the store already accepts.
+- **One source of truth.** With the pane, `StatusModel`'s `workers` and `incident` fields are fed from the serve stream, and the `@cpd_workers` tmux scrape of `web/src/server/cockpit/status.ts` (the regex over the TUI's display string, `scout-ws-workers §(d)`) is retired for those fields: the WebUI reads the same store numbers the TUI's step reads, with no second computation over a display format. The incident pill's elapsed text stays the renderer's own rendering (6.7), computed from the pane's `started_at`.
+- **Tests and limits:** the pane's parse and delivery are tested with fakes like every stream path (13.10, A6 — no real process, socket or `cpd`); the pane's live values are unverified until the code Jobs of the Plan run them (unverified).
