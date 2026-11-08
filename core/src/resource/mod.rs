@@ -18,6 +18,8 @@ pub mod cmd;
 pub use cmd::{Command, run};
 
 #[cfg(test)]
+mod pool_tests;
+#[cfg(test)]
 mod tests;
 
 /// The reserved name of the built-in resource: the host's Worker slots (contract §8.3 "The built-in resource `workers`").
