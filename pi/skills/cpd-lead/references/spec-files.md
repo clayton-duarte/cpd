@@ -4,7 +4,7 @@ A Worker is a fresh session that sees only its Spec. Whatever it needs must be i
 
 ## The spec file
 
-The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required, and no others (an unknown field is refused with `spec_invalid`); a test Job's also has `tests` and `test_files` ([Test Jobs](#test-jobs)):
+The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required — `out_of_scope` too: it may be empty, but the key must be there — and no others. The field names are snake_case: the camelCase spelling cpd 1 used for `out_of_scope` is an unknown field, refused with `spec_invalid` naming `out_of_scope`; so is any other unknown field (each refusal names the JSON path); a test Job's also has `tests` and `test_files` ([Test Jobs](#test-jobs)):
 
 ```json
 {
@@ -45,7 +45,7 @@ The Worker's submit runs only the tamper check and, for a test or implementation
 Put these in the `context` of every Spec (they are a Worker's only rules):
 
 - Commit a skeleton within 10 minutes, then at least every 20 minutes.
-- Wrap every measurement and test run in `timeout` (for example `timeout 300 node --test test/routes/health.test.ts`), and run only the tests your change touches, never the full suite.
+- Wrap every measurement and test run in `timeout` (for example `timeout 300 node --test test/routes/health.test.ts`), and run only the tests your change touches, never the full suite. Your bound is the Attempt's `attempt_minutes`, not the 30 s a Lead's, a Manager's and an explore Worker's shell calls live under: size each `timeout` to what the command needs, well inside `attempt_minutes`.
 - Write no synthetic benchmarks.
 - Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
 
@@ -73,7 +73,7 @@ On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--dra
 
 A Workflow that changes behaviour has a test Job and an implementation Job after its docs Job, and, for an end-to-end or other check that changes no product behaviour, a `verify` Job after the implementation Job (plain Spec, no `tests`) ([the Workflow's shape](../SKILL.md#splitting)). A different Worker writes each, so the tests are not fitted to the code.
 
-- **A test Job's spec file** has two more fields, both required once the Job is not a stub, and refused for every other kind: `tests`, the named tests (one or more distinct one-line strings, the names the repo's test command takes), and `test_files`, the files that hold them (repo-relative paths or, ending in `/`, directory prefixes; no `..`, no leading `/`). Name the tests exactly: with no `list` command below, a name that matches no test can read as a red test. A name is a pi test `pi/test/<file>.test.ts::<title>` (the file, `::`, the exact `node:test` title), a web test `web/<file>.test.ts(x)::<title>` (the exact vitest title), or a Rust name, as nextest filters it. Its `touches` includes those files and the stubs that make the branch build.
+- **A test Job's spec file** has two more fields, both required once the Job is not a stub, and refused for every other kind: `tests`, the named tests (one or more distinct one-line strings, the names the repo's test command takes), and `test_files`, the files that hold them (repo-relative paths or, ending in `/`, directory prefixes; no `..`, no leading `/`). Name the tests exactly: with no `list` command below, a name that matches no test can read as a red test. A name is a pi test `pi/test/<file>.test.ts::<title>` (the repo-relative file, `::`, the exact `node:test` title), a web test `web/<file>.test.ts(x)::<title>` (the repo-relative file, `::`, the exact vitest title), or a Rust test id: the module path from the crate root, then `::`, then the test function's name, exactly as nextest names it (`spec::refusals_tests::worker_text_lists_only_refusals_submit_returns` for a unit test; `<file-stem>::<test_fn>` for a `cli/tests/<area>` test, with the area name left out of the id; a bare test-function name also matches). Its `touches` includes those files and the stubs that make the branch build.
 
   ```json
   {"goal": "Write the red tests for the /health endpoint, with stubs.", "context": "…", "touches": ["test/routes/health.test.ts", "src/routes/health.ts"], "acceptance": ["…"], "out_of_scope": ["…"],
@@ -82,7 +82,7 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
 
   Its submit builds the branch and runs the named tests, and is refused unless they fail for a reason other than a build error (`tests_build_failed`, `tests_not_red`; `test_files_missing` when a `test_files` entry matches nothing the Job changed).
 - **An implementation Job names no tests.** Its tests are the union of the `tests` of the test Jobs it needs directly (derived, so the tests it must pass are the ones that were red). Its submit is refused unless they pass (`tests_failed`). Its Spec's `context` says which test Jobs it builds on.
-- **The red tests are guarded.** The implementation Job may not change a path matched by the `test_files` of the test Jobs it needs (`tests_tampered`), unless you approve the path with `cpd job approve-tests <job> --path <p> --reason "<why>"`. A Worker that needs a test changed asks you with `cpd ask`; the decision is yours ([Escalations](../SKILL.md#escalations)).
+- **The red tests are guarded.** The implementation Job may not change a path matched by the `test_files` of the test Jobs it needs (`tests_tampered`), unless you approve the path with `cpd job approve-tests <job> --path <p> --reason "<why>"`. A guarded test path that is not in the implementation Job's Spec `touches` needs **two approvals**: the touches guard runs first, so that one approval alone still leaves its next submit refused `touches_violation`; grant the same path with `cpd job approve-touches <job> --path <p> --reason "<why>"` as well, and the next submit passes both guards. A Worker that needs a test changed asks you with `cpd ask`; the decision is yours ([Escalations](../SKILL.md#escalations)).
 - **The repo's test commands** are the `[test-commands]` table of the repo's policy file at `$CPD_HOME/policy/repos/<owner>/<name>.toml`, which the Lead drafts and the User approves:
 
   ```toml

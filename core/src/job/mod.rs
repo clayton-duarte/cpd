@@ -92,18 +92,18 @@ pub struct AddArgs {
     /// The title
     #[arg(long, value_name = "text")]
     title: Text,
-    /// The Tier: <G|H|S|O><0-4|X> (required, except with --draft)
+    /// The Tier: <G|H|S|O><0-4|X> (required for every Job, a --draft too)
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
-    /// The Spec file (JSON) (required, except with --draft)
+    /// The Spec file (JSON) (required for every Job, a --draft too)
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// Dependencies, comma-separated
     #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
     needs: Vec<JobKey>,
     /// Add it as a draft in a phase after plan too: the engine never runs it
-    /// until a Plan review of the drafts is approved. Needs no --tier and no
-    /// --spec: a stub draft, completed later with job edit
+    /// until a Plan review of the drafts is approved. Needs --tier and --spec
+    /// like any Job; a draft that lacks them is a stub, completed later with job edit
     #[arg(long)]
     draft: bool,
     /// Add it urgent (§2.2): E3 starts it first and may run it beyond the

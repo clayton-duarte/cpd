@@ -30,8 +30,12 @@ This is an **update Job** of a Workflow whose pull request is open: you bring th
 
 {% if explore %}
 - Write only the artefact named under "Deliverable" (and temporary files in the OS temp directory); change no git repository.
+- Every shell call sets the bash tool's `timeout` input above 0 and at most 30 seconds; a lone `cpd ask` is the only exception, with no upper bound.{% if kind == "scout" %} A `scout` has no network: no `curl`, `wget`, `ssh`, `git fetch`/`pull`/`push`/`clone`, `cargo install`/`publish`/`search`, and no MCP or web tool.{% endif %}
 {% else %}
 - Work only in this worktree, and touch the files listed under "Files you may touch". A diff outside those files is refused `touches_violation`; the repo's generated paths (listed in the Spec) are exempt; a path the Lead approved with `job approve-touches` is exempt; otherwise ask the Lead (`cpd ask`) or revert the file. Never a guarded or protected path.
+{% endif %}
+{% if writing_for_agents %}
+- Read and follow pi/skills/writing-for-agents/SKILL.md before editing any file under pi/skills/.
 {% endif %}
 {% if kind == "open" or kind == "update" %}
 - Fetch the base (`git fetch origin <base>`, the base is named under "Context") and merge it as the Context says: a conflict always (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1); with no conflict, merge it **only if the Lead Branch conflicts with it** or the Context tells you the base Workflow's pull request merged and the default branch holds commits the Lead Branch lacks. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict and no such cause there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
