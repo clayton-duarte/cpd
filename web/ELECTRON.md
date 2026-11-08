@@ -10,13 +10,21 @@ Launch the app with `cpd desktop`:
 cpd desktop
 ```
 
-`cpd desktop` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `desktop_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches Electron without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a). The launch removes the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER`, `CPD_JOB_KIND` (contract §6.6) — from the child's environment, and the app strips the same five from its own environment at boot (Boot order, below), so no agent Session's identity reaches the app or the `cpd` children it spawns; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and the rest of the environment stay.
+`cpd desktop` runs the checkout that `cpd install --root <checkout>` built: it reads `~/.local/share/cpd/app-root`, which install writes, and without that file it refuses with `desktop_not_installed`. It builds `web/dist-electron` when that is missing, makes node-pty's `spawn-helper` executable and, on macOS, names the app CPD. Then it sends SIGUSR1 to the running app, or, when none runs, launches the installed app without waiting, with its output in `$CPD_HOME/run/app.log` (commands.md §14.4a).
+
+The app `cpd desktop` launches is the packaged app installed from the checkout (air-d89 point 1). `scripts/install-cpd.sh` — `cpd install --root <checkout>` (commands.md §14.4, step 7a) — packages the app with the existing `web/electron-builder.yml` and installs the built bundle into the app dir `<home>/.local/share/cpd/app` (`CPD.app` on macOS; `productName` CPD, `appId` com.cpd.desktop; the previous bundle is replaced), and the launcher spawns that installed bundle's executable. Status: decided by air-d89 point 1; as of this amendment the code still spawns `<root>/web/node_modules/.bin/electron .` from the checkout (`core/src/app/mod.rs`, `launch`) and nothing invokes `electron-builder.yml` — the install has no packaging step — and the implementing change brings the code in line.
+
+The installed app is a shell (air-d89 point 1): it carries the watchdog in its own main process — not the external frozen node script `scripts/preview-watchdog.mjs`, which only the web preview installs under `~/.cache/cpd-preview/watchdog` — and only the tooling its duties need: the bundle ships the pty's `spawn-helper` (`asarUnpack`), the tray and Dock resources (`extraResources`) and nothing else of the checkout. The views keep loading from the checkout named by `app-root` (air-d89 point 3), built and swapped there by the updater, so the bundle carries no view build and a view update needs no repackage. Status: decided by air-d89 point 1; as of this amendment the only watchdog that runs is the external preview script and the shell is the checkout's node_modules Electron.
+
+The app detects a broken installation and reports it: a missing app dir — nothing installed where the checkout named by `app-root` installed it — or a failed launch is detected and reported as a structured cpd Event, queryable like every Event (commands.md §11). Status: decided with air-d89 point 1 (`web/src/electron/install.ts`); the module does not exist yet and the implementing change brings it in line.
+
+The launch removes the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER`, `CPD_JOB_KIND` (contract §6.6) — from the child's environment, and the app strips the same five from its own environment at boot (Boot order, below), so no agent Session's identity reaches the app or the `cpd` children it spawns; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and the rest of the environment stay.
 
 These steps are needed because node-pty 1.1.0 ships `spawn-helper` with mode 0644, and without the execute bit the pty fails with `posix_spawnp failed`. The `allowBuilds: electron: false` setting in `pnpm-workspace.yaml` stops the postinstall download of the Electron binary, so worktrees and CI have no binary. When the binary is missing, `cpd install` and `cpd desktop` run `node web/node_modules/electron/install.js` to download it; if that fails, the install or app step fails before plutil runs. When the binary is present, no extra command runs. `pnpm --filter cpd-web-client run electron` does the same by hand; it is not the way to launch.
 
 Prerequisites:
 
-- `cpd install --root <checkout>` has run for the checkout you launch (it runs `pnpm install --frozen-lockfile` there).
+- `cpd install --root <checkout>` has run for the checkout you launch: it runs `pnpm install --frozen-lockfile` there and packages and installs the app into the app dir (§Run above, air-d89 point 1).
 - `cpd` and `tmux` are installed and on the PATH. The pty runs `cpd tui --attach` in your home directory with your login-shell PATH.
 - Maple Mono is installed on the system. It is not bundled; without it the terminal falls back to the generic monospace font.
 
@@ -268,7 +276,7 @@ export function startTerminalHost(deps: TerminalHostDeps): Promise<{ dispose(): 
 
 - `preload.ts`: `contextBridge.exposeInMainWorld("cpdElectron", createBridge(ipcRenderer))`.
 - `renderer.ts`: reads `window.cpdElectron`, loads `Ghostty.fromBytes(await bridge.readWasm())`, builds a `TerminalEngine` over `@aurigax-ai/ghostty-web` (`new Terminal({ ghostty, renderer: "webgl", theme: DANGO_THEME, ...TERMINAL_FONT })` plus its `FitAddon`; `setPaused`, `clipboardWriteHandler` as in the research file), a `ResizeSource` over `ResizeObserver`, and calls `startTerminalHost`.
-- `main.ts`: the Electron main process (below).
+- `main.ts`: the Electron main process (below). Every main→renderer payload goes through `sendToWindow`, which checks `win.isDestroyed()` before it reads `win.webContents` (air-n62): a window closed while a pty still emits data no longer throws `Object has been destroyed` — the send is dropped, and the window's `closed` handler kills every pty behind the sinks (`ipc.dispose()`), so nothing can emit for the dead window and the app quits with no orphan process (Verification checklist 12).
 
 ### Terminal fixes (pro-d25)
 
@@ -308,11 +316,12 @@ At runtime `native.ts` reads only the two tray images. In dev they come from `ap
 
 ## Packaging
 
-- `web/electron-builder.yml` is the electron-builder config. `appId` is `com.cpd.desktop`; `productName` is `cpd`.
+- `web/electron-builder.yml` is the electron-builder config. `appId` is `com.cpd.desktop`; `productName` is `CPD` (a correction: the file's value is `CPD`, not `cpd` as an earlier edition of this list said).
 - `electron-builder` is a pinned devDependency of `web/` (pro-d24).
 - `files` ships the main process output (`dist-electron/**/*`) and `package.json`. `extraResources` copies `build/tray` into `Contents/Resources/tray`.
 - The macOS target is arm64: a DMG and a zip. The build uses the hardened runtime and notarizes, and reads the Apple credentials from the environment.
 - `dist:mac` (`pnpm --filter cpd-web-client run dist:mac`) builds the Electron bundle and runs electron-builder for macOS. The output goes to `web/dist/`.
+- The install packages the app and puts it in place: `cpd install --root <checkout>` (commands.md §14.4, step 7a) runs the packaging with this config and installs the built bundle into the app dir `<home>/.local/share/cpd/app` (air-d89 point 1); `cpd desktop` launches it (§Run).
 - Run `scripts/prepare-macos-assets.sh` once on a Mac before `dist:mac`. The DMG background is `build/dmg/background.tiff`, and the script creates it.
 
 ## Native shell
