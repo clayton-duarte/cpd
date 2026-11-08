@@ -120,7 +120,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
             poll::arm_for_behind_head(&mut store, &home, &repo, number)?;
             return Err(CpdError::new(
                 ErrorCode::HeadBehindMain,
-                format!("{repo}#{number} is behind {default}, updated, waiting for gate."),
+                "behind main, updated, waiting for gate".to_owned(),
             )
             .with("repo", repo.as_str())
             .with("number", number)
