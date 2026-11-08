@@ -58,8 +58,9 @@ impl Handler for NoGh {
     }
 }
 
-/// The in-process `gh` of one `pr poll`: the search lists `acme/pay#801` open (so the poll owns a repo to fill), the
-/// comments read is empty, and the repo-settings read answers. Any other call exits 9.
+/// The in-process `gh` of one `pr poll`: the search lists `acme/pay#801` open (so the poll owns a repo to fill) and its
+/// repository node carries the settings, the comments read is empty. Any other call exits 9: the poll makes no separate
+/// settings read.
 struct PollGh;
 
 impl Handler for PollGh {
@@ -67,7 +68,7 @@ impl Handler for PollGh {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         let query = args.get(3).copied().unwrap_or_default();
         if query.contains("search(type: ISSUE") {
-            let node = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801","isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#;
+            let node = r#"{"repository":{"nameWithOwner":"acme/pay","defaultBranchRef":{"name":"main"},"isArchived":false,"autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":true},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801","isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#;
             return Reply::ok(&format!(
                 r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-01-01T01:00:00Z"}}}}}}"#
             ));
@@ -80,13 +81,7 @@ impl Handler for PollGh {
             }
             return Reply::ok(&serde_json::json!({"data": data}).to_string());
         }
-        match args[..] {
-            ["api", path] if path.starts_with("repos/") && !path.contains("compare") => {
-                Reply::ok(SETTINGS_REST)
-            }
-            ["repo", "view", _, "--json", ..] => Reply::ok(SETTINGS_VIEW),
-            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
-        }
+        Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" ")))
     }
 }
 

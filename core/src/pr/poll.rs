@@ -311,9 +311,9 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
-    // The repo-settings cache (air-n71): one `gh` read per polled repo whose `swr_repos` row is cold, returned for
-    // the write transaction. A read that fails is left to the merge's on-demand read; the poll's own rows stand.
-    let settings = read_repo_settings(env, &root, &seen)?;
+    // The repo-settings cache (air-n71): the repos the search read whose `swr_repos` row is cold are written from the
+    // settings the search document already carried - no extra `gh` call.
+    let settings = cold_repo_settings(&mut env.store, &search.repo_settings)?;
     let dirty = !settings.is_empty()
         || !follows.is_empty()
         || env.store.read(|conn| {
@@ -566,42 +566,26 @@ fn apply(
 }
 
 /// The comments read of the pull request `listed`, if this poll made one.
-/// The repos of `seen`, distinct and sorted.
-fn seen_repos(seen: &[Listed]) -> Vec<String> {
-    let mut repos: Vec<String> = seen.iter().map(|l| l.pr.repo.clone()).collect();
-    repos.sort();
-    repos.dedup();
-    repos
-}
-
-/// The repos of `seen` whose `swr_repos` row is cold, each read once through `gh` (air-n71). A read that fails leaves
-/// the repo cold for the merge's on-demand read and never fails the poll: the poll's own rows are the poll's job.
-fn read_repo_settings(
-    env: &mut Env,
-    root: &Path,
-    seen: &[Listed],
+/// The repos of `from_search` whose `swr_repos` row is cold, returned for the write transaction (air-n71): the search
+/// document already read their settings, so the poll adds no `gh` call and only the cold rows are written.
+fn cold_repo_settings(
+    store: &mut Store,
+    from_search: &[(String, gh::RepoMeta)],
 ) -> Result<Vec<(String, gh::RepoMeta)>, CpdError> {
-    let cold = env.store.read(|c| {
+    store.read(|c| {
         let mut stmt = c.prepare("SELECT 1 FROM swr_repos WHERE repo = ?1")?;
         let mut cold = Vec::new();
-        for repo in seen_repos(seen) {
+        for (repo, meta) in from_search {
             if stmt
-                .query_row([&repo], |r| r.get::<_, i64>(0))
+                .query_row([repo], |r| r.get::<_, i64>(0))
                 .optional()?
                 .is_none()
             {
-                cold.push(repo);
+                cold.push((repo.clone(), meta.clone()));
             }
         }
         Ok(cold)
-    })?;
-    let mut settings = Vec::new();
-    for repo in cold {
-        if let Ok(meta) = gh::repo_settings(&*env.ports.runner, root, &repo) {
-            settings.push((repo, meta));
-        }
-    }
-    Ok(settings)
+    })
 }
 
 fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
