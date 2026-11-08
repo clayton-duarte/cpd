@@ -48,6 +48,8 @@ mod escalations;
 mod explore_tests;
 #[cfg(test)]
 mod finished_rule_tests;
+#[cfg(test)]
+mod github_pass_tests;
 pub mod host_alert;
 mod hosts;
 #[cfg(test)]

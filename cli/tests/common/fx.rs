@@ -1068,7 +1068,10 @@ impl Fx {
     /// One tick of the engine (`cpd watch`: E1-E5, E7-E14), run in this thread on the ports of this `Fx` through
     /// `cpd_engine::watch::run_with`: the loop ends at its first nap, which is on the `ManualClock`. Starts no process;
     /// what a step starts is recorded by the `FakeSpawn`, what it asks of tmux, `gh` or `cpd` is the `FakeRunner`'s.
+    /// E5's in-process github poll is the fixture default ([`Fx::engine_gh_route`]): a test that needs another answer
+    /// scripts `gh` first, which answers before the route.
     pub fn engine_tick(&self) {
+        self.engine_gh_route();
         let until = Arc::new(AtomicBool::new(false));
         let clock = Arc::new(StopAtFirstNap {
             inner: self.fakes.clock.clone(),

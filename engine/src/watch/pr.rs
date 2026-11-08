@@ -1,8 +1,10 @@
-//! E5, pull request poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
-//! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
-//! end of the previous poll, at its due time (the engine wakes for it between ticks),
-//! whether or not any Plan is in `deploy`: one poll covers every open pull request of the User. `cpd` is the executable the engine started
-//! from (`Spawn::self_exe`), as for the drivers of E3 (hs-d151): not `PATH`.
+//! E5, the GitHub step (contract §3.7, §7.6; hs-d96, hs-d97; docs/architecture/swr.md §12): E5 owns the `github`
+//! source — its `due()`, its `fetch()` and its outbox drain (swr-github.md §4, §9). `pr_poll_seconds` after the end of
+//! the previous pass, at its due time (the engine wakes for it between ticks), whether or not any Plan is in `deploy`:
+//! one pass covers every open pull request of the User. The pass IS E5's poll: the source's fetch replaces the legacy
+//! `cpd pr poll` spawn, and the legacy effects (the pr-feedback, pr-merged and pr-closed Events, the Workflow merges and
+//! unstack, and the changed/feedback/merged/done counts) are applied from that same read, so the tick polls GitHub once
+//! per `pr_poll_seconds` (D9's target; Lead answer github-pass-poll-fix-a1-q1).
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
@@ -29,7 +31,6 @@ use cpd_core::git::{TAIL_LINES, tail};
 use cpd_core::host::deadline::Failed;
 use cpd_core::host::limit::limit;
 use cpd_core::host::runner::Runner;
-use cpd_core::ports::Ports;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
@@ -39,6 +40,7 @@ const RATE_GRACE: Duration = Duration::from_secs(3);
 const RATE_FALLBACK: Duration = Duration::from_secs(60);
 /// The `cpd pr poll` child's deadline (contract §3.7): above `pr poll`'s own 15 s
 /// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
+#[cfg_attr(not(test), allow(dead_code))]
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
 /// When the next poll is due: `pr_poll_seconds` after the last one ended (tests: `CPD_TEST_PR_POLL`, [`limit`]), and
@@ -66,7 +68,7 @@ pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
     )
 }
 
-/// E5, first step: starts `cpd pr poll` on its own thread when it is due and none runs.
+/// E5, first step: starts the GitHub pass (E5's poll now, D9's target) on its own thread when it is due and none runs.
 pub(super) fn start(engine: &mut Engine) {
     let now = engine.ports.clock.now();
     if due(engine, now).is_none_or(|due| now < due) {
@@ -75,10 +77,14 @@ pub(super) fn start(engine: &mut Engine) {
     engine.paused_until = None;
     // A request written during this poll is served by the next one (contract §3.7).
     cpd_core::pr::clear_poll_now_in(&engine.home);
-    let root = engine.home.root().to_path_buf();
+    let home = engine.home.clone();
+    let busy_ms = u64::from(engine.config.timeouts.store_busy_ms);
     let ports = engine.ports.clone();
     engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || {
-        poll(&ports, &root)
+        // E5 owns the `github` source (docs/architecture/swr.md §12): its `fetch` IS E5's poll, so one pass per
+        // `pr_poll_seconds` polls GitHub once and applies the legacy effects from that same read. The pass records its
+        // own endpoint failure (swr_endpoints); an error it returns is E5's poll result.
+        super::swr::github_pass(&ports, &home, busy_ms)
     }));
 }
 
@@ -354,13 +360,10 @@ pub(super) fn rate_guard(
     Ok(Some((until, failure)))
 }
 
-/// Runs `cpd pr poll` and returns its success value, or the failure it printed.
-fn poll(ports: &Ports, root: &Path) -> Result<Value, Failure> {
-    let exe = ports.spawn.self_exe().map_err(|e| Failure::from(&e))?;
-    poll_with(&*ports.runner, &exe, root)
-}
-
-/// [`poll`] on `runner`, with `exe` the recorded path of cpd's own executable.
+/// Runs `cpd pr poll` on `runner`, with `exe` the recorded path of cpd's own executable, and returns its success value,
+/// or the failure it printed. E5's own poll no longer spawns this (the GitHub pass is E5's poll now); the helper stays for
+/// the runner's tests and any caller that runs the command as a child.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<Value, Failure> {
     let argv = [&*exe.to_string_lossy(), "pr", "poll"];
     let mut cmd = Command::new(exe);
@@ -389,6 +392,7 @@ pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<
 
 /// What a child printed: its success value (`ok` true, exit 0), or the failure it printed (`ok` false, with an
 /// `error` code), or a `spawn_failed` failure when it printed no result (named apart when it exited 0 with no output). Shared with E11's helper.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
