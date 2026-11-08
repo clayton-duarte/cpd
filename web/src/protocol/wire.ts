@@ -23,7 +23,7 @@ export type ClientMessage =
   | { type: "dialog.respond"; sessionId: string; dialogId: string; response: DialogResponse };
 
 
-export type CockpitPane = "tree" | "plan" | "inbox";
+export type CockpitPane = "tree" | "plan" | "inbox" | "status";
 export type CockpitPaneData =
   | { pane: "tree"; data: ContextTreeModel }
   | { pane: "plan"; data: PlanViewModel | null } // null = no Plan selected

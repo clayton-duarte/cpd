@@ -1,23 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { readStatus, type StatusDeps } from "./status.ts";
+import { readStatus, type StatusDeps, type StatusPane } from "./status.ts";
 
-const SEP = "\u{f0798}";
-interface Sources { version?: string; incident?: string; config?: string; workers?: string; preview?: string; install?: string }
+interface Sources { version?: string; config?: string; preview?: string; install?: string; pane?: StatusPane | null }
 
 function deps(s: Sources, env: Record<string, string> = {}, drift: StatusDeps["drift"] = async () => { throw new Error("drift must not be read"); }): StatusDeps {
   return {
     env,
     drift,
+    statusPane: s.pane ?? null,
     async cpd(argv) {
       const a = argv.join(" ");
       if (a.includes("--version") && s.version !== undefined) return s.version;
-      if (a.startsWith("incident") && s.incident !== undefined) return s.incident;
       if (a.startsWith("config") && s.config !== undefined) return s.config;
       throw new Error(`no source for cpd ${a}`);
     },
     async tmux(argv) {
       const a = argv.join(" ");
-      if (a.includes("@cpd_workers") && s.workers !== undefined) return `${s.workers}\n`;
       if (a.includes("@cpd_preview") && s.preview !== undefined) return `${s.preview}\n`;
       throw new Error(`no source for tmux ${a}`);
     },
@@ -32,19 +30,32 @@ describe("status", () => {
     const st = await readStatus(deps({ version: '{"ok":true,"version":"0.21.45-070ddee","protocol":21}' }));
     expect(st.version).toBe("0.21.45-070ddee");
   });
-  it("status reads the open incident start time", async () => {
-    const on = '{"ok":true,"on":true,"incident":{"started_at":"2026-10-14T21:10:00.000Z","by":"x","reason":"r","plans":[],"until_workflow":null}}';
-    expect((await readStatus(deps({ incident: on }))).incident).toEqual({ startedAt: "2026-10-14T21:10:00.000Z" });
-    expect((await readStatus(deps({ incident: '{"ok":true,"on":false,"incident":null}' }))).incident).toBeNull();
-  });
   it("status reads the runner from durable_workers", async () => {
     const cfg = (on: boolean) => `{"ok":true,"config":{"experimental":{"durable_workers":${on},"write_curation":true}}}`;
     expect((await readStatus(deps({ config: cfg(true) }))).runner).toBe("durable");
     expect((await readStatus(deps({ config: cfg(false) }))).runner).toBe("pi");
   });
-  it("status reads workers queued waiting tenants and limit from the tmux option", async () => {
-    const st = await readStatus(deps({ workers: `workers 52${SEP}13${SEP}10/10` }));
+  it("status reads workers and incident from the serve pane, never from tmux", async () => {
+    const calls: string[] = [];
+    const d: StatusDeps = {
+      env: {},
+      drift: async () => { throw new Error("drift must not be read"); },
+      statusPane: { workers: { queued: 52, waiting: 13, running: 10, limit: 10 }, incident: { on: true, started_at: "2026-10-14T21:10:00.000Z", lead: "lead-session-1" } },
+      async cpd(argv) {
+        const a = argv.join(" ");
+        calls.push(`cpd ${a}`);
+        if (a.includes("--version")) return '{"ok":true,"version":"1.2.3"}';
+        if (a.startsWith("config")) return '{"ok":true,"config":{"experimental":{}}}';
+        return "{}";
+      },
+      async tmux(argv) { calls.push(`tmux ${argv.join(" ")}`); return ""; },
+      async readFile() { return null; },
+    };
+    const st = await readStatus(d);
     expect(st.workers).toEqual({ queued: 52, waiting: 13, tenants: 10, limit: 10 });
+    expect(st.incident).toEqual({ startedAt: "2026-10-14T21:10:00.000Z", lead: "lead-session-1" });
+    expect(calls.some((c) => c.includes("@cpd_workers"))).toBe(false);
+    expect(calls.some((c) => c.includes("incident"))).toBe(false);
   });
   it("status reads the preview sha from the tmux option", async () => {
     const st = await readStatus(deps({ preview: "my-worktree abc1234" }));
