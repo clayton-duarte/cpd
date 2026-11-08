@@ -65,23 +65,28 @@ describe('installCli', () => {
     expect(f.calls.every((c) => c.cwd === ROOT)).toBe(true);
   });
   it('installCli waits while attempts run and installs when idle', async () => {
+    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
     let n = 0;
     const f = fakeExec({
       [BUILD]: {},
       [PLANS]: () => json({ plans: [{ id: 'a' }] }),
       [LIST('a')]: () => json({ attempts: n++ === 0 ? [{ status: 'running' }] : [] }),
+      [NO_FOLLOW_UP]: {},
       [INSTALL]: {},
     });
     const { timers, pending } = manualTimers();
     const logs: string[] = [];
+    const invoked = () => f.calls.map((c) => [c.cmd, ...c.args].join(' '));
     const p = installCli({ exec: f.exec, fs: fakeFs(), timers, log: (l) => logs.push(l), retryMs: 1234 }, ROOT, 's1');
     await flush();
     expect(pending.map((t) => t.ms)).toEqual([1234]);
     expect(logs.length).toBeGreaterThan(0);
-    expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(false);
+    // The binary is installed at once; the full install, which runs the follow-ups, waits for zero attempts.
+    expect(invoked()).toContain(NO_FOLLOW_UP);
+    expect(invoked()).not.toContain(INSTALL);
     pending[0]?.fn();
     expect(await p).toEqual({ ok: true });
-    expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(true);
+    expect(invoked().filter((k) => k === INSTALL)).toHaveLength(1);
   });
   it('installCli returns the log when the build fails', async () => {
     const f = fakeExec({ [BUILD]: { code: 101, stderr: 'compile error', stdout: 'out' } });
@@ -108,12 +113,16 @@ describe('installCli', () => {
     expect(fs.files.get(STAMP)).toBe('abc123');
   });
   it('installCli fails loud when counting attempts fails', async () => {
-    const f = fakeExec({ [BUILD]: {}, [PLANS]: { code: 1, stderr: 'down' } });
+    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
+    const f = fakeExec({ [BUILD]: {}, [NO_FOLLOW_UP]: {}, [PLANS]: { code: 1, stderr: 'down' } });
     const { timers } = manualTimers();
     const r = await installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1');
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.log).toMatch(/plan list/);
-    expect(f.calls.some((c) => c.cmd === INSTALL)).toBe(false);
+    // The binary-only install ran at once; the full install, which runs the follow-ups, never did.
+    const invoked = f.calls.map((c) => [c.cmd, ...c.args].join(' '));
+    expect(invoked).toContain(NO_FOLLOW_UP);
+    expect(invoked).not.toContain(INSTALL);
   });
   it('installCli installs the binary before waiting for running attempts', async () => {
     const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
