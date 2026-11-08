@@ -166,11 +166,10 @@ fn incident_state(conn: &rusqlite::Connection) -> Result<Value, CpdError> {
     if !crate::incident::is_on(conn) {
         return Ok(json!({"on": false, "started_at": null, "lead": null}));
     }
-    let started_at: String = conn.query_row(
-        "SELECT started_at FROM incident WHERE id = 1",
-        [],
-        |r| r.get(0),
-    )?;
+    let started_at: String =
+        conn.query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| {
+            r.get(0)
+        })?;
     let lead = crate::incident::lead(conn)?.map(|id| id.as_str().to_owned());
     Ok(json!({"on": true, "started_at": started_at, "lead": lead}))
 }
