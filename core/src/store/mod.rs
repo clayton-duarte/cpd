@@ -265,7 +265,7 @@ impl Store {
         // §4.2: `locks/store.lock` guards only the store's one-time setup — the WAL switch of a missing database
         // and the migrations. Decide before taking it, from read-only state (`current_schema` opens no lock,
         // migrates nothing and writes nothing).
-        if current_schema(home)?.is_none() {
+        if current_schema(home, busy_ms)?.is_none() {
             // A missing database: its WAL switch is one-time setup, under the lock.
             let setup = setup_lock(clock, home, busy_ms)?;
             let mut store =
@@ -279,8 +279,7 @@ impl Store {
         }
         // The database exists: connect without the lock and ask the read-only verdict. An up-to-date store needs no
         // setup, so it is opened and read with no setup lock and no wait for one.
-        let mut store =
-            Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
+        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         if verdict_with(&store.conn, catalog)?.into_plan()?.is_none() {
             Self::finish_open(&mut store, home, catalog, busy_ms)?;
             return Ok(store);
@@ -910,8 +909,11 @@ pub(crate) fn cache_setup_lock(home: &CpdHome, busy_ms: u64) -> Result<CacheSetu
 }
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
-/// exist. Opens it read-only: no migration, no schema check, no write.
-pub fn current_schema(home: &CpdHome) -> Result<Option<i64>, CpdError> {
+/// exist. Opens it read-only: no migration, no schema check, no write. Its own
+/// connection sets SQLite's busy timeout to `busy_ms` before the read (the
+/// rusqlite default is 5 s of real time), so a database another cpd holds is
+/// waited for on the caller's bound, never longer.
+pub fn current_schema(home: &CpdHome, busy_ms: u64) -> Result<Option<i64>, CpdError> {
     let path = home.db();
     if !path.try_exists().map_err(|e| {
         CpdError::new(
@@ -924,6 +926,7 @@ pub fn current_schema(home: &CpdHome) -> Result<Option<i64>, CpdError> {
     }
     let read = || -> Result<i64, CpdError> {
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(Duration::from_millis(busy_ms))?;
         Ok(user_version(&conn)?)
     };
     read().map(Some).map_err(|e| enrich(e, &path, 0))
@@ -1340,7 +1343,7 @@ mod tests {
     fn current_schema_is_none_without_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        assert_eq!(current_schema(&home).unwrap(), None);
+        assert_eq!(current_schema(&home, 5000).unwrap(), None);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
@@ -1352,7 +1355,7 @@ mod tests {
         conn.pragma_update(None, "user_version", 99).unwrap();
         drop(conn);
         let before = fs::read(home.db()).unwrap();
-        assert_eq!(current_schema(&home).unwrap(), Some(99));
+        assert_eq!(current_schema(&home, 5000).unwrap(), Some(99));
         assert_eq!(fs::read(home.db()).unwrap(), before);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
