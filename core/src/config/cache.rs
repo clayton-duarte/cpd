@@ -23,7 +23,12 @@ pub(super) fn read(
     models: [&str; 3],
     g: &str,
 ) -> Result<Option<Catalog>, CpdError> {
-    read_refs(store, pi_version, models_sha, [models[0], models[1], models[2], g, ""])
+    read_refs(
+        store,
+        pi_version,
+        models_sha,
+        [models[0], models[1], models[2], g, ""],
+    )
 }
 
 /// The cached Catalog for `pi_version`, when it holds a row for each of the five configured models
