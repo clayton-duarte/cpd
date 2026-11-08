@@ -348,7 +348,7 @@ aside[aria-label="Inbox"]
 ├─ TopPaneHeader[data-part="inbox-header"]   the shared header (DESIGN 3i), `hasOverlayControls` false
 │   ├─ h2   "INBOX"        shrink-0; font-mono text-[14px] font-semibold uppercase text-fg-strong
 │   └─ actions: the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (shrink-0), or the collapsed trigger (2.4.2)
-├─ p[data-empty]     only when the filtered list is empty; text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
+├─ Empty[data-empty] only when the filtered list is empty; the `Empty` part (DESIGN 2f `empty.tsx`); text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
 └─ ScrollArea   min-h-0 flex-1 (pro-d69; the list scrolls here, the aside clips)     (only when filtered rows exist)
     └─ ItemGroup   gap-2 px-2.5 py-1.5
         └─ InboxItemRow ×filtered rows, in `inbox.rows` order (2.5)
@@ -471,8 +471,8 @@ The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` 
 | State | Rendering |
 |---|---|
 | `inbox === null` | the 2b first outline: `INBOX` heading and `Loading inbox…` |
-| no rows in the snapshot | the header (the filters at `all 0`), `p[data-empty]` `up to date, drink some water`; no list |
-| rows exist, the filter selects none | the same `p[data-empty]` copy; the header keeps its filters |
+| no rows in the snapshot | the header (the filters at `all 0`), `Empty[data-empty]` (the `Empty` part, DESIGN 2f `empty.tsx`) `up to date, drink some water`; no list |
+| rows exist, the filter selects none | the same `Empty[data-empty]` copy; the header keeps its filters |
 | engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row with `Start` |
 
 ### 2.9. Not built (Inbox)
