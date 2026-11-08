@@ -263,36 +263,50 @@ impl Store {
     ) -> Result<Store, CpdError> {
         let path = home.db();
         // §4.2: `locks/store.lock` guards only the store's one-time setup — the WAL switch of a missing database
-        // and the migrations. Decide before taking it, from read-only state (`current_schema` opens no lock,
-        // migrates nothing and writes nothing).
-        if current_schema(home, busy_ms)?.is_none() {
-            // A missing database: its WAL switch is one-time setup, under the lock.
-            let setup = setup_lock(clock, home, busy_ms)?;
+        // and the migrations. Decide before taking it, from read-only state (`current_schema` and the verdict open
+        // no lock, migrate nothing and write nothing); an up-to-date store is opened without the lock at all.
+        // A store that cannot be read right now (another connection holds it exclusively) is judged as needing
+        // setup, so a held store still takes the lock rather than failing on the read.
+        let missing = match current_schema(home, busy_ms) {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(e) if is_transient(&e) => false,
+            Err(e) => return Err(e),
+        };
+        let needs_setup = missing || !Self::is_up_to_date(&path, catalog, busy_ms)?;
+        if !needs_setup {
             let mut store =
                 Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
-            store
-                .migrate(home, catalog, &setup)
-                .map_err(|e| enrich(e, &path, busy_ms))?;
-            drop(setup);
             Self::finish_open(&mut store, home, catalog, busy_ms)?;
             return Ok(store);
         }
-        // The database exists: connect without the lock and ask the read-only verdict. An up-to-date store needs no
-        // setup, so it is opened and read with no setup lock and no wait for one.
-        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
-        if verdict_with(&store.conn, catalog)?.into_plan()?.is_none() {
-            Self::finish_open(&mut store, home, catalog, busy_ms)?;
-            return Ok(store);
-        }
-        // A migration is pending: take the lock and run it. `migrate` re-judges from read-only state inside the
-        // lock, since another process may have migrated the store meanwhile.
+        // A missing database (the WAL switch of a new one) or a pending migration: take the lock, connect under it
+        // and migrate. `migrate` re-judges from read-only state inside the lock, since another process may have
+        // migrated the store meanwhile.
         let setup = Self::settled_setup_lock(clock, home, busy_ms)?;
+        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store
             .migrate(home, catalog, &setup)
             .map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
         Self::finish_open(&mut store, home, catalog, busy_ms)?;
         Ok(store)
+    }
+
+    /// Whether the existing store at `path` needs no migration, judged read-only: no lock, no migration, no write.
+    /// A store that cannot be read right now (another connection holds it exclusively) is judged as needing setup,
+    /// so the caller takes the lock, as every open did before (§4.2).
+    fn is_up_to_date(path: &Path, catalog: &Catalog<'_>, busy_ms: u64) -> Result<bool, CpdError> {
+        let read = || -> Result<bool, CpdError> {
+            let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(Duration::from_millis(busy_ms))?;
+            Ok(verdict_with(&conn, catalog)?.into_plan()?.is_none())
+        };
+        match read() {
+            Ok(up_to_date) => Ok(up_to_date),
+            Err(e) if is_transient(&e) => Ok(false),
+            Err(e) => Err(enrich(e, path, busy_ms)),
+        }
     }
 
     /// The body every open shares after its setup (if any): the connection's busy timeout is `busy_ms` again, and
@@ -327,12 +341,14 @@ impl Store {
             return Ok(setup);
         }
         drop(setup);
-        // A probe connection carries the settle as its busy timeout. The database exists and needs no migration
-        // (the caller saw a plan only from the migrating holder), so it writes nothing the lock guards.
+        // A probe connection carries the settle as its busy timeout, with the lock released: no opener holds
+        // `locks/store.lock` while it waits on SQLite. It writes nothing the lock guards.
         let path = home.db();
-        let probe = Store::connect(&path, busy_ms.max(MIGRATION_SETTLE_MS))
-            .map_err(|e| enrich(e, &path, busy_ms))?;
-        drop(probe);
+        if path.exists() {
+            let probe = Store::connect(&path, busy_ms.max(MIGRATION_SETTLE_MS))
+                .map_err(|e| enrich(e, &path, busy_ms))?;
+            drop(probe);
+        }
         setup_lock(clock, home, busy_ms)
     }
 
