@@ -33,8 +33,13 @@ struct Gh;
 
 impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
-        match call.args.first().map(String::as_str) {
-            Some("pr") if call.args.get(1).map(String::as_str) == Some("merge") => Reply::ok(""),
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            // The up-to-date gate's fresh read: the head contains `main`.
+            ["api", _, ..] if args[1].starts_with("repos/acme/pay/compare/") => {
+                Reply::ok(r#"{"status":"ahead"}"#)
+            }
+            ["pr", "merge", ..] => Reply::ok(""),
             _ => Reply::ok("{}"),
         }
     }
@@ -45,10 +50,16 @@ struct Refusing;
 
 impl Handler for Refusing {
     fn handle(&self, call: &Call) -> Reply {
-        if call.args.iter().any(|a| a == "merge") {
-            Reply::exit(1, "", "GraphQL: Pull request is not mergeable\n")
-        } else {
-            Reply::ok("{}")
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            // The drain's re-check: the head still contains `main`, so the merge is tried and refused.
+            ["api", _, ..] if args[1].starts_with("repos/acme/pay/compare/") => {
+                Reply::ok(r#"{"status":"ahead"}"#)
+            }
+            _ if call.args.iter().any(|a| a == "merge") => {
+                Reply::exit(1, "", "GraphQL: Pull request is not mergeable\n")
+            }
+            _ => Reply::ok("{}"),
         }
     }
 }
@@ -234,8 +245,8 @@ fn gh_merge_enqueues_a_mutation_and_prints_queued() {
     assert_eq!(patch.as_ref().unwrap()["state"], "merging");
     assert_eq!(
         gh_calls(&rig),
-        Vec::<String>::new(),
-        "a command never calls GitHub for a write"
+        [format!("api repos/acme/pay/compare/main...{HEAD}")],
+        "the enqueue reads the containment, and never writes"
     );
 }
 
