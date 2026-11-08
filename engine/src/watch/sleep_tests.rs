@@ -100,3 +100,42 @@ fn sleep_ignores_grounding_codereview_plan_without_changes_requested() {
         "an open codereview Plan with no requested changes keeps its Lead awake"
     );
 }
+
+/// air-n103, air-n104 (contract §3.7 E13): a `cpd install` reloads an idle Lead's pi, and the adapter's `stopped` → `idle`
+/// round trip moves `state_at` to now. That round trip is not activity, so a finished Lead whose only fresh time is that
+/// reload still sleeps once `timeouts.sleep_seconds` has passed since its Plan was done. A second finished Lead with the
+/// same Plan shape but no reload (`quiet`) is the control: it sleeps, so the fixture's conditions hold and the reload is
+/// the only difference between them.
+#[test]
+fn an_idle_done_plan_lead_whose_state_at_a_machine_reload_just_bumped_must_still_be_slept() {
+    let mut fx = Fx::new("");
+    let long_ago = ago(24 * 60);
+    let now = ago(0);
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', '{now}', 't', 'durable'),
+                  ('quiet', 'lead', 'ctx', 'rest', 'Quiet', '/', 'O3', 'idle', '{long_ago}', 't', 'durable');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pay', 'ctx', 'Pay', 'done', 'lead1', 't', 't', '{long_ago}'),
+                  ('rest', 'ctx', 'Rest', 'done', 'quiet', 't', 't', '{long_ago}');
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at)
+           VALUES ('pay', 'repo', '/r', 'main', 'cancelled', 'cpd/pay', NULL, 'T', 'config', cpd_txn(), 't'),
+                  ('rest', 'repo', '/q', 'main', 'cancelled', 'cpd/rest', NULL, 'T', 'config', cpd_txn(), 't');
+         -- The machine reload the adapter reports: pi stops, then the new pi starts and reports idle, just now.
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+           VALUES (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'lead1', 'Session Lead is stopped.', '{{\"from\":\"idle\",\"to\":\"stopped\"}}'),
+                  (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'lead1', 'Session Lead is idle.', '{{\"from\":\"stopped\",\"to\":\"idle\"}}');"
+    ));
+    sleep::run(&mut fx.engine);
+    assert!(
+        asleep(&mut fx),
+        "a reload is not activity: the finished Lead still sleeps after sleep_seconds"
+    );
+    assert_eq!(
+        fx.query::<i64>(
+            "SELECT count(*) FROM sessions WHERE id = 'quiet' AND asleep_at IS NOT NULL"
+        ),
+        1,
+        "a finished Lead with no activity sleeps: the fixture's conditions hold"
+    );
+}
