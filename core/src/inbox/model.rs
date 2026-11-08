@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -46,6 +46,9 @@ pub enum Kind {
     DraftsParked,
     /// An open Workflow of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
     PrClosed,
+    /// An open, unmitigated bug record (contract §2.2 "Bug record", "Inbox item"; air-d104, air-d105, air-n120);
+    /// always red, the owner's wake item and the User's breach indicator, linked to the owner Session, the Plan and its Context.
+    Bug,
 }
 
 impl Kind {
@@ -70,6 +73,7 @@ impl Kind {
             Kind::Deploy => "deploy",
             Kind::DraftsParked => "drafts-parked",
             Kind::PrClosed => "pr-closed",
+            Kind::Bug => "bug",
         }
     }
 
@@ -94,6 +98,7 @@ impl Kind {
             Deploy,
             DraftsParked,
             PrClosed,
+            Bug,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)
@@ -488,6 +493,95 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
     )
 }
 
+/// The `bug` Inbox conditions (contract §2.2 "Inbox item", "Bug record"; air-d104, air-d105,
+/// air-n120): one red item per open `bug_records` row with no mitigation, the owner's wake item and
+/// the User's breach indicator. It links the owner Session (the Plan's Lead when the record names a
+/// Plan, else the live Manager of Context `cpd`, pro-d204), the record's Plan and its Context (`cpd`
+/// for a cross-Plan bug). The rule lives here because [`reconcile`] is the single write path for
+/// Inbox items; an item closes when the bug is mitigated or its `status` turns `closed`.
+pub fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.plan, b.title, p.context, p.lead_session
+           FROM bug_records b LEFT JOIN plans p ON p.id = b.plan
+          WHERE b.status = 'open' AND b.mitigation IS NULL
+          ORDER BY b.id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (id, plan, title, plan_context, lead) in rows {
+        let plan = plan
+            .map(|p| PlanId::parse(&p))
+            .transpose()
+            .map_err(|e| corrupt_plan(&id, e))?;
+        let (context, owner, row1) = match (&plan, plan_context, lead) {
+            (Some(plan), Some(context), lead) => (
+                Some(ContextId::parse(&context)?),
+                lead.map(|s| SessionId::parse(&s)).transpose()?,
+                format!("{plan}: bug {id}"),
+            ),
+            // A cross-Plan bug (contract §2.2 "Bug record": the Context `cpd`, the live Manager, pro-d204).
+            _ => {
+                let exists: bool = conn.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM contexts WHERE id = 'cpd')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    continue;
+                }
+                let manager: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM sessions WHERE role = 'manager' AND context = 'cpd' AND archived_at IS NULL ORDER BY created_at, id LIMIT 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                (
+                    Some(ContextId::parse("cpd")?),
+                    manager.map(|s| SessionId::parse(&s)).transpose()?,
+                    format!("cpd: bug {id}"),
+                )
+            }
+        };
+        out.push(Condition {
+            kind: Kind::Bug,
+            urgency: Urgency::Red,
+            subject: format!("bug:{id}"),
+            label: format!("{row1}\n{title}"),
+            url: None,
+            context,
+            plan,
+            job: None,
+            session: owner,
+            record: None,
+            event: None,
+            opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
+        });
+    }
+    Ok(out)
+}
+
+/// A `bug_records.plan` that does not parse: the database was written outside cpd.
+fn corrupt_plan(id: &str, e: CpdError) -> CpdError {
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Bug {id} names a Plan that does not parse: {}.", e.message()),
+    )
+    .with("bug", id)
+}
+
 /// Engine step E8 (§3.7): in one write transaction, opens an item for each
 /// condition with no open item of its identity (`kind`, `subject`,
 /// `urgency`), closes each open item with no condition, and appends
@@ -495,11 +589,17 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 /// `dialog`, `pr-ready`, `drafts-parked` or `unread` item whose condition moved inside its identity (see
 /// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
+///
+/// The `bug` conditions are computed here, by [`bug_conditions`], so the single write path owns the
+/// rule the engine step E25's owner wake and the User's breach indicator share (§2.2 "Bug record").
 pub fn reconcile(
     store: &mut Store,
     conditions: &[Condition],
     now: &str,
 ) -> Result<Changes, CpdError> {
+    let mut wanted = store.read(bug_conditions)?;
+    wanted.extend_from_slice(conditions);
+    let conditions = wanted.as_slice();
     let open = store.read(open_items)?;
     let (gone, new) = diff(&open, conditions);
     if gone.is_empty() && new.is_empty() && relabelled(&open, conditions).is_empty() {

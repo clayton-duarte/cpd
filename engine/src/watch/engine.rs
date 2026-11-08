@@ -275,7 +275,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 23] = [
+        let steps: [fn(&mut Engine); 24] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -289,6 +289,7 @@ impl Engine {
             start_prs,
             parked::run,
             closed::run,
+            bug_guard::run,
             inbox::run,
             distill::run,
             titles::run,

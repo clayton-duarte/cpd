@@ -26,12 +26,7 @@ mod archive_leads_tests;
 #[cfg(test)]
 mod archive_tests;
 mod asks;
-// STUB (bug-guard-tests-a1): the E25 bug protocol step. `bug-guard-impl` replaces this inline module
-// with `engine/src/watch/bug_guard.rs` and calls it in the tick right after E21 and before E8.
-#[cfg(test)]
-mod bug_guard {
-    pub(super) fn run(_engine: &mut super::engine::Engine) {}
-}
+mod bug_guard;
 #[cfg(test)]
 mod bug_protocol_tests;
 mod closed;
