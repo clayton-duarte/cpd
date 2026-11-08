@@ -25,6 +25,7 @@ import { registerReloadCommand } from "./reload-command.ts";
 import { start, stop } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
+import { blocked, registerRefusalReports } from "./refusal-report.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
@@ -46,6 +47,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReminderCheck(host);
   registerLoopGuard(host);
   registerQuestionGuard(host);
+  registerRefusalReports(host);
 
   registerLiveStream(pi, host.env); // contract §6.21
 
@@ -53,8 +55,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   pi.on("session_start", async (event, ctx) => {
     removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
     // contract §6.1: the uniform 1-cell chat-slot pad replaces the cpd-pad status and header
-    if (ctx.mode === "tui") installChatPad(ctx);
-    if (ctx.mode === "tui") installQuitMarker(ctx as never, host);
+    if (ctx.mode === "tui") { installChatPad(ctx); installQuitMarker(ctx as never, host); }
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
@@ -76,29 +77,29 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   pi.on("tool_call", async (event, ctx) => {
     noteQuestionTool(host, event.toolName);
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
-    if (looped !== undefined) return { block: true, reason: looped };
+    if (looped !== undefined) return blocked(host, event.toolName, looped, event.input);
     const role = host.run?.info.role;
-    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" }); if (external) return { block: true, reason: external };
+    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" }); if (external) return blocked(host, event.toolName, external, event.input);
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
-    if (explored !== undefined) return { block: true, reason: explored.block };
+    if (explored !== undefined) return blocked(host, event.toolName, explored.block, event.input);
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
-    if (led !== undefined) return { block: true, reason: led.block };
+    if (led !== undefined) return blocked(host, event.toolName, led.block, event.input);
     if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
       const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
-      if (written !== undefined) return { block: true, reason: mainReasonText(written) };
+      if (written !== undefined) return blocked(host, event.toolName, mainReasonText(written), event.input);
     }
     const bashCommand = (event.input as { command?: unknown }).command;
     if (host.run && event.toolName === "bash" && typeof bashCommand === "string") {
-      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir()); if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
-      const secret = secretBypass(bashCommand); if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
-      const electron = electronBypass(bashCommand); if (electron !== undefined) return { block: true, reason: electronReasonText(electron) };
-      const hostApprove = hostApproveBypass(bashCommand); if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
+      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir()); if (moved !== undefined) return blocked(host, event.toolName, mainReasonText(moved), event.input);
+      const secret = secretBypass(bashCommand); if (secret !== undefined) return blocked(host, event.toolName, secretReasonText(secret), event.input);
+      const electron = electronBypass(bashCommand); if (electron !== undefined) return blocked(host, event.toolName, electronReasonText(electron), event.input);
+      const hostApprove = hostApproveBypass(bashCommand); if (hostApprove !== undefined) return blocked(host, event.toolName, hostApproveReasonText(hostApprove), event.input);
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
-      if (long !== undefined) return { block: true, reason: long };
+      if (long !== undefined) return blocked(host, event.toolName, long, event.input);
       const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.parentToolCallId ?? event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
-      if (unseenReason !== undefined) return { block: true, reason: unseenReason };
+      if (unseenReason !== undefined) return blocked(host, event.toolName, unseenReason, event.input);
       host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
       return undefined;
     }
@@ -107,13 +108,12 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const command = typeof input.command === "string" ? input.command : "";
     if (role === "manager" || role === "lead") {
       const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
-      if (matched !== undefined) return { block: true, reason: reasonText(matched, role) };
+      if (matched !== undefined) return blocked(host, event.toolName, reasonText(matched, role), event.input);
       if (input.timeout === undefined) input.timeout = BOUND_SECONDS; // pro-d202: pi's bash tool has no default timeout
       return undefined;
     }
     const matched = unfilteredTestRun(command);
-    return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
+    return matched === undefined ? undefined : blocked(host, event.toolName, testReasonText(matched), event.input);
   });
-
   registerAgentState(host);
 }

@@ -3697,6 +3697,8 @@ Output:
 
 `event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
+**A report of a refusal carries the `guard` kind** (contract §5.2, Plan `agent-refusals`): when the report is a refusal of the reporting Session's own tool call or command — an adapter guard refusal (a `toolResult` whose text starts with `φ: ` and whose `details` are empty) or an agent-caused CLI refusal (the `{"ok":false,"error":{…}}` envelope) — the appended Event is a `guard` Event instead of an `error` Event, with `data` `{code, role, tier, model, tool, excerpt}` (`code` the guard rule or the envelope's error code, `excerpt` the refused command line or path cut to 200 characters) and the scope columns of the reporting Session; the dedupe window above is the same, matched on `code` and `excerpt` instead of `code` and `message`. Any other report keeps the `error` kind exactly as the Effects above state.
+
 ### 10.18a `session switch-failed` (internal)
 
 ```
@@ -3918,6 +3920,14 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7). A Manager of a Lead-less Plan also receives the engine's `session-message` for each `job-merged`, `job-failed` and `escalation` Event of that Plan (contract §5.3); the Plan's own Events are still not routed to it.
 
 The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
+
+The kind `guard` (contract §5.2) is read like any other kind too: `cpd events list --kind guard` lists every refusal, scoped by `--plan`, `--context` or `--session` (§1.3), `--since` and `--limit` as always, and `cpd events follow --kind guard` streams them. One Event per guard Event row; its `data` carries the refusal's own fields, so a ranking per guard, role, model and day is an aggregation over these rows:
+
+```json
+{"id": 48216, "at": "2026-11-08T03:10:00.000Z", "kind": "guard", "context": "building-cpd", "plan": "cpd2", "job": "ev-docs", "attempt": "ev-docs-a1", "session": "9f2e…", "text": "Worker ev-docs-a1 refused: explore network write: scout has no network: git fetch", "data": {"code": "explore network write", "role": "worker", "tier": "H3", "model": "github-copilot/gpt-5", "tool": "bash", "excerpt": "git fetch origin agent-refusals/miner"}}
+```
+
+`data.code` separates the two refusal families: a guard rule (`explore network write`, `loop guard`, `primary-checkout`, …) for an adapter guard refusal, a CLI error code (`usage`, `spec_invalid`, `shape_violation`, …) for an agent-caused CLI refusal. To rank one code across the store: `cpd events list --kind guard --context <c> | jq '[.events[] | select(.data.code == "spec_invalid")] | length'`. The repeat dedupe (contract §5.2) shapes what the rows mean: one row per refusal episode, at most one per (`session`, `code`, `excerpt`) per `watch.error_repeat_seconds` window, never one per raw refusal.
 
 ### 11.1 `events list`
 
