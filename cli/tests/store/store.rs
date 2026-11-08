@@ -271,7 +271,7 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 11, "§4.4 changed shape"); // `swr` added the block of the SWR tables; `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`
+    assert_eq!(blocks.len(), 12, "§4.4 changed shape"); // `swr` added the block of the SWR tables; `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`; `bug-record` added `bug_records`
     assert!(
         blocks[2].contains("CREATE TRIGGER escalations_hist_ins"),
         "block 3 is the generated example"
@@ -340,7 +340,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        45, // 32 (33 less `jira_transitions`, dropped by `jira-swr`) and the 13 tables of `swr`
+        46, // 32 (33 less `jira_transitions`, dropped by `jira-swr`) and the 13 tables of `swr`, plus `bug_records`
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {

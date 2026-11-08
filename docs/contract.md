@@ -2724,6 +2724,32 @@ CREATE TABLE swr_badges (
 
 `swr_badges` is the Lead completion badge's cache, one row per Session. Its columns map from the web's `Completion`, its freshness is the `entry_id` of the last transcript item, and its gcTime is 7 days with the observer rule of `docs/architecture/swr-classifier.md` §2.3 and §2.4. Its write is `cpd swr badge put` (commands §32.8), a cache write and not an outbox row.
 
+**The bug records** (contract §2.2 "Bug record"; air-d103, air-d104, air-d107). One row per bug, written by `cpd protocol bug report`, `protocol bug mitigate` and `protocol bug close` (commands.md §33); no Event kind is added and the protocol number does not change. It is created by the migration `20261108T0800-bug-record`, a `history_tables` row with `no_delete` 1.
+
+```sql
+CREATE TABLE bug_records (
+  id              TEXT PRIMARY KEY CHECK (id GLOB 'b[0-9]*' AND length(id) BETWEEN 2 AND 12),
+  plan            TEXT REFERENCES plans(id),
+  title           TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+  symptom         TEXT NOT NULL CHECK (length(symptom) BETWEEN 1 AND 20000),
+  cause           TEXT CHECK (cause IS NULL OR length(cause) BETWEEN 1 AND 20000),
+  mitigation      TEXT CHECK (mitigation IS NULL OR length(mitigation) BETWEEN 1 AND 20000),
+  mitigated_by    TEXT,
+  mitigated_at    TEXT,
+  root_fix        TEXT CHECK (root_fix IS NULL OR length(root_fix) BETWEEN 1 AND 200),
+  regression_test TEXT CHECK (regression_test IS NULL OR length(regression_test) BETWEEN 1 AND 200),
+  status          TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+  reported_by     TEXT,
+  reported_at     TEXT NOT NULL,
+  closed_at       TEXT,
+  closed_by       TEXT,
+  CHECK ((mitigation IS NULL) = (mitigated_at IS NULL)),
+  CHECK (mitigated_by IS NULL OR mitigation IS NOT NULL),
+  CHECK ((status = 'closed') = (closed_at IS NOT NULL)),
+  CHECK (status <> 'closed' OR (root_fix IS NOT NULL AND regression_test IS NOT NULL))
+) STRICT;
+```
+
 ### 4.5 Schema versions and migrations
 
 The store's schema changes by **named migrations** (hs-d178; design `docs/research/migrations.md`, as amended by the User's decisions D1–D4, which win where they differ). Everything below is normative for `core/src/store/`.
