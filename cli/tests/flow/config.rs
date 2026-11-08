@@ -77,7 +77,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "sleep_seconds": 3600,
                 "archive_sleep_seconds": 86400
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "janitor_minutes": 60, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "janitor_minutes": 60, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10, "refusal_alert_threshold": 10, "refusal_alert_minutes": 60},
             "swr": {"gc_days": 7},
             "inbox": {
                 "stuck_job_minutes": 10,
@@ -327,6 +327,8 @@ models_discovery_seconds = 1
 janitor_minutes = 1
 pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
+refusal_alert_threshold = 1
+refusal_alert_minutes = 1
 [swr]
 gc_days = 4294967295
 [inbox]
