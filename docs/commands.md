@@ -3919,6 +3919,14 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 
 The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
 
+The kind `guard` (contract §5.2) is read like any other kind too: `cpd events list --kind guard` lists every refusal, scoped by `--plan`, `--context` or `--session` (§1.3), `--since` and `--limit` as always, and `cpd events follow --kind guard` streams them. One Event per guard Event row; its `data` carries the refusal's own fields, so a ranking per guard, role, model and day is an aggregation over these rows:
+
+```json
+{"id": 48216, "at": "2026-11-08T03:10:00.000Z", "kind": "guard", "context": "building-cpd", "plan": "cpd2", "job": "ev-docs", "attempt": "ev-docs-a1", "session": "9f2e…", "text": "Worker ev-docs-a1 refused: explore network write: scout has no network: git fetch", "data": {"code": "explore network write", "role": "worker", "tier": "H3", "model": "github-copilot/gpt-5", "tool": "bash", "excerpt": "git fetch origin agent-refusals/miner"}}
+```
+
+`data.code` separates the two refusal families: a guard rule (`explore network write`, `loop guard`, `primary-checkout`, …) for an adapter guard refusal, a CLI error code (`usage`, `spec_invalid`, `shape_violation`, …) for an agent-caused CLI refusal. To rank one code across the store: `cpd events list --kind guard --context <c> | jq '[.events[] | select(.data.code == "spec_invalid")] | length'`. The repeat dedupe (contract §5.2) shapes what the rows mean: one row per refusal episode, at most one per (`session`, `code`, `excerpt`) per `watch.error_repeat_seconds` window, never one per raw refusal.
+
 ### 11.1 `events list`
 
 ```
