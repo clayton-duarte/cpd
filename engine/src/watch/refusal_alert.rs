@@ -8,12 +8,9 @@
 //! `refusal_threshold` is not a step failure: the step succeeds, reports nothing to the step-failure machinery and
 //! opens no `engine-error` item (contract §3.7 E25).
 
-use std::collections::BTreeMap;
-
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::SOURCE;
 use super::engine::Engine;
@@ -21,22 +18,7 @@ use cpd_core::clock::timestamp;
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::SessionId;
-
-/// One Session's counted refusals over the window, at or above the threshold.
-struct Crossing {
-    session: String,
-    context: String,
-    role: String,
-    tier: String,
-    model: String,
-    count: u64,
-    per_guard: BTreeMap<String, u64>,
-    /// The `at` of the window's oldest and newest counted `guard` Events.
-    first: String,
-    last: String,
-    /// The newest counted `guard` Event's `data.excerpt`.
-    excerpt: String,
-}
+use cpd_core::inbox::refusals::{self, Refusal};
 
 /// E25 (§3.7): the refusal crossings of this tick, each reported and delivered.
 pub(super) fn run(engine: &mut Engine) {
@@ -96,78 +78,16 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// Every Session not archived whose counted `guard` Events reach `threshold`, oldest first.
+/// Every Session not archived whose counted `guard` Events reach `threshold`, oldest first. The count itself is the
+/// one query E8's `refusal-alert` item also reads (`cpd_core::inbox::refusals::over_window`, contract §3.7 E25).
 fn crossings(
     conn: &Connection,
     since: OffsetDateTime,
     threshold: u64,
-) -> Result<Vec<Crossing>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT e.session, s.context, s.role, s.tier, json_extract(e.data, '$.code'),
-                json_extract(e.data, '$.model'), json_extract(e.data, '$.excerpt'), e.at
-         FROM events e JOIN sessions s ON s.id = e.session
-         WHERE e.kind = 'guard' AND e.session IS NOT NULL AND s.archived_at IS NULL
-         ORDER BY e.id",
-    )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-            r.get::<_, Option<String>>(4)?,
-            r.get::<_, Option<String>>(5)?,
-            r.get::<_, Option<String>>(6)?,
-            r.get::<_, String>(7)?,
-        ))
-    })?;
-
-    let mut order: Vec<String> = Vec::new();
-    let mut seen: BTreeMap<String, Crossing> = BTreeMap::new();
-    for row in rows {
-        let (session, context, role, tier, code, model, excerpt, at) = row?;
-        let Some(at_dt) = OffsetDateTime::parse(&at, &Rfc3339).ok() else {
-            continue;
-        };
-        if at_dt < since {
-            continue;
-        }
-        let entry = seen.entry(session.clone()).or_insert_with(|| {
-            order.push(session.clone());
-            Crossing {
-                session: session.clone(),
-                context: context.clone(),
-                role: role.clone(),
-                tier: tier.clone(),
-                model: "unknown".to_owned(),
-                count: 0,
-                per_guard: BTreeMap::new(),
-                first: at.clone(),
-                last: String::new(),
-                excerpt: String::new(),
-            }
-        });
-        entry.count += 1;
-        *entry
-            .per_guard
-            .entry(code.unwrap_or_else(|| "unknown".to_owned()))
-            .or_insert(0) += 1;
-        if entry.count == 1 || at < entry.first {
-            entry.first = at.clone();
-        }
-        if entry.count == 1 || at >= entry.last {
-            entry.last = at.clone();
-            entry.excerpt = excerpt.unwrap_or_default();
-            entry.model = model.unwrap_or_else(|| "unknown".to_owned());
-        }
-    }
-
-    Ok(order
+) -> Result<Vec<Refusal>, CpdError> {
+    Ok(refusals::over_window(conn, since)?
         .into_iter()
-        .filter_map(|session| {
-            seen.remove(&session)
-                .filter(|crossing| crossing.count >= threshold)
-        })
+        .filter(|crossing| crossing.count >= threshold)
         .collect())
 }
 
@@ -197,7 +117,7 @@ fn live_manager(tx: &Connection, context: &str) -> Result<Option<String>, CpdErr
 }
 
 /// The Event's `details` (contract §3.7 E25).
-fn alert_details(crossing: &Crossing, minutes: u32, threshold: u64) -> Value {
+fn alert_details(crossing: &Refusal, minutes: u32, threshold: u64) -> Value {
     json!({
         "session": crossing.session,
         "role": crossing.role,
@@ -214,7 +134,7 @@ fn alert_details(crossing: &Crossing, minutes: u32, threshold: u64) -> Value {
 
 /// The alert's text (contract §3.7 E25): the count, the window, the three guards with the most refusals, and the
 /// newest excerpt.
-fn alert_text(crossing: &Crossing, minutes: u32) -> String {
+fn alert_text(crossing: &Refusal, minutes: u32) -> String {
     let mut guards: Vec<(&String, &u64)> = crossing.per_guard.iter().collect();
     guards.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
     let shown = guards
