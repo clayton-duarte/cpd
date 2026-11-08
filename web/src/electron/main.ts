@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
+import { app, BrowserWindow, dialog as electronDialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import { boot } from "./boot.ts";
 import { createPreviewClient, type PreviewClient } from "./preview-client.ts";
 import { createHealthWatchdog, createPreviewWatchdog } from "./watchdog.ts";
