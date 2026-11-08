@@ -3042,7 +3042,13 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
         json!(null),
     ))));
     let text = says.0.clone();
-    fx.route_fn("gh", move |_| Reply::ok(&text.lock().unwrap()));
+    fx.route_fn("gh", move |call| {
+        // The containment compare is not the poll document (D10): answer it before the search reply.
+        if is_compare(call) {
+            return Reply::ok(COMPARE_AHEAD);
+        }
+        Reply::ok(&text.lock().unwrap())
+    });
     (fx, says)
 }
 
@@ -3069,6 +3075,15 @@ fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
 fn is_search(call: &Call) -> bool {
     call.args.iter().any(|arg| arg.contains("search(type"))
 }
+
+/// Whether `call` is the containment compare main's poll makes per open default-branch pull request
+/// (`gh api repos/<repo>/compare/<default>...<head>`): a read of its own, never the poll document (D10).
+fn is_compare(call: &Call) -> bool {
+    call.args.iter().any(|arg| arg.contains("/compare/"))
+}
+
+/// What the containment compare answers: the head contains the default branch's head.
+const COMPARE_AHEAD: &str = r#"{"status":"ahead"}"#;
 
 /// How many polls have searched so far (`gh` calls that are the search), in all the runs of the engine.
 fn searches(runner: &FakeRunner) -> usize {
@@ -3558,8 +3573,11 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
     .unwrap();
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
     let (clock, noted) = (fx.fakes.clock.clone(), starts.clone());
-    fx.route_fn("gh", move |_| {
+    fx.route_fn("gh", move |call| {
         noted.lock().unwrap().push(clock.elapsed());
+        if is_compare(call) {
+            return Reply::ok(COMPARE_AHEAD);
+        }
         Reply::ok(&swr_reply_one(
             "acme/pay",
             7,

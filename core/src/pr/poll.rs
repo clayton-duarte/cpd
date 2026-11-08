@@ -401,30 +401,25 @@ fn poll_pass(
 
     // The containment flag (contract §2.2 "Ready to merge", §7.6): one fresh compare read per open pull request
     // whose base is its default branch, before the write transaction, so `ready_to_merge_sql` reads a current flag.
-    // Only the legacy `cpd pr poll` makes that read: E5's poll IS the GitHub source's single read (D9), and the source's
-    // document carries no compare, so the SWR-pass path (`given_reads`) must not make a second `gh` call - the engine's
-    // cadence tests count the calls a poll makes. The flag the legacy poll wrote stays for the pass to read.
-    let mut contained: Vec<Contained> = Vec::new();
-    if legacy {
-        let rows = env.store.read(containment_rows)?;
-        for (repo, number, base, default, head, stored) in rows {
-            let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
-                (Some(base), Some(default), Some(head)) if base == default => Some(
-                    if gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)? {
-                        1
-                    } else {
-                        0
-                    },
-                ),
-                _ => None,
-            };
-            contained.push(Contained {
-                repo,
-                number,
-                value,
-                held: stored == value,
-            });
-        }
+    let rows = env.store.read(containment_rows)?;
+    let mut contained: Vec<Contained> = Vec::with_capacity(rows.len());
+    for (repo, number, base, default, head, stored) in rows {
+        let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
+            (Some(base), Some(default), Some(head)) if base == default => Some(
+                if gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)? {
+                    1
+                } else {
+                    0
+                },
+            ),
+            _ => None,
+        };
+        contained.push(Contained {
+            repo,
+            number,
+            value,
+            held: stored == value,
+        });
     }
 
     // The owned Workflows whose pull request a search lists with a base other than the Workflow's `base`.

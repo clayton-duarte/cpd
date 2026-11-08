@@ -64,6 +64,11 @@ impl Handler for Gh {
         if is_github_poll(&text) {
             return Reply::ok(&self.poll_reply(&text));
         }
+        // The containment compare (main's poll per open default-branch pull request) is not the poll document (D10):
+        // answer it on its own, before the auto-merge reads below.
+        if text.contains("/compare/") {
+            return Reply::ok(r#"{"status":"ahead"}"#);
+        }
         let script = self.script.lock().unwrap();
         if text.contains("viewer") {
             return Reply::ok(r#"{"data":{"viewer":{"login":"clayton-duarte"}}}"#);

@@ -709,6 +709,12 @@ struct GhPoll;
 
 impl Handler for GhPoll {
     fn handle(&self, call: &Call) -> Reply {
+        // The containment compare main's poll makes per open default-branch pull request
+        // (`gh api repos/<repo>/compare/<default>...<head>`) is a read of its own, not the poll document (D10): answer
+        // it before the poll check, which refuses anything that is not the document.
+        if call.args.iter().any(|arg| arg.contains("/compare/")) {
+            return Reply::ok(r#"{"status":"ahead"}"#);
+        }
         let query = call.args.iter().find_map(|arg| arg.strip_prefix("query="));
         let Some(query) = query.filter(|query| is_github_poll(query)) else {
             return Reply::exit(

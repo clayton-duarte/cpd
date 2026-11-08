@@ -411,6 +411,11 @@ impl Fx {
             {
                 return Reply::ok(&swr_poll_reply(merged.load(Ordering::SeqCst)));
             }
+            // The containment compare (main's poll per open default-branch pull request) is not the poll document
+            // (D10): answer it before the lookup fallback below, which would otherwise be read as a compare.
+            if call.args.iter().any(|arg| arg.contains("/compare/")) {
+                return Reply::ok(r#"{"status":"ahead"}"#);
+            }
             if call.args.iter().any(|arg| arg.contains("search(type: ISSUE")) {
                 return Reply::ok(EMPTY_SEARCH);
             }
