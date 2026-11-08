@@ -48,12 +48,14 @@ pub struct PullRequest {
 }
 
 /// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
-/// pull request is open, not a draft, its merge state is clean and its base is the repo's default branch; an unknown
-/// (NULL) base or default branch is not ready. The one definition: every reader uses it.
+/// pull request is open, not a draft, its merge state is clean, its base is the repo's default branch and its head
+/// contains the current default-branch head (the stored `base_contained` flag, set by the poll); an unknown (NULL)
+/// base, default branch or containment flag is not ready. The one definition: every reader uses it.
 pub fn ready_to_merge_sql(alias: &str) -> String {
     format!(
         "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
-         AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch, 0)"
+         AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch \
+         AND {alias}.base_contained = 1, 0)"
     )
 }
 
