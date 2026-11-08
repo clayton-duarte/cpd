@@ -5218,6 +5218,8 @@ The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Le
 - `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
 - `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
 
+**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day, with a threshold crossing over a window that records an Event and alerts the Manager and the Inbox. The surface is the CLI only; nothing here feeds an exporter.
+
 **`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
 
 | Metric | Labels |
@@ -5656,8 +5658,8 @@ A `for` loop is not a loop of this rule; the `sleep` in its body is judged by it
 
 ```
 reasonText(matched, role) {
-  if (role === "manager") return `cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
-  if (role === "lead") return `cpd: a Lead never blocks: a wait over 30 s runs in the background or is left to the engine's Events; refused: ${matched}`;
+  if (role === "manager") return `φ: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
+  if (role === "lead") return `φ: a Lead never blocks: a wait over 30 s runs in the background or is left to the engine's Events; refused: ${matched}`;
 }
 ```
 
@@ -5688,7 +5690,7 @@ A pattern counts where a command runs, as in §15.11 (a command word of a simple
 **The refusal** is `{block: true, reason}`, with the reason on one line naming the rule:
 
 ```
-cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the Workflow's open Job; refused: <what matched>
+φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the Workflow's open Job; refused: <what matched>
 ```
 
 `<what matched>` is the command word and its subcommand, with `--workspace` when it was given (`cargo.sh test --workspace`, `cargo nextest run`, `npm test`, `npm run verify`). For pnpm the matched text is `pnpm test` (for `test`, `t` and `tst`), `pnpm run test` (for `run test` and `run-script test`) and `pnpm run verify` (for `run verify`, `run-script verify` and the bare `verify`).
@@ -5704,7 +5706,7 @@ Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan
 **G2, a long question.** For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
 
 ```
-cpd: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: <n> characters (limit 1500)
+φ: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: <n> characters (limit 1500)
 ```
 
 The refusal is `{block: true, reason}`.
@@ -5713,12 +5715,12 @@ The tool's own description, its guidelines and the descriptions of its `question
 
 **G4, labels stated nowhere** (hs-d553; hs-d548 part 1 and G3 superseded by hs-n425). A question must state what it asks about: every label must occur in the call's text. This guard applies to Sessions of role `lead` or `manager` (side forks of those roles included), not workers. The refusal comes before the User sees the question.
 
-**Assumptions B1–B5.** B1: 'The call states a label' means the label token (\b[A-Z][0-9]+\b, as today's A3) occurs in the call's text: every question's `question` and `header`, every option's `label`, `description` and `preview`. A range X<m>–X<n> (en dash U+2013 or '-', same letter, m<n) in the call states its two ends only; its middle members count as cited but not stated, so they must occur as tokens somewhere in the call or the visible chat. Consequence: only the middle members of a range can be refused. B2: 'Visible chat' is unchanged (old A2): the whole branch up to the call: assistant `text` blocks (those of the calling message before the call included), `user` messages, `toolResult` text, `custom_message` entries with display true; never thinking blocks or tool-call inputs. A label is shown when its token occurs in the call's text or in the visible chat. B3: The turn logic of the old A1 goes away entirely: nothing is read about where the turn starts. B4: Roles unchanged (old A5): G4 applies to Sessions of role lead or manager (side forks of those roles included), not workers. B5: G4's reason, one line, exactly: `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere` for example `...; refused: D2, D3, D4 stated nowhere`.
+**Assumptions B1–B5.** B1: 'The call states a label' means the label token (\b[A-Z][0-9]+\b, as today's A3) occurs in the call's text: every question's `question` and `header`, every option's `label`, `description` and `preview`. A range X<m>–X<n> (en dash U+2013 or '-', same letter, m<n) in the call states its two ends only; its middle members count as cited but not stated, so they must occur as tokens somewhere in the call or the visible chat. Consequence: only the middle members of a range can be refused. B2: 'Visible chat' is unchanged (old A2): the whole branch up to the call: assistant `text` blocks (those of the calling message before the call included), `user` messages, `toolResult` text, `custom_message` entries with display true; never thinking blocks or tool-call inputs. A label is shown when its token occurs in the call's text or in the visible chat. B3: The turn logic of the old A1 goes away entirely: nothing is read about where the turn starts. B4: Roles unchanged (old A5): G4 applies to Sessions of role lead or manager (side forks of those roles included), not workers. B5: G4's reason, one line, exactly: `φ: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere` for example `...; refused: D2, D3, D4 stated nowhere`.
 
 **G4 process.** The call is refused when it cites a label (stated or not; a range cites all its members) that is not shown. Cited but not stated labels form the refusal. The reason:
 
 ```
-cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere
+φ: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere
 ```
 
 Examples: (1) a call citing D1–D5 and stating D1 and D5 only: refused `D2, D3, D4 stated nowhere`. (2) a call stating D1, D2, D3, D4, D5 individually: passes. (3) a call citing A4 with no chat text at all: passes. (4) D2 shown in a user message, but the call cites D1–D5 with D1 and D5 stated: only D3, D4 named in refusal (D2 is shown). The refusal is `{block: true, reason}`.
@@ -5805,7 +5807,7 @@ Decision (User, 2026-10-22, hs-n436; it applies hs-d573, fix the cause and hs-d2
 **The refusal** is `{block: true, reason}` for the three kinds, with `reasonText(matched)` giving this one line (the four read alternatives stay; the way to change files is new, before `refused:`):
 
 ```
-cpd: no agent moves HEAD or changes the files of a repo's primary checkout; fetching is allowed, then read origin/main with 'git show origin/main:<path>', 'git log origin/main' or 'git diff origin/main', or in a throwaway 'git worktree add $(mktemp -d) origin/main' that you remove afterwards; to change files, work on a branch in a worktree ('git worktree add -b <branch> <dir> origin/main', or the worktree of your Job) and let a PR carry the change; refused: <matched>
+φ: no agent moves HEAD or changes the files of a repo's primary checkout; fetching is allowed, then read origin/main with 'git show origin/main:<path>', 'git log origin/main' or 'git diff origin/main', or in a throwaway 'git worktree add $(mktemp -d) origin/main' that you remove afterwards; to change files, work on a branch in a worktree ('git worktree add -b <branch> <dir> origin/main', or the worktree of your Job) and let a PR carry the change; refused: <matched>
 ```
 
 `<matched>` is `git <subcommand> in <root>` for a git command (the refused subcommand and the root of the primary checkout, the directory that holds its `.git` directory, an absolute path as resolved above, never a `realpath`), `<form> <path> in <root>` for a bash write form and `<tool> <path> in <root>` for an `edit` or `write` call.
@@ -5832,10 +5834,10 @@ Decision (User, 2026-10-22, accepted assumptions A1–A5). Agents never call 1Pa
 
 ```
 For op or path ending /op with arguments:
-cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §23); refused: <matched>
+φ: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: <matched>
 
 For cpd secret approve:
-cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve
+φ: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve
 ```
 
 `<matched>` is the command word (`op`, `/path/to/op`, `op read`, `op item list`) or `cpd secret approve`.
@@ -5870,7 +5872,7 @@ This writes `$CPD_HOME/run/secret/allow/<attempt-id>.json` (contract §8.4). The
 
 ### 15.18 The pi tool `cpd_host_approve`
 
-**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 E6). The adapter refuses an agent's bash `cpd host approve` with the reason `cpd: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
+**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 E6). The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
 
 ### 15.19 The compaction ratio (hs-d660)
 
@@ -6127,7 +6129,7 @@ Decision pro-d451 (User, 2026-11-06 15:35 EST): an agent never comments on a pul
 
 **Refused Slack tools.** `mcp__slack__slack_send_message` and `mcp__slack__slack_send_message_draft`, called directly or from a `codemode` script (a nested call is judged like a direct one), are refused for every role unless the User granted a one-shot approval through the tool below.
 
-**The refusal text** has the shape of §15.17: `cpd: approvals are the User's: ask with the tool cpd_external_approve (commands.md §15.27); refused: <matched>`. The CLI refuses an agent's unapproved `cpd pr reply` (human item), `cpd pr post` and `cpd pr repost` with the error code `approval_required` (exit 3); it means exactly that: ask the User through the tool, then repeat the command.
+**The refusal text** has the shape of §15.17: `φ: external writes are the User's: ask with the tool cpd_external_approve (pr_reply, pr_post, slack_send); refused: <matched>`. The CLI refuses an agent's unapproved `cpd pr reply` (human item), `cpd pr post` and `cpd pr repost` with the error code `approval_required` (exit 3); it means exactly that: ask the User through the tool, then repeat the command.
 
 **The tool.** `cpd_external_approve` is a pi tool the adapter runs after the User's dialog choice. Parameters: `kind` (`pr_reply`, `pr_post` or `slack_send`), `reason` (one line, at most 200 characters), `workflow` (the Workflow key; required for `pr_reply` and `pr_post`), `to` (the feedback item id; required for `pr_reply`). Roles: `kind` `pr_reply` and `pr_post` are Lead only; `slack_send` is for a Lead or a Manager; a Worker is refused `not_a_lead`. Dialog `Allow once` / `Deny`, with `purpose: "external_approve"` on the durable host's `ui_request` (contract §dialogs). The dialog sentence is `<name> asks to <action>. Reason: <reason>. Allow once: approve this one action.` where `<action>` names the kind (reply to item `<to>` of Workflow `<workflow>`; post Workflow `<workflow>` for review; send one Slack message). On `Deny` it says so and not to retry.
 
@@ -6193,6 +6195,8 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause and what explains it: the conflicting files (`merge_conflict`), the failed Gate's hook and log (`gate_failed`, `gate_error`), pi stopped on a provider error with its message (`provider_error`); the provider was down or unreachable, the Job was retried at the same Tier, or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `touches_violation` (revert the files outside your touches, or ask), `attempt_not_running` (the Attempt was stopped: stop) |
+
+**The writing-for-agents pointer** (Plan `agent-refusals`). When the Job's declared `touches` match `pi/skills/**`, the rendered Spec carries the line `Read and follow pi/skills/writing-for-agents/SKILL.md before editing any file under pi/skills/.` — the Worker reads the bundled reference for writing any document an agent consumes before its first edit of a skill file. A Job whose touches match no skill file gets no pointer (contract §8.3 "Delivery to agents").
 
 **The addenda** (§5.10). The section is rendered with the Spec (A3), so an addendum stored after an Attempt's Spec was rendered reaches that running Attempt only as the steered `job-addendum` message (§15.3); the next Attempt's Spec lists it.
 
