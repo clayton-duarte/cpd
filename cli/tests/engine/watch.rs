@@ -6425,7 +6425,9 @@ fn a_failed_curate_run_raises_an_error_event() {
 
     let launches = fx.fakes.spawn.launches();
     assert!(
-        launches.iter().any(|l| l.args.get(1).map(String::as_str) == Some("curate")),
+        launches
+            .iter()
+            .any(|l| l.args.get(1).map(String::as_str) == Some("curate")),
         "the curate run was not started: {launches:?}"
     );
     let errors = fx.texts("error");
