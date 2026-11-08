@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { swapBundle } from './bundle';
 import type { SyncResult } from './checkout';
 import { createUpdater, type UpdaterDeps } from './controller';
-import { fakeFs } from './fakes';
-import type { UpdateState } from './types';
+import { fakeExec, fakeFs } from './fakes';
+import { rebuildViews } from './preview';
+import type { UpdateExec, UpdateState } from './types';
+import { BUILT_SHA_FILE, PREVIEW_VIEW_DIR, PROD_VIEW_DIR } from './views';
 
 const OK = { ok: true } as const;
 const SHA = 'abc123';
@@ -24,11 +26,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function setup(over: Partial<UpdaterDeps> = {}) {
+// The views-impl change adds the view rebuild to the updater's dependencies; pin it here so the
+// controller test compiles today and the implementing change can wire it in.
+type UpdaterDepsWithViews = UpdaterDeps & { rebuildViews(): Promise<void> };
+
+function setup(over: Partial<UpdaterDepsWithViews> = {}) {
   const events: string[] = [];
   const states: UpdateState[] = [];
   const logs: string[] = [];
-  const deps: UpdaterDeps = {
+  const deps: UpdaterDepsWithViews = {
     sync: vi.fn(async (): Promise<SyncResult> => ({ kind: 'updated', from: 'old', to: SHA, lockfileChanged: false })),
     headSha: vi.fn(async () => SHA),
     builtSha: vi.fn(() => 'old'),
@@ -38,6 +44,7 @@ function setup(over: Partial<UpdaterDeps> = {}) {
     whenApplicable: vi.fn(async () => { events.push('gate'); }),
     reloadRenderer: vi.fn(() => { events.push('reload'); }),
     installCli: vi.fn(async () => OK),
+    rebuildViews: vi.fn(async () => {}),
     onState: vi.fn((s: UpdateState) => { states.push(s); events.push(`state:${s.phase}`); }),
     log: vi.fn((l: string) => { logs.push(l); }),
     ...over,
@@ -139,6 +146,45 @@ describe('createUpdater', () => {
     const { deps, updater } = setup({ cliSha: vi.fn(() => SHA) });
     await updater.check();
     expect(deps.installCli).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds the views when the CLI update lands', async () => {
+    const PREVIEW = '/preview';
+    const BUILD = 'pnpm --filter cpd-web-client run build:electron';
+    const outs: (string | undefined)[] = [];
+    const fx = fakeExec({
+      'git rev-parse HEAD': { stdout: `${SHA}\n` },
+      'git rev-parse --abbrev-ref HEAD': { stdout: 'preview\n' },
+      [BUILD]: {},
+    });
+    const fs = fakeFs({ [`${ROOT}/.git/HEAD`]: '', [`${PREVIEW}/.git/HEAD`]: '' });
+    const exec: UpdateExec = async (cmd, args, opts) => {
+      const r = await fx.exec(cmd, args, opts);
+      if (cmd === 'pnpm') outs.push(opts.env?.['CPD_ELECTRON_OUT']);
+      return r;
+    };
+    const rebuilt = vi.fn(async () => {
+      await rebuildViews({ exec, fs }, { prod: ROOT, preview: PREVIEW });
+    });
+    const { deps, updater } = setup({
+      cliSha: vi.fn(() => 'older'),
+      installCli: vi.fn(async () => OK),
+      rebuildViews: rebuilt,
+    });
+
+    await updater.check();
+
+    expect(deps.installCli).toHaveBeenCalledWith(SHA);
+    expect(rebuilt).toHaveBeenCalledTimes(1);
+    expect(outs).toEqual([PROD_VIEW_DIR, PREVIEW_VIEW_DIR]);
+    expect(fs.readText(`${ROOT}/${PROD_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
+    expect(fs.readText(`${PREVIEW}/${PREVIEW_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
+  });
+
+  it('does not rebuild the views when the CLI is already current', async () => {
+    const { deps, updater } = setup({ cliSha: vi.fn(() => SHA) });
+    await updater.check();
+    expect(deps.rebuildViews).not.toHaveBeenCalled();
   });
 
   it('check logs a CLI install failure without failing the bundle flow', async () => {
