@@ -66,9 +66,9 @@ impl Fx {
         let url = format!("https://github.com/acme/shop/pull/{n}");
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                        mergeable, authored, review_requested, merge_state, feedback, base_ref, default_branch)
+                                        mergeable, authored, review_requested, merge_state, feedback, base_ref, default_branch, base_contained)
              VALUES ('acme/shop', {n}, '{url}', 'T', 0, 'open', 'none', 'passed', '{T}', '{T}',
-                     'mergeable', 1, 0, 'clean', '[]', 'main', 'main');
+                     'mergeable', 1, 0, 'clean', '[]', 'main', 'main', 1);
              UPDATE pull_requests SET {assignments} WHERE number = {n};"
         ));
     }
