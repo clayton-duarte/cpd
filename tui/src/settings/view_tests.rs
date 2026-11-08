@@ -329,7 +329,7 @@ impl Commands {
             ["preset", "set", ..] => Output::success(json!({"preset": "set"})),
             ["config", "tiers", "set", ..] => Output::success(json!({"tiers": "set"})),
             ["config", "concurrency", "set", _n] => {
-                Output::success(json!({"ok": true, "changed": ["concurrency"], "already": false}))
+                Output::success(json!({"changed": ["concurrency"], "already": false}))
             }
             ["session", "retier", "--all"] => Output::success(json!({"retiered": []})),
             other => panic!("the view ran a command nobody expects: {other:?}"),
@@ -489,6 +489,7 @@ pub(super) fn workers_screen(value: &str) -> Vec<String> {
         &[
             "",
             "",
+            "",
             " Workers  the Attempts the machine runs at once",
             &row,
             "",
@@ -513,7 +514,10 @@ fn red() -> Option<ratatui::style::Color> {
 
 #[test]
 fn the_initial_screen_is_exactly_the_documented_rows() {
-    let run = popup(&Commands::new(), vec![Act::Snap, Act::Key(KeyCode::Esc)]);
+    let run = popup(
+        &Commands::new(),
+        vec![Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)],
+    );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(run.snaps[0].rows(), first_screen());
 }
@@ -591,6 +595,7 @@ fn the_workers_screen_keeps_the_error_and_stops_on_a_refused_concurrency() {
 #[test]
 fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
     let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)]);
     acts.extend([Act::Snap, Act::Key(KeyCode::Esc)]);
     let run = popup(&Commands::new(), acts);
@@ -633,6 +638,7 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
 fn typing_narrows_the_list_by_substring() {
     // not in the listed names on purpose: pins the filter line `filter: <text>` the docs give
     let mut acts: Vec<Act> = (0..8).map(|_| Act::Key(KeyCode::Down)).collect();
+    acts.insert(0, Act::Key(KeyCode::Enter));
     acts.extend([
         Act::Key(KeyCode::Enter),
         Act::Type("O"),
@@ -656,6 +662,7 @@ fn typing_narrows_the_list_by_substring() {
 #[test]
 fn a_changed_value_ends_with_a_star_and_an_invalid_one_is_red_and_ends_with_a_bang() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Click("Provider  bifrost", "bifrost ▾"),
@@ -698,6 +705,7 @@ fn the_footer_shows_a_refusal_in_red() {
         ),
     );
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
         Act::Click(
             "( ) vertex/claude-sonnet-5-5",
@@ -722,6 +730,7 @@ fn the_footer_shows_a_refusal_in_red() {
 #[test]
 fn the_body_scrolls_with_the_wheel_when_it_is_taller_than_the_popup() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Snap,
         Act::Wheel(MouseEventKind::ScrollDown),
         Act::Snap,
@@ -763,6 +772,7 @@ fn the_body_scrolls_with_the_wheel_when_it_is_taller_than_the_popup() {
 #[test]
 fn a_click_on_a_value_opens_its_list_and_a_click_on_an_entry_picks_it() {
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
         Act::Snap,
         Act::Click(
@@ -805,6 +815,7 @@ fn a_click_on_a_value_opens_its_list_and_a_click_on_an_entry_picks_it() {
 
 fn change_manager_and_o_then(finish: Act) -> Vec<Act> {
     vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Click("O  opus", "vertex/gemini-4-argon ▾"),
@@ -905,6 +916,7 @@ fn a_refused_step_keeps_the_view_open_and_a_second_save_retries_only_that_step()
 fn a_click_on_cancel_closes_without_running_a_write_command() {
     let commands = Commands::new();
     let acts = vec![
+        Act::Key(KeyCode::Enter),
         Act::Click("manager", "O3 ▾"),
         Act::Click("( ) O4", "( ) O4"),
         Act::Wheel(MouseEventKind::ScrollDown),

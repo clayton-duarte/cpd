@@ -30,7 +30,10 @@ fn scroll_to_the_buttons() -> Act {
 
 #[test]
 fn settings_first_screen_shows_the_experimental_rows_below_tiers() {
-    let run = popup(&Commands::new(), vec![Act::Snap, Act::Key(KeyCode::Esc)]);
+    let run = popup(
+        &Commands::new(),
+        vec![Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)],
+    );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     let rows = run.snaps[0].rows();
     assert_eq!(rows, first_screen());
@@ -44,6 +47,7 @@ fn clicking_an_experimental_row_flips_it_and_marks_it_changed() {
     let run = popup(
         &Commands::new(),
         vec![
+            Act::Key(KeyCode::Enter),
             Act::ClickEnd("write_curation"),
             Act::Snap,
             Act::Key(KeyCode::Esc),
@@ -64,6 +68,7 @@ fn save_runs_cpd_config_experimental_for_each_changed_feature_only() {
     let run = popup(
         &commands,
         vec![
+            Act::Key(KeyCode::Enter),
             Act::ClickEnd("turn_question_guard"),
             Act::ClickEnd("durable_workers"),
             scroll_to_the_buttons(),
@@ -87,6 +92,7 @@ fn cancel_discards_experimental_flips() {
     let run = popup(
         &Commands::new(),
         vec![
+            Act::Key(KeyCode::Enter),
             Act::ClickEnd("write_curation"),
             Act::Snap,
             scroll_to_the_buttons(),
@@ -108,7 +114,10 @@ fn experimental_rows_load_from_cpd_config_json() {
         "durable_workers": true, "write_curation": false,
         "failure_triage": true, "turn_question_guard": false,
     }));
-    let run = popup(&commands, vec![Act::Snap, Act::Key(KeyCode::Esc)]);
+    let run = popup(
+        &commands,
+        vec![Act::Key(KeyCode::Enter), Act::Snap, Act::Key(KeyCode::Esc)],
+    );
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     assert_eq!(
         experimental_block(&run.snaps[0].rows()),
