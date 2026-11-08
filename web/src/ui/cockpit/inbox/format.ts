@@ -1,6 +1,5 @@
 import type { Urgency } from "../../../protocol/cockpit.ts";
 
-export const linkKinds: readonly string[] = ["plan-review", "pr-ready", "pr-closed", "review-requested", "deploy"];
 /** Kinds whose left click opens the row's session (a Lead for the Plan kinds: the read model sets sessionId). */
 export const sessionKinds: readonly string[] = ["dialog", "unread", "loop-guard", "question", "plan-review", "drafts-parked", "pr-ready", "pr-closed"];
 
