@@ -2,8 +2,8 @@
 // Scenario: opening the Agent Tiers dialog must not blank the WebUI, and the WebUI must have no
 // hidden tab-bar offset (guards air-n74 and air-n68).
 //
-// Bug air-n74: every modal Radix primitive scroll-locks the page when it opens, setting
-// `body[data-scroll-locked]{position:relative!important}`. `electron.html` laid the WebUI out as
+// Bug air-n74: when the app still used the Radix primitives, every modal scroll-locked the page,
+// setting `body[data-scroll-locked]{position:relative!important}`. `electron.html` laid the WebUI out as
 // `#webui-root{position:absolute;top:30px;bottom:0}` against a `body` with no height of its own, so
 // once `body` became the positioned containing block the root's inset box collapsed to height 0 and
 // the app vanished behind the floating dialog. `height:100%` on `html, body` keeps the viewport box
@@ -157,8 +157,22 @@ test("opening the Agent Tiers dialog keeps the WebUI root full-height under the 
   await page.locator('[data-part="settings"]').click();
   await expect(page.locator('[data-part="agent-tiers-dialog"]')).toBeVisible();
 
-  // Radix's modal scroll lock is live on body.
-  await expect.poll(() => page.evaluate(() => document.body.hasAttribute("data-scroll-locked")), { timeout: 30_000 }).toBe(true);
+  // Base UI's modal scroll lock is live. Unlike react-remove-scroll (Radix), Base UI does not use
+  // a `data-scroll-locked` attribute: @base-ui/utils/useScrollLock writes inline styles on the
+  // viewport scroller (and, on the inset-scrollbar path, an `data-base-ui-scroll-locked` attribute
+  // on <html>). In this app electron.html already pins `html, body { overflow: hidden }`, so Base UI
+  // reads the page as already locked and leaves its styles untouched. Assert the observable lock
+  // instead: the document does not scroll while the dialog is open.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          window.scrollTo(0, 1000);
+          return window.scrollY;
+        }),
+      { timeout: 30_000 },
+    )
+    .toBe(0);
 
   // While the lock is on, the app is still laid out: the WebUI root keeps its full height and still
   // starts at the window top (no hidden tab-bar offset). Before the fix, body{position:relative}

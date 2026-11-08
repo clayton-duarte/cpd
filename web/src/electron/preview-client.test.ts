@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import type { HealthRecord } from "./health.ts";
-import { createPreviewClient, type PreviewClientDeps } from "./preview-client.ts";
+import {
+  createPreviewClient,
+  PREVIEW_READINESS_TIMEOUT_MS,
+  type PreviewClientDeps,
+} from "./preview-client.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -14,10 +18,6 @@ function loading(epoch = 1): HealthRecord {
   return { status: "loading", reloadEpoch: epoch, pid: PID, startedAt: iso(T0) };
 }
 
-function healthy(epoch = 1): HealthRecord {
-  return { status: "healthy", reloadEpoch: epoch, pid: PID, startedAt: iso(T0), healthyAt: iso(T0) };
-}
-
 interface RunCall {
   readonly file: string;
   readonly args: readonly string[];
@@ -25,7 +25,15 @@ interface RunCall {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-function setup(overrides: { code?: number; stderr?: string; runError?: Error; previous?: "tui" | "webui" | "webui-preview" } = {}) {
+function setup(
+  overrides: {
+    code?: number;
+    stderr?: string;
+    runError?: Error;
+    previous?: "tui" | "webui" | "webui-preview";
+    serverReady?: boolean;
+  } = {},
+) {
   const calls: RunCall[] = [];
   const healthWrites: HealthRecord[] = [];
   const loadingShown: string[] = [];
@@ -51,12 +59,15 @@ function setup(overrides: { code?: number; stderr?: string; runError?: Error; pr
     writeHealth: async (record) => {
       healthWrites.push(record);
     },
+    isPreviewServerReady: async () => overrides.serverReady ?? true,
     showLoading: () => {
       loadingShown.push("loading");
     },
     loadDevUrl: async (url) => {
       loaded.push(url);
     },
+    // The failure port. main.ts wires it to the cockpit toast (CONTRACT.md §19.3), never a native
+    // modal; the client only has to report a failure here.
     showErrorBox: (title, content) => {
       dialogs.push(`${title}: ${content}`);
     },
@@ -85,18 +96,32 @@ it("starts the serve-only preview server once and shows the loading page", async
   expect(s.dialogs).toEqual([]);
 });
 
-it("loads the dev URL only after the client health is healthy", async () => {
+it("reaches the dev URL without the running app being healthy", async () => {
   const s = setup();
   const client = createPreviewClient(s.deps);
   await client.open();
-  s.state.health = loading();
+  // The running app's health never arrives: the old gate ("status === healthy") waited for the
+  // renderer the dev-URL load itself starts — the circular wait. Readiness is the preview server.
+  s.state.health = null;
   await client.tick();
+  expect(s.loaded).toEqual([DEV_URL]);
+  await client.tick();
+  expect(s.loaded).toEqual([DEV_URL]);
+});
+
+it("a preview that never becomes ready times out and reports a failure", async () => {
+  const s = setup({ serverReady: false, previous: "tui" });
+  const client = createPreviewClient(s.deps);
+  await client.open();
+  // Advance well past the bounded readiness wait and keep ticking: the wait must end in a failure,
+  // not hang.
+  for (let i = 0; i < 3; i += 1) {
+    s.state.clock += PREVIEW_READINESS_TIMEOUT_MS + 1;
+    await client.tick();
+  }
   expect(s.loaded).toEqual([]);
-  s.state.health = healthy();
-  await client.tick();
-  expect(s.loaded).toEqual([DEV_URL]);
-  await client.tick();
-  expect(s.loaded).toEqual([DEV_URL]);
+  expect(s.dialogs).toHaveLength(1);
+  expect(s.modes).toEqual(["tui"]);
 });
 
 it("shows a native dialog and returns to the previous view when the server fails", async () => {

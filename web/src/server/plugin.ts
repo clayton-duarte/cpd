@@ -358,7 +358,12 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
       const boundaries = options?.boundaries ?? realBoundaries(process.env);
       const services = createServices(boundaries);
       let closed = false;
-      const started = services.cockpit.start().catch((e: unknown) => {
+      const started = services.cockpit.start();
+      // The gate is the raw start promise: it rejects on a failed start so the endpoint surfaces the
+      // failure on its error path instead of resolving a gate while no service runs (20.1). A terminal
+      // load failure fails the start at once (the retry is only for a lock-waited store, air-n101), so the
+      // dev server is not held up by the retry budget; the failure is logged exactly once here.
+      const logged = started.catch((e: unknown) => {
         server.config.logger.error(`cpd-web: cockpit failed to start: ${e instanceof Error ? e.message : String(e)}`);
       });
       // The dev server hosts the one WebSocket endpoint on its own httpServer (web/CONTRACT.md §15.1),
@@ -369,7 +374,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
             newConnection: (send) => services.newConnection(send),
             server: createUpgradeFactory(server.httpServer as unknown as WebSocketUpgradeServer),
             scheduler: boundaries.scheduler,
-            started,
+            started: () => started,
             onError: (e: unknown) => server.config.logger.error(`cpd-web: ${e instanceof Error ? e.message : String(e)}`),
             path: WS_PATH,
           });
@@ -380,7 +385,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
         services.cockpit.stop();
       };
       server.httpServer?.once("close", () => { void closeAll?.(); });
-      await started;
+      await logged;
     },
     closeBundle() {
       return closeAll?.();

@@ -9,6 +9,7 @@ import { dotDisplay, sessionDisplay } from "../dango-status.ts";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/context-menu.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
 import { Button } from "../components/button.tsx";
+import { Empty } from "../components/empty.tsx";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Input } from "../components/input.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/collapsible.tsx";
@@ -132,7 +133,7 @@ function RowMenu(props: { api: MenuApi | undefined; kind: MenuKind; items: reado
   if (props.api === undefined) return props.children;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuTrigger render={props.children} />
       <ContextMenuContent data-menu-kind={props.kind}>
         {props.items.map((i) => (
           <ContextMenuItem key={i.label} onSelect={i.run}>{i.label}</ContextMenuItem>
@@ -377,8 +378,11 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
   // in the Archive section a live Context only holds archived Plans: its own row has no menu
   const rowApi = props.allPlans && !context.archived ? undefined : api;
   return (
-    <Collapsible open={effectiveOpen} onOpenChange={handleOpenChange} asChild>
-      <SidebarMenuItem role="treeitem" data-context={context.id}>
+    <Collapsible
+      open={effectiveOpen}
+      onOpenChange={handleOpenChange}
+      render={<SidebarMenuItem role="treeitem" data-context={context.id} />}
+    >
         <RowMenu api={rowApi} kind={permanent ? "permanent" : archivedRow ? "archived" : "context"} items={items}>
         <SidebarMenuButton
           type="button"
@@ -402,11 +406,13 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
         </RowMenu>
         {hasChildren ? (
           <>
-            <CollapsibleTrigger asChild>
-              <SidebarMenuAction type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
-                {effectiveOpen ? <MinusIcon /> : <PlusIcon />}
-              </SidebarMenuAction>
-            </CollapsibleTrigger>
+            <CollapsibleTrigger
+              render={
+                <SidebarMenuAction data-slot="sidebar-menu-action" type="button" aria-label={`Toggle ${context.id}`} data-state={effectiveOpen ? "open" : "closed"}>
+                  {effectiveOpen ? <MinusIcon /> : <PlusIcon />}
+                </SidebarMenuAction>
+              }
+            />
             <CollapsibleContent>
               <SidebarMenuSub role="group">
                 {plans.map((p) => (
@@ -419,7 +425,6 @@ function ContextItem(props: { context: ContextNode; allPlans: boolean } & Handle
             </CollapsibleContent>
           </>
         ) : null}
-      </SidebarMenuItem>
     </Collapsible>
   );
 }
@@ -442,15 +447,18 @@ function TreeSection(props: {
     >
       <SidebarGroup className={cn("flex flex-col overflow-hidden px-0 py-1", props.open ? "min-h-0 flex-1" : "shrink-0")} {...props.groupAttrs}>
         <div className="relative shrink-0 px-2">
-          <SidebarGroupLabel asChild>
-            <CollapsibleTrigger
-              type="button"
-              className="w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            >
-              <span>{props.label}</span>
-              {props.open ? <MinusIcon className="ml-auto" /> : <PlusIcon className="ml-auto" />}
-            </CollapsibleTrigger>
-          </SidebarGroupLabel>
+          <SidebarGroupLabel
+            render={
+              <CollapsibleTrigger
+                data-slot="sidebar-group-label"
+                type="button"
+                className="w-full hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              >
+                <span>{props.label}</span>
+                {props.open ? <MinusIcon className="ml-auto" /> : <PlusIcon className="ml-auto" />}
+              </CollapsibleTrigger>
+            }
+          />
         </div>
         <CollapsibleContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ScrollArea data-part="tree-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
@@ -558,7 +566,12 @@ export function ContextTree(props: {
               {tree === null ? (
                 <p data-part="loading" className="px-2 text-fg-dim">Loading contexts…</p>
               ) : all.length === 0 ? (
-                <p data-part="empty" className="px-2 text-fg-dim">No contexts</p>
+                <Empty
+                  data-part="empty"
+                  className="flex-none items-start justify-start gap-0 p-0 px-2 text-left text-fg-dim"
+                >
+                  No contexts
+                </Empty>
               ) : (
                 <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
               )}

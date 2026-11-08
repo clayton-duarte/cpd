@@ -421,6 +421,10 @@ _Avoid_: checks (alone)
 A check that refuses an action as it is attempted, as a reply to the call — the explore Worker's tool-call refusals (`φ: <rule>`; contract §6.6) and the red-test guard are instances — one of the ways cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). A guard is not an OS sandbox: it stops mistakes, not a determined agent.
 _Avoid_: sandbox
 
+**Protocol** (mechanism, air-d101):
+A rule the User defines as a procedure that must be followed when it is invoked: it is called with prose, reaches the agent as a skill, and is enforced by commands and hooks that exist as guardrails — one of the protocols cpd's definition names (the canonical definition in [README.md](README.md), line 5; recorded in [docs/adr/0017-protocols.md](docs/adr/0017-protocols.md)). No protocol is enforced by cpd's commands and hooks yet; the bug report protocol is still prose in the manager and lead skills, and Plan `protocol-enforce` brings the protocols up to this definition.
+_Avoid_: convention; protocol (alone, for the pi adapter's wire protocol: commands.md §15)
+
 **Enforcement** (other, air-d86):
 How cpd makes its protocols hold: through tooling that can refuse, rather than prose (the canonical definition in [README.md](README.md); the contract's own rule, prose is not enforcement, docs/contract.md §8). A rule is enforced when something refuses; a sentence in a document is not enforcement.
 _Avoid_: prompt enforcement; convention

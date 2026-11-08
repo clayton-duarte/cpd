@@ -1394,6 +1394,11 @@ impl Tmux {
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut panes = Vec::new();
         for line in stdout.lines() {
+            // A blank line names no pane: tmux can print one among the pane lines (a pane torn down
+            // mid-format), and it must not abort the whole listing (contract §6.3, air-n104).
+            if line.trim().is_empty() {
+                continue;
+            }
             match parse_pane(line).ok_or_else(|| self.unexpected(&args, line))? {
                 Line::Pane(pane) => panes.push(pane),
                 Line::UnknownView(view) => warn_unknown_view(&view),

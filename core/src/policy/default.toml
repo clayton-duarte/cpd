@@ -56,6 +56,7 @@ O = "github-copilot/claude-opus-5.5"
 S = "github-copilot/claude-sonnet-5.5"
 H = "github-copilot/claude-haiku-4.5"
 G = "github-copilot/gemini-3.8-flash"
+J = "github-copilot/gemini-3.8-flash"
 
 [hooks]
 

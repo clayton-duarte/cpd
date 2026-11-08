@@ -262,27 +262,111 @@ impl Store {
         catalog: &Catalog<'_>,
     ) -> Result<Store, CpdError> {
         let path = home.db();
-        let setup = setup_lock(clock, home, busy_ms)?;
-        // An opener that waited out a migration may meet its holder still finishing (closing its connection, which
-        // checkpoints): its own setup waits for SQLite at least `MIGRATION_SETTLE_MS`, whatever `busy_ms` (§4.2).
-        let setup_ms = if setup.waited_for_migration() {
-            busy_ms.max(MIGRATION_SETTLE_MS)
-        } else {
-            busy_ms
+        // §4.2: `locks/store.lock` guards only the store's one-time setup — the WAL switch of a missing database
+        // and the migrations. Decide before taking it, from read-only state (`current_schema` and the verdict open
+        // no lock, migrate nothing and write nothing); an up-to-date store is opened without the lock at all.
+        // A store that cannot be read right now (another connection holds it exclusively) is judged as needing
+        // setup, so a held store still takes the lock rather than failing on the read.
+        let missing = match current_schema(home, busy_ms) {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(e) if is_transient(&e) => false,
+            Err(e) => return Err(e),
         };
-        let mut store =
-            Store::connect(&path, busy_ms, setup_ms).map_err(|e| enrich(e, &path, busy_ms))?;
+        let needs_setup = missing || !Self::is_up_to_date(&path, catalog, busy_ms)?;
+        if !needs_setup {
+            // §1.4: the setup lock creates `locks/` on its way; this open takes no lock, but must still leave
+            // the directory, since other parts of cpd write files in it (resource locks, the writer's record)
+            // without creating it themselves.
+            Self::ensure_locks_dir(home)?;
+            let mut store =
+                Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
+            Self::finish_open(&mut store, home, catalog, busy_ms)?;
+            return Ok(store);
+        }
+        // A missing database (the WAL switch of a new one) or a pending migration: take the lock, connect under it
+        // and migrate. `migrate` re-judges from read-only state inside the lock, since another process may have
+        // migrated the store meanwhile.
+        let setup = Self::settled_setup_lock(clock, home, busy_ms)?;
+        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store
             .migrate(home, catalog, &setup)
             .map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
+        Self::finish_open(&mut store, home, catalog, busy_ms)?;
+        Ok(store)
+    }
+
+    /// Whether the existing store at `path` needs no migration, judged read-only: no lock, no migration, no write.
+    /// A store that cannot be read right now (another connection holds it exclusively) is judged as needing setup,
+    /// so the caller takes the lock, as every open did before (§4.2).
+    fn is_up_to_date(path: &Path, catalog: &Catalog<'_>, busy_ms: u64) -> Result<bool, CpdError> {
+        let read = || -> Result<bool, CpdError> {
+            let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(Duration::from_millis(busy_ms))?;
+            Ok(verdict_with(&conn, catalog)?.into_plan()?.is_none())
+        };
+        match read() {
+            Ok(up_to_date) => Ok(up_to_date),
+            Err(e) if is_transient(&e) => Ok(false),
+            Err(e) => Err(enrich(e, path, busy_ms)),
+        }
+    }
+
+    /// Ensures the store's `locks/` directory exists (§1.4). [`setup_lock`] creates it on its way; an open that
+    /// takes no setup lock (an up-to-date store) must still leave it, cheap and idempotent.
+    fn ensure_locks_dir(home: &CpdHome) -> Result<(), CpdError> {
+        let dir = home.locks_dir();
+        fs::create_dir_all(&dir).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot create {}: {e}.", dir.display()),
+            )
+            .with("path", dir.display().to_string())
+        })
+    }
+
+    /// The body every open shares after its setup (if any): the connection's busy timeout is `busy_ms` again, and
+    /// the schema check (§4.3) runs. Never under `locks/store.lock`.
+    fn finish_open(
+        store: &mut Store,
+        home: &CpdHome,
+        catalog: &Catalog<'_>,
+        busy_ms: u64,
+    ) -> Result<(), CpdError> {
+        let path = store.path.clone();
         store
             .conn
             .busy_timeout(Duration::from_millis(busy_ms))
             .map_err(|e| enrich(e.into(), &path, busy_ms))?;
         store.schema =
             schema_mismatch(&store.conn, home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
-        Ok(store)
+        Ok(())
+    }
+
+    /// Takes `locks/store.lock` for one-time setup (§4.2). When the wait read a live migration marker, the holder
+    /// has released the `flock` but may still be finishing (closing its connection checkpoints the migration's
+    /// WAL): its `MIGRATION_SETTLE_MS` wait for SQLite runs **before** the lock is taken again, so no opener holds
+    /// `locks/store.lock` while it waits on SQLite.
+    fn settled_setup_lock(
+        clock: &dyn Clock,
+        home: &CpdHome,
+        busy_ms: u64,
+    ) -> Result<SetupLock, CpdError> {
+        let setup = setup_lock(clock, home, busy_ms)?;
+        if !setup.waited_for_migration() {
+            return Ok(setup);
+        }
+        drop(setup);
+        // A probe connection carries the settle as its busy timeout, with the lock released: no opener holds
+        // `locks/store.lock` while it waits on SQLite. It writes nothing the lock guards.
+        let path = home.db();
+        if path.exists() {
+            let probe = Store::connect(&path, busy_ms.max(MIGRATION_SETTLE_MS))
+                .map_err(|e| enrich(e, &path, busy_ms))?;
+            drop(probe);
+        }
+        setup_lock(clock, home, busy_ms)
     }
 
     /// [`Store::open`] for a process that persists (see [`Persist`]): a
@@ -333,9 +417,8 @@ impl Store {
         self.persist = Some(persist);
     }
 
-    /// `setup_ms` is the connection's busy timeout until the caller sets it back to `busy_ms` (the setup's, see
-    /// [`MIGRATION_SETTLE_MS`]).
-    fn connect(path: &Path, busy_ms: u64, setup_ms: u64) -> Result<Store, CpdError> {
+    /// `busy_ms` is the connection's busy timeout; the caller sets it again once the setup is over.
+    fn connect(path: &Path, busy_ms: u64) -> Result<Store, CpdError> {
         let conn = Connection::open(path)?;
         let txn = Arc::new(AtomicI64::new(0));
         let current = Arc::clone(&txn);
@@ -352,7 +435,7 @@ impl Store {
             },
         )?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        configure(&conn, path, setup_ms, APPLICATION_ID, "a cpd 2 database")?;
+        configure(&conn, path, busy_ms, APPLICATION_ID, "a cpd 2 database")?;
         Ok(Store {
             conn,
             path: path.to_owned(),
@@ -859,8 +942,11 @@ pub(crate) fn cache_setup_lock(home: &CpdHome, busy_ms: u64) -> Result<CacheSetu
 }
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
-/// exist. Opens it read-only: no migration, no schema check, no write.
-pub fn current_schema(home: &CpdHome) -> Result<Option<i64>, CpdError> {
+/// exist. Opens it read-only: no migration, no schema check, no write. Its own
+/// connection sets SQLite's busy timeout to `busy_ms` before the read (the
+/// rusqlite default is 5 s of real time), so a database another cpd holds is
+/// waited for on the caller's bound, never longer.
+pub fn current_schema(home: &CpdHome, busy_ms: u64) -> Result<Option<i64>, CpdError> {
     let path = home.db();
     if !path.try_exists().map_err(|e| {
         CpdError::new(
@@ -873,6 +959,7 @@ pub fn current_schema(home: &CpdHome) -> Result<Option<i64>, CpdError> {
     }
     let read = || -> Result<i64, CpdError> {
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(Duration::from_millis(busy_ms))?;
         Ok(user_version(&conn)?)
     };
     read().map(Some).map_err(|e| enrich(e, &path, 0))
@@ -1289,7 +1376,7 @@ mod tests {
     fn current_schema_is_none_without_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        assert_eq!(current_schema(&home).unwrap(), None);
+        assert_eq!(current_schema(&home, 5000).unwrap(), None);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
@@ -1301,7 +1388,7 @@ mod tests {
         conn.pragma_update(None, "user_version", 99).unwrap();
         drop(conn);
         let before = fs::read(home.db()).unwrap();
-        assert_eq!(current_schema(&home).unwrap(), Some(99));
+        assert_eq!(current_schema(&home, 5000).unwrap(), Some(99));
         assert_eq!(fs::read(home.db()).unwrap(), before);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
@@ -1789,7 +1876,7 @@ mod tests {
     /// Converts the store of [`big_legacy_store`] as `Store::open` does, on a connection that counts SQLite's
     /// virtual machine steps (in thousands). Returns the converted store and the steps.
     fn convert_counting_steps(home: &CpdHome) -> (Store, u64) {
-        let mut store = Store::connect(&home.db(), 5000, 5000).unwrap();
+        let mut store = Store::connect(&home.db(), 5000).unwrap();
         let steps = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let counter = Arc::clone(&steps);
         store

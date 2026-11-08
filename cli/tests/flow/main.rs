@@ -64,6 +64,7 @@ mod job_fix;
 mod job_open_description;
 mod job_open_jira;
 mod job_parked;
+mod job_refusals;
 mod job_resources;
 mod job_touches_stacked;
 mod job_verify;

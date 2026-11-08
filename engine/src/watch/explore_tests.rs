@@ -260,6 +260,10 @@ fn explore_attempt_times_out_at_explore_minutes() {
 /// The catalog of the testkit (contract §9): H0-H3, S0-S5.
 fn catalog() -> Catalog {
     Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".into(),
         o: TierModel {
             model: "p/opus".into(),
@@ -303,6 +307,7 @@ fn fail_attempt(
         catalog: &catalog,
         retry_cap,
         roles: cpd_core::config::RoleTiers {
+            decide: cpd_core::config::Tier::x(cpd_core::config::Letter::O),
             auxiliar: Tier::parse("GX").unwrap(),
             worker: Tier::parse("H0").unwrap(),
             lead: Tier::parse("S4").unwrap(),

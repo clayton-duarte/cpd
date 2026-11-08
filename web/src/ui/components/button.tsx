@@ -1,7 +1,8 @@
 import * as React from "react"
+import { mergeProps } from "@base-ui/react/merge-props"
+import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
 import { toneClasses, type Tone } from "../dango-status.ts"
-import { Slot } from "radix-ui"
 import { cn } from "../../lib/utils.ts"
 
 const buttonVariants = cva(
@@ -39,32 +40,39 @@ const buttonVariants = cva(
   }
 )
 
+type ButtonProps = Omit<useRender.ComponentProps<"button">, "className"> & {
+  className?: string
+} &
+  VariantProps<typeof buttonVariants> & {
+    tone?: Tone
+  }
+
 function Button({
   className,
   variant = "default",
   size = "default",
-  asChild = false,
   tone,
+  render,
   ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-    tone?: Tone
-  }) {
-  const Comp = asChild ? Slot.Root : "button"
-
-  return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(
-        buttonVariants({ variant, size, className }),
-        tone !== undefined && variant === "outline" && [toneClasses[tone].text, toneClasses[tone].border, toneClasses[tone].tint]
-      )}
-      {...props}
-    />
-  )
+}: ButtonProps) {
+  return useRender({
+    defaultTagName: "button",
+    props: mergeProps<"button">(
+      {
+        className: cn(
+          buttonVariants({ variant, size, className }),
+          tone !== undefined && variant === "outline" && [toneClasses[tone].text, toneClasses[tone].border, toneClasses[tone].tint]
+        ),
+      },
+      props
+    ),
+    render,
+    state: {
+      slot: "button",
+      variant,
+      size,
+    },
+  })
 }
 
 export { Button, buttonVariants }

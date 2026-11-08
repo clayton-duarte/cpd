@@ -137,7 +137,9 @@ function parseResponse(o: Obj): DialogResponse {
   throw bad("response method/outcome pair is not valid", "response");
 }
 
-const TIER = /^[GHSO]([0-4]|X)$/;
+// The Tier letters in ladder order, J first (contract §9, air-d113, air-d115, air-d120): J's model
+// offers efforts 0-3, so `J4` (like `J5`) is refused while the other letters still take 0-4 or X.
+const TIER = /^(?:[GHSO](?:[0-4]|X)|J(?:[0-3]|X))$/;
 function parseChanges(o: Obj): SettingsChanges {
   const c = objOf(o, "changes");
   const tiers: Record<string, string> = {};

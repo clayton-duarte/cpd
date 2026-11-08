@@ -1235,8 +1235,9 @@ impl TestEnv {
         fs::write(self.cpd_home().join("config.toml"), text).expect("write config.toml");
     }
 
-    /// The Tier models the tests use, `p/opus`, `p/sonnet`, `p/haiku` and `p/gemini`, as the machine policy's `[model]`
-    /// (`policy/host.toml`, appended to what it holds; a `host.toml` with a `[model]` is left as it is), (pro-d27).
+    /// The Tier models the tests use, `p/opus`, `p/sonnet`, `p/haiku`, `p/gemini` and `p/jev-router`, as the machine
+    /// policy's `[model]` (`policy/host.toml`, appended to what it holds; a `host.toml` with a `[model]` is left as it
+    /// is), (pro-d27). All five keys share the provider `p`, so the merged table holds one provider (contract §8.3).
     pub fn write_models(&self) {
         let path = self.cpd_home().join("policy").join("host.toml");
         fs::create_dir_all(path.parent().unwrap()).expect("create the policy directory");
@@ -1244,8 +1245,7 @@ impl TestEnv {
         if held.contains("[model]") {
             return;
         }
-        let model =
-            "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
+        let model = "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\nJ = \"p/jev-router\"\n";
         fs::write(&path, format!("{held}{model}")).expect("write host.toml");
     }
 

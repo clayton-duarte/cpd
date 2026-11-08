@@ -130,22 +130,23 @@ export function PlanReviewCard(props: {
     <Item
       variant="outline"
       size="sm"
-      asChild
       className="mx-4 mb-3 w-auto shrink-0"
+      render={
+        <section
+          aria-label="Plan review"
+          data-dialog="cpd_plan_review"
+          {...(readOnly ? { "data-readonly": "" } : {})}
+          onKeyDown={(e) => {
+            if (readOnly || e.key !== "Enter" || !(e.metaKey || e.ctrlKey))
+              return;
+            if (e.target instanceof HTMLTextAreaElement) return;
+            e.preventDefault();
+            if (!hasSummary) return;
+            respond("approve");
+          }}
+        />
+      }
     >
-      <section
-        aria-label="Plan review"
-        data-dialog="cpd_plan_review"
-        {...(readOnly ? { "data-readonly": "" } : {})}
-        onKeyDown={(e) => {
-          if (readOnly || e.key !== "Enter" || !(e.metaKey || e.ctrlKey))
-            return;
-          if (e.target instanceof HTMLTextAreaElement) return;
-          e.preventDefault();
-          if (!hasSummary) return;
-          respond("approve");
-        }}
-      >
         <ItemMedia variant="icon" data-part="phi">
           <RouteIcon />
         </ItemMedia>
@@ -455,7 +456,6 @@ export function PlanReviewCard(props: {
             ) : null}
           </ItemFooter>
         ) : null}
-      </section>
     </Item>
   );
 }
