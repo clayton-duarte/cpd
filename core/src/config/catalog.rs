@@ -300,12 +300,15 @@ pub fn read_with(
         .with("pi_version", pi.version.clone()));
     }
     let [o, s, h, g]: [TierModel; 4] = models.try_into().expect("one model per letter");
+    // Placeholder: Job tier-j-impl-core reads the fifth letter `J` from pi too.
+    let j = s.clone();
     Ok(Catalog {
         pi_version: pi.version.clone(),
         o,
         s,
         h,
         g,
+        j,
     })
 }
 
@@ -347,6 +350,7 @@ mod tests {
                 model: models.g.clone(),
                 efforts: vec![],
             },
+            j: tier(&models.s),
         };
         cache::write(&mut store, "", &cached).unwrap();
 

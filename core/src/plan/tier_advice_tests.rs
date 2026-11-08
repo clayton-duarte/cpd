@@ -22,6 +22,10 @@ fn model(name: &str, efforts: &[u8]) -> TierModel {
 /// The real `Catalog::next_in` over the range H0..S3 as the ladder (H3 -> S1, S3 -> none).
 fn ladder() -> impl Fn(Tier) -> Option<Tier> {
     let catalog = Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.2.0".into(),
         o: model("opus", &[0, 1, 2, 3, 4, 5]),
         s: model("sonnet", &[0, 1, 2, 3]),
@@ -302,6 +306,10 @@ fn a_cell_without_a_cost_gives_no_advice() {
 /// H [0-4], S [0-4], O [0,2,3,4], G []; roles GX / H3 / S4 / O3 give the worker range H3..S3.
 fn worker_catalog() -> Catalog {
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.2.0".into(),
         o: model("opus", &[0, 2, 3, 4]),
         s: model("sonnet", &[0, 1, 2, 3, 4]),
@@ -312,6 +320,7 @@ fn worker_catalog() -> Catalog {
 
 fn roles(lead: &str) -> RoleTiers {
     RoleTiers {
+        decide: crate::config::Tier::x(crate::config::Letter::O),
         auxiliar: t("GX"),
         worker: t("H3"),
         lead: t(lead),

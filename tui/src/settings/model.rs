@@ -149,6 +149,8 @@ fn provider_of(model_ref: &str) -> &str {
 
 fn tier_of(tiers: &RoleTiers, role: Role) -> Tier {
     match role {
+        // Placeholder: the TUI's Agent Tiers screen still shows the four legacy roles (out of scope).
+        Role::Decide => tiers.decide,
         Role::Auxiliar => tiers.auxiliar,
         Role::Worker => tiers.worker,
         Role::Lead => tiers.lead,
@@ -158,6 +160,7 @@ fn tier_of(tiers: &RoleTiers, role: Role) -> Tier {
 
 fn set_tier(tiers: &mut RoleTiers, role: Role, tier: Tier) {
     match role {
+        Role::Decide => tiers.decide = tier,
         Role::Auxiliar => tiers.auxiliar = tier,
         Role::Worker => tiers.worker = tier,
         Role::Lead => tiers.lead = tier,
@@ -167,6 +170,7 @@ fn set_tier(tiers: &mut RoleTiers, role: Role, tier: Tier) {
 
 fn role_name(role: Role) -> &'static str {
     match role {
+        Role::Decide => "decide",
         Role::Auxiliar => "auxiliar",
         Role::Worker => "worker",
         Role::Lead => "lead",
@@ -249,6 +253,11 @@ pub fn catalog(tiers: &Value) -> Result<Catalog, CpdError> {
         s: tier_model(tm, Letter::S)?,
         h: tier_model(tm, Letter::H)?,
         g: tier_model(tm, Letter::G)?,
+        // Placeholder: the TUI's catalog still reads the four legacy letters (out of scope).
+        j: tier_model(tm, Letter::J).unwrap_or(cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        }),
     })
 }
 
@@ -260,6 +269,9 @@ impl Reads {
             .ok_or_else(|| shape("config.config is missing"))?;
         let tier = |key: &str| Tier::parse(text(cfg, key, "config")?);
         let role_tiers = RoleTiers {
+            // Placeholder: the TUI's config read still shows the four legacy roles (out of scope).
+            decide: tier("decide_tier")
+                .unwrap_or_else(|_| Tier::parse("JX").expect("a valid Tier")),
             auxiliar: tier("context_distill_tier")?,
             worker: tier("worker_tier")?,
             lead: tier("lead_tier")?,
@@ -578,6 +590,7 @@ impl Model {
                             Letter::S => "sonnet",
                             Letter::H => "haiku",
                             Letter::G => "gemini",
+                            Letter::J => "jev-router",
                         };
                         (
                             format!("{l}  {name}"),

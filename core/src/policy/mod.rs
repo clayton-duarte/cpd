@@ -216,6 +216,10 @@ mod deploys_tests;
 mod generated_tests;
 
 #[cfg(test)]
+#[path = "model_tests.rs"]
+mod model_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::home::CpdHome;

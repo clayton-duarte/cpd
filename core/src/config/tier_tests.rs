@@ -1,6 +1,80 @@
 use super::tier::*;
 use crate::error::ErrorCode;
 
+/// A catalog whose `J` model (`openrouter/typesafe/jev-router`) offers efforts 0, 1, 2 and 3.
+fn letter_catalog() -> Catalog {
+    let model = |name: &str, efforts: &[u8]| TierModel {
+        model: format!("p/{name}"),
+        efforts: efforts.to_vec(),
+    };
+    Catalog {
+        pi_version: "1.0.0".into(),
+        o: model("opus", &[0, 1, 2, 3, 4]),
+        s: model("sonnet", &[1, 2, 3]),
+        h: model("haiku", &[1, 3]),
+        g: model("gemini", &[]),
+        j: model("jev-router", &[0, 1, 2, 3]),
+    }
+}
+
+/// J is the fifth Tier letter (contract §9 "Syntax"): `JX` parses and round-trips as `JX`; `J4` is within the
+/// syntax `<Letter><0-4|X>` but J's model offers no effort 4, so the catalog refuses it; the parse error names
+/// the letters in ladder order `J < G < H < S < O`.
+#[test]
+fn letter_j_parses_and_round_trips() {
+    let jx = Tier::parse("JX").expect("JX parses");
+    assert_eq!(jx.to_string(), "JX");
+    assert_eq!(jx.letter().as_char(), 'J');
+    for written in ["J0", "J1", "J2", "J3"] {
+        assert_eq!(
+            Tier::parse(written).expect("a J effort parses").to_string(),
+            written
+        );
+    }
+    let catalog = letter_catalog();
+    let j4 = Tier::parse("J4").expect("J4 is within the syntax <Letter><0-4|X>");
+    assert!(
+        !catalog.is_valid(j4),
+        "J's model offers efforts 0, 1, 2 and 3"
+    );
+    assert_eq!(
+        catalog.check(j4).unwrap_err().code(),
+        ErrorCode::TierInvalid
+    );
+    // `Z` is neither a letter nor an effort, so the message names only the syntax's letters.
+    let err = Tier::parse("Z").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::TierInvalid);
+    let hint = err.message();
+    let at = |ch: char| {
+        hint.find(ch)
+            .unwrap_or_else(|| panic!("the parse hint names {ch}: {hint}"))
+    };
+    assert!(
+        at('J') < at('G') && at('G') < at('H') && at('H') < at('S') && at('S') < at('O'),
+        "the letters are in ladder order J < G < H < S < O: {hint}"
+    );
+}
+
+/// J ranks below G (contract §9 "Ladder order"): every J rung is below every G rung, and within J
+/// effort 0 < X < 1.
+#[test]
+fn letter_rank_puts_j_below_g() {
+    assert!(
+        Tier::parse("JX").unwrap() < Tier::parse("G0").unwrap(),
+        "JX < G0"
+    );
+    assert!(
+        Tier::parse("J4").unwrap() < Tier::parse("G0").unwrap(),
+        "a J effort is below every G rung"
+    );
+    let mut tiers: Vec<Tier> = ["GX", "G0", "JX", "J0", "J1"]
+        .map(|s| Tier::parse(s).unwrap())
+        .to_vec();
+    tiers.sort();
+    let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
+    assert_eq!(sorted, ["J0", "JX", "J1", "G0", "GX"]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -15,6 +89,10 @@ mod tests {
     /// O supports 0–5, S 1–5, H 0–3.
     fn catalog() -> Catalog {
         Catalog {
+            j: crate::config::TierModel {
+                model: String::new(),
+                efforts: Vec::new(),
+            },
             pi_version: "1.2.0".into(),
             o: model("opus", &[0, 1, 2, 3, 4, 5]),
             s: model("sonnet", &[1, 2, 3, 4, 5]),
@@ -30,6 +108,10 @@ mod tests {
     /// pi levels by effort: off=0 low=1 medium=2 high=3 xhigh=4, a catalog with gaps and models without levels.
     fn gappy() -> Catalog {
         Catalog {
+            j: crate::config::TierModel {
+                model: String::new(),
+                efforts: Vec::new(),
+            },
             pi_version: "1.5.0".into(),
             o: model("opus", &[]),
             s: model("sonnet", &[0, 1, 3]),

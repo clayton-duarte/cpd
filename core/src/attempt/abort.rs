@@ -30,6 +30,7 @@ fn no_catalog() -> Catalog {
         s: empty(),
         h: empty(),
         g: empty(),
+        j: empty(),
     }
 }
 

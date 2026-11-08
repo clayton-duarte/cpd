@@ -12,6 +12,7 @@ fn t(s: &str) -> Tier {
 
 fn tiers(a: &str, w: &str, l: &str, m: &str) -> RoleTiers {
     RoleTiers {
+        decide: cpd_core::config::Tier::x(cpd_core::config::Letter::O),
         auxiliar: t(a),
         worker: t(w),
         lead: t(l),
@@ -28,6 +29,10 @@ fn tm(model: &str, efforts: &[u8]) -> TierModel {
 
 fn catalog_of(o: &[u8], s: &[u8], h: &[u8], g: &[u8]) -> Catalog {
     Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.5.0".into(),
         o: tm("bifrost/vertex/gemini-4-argon", o),
         s: tm("bifrost/vertex/claude-sonnet-5-5", s),

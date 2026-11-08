@@ -39,6 +39,9 @@ pub struct Config {
     pub concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
+    /// The decide role's default (contract §9 "Roles and ranges"). Placeholder: Job tier-j-impl-core
+    /// makes it `decide_tier`, defaulting to `JX`.
+    pub decide_tier: Tier,
     pub lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
@@ -254,6 +257,7 @@ impl Config {
     /// The four role defaults, ascending (checked at parse).
     pub fn role_tiers(&self) -> RoleTiers {
         RoleTiers {
+            decide: self.decide_tier,
             auxiliar: self.context_distill_tier,
             worker: self.worker_tier,
             lead: self.lead_tier,
@@ -337,6 +341,8 @@ impl Config {
         };
         let lead_tier = tier_key(&mut r, "lead_tier", "O2")?;
         let manager_tier = tier_key(&mut r, "manager_tier", "O4")?;
+        // Placeholder: Job tier-j-impl-core defaults this to `JX` and adds it to the ascend check below.
+        let decide_tier = tier_key(&mut r, "decide_tier", "GX")?;
         let context_distill_tier = tier_key(&mut r, "context_distill_tier", "GX")?;
         let context_curation_min_records =
             r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
@@ -500,6 +506,7 @@ impl Config {
             machine,
             concurrency,
             retry_cap,
+            decide_tier,
             lead_tier,
             manager_tier,
             context_distill_tier,

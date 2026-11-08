@@ -27,6 +27,9 @@ pub struct Models {
     pub h: String,
     #[serde(rename = "G")]
     pub g: String,
+    /// Placeholder: Job tier-j-impl-core makes this the fifth `[model]` key, from the scope set and the default.
+    #[serde(rename = "J", default)]
+    pub j: String,
 }
 
 impl Models {
@@ -171,6 +174,7 @@ impl Set for ModelSet {
             s: pick(&self.s, &base.s),
             h: pick(&self.h, &base.h),
             g: pick(&self.g, &base.g),
+            j: base.j.clone(),
         };
         let left_out = [
             ("O", self.o.is_none()),
@@ -190,6 +194,7 @@ impl Set for ModelSet {
             s: self.s.clone()?,
             h: self.h.clone()?,
             g: self.g.clone()?,
+            j: String::new(),
         })
     }
 }
@@ -224,7 +229,3 @@ pub fn check_one_provider(models: &Models, file: &Path) -> Result<(), CpdError> 
         )),
     }
 }
-
-#[cfg(test)]
-#[path = "model_tests.rs"]
-mod tests;

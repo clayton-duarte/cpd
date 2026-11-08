@@ -11,13 +11,14 @@ use serde::{Serialize, Serializer};
 
 use crate::error::{CpdError, ErrorCode};
 
-/// A model letter: `G`, `H`aiku, `S`onnet, `O`pus (the `[model]` of a policy key).
+/// A model letter: `J`ev-router, `G`, `H`aiku, `S`onnet, `O`pus (the `[model]` of a policy key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Letter {
     O,
     S,
     H,
     G,
+    J,
 }
 
 impl Letter {
@@ -36,16 +37,18 @@ impl Letter {
             Letter::S => 'S',
             Letter::H => 'H',
             Letter::G => 'G',
+            Letter::J => 'J',
         }
     }
 
-    /// The place on the ladder: G < H < S < O.
+    /// The place on the ladder. Placeholder: Job tier-j-impl-core sorts J below G.
     fn rank(self) -> u8 {
         match self {
             Letter::G => 0,
             Letter::H => 1,
             Letter::S => 2,
             Letter::O => 3,
+            Letter::J => 4,
         }
     }
 
@@ -55,6 +58,7 @@ impl Letter {
             'S' => Some(Letter::S),
             'H' => Some(Letter::H),
             'G' => Some(Letter::G),
+            'J' => Some(Letter::J),
             _ => None,
         }
     }
@@ -171,6 +175,7 @@ impl PartialOrd for Tier {
 /// An agent role, ascending: auxiliar < worker < lead < manager (Tier model v2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
+    Decide,
     Auxiliar,
     Worker,
     Lead,
@@ -181,6 +186,7 @@ impl Role {
     /// The role's name, as an error and `details.role` give it.
     pub fn name(self) -> &'static str {
         match self {
+            Role::Decide => "decide",
             Role::Auxiliar => "auxiliar",
             Role::Worker => "worker",
             Role::Lead => "lead",
@@ -191,6 +197,7 @@ impl Role {
     /// The config key of the role's default, which sets the floor of its range.
     pub fn key(self) -> &'static str {
         match self {
+            Role::Decide => "decide_tier",
             Role::Auxiliar => "context_distill_tier",
             Role::Worker => "worker_tier",
             Role::Lead => "lead_tier",
@@ -201,6 +208,7 @@ impl Role {
     /// The role above, whose default bounds the ceiling; `None` for the manager.
     fn above(self) -> Option<Role> {
         match self {
+            Role::Decide => Some(Role::Auxiliar),
             Role::Auxiliar => Some(Role::Worker),
             Role::Worker => Some(Role::Lead),
             Role::Lead => Some(Role::Manager),
@@ -212,6 +220,7 @@ impl Role {
 /// The role defaults: `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoleTiers {
+    pub decide: Tier,
     pub auxiliar: Tier,
     pub worker: Tier,
     pub lead: Tier,
@@ -371,6 +380,7 @@ pub struct Catalog {
     pub s: TierModel,
     pub h: TierModel,
     pub g: TierModel,
+    pub j: TierModel,
 }
 
 impl Catalog {
@@ -380,6 +390,7 @@ impl Catalog {
             Letter::S => &self.s,
             Letter::H => &self.h,
             Letter::G => &self.g,
+            Letter::J => &self.j,
         }
     }
 
@@ -452,6 +463,10 @@ impl Catalog {
     /// Floor: the lowest rung at or above the role's default; ceiling: the highest rung strictly below the
     /// next role's default (the Manager: the top rung). The auxiliar is its default only.
     pub fn range(&self, role: Role, defaults: &RoleTiers) -> Option<Range> {
+        // Placeholder: Job tier-j-impl-core gives the decide role its default-only range.
+        if role == Role::Decide {
+            return None;
+        }
         if role == Role::Auxiliar {
             let default = defaults.auxiliar;
             return self.is_valid(default).then_some(Range {
@@ -460,6 +475,7 @@ impl Catalog {
             });
         }
         let (own, above) = match role {
+            Role::Decide => unreachable!("handled above"),
             Role::Auxiliar => unreachable!("handled above"),
             Role::Worker => (defaults.worker, Some(defaults.lead)),
             Role::Lead => (defaults.lead, Some(defaults.manager)),

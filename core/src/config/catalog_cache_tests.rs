@@ -290,6 +290,10 @@ fn g_rows_are_cached_and_read_back_with_their_efforts() {
     // Through the cache's own functions: write a catalog, read it back.
     let models = rig.models.clone();
     let catalog = Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "2.0.0".into(),
         o: TierModel {
             model: models.o.clone(),

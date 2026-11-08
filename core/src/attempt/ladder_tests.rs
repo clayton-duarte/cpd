@@ -63,6 +63,7 @@ fn end_on(
         catalog: cat,
         retry_cap,
         roles: crate::config::RoleTiers {
+            decide: crate::config::Tier::x(crate::config::Letter::O),
             auxiliar: Tier::parse("GX").unwrap(),
             worker: Tier::parse("H0").unwrap(),
             lead: Tier::parse("S4").unwrap(),
@@ -169,6 +170,10 @@ fn retry_cap_still_bounds_automatic_attempts() {
 /// O and G as `incident_tests::catalog` has them. Built inline: `incident_tests::catalog` stays dense.
 fn gappy_catalog() -> Catalog {
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".into(),
         o: TierModel {
             model: "o/m".into(),

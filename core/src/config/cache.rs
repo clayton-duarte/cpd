@@ -37,12 +37,15 @@ pub(super) fn read(
             }
         }
         let [o, s, h, g]: [TierModel; 4] = found.try_into().expect("one model per letter");
+        // Placeholder: Job tier-j-impl-core caches the fifth letter `J` too.
+        let j = s.clone();
         Ok(Some(Catalog {
             pi_version: pi_version.to_owned(),
             o,
             s,
             h,
             g,
+            j,
         }))
     })
 }

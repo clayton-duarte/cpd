@@ -127,6 +127,8 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
         s: preset.s.clone(),
         h: preset.h.clone(),
         g: preset.g.clone(),
+        // Placeholder: Job tier-j-impl-core carries the fifth `J` ref through presets too.
+        j: String::new(),
     };
     write_host(&home, &config, &preset_models, "preset apply", Some(&name))
 }
@@ -140,6 +142,8 @@ fn set(args: SetArgs) -> Result<Output, CpdError> {
         s: args.s,
         h: args.h,
         g: args.g,
+        // Placeholder: Job tier-j-impl-core adds the fifth `J` flag.
+        j: String::new(),
     };
     write_host(&home, &config, &models, "preset set", None)
 }
@@ -359,6 +363,7 @@ mod tests {
             s: "p/sonnet".into(),
             h: "p/haiku".into(),
             g: "p/gemini".into(),
+            j: String::new(),
         };
         let after = rewrite_model(host, &preset);
         assert_eq!(
@@ -376,6 +381,7 @@ mod tests {
             s: "p/sonnet".into(),
             h: "p/haiku".into(),
             g: "p/gemini".into(),
+            j: String::new(),
         };
         // The letters keep their places; the trailing newline survives.
         assert_eq!(
