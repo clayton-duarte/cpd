@@ -1,3 +1,5 @@
+import type { ContextTreeModel } from "../protocol/cockpit.ts";
+
 export type CrashSource =
   | "error-boundary"
   | "window-error"
@@ -187,4 +189,61 @@ export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
         });
       }),
   };
+}
+
+/**
+ * The cockpit and transport signals the renderer reports beside its health record: what the
+ * WebSocket delivered and what the cockpit painted (web/CONTRACT.md §15.2, web/ELECTRON.md
+ * §Watchdog). A view that paints but never receives cockpit data is broken, so the watchdog
+ * reads these to decide a break.
+ */
+export interface CockpitHealth {
+  /** The renderer boot; every reload bumps it. One watchdog action per epoch. */
+  epoch: number;
+  /** When this renderer boot started (ms since the Unix epoch). */
+  startedAt: number;
+  /** The cockpit tree of the last `cockpit.snapshot`; null when no snapshot has arrived. */
+  tree: ContextTreeModel | null;
+  /** When the last `cockpit.snapshot` arrived (ms). */
+  snapshotAt?: number;
+  /** The `cockpit.error` message of the last error frame, e.g. "not ready". */
+  error?: string;
+  /** When the last `cockpit.error` arrived (ms). */
+  errorAt?: number;
+  /** When the last server heartbeat (`pong`) was seen on the WebSocket (ms). */
+  heartbeatAt?: number;
+}
+
+/** The cockpit-side breaks the watchdog detects by health (air-d88). */
+export type BreakKind = "empty-data" | "cockpit-not-ready" | "websocket-stalled";
+
+export interface Break {
+  kind: BreakKind;
+  /** One line for the User, naming the signal that fired. */
+  detail: string;
+}
+
+export interface HealthLimits {
+  /** N: how long an empty tree, or `cockpit not ready`, may go without a later snapshot. */
+  snapshotGraceMs: number;
+  /** How long the WebSocket may go without a server heartbeat before it counts as stalled. */
+  heartbeatTimeoutMs: number;
+}
+
+export const DEFAULT_HEALTH_LIMITS: HealthLimits = { snapshotGraceMs: 10000, heartbeatTimeoutMs: 5000 };
+
+/**
+ * The break the renderer's report shows, or null when the cockpit and its transport are fine.
+ * Checked in order: `cockpit not ready` (the hub subscribe race, web/src/server/hub/connection.ts)
+ * beats an empty tree, and a stalled WebSocket beats the loading grace.
+ */
+export function detectBreak(
+  health: CockpitHealth,
+  now: number,
+  limits: HealthLimits = DEFAULT_HEALTH_LIMITS,
+): Break | null {
+  void health;
+  void now;
+  void limits;
+  return null; // stub: the implementing change brings the code in line
 }

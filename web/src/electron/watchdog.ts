@@ -1,4 +1,6 @@
 import type { UiMode } from "./channels.ts";
+import type { CockpitHealth, HealthLimits } from "./health.ts";
+import { DEFAULT_HEALTH_LIMITS } from "./health.ts";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
 import type { RestorePoints } from "./restore-points.ts";
@@ -208,6 +210,61 @@ export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = 
       lastMalformed = null;
       if (rec === null) return;
       await observe(rec);
+    },
+  };
+}
+
+/** A build kept on disk that the watchdog can revert to. */
+export type Build = "preview" | "prod" | "head-1" | "head-2";
+
+/** The revert ladder, in order (air-d95): preview > prod > HEAD-1 > HEAD-2. */
+export const LADDER: readonly Build[] = ["preview", "prod", "head-1", "head-2"];
+
+/**
+ * A structured cpd Event (air-d81, docs/commands.md §11): the shape every Event carries.
+ * A detection Event names the detection and the health record that fired it; a recovery Event
+ * names the ladder rung taken, or the renderer-only reload.
+ */
+export interface WatchdogEvent {
+  kind: "watchdog.break" | "watchdog.recovery";
+  text: string;
+  data: Record<string, unknown>;
+}
+
+export interface HealthWatchdogPorts {
+  now(): number;
+  /** The renderer's cockpit and transport report; null when it has written none. */
+  readHealth(): Promise<CockpitHealth | null>;
+  /** The build the view runs from now. */
+  build(): Build;
+  /** Swap to another build kept on disk and relaunch the app (a ladder step). */
+  revert(build: Build): Promise<void>;
+  /** Reload the renderer in place: the app process and the view stay (not a ladder step). */
+  reloadRenderer(): Promise<void>;
+  /** Commit one structured Event (air-d81). */
+  report(event: WatchdogEvent): Promise<void>;
+  log(entry: Record<string, unknown>): Promise<void>;
+}
+
+export interface HealthWatchdog {
+  tick(): Promise<void>;
+}
+
+/**
+ * The watchdog that reads the cockpit/transport report in every view mode (air-d88), reverts
+ * along the ladder (air-d95) and commits an Event for every detection and every recovery
+ * (air-d81). `cockpit not ready` is not a ladder step: the build on disk is not broken, so its
+ * recovery is the renderer-only reload.
+ */
+export function createHealthWatchdog(
+  ports: HealthWatchdogPorts,
+  limits: HealthLimits = DEFAULT_HEALTH_LIMITS,
+): HealthWatchdog {
+  void ports;
+  void limits;
+  return {
+    async tick() {
+      // stub: the implementing change brings the code in line
     },
   };
 }
