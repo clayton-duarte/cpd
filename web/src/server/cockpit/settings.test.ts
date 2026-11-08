@@ -19,7 +19,7 @@ function fake(replies: Record<string, Record<string, unknown>>, failOn?: string)
   };
 }
 
-const config = { ok: true, config: { context_distill_tier: "GX", worker_tier: "H3", lead_tier: "S3", manager_tier: "O3" } };
+const config = { ok: true, config: { decide_tier: "JX", context_distill_tier: "GX", worker_tier: "H3", lead_tier: "S3", manager_tier: "O3" } };
 // `cpd config` also carries the machine-wide Worker count (docs/commands.md §14.2, `concurrency`, contract §8.2).
 const configWithConcurrency = { ok: true, config: { ...config.config, concurrency: 3 } };
 const experimental = { ok: true, experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true } };
@@ -28,7 +28,7 @@ describe("settings", () => {
   it("settings.read reads the Tiers from cpd config and the switches from cpd config experimental", async () => {
     const { cpd } = fake({ config, "config experimental": experimental });
     expect(await readSettings(cpd)).toEqual({
-      tiers: { auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
+      tiers: { decide: "JX", auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
       experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true },
     });
   });
@@ -48,13 +48,13 @@ describe("settings", () => {
     await expect(readSettings(cpd)).rejects.toMatchObject({ code: "cpd_malformed_json" });
   });
 
-  it("settings.save sends all four Tiers, the changed ones over the current ones, then each switch, then retier all, in order", async () => {
+  it("settings.save sends all five Tiers, the changed ones over the current ones, then each switch, then retier all, in order", async () => {
     const { cpd, calls } = fake({ config, "config experimental": experimental });
     await saveSettings(cpd, { tiers: { worker: "H2", lead: "S2" }, experimental: { write_curation: false, durable_workers: true } });
     expect(calls).toEqual([
       "config",
       "config experimental",
-      "config tiers set --auxiliar GX --worker H2 --lead S2 --manager O3",
+      "config tiers set --decide JX --auxiliar GX --worker H2 --lead S2 --manager O3",
       "config experimental durable_workers on",
       "config experimental write_curation off",
       "session retier --all",
@@ -70,13 +70,13 @@ describe("settings", () => {
   it("settings.read exposes the concurrency from cpd config", async () => {
     const { cpd } = fake({ config: configWithConcurrency, "config experimental": experimental });
     expect(await readSettings(cpd)).toEqual({
-      tiers: { auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
+      tiers: { decide: "JX", auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
       experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true },
       concurrency: 3,
     });
   });
 
-  it("settings.save writes all four Tiers and the concurrency, through toArgv", async () => {
+  it("settings.save writes all five Tiers and the concurrency, through toArgv", async () => {
     const { cpd, calls } = fake({ config: configWithConcurrency, "config experimental": experimental });
     await saveSettings(cpd, { tiers: { worker: "H2", lead: "S2" }, concurrency: 4 } as SettingsChanges);
     // `cpd config concurrency set <n>` (commands.md §14.2c), the builder's `config.concurrency.set` variant (web/CONTRACT.md §19.3).
@@ -84,7 +84,7 @@ describe("settings", () => {
     expect(calls).toEqual([
       toArgv({ kind: "config.read" }).join(" "),
       toArgv({ kind: "config.experimental.read" }).join(" "),
-      toArgv({ kind: "config.tiers.set", tiers: { auxiliar: "GX", worker: "H2", lead: "S2", manager: "O3" } }).join(" "),
+      toArgv({ kind: "config.tiers.set", tiers: { decide: "JX", auxiliar: "GX", worker: "H2", lead: "S2", manager: "O3" } }).join(" "),
       concurrency,
       toArgv({ kind: "session.retierAll" }).join(" "),
     ]);
@@ -96,6 +96,6 @@ describe("settings", () => {
   it("settings.save stops at the first refusal", async () => {
     const { cpd, calls } = fake({ config, "config experimental": experimental }, "config experimental write_curation off");
     await expect(saveSettings(cpd, { tiers: { lead: "S2" }, experimental: { write_curation: false, failure_triage: false } })).rejects.toThrow("refused");
-    expect(calls).toEqual(["config", "config experimental", "config tiers set --auxiliar GX --worker H3 --lead S2 --manager O3", "config experimental write_curation off"]);
+    expect(calls).toEqual(["config", "config experimental", "config tiers set --decide JX --auxiliar GX --worker H3 --lead S2 --manager O3", "config experimental write_curation off"]);
   });
 });

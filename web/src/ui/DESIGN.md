@@ -642,7 +642,7 @@ A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model
 
 - **Save** runs the writes below in order, as the TUI does (`tui/src/settings/model.rs:681-733`, `tui/src/settings/mod.rs:115-181`). Each step runs only when its value changed.
   1. `cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>` when a model or the Provider changed.
-  2. `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers.
+  2. `cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers (all five roles, the decide role included, contract §9).
   3. `cpd config experimental <feature> on|off`, once per changed switch.
   4. `cpd session retier --all`, only when step 1 or 2 changed something. It re-tiers every live Lead and Manager.
 - Save is blocked, and the reason is shown in red: a model is unset, a re-read failed, or a Tier is not a rung of the model it runs on. Save with nothing changed closes the dialog. A failed step stops the run and shows its error; the next Save runs only the steps that did not succeed.
@@ -654,7 +654,7 @@ A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model
 | Read | Command or source | Field | Used by |
 |---|---|---|---|
 | Runner, switches | `cpd config experimental` | `.experimental.{durable_workers,write_curation,failure_triage,turn_question_guard}` | Runner, Agent Tiers rows 10 to 13 |
-| Tiers, presets | `cpd config` | `.config.{context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
+| Tiers, presets | `cpd config` | `.config.{decide_tier,context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
 | Models, rungs | `cpd tiers` | `.tiers.{O,S,H,G}.{model,efforts}` | Agent Tiers rows 2 to 5 and ranges |
 | Provider lists | `cpd models show` | `.providers[].{provider,ids}` | Agent Tiers rows 1 and 2 to 5 |
 | Incident | `cpd incident status` | `on`, `incident.started_at` | Incident |
