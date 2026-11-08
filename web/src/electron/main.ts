@@ -76,6 +76,22 @@ const backend: PtyBackend = {
   spawn: (file, args, options) => nodePty.spawn(file, args, options),
 };
 
+/** The part of a BrowserWindow that `sendToWindow` touches: its liveness and its webContents. */
+export interface SendTarget {
+  isDestroyed(): boolean;
+  webContents: { isDestroyed(): boolean; send(channel: string, payload: unknown): void };
+}
+
+/**
+ * Send `payload` on `channel` to `win`'s renderer. Exported so the pty-teardown regression
+ * (web/src/electron/main.test.ts, air-n62) can drive this path with a window double. The guard
+ * still reads `win.webContents` unconditionally: desktop-destroy-impl adds the `win.isDestroyed()`
+ * check.
+ */
+export function sendToWindow(win: SendTarget | undefined, channel: string, payload: unknown): void {
+  if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+}
+
 async function main(): Promise<void> {
   // The cpd Session that launched the app is not the app: strip its per-session
   // identity from `process.env` once, before any cpd child is spawned. Every
@@ -85,7 +101,7 @@ async function main(): Promise<void> {
   process.env = stripSessionEnv(process.env);
   let win!: BrowserWindow;
   const send = (channel: string, payload: unknown): void => {
-    if (win && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+    sendToWindow(win, channel, payload);
   };
   let env: NodeJS.ProcessEnv = process.env;
   let cpdHome = "";
