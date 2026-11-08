@@ -98,7 +98,7 @@ fn refused(text: impl std::fmt::Display) -> Stop {
 fn steps(
     ports: &Ports,
     install: &Install,
-    _options: &InstallOptions,
+    options: &InstallOptions,
     err: &mut dyn Write,
 ) -> Result<i32, Stop> {
     check_migrations(ports, install)?;
@@ -116,7 +116,15 @@ fn steps(
         dest.display(),
         adapter::link_of(install).display()
     );
-    let failed = follow_up::run(ports, install, &dest, err);
+    let failed = if options.no_follow_up {
+        let _ = writeln!(
+            err,
+            "cpd install: --no-follow-up; the follow-ups were not run"
+        );
+        false
+    } else {
+        follow_up::run(ports, install, &dest, err)
+    };
     let failed = electron_step(ports, install, err) || failed;
     follow_up::tag(ports, install, err);
     Ok(i32::from(failed))
