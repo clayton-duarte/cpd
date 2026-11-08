@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +28,28 @@ function makeSpawnHelpersExecutable(): void {
   }
 }
 
+/**
+ * Fail early, with a clear message, when node-pty's native module is missing.
+ *
+ * node-pty 1.1.0 ships Node-API prebuilds for darwin and win32 only, and pnpm-workspace.yaml
+ * disables its build script (`allowBuilds.node-pty: false`), so on Linux there is no `pty.node`
+ * unless something built it. The app imports node-pty at load, so without it no window is ever
+ * created and the failure shows as a bare `firstWindow` timeout. The e2e job builds it (see
+ * `.github/workflows/e2e.yml`, "node-pty native module"); this check turns a missing build into a
+ * named error before any test runs.
+ */
+function assertNodePtyNative(): void {
+  try {
+    createRequire(import.meta.url)("node-pty");
+  } catch (error) {
+    throw new Error(
+      `node-pty failed to load (${(error as Error).message}); build its native module before running the e2e suite`,
+    );
+  }
+}
+
 /** Playwright globalSetup: runs once before any worker, before any Electron launch. */
 export default function globalSetup(): void {
+  assertNodePtyNative();
   makeSpawnHelpersExecutable();
 }

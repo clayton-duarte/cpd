@@ -23,29 +23,55 @@ export async function boot(deps: BootDeps): Promise<void> {
   // created with `show:false` and can never appear on the User's screen (no flash).
   // Unset in production, where Electron's default `show:true` still applies.
   const hidden = deps.env['CPD_ELECTRON_HIDDEN'] === '1';
-  deps.app.setName('CPD');
-  await deps.app.whenReady();
-  const win = new deps.BrowserWindow({ title: 'CPD', show: !hidden });
-  await deps.initMode(win);
-  deps.process.on('SIGUSR1', async () => {
-    try {
-      await deps.reloadServer();
-    } catch (error) {
-      console.error(error);
-    }
-    if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
-  });
-  deps.registerIpc();
-  deps.registerWebuiIpc();
-  const update = await deps.startAutoUpdate(win);
-  if (update.bootstrap.state === 'ready') deps.startServices();
-  const devUrl = preview.mode === 'preview' ? preview.devUrl : null;
-  if (devUrl) {
-    try {
-      await deps.loadDevUrl(win, devUrl);
-    } catch (error) {
-      console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
+  // Test-only step trace (CPD_BOOT_TRACE=1, set by the e2e suite): each awaited boot step prints
+  // one `[boot] <step>` line to stdout, so a boot that never reaches loadDevUrl names the step it
+  // stopped at in the CI log instead of a bare firstWindow timeout. Unset in production.
+  const trace = deps.env['CPD_BOOT_TRACE'] === '1';
+  let step = 'start';
+  const mark = (next: string): void => {
+    step = next;
+    if (trace) console.log(`[boot] ${next}`);
+  };
+  try {
+    deps.app.setName('CPD');
+    mark('whenReady-start');
+    await deps.app.whenReady();
+    mark('whenReady-done');
+    const win = new deps.BrowserWindow({ title: 'CPD', show: !hidden });
+    mark('window-created');
+    await deps.initMode(win);
+    mark('initMode-done');
+    deps.process.on('SIGUSR1', async () => {
+      try {
+        await deps.reloadServer();
+      } catch (error) {
+        console.error(error);
+      }
+      if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
+    });
+    deps.registerIpc();
+    deps.registerWebuiIpc();
+    mark('ipc-registered');
+    const update = await deps.startAutoUpdate(win);
+    mark('startUpdate-done');
+    if (update.bootstrap.state === 'ready') deps.startServices();
+    mark('services-started');
+    const devUrl = preview.mode === 'preview' ? preview.devUrl : null;
+    if (devUrl) {
+      mark('loadDevUrl-start');
+      try {
+        await deps.loadDevUrl(win, devUrl);
+      } catch (error) {
+        console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
+        await deps.loadFile(win, 'renderer/electron.html');
+      }
+    } else {
+      mark('loadFile-start');
       await deps.loadFile(win, 'renderer/electron.html');
     }
-  } else await deps.loadFile(win, 'renderer/electron.html');
+    mark('loadDevUrl-done');
+  } catch (error) {
+    console.error(`[boot] failed at ${step}`, error);
+    throw error;
+  }
 }
