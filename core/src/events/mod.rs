@@ -10,6 +10,8 @@ pub mod repeat;
 mod select;
 mod stale;
 mod typed;
+#[cfg(test)]
+mod bug_tests;
 
 use std::ffi::OsString;
 use std::io::Write;
