@@ -1,4 +1,4 @@
-//! The Source trait and the registry (swr.md §11). The four sources are stubs until their Workflows.
+//! The Source trait and the registry (swr.md §11). Each source is registered once its Workflow is built.
 
 use std::time::Duration;
 
@@ -72,7 +72,15 @@ pub trait Source: Sync {
     fn coalesce(&self, op_kind: &str) -> Coalesce;
 }
 
+/// The live `github` source the registry carries. `GithubSource` carries the policy's excused labels; the registry
+/// names it with none, and the engine fills them where it drives the pass.
+static GITHUB: github::GithubSource = github::GithubSource {
+    excused_labels: Vec::new(),
+};
+
 /// The registered sources: a new source is one line here.
+static REGISTRY: &[&dyn Source] = &[&GITHUB, &slack::Slack, &jira::Jira, &models::Models];
+
 pub fn registry() -> &'static [&'static dyn Source] {
-    &[&github::Github, &slack::Slack, &jira::Jira, &models::Models]
+    REGISTRY
 }

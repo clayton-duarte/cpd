@@ -1,4 +1,4 @@
-//! The `github` source: a stub until its Workflow (swr.md §14).
+//! The `github` source: the live GitHub SWR source (swr.md §14).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
@@ -14,36 +14,6 @@ use crate::error::CpdError;
 use crate::pr::swr_read::{self, PollNode, PollPlan, PollRead};
 use crate::swr::outbox::{Coalesce, Mutation};
 use crate::swr::{cache, endpoint};
-
-pub struct Github;
-
-impl Source for Github {
-    fn system(&self) -> &'static str {
-        "github"
-    }
-    fn endpoints(&self) -> &'static [&'static str] {
-        &["github"]
-    }
-    fn due(&self, _cx: &mut Cx<'_>, _now: OffsetDateTime) -> Result<Vec<QueryKey>, CpdError> {
-        Ok(Vec::new())
-    }
-    fn fetch(
-        &self,
-        _cx: &mut Cx<'_>,
-        _keys: &[QueryKey],
-        _poll_started_at: OffsetDateTime,
-    ) -> Result<(), CpdError> {
-        Ok(())
-    }
-    fn execute(&self, _cx: &mut Cx<'_>, _m: &Mutation) -> ExecOutcome {
-        ExecOutcome::Failed {
-            error: "not implemented".into(),
-        }
-    }
-    fn coalesce(&self, _op_kind: &str) -> Coalesce {
-        Coalesce::LatestWins
-    }
-}
 
 /// GitHub's rate-limit floor: below it the endpoint is paused until the limit resets (was `RATE_FLOOR` of the engine).
 const RATE_FLOOR: i64 = 100;
