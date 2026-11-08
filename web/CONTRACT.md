@@ -2176,3 +2176,18 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text and no images; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3, amended above), and the submission is echoed, queued and delivered like any other.
+
+## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
+
+Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
+
+### 17.1 The Save sends all four role Tiers
+
+- The Save runs `cpd config tiers set` with **all four** role Tiers — `--auxiliar`, `--worker`, `--lead` and `--manager`, the values the dialog shows, whether or not the User changed them — because `cpd config tiers set` accepts a save only with all four role Tiers (its `--help` usage line is `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`).
+- The rest of the save keeps its TUI order: the experimental switches are set one by one, then `cpd session retier --all` runs when a Tier value differs from the read; a refusal stops the save at the first failing step.
+
+### 17.2 A Save refusal is shown through the cockpit error toast
+
+- A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
+- The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+
