@@ -52,7 +52,7 @@ A key is fixed: never rename a session.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
-- **Bug report protocol — all steps required on every bug report:**
+- **Bug report protocol — all steps required on every bug report.** Every protocol cpd defines, this one included, is listed with its defining file and section in `docs/protocols.md`; when a Plan's work must apply a protocol, the Plan's brief names that protocol's path (its `docs/protocols.md` row and the file and section that define it), and the Lead's Spec carries it down — a Worker runs without skills and reads only its Spec — never a restatement of the protocol's text:
   1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix.
   2. Apply the mitigation ASAP, fixing the symptom fast to stop the bleeding.
   3. Queue the follow-up root-cause fix (Plan / Workflow / Job) to address the bug in source.
@@ -114,7 +114,7 @@ cpd answer <escalation> "<text>" --plan <id>
 - `--shaping` creates a Lead-less Plan of this Context: no Lead, no pane, no first message. The Job's Spec fields and Tier ranges are an explore Job's ([Spec files](../cpd-lead/references/spec-files.md#explore-jobs)): a `scout` reads this machine, a `research` Job may reach outside it. It is queued at once rather than drafted.
 - Watch the Plan with `cpd job list --plan <id>` and `cpd job show <k> --plan <id>`.
 - `cpd answer <escalation> "<text>" --plan <id>` answers a Worker's question, which reaches you as a message; a `job-merged` message carries the summary and the artefact path.
-- **The result arrives as a message**, not a file: the summary (at most 1500 characters) and the artefact path. You may not read the file: cite its path in the brief of the Plan you start later (`cpd plan new --brief-file`), and that Plan's Workers read it.
+- **The result arrives as a message**, not a file: the summary (at most 1500 characters) and the artefact path. You may not read the file: cite its path in the brief of the Plan you start later (`cpd plan new --brief-file`), and that Plan's Workers read it. The same citation covers a protocol the Plan applies: the brief names its `docs/protocols.md` row and the file and section that define it, so the Lead's Spec can hand the protocol's path to its Workers.
 - The Plan settles itself to `done` when every Job is final, and the engine archives it; a new explore Job reopens it.
 
 2. **Interview** until every Requirement, repo boundary and Plan cut is settled, with no cross-Plan Workflow need. Group independent questions into one round. Record each answer as you get it.
