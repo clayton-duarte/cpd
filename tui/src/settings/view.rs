@@ -31,8 +31,8 @@ pub enum Hit {
     Cancel,
 }
 
-/// The index of the first row of the Tiers section.
-const TIERS_AT: usize = 6;
+/// The index of the first row of the Tiers section: after Preset, Provider and the five letters O, S, H, G, J.
+const TIERS_AT: usize = 7;
 /// The column of a row's value, and of an open list's entries.
 const VALUE_COL: usize = 15;
 /// The column of the first button of the buttons row.
