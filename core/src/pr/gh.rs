@@ -473,6 +473,36 @@ pub fn head_contains_base(
     Ok(matches!(compare.status.as_str(), "ahead" | "identical"))
 }
 
+/// The repo settings a `swr_repos` row holds, as `gh api repos/{owner}/{repo}` prints them (air-n70).
+#[derive(Deserialize)]
+struct RawRepoSettings {
+    default_branch: Option<String>,
+    archived: bool,
+    #[serde(default)]
+    allow_auto_merge: bool,
+    allow_merge_commit: bool,
+    allow_squash_merge: bool,
+    allow_rebase_merge: bool,
+    delete_branch_on_merge: bool,
+}
+
+/// The repo's settings (`gh api repos/{owner}/{repo}`), one read (air-n70): the REST fields map onto the `swr_repos`
+/// row. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`; a tolerated reply is parsed once here.
+pub fn repo_settings(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<RepoMeta, CpdError> {
+    let endpoint = format!("repos/{repo}");
+    let args = ["api", endpoint.as_str()];
+    let raw: RawRepoSettings = parse(&args, &run_on(runner, cwd, &args)?)?;
+    Ok(RepoMeta {
+        default_branch: raw.default_branch,
+        is_archived: raw.archived,
+        auto_merge_allowed: raw.allow_auto_merge,
+        squash_merge_allowed: raw.allow_squash_merge,
+        merge_commit_allowed: raw.allow_merge_commit,
+        rebase_merge_allowed: raw.allow_rebase_merge,
+        delete_branch_on_merge: raw.delete_branch_on_merge,
+    })
+}
+
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`. When GitHub refuses because the pull request is the base of a
 /// stack, it falls back to the asynchronous REST merge endpoint (`merge-async`, pro-d355). It still does not pass `--delete-branch`: GitHub's own

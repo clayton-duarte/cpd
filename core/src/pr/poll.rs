@@ -311,7 +311,11 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
-    let dirty = !follows.is_empty()
+    // The repo-settings cache (air-n71): one `gh` read per polled repo whose `swr_repos` row is cold, returned for
+    // the write transaction. A read that fails is left to the merge's on-demand read; the poll's own rows stand.
+    let settings = read_repo_settings(env, &root, &seen)?;
+    let dirty = !settings.is_empty()
+        || !follows.is_empty()
         || env.store.read(|conn| {
             for listed in &seen {
                 match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
@@ -346,7 +350,7 @@ fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool),
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
             apply(
-                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, now,
+                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &settings, now,
             )
         })?
     } else {
@@ -442,8 +446,13 @@ fn apply(
     ahead: &[Ahead],
     tiers: &[(PlanId, WorkflowKey, Tier)],
     armed: &[Armed],
+    settings: &[(String, gh::RepoMeta)],
     now: time::OffsetDateTime,
 ) -> Result<Outcome, CpdError> {
+    // The repo-settings cache fill (air-n71): the cold rows the read phase fetched.
+    for (repo, meta) in settings {
+        github_write::write_repo_settings(tx, repo, meta, now)?;
+    }
     let tier_of = |plan: &PlanId, key: &WorkflowKey| -> Result<Tier, CpdError> {
         tiers
             .iter()
@@ -556,6 +565,44 @@ fn apply(
 }
 
 /// The comments read of the pull request `listed`, if this poll made one.
+/// The repos of `seen`, distinct and sorted.
+fn seen_repos(seen: &[Listed]) -> Vec<String> {
+    let mut repos: Vec<String> = seen.iter().map(|l| l.pr.repo.clone()).collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
+/// The repos of `seen` whose `swr_repos` row is cold, each read once through `gh` (air-n71). A read that fails leaves
+/// the repo cold for the merge's on-demand read and never fails the poll: the poll's own rows are the poll's job.
+fn read_repo_settings(
+    env: &mut Env,
+    root: &Path,
+    seen: &[Listed],
+) -> Result<Vec<(String, gh::RepoMeta)>, CpdError> {
+    let cold = env.store.read(|c| {
+        let mut stmt = c.prepare("SELECT 1 FROM swr_repos WHERE repo = ?1")?;
+        let mut cold = Vec::new();
+        for repo in seen_repos(seen) {
+            if stmt
+                .query_row([&repo], |r| r.get::<_, i64>(0))
+                .optional()?
+                .is_none()
+            {
+                cold.push(repo);
+            }
+        }
+        Ok(cold)
+    })?;
+    let mut settings = Vec::new();
+    for repo in cold {
+        if let Ok(meta) = gh::repo_settings(&*env.ports.runner, root, &repo) {
+            settings.push((repo, meta));
+        }
+    }
+    Ok(settings)
+}
+
 fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
     reads
         .iter()

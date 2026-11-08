@@ -15,9 +15,11 @@ use crate::home::CpdHome;
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::Store;
-use crate::swr::cache;
+use crate::swr::endpoint;
 use crate::swr::github::effective_pr;
-use crate::swr::source::github_write::{enqueue, merge_method, queued, target_of};
+use crate::swr::source::github_write::{
+    enqueue, merge_method, queued, target_of, write_repo_settings,
+};
 
 /// `<owner>/<repo>#<n>`: `owner` and `repo` non-empty, with no `/` or `#`; `n` a positive integer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,7 +130,35 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
             .with("main", default));
         }
     }
-    let method = match merge_method(&mut store, &repo)? {
+    let mut method = merge_method(&mut store, &repo)?;
+    if method.is_none() {
+        // The settings cache is cold (air-n70): no refusal. A paused `github` endpoint refuses with the rate limit and
+        // reads nothing; otherwise exactly one `gh` read of the repo's settings fills the row, then the method is read
+        // again. The read's own `gh` error surfaces; nothing is invalidated and no row is ever dropped.
+        if let Some(row) = endpoint::get(&mut store, "github")?
+            && endpoint::is_paused(&row, now)
+        {
+            let reset = row
+                .paused_until
+                .map(crate::clock::timestamp)
+                .unwrap_or_default();
+            return Err(CpdError::new(
+                ErrorCode::GhRateLimited,
+                format!(
+                    "The github endpoint is rate limited until {reset}: the settings of {repo} are not cached and cannot be read now. Try again after the reset."
+                ),
+            )
+            .with("repo", repo.as_str())
+            .with("rate_limited", true)
+            .with("reset_at", reset));
+        }
+        let settings = gh::repo_settings(&*ports.runner, home.root(), &repo)?;
+        store.write("swr repo settings", |tx| {
+            write_repo_settings(tx, &repo, &settings, now)
+        })?;
+        method = merge_method(&mut store, &repo)?;
+    }
+    let method = match method {
         Some(Ok(method)) => method,
         Some(Err(methods)) => {
             return Err(CpdError::new(
@@ -142,10 +172,9 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
             .with("rebase", methods.rebase));
         }
         None => {
-            cache::invalidate(&mut store, &format!("github:repo:{repo}"))?;
             return Err(CpdError::new(
-                ErrorCode::ItemNotFound,
-                format!("The settings of {repo} are not in the cache yet: the next poll reads them; try again then."),
+                ErrorCode::GhFailed,
+                format!("The on-demand settings read of {repo} wrote no swr_repos row."),
             )
             .with("repo", repo.as_str()));
         }
