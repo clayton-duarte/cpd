@@ -157,7 +157,9 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     const lead = objectOf(out["lead"])?.["session"];
     const forked = objectOf(out["session"])?.["id"];
-    const next = typeof lead === "string" ? lead : typeof forked === "string" ? forked : null;
+    // context.new replies with the new Context's Manager (`manager.session`), like `context manager`.
+    const manager = objectOf(out["manager"])?.["session"];
+    const next = typeof lead === "string" ? lead : typeof forked === "string" ? forked : typeof manager === "string" ? manager : null;
     const before = store.getState().selectedSessionId;
     if (next === null || next === before) return;
     dropBuffer();
