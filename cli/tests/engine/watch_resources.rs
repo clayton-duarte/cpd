@@ -340,12 +340,13 @@ fn skipped_n(fx: &Fx, key: &str) -> Option<i64> {
 }
 
 /// Job `key` as a tenant: `running` with its first Attempt, its `job_pools` rows `pools` (the starter's), and its driver gone:
-/// its Attempt `ended` as `failed` when `failed`, and the Job `failed` with it. Lists `resources` in its Spec.
+/// its Attempt `ended` as `failed` when `failed`, and the Job `failed` with it. Lists `resources` in its Spec. The Attempt keeps
+/// its `driver_pid` (a driver that had started): no spawn-failure back-off holds a later retry of it.
 fn tenant(fx: &Fx, key: &str, resources: &[&str], pools: &[&str], failed: bool) {
     let mut then = format!(
         "UPDATE jobs SET status = 'running' WHERE plan = '{PLAN}' AND key = '{key}';
-         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-           VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't');"
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+           VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't', 4242);"
     );
     // The Attempt turned `running`: E2 reads this Event for a live Attempt, as `Fx::add_running` writes it.
     then += &format!(
@@ -434,9 +435,6 @@ fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
     // `e2e-port` (contract §3.4 "Tenancy", air-n90).
     let fx = engine_with(POLICY, 2);
     tenant(&fx, "api", &["e2e-port"], &[PORT_POOL], true);
-    // Its driver had started before the Attempt ended: no spawn-failure back-off holds the retry below.
-    fx.env
-        .sql("UPDATE attempts SET driver_pid = 4242 WHERE id = 'api-a1';");
     add(&fx, "other", &["e2e-port"], "");
     add(&fx, "web", &[], "");
     add(&fx, "late", &[], "");
