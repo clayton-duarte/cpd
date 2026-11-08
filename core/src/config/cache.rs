@@ -11,9 +11,11 @@ use crate::store::{Store, WriteTxn};
 /// The `txns.command` of the cache's write transaction.
 const COMMAND: &str = "tiers";
 
-/// The cached Catalog for `pi_version`, when it holds a row for each of the
-/// four configured models (`models` in `O, S, H` order, then `g`). `None` is a cache miss.
-/// `g` is the configured G model.
+/// The cached Catalog for `pi_version` for the four letters `O`, `S`, `H`, `G` (`models` in `O, S, H`
+/// order, then `g`) with a `J` left empty. `None` is a cache miss. `load_from` uses
+/// [`read_refs`], which carries the fifth `J` ref too; this signature is the four-letter one the
+/// catalog tests pin.
+#[cfg(test)]
 pub(super) fn read(
     store: &mut Store,
     pi_version: &str,
@@ -21,13 +23,39 @@ pub(super) fn read(
     models: [&str; 3],
     g: &str,
 ) -> Result<Option<Catalog>, CpdError> {
+    read_refs(store, pi_version, models_sha, [models[0], models[1], models[2], g, ""])
+}
+
+/// The cached Catalog for `pi_version`, when it holds a row for each of the five configured models
+/// (`refs` in `O, S, H, G, J` order). `None` is a cache miss. A `J` ref of `""` is not looked up:
+/// the letter stays empty (a catalog computed before the letter existed).
+pub(super) fn read_refs(
+    store: &mut Store,
+    pi_version: &str,
+    models_sha: &str,
+    refs: [&str; 5],
+) -> Result<Option<Catalog>, CpdError> {
     store.read(|conn| {
-        let mut found = Vec::with_capacity(4);
-        let all = [models[0], models[1], models[2], g];
-        for (letter, model) in [Letter::O, Letter::S, Letter::H, Letter::G]
+        let mut found = Vec::with_capacity(5);
+        for (letter, model) in [Letter::O, Letter::S, Letter::H, Letter::G, Letter::J]
             .into_iter()
-            .zip(all)
+            .zip(refs)
         {
+            // `J` is the decide role's letter: a catalog computed before it existed has no row for it, so
+            // the letter is left empty rather than a cache miss.
+            if letter == Letter::J {
+                match row(conn, pi_version, models_sha, letter, model)? {
+                    Some(efforts) => found.push(TierModel {
+                        model: model.to_owned(),
+                        efforts,
+                    }),
+                    None => found.push(TierModel {
+                        model: String::new(),
+                        efforts: Vec::new(),
+                    }),
+                }
+                continue;
+            }
             match row(conn, pi_version, models_sha, letter, model)? {
                 Some(efforts) => found.push(TierModel {
                     model: model.to_owned(),
@@ -36,9 +64,7 @@ pub(super) fn read(
                 None => return Ok(None),
             }
         }
-        let [o, s, h, g]: [TierModel; 4] = found.try_into().expect("one model per letter");
-        // Placeholder: Job tier-j-impl-core caches the fifth letter `J` too.
-        let j = s.clone();
+        let [o, s, h, g, j]: [TierModel; 5] = found.try_into().expect("one model per letter");
         Ok(Some(Catalog {
             pi_version: pi_version.to_owned(),
             o,
@@ -86,8 +112,12 @@ pub(super) fn write(
     catalog: &Catalog,
 ) -> Result<(), CpdError> {
     store.write(COMMAND, |tx: &WriteTxn<'_>| {
-        for letter in [Letter::O, Letter::S, Letter::H, Letter::G] {
+        for letter in [Letter::O, Letter::S, Letter::H, Letter::G, Letter::J] {
             let TierModel { model, efforts } = catalog.model(letter);
+            // An empty `J` (a catalog computed before the letter existed) has no row to cache.
+            if model.is_empty() {
+                continue;
+            }
             tx.execute(
                 "INSERT OR IGNORE INTO tier_catalog (pi_version, models_sha, letter, model, efforts, read_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",

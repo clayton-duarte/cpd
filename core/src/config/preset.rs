@@ -191,24 +191,31 @@ fn write_host(
         ));
     }
 
-    // Step 3: equality. The no-op opens no store and writes nothing.
+    // Step 3: equality. The no-op opens no store and writes nothing. A preset carries the four model letters
+    // `O`, `S`, `H`, `G`; the fifth, `J`, is the decide role's letter (contract §9 "Roles and ranges") and is
+    // kept as the host already resolves it, so a preset never moves the decide letter and the four written
+    // lines stay one provider with it.
     let pre = resolve_machine(home)?.policy.model;
-    if *preset_models == pre {
+    let mut preset = preset_models.clone();
+    if preset.j.is_empty() {
+        preset.j = pre.j.clone();
+    }
+    if preset == pre {
         return Ok(Output::success(
             json!({"preset": name, "already": true, "changed": []}),
         ));
     }
 
     // Step 4: the one-provider invariant of the table to be written, before anything external runs.
-    check_one_provider(preset_models, &host_path)?;
+    check_one_provider(&preset, &host_path)?;
 
     // Step 5: the registry, listed at apply time (`--all`), through the host runner.
     let answer = Helper::new(config, home)?.all().run()?;
-    check_registry(&label, name, preset_models, &answer)?;
+    check_registry(&label, name, &preset, &answer)?;
 
     // Steps 6–7: the byte-preserving rewrite, then one Event per changed live Lead or Manager, all in one
     // store transaction. The pre-write models are read before the file is replaced.
-    let new_text = rewrite_model(&host_text, preset_models);
+    let new_text = rewrite_model(&host_text, &preset);
     let mut env = Env::open()?;
     let pre_models: Vec<(row::ModelSwitchRow, String)> = env.store.read(|conn| {
         row::live_model_switch(conn)?

@@ -41,14 +41,14 @@ impl Letter {
         }
     }
 
-    /// The place on the ladder. Placeholder: Job tier-j-impl-core sorts J below G.
+    /// The place on the ladder: `J < G < H < S < O` (contract §9 "Ladder order").
     fn rank(self) -> u8 {
         match self {
-            Letter::G => 0,
-            Letter::H => 1,
-            Letter::S => 2,
-            Letter::O => 3,
-            Letter::J => 4,
+            Letter::J => 0,
+            Letter::G => 1,
+            Letter::H => 2,
+            Letter::S => 3,
+            Letter::O => 4,
         }
     }
 
@@ -88,7 +88,7 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
 /// The highest effort digit; effort 5 is valid for no letter.
 const TOP_EFFORT: u8 = 4;
 
-/// A Tier: a model letter and an effort 0-4 or `X`, `^[GHSO]([0-4]|X)$`, e.g. `S3`, `GX`.
+/// A Tier: a model letter and an effort 0-4 or `X`, `^[JGHSO]([0-4]|X)$`, e.g. `S3`, `GX`.
 /// `X` (no effort) is distinct from effort 0; it is the one Tier of a model with no effort levels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tier {
@@ -119,7 +119,7 @@ impl Tier {
         self.effort.is_none()
     }
 
-    /// `tier_invalid` (exit 2) when `s` is not `^[GHSO]([0-4]|X)$`.
+    /// `tier_invalid` (exit 2) when `s` is not `^[JGHSO]([0-4]|X)$`.
     pub fn parse(s: &str) -> Result<Tier, CpdError> {
         let mut chars = s.chars();
         let tier = (|| {
@@ -133,7 +133,7 @@ impl Tier {
         tier.ok_or_else(|| {
             CpdError::new(
                 ErrorCode::TierInvalid,
-                format!("invalid Tier {s:?}: expected <G|H|S|O><0-4|X>, for example S3."),
+                format!("invalid Tier {s:?}: expected <J|G|H|S|O><0-4|X>, for example S3."),
             )
             .with("tier", s)
         })
@@ -159,7 +159,7 @@ impl Tier {
     }
 }
 
-/// The ladder's order (Tier model v2): letters G < H < S < O, then effort ascending, `X` between 0 and 1.
+/// The ladder's order (Tier model v2): letters J < G < H < S < O, then effort ascending, `X` between 0 and 1.
 impl Ord for Tier {
     fn cmp(&self, other: &Tier) -> std::cmp::Ordering {
         (self.letter.rank(), self.effort_rank()).cmp(&(other.letter.rank(), other.effort_rank()))
@@ -172,7 +172,7 @@ impl PartialOrd for Tier {
     }
 }
 
-/// An agent role, ascending: auxiliar < worker < lead < manager (Tier model v2).
+/// An agent role, ascending: decide < auxiliar < worker < lead < manager (Tier model v2; the decide role air-d113, air-d115, air-d120).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     Decide,
@@ -217,7 +217,7 @@ impl Role {
     }
 }
 
-/// The role defaults: `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`.
+/// The role defaults: `decide_tier`, `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoleTiers {
     pub decide: Tier,
@@ -372,7 +372,7 @@ pub struct TierModel {
     pub efforts: Vec<u8>,
 }
 
-/// The four Tier letters' models with their valid efforts, read from pi.
+/// The five Tier letters' models with their valid efforts, read from pi.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub pi_version: String,
@@ -461,14 +461,15 @@ impl Catalog {
 
     /// The range of `role` under the role defaults; `None` when no valid rung lies in its span.
     /// Floor: the lowest rung at or above the role's default; ceiling: the highest rung strictly below the
-    /// next role's default (the Manager: the top rung). The auxiliar is its default only.
+    /// next role's default (the Manager: the top rung). The decide and the auxiliar are their default only
+    /// (one rung, no ladder).
     pub fn range(&self, role: Role, defaults: &RoleTiers) -> Option<Range> {
-        // Placeholder: Job tier-j-impl-core gives the decide role its default-only range.
-        if role == Role::Decide {
-            return None;
-        }
-        if role == Role::Auxiliar {
-            let default = defaults.auxiliar;
+        if role == Role::Decide || role == Role::Auxiliar {
+            let default = match role {
+                Role::Decide => defaults.decide,
+                Role::Auxiliar => defaults.auxiliar,
+                _ => unreachable!("handled above"),
+            };
             return self.is_valid(default).then_some(Range {
                 floor: default,
                 ceiling: default,
