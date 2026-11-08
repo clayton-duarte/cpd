@@ -32,6 +32,7 @@ type Entry = Record<string, unknown>;
 
 function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error } = {}) {
   const calls: string[] = [];
+  const relaunchModes: Array<string | undefined> = [];
   const logs: Entry[] = [];
   const state = {
     clock: T0,
@@ -52,8 +53,9 @@ function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error
     terminate: (pid: number) => {
       calls.push(`terminate:${pid}`);
     },
-    relaunch: async () => {
+    relaunch: async (mode?: string) => {
       calls.push("relaunch");
+      relaunchModes.push(mode);
     },
     restore: {
       captureCandidate: async () => {
@@ -80,7 +82,7 @@ function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error
     state.clock += ms;
   };
   const events = () => logs.map((l) => l.event);
-  return { wd, state, calls, logs, advance, events };
+  return { wd, state, calls, logs, relaunchModes, advance, events };
 }
 
 it("first observation of an epoch captures a candidate", async () => {
@@ -141,6 +143,15 @@ it("rollback restores the last good build, terminates the live preview and relau
   expect(s.calls).toEqual(["capture", "restore", "terminate:100", "relaunch"]);
   expect(s.logs[0]).toMatchObject({ event: "rollback", reloadEpoch: 2, pid: 100 });
   expect(typeof s.logs[0]?.reason).toBe("string");
+});
+
+it("the rollback relaunch asks for production explicitly", async () => {
+  const s = setup();
+  s.state.health = crashed(2);
+  await s.wd.tick();
+  s.advance(1000);
+  await s.wd.tick();
+  expect(s.relaunchModes).toEqual(["production"]);
 });
 
 it("a crash that clears within the debounce does nothing", async () => {
