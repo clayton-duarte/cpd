@@ -2,7 +2,9 @@
 
 cpd's mark is **φ**, as pi's is **π**; the mark and its logo font are specified in [docs/mark.md](docs/mark.md).
 
-cpd (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request: a Lead agent specifies the work, and a swarm of Workers executes it in parallel, each in its own git worktree. One binary, `cpd`, is the CLI, the engine and the cockpit (a terminal UI).
+cpd (Continuous Parallel Delivery) is a framework for how agents work: it enforces its protocols through tooling rather than prose, gates undesired behaviour, and logs every gate as a metric to improve on.
+
+It turns one human ticket into a reviewed pull request: a Lead agent specifies the work, and a swarm of Workers executes it in parallel, each in its own git worktree. One binary, `cpd`, is the CLI, the engine and the cockpit (a terminal UI).
 
 The levels (Jira's words, as an analogy), the cpd objects and their roles are in [CONTEXT.md](CONTEXT.md).
 
