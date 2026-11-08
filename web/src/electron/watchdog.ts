@@ -1,6 +1,6 @@
 import type { UiMode } from "./channels.ts";
-import type { CockpitHealth, HealthLimits } from "./health.ts";
-import { DEFAULT_HEALTH_LIMITS } from "./health.ts";
+import type { Break, CockpitHealth, HealthLimits } from "./health.ts";
+import { DEFAULT_HEALTH_LIMITS, detectBreak } from "./health.ts";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
 import type { RestorePoints } from "./restore-points.ts";
@@ -260,11 +260,58 @@ export function createHealthWatchdog(
   ports: HealthWatchdogPorts,
   limits: HealthLimits = DEFAULT_HEALTH_LIMITS,
 ): HealthWatchdog {
-  void ports;
-  void limits;
+  // One detection and one recovery per renderer boot (epoch): the report is fresh only when the
+  // renderer reloaded, so a break that persists in the same boot is not acted on twice.
+  let actedEpoch: number | null = null;
+
+  const detect = async (brk: Break, health: CockpitHealth): Promise<void> => {
+    await ports.report({
+      kind: "watchdog.break",
+      text: `CPD watchdog detected ${brk.kind}: ${brk.detail}`,
+      data: { detection: brk.kind, health },
+    });
+  };
+
+  const revert = async (brk: Break): Promise<void> => {
+    const current = ports.build();
+    const at = LADDER.indexOf(current);
+    const next = at >= 0 ? LADDER[at + 1] : undefined;
+    if (next === undefined) {
+      // Every rung has failed: no fourth step, and never a rung already tried. The User sees the
+      // detection event; the skip is named in the log.
+      await ports.log({ at: new Date(ports.now()).toISOString(), event: "ladder-exhausted", detection: brk.kind, build: current });
+      return;
+    }
+    await ports.revert(next);
+    await ports.report({
+      kind: "watchdog.recovery",
+      text: `CPD watchdog recovered from ${brk.kind} by reverting to ${next}`,
+      data: { detection: brk.kind, build: next },
+    });
+  };
+
+  const reload = async (brk: Break): Promise<void> => {
+    await ports.reloadRenderer();
+    await ports.report({
+      kind: "watchdog.recovery",
+      text: `CPD watchdog recovered from ${brk.kind} by reloading the renderer`,
+      data: { detection: brk.kind, recovery: "renderer-reload" },
+    });
+  };
+
   return {
     async tick() {
-      // stub: the implementing change brings the code in line
+      const health = await ports.readHealth();
+      if (health === null) return;
+      if (actedEpoch === health.epoch) return;
+      const brk = detectBreak(health, ports.now(), limits);
+      if (brk === null) return;
+      actedEpoch = health.epoch;
+      await detect(brk, health);
+      // `cockpit not ready` is not a ladder step: the build on disk is not broken, so its recovery
+      // is the renderer-only reload (air-n101). Every other break walks the ladder.
+      if (brk.kind === "cockpit-not-ready") await reload(brk);
+      else await revert(brk);
     },
   };
 }

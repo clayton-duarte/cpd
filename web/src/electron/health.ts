@@ -1,4 +1,5 @@
 import type { ContextTreeModel } from "../protocol/cockpit.ts";
+import { isStalled } from "./liveness.ts";
 
 export type CrashSource =
   | "error-boundary"
@@ -233,6 +234,57 @@ export interface HealthLimits {
 export const DEFAULT_HEALTH_LIMITS: HealthLimits = { snapshotGraceMs: 10000, heartbeatTimeoutMs: 5000 };
 
 /**
+ * Read the cockpit/transport report the renderer writes beside its health record
+ * (`$CPD_HOME/run/cockpit-health.json`). Validation at the boundary: a malformed report raises
+ * `HealthParseError`, so a bad write is loud, never a silent fallback.
+ */
+export function parseCockpitHealth(text: string): CockpitHealth {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new HealthParseError(`malformed cockpit health json: ${(error as Error).message}`);
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new HealthParseError("cockpit health is not an object");
+  }
+  const o = raw as Record<string, unknown>;
+  const num = (k: string): number => {
+    const v = o[k];
+    if (typeof v !== "number" || !Number.isFinite(v)) throw new HealthParseError(`bad field ${k}`);
+    return v;
+  };
+  const optNum = (k: string): number | undefined => {
+    const v = o[k];
+    if (v === undefined) return undefined;
+    if (typeof v !== "number" || !Number.isFinite(v)) throw new HealthParseError(`bad field ${k}`);
+    return v;
+  };
+  const epoch = o["epoch"];
+  if (typeof epoch !== "number" || !Number.isInteger(epoch) || epoch <= 0) {
+    throw new HealthParseError("bad field epoch");
+  }
+  const tree = o["tree"];
+  if (tree !== null && typeof tree !== "object") {
+    throw new HealthParseError("bad field tree");
+  }
+  const error = o["error"];
+  if (error !== undefined && typeof error !== "string") throw new HealthParseError("bad field error");
+  const snapshotAt = optNum("snapshotAt");
+  const errorAt = optNum("errorAt");
+  const heartbeatAt = optNum("heartbeatAt");
+  return {
+    epoch,
+    startedAt: num("startedAt"),
+    tree: tree as ContextTreeModel | null,
+    ...(snapshotAt === undefined ? {} : { snapshotAt }),
+    ...(error === undefined ? {} : { error }),
+    ...(errorAt === undefined ? {} : { errorAt }),
+    ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+  };
+}
+
+/**
  * The break the renderer's report shows, or null when the cockpit and its transport are fine.
  * Checked in order: `cockpit not ready` (the hub subscribe race, web/src/server/hub/connection.ts)
  * beats an empty tree, and a stalled WebSocket beats the loading grace.
@@ -242,8 +294,27 @@ export function detectBreak(
   now: number,
   limits: HealthLimits = DEFAULT_HEALTH_LIMITS,
 ): Break | null {
-  void health;
-  void now;
-  void limits;
-  return null; // stub: the implementing change brings the code in line
+  // `cockpit not ready` with no later snapshot: the hub's subscribe ran before the cockpit's
+  // first load, sent the error and dropped the client, so nothing more comes on its own.
+  const notReadyBaseline = health.errorAt ?? health.startedAt;
+  const laterSnapshot = health.snapshotAt !== undefined && health.snapshotAt > notReadyBaseline;
+  if (health.error === "not ready" && !laterSnapshot && now - notReadyBaseline >= limits.snapshotGraceMs) {
+    return {
+      kind: "cockpit-not-ready",
+      detail: `cockpit.error "not ready" for ${now - notReadyBaseline} ms with no later snapshot`,
+    };
+  }
+  // A stalled WebSocket beats the loading grace: the transport's heartbeat stopped, so no frame
+  // can arrive whatever the cockpit painted.
+  if (isStalled(health.heartbeatAt, now, limits.heartbeatTimeoutMs)) {
+    return {
+      kind: "websocket-stalled",
+      detail: `no server heartbeat for ${now - (health.heartbeatAt as number)} ms`,
+    };
+  }
+  // Empty data: the view painted but never received the first cockpit snapshot.
+  if (health.tree === null && now - health.startedAt >= limits.snapshotGraceMs) {
+    return { kind: "empty-data", detail: `no cockpit snapshot ${now - health.startedAt} ms after boot` };
+  }
+  return null;
 }
