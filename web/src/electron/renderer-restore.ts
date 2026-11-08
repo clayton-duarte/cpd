@@ -14,8 +14,9 @@ export interface RendererRestorePorts {
 }
 
 /**
- * Restores the production renderer after leaving the preview.
- *
- * Stub: preview-impl replaces the empty body with `await ports.loadFile(PRODUCTION_RENDERER)`.
+ * Restores the production renderer after leaving the preview: the window reloads the built
+ * renderer, so a dead preview page never blocks the View change (§19.3).
  */
-export async function restoreRenderer(_ports: RendererRestorePorts): Promise<void> {}
+export async function restoreRenderer(ports: RendererRestorePorts): Promise<void> {
+  await ports.loadFile(PRODUCTION_RENDERER);
+}

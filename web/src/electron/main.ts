@@ -4,9 +4,12 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog as electronDialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import { boot } from "./boot.ts";
 import { createPreviewClient, type PreviewClient } from "./preview-client.ts";
+import { restoreRenderer } from "./renderer-restore.ts";
+import { WebError, type WireError } from "../protocol/domain.ts";
+import type { ServerMessage } from "../protocol/wire.ts";
 import { createPreviewWatchdog } from "./watchdog.ts";
 import { parseHealth, type HealthRecord } from "./health.ts";
 import { DEFAULT_DEV_URL } from "./preview-mode.ts";
@@ -139,6 +142,26 @@ async function main(): Promise<void> {
   let failStarted: (error: unknown) => void = () => {};
   let webSocketUrl = "";
 
+  // §19.3 / air-d77: a Preview start or load failure is a cockpit error toast (the renderer's
+  // toast surface of §16.1), never a native modal. The toast rides the renderer's existing
+  // WebSocket error channel; a failure raised while the production renderer is replaced by the
+  // loading page is queued and flushed when that renderer reconnects.
+  const rendererSenders = new Set<(message: ServerMessage) => void>();
+  const pendingToasts: WireError[] = [];
+  const toast = (title: string, content: string): void => {
+    const error = new WebError("cpd_failed", `${title}: ${content}`.trim());
+    if (rendererSenders.size === 0) {
+      pendingToasts.push(error);
+      return;
+    }
+    const message: ServerMessage = { type: "cockpit.error", error };
+    for (const send of rendererSenders) send(message);
+  };
+  // §19.3: leaving the preview restores the production renderer, so the View change is never
+  // blocked by a dead preview page. `PRODUCTION_RENDERER` is relative to `web/dist-electron`.
+  const restoreProductionRenderer = (): Promise<void> =>
+    restoreRenderer({ loadFile: (file) => win.loadFile(path.join(here, file)) });
+
   // Everything that needs the app to be ready but not the window: runs inside boot's whenReady.
   const prepare = async (): Promise<void> => {
   const loginPath = await resolveLoginPath({
@@ -202,7 +225,18 @@ async function main(): Promise<void> {
     signalListening = resolve;
   });
   const endpoint = createWsServer({
-    newConnection: (send) => services.newConnection(send),
+    newConnection: (send) => {
+      rendererSenders.add(send);
+      for (const error of pendingToasts.splice(0)) send({ type: "cockpit.error", error });
+      const hub = services.newConnection(send);
+      return {
+        handle: (raw) => hub.handle(raw),
+        close: () => {
+          rendererSenders.delete(send);
+          return hub.close();
+        },
+      };
+    },
     server: createListenerFactory(),
     scheduler: boundaries.scheduler,
     started,
@@ -243,7 +277,16 @@ async function main(): Promise<void> {
       await fs.writeFile(tmp, JSON.stringify(record));
       await fs.rename(tmp, healthFile);
     };
-    const showErrorBox = (title: string, content: string): void => electronDialog.showErrorBox(title, content);
+    // A Preview failure is a toast, never `electronDialog.showErrorBox` (§19.3, air-d77).
+    const showErrorBox = (title: string, content: string): void => toast(title, content);
+    const isPreviewServerReady = async (): Promise<boolean> => {
+      try {
+        const response = await fetch(devUrl, { signal: AbortSignal.timeout(2_000) });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    };
     const setMode = (mode: UiMode): Promise<void> => controller.setMode(mode);
     const watchdog = createPreviewWatchdog({
       now: () => Date.now(),
@@ -271,6 +314,7 @@ async function main(): Promise<void> {
       run: previewRun,
       readHealth,
       writeHealth,
+      isPreviewServerReady,
       showLoading: () => {
         void win.loadURL(loadingPageUrl());
       },
@@ -331,11 +375,14 @@ async function main(): Promise<void> {
         const client = await ensurePreviewClient();
         await client.open();
       } catch (error) {
-        electronDialog.showErrorBox("WebUI Preview", (error as Error).message);
+        toast("WebUI Preview", (error as Error).message);
         await controller.setMode(before);
       }
     } else if (before === "webui-preview") {
       await previewClient?.leave();
+      // §19.3: leaving the preview — the User's View change and the watchdog rollback (whose
+      // setMode runs through this wrapper), a failed open included — restores the renderer.
+      await restoreProductionRenderer();
     }
     emitViewChange();
   };
