@@ -20,5 +20,15 @@ it("components.json uses a base style and the real css entry", () => {
 
 it("the base primitive package is installed", () => {
   const pkg = readJson("../../package.json");
+  // The base registry's primitive library. (`@base-ui/react` is already present on main,
+  // from the ScrollArea migration, and the switch keeps it.)
   expect(Object.keys(pkg.dependencies ?? {})).toContain("@base-ui/react");
+  // The base style's own `className` helper package (base-nova's index lists `cn`): the
+  // switch installs it and routes the shared helper through it.
+  const listed = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  expect(Object.keys(listed)).toContain("cn");
+  const utils = readFileSync(new URL("../../src/lib/utils.ts", import.meta.url), "utf8");
+  expect(utils).toContain('from "cn"');
+  expect(utils).not.toContain("clsx");
+  expect(utils).not.toContain("tailwind-merge");
 });
