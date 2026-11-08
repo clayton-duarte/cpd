@@ -26,6 +26,9 @@ mod archive_leads_tests;
 #[cfg(test)]
 mod archive_tests;
 mod asks;
+mod bug_guard;
+#[cfg(test)]
+mod bug_protocol_tests;
 mod closed;
 #[cfg(test)]
 mod closed_tests;
