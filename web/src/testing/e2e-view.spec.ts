@@ -6,15 +6,15 @@
 // The three clients share one main process and one window: selecting the View menu writes the
 // run-only marker `$CPD_HOME/run/ui-view.json` (`{view,pid}`) and sends the renderer `ui:mode`, so
 // the window swaps `#terminal` and `#webui-root` without a relaunch (pid unchanged, never a second
-// Electron). WebUI Preview runs the serve-only `scripts/preview-web.sh serve`, shows the built-in
-// loading page while the client health is `loading`, and loads the dev renderer once it is
-// `healthy`. A start or load failure shows a native error dialog and keeps the current view — no
-// silent fallback.
+// Electron). WebUI Preview runs the serve-only `scripts/preview-web.sh serve` and loads the dev
+// renderer once that server is ready; a start or load failure shows the renderer's cockpit error
+// toast and keeps the current view — no silent fallback, and leaving the preview restores the
+// production renderer, so a dead preview page never blocks a later View change (§19.3).
 //
 // The day's bug class is a blank/stale window after a relaunch (air-n31) and a frozen view
 // (air-n13/n15): this spec pins that switching is in place, not a second process.
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,30 +29,16 @@ const e2eFakeCpd = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
 let staging = "";
 /** The staged checkout root the app's in-place preview runs `scripts/preview-web.sh` from. */
 let previewRoot = "";
-/** Touch this to make the fake `preview-web.sh serve` fail loudly (the failure scenario). */
-let failMarker = "";
 /** A private `userData` dir, so the app writes nothing to the User's profile. */
 let userDataDir = "";
 
 /**
  * A deterministic stand-in for `scripts/preview-web.sh`. It replaces the real script (which drives
- * tmux and the real cpd) for the in-place preview: `serve` succeeds unless the fail marker exists,
- * `unserve` always succeeds. The e2e suite never runs tmux or a real preview server.
+ * tmux and the real cpd) for the in-place preview: `serve` and `unserve` both succeed. The e2e
+ * suite never runs tmux or a real preview server.
  */
 const FAKE_PREVIEW_SCRIPT = `#!/bin/sh
-dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-case "$1" in
-  serve)
-    if [ -f "$dir/fail" ]; then
-      echo "fake preview: serve failed" >&2
-      exit 1
-    fi
-    exit 0
-    ;;
-  *)
-    exit 0
-    ;;
-esac
+exit 0
 `;
 
 /**
@@ -92,11 +78,16 @@ test.beforeAll(() => {
   const fakeBin = join(staging, "bin");
   const fakeShell = join(staging, "shell");
   previewRoot = join(staging, "preview");
-  failMarker = join(previewRoot, "scripts", "fail");
   userDataDir = join(staging, "user-data");
   mkdirSync(fakeBin, { recursive: true });
   mkdirSync(join(previewRoot, "scripts"), { recursive: true });
   mkdirSync(userDataDir, { recursive: true });
+  // The staged checkout is a real git repo with an `origin/main` ref, so the WebUI's status call
+  // (`git status` + `git log origin/main..HEAD`, run against `CPD_CHECKOUT`) succeeds instead of
+  // surfacing an unrelated "not a git repository" error toast that would mask the preview failure.
+  execFileSync("git", ["init", "-q"], { cwd: previewRoot });
+  execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "commit", "--allow-empty", "-q", "-m", "e2e preview root"], { cwd: previewRoot });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: previewRoot });
   // A fake login shell reporting the app's PATH unchanged, so the pty's `cpd` is the fake, not a
   // real cpd (`resolveLoginPath` would otherwise drop the fake bin dir).
   writeFileSync(
@@ -153,35 +144,6 @@ function readHealth(cpdHome: string): { status?: string; reloadEpoch?: number; p
   }
 }
 
-/** Record the native dialogs without opening a modal window that would block the main process. */
-async function patchDialogs(app: unknown): Promise<void> {
-  await app.evaluate(({ dialog }) => {
-    const seen: { title: string; content: string }[] = [];
-    (globalThis as Record<string, unknown>)["__cpdViewDialogs"] = seen;
-    dialog.showErrorBox = (title: string, content: string) => {
-      seen.push({ title, content });
-    };
-  });
-}
-
-/** Tell the app the preview client health turned healthy, so it loads the dev renderer. */
-function markPreviewHealthy(cpdHome: string): void {
-  const file = join(cpdHome, "run", "preview-health.json");
-  const loading = JSON.parse(readFileSync(file, "utf8"));
-  const tmp = `${file}.e2e.tmp`;
-  writeFileSync(
-    tmp,
-    JSON.stringify({
-      status: "healthy",
-      reloadEpoch: loading.reloadEpoch,
-      pid: loading.pid,
-      startedAt: loading.startedAt,
-      healthyAt: new Date().toISOString(),
-    }),
-  );
-  renameSync(tmp, file);
-}
-
 test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40, air-d41, air-d49)", async ({ page, cpdHome, electronApp }) => {
   const mainPid = await electronApp.evaluate(() => process.pid);
   const markerPid = () => readMarker(cpdHome).pid;
@@ -191,7 +153,6 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   const window = await electronApp.browserWindow(page);
   expect(await window.evaluate((w) => w.isVisible())).toBe(false);
   expect(await electronApp.evaluate(({ app }) => app.getPath("userData"))).toContain(staging);
-  await patchDialogs(electronApp);
 
   // The app always launches in WebUI (air-d40): the WebUI is shown, the terminal hidden. Its own
   // health recorder reports the boot healthy (the renderer's post-mount `health:ok`).
@@ -217,20 +178,11 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   expect(markerPid()).toBe(mainPid);
   expect(await windowCount(electronApp)).toBe(1);
 
-  // WebUI Preview: the serve-only preview succeeds, the built-in loading page shows while the
-  // client health is loading, then the selected (WebUI) view renders once the health is healthy.
+  // WebUI Preview: the serve-only preview succeeds, and the dev URL (the suite's renderer server)
+  // is ready at once, so the app loads the selected (WebUI) renderer in place; the marker records
+  // the view. There is no circular wait on the app's own health (§19.3).
   await selectView(electronApp, "WebUI Preview");
-  await expect(page.getByText("Starting WebUI Preview…")).toBeVisible();
   await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui-preview");
-  // Wait for the app's health recorder to finish its `loading` write for the loading page (a new
-  // epoch, above the client's own loading record), so the `healthy` record written next is last.
-  await expect
-    .poll(() => {
-      const health = readHealth(cpdHome);
-      return health.status === "loading" && (health.reloadEpoch ?? 0) >= 2;
-    }, { timeout: 8_000 })
-    .toBe(true);
-  markPreviewHealthy(cpdHome);
   await expect(page.locator("#webui-root")).toBeVisible({ timeout: 30_000 });
   await expect(page.locator("#terminal")).toBeHidden();
 
@@ -241,33 +193,38 @@ test("the View menu switches TUI, WebUI and WebUI Preview in one window (air-d40
   expect(markerPid()).toBe(mainPid);
 });
 
-test("a preview start failure keeps the current view and surfaces loudly, with no silent fallback", async ({ page, cpdHome, electronApp }) => {
+test("a preview that never becomes ready fails with a toast and never blocks the View change", async ({ page, cpdHome, electronApp, rendererServer }) => {
   const mainPid = await electronApp.evaluate(() => process.pid);
-  await patchDialogs(electronApp);
   await expect(page.locator("#webui-root")).toBeVisible();
 
-  // The fake preview server fails on start.
-  writeFileSync(failMarker, "fail");
+  // Take the preview's dev server down: the preview starts but can never become ready. The
+  // readiness wait is bounded (§19.3), so selecting the preview fails after that bound instead of
+  // hanging, and rolls back to the WebUI.
+  await rendererServer.close();
 
   await selectView(electronApp, "WebUI Preview");
 
-  // Loud, not silent: the native dialog carries the failure, and the current view (WebUI) stays.
-  await expect
-    .poll(
-      async () =>
-        (await electronApp.evaluate(() => (globalThis as Record<string, unknown>)["__cpdViewDialogs"] as { title: string }[])).map(
-          (entry) => entry.title,
-        ),
-      { timeout: 30_000 },
-    )
-    .toEqual(["WebUI Preview"]);
-  const [dialog] = await electronApp.evaluate(() => (globalThis as Record<string, unknown>)["__cpdViewDialogs"] as { content: string }[]);
-  expect(dialog?.content ?? "").toContain("fake preview: serve failed");
+  // The serve-only preview still starts and shows the built-in loading page while it waits.
+  await expect(page.getByText("Starting WebUI Preview…")).toBeVisible({ timeout: 30_000 });
+
+  // Loud, not silent (air-d77, §19.3): the failure is the renderer's cockpit error toast -- never a
+  // native modal. The scriptless loading page has no WebSocket, so the toast is queued and flushed
+  // once the restored production renderer reconnects.
+  const toast = page.locator('[data-part="cockpit-error-toast"]');
+  await expect(toast).toBeVisible({ timeout: 60_000 });
+  await expect(toast).toContainText("was not ready within");
+
+  // The failed preview kept the WebUI (no silent fallback) and never relaunched: same pid, one window.
   await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("webui");
   await expect(page.locator("#webui-root")).toBeVisible();
-  await expect(page.locator("#terminal")).toBeHidden();
+  expect(await electronApp.evaluate(() => process.pid)).toBe(mainPid);
+  expect(await windowCount(electronApp)).toBe(1);
 
-  // The failure never relaunched the app: same pid, one window.
+  // The failed preview never blocks a later View change: TUI still lands in place, one window, one pid.
+  await selectView(electronApp, "TUI");
+  await expect(page.locator("#terminal")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#webui-root")).toBeHidden();
+  await expect.poll(() => readMarker(cpdHome).view ?? null, { timeout: 30_000 }).toBe("tui");
   expect(await electronApp.evaluate(() => process.pid)).toBe(mainPid);
   expect(await windowCount(electronApp)).toBe(1);
 });
