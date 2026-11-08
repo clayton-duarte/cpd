@@ -63,7 +63,7 @@ export const ToolGroup = memo(function ToolGroup(
     >
       <TraceCollapsible open={isOpen} onOpenChange={setOpen}>
         <TraceCollapsibleTrigger data-part="group-header">
-          <TraceLine status={traceStatus} className="text-sm font-sans">
+          <TraceLine status={traceStatus}>
             <TraceIcon data-part="glyph" data-tone={tone} data-glyph={tone}>
               {agg === "running" ? (
                 <Spinner />

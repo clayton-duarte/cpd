@@ -8,7 +8,7 @@ import type { Completion, TranscriptItem } from "../protocol/domain.ts";
 import { toWireError } from "../protocol/domain.ts";
 import { archiveNavigation, sessionArchived } from "./archiveNav.ts";
 import {
-  appendItems, applyDelta, emptyTranscript, prependEarlier, removeItems, setTail, toolFailureReason, updateItems, type TranscriptState,
+  appendItems, applyDelta, emptyTranscript, prependEarlier, removeItems, setTail, updateItems, type TranscriptState,
 } from "./transcript.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
@@ -105,15 +105,6 @@ function normalizeUserText(text: string): string {
     .trim();
 }
 
-/** The toast error for the first failed tool in `items`, or null when none failed (15.1). */
-function firstToolFailure(items: readonly TranscriptItem[]): WireError | null {
-  for (const item of items) {
-    if (item.kind !== "tool" || item.status !== "failed") continue;
-    return { code: "tool_failed", message: toolFailureReason(item), details: { itemId: item.id } };
-  }
-  return null;
-}
-
 /** Removes the oldest matching "sending" or "sent" row per new user item (id not in `before`). */
 function echoed(pending: readonly PendingSubmission[], before: TranscriptState, incoming: readonly TranscriptItem[]): readonly PendingSubmission[] {
   let rows = pending;
@@ -131,12 +122,8 @@ function echoed(pending: readonly PendingSubmission[], before: TranscriptState, 
 
 function reduceSession(state: AppState, session: SessionView, message: ServerMessage): AppState {
   const set = (patch: Partial<SessionView>): AppState => ({ ...state, session: { ...session, ...patch } });
-  // A failed tool result raises the cockpit error toast: lastError = tool_failed (15.1).
-  const applied = (patch: Partial<SessionView>, items: readonly TranscriptItem[]): AppState => {
-    const next = set(patch);
-    const failure = firstToolFailure(items);
-    return failure === null ? next : { ...next, lastError: failure };
-  };
+  // A failed agent tool call raises no toast (16.1, air-d77): it shows as a failed tool row.
+  const applied = (patch: Partial<SessionView>): AppState => set(patch);
   switch (message.type) {
     case "session.attached":
       return set({ attached: true, capabilities: message.capabilities, title: message.title, ref: message.meta.ref, footer: message.meta.footer });
@@ -147,22 +134,22 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
           error: null,
           transcript: setTail(message.window, session.transcript),
           pending: session.pending.filter((p) => p.state !== "sent"),
-        }, message.window.items);
+        });
       }
       return applied({
         transcript: prependEarlier(session.transcript, message.window),
         pending: echoed(session.pending, session.transcript, message.window.items),
-      }, message.window.items);
+      });
     case "session.append":
       return applied({
         transcript: appendItems(session.transcript, message.items),
         pending: echoed(session.pending, session.transcript, message.items),
-      }, message.items);
+      });
     case "session.update":
       return applied({
         transcript: updateItems(session.transcript, message.items),
         pending: echoed(session.pending, session.transcript, message.items),
-      }, message.items);
+      });
     case "session.remove":
       return set({ transcript: removeItems(session.transcript, [message.itemId]) });
     case "session.delta":
