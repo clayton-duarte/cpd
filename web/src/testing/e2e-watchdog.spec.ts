@@ -57,6 +57,74 @@ const RUNG = {
 /** The title prefix a rung's page writes, so the target list names the build the view belongs to. */
 const TITLE_PREFIX = "cpd-e2e-view:";
 
+/**
+ * Every wait the scenario takes, each short and named. The ladder rides a 500 ms watchdog tick, so
+ * a real step is sub-second; these are ceilings, not expectations. A step that never resolves must
+ * fail as itself -- naming the phase, with a timestamp -- instead of silently eating the whole
+ * scenario budget and surfacing as an opaque `Test timeout` that hides the step that hung.
+ */
+const WAIT = {
+  server: 30_000,
+  launch: 60_000,
+  firstWindow: 30_000,
+  domReady: 30_000,
+  windowHidden: 15_000,
+  userData: 15_000,
+  previewText: 30_000,
+  previewTitle: 15_000,
+  previewUrl: 15_000,
+  markerPid: 15_000,
+  detection: 30_000,
+  recovery: 30_000,
+  relaunchPid: 45_000,
+  viewTitle: 30_000,
+  settle: 13_000,
+  close: 20_000,
+  reap: 45_000,
+} as const;
+
+/**
+ * The scenario budget: above the sum of every bounded wait the test can take, so the failure is
+ * always reported as the phase that stalled and never as `Test timeout` (which is the CI failure
+ * this guards: the sum of the old 60 s waits far exceeded the 120 s default). A healthy run
+ * finishes in seconds; the ceiling exists only to guarantee the specific failure message.
+ */
+const SCENARIO_TIMEOUT_MS =
+  WAIT.server + WAIT.launch + WAIT.firstWindow + WAIT.domReady +
+  WAIT.windowHidden + WAIT.userData +
+  WAIT.previewText + WAIT.previewTitle + WAIT.previewUrl + WAIT.markerPid +
+  (WAIT.detection + WAIT.recovery + WAIT.relaunchPid + WAIT.viewTitle) * 2 +
+  WAIT.settle + WAIT.close * 2 + WAIT.reap + 30_000;
+
+/** The scenario clock, set when the test body starts, so every log line carries one timestamp. */
+let scenarioClock = 0;
+const log = (line: string): void => console.log(`[ladder] +${Date.now() - scenarioClock}ms ${line}`);
+
+/**
+ * Run one bounded, timed step. It logs start/done/over against the scenario clock and races the step
+ * against its own short ceiling, so a step that never resolves throws a named error (the phase and
+ * its limit) instead of the scenario's whole budget. The race keeps a handler on both promises, so
+ * a late rejection from the abandoned step is not an unhandled one.
+ */
+async function phase<T>(name: string, ms: number, run: () => Promise<T>): Promise<T> {
+  const from = Date.now();
+  log(`${name}: start (limit ${ms}ms)`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`phase "${name}" did not resolve within ${ms}ms`)), ms);
+  });
+  try {
+    const value = await Promise.race([run(), expired]);
+    log(`${name}: done in ${Date.now() - from}ms`);
+    return value;
+  } catch (error) {
+    log(`${name}: FAILED after ${Date.now() - from}ms: ${(error as Error).message}`);
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** The fake CLI/scripts: nothing to build, nothing to install. */
 const FAKE_OK = `#!/bin/sh
 exit 0
@@ -429,6 +497,40 @@ type WalkStep = {
 };
 
 /**
+ * What a stalled relaunch left behind, logged (never asserted): the marker the new process would
+ * have written, the live processes still under the staging, and -- on Linux, where the CI runner
+ * runs -- each one's DISPLAY. The rollback relaunch inherits the parent env (Electron's
+ * `app.relaunch` passes no `env`, so the child keeps `process.env`), so DISPLAY must be present;
+ * this proves it in the failing run instead of leaving it to inference.
+ */
+function diagnoseRelaunch(cpdHome: string, fromPid: number): void {
+  const marker = (() => {
+    try {
+      return readFileSync(markerFile(cpdHome), "utf8").trim();
+    } catch {
+      return "<none>";
+    }
+  })();
+  log(`diagnose: marker was ${marker} (watching from pid ${fromPid})`);
+  let pids: number[] = [];
+  try {
+    pids = processesMatching(staging).filter(alive);
+  } catch (error) {
+    log(`diagnose: could not list processes: ${(error as Error).message}`);
+    return;
+  }
+  log(`diagnose: live processes under the staging: ${pids.join(", ") || "none"}`);
+  for (const pid of pids) {
+    try {
+      const env = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+      log(`diagnose: pid ${pid} ${env.find((entry) => entry.startsWith("DISPLAY=")) ?? "DISPLAY unset"}`);
+    } catch {
+      // Not Linux (no /proc), or the process is already gone: skip.
+    }
+  }
+}
+
+/**
  * Break the rung the app is running now and let the watchdog walk one step down the ladder. The
  * detection Event proves the watchdog read the break; the report is turned healthy right after, so
  * the relaunched process finds the rung above it healthy instead of reverting again on it. Then the
@@ -444,72 +546,106 @@ async function walkStep(step: WalkStep): Promise<number> {
   // The detection Event: the watchdog read the break and is reverting now. The report is turned
   // healthy for the next rung the moment it appears, so the relaunched process — a fresh watchdog
   // with no memory of the epoch — finds the rung above it healthy instead of reverting again.
-  await expect
-    .poll(() => eventKeys(cpdHome).slice(before), { timeout: 60_000, intervals: [10, 20, 50] })
-    .toContain(`watchdog.break:${step.breakKind}`);
+  await phase(`rung->${step.nextRung}: detection Event`, WAIT.detection, () =>
+    expect
+      .poll(() => eventKeys(cpdHome).slice(before), { timeout: WAIT.detection, intervals: [10, 20, 50] })
+      .toContain(`watchdog.break:${step.breakKind}`),
+  );
   setReport(step.breakEpoch + 1, null);
 
   // The recovery Event names the rung the ladder stepped to (air-d81).
-  await expect
-    .poll(() => eventKeys(cpdHome).slice(before), { timeout: 60_000, intervals: [50] })
-    .toContain(`watchdog.recovery:${step.nextRung}`);
+  await phase(`rung->${step.nextRung}: recovery Event`, WAIT.recovery, () =>
+    expect
+      .poll(() => eventKeys(cpdHome).slice(before), { timeout: WAIT.recovery, intervals: [50] })
+      .toContain(`watchdog.recovery:${step.nextRung}`),
+  );
 
   // A new main process came up (the rollback relaunch), and it is not the one we were watching.
-  await expect
-    .poll(() => {
-      const pid = markerPid(cpdHome);
-      return pid !== null && pid !== fromPid ? pid : null;
-    }, { timeout: 60_000, intervals: [100] })
-    .not.toBeNull();
-  const pid = markerPid(cpdHome);
-  if (pid === null) throw new Error("the relaunched app wrote no view marker");
+  let pid: number;
+  try {
+    pid = await phase(`rung->${step.nextRung}: relaunch pid`, WAIT.relaunchPid, async () => {
+      await expect
+        .poll(() => {
+          const next = markerPid(cpdHome);
+          return next !== null && next !== fromPid ? next : null;
+        }, { timeout: WAIT.relaunchPid, intervals: [100] })
+        .not.toBeNull();
+      const next = markerPid(cpdHome);
+      if (next === null) throw new Error("the relaunched app wrote no view marker");
+      return next;
+    });
+  } catch (error) {
+    // The relaunch pid is the step the Lead flagged (air-d126, air-d127): name what a stalled
+    // relaunch left behind, so a Linux-only failure is diagnosable, not a bare timeout.
+    diagnoseRelaunch(cpdHome, fromPid);
+    throw error;
+  }
 
   // The view that is loaded names the rung: the page Electron loaded sets its own title, and the
   // URL it was loaded from says the rollback relaunch carried production mode — the built renderer
   // from disk, never the preview dev URL (air-d95).
-  await expect
-    .poll(async () => (await currentView())?.title ?? null, { timeout: 60_000, intervals: [100] })
-    .toBe(`${TITLE_PREFIX}${RUNG[step.nextRung]}`);
-  const view = await currentView();
-  expect(view?.url).toBe(rendererUrl());
+  await phase(`rung->${step.nextRung}: loaded view`, WAIT.viewTitle, async () => {
+    await expect
+      .poll(async () => (await currentView())?.title ?? null, { timeout: WAIT.viewTitle, intervals: [100] })
+      .toBe(`${TITLE_PREFIX}${RUNG[step.nextRung]}`);
+    const view = await currentView();
+    expect(view?.url).toBe(rendererUrl());
+  });
   return pid;
 }
 
 /** Boot the app against the staged checkout and return it with the first window and the server. */
 async function bootApp(cpdHome: string, userDataDir: string) {
-  const preview = await startPreviewServer();
+  const preview = await phase("preview server", WAIT.server, () => startPreviewServer());
   resetRungs();
-  const app = await launchApp({
-    cpdHome,
-    userDataDir,
-    rendererUrl: preview.url,
-    // The staged app dir is the app path, so the main process it boots resolves every build it
-    // loads (`here`) and every rung of the ladder (`CPD_CHECKOUT/web`) under the staging.
-    appPath: appDir,
-    // The DevTools endpoint the spec reads the loaded view from; the relaunch repeats it.
-    extraArgs: [`--remote-debugging-port=${debugPort}`],
-    env: { CPD_CHECKOUT: checkout, HOME: stagedHome },
-  });
-  const page = await firstWindow(app);
-  await page.waitForLoadState("domcontentloaded");
+  const app = await phase("app launch", WAIT.launch, () =>
+    launchApp({
+      cpdHome,
+      userDataDir,
+      rendererUrl: preview.url,
+      // The staged app dir is the app path, so the main process it boots resolves every build it
+      // loads (`here`) and every rung of the ladder (`CPD_CHECKOUT/web`) under the staging.
+      appPath: appDir,
+      // The DevTools endpoint the spec reads the loaded view from; the relaunch repeats it.
+      extraArgs: [`--remote-debugging-port=${debugPort}`],
+      env: { CPD_CHECKOUT: checkout, HOME: stagedHome },
+    }),
+  );
+  const page = await phase("first window", WAIT.firstWindow, () => firstWindow(app));
+  await phase("renderer domcontentloaded", WAIT.domReady, () => page.waitForLoadState("domcontentloaded"));
   startReports(cpdHome);
   return { app, page, preview };
 }
 
 test("the watchdog walks preview > prod > HEAD-1 by the loaded view (air-d88, air-d95, air-d81)", async ({ cpdHome, userDataDir }) => {
+  scenarioClock = Date.now();
+  test.setTimeout(SCENARIO_TIMEOUT_MS);
+  log(`scenario start (budget ${SCENARIO_TIMEOUT_MS}ms)`);
   const { app, page, preview } = await bootApp(cpdHome, userDataDir);
   const pids: number[] = [];
   try {
     // Hidden and isolated (air-d68): no window on the User's screen, every write under the per-run dirs.
-    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
-    expect(await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"))).toContain("cpd-e2e-userdata-");
+    await phase("hidden window check", WAIT.windowHidden, async () => {
+      expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
+    });
+    await phase("userData isolation check", WAIT.userData, async () => {
+      expect(await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"))).toContain("cpd-e2e-userdata-");
+    });
 
     // The rung the app boots on is preview: the view is the suite's dev URL, naming the preview build.
-    await expect(page.locator("#built-view")).toHaveText(RUNG.preview, { timeout: 60_000 });
-    await expect.poll(async () => (await currentView())?.title ?? null, { timeout: 30_000 }).toBe(`${TITLE_PREFIX}${RUNG.preview}`);
-    expect((await currentView())?.url).toBe(preview.url);
-    await expect.poll(() => markerPid(cpdHome), { timeout: 30_000 }).not.toBeNull();
-    const launchPid = markerPid(cpdHome) as number;
+    await phase("preview rung text", WAIT.previewText, () =>
+      expect(page.locator("#built-view")).toHaveText(RUNG.preview, { timeout: WAIT.previewText }),
+    );
+    await phase("preview rung title", WAIT.previewTitle, () =>
+      expect.poll(async () => (await currentView())?.title ?? null, { timeout: WAIT.previewTitle }).toBe(`${TITLE_PREFIX}${RUNG.preview}`),
+    );
+    await phase("preview rung url", WAIT.previewUrl, async () => {
+      expect((await currentView())?.url).toBe(preview.url);
+    });
+    const launchPid = await phase("launch pid marker", WAIT.markerPid, async () => {
+      await expect.poll(() => markerPid(cpdHome), { timeout: WAIT.markerPid }).not.toBeNull();
+      return markerPid(cpdHome) as number;
+    });
     pids.push(launchPid);
     expect(app.windows().length).toBe(1);
 
@@ -525,7 +661,7 @@ test("the watchdog walks preview > prod > HEAD-1 by the loaded view (air-d88, ai
 
     // HEAD-1 is present and healthy, so the walk stops there: over several watchdog ticks nothing is
     // detected, nothing is reverted, no HEAD-2 build is loaded and the process stays the same.
-    await settle(3000);
+    await phase("settle", WAIT.settle, () => settle(3000));
     expect(eventKeys(cpdHome)).toEqual([
       "watchdog.break:empty-data",
       "watchdog.recovery:prod",
@@ -535,9 +671,12 @@ test("the watchdog walks preview > prod > HEAD-1 by the loaded view (air-d88, ai
     expect(markerPid(cpdHome)).toBe(head1Pid);
     expect((await currentView())?.title).toBe(`${TITLE_PREFIX}${RUNG["head-1"]}`);
   } finally {
+    // Cleanup is bounded and cannot hang the worker: a close that does not resolve is logged (its own
+    // phase) and abandoned in favour of killing every process, so nothing is left behind even then.
     stopReports();
-    await app.close().catch(() => undefined);
-    await preview.close();
-    await stopEverything(pids);
+    await phase("close app", WAIT.close, () => app.close()).catch(() => undefined);
+    await phase("close preview server", WAIT.close, () => preview.close()).catch(() => undefined);
+    await phase("reap processes", WAIT.reap, () => stopEverything(pids)).catch(() => undefined);
+    log(`scenario done in ${Date.now() - scenarioClock}ms`);
   }
 });
