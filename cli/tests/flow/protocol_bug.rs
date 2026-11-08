@@ -18,7 +18,13 @@ fn bug_fx() -> Fx {
 /// `cpd protocol bug report` and its `bug` object.
 fn report(fx: &Fx, title: &str, symptom: &str) -> Value {
     fx.cpd(&[
-        "protocol", "bug", "report", "--title", title, "--symptom", symptom,
+        "protocol",
+        "bug",
+        "report",
+        "--title",
+        title,
+        "--symptom",
+        symptom,
     ])
     .ok()["bug"]
         .clone()
@@ -106,7 +112,11 @@ fn report_records_a_bug_with_mitigation_not_applied() {
 #[test]
 fn mitigate_records_who_and_when() {
     let fx = bug_fx();
-    report(&fx, "the engine stopped ticking", "No engine step ran for an hour.");
+    report(
+        &fx,
+        "the engine stopped ticking",
+        "No engine step ran for an hour.",
+    );
 
     let bug = mitigate(
         &fx,
@@ -210,10 +220,16 @@ fn list_shows_open_bugs_and_their_mitigation_state() {
     assert!(bugs[1]["mitigated_by"].is_null(), "{all}");
     assert!(bugs[1]["mitigated_at"].is_null(), "{all}");
 
-    let mitigated = fx.cpd(&["protocol", "bug", "list", "--mitigated", "yes"]).ok();
+    let mitigated = fx
+        .cpd(&["protocol", "bug", "list", "--mitigated", "yes"])
+        .ok();
     assert_eq!(ids(&mitigated), ["b1"]);
-    let unmitigated = fx.cpd(&["protocol", "bug", "list", "--mitigated", "no"]).ok();
+    let unmitigated = fx
+        .cpd(&["protocol", "bug", "list", "--mitigated", "no"])
+        .ok();
     assert_eq!(ids(&unmitigated), ["b2"]);
-    let open = fx.cpd(&["protocol", "bug", "list", "--status", "open"]).ok();
+    let open = fx
+        .cpd(&["protocol", "bug", "list", "--status", "open"])
+        .ok();
     assert_eq!(ids(&open), ["b1", "b2"]);
 }
