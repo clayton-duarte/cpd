@@ -508,9 +508,12 @@ fn apply(
                         .push((plan.clone(), key.clone(), job, Cause::Conflict));
                 }
             }
-            // The armed merge: once the checks passed on a head that contains the default branch, the merge is queued
-            // (commands.md §9.10). The intent stays until the merge, a close or a cancel clears it.
-            if after.state == "open" && after.checks == "passed" {
+            // The armed merge: once the required checks passed on a head that contains the default branch, the merge is
+            // queued (commands.md §9.10). A resolved policy with an empty `pr.required_checks` needs no verdict (the same
+            // rule `pr merge` applies). The intent stays until the merge, a close or a cancel clears it.
+            let required_empty =
+                checks_of(checks, plan, key).is_some_and(|r| r.required.is_empty());
+            if after.state == "open" && (after.checks == "passed" || required_empty) {
                 let contained = armed
                     .iter()
                     .find(|a| a.repo == after.repo && a.number == after.number && a.contained);

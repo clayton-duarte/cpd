@@ -1803,7 +1803,7 @@ CREATE TABLE plans (
   CHECK (phase <> 'shaping' OR lead_session IS NULL)               -- migration `shaping`: phase 'shaping' requires a NULL lead_session
 ) STRICT;
 
--- ---------- Pull requests (the PR poller, hs-d96; migration 6; mergeable and merge_state: migration 11; authored and review_requested: migration 0013; updated_at and feedback: migration `pr-comments`; base_ref and default_branch: migration `pr-base`) ----------
+-- ---------- Pull requests (the PR poller, hs-d96; migration 6; mergeable and merge_state: migration 11; authored and review_requested: migration 0013; updated_at and feedback: migration `pr-comments`; base_ref and default_branch: migration `pr-base`; merge_armed: migration `20261107T2330-pr-merge-armed`) ----------
 CREATE TABLE pull_requests (
   id              INTEGER PRIMARY KEY,
   repo            TEXT NOT NULL CHECK (repo LIKE '_%/_%'),      -- GitHub's owner/name
@@ -1831,6 +1831,7 @@ CREATE TABLE pull_requests (
   author_login    TEXT,                                           -- migration `pr-light-cache` (pro-d453): the pull request's author login, from the Light read; NULL = not polled since
   reviews_json    TEXT,                                           -- migration `pr-light-cache`: the `latestReviews` nodes (state, author, commit oid) of the Light read; NULL = not polled since
   labels_json     TEXT,                                           -- migration `pr-light-cache`: the label names of the Light read (a JSON array); NULL = not polled since
+  merge_armed     INTEGER NOT NULL DEFAULT 0 CHECK (merge_armed IN (0, 1)),      -- migration `20261107T2330-pr-merge-armed` (commands.md §9.10): 1 when `pr merge` refused a behind head and armed an automatic merge, cleared when the pull request merges, closes or is cancelled
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
