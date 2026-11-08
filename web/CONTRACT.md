@@ -390,7 +390,8 @@ export type ErrorCode =
   | "invalid_message" // a wire message failed validation
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
-  | "invalid_submission" // empty text, or text longer than the backend allows
+  | "invalid_submission" // empty text with no images (16.2), or text longer than the backend allows
+  | "tool_failed" // a tool result arrived with status "failed" (16.1); message = the reason, shown in the cockpit error toast, never inline in the row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
@@ -542,7 +543,7 @@ Both are pure and throw `WebError`:
 
 - not an object, no string `type`, or an unknown `type` -> `invalid_message` (server messages: `protocol_error`);
 - a missing field, a wrong primitive type, an empty `sessionId` / `clientSubmissionId` / `actionId` / `dialogId` -> same codes, `details.field` names the field;
-- `session.submit`: `images.length <= IMAGE_MAX_COUNT`, every `mimeType` in `IMAGE_MIME_TYPES`, summed `dataBase64.length <= IMAGE_MAX_TOTAL_BASE64`, `whenBusy` in `followUp|steer`, `text` a string (emptiness is the backend's `invalid_submission`); it carries no `origin` field (11.9);
+- `session.submit`: `images.length <= IMAGE_MAX_COUNT`, every `mimeType` in `IMAGE_MIME_TYPES`, summed `dataBase64.length <= IMAGE_MAX_TOTAL_BASE64`, `whenBusy` in `followUp|steer`, `text` a string (emptiness with no images is the backend's `invalid_submission`; an image-only message is valid, 16.2); it carries no `origin` field (11.9);
 - `session.configure`: exactly one `change.kind` of `model|thinking|tier`;
 - `dialog.respond`: `response.method`/`outcome` pair from `DialogResponse`; `changes` needs `feedback.trim() !== ""`;
 - `cockpit.action`: the action goes through `parseCockpitAction` (section 5.5), whose failures are `unknown_action` (unknown kind) and `invalid_message` (bad field of a known kind);
@@ -820,7 +821,7 @@ export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed"
 
 export interface PendingSubmission {
   readonly clientSubmissionId: string; readonly text: string; readonly imageCount: number; readonly whenBusy: WhenBusy;
-  readonly state: "sending" | "failed"; readonly error?: WireError;
+  readonly state: "sending"; // Amended by 16.1 (air-d44): no "failed" state — a session.error with a clientSubmissionId drops the row and shows its error once in the cockpit error toast (11.7), so the row never carries an error; 10.3 adds "sent"
 }
 export interface SessionView {
   readonly id: string;
@@ -868,7 +869,7 @@ Reducer behaviours (every ServerMessage is `{type:"server"}`):
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`, and clears `error`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
 - `session.status` sets `busy` and `queued`. `session.footer` sets `footer`; `session.title` sets `title` (the header shows `title`; the footer and title also come from `session.attached.meta`).
-- `session.submitAck` (not queued) marks the pending submission with that `clientSubmissionId` `state:"sent"`, or removes it when its echo is already in the transcript; a queued ack removes it (11.2). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` when its `sessionId` is the selected id (and, when `sessionId` is null, `lastError`).
+- `session.submitAck` (not queued) marks the pending submission with that `clientSubmissionId` `state:"sent"`, or removes it when its echo is already in the transcript; a queued ack removes it (11.2). `session.error` with `clientSubmissionId` marks that pending submission `state:"failed"` with the error; without it sets `session.error` when its `sessionId` is the selected id (and, when `sessionId` is null, `lastError`). **Amended by 16.1 (air-d44):** a failed submission's row is removed from the transcript instead of being marked `failed`, and its error is shown once in the cockpit error toast (11.7); no inline text stays in the chat.
 - `submitPending` adds a `sending` submission (with `at` and `images`, 11.2); `dismissPending` removes one.
 - `session.dialog` sets `dialog`; `session.dialogResolved` clears `dialog` only when its `dialogId` equals the active dialog's id; `session.models` sets `models`.
 - `session.completion` with a non-null `completion` for the attached session sets `completion` and `completions[sessionId]`. A `null` completion changes nothing: it never clears `completion` or `completions`. `completions` is never reset by navigation, so `selectSession` shows the last known value (`completions[id] ?? null`) until a newer one arrives.
@@ -1370,7 +1371,7 @@ Behaviours:
 - Live: `append` events emit `session.append` (`added`), `session.update` (`updated`), `session.dialog` / `session.dialogResolved` for `dialogsOpened` / `dialogsResolved` (outcome `"answered"`; plan review `superseded` or `lost` -> `"superseded"`), `session.footer` when `factsChanged`, `session.status` when `busy` changed. `reset` -> re-reads the tail, emits a fresh `session.window {mode:"tail"}` (truncation or replacement resets the window) and restarts the watcher.
 - `busy` (Phase 1 choice, a file-derived approximation): `facts.lastRole === "user" || "toolResult"`, or `lastRole === "assistant"` with `lastStopReason` of `toolUse`/`pending`; false otherwise. `queued` is always `[]`.
 - `loadEarlier(before)`: `readEarlier`, emits `session.window {mode:"earlier"}`; on a session attached with no file it emits an empty `session.window {mode:"earlier", items: [], hasEarlier: false, cursor: null}`.
-- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); `text.trim() === ""` or `text.length > PI_SEND_TEXT_MAX` -> `invalid_submission`; else `cpd.json(sessionSendArgs(id, text))`, `sessionSendArgs` passing `--origin webui` (11.9: the `session-message` Event carries `data.origin: "webui"`) (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
+- `submit`: images are written and referenced in the text (11.3); `whenBusy === "steer"` -> `unsupported_capability` (reason of `capabilities.steer`); **Amended by 16.2 (air-d43):** `text.trim() === ""` with no images, or `text.length > PI_SEND_TEXT_MAX`, -> `invalid_submission`; with images and no text the submission is valid: the images are written and the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3); else `cpd.json(sessionSendArgs(id, text))`, `sessionSendArgs` passing `--origin webui` (11.9: the `session-message` Event carries `data.origin: "webui"`) (text-file attachments were already inlined by the browser, 6.9) and `session.submitAck {queued:false}`; a `cpd_failed` rejects and the hub reports it as `session.error {clientSubmissionId}`. After a submit that succeeds on a session attached with no file (pro-d397, pro-d400), the backend polls `cpd session show <id>` (`deps.cpd.json`) every 250 ms through the injected `deps.scheduler.after`, for at most 20 tries. When the reply's `session.file` is a non-empty string, it reads that tail as `attach` does, emits `session.window {mode:"tail"}`, `session.footer` and `session.status`, and starts the watch from `endOffset`. When the file never appears within the 20 tries, it emits `session.error` with `session_file_missing` `{sessionId}`. `dispose()` cancels the pending poll timer, so no timer outlives the handle.
 - `configure {kind:"tier"}`: `cpd.json(sessionRetierArgs(id, tier))` (applies at the next idle, scout-pi §6), then re-reads `cpd session show` and emits `session.footer`. `{kind:"model"|"thinking"}` -> `unsupported_capability`.
 - `abort`, `abortSubmission`, `compact` and `listModels` -> `unsupported_capability` with the reason of the matching capability (`listModels` -> the `configure.model` reason). `respond` answers the open dialog (11.4).
 - Footer: `model` = `facts.model` (a later `model_change` wins over `session show`) else `session show` `model`; `thinking` likewise; `tier` = `session show` `tier` else `ref.tier`; `cost` = unknown (`"pi session cost needs a full-file scan, which Phase 1 never does"`); `contextPercent` = unknown (`"the model's context window is not available for pi sessions"`); `branch` = `git.branch(ref.cwd)` (the git branch of the session cwd; `ref.cwd` missing -> unknown `"the session row has no cwd"`; `null` -> unknown `"not a git repository"`).
@@ -1421,7 +1422,7 @@ Behaviours:
   - **Manager:** refused without a cpd call: `session.error {sessionId, clientSubmissionId, error: {code: "manager_not_archivable", message: "A Manager is archived only with its Context.", details: {sessionId}}}`.
   - **Plan Lead** (the `leadSessionId` of its Plan, 5.1): runs `plan.archive` for its Plan. **Any other Lead or side fork:** runs `session.archive`. Both go through `runAction` (`actions.ts`, 5.4) with its park-and-retry for `in_chat_slot`, so `blockers()` is enforced exactly as for the cockpit.
   - **Success:** no reply for the submission and no `action.result`. The archive reaches the client as a tree change, which the web handles as DESIGN 3h says.
-  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. The Composer marks that pending row `failed` (6.2) and the User stays where they are.
+  - **Failure** (any `WebError` from `runAction`, `archive_blocked` included): `session.error {sessionId, clientSubmissionId, error: toWireError(e)}`, the same error the cockpit's `action.result` carries: `code "cpd_failed"`, `details.cpdCode` = cpd's code (`archive_blocked`, with `details.details.blockers` as a list of `{kind,id,reason,plan?}`), `details.exitCode` 3. **Amended by 16.1 (air-d44):** the pending row is dropped instead of being marked `failed` (6.2), and its error is shown once in the cockpit error toast (11.7); the User stays where they are.
 - `close()` disposes the attached handle and the cockpit subscription; idempotent. Disconnect stops backend streams.
 
 #### `plugin.ts`: the Vite plugin and the real boundaries (thin, ONE place)
@@ -1498,7 +1499,7 @@ export function Footer(props: { footer: FooterStats | null; contextWindow?: numb
 **ToolRow DOM** (scout-pi §4, compact-tools). `<details data-kind="tool" data-tool="<name>" data-status="<status>">`, `open` attribute set only for `name === "edit"` (edit's body shows as a bounded preview by default, scout-pi §4). `<summary>`: `<span data-part="name">` (name with a leading `mcp__` removed, so `mcp__srv__tool` shows `srv__tool`), `<span data-part="detail">`, `<span data-part="status">`:
 
 - **detail** by tool: the table of DESIGN-chat 3.2 (paths and commands cut at 100 characters, other details at 160).
-- **status** text: `running` -> `Running`; `failed` -> `Failed` plus `: <reason>` where reason is the first non-empty line of `result.text` cut at 140 chars + `…`; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
+- **status** text: `running` -> `Running`; **Amended by 16.1 (air-d44):** `failed` -> `Failed`, with no inline reason — the failure's reason text goes to the cockpit error toast with code `tool_failed` (16.1), while the row keeps its failed tone and the tool group's failed count; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
 - **body** (inside the row's closed `TraceCollapsibleContent`): DESIGN-chat 3.6 (a `CodeBlock`, the first 10 lines, `Show N more lines`).
 
 `OrphanRow`: `<article data-kind="orphan-result">` with `Result of <name> (call not loaded)` and the same output body rules.
@@ -1663,6 +1664,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unknown_action` | `parseCockpitAction`, `actions.runAction` | action `kind` not in 5.4 | `{kind}` |
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
+| `tool_failed` | `store.ts` (the state layer) | a tool result with status `failed` is applied to the selected session's transcript; `message` = the reason, the first non-empty line of `result.text` (6.8, 16.1) | `{itemId?}` |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
 | `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
@@ -1766,7 +1768,7 @@ In both dialects an entry of kind `"cpd-chat"` (the host writes it for text type
 
 ### 10.3 State layer (`web/src/state/*`)
 
-1. `PendingSubmission.state` is `"sending" | "sent" | "failed"`. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
+1. **Amended by 16.1 (air-d44):** `PendingSubmission.state` is `"sending" | "sent"`, never `"failed"`: a `session.error` carrying a `clientSubmissionId` drops its pending row and shows the error once in the cockpit error toast (11.7) instead of marking the row. `session.submitAck` with `queued: false` sets that pending row to `"sent"` (it is no longer removed); with `queued: true` the row is removed as in Phase 1 (the host's queued list shows it). A `"sent"` row is removed when a `session.append`, `session.update` or `session.window` carries a NEW user item (id not yet in the transcript) whose text, trimmed, equals the row's text, trimmed: oldest matching `"sent"` row first, one row per item. A `session.window` with `mode: "tail"` removes all `"sent"` rows. `connection.ts` schedules `scheduler.after(PENDING_ECHO_MS, ...)` at the ack (`PENDING_ECHO_MS = 30000`, exported) that dispatches `dismissPending` for the row; the timer is disposed at `close`.
 2. `TranscriptState` gains `tailEpoch: number` (`emptyTranscript` has 0): `setTail(window, previous?)` returns `(previous?.tailEpoch ?? 0) + 1`; `prependEarlier`, `appendItems`, `updateItems` and `applyDelta` keep it.
 3. `applyDelta` locates its item searching from the END of the list (the streaming item is last) and copies only the changed item; every other item keeps reference identity. `mergeById` uses one id->index `Map`.
 4. Frame coalescing: `StoreAction` gains `{type: "serverBatch"; messages: ServerMessage[]}` which reduces the messages in order and produces ONE new state (one listener notification). `createConnection` buffers messages of type `session.append`, `session.update` and `session.delta` whose `sessionId` is the selected session; the first buffered message arms `scheduler.after(FRAME_MS, flush)` (`FRAME_MS = 16`, exported); `flush` dispatches one `serverBatch`. Adjacent buffered `session.delta` messages with the same `sessionId`, `itemId`, `blockIndex` and `blockType` are merged by concatenating `text`. Any other server message flushes the buffer synchronously first (order is preserved) and is then dispatched as before. `selectSession` and `close` drop the buffer and dispose the timer. A parse failure of a buffered message surfaces as `session.error` exactly as in Phase 1 (parse happens before buffering).
@@ -1893,7 +1895,7 @@ Recorded decisions: pro-d48 to pro-d61, approved by the User (preview `cpd-webui
 
 ### 11.3 Images on submissions and the pi transcript
 
-- **Send.** A pi `session.submit` with `images` no longer fails. The backend writes each image to the attachments directory (`<tmpdir>/cpd-webui-attachments/`, `web/README.md`) as `<sessionId>-<stamp>-<i>.<ext>` (`png`, `jpg`, `gif`, `webp` by MIME type) and appends one `[Attached image: <path>]` line per image after a blank line to the text it sends with `cpd session send`. `PI_SEND_TEXT_MAX` applies to that text. `capabilities.images` for pi is `{supported: true, maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64}`.
+- **Send.** A pi `session.submit` with `images` no longer fails. The backend writes each image to the attachments directory (`<tmpdir>/cpd-webui-attachments/`, `web/README.md`) as `<sessionId>-<stamp>-<i>.<ext>` (`png`, `jpg`, `gif`, `webp` by MIME type) and appends one `[Attached image: <path>]` line per image after a blank line to the text it sends with `cpd session send`. `PI_SEND_TEXT_MAX` applies to that text. **Amended by 16.2 (air-d43):** with no text, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line; the message is delivered like any other. `capabilities.images` for pi is `{supported: true, maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64}`.
 - **Echo.** The pi normaliser (`jsonl.ts`) reads each `[Attached image: <path>]` line of a user message: the line is removed from `text`, and the path becomes a `TranscriptAttachment {kind: "image", mimeType, dataBase64}`. `mimeType` from the extension (`png`, `jpg`/`jpeg`, `gif`, `webp`; default `image/png`). `dataBase64` is the file's base64 when it can be read; otherwise the attachment has no `dataBase64` and shows as a named attachment. Block images of the message (`ImageContent`) are kept as before, before the path images.
 - Durable sessions: `images` as in 6.9 and 6.4, unchanged.
 
@@ -2161,3 +2163,32 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 - Tests run without a real process, socket, timer or `cpd` (A6): the server socket and the client `WebSocket` are injected fakes driven by `emit*` helpers, the heartbeat and the watchdog run on the injected `Scheduler`, and no test opens a real port.
 - Limits, stated plainly: the browser's automatic pong answering is the platform's, not the code's (unverified in a real browser); the constants above are the code's named constants, not configuration.
+
+## 16. Amendments air-d44, air-d43: the error toast standard and the image-only message (Plan `toast-fix`)
+
+Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.8 or 11.3 is marked "Amended by 16.x", section 16 wins and the older statement is void.
+
+### 16.1 Every error is shown through the cockpit error toast (air-d44)
+
+- In the WebUI every error is shown through the cockpit error toast (the error Alert of 11.7, with its Report button). An error rendered inline in the chat breaks the standard. A failed submission leaves no row and no inline text in the transcript: its error appears once in the cockpit error toast, and the User retypes the message.
+- A failed tool's row is the transcript's record, not an error display: it keeps its failed tone, its failed count and its place in the Chain of Thought, and the failure's reason text goes to the cockpit error toast with code `tool_failed` instead of being rendered inline in the row (6.8's status text, amended above).
+
+### 16.2 An image-only chat message is valid and delivered (air-d43)
+
+- A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text and no images; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
+- The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the `[Attached image: <path>]` lines alone, with no leading blank line (11.3, amended above), and the submission is echoed, queued and delivered like any other.
+
+## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
+
+Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
+
+### 17.1 The Save sends all four role Tiers
+
+- The Save runs `cpd config tiers set` with **all four** role Tiers — `--auxiliar`, `--worker`, `--lead` and `--manager`, the values the dialog shows, whether or not the User changed them — because `cpd config tiers set` accepts a save only with all four role Tiers (its `--help` usage line is `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`).
+- The rest of the save keeps its TUI order: the experimental switches are set one by one, then `cpd session retier --all` runs when a Tier value differs from the read; a refusal stops the save at the first failing step.
+
+### 17.2 A Save refusal is shown through the cockpit error toast
+
+- A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
+- The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+

@@ -128,12 +128,7 @@ function diffCounts(diff: string): { added: number; removed: number } {
 
 function statusOf(tool: ToolItem): string {
   if (tool.status === "running") return "Running";
-  if (tool.status === "failed") {
-    const reason = splitLines(tool.result?.text ?? "")
-      .map((l) => l.trim())
-      .find((l) => l !== "");
-    return reason === undefined ? "Failed" : `Failed: ${reason}`;
-  }
+  if (tool.status === "failed") return "Failed";
   let s = "Done";
   const ms = tool.result?.durationMs;
   if (typeof ms === "number") s += ` in ${duration(ms)}`;
