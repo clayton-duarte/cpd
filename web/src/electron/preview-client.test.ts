@@ -18,10 +18,6 @@ function loading(epoch = 1): HealthRecord {
   return { status: "loading", reloadEpoch: epoch, pid: PID, startedAt: iso(T0) };
 }
 
-function healthy(epoch = 1): HealthRecord {
-  return { status: "healthy", reloadEpoch: epoch, pid: PID, startedAt: iso(T0), healthyAt: iso(T0) };
-}
-
 interface RunCall {
   readonly file: string;
   readonly args: readonly string[];
