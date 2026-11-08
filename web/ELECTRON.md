@@ -394,11 +394,11 @@ Keys, resize, OSC 52 copy, paste and zoom behave per tab exactly as the terminal
 
 The Electron app and the `cpd` CLI are two binaries, both built from the cpd checkout. A push to `main` is a release: each `pr-merged` Event, and a catch-up check at launch, syncs the checkout to `origin/main` (fast-forward; in preview mode a rebase of local commits, see `checkout.ts`), builds the app bundle and installs the CLI. At launch, before the window opens, a ready `web/dist-electron.next` whose `.built-sha` equals `git rev-parse HEAD` is promoted into `web/dist-electron` (see Launch promote, below), so no stale bundle survives a relaunch (air-n67). Nothing stops for it: the swap runs while the window is unfocused, the system has been idle for 300 s, or at the next View menu change (air-d76), and never takes focus. An update that changes any non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) shows the tray item `Restart to Apply Update`; the new main-process code loads at the next launch, and the app never relaunches itself (air-d76). A renderer-only change keeps the in-place renderer reload.
 
+Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
+
 ### Launch promote
 
 Before the window opens — in the boot sequence, before the window is created — the main process runs one promote step. When `web/dist-electron.next/.built-sha` exists and equals `git rev-parse HEAD` (run in the checkout root), it promotes `.next` into the current bundle with `swapBundle` (`web/src/electron/update/bundle.ts`): the current bundle's `.built-sha` becomes HEAD, so the updater's catch-up check finds nothing to build and the launch never starts a stale bundle (air-n67). When `.next` is missing, or its `.built-sha` does not match HEAD, nothing is promoted: the `.next` build is not a build of this HEAD, and the updater's catch-up check rebuilds it as usual. A promoted main-side artefact (`main.js`, `preload.cjs`, `server.js`) loads at the next launch; the process that ran the promote keeps the code it was started with.
-
-Scope (A1): the app run from the cpd checkout. The packaged `cpd.app` does not replace itself; with no checkout found, auto-update logs one line and stays off.
 
 ### Contract
 
