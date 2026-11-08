@@ -177,8 +177,8 @@ describe('createUpdater', () => {
     expect(deps.installCli).toHaveBeenCalledWith(SHA);
     expect(rebuilt).toHaveBeenCalledTimes(1);
     expect(outs).toEqual([PROD_VIEW_DIR, PREVIEW_VIEW_DIR]);
-    expect(fs.readText(`${ROOT}/${PROD_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
-    expect(fs.readText(`${PREVIEW}/${PREVIEW_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
+    expect(fs.readText(`${ROOT}/web/${PROD_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
+    expect(fs.readText(`${PREVIEW}/web/${PREVIEW_VIEW_DIR}/${BUILT_SHA_FILE}`)).toBe(SHA);
   });
 
   it('does not rebuild the views when the CLI is already current', async () => {
