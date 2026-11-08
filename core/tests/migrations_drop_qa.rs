@@ -33,10 +33,7 @@ fn raw(home: &CpdHome) -> Connection {
 /// the table's generated triggers for the re-run.
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
-    (
-        "inbox_items",
-        "SELECT 1",
-    ),
+    ("inbox_items", "SELECT 1"),
     (
         "event_kinds",
         "DELETE FROM event_kinds WHERE name = 'guard'",

@@ -41,7 +41,13 @@ fn refusal_of(fx: &mut Fx, session: &str, at: &str, code: &str, model: &str) {
 /// The open `refusal-alert` items: `(subject, label, context, plan, session)`, oldest first.
 fn alert_items(
     fx: &mut Fx,
-) -> Vec<(String, String, Option<String>, Option<String>, Option<String>)> {
+) -> Vec<(
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
     fx.engine
         .store
         .read(|conn| {
@@ -191,7 +197,11 @@ fn e8_opens_one_item_per_session_at_the_threshold_and_closes_it_below_it() {
     refusal_of(&mut fx, "fork1", &ago(3), "usage", "p/sonnet");
     refusal_of(&mut fx, "fork1", &ago(2), "usage", "p/sonnet");
     inbox::run(&mut fx.engine);
-    assert_eq!(alert_items(&mut fx), vec![], "below the threshold opens nothing");
+    assert_eq!(
+        alert_items(&mut fx),
+        vec![],
+        "below the threshold opens nothing"
+    );
 
     // The third refusal of each Session reaches the threshold: one red item per Session, labelled and linked.
     refusal(&mut fx, &ago(1), "network", "p/opus");
