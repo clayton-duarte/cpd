@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/test/durable-worker/*.test.ts pi/test/durable-host/*.test.ts pi/skills/skill.test.ts; fi; node --test \"$@\"; }; t",
+    "refusals": "node pi/tools/refusal-miner.ts",
     "pretypecheck": "scripts/pnpm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/pnpm-fresh.sh",
