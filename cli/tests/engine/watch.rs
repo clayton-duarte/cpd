@@ -6219,13 +6219,38 @@ impl Probe {
 /// Runs the engine on virtual time until `step` says so; it is given the virtual time passed since the run began, once per nap,
 /// after the `cpd` children E9 started have run.
 fn drive(fx: &Ip, mut step: impl FnMut(Duration) -> bool + Send + 'static) {
+    /// How long the run waits for E5's pass to end before running the runs it starts (a real wait on a channel, as the
+    /// cadence tests' `WAIT`; the pass answers at once in these fixtures).
+    const WAIT: Duration = Duration::from_secs(10);
     let mut children = fx.children();
     let clock = (*fx.fakes.clock).clone();
     let from = clock.elapsed();
-    fx.watch_steps(move |_| {
-        children.run_pending();
-        step(clock.elapsed() - from)
-    })
+    // E5's pass opens a store of its own on its poll thread. E9's runs open theirs on this thread with the manual
+    // clock, whose wait for the store's setup lock (`locks/store.lock`) spends the whole budget at once instead of
+    // waiting: a run that met the pass's store setup would fail `lock_timeout` (exit 5) and the batch would step down
+    // for the schedule, not the state - load-dependently. So wait once for the pass's thread to end (its store is
+    // closed by then) before running the runs, and the batch split is the state's alone.
+    let (ended_tx, ended_rx) = std::sync::mpsc::channel::<()>();
+    let ended_tx = Mutex::new(ended_tx);
+    let mut waited = false;
+    fx.watch_gated(
+        move |_| {
+            if !waited {
+                ended_rx
+                    .recv_timeout(WAIT)
+                    .expect("E5's pass ended and let the runs go");
+                waited = true;
+            }
+            children.run_pending();
+            step(clock.elapsed() - from)
+        },
+        move || {
+            // The hook must not panic (it runs in a thread-local destructor): a poisoned lock is dropped silently.
+            if let Ok(tx) = ended_tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+    )
     .unwrap();
 }
 
