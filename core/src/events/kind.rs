@@ -151,6 +151,7 @@ kinds! {
     IncidentStarted = "incident-started",
     IncidentPlans = "incident-plans",
     IncidentEnded = "incident-ended",
+    Guard = "guard",
 }
 
 impl Kind {
@@ -362,6 +363,11 @@ impl Kind {
             Error => spec(
                 [M, M, M, M, M],
                 &["source", "code", "message", "details"],
+                &[],
+            ),
+            Guard => spec(
+                [Y, M, M, M, Y],
+                &["code", "role", "tier", "model", "tool", "excerpt"],
                 &[],
             ),
         }

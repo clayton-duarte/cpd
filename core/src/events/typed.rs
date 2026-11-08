@@ -884,6 +884,34 @@ impl NewEvent {
         )
     }
 
+    /// `guard` (contract §5.2, Plan `agent-refusals`): one of the Session's own tool calls or commands was
+    /// refused. `code` is the guard rule (an adapter refusal) or the envelope's code (a CLI refusal), and
+    /// `excerpt` the refused command line or path, cut to 200 characters. `role`, `tier` and `model` are the
+    /// refusing Session's own, so a refusal is rankable per guard, role, model and day with no join.
+    #[allow(clippy::too_many_arguments)]
+    pub fn guard(
+        text: impl Into<String>,
+        code: &str,
+        role: &str,
+        tier: &str,
+        model: &str,
+        tool: &str,
+        excerpt: &str,
+    ) -> NewEvent {
+        make(
+            Kind::Guard,
+            text,
+            json!({
+                "code": code,
+                "role": role,
+                "tier": tier,
+                "model": model,
+                "tool": tool,
+                "excerpt": excerpt,
+            }),
+        )
+    }
+
     /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
     /// the incident; `until_workflow` (the `<plan>/<key>` auto-end Workflow) is in `data` only when set.
     pub fn incident_started(
@@ -1095,6 +1123,7 @@ mod tests {
                 NewEvent::incident_plans(T, s, [s], Some(s)),
             ],
             Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s, s)],
+            Kind::Guard => vec![NewEvent::guard(T, s, s, s, s, s, s)],
         }
     }
 
