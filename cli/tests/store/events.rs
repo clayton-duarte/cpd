@@ -1063,17 +1063,34 @@ fn migrating(fx: &Fx) -> impl FnOnce() + Send + 'static {
     }
 }
 
-/// hs-n278: a follower that opens the store while another cpd migrates it waits (stderr says so once), and
-/// does not fail `lock_timeout` after `store_busy_ms`.
+/// hs-n278 (air-n99), contract §4.2: `events follow`'s open takes the setup lock when the store's schema cannot
+/// be read. The holder is not migrating the store: it holds the database exclusively (a rollback-journal
+/// `BEGIN EXCLUSIVE`, as a migration's WAL switch does) so the follower's read-only schema check cannot land, and
+/// its setup lock carries a live migration marker so the wait runs on the fake clock. `open_catalog` cannot
+/// confirm the store is up to date, its conservative branch takes the setup lock and waits the holder out for
+/// longer than `store_busy_ms`, then opens and reads the seeded events.
 #[test]
-fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
+fn follow_waits_out_a_holder_whose_schema_cannot_be_read_longer_than_store_busy_ms() {
     let fx = seeded();
     fx.env
         .write_config(&format!("{CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    let h = home(&fx.env);
+    // The database is rolled back to the journal and held exclusively, so its read-only schema check is busy; the
+    // setup lock says a migration is in progress, so the wait for it runs on the fake clock, not on wall time.
+    let exclusive = Connection::open(h.db()).unwrap();
+    exclusive
+        .pragma_update(None, "journal_mode", "DELETE")
+        .unwrap();
+    exclusive.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let release = migrating(&fx);
-    // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
-    // while a migration holds the lock.
-    let clock = Arc::new(ScriptedClock::new().at(Duration::from_millis(1500), release));
+    // The holder lets go 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms),
+    // and a follower that opened without waiting would have elapsed 0 and printed no waiting line.
+    let clock = Arc::new(
+        ScriptedClock::new().at(Duration::from_millis(1500), move || {
+            release();
+            exclusive.execute_batch("ROLLBACK").unwrap();
+        }),
+    );
     let ports = cpd_core::ports::Ports {
         clock: clock.clone(),
         runner: fx.fakes.runner.clone(),
@@ -1081,12 +1098,12 @@ fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
         ..cpd_core::ports::Ports::real()
     };
     let run = follow_once_on(&ports, &["--until-idle", "--since", "0"]);
-    assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
     assert!(
         clock.elapsed() >= Duration::from_millis(1000),
-        "did not wait: {:?}",
+        "the follower opened without waiting: {:?}",
         clock.elapsed()
     );
+    assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
     assert_eq!(
         run.stderr.matches("waiting for cpd pid").count(),
         1,
