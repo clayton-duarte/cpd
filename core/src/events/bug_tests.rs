@@ -18,7 +18,13 @@ fn bug_protocol_breach_kind_is_registered() {
     assert!(Kind::ALL.contains(&kind), "the kind is one of Kind::ALL");
     let spec = kind.spec();
     assert_eq!(
-        (spec.context, spec.plan, spec.job, spec.attempt, spec.session),
+        (
+            spec.context,
+            spec.plan,
+            spec.job,
+            spec.attempt,
+            spec.session
+        ),
         (Set::Maybe, Set::Maybe, Set::No, Set::No, Set::No)
     );
     assert_eq!(spec.required, ["bug", "reason", "symptom", "bound"]);
