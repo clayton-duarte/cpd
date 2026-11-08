@@ -945,3 +945,7 @@ No test opens a socket, starts a process, runs real tmux, pi-durable or a model,
 **What it cannot measure.** What a codemode script read and filtered away (nested results are never stored), so the saving shows only as a change in `result_chars`, `turns` and `cost_usd` between two windows of comparable work; sessions differ, so compare medians over many sessions, not one pair.
 
 **How to use it for the experiment.** The baseline is `--until <time the project setting reached the machine>`, the comparison `--since` that time.
+
+## The command-example guard (Plan `agent-refusals`)
+
+Contract §8.3 "Delivery to agents" fixes the rule; this section (skeleton) will say where it lives in the code: `pi/lib/command-guard.ts` and `pi/test/skill-commands.test.ts`.
