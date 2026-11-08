@@ -157,7 +157,12 @@ fn stays_silent_below_the_bound() {
         "{:?}",
         messages(&mut fx)
     );
-    assert_eq!(fx.count("protocol-breach"), 0, "{:?}", fx.events("protocol-breach"));
+    assert_eq!(
+        fx.count("protocol-breach"),
+        0,
+        "{:?}",
+        fx.events("protocol-breach")
+    );
     assert!(
         messages_starting(&mut fx, "Bug b1 breached").is_empty(),
         "{:?}",

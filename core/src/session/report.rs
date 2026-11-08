@@ -14,8 +14,8 @@ use super::row;
 use super::{Env, ReportArgs};
 use crate::args::SessionArg;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
 use crate::events::repeat::{self, Same, Scope};
+use crate::events::{NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store::WriteTxn;
@@ -161,10 +161,10 @@ impl FromStr for Command {
     fn from_str(s: &str) -> Result<Command, CpdError> {
         let chars = s.chars().count();
         if chars == 0 || chars > COMMAND_MAX {
-            return Err(
-                usage(format!("The command must be 1 to {COMMAND_MAX} characters."))
-                    .with("chars", chars),
-            );
+            return Err(usage(format!(
+                "The command must be 1 to {COMMAND_MAX} characters."
+            ))
+            .with("chars", chars));
         }
         Ok(Command(s.to_owned()))
     }
@@ -271,9 +271,14 @@ fn breach(
             event = event.plan(plan);
         }
         // The window compares protocol, tool and command (§10.18), scoped to the reporting Session.
-        if let Some(earlier) =
-            recent_breach(tx, window, &protocol.0, &tool.0, command.as_deref(), &session.id)?
-        {
+        if let Some(earlier) = recent_breach(
+            tx,
+            window,
+            &protocol.0,
+            &tool.0,
+            command.as_deref(),
+            &session.id,
+        )? {
             return Ok(earlier);
         }
         append(tx, event)

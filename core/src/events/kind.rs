@@ -366,15 +366,7 @@ impl Kind {
                 [M, M, N, N, M],
                 &["protocol", "source"],
                 &[
-                    "role",
-                    "model",
-                    "tier",
-                    "tool",
-                    "command",
-                    "bug",
-                    "reason",
-                    "symptom",
-                    "bound",
+                    "role", "model", "tier", "tool", "command", "bug", "reason", "symptom", "bound",
                 ],
             ),
             Error => spec(
