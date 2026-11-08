@@ -324,7 +324,9 @@ impl Config {
         let machine = r.require("machine", |v| {
             MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
-        let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
+        // The machine-wide Attempt limit is bounded 1 to 16 (contract §8.2, air-d70): a hand-edited value above
+        // 16 is refused here, so neither plain `cpd config` nor the engine can load it.
+        let concurrency = r.get("concurrency", 3, |v| int(v, 1, 16))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier model v2: each role default is a Tier by syntax only (the catalog is not read here) and the four
         // strictly ascend on the ladder (checked below).
