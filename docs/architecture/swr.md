@@ -451,6 +451,7 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 - `coalesce` gives the rule `enqueue` applies to the op kind.
 - Node helpers do I/O only and run on the `Runner` port (A7). Datasource logic is Rust.
 - `registry()` returns the four sources as `&'static dyn Source`.
+- `registry()` is the one place a source becomes live: the engine runs only the sources it names, so a source the registry does not list never runs. When a source file carries both a stub and a live implementation, the registry names the live one.
 
 ## 12. The engine step E24 and gc
 

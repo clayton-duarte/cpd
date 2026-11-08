@@ -120,7 +120,7 @@ A document that fails, times out or parses badly is one failure of the endpoint 
 
 ## 4. The pass
 
-Each step is one function in `core/src/swr/source/github.rs`; the reader is `core/src/swr/github.rs` (§6). `now` and `poll_started_at` are arguments (swr.md §16).
+Each step is one function in `core/src/swr/source/github.rs`; the reader is `core/src/swr/github.rs` (§6). The registered source is the live `GithubSource`, not the file's stub `Github`: only what `registry()` names runs (swr.md §11). `now` and `poll_started_at` are arguments (swr.md §16).
 
 1. **Plan the document.** From the stored rows, before the call, compute:
    - the `Heavy` set and the alias sets (§3.2, §4.2);
