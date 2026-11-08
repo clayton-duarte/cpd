@@ -24,16 +24,21 @@ export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
     const v = experimental[name];
     return typeof v === "boolean" ? v : bad(name);
   };
+  const raw = config["concurrency"];
+  const concurrency = raw === undefined
+    ? {}
+    : { concurrency: typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 16 ? raw : bad("concurrency") };
   return {
     tiers: { auxiliar: tier("auxiliar"), worker: tier("worker"), lead: tier("lead"), manager: tier("manager") },
     experimental: {
       durable_workers: flag("durable_workers"), write_curation: flag("write_curation"),
       failure_triage: flag("failure_triage"), turn_question_guard: flag("turn_question_guard"),
     },
+    ...concurrency,
   };
 }
 
-/** Saves in the TUI's order: Tiers, then each switch, then retier all when a Tier changed. Stops at the first refusal.
+/** Saves in the TUI's order: Tiers, then the Worker count, then each switch, then retier all when a Tier changed. Stops at the first refusal.
  * `config tiers set` requires all four roles (air-n37): the changed ones come from the dialog, the rest
  * from the settings read, so no role is ever dropped. */
 export async function saveSettings(cpd: Cpd, changes: SettingsChanges): Promise<void> {
@@ -44,6 +49,7 @@ export async function saveSettings(cpd: Cpd, changes: SettingsChanges): Promise<
     const tiers = Object.fromEntries(SETTINGS_ROLES.map((r) => [r, changes.tiers?.[r] ?? current.tiers[r]])) as Record<SettingsRole, string>;
     await cpd.json(toArgv({ kind: "config.tiers.set", tiers }));
   }
+  if (changes.concurrency !== undefined) await cpd.json(toArgv({ kind: "config.concurrency.set", n: changes.concurrency }));
   for (const key of SETTINGS_SWITCHES) {
     const on = changes.experimental?.[key];
     if (on !== undefined) await cpd.json(toArgv({ kind: "config.experimental.set", key, on }));

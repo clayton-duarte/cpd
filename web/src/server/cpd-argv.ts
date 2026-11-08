@@ -11,6 +11,7 @@ export type CpdCommand =
   | { readonly kind: "config.experimental.read" }
   | { readonly kind: "config.tiers.set"; readonly tiers: TiersArgv }
   | { readonly kind: "config.experimental.set"; readonly key: string; readonly on: boolean }
+  | { readonly kind: "config.concurrency.set"; readonly n: number }
   | { readonly kind: "context.list" }
   | { readonly kind: "context.curation"; readonly contextId: string; readonly limit: number }
   | { readonly kind: "context.rename"; readonly contextId: string; readonly title: string }
@@ -75,6 +76,7 @@ export function toArgv(cmd: CpdCommand): string[] {
         "--lead", cmd.tiers.lead,
         "--manager", cmd.tiers.manager];
     case "config.experimental.set": return ["config", "experimental", cmd.key, cmd.on ? "on" : "off"];
+    case "config.concurrency.set": return ["config", "concurrency", "set", String(cmd.n)];
     case "context.list": return ["context", "list"];
     case "context.curation": return ["context", "curation", `--context=${cmd.contextId}`, `--limit=${cmd.limit}`];
     case "context.rename": return ["context", "rename", cmd.contextId, `--title=${cmd.title}`];
@@ -156,7 +158,7 @@ export function tuiAttachCommand(sshAlias?: string): { file: string; args: strin
   return sshAlias === undefined ? { file: "cpd", args: cpd } : { file: "ssh", args: ["-t", sshAlias, "cpd", ...cpd] };
 }
 
-const TIERS: TiersArgv = { auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" };
+const TIERS: TiersArgv = { auxiliar: "GX", worker: "H2", lead: "S2", manager: "O3" };
 
 /** Every command the web can send, for the argv contract test: one per variant, plus the
  * optional-flag combinations the call sites produce (commands.md §5.6). */
@@ -169,6 +171,7 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "config.tiers.set", tiers: TIERS },
     { kind: "config.experimental.set", key: "write_curation", on: true },
     { kind: "config.experimental.set", key: "durable_workers", on: false },
+    { kind: "config.concurrency.set", n: 4 },
     { kind: "context.list" },
     { kind: "context.curation", contextId: "c1", limit: 10 },
     { kind: "context.rename", contextId: "c1", title: "T" },
