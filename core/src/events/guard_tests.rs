@@ -58,7 +58,11 @@ fn guard_kind_is_registered() {
             .optional()?)
         })
         .unwrap();
-    assert_eq!(listed.as_deref(), Some(GUARD), "a `guard` row in event_kinds");
+    assert_eq!(
+        listed.as_deref(),
+        Some(GUARD),
+        "a `guard` row in event_kinds"
+    );
 }
 
 #[test]
@@ -105,9 +109,7 @@ fn guard_event_carries_the_refusal_fields() {
         data.clone(),
     )
     .session(session);
-    let id = store
-        .write("guard_tests", |tx| append(tx, event))
-        .unwrap();
+    let id = store.write("guard_tests", |tx| append(tx, event)).unwrap();
 
     let (stored_kind, stored_session, stored_data): (String, Option<String>, String) = store
         .read(|c| {
