@@ -31,6 +31,17 @@ pub struct Reads {
     pub providers: Vec<Provider>,
 }
 
+/// The level of the two-level popup: the menu that opens it, and its two screens (commands.md §13.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Menu,
+    Tiers,
+    Workers,
+}
+
+/// The menu's entries, in drawing order; picking one opens its screen.
+pub const MENU: [&str; 2] = ["Agent Tiers", "Workers"];
+
 /// A row of the view, in drawing order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
@@ -116,6 +127,8 @@ pub enum Step {
     PresetSet([String; 4]),
     /// `cpd config tiers set`.
     TiersSet(RoleTiers),
+    /// `cpd config concurrency set <n>`.
+    Concurrency(u32),
     /// `cpd config experimental <feature> <on|off>`.
     Experimental(Feature, bool),
     /// `cpd session retier --all`.
@@ -178,6 +191,16 @@ fn flag(v: &Value, key: &str) -> Result<bool, CpdError> {
     v.get(key)
         .and_then(Value::as_bool)
         .ok_or_else(|| shape(&format!("config.experimental.{key} is not a boolean")))
+}
+
+/// Parses the `concurrency` of `cpd config`: the machine's concurrent Worker count (commands.md §14.2c).
+pub fn concurrency(config: &Value) -> Result<u32, CpdError> {
+    let n = config
+        .get("config")
+        .and_then(|c| c.get("concurrency"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| shape("config.concurrency is not an integer"))?;
+    u32::try_from(n).map_err(|_| shape("config.concurrency is out of range"))
 }
 
 /// Parses the `experimental` object of `cpd config`: the four switches, in [`Feature::ALL`] order.
@@ -313,9 +336,14 @@ pub struct Model {
     saved_provider: String,
     base_models: [Option<String>; 4],
     base_tiers: RoleTiers,
+    concurrency: u32,
+    base_concurrency: u32,
     experimental: [bool; 4],
     base_experimental: [bool; 4],
     retier_pending: bool,
+    level: Level,
+    menu_focus: usize,
+    editing: Option<String>,
     focus: usize,
     open: Option<OpenList>,
     reread_error: Option<String>,
@@ -356,9 +384,14 @@ impl Model {
             base_tiers: reads.tiers,
             tiers: reads.tiers,
             catalog: reads.catalog,
+            concurrency: 0,
+            base_concurrency: 0,
             experimental: [false; 4],
             base_experimental: [false; 4],
             retier_pending: false,
+            level: Level::Tiers,
+            menu_focus: 0,
+            editing: None,
             focus: 0,
             open: None,
             reread_error: None,
@@ -371,6 +404,103 @@ impl Model {
         self.experimental = on;
         self.base_experimental = on;
         self
+    }
+
+    /// The count as `cpd config` read it: the current value and the baseline of the Workers row.
+    pub fn with_concurrency(mut self, count: u32) -> Model {
+        self.concurrency = count;
+        self.base_concurrency = count;
+        self
+    }
+
+    /// The popup opens on the menu (commands.md §13.2); its screens are entered from there.
+    pub fn at_menu(mut self) -> Model {
+        self.level = Level::Menu;
+        self
+    }
+
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
+    pub fn menu_focus(&self) -> usize {
+        self.menu_focus
+    }
+
+    /// The Workers row's value: the committed count, or the digits typed so far and the cursor while the editor is open.
+    pub fn concurrency_value(&self) -> String {
+        match &self.editing {
+            Some(digits) => format!("{digits}▌"),
+            None => self.concurrency.to_string(),
+        }
+    }
+
+    /// Whether the committed count differs from the baseline.
+    pub fn concurrency_changed(&self) -> bool {
+        self.concurrency != self.base_concurrency
+    }
+
+    /// Opens the menu entry `i` (a click, or Enter on the focused entry).
+    pub fn enter(&mut self, i: usize) {
+        if i < MENU.len() {
+            self.level = if i == 0 { Level::Tiers } else { Level::Workers };
+            self.menu_focus = i;
+            self.open = None;
+        }
+    }
+
+    /// Opens the Workers count's editor with nothing typed yet.
+    pub fn edit_concurrency(&mut self) {
+        if self.level == Level::Workers {
+            self.editing = Some(String::new());
+        }
+    }
+
+    fn menu_key(&mut self, key: KeyEvent) -> Effect {
+        match key.code {
+            KeyCode::Up => self.menu_focus = self.menu_focus.saturating_sub(1),
+            KeyCode::Down => self.menu_focus = (self.menu_focus + 1).min(MENU.len() - 1),
+            KeyCode::Enter => self.enter(self.menu_focus),
+            KeyCode::Esc | KeyCode::Char('q') => return Effect::Close,
+            _ => {}
+        }
+        Effect::None
+    }
+
+    /// A key on the Workers screen: an editor open edits its digits; else Enter opens the editor and Esc or `q` closes.
+    fn workers_key(&mut self, key: KeyEvent) -> Effect {
+        let Some(digits) = self.editing.clone() else {
+            match key.code {
+                KeyCode::Enter => self.editing = Some(String::new()),
+                KeyCode::Esc | KeyCode::Char('q') => return Effect::Close,
+                _ => {}
+            }
+            return Effect::None;
+        };
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if let Some(d) = self.editing.as_mut() {
+                    d.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(d) = self.editing.as_mut() {
+                    d.pop();
+                }
+            }
+            // an empty editor commits nothing: it closes and the value is unchanged
+            KeyCode::Enter => {
+                self.editing = None;
+                if !digits.is_empty()
+                    && let Ok(n) = digits.parse::<u32>()
+                {
+                    self.concurrency = n;
+                }
+            }
+            KeyCode::Esc => self.editing = None,
+            _ => {}
+        }
+        Effect::None
     }
 
     /// Flips an Experimental row's switch, and focuses it.
@@ -511,6 +641,11 @@ impl Model {
     /// A key: Up/Down move the focus or the list's highlight, Enter opens the focused row's list or picks, a
     /// character or Backspace edits the filter, Esc closes the list, or else the view; `q` closes without a list.
     pub fn key(&mut self, key: KeyEvent) -> Effect {
+        match self.level {
+            Level::Menu => return self.menu_key(key),
+            Level::Workers => return self.workers_key(key),
+            Level::Tiers => {}
+        }
         let Some(open) = self.open.clone() else {
             match key.code {
                 KeyCode::Up => self.focus = self.focus.saturating_sub(1),
@@ -719,8 +854,11 @@ impl Model {
         if self.tiers != self.base_tiers {
             steps.push(Step::TiersSet(self.tiers));
         }
-        // an Experimental switch changes no Tier, so it needs no retier; it runs before the retier
+        // a concurrency change and an Experimental switch change no Tier, so neither needs a retier
         let retier = !steps.is_empty() || self.retier_pending;
+        if self.concurrency != self.base_concurrency {
+            steps.push(Step::Concurrency(self.concurrency));
+        }
         for (i, f) in Feature::ALL.into_iter().enumerate() {
             if self.experimental[i] != self.base_experimental[i] {
                 steps.push(Step::Experimental(f, self.experimental[i]));
@@ -743,6 +881,7 @@ impl Model {
                 self.base_tiers = *tiers;
                 self.retier_pending = true;
             }
+            Step::Concurrency(n) => self.base_concurrency = *n,
             Step::Experimental(f, on) => self.base_experimental[f.at()] = *on,
             Step::Retier => self.retier_pending = false,
         }

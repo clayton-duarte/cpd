@@ -256,6 +256,7 @@ error_codes! {
     PostNotFound = "post_not_found" => Refused,
     MergeNotClean = "merge_not_clean" => Refused,
     RequiredCheckNotPassed = "required_check_not_passed" => Refused,
+    HeadBehindMain = "head_behind_main" => Refused,
     NoMergeMethod = "no_merge_method" => Refused,
     OwnerMismatch = "owner_mismatch" => Refused,
     OwnerUnset = "owner_unset" => Refused,

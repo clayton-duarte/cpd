@@ -103,15 +103,44 @@ describe("store", () => {
     expect(s4.lastError).toEqual(err);
   });
 
-  it("a failed tool result raises the error toast", () => {
-    const running: ToolItem = { kind: "tool", id: "tool:c1", callId: "c1", name: "bash", args: { command: "x" }, status: "running" };
-    const failed: ToolItem = { ...running, status: "failed", result: { text: "\nboom\nmore", isError: true } };
-    const s1 = run(selected(), attached(), server({ type: "session.window", sessionId: "s1", mode: "tail", window: { items: [running], hasEarlier: false, cursor: null } }));
-    expect(s1.lastError ?? s1.cockpit.error).toBeNull();
-    const s2 = run(s1, server({ type: "session.update", sessionId: "s1", items: [failed] }));
-    expect(s2.session?.transcript.items).toEqual([failed]);
-    // 15.1: the reason goes to the toast with code tool_failed; the row stays the transcript's record.
-    expect(s2.lastError ?? s2.cockpit.error).toMatchObject({ code: "tool_failed", message: "boom" });
+  const failedTool: ToolItem = {
+    kind: "tool", id: "tool:c9", callId: "c9", name: "bash", args: { command: "false" },
+    status: "failed", result: { text: "exit 1: command failed\nsecond line", isError: true },
+  };
+  const toolIds = (s: AppState): string[] =>
+    (s.session?.transcript.items ?? []).filter((i) => i.kind === "tool").map((i) => i.id);
+
+  it("a tail window holding an old failed tool raises no toast", () => {
+    const user = { kind: "user" as const, id: "u:1", text: "run it", attachments: [] };
+    const window = { items: [user, failedTool], hasEarlier: true, cursor: "pi:180" };
+    // Attach and reconnect both resync with a full tail window.
+    const onAttach = run(selected(), attached(), server({ type: "session.window", sessionId: "s1", mode: "tail", window }));
+    // The old failure is the failed row's record, not an error of a User action (air-d77): no toast on reload.
+    expect(toolIds(onAttach)).toEqual([failedTool.id]);
+    expect(onAttach.lastError).toBeNull();
+    // air-n77: the same tail window is replayed again on every reconnect; the old failure still raises nothing.
+    const onReconnect = run(onAttach, server({ type: "session.window", sessionId: "s1", mode: "tail", window }));
+    expect(toolIds(onReconnect)).toEqual([failedTool.id]);
+    expect(onReconnect.lastError).toBeNull();
+  });
+
+  it("no agent tool failure raises a toast", () => {
+    const base = run(selected(), attached());
+    const appended = run(base, server({ type: "session.append", sessionId: "s1", items: [failedTool] }));
+    expect(toolIds(appended)).toEqual([failedTool.id]);
+    expect(appended.lastError).toBeNull();
+    const updated = run(appended, server({
+      type: "session.update", sessionId: "s1",
+      items: [{ ...failedTool, result: { text: "boom", isError: true } }],
+    }));
+    expect(toolIds(updated)).toEqual([failedTool.id]);
+    expect(updated.lastError).toBeNull();
+    const earlier = run(base, server({
+      type: "session.window", sessionId: "s1", mode: "earlier",
+      window: { items: [failedTool], hasEarlier: false, cursor: null },
+    }));
+    expect(toolIds(earlier)).toEqual([failedTool.id]);
+    expect(earlier.lastError).toBeNull();
   });
 
   it("busy state and queued submissions come from session status", () => {

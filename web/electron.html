@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <title>CPD</title>
     <style>
-      html, body { margin: 0; overflow: hidden; background: #1c1a20; color: #d8d2cc; }
+      html, body { margin: 0; overflow: hidden; height: 100%; background: #1c1a20; color: #d8d2cc; }
       #tab-bar { display: flex; align-items: flex-end; gap: 4px; height: 30px; padding: 0 6px; box-sizing: border-box; background: #14121a; }
       #tab-bar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: none; border-radius: 6px 6px 0 0; background: transparent; color: inherit; font: inherit; cursor: default; }
       #tab-bar .tab.active { outline: 2px solid #ecaec7; outline-offset: -2px; }
@@ -17,6 +17,7 @@
       #terminal { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; }
       #terminal .pane { width: 100%; height: 100%; }
       #webui-root { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; overflow: auto; }
+      #tab-bar[hidden] ~ #webui-root { top: 0; }
       #terminal, #terminal canvas { cursor: default !important; }
       [hidden] { display: none !important; }
     </style>

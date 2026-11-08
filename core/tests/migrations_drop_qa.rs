@@ -31,6 +31,10 @@ fn raw(home: &CpdHome) -> Connection {
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
     (
+        "pull_requests",
+        "ALTER TABLE pull_requests DROP COLUMN merge_armed",
+    ),
+    (
         "plans",
         "ALTER TABLE plans DROP COLUMN reviewed_repo; ALTER TABLE plans DROP COLUMN reviewed_number; ALTER TABLE plans DROP COLUMN reviewed_title; ALTER TABLE plans DROP COLUMN pr_subject; ALTER TABLE plans DROP COLUMN changes_requested_at",
     ),

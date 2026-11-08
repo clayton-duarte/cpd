@@ -10,15 +10,20 @@ use time::OffsetDateTime;
 
 use super::github::GithubSource;
 use super::{Cx, ExecOutcome};
+use crate::clock::timestamp;
 use crate::error::CpdError;
 use crate::output::Output;
 use crate::pr::auto_merge::{self, Outcome};
 use crate::pr::comments::{Kind as ItemKind, MARKER};
 use crate::pr::merge_method::{MergeMethods, Method};
 use crate::pr::swr_read as gh;
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 use crate::swr::github::{effective_pr, pr_key};
 use crate::swr::outbox::{self, Coalesce, Mutation, Op};
+
+#[cfg(test)]
+#[path = "github_write_uptodate_tests.rs"]
+mod github_write_uptodate_tests;
 
 /// How long a transient failure waits before the drain tries again.
 const RETRY: Duration = Duration::from_secs(60);
@@ -74,6 +79,88 @@ pub fn queued(
     fields["mutation_id"] = json!(id);
     fields["effective"] = effective;
     Ok(Output::success(fields))
+}
+
+/// The one `swr_repos` write (air-n70, air-n71): the row of `repo` upserted from `meta`, with `fetched_at` `now`. The
+/// SWR source's commit, `pr poll`'s fill and the merge's on-demand read all write the row through here.
+pub(crate) fn write_repo_settings(
+    tx: &WriteTxn<'_>,
+    repo: &str,
+    meta: &gh::RepoMeta,
+    now: OffsetDateTime,
+) -> Result<(), CpdError> {
+    tx.execute(
+        "INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
+           merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (repo) DO UPDATE SET default_branch = excluded.default_branch,
+           is_archived = excluded.is_archived, auto_merge_allowed = excluded.auto_merge_allowed,
+           squash_merge_allowed = excluded.squash_merge_allowed,
+           merge_commit_allowed = excluded.merge_commit_allowed,
+           rebase_merge_allowed = excluded.rebase_merge_allowed,
+           delete_branch_on_merge = excluded.delete_branch_on_merge, fetched_at = excluded.fetched_at",
+        rusqlite::params![
+            repo,
+            meta.default_branch,
+            meta.is_archived,
+            meta.auto_merge_allowed,
+            meta.squash_merge_allowed,
+            meta.merge_commit_allowed,
+            meta.rebase_merge_allowed,
+            meta.delete_branch_on_merge,
+            timestamp(now)
+        ],
+    )?;
+    Ok(())
+}
+
+/// [`merge_method`] inside the caller's transaction, from `swr_repos`: the first allowed of squash, merge, rebase;
+/// `None` when the row is missing or none is allowed.
+pub(crate) fn merge_method_tx(tx: &WriteTxn<'_>, repo: &str) -> Result<Option<Method>, CpdError> {
+    let flags: Option<MergeMethods> = tx
+        .query_row(
+            "SELECT squash_merge_allowed, merge_commit_allowed, rebase_merge_allowed FROM swr_repos WHERE repo = ?1",
+            [repo],
+            |r| {
+                Ok(MergeMethods {
+                    squash: r.get(0)?,
+                    merge: r.get(1)?,
+                    rebase: r.get(2)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(flags.and_then(|f| f.choose()))
+}
+
+/// Enqueues the `merge` op of `repo#number` inside the caller's transaction (the poll's armed merge, commands.md §9.10):
+/// the id of the new mutation, or of the pending one the `Dedupe` coalesces with.
+pub(crate) fn enqueue_merge_tx(
+    tx: &WriteTxn<'_>,
+    now: OffsetDateTime,
+    repo: &str,
+    number: i64,
+    head: &str,
+    method: Method,
+) -> Result<i64, CpdError> {
+    let vars = json!({"expected_head_oid": head, "method": method.as_str()});
+    let coalesce = match coalesce_of("merge") {
+        Coalesce::Dedupe(_) => Coalesce::Dedupe(vars.to_string()),
+        other => other,
+    };
+    outbox::enqueue_tx(
+        tx,
+        now,
+        Op {
+            system: "github".into(),
+            target_key: target_of(repo, number),
+            op_kind: "merge".into(),
+            vars,
+            patch: Some(json!({"state": "merging"})),
+            context: None,
+        },
+        coalesce,
+    )
 }
 
 /// The merge method a repo allows (the first of squash, merge, rebase), from `swr_repos`; `None` when the row is missing.
@@ -172,6 +259,22 @@ impl GithubSource {
                     Ok(None) => return self.wait_for_repo(cx, repo),
                     Err(e) => return retry(&e),
                 };
+                // The up-to-date re-check (commands.md §9.10): a head that no longer contains the default branch is
+                // not merged. The intent stays armed and the Workflow's update Job is queued.
+                match uptodate(cx, runner, cwd, repo, number, &head) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Err(e) =
+                            crate::pr::poll::arm_for_behind_head(cx.store, cx.home, repo, number)
+                        {
+                            return failed(e.message());
+                        }
+                        return failed(format!(
+                            "{repo}#{number} is now behind the default branch, updated, waiting for gate."
+                        ));
+                    }
+                    Err(e) => return retry(&e),
+                }
                 match gh::merge_pr(runner, cwd, repo, number, method, &head) {
                     Ok(()) => ExecOutcome::Done,
                     Err(e) => failed(refusal(&e)),
@@ -374,6 +477,34 @@ impl GithubSource {
         };
         sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)
     }
+}
+
+/// Whether the merge op's `head` still contains the default branch's head (commands.md §9.10): `true` when the pull
+/// request's `base_ref` is not its default branch (nothing to compare) or the fresh compare says it does. The compare
+/// is a read through `crate::pr::gh` (the module `pr` owns); a failure is the caller's to retry.
+fn uptodate(
+    cx: &mut Cx<'_>,
+    runner: &dyn crate::host::runner::Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    head: &str,
+) -> Result<bool, CpdError> {
+    let row: Option<(Option<String>, Option<String>)> = cx.store.read(|c| {
+        Ok(c.query_row(
+            "SELECT base_ref, default_branch FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+    })?;
+    let Some((Some(base), Some(default))) = row else {
+        return Ok(true);
+    };
+    if base != default {
+        return Ok(true);
+    }
+    crate::pr::poll::head_contains_base(runner, cwd, repo, &default, head)
 }
 
 /// GitHub's refusal text of a failed write: its stderr when it printed one.

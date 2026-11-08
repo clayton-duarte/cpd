@@ -1,6 +1,6 @@
-//! `pr merge` (commands.md §9.10, swr-github.md §9), run in-process on `run_with`: it checks the cached pull request and queues a
-//! `merge` mutation; it never calls `gh` (the drain does, in `core/src/swr/source/github_write_tests.rs`). The command needs no Plan
-//! and no Context.
+//! `pr merge` (commands.md §9.10, swr-github.md §9), run in-process on `run_with`: it checks the cached pull request, reads
+//! whether the head contains the default branch (a `gh` read, never a write) and queues a `merge` mutation (the drain writes, in
+//! `core/src/swr/source/github_write_tests.rs`). The command needs no Plan and no Context.
 
 use crate::common;
 
@@ -13,8 +13,10 @@ const REF: &str = "acme/api#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// A cached open, clean, authored pull request `acme/api#7` whose head is `SHA`, and the repo's settings allowing `methods`
-/// (squash, merge commit, rebase).
-fn cached(env: &TestEnv, state: &str, merge_state: &str, methods: (bool, bool, bool)) {
+/// (squash, merge commit, rebase). `gh` answers the up-to-date gate's containment read with `ahead`.
+fn cached(fx: &Fx, state: &str, merge_state: &str, methods: (bool, bool, bool)) {
+    let env = &fx.env;
+    fx.fake_gh(cpd_core::host::runner::Reply::ok(r#"{"status":"ahead"}"#));
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let merged_at = if state == "merged" { "'t'" } else { "NULL" };
@@ -57,7 +59,7 @@ fn mutations(env: &TestEnv) -> Vec<(String, String, String, Value, Value)> {
 #[test]
 fn a_clean_open_pull_request_is_queued_with_the_head_it_was_cached_at() {
     let fx = Fx::with_ports();
-    cached(&fx.env, "open", "clean", (true, false, false));
+    cached(&fx, "open", "clean", (true, false, false));
     let out = fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(out["queued"], true, "{out}");
     assert!(out["mutation_id"].is_i64(), "{out}");
@@ -80,7 +82,14 @@ fn a_clean_open_pull_request_is_queued_with_the_head_it_was_cached_at() {
             json!({"state": "merging"})
         )]
     );
-    assert_eq!(gh_calls(&fx), 0, "a command never calls GitHub for a write");
+    assert_eq!(
+        fx.calls("gh")
+            .iter()
+            .map(|c| c.args.join(" "))
+            .collect::<Vec<_>>(),
+        [format!("api repos/acme/api/compare/main...{SHA}")],
+        "the enqueue reads the containment, and never writes"
+    );
 }
 
 #[test]
@@ -91,7 +100,7 @@ fn the_first_method_the_repo_allows_is_the_one_queued() {
         ((false, false, true), "rebase"),
     ] {
         let fx = Fx::with_ports();
-        cached(&fx.env, "open", "clean", methods);
+        cached(&fx, "open", "clean", methods);
         assert_eq!(
             fx.cpd(&["pr", "merge", REF]).ok()["method"],
             want,
@@ -104,7 +113,7 @@ fn the_first_method_the_repo_allows_is_the_one_queued() {
 #[test]
 fn a_repo_that_allows_no_merge_method_is_refused_before_any_mutation() {
     let fx = Fx::with_ports();
-    cached(&fx.env, "open", "clean", (false, false, false));
+    cached(&fx, "open", "clean", (false, false, false));
     let error = refused(&fx.cpd(&["pr", "merge", REF]), "no_merge_method", 3);
     assert_eq!(
         error["details"],
@@ -123,7 +132,7 @@ fn a_pull_request_that_is_not_open_and_clean_is_refused_before_any_mutation() {
         ("closed", "clean"),
     ] {
         let fx = Fx::with_ports();
-        cached(&fx.env, state, merge_state, (true, false, false));
+        cached(&fx, state, merge_state, (true, false, false));
         let error = refused(&fx.cpd(&["pr", "merge", REF]), "merge_not_clean", 3);
         assert_eq!(
             error["details"],
@@ -138,7 +147,7 @@ fn a_pull_request_that_is_not_open_and_clean_is_refused_before_any_mutation() {
 #[test]
 fn a_pull_request_the_poll_has_not_read_is_not_found_and_nothing_is_queued() {
     let fx = Fx::with_ports();
-    cached(&fx.env, "open", "clean", (true, false, false));
+    cached(&fx, "open", "clean", (true, false, false));
     fx.env.sql("DELETE FROM pull_requests");
     refused(&fx.cpd(&["pr", "merge", REF]), "item_not_found", 4);
     assert!(mutations(&fx.env).is_empty());
@@ -147,7 +156,7 @@ fn a_pull_request_the_poll_has_not_read_is_not_found_and_nothing_is_queued() {
 #[test]
 fn a_second_merge_of_the_same_head_queues_no_second_mutation() {
     let fx = Fx::with_ports();
-    cached(&fx.env, "open", "clean", (true, false, false));
+    cached(&fx, "open", "clean", (true, false, false));
     let first = fx.cpd(&["pr", "merge", REF]).ok();
     let second = fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(first["mutation_id"], second["mutation_id"]);
@@ -191,7 +200,7 @@ fn a_required_check_that_is_missing_pending_or_failed_refuses_the_merge() {
     ] {
         let fx = Fx::with_ports();
         fx.env.repo_policy("acme", "api", REQUIRED);
-        cached(&fx.env, "open", "clean", (true, false, false));
+        cached(&fx, "open", "clean", (true, false, false));
         readiness(&fx.env, verdict);
         rollup(&fx, nodes);
         let error = refused(
@@ -217,7 +226,7 @@ fn a_passed_required_check_or_an_empty_required_list_queues_the_merge() {
         if !policy.is_empty() {
             fx.env.repo_policy("acme", "api", policy);
         }
-        cached(&fx.env, "open", "clean", (true, false, false));
+        cached(&fx, "open", "clean", (true, false, false));
         rollup(&fx, nodes);
         assert_eq!(
             fx.cpd(&["pr", "merge", REF]).ok()["queued"],
@@ -244,7 +253,7 @@ fn readiness(env: &TestEnv, verdict: &str) {
 fn pr_merge_allows_when_readiness_passed_but_cached_detail_stale() {
     let fx = Fx::with_ports();
     fx.env.repo_policy("acme", "api", REQUIRED);
-    cached(&fx.env, "open", "clean", (true, false, false));
+    cached(&fx, "open", "clean", (true, false, false));
     assert_eq!(
         fx.env.query::<String>(
             "SELECT checks FROM pull_requests WHERE repo = 'acme/api' AND number = 7"
@@ -287,7 +296,7 @@ fn pr_merge_refuses_when_readiness_not_passed() {
     for (verdict, nodes, want) in cases {
         let fx = Fx::with_ports();
         fx.env.repo_policy("acme", "api", REQUIRED);
-        cached(&fx.env, "open", "clean", (true, false, false));
+        cached(&fx, "open", "clean", (true, false, false));
         readiness(&fx.env, verdict);
         rollup(&fx, nodes);
         let error = refused(

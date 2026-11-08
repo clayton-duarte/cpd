@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { SETTINGS_ROLES, SETTINGS_SWITCHES } from "../../protocol/cockpit.ts";
 import type { SettingsChanges, SettingsModel, SettingsRole, SettingsSwitch } from "../../protocol/cockpit.ts";
@@ -18,13 +18,19 @@ function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): voi
   const { read } = props;
   const [tiers, setTiers] = useState<Record<SettingsRole, string>>({ ...read.tiers });
   const [flags, setFlags] = useState<Record<SettingsSwitch, boolean>>({ ...read.experimental });
+  const [concurrency, setConcurrency] = useState<string>(read.concurrency === undefined ? "" : String(read.concurrency));
+  const concurrencyRef = useRef<HTMLInputElement>(null);
   const valid = SETTINGS_ROLES.every((r) => TIER.test(tiers[r]));
   const save = (): void => {
     const changedTiers = SETTINGS_ROLES.filter((r) => tiers[r] !== read.tiers[r]);
     const changedFlags = SETTINGS_SWITCHES.filter((k) => flags[k] !== read.experimental[k]);
+    // The count is read from the field itself: a bad value is refused by the CLI, never clamped or dropped here (air-d70).
+    const raw = concurrencyRef.current?.value ?? concurrency;
+    const count = Number(raw);
     props.onSave({
       ...(changedTiers.length === 0 ? {} : { tiers: Object.fromEntries(changedTiers.map((r) => [r, tiers[r]])) }),
       ...(changedFlags.length === 0 ? {} : { experimental: Object.fromEntries(changedFlags.map((k) => [k, flags[k]])) }),
+      ...(raw === "" || !Number.isInteger(count) || count === read.concurrency ? {} : { concurrency: count }),
     });
   };
   return (
@@ -49,6 +55,20 @@ function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): voi
             />
           </label>
         ))}
+        <label className="flex items-center gap-2">
+          <span className="w-24 font-mono text-meta">concurrency</span>
+          <input
+            ref={concurrencyRef}
+            type="number"
+            min={1}
+            max={16}
+            aria-label="concurrency"
+            value={concurrency}
+            onChange={(e) => setConcurrency(e.target.value)}
+            aria-invalid={concurrency !== "" && !(Number.isInteger(Number(concurrency)) && Number(concurrency) >= 1 && Number(concurrency) <= 16)}
+            className="h-7 w-16 rounded-md border border-border bg-background px-2 font-mono text-meta"
+          />
+        </label>
       </section>
       <section className="grid gap-2">
         <h3 className="font-semibold text-fg-strong">Experimental</h3>
