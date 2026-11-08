@@ -211,9 +211,13 @@ export type SettingsRole = (typeof SETTINGS_ROLES)[number];
 export interface SettingsModel {
   readonly tiers: Readonly<Record<SettingsRole, string>>;
   readonly experimental: Readonly<Record<SettingsSwitch, boolean>>;
+  /** The machine-wide Worker count (config `concurrency`, docs/contract.md §8.2); absent from an older reply. */
+  readonly concurrency?: number;
 }
 /** Only the values the User changed. */
 export interface SettingsChanges {
   readonly tiers?: Partial<Record<SettingsRole, string>>;
   readonly experimental?: Partial<Record<SettingsSwitch, boolean>>;
+  /** The machine-wide Worker count, when the User changed it (air-d70). */
+  readonly concurrency?: number;
 }
