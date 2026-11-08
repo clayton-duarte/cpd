@@ -193,8 +193,8 @@ fn pull_request(env: &TestEnv, n: u32, set: &str) {
     store
         .write("test", |tx| {
             tx.execute(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, base_ref, default_branch)
-                 VALUES ('acme/shop', ?1, 'https://github.com/acme/shop/pull/' || ?1, 'T', 0, 'open', 'none', 'none', 't', 't', 'clean', 'main', 'main')",
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, base_ref, default_branch, base_contained)
+                 VALUES ('acme/shop', ?1, 'https://github.com/acme/shop/pull/' || ?1, 'T', 0, 'open', 'none', 'none', 't', 't', 'clean', 'main', 'main', 1)",
                 [n],
             )?;
             tx.execute(&format!("UPDATE pull_requests SET {set} WHERE number = {n}"), [])?;

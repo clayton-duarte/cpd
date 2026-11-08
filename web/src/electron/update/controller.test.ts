@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { swapBundle } from './bundle';
 import type { SyncResult } from './checkout';
-import { createUpdater, type UpdaterDeps } from './controller';
+import { createUpdater, promoteOnLaunch, type UpdaterDeps } from './controller';
 import { fakeExec, fakeFs } from './fakes';
 import { rebuildViews } from './preview';
 import type { UpdateExec, UpdateState } from './types';
@@ -53,6 +53,36 @@ function setup(over: Partial<UpdaterDepsWithViews> = {}) {
 }
 
 const phases = (states: UpdateState[]) => states.map((s) => s.phase);
+
+// web/CONTRACT.md §19.1 (air-n67): at launch, before the window opens, a ready `dist-electron.next`
+// whose `.built-sha` equals HEAD is promoted into `dist-electron`; any other `.next` is left alone and
+// the updater's catch-up check rebuilds it as usual.
+describe('promoteOnLaunch', () => {
+  const ready = (nextSha: string) => bundle({
+    [`${ROOT}/web/dist-electron/main.js`]: 'old main',
+    [`${ROOT}/web/dist-electron/.built-sha`]: 'oldsha',
+    [`${ROOT}/web/dist-electron.next/main.js`]: 'new main',
+    [`${ROOT}/web/dist-electron.next/.built-sha`]: nextSha,
+  });
+  const headSha = async () => SHA;
+
+  it('launch promotes a ready .next whose .built-sha matches HEAD', async () => {
+    const fs = ready(SHA);
+    await promoteOnLaunch({ fs, root: ROOT, headSha });
+    expect(fs.readText(`${ROOT}/web/dist-electron/.built-sha`)).toBe(SHA);
+    expect(fs.readText(`${ROOT}/web/dist-electron/main.js`)).toBe('new main');
+    expect(fs.exists(`${ROOT}/web/dist-electron.next`)).toBe(false);
+  });
+
+  it('does not promote a .next whose .built-sha does not match HEAD', async () => {
+    const fs = ready('othersha');
+    await promoteOnLaunch({ fs, root: ROOT, headSha });
+    expect(fs.readText(`${ROOT}/web/dist-electron/.built-sha`)).toBe('oldsha');
+    expect(fs.readText(`${ROOT}/web/dist-electron/main.js`)).toBe('old main');
+    expect(fs.readText(`${ROOT}/web/dist-electron.next/.built-sha`)).toBe('othersha');
+    expect(fs.renames).toEqual([]);
+  });
+});
 
 describe('createUpdater', () => {
   it('check does nothing when sync is skipped', async () => {

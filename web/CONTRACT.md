@@ -391,7 +391,7 @@ export type ErrorCode =
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
   | "invalid_submission" // empty text with no images (16.2), or text longer than the backend allows
-  | "tool_failed" // a tool result arrived with status "failed" (16.1); message = the reason, shown in the cockpit error toast, never inline in the row
+  | "tool_failed" // a tool result arrived with status "failed" (16.1); no toast is raised for it (16.1, amended by air-d77): a failed agent tool call shows as a failed tool row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
@@ -1506,7 +1506,7 @@ export function Footer(props: { footer: FooterStats | null; contextWindow?: numb
 **ToolRow DOM** (scout-pi §4, compact-tools). `<details data-kind="tool" data-tool="<name>" data-status="<status>">`, `open` attribute set only for `name === "edit"` (edit's body shows as a bounded preview by default, scout-pi §4). `<summary>`: `<span data-part="name">` (name with a leading `mcp__` removed, so `mcp__srv__tool` shows `srv__tool`), `<span data-part="detail">`, `<span data-part="status">`:
 
 - **detail** by tool: the table of DESIGN-chat 3.2 (paths and commands cut at 100 characters, other details at 160).
-- **status** text: `running` -> `Running`; **Amended by 16.1 (air-d44):** `failed` -> `Failed`, with no inline reason — the failure's reason text goes to the cockpit error toast with code `tool_failed` (16.1), while the row keeps its failed tone and the tool group's failed count; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
+- **status** text: `running` -> `Running`; **Amended by 16.1 (air-d44, air-d77):** `failed` -> `Failed`, with no inline reason in the status text — no toast is raised for a failed agent tool call (16.1): the failure's record is the row itself, which keeps its failed tone and the tool group's failed count; `done` -> `Done`, plus ` in <duration>` when `durationMs` is a number (`<n>ms` below 1000, else seconds with one decimal and `s`), plus ` (+<added> -<removed>)` for `edit` (counts of `+`/`-` diff lines, not `+++`/`---`) or ` (<N> lines)` for the others (`1 line` singular; `N` = number of lines of `result.text`, a trailing newline not counted, empty text = `0 lines`).
 - **body** (inside the row's closed `TraceCollapsibleContent`): DESIGN-chat 3.6 (a `CodeBlock`, the first 10 lines, `Show N more lines`).
 
 `OrphanRow`: `<article data-kind="orphan-result">` with `Result of <name> (call not loaded)` and the same output body rules.
@@ -1671,7 +1671,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 | `unknown_action` | `parseCockpitAction`, `actions.runAction` | action `kind` not in 5.4 | `{kind}` |
 | `unsupported_capability` | `pi backend`, `hub` | a method the session's capabilities declare unsupported; `message` is the capability reason | `{capability}` |
 | `invalid_submission` | `backend.submit` | empty text without images; pi text over 20 000 chars | `{max?}` |
-| `tool_failed` | `store.ts` (the state layer) | a tool result with status `failed` is applied to the selected session's transcript; `message` = the reason, the first non-empty line of `result.text` (6.8, 16.1) | `{itemId?}` |
+| `tool_failed` | nothing raises it (16.1, amended by air-d77) | a tool result with status `failed` is applied to the selected session's transcript; no error and no toast is raised — the failure shows as a failed tool row (16.1) | — |
 | `not_attached` | `hub/connection.ts`, `state/connection.ts` | a session message names a session that is not the attached/selected one | `{sessionId}` |
 | `manager_not_archivable` | `hub/connection.ts` | a `session.submit` of `/q` or `/quit` in a Manager session (6.6); no cpd call is made | `{sessionId}` |
 | `internal` | anywhere | a non-`WebError` throwable (via `toWireError`); `cockpit not ready`; send on a closed transport | `{}` |
@@ -2175,10 +2175,11 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.8 or 11.3 is marked "Amended by 16.x", section 16 wins and the older statement is void.
 
-### 16.1 Every error is shown through the cockpit error toast (air-d44)
+### 16.1 Every error of the User's own actions is shown through the cockpit error toast (air-d44, amended by air-d77)
 
-- In the WebUI every error is shown through the cockpit error toast (the error Alert of 11.7, with its Report button). An error rendered inline in the chat breaks the standard. A failed submission leaves no row and no inline text in the transcript: its error appears once in the cockpit error toast, and the User retypes the message.
-- A failed tool's row is the transcript's record, not an error display: it keeps its failed tone, its failed count and its place in the Chain of Thought, and the failure's reason text goes to the cockpit error toast with code `tool_failed` instead of being rendered inline in the row (6.8's status text, amended above).
+- In the WebUI every error of the User's own actions is shown through the cockpit error toast (the error Alert of 11.7, with its Report button). An error rendered inline in the chat breaks the standard. A failed submission leaves no row and no inline text in the transcript: its error appears once in the cockpit error toast, and the User retypes the message.
+- **Amended by air-d77 (Plan `tool-style`): toasts are for the User's own actions only.** The cockpit error toast is raised only for an error of the User's own actions — a failed submit, a refused save, a refused merge or dismissal and the like. No agent tool failure raises a toast, at any point: not when the failed result first arrives, and not when a tail window carrying old failures is replayed as the transcript attaches or reconnects — a reloaded transcript raises no toast for the failures it replays.
+- A failed agent tool call shows as a failed tool row: the row keeps its failed tone, its failed count and its place in the Chain of Thought, and the failure's record is the row itself (6.8's status text, amended above) — never the cockpit error toast.
 
 ### 16.2 An image-only chat message is valid and delivered (air-d43)
 
@@ -2206,6 +2207,32 @@ Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dia
 
 - A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
 - The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+
+## 19. The desktop update promote and the Preview readiness contract (Plan `desktop-fix`)
+
+Normative. Plan `desktop-fix` decides the points below after the bugs air-n67 (a stale Electron bundle survived a relaunch) and air-d76 (a focused window never received its update), and air-d77 (refines air-d44, recency wins). The updater and View-menu statements of web/ELECTRON.md carry the same statements; where they differ, this section wins. Paths are repo-relative.
+
+### 19.1 The launch promotes a ready `.next` bundle (air-n67)
+
+- At launch, before the window opens, the main process runs one promote step: when `web/dist-electron.next/.built-sha` exists and equals `git rev-parse HEAD` (run in the checkout root), `swapBundle` (`web/src/electron/update/bundle.ts`) renames `.next` into `web/dist-electron`, so no stale bundle survives a relaunch. The promoted `.built-sha` is HEAD, so the updater's catch-up check finds nothing to build.
+- When `web/dist-electron.next` is missing, or its `.built-sha` does not match HEAD, nothing is promoted: the `.next` build is not a build of this HEAD, and the updater's catch-up check rebuilds it as usual.
+- A promoted main-side artefact (`main.js`, `preload.cjs`, `server.js`) loads at the next launch; the process that ran the promote keeps the code it was started with.
+
+### 19.2 A View change applies a pending update (air-d76)
+
+- With the window focused, the next View menu change is also an applicability moment for the updater: `whenApplicable` (`web/src/electron/update/idle.ts`) resolves not only when the window is unfocused or the system has been idle ≥ 300 s, but on every View menu change, even while the window is focused and the system is not idle. A ready `web/dist-electron.next` the updater already built is therefore swapped in at that moment.
+- When the swap changes a main-side artefact (`main.js`, `preload.cjs`, `server.js`), the updater reports `restart-needed` and shows the existing tray item `Restart to Apply Update`; the new main-process code loads at the next launch. The app never relaunches itself, and a View change is never blocked or slowed by the update (air-d76).
+
+### 19.3 Preview readiness is independent of the running app's health (air-d76)
+
+- The WebUI Preview loads its dev URL once the preview server is ready, within a bounded readiness wait; it does not wait for the running app's health (`preview-health.json` is not the gate). The earlier circular wait — the preview tick loop loaded the dev URL only once the app's `healthy` record existed, and that record was produced only by the renderer the dev URL itself loads — is gone; the wait never hangs.
+- A Preview start or load failure — a failed serve, a failed dev-URL load, or the readiness timeout — is shown once in the cockpit error toast (the toast surface of 16.1), never a native `showErrorBox` modal, and the app returns to the mode it was in. Selecting WebUI Preview is the User's own action, so a Preview start/load failure still gets a toast (air-d77 refines air-d44: the WebUI raises an error toast for the User's own actions — send, save, merge, dismiss — and Preview selection is one of them).
+- Leaving the Preview — the User's next View menu change, a watchdog rollback included — restores the production renderer: the window reloads the built renderer (`web/dist-electron/renderer/electron.html`), so the View change is never blocked. The View-menu state stays what the User chose.
+
+### 19.4 The host tab strip and the health report (air-d50, air-n52)
+
+- The desktop's WebUI and WebUI Preview show no host tab strip: the host tabs (`local` plus every remote tab) show only in the TUI view (air-d50; web/ELECTRON.md, Remote TUI tabs over ssh, "Visibility and the view").
+- The desktop renderer reports `health:ok` only after the first `cockpit.snapshot` arrives on the WebSocket transport — a painted shell is not health (§15.2, "The desktop's health report"; already shipped by #961, no change here).
 
 
 ## 19. The Agent Tiers dialog shows and saves the Worker concurrency (Plan `settings-workers`; air-d69)

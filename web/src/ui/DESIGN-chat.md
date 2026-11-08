@@ -12,6 +12,12 @@ Sources read: the boards' chat zone (`Main.dc.html` lines 257 to 402, via `sc-ma
 
 **Shadcn parts (pro-d55).** The chat is built from shadcn parts in `web/src/ui/components/` (2f): `ScrollArea` (the transcript's scroll element, 2.2, pro-d72) and the `MessageScroller` family (the transcript), `Message` and `Bubble` (every message), `Trace` and `TraceCollapsible` (the Chain of Thought, the tool rows, the tool groups, the thinking blocks), `Marker` (cpd folds, compaction, the working marker), `CodeBlock` (tool output, edit diffs, fenced code), `Attachment` (non-image attachments), `Tooltip` (the Copy action), `Empty`, `Spinner` and `Button` (`Load earlier`, the header-less controls). **Resolution:** the Phase 2 native `details`/`summary` blocks are replaced by these parts; the Phase 2 hooks they carried are kept on the part's root (section 4).
 
+**One shared Trace for the Reasoning block and the tool calls (air-d79).** The Reasoning block (2.4.2) and the tool calls (3.2, 3.4, and the fold and compaction rows, 3.1 and 2.5) render through one shared component: `web/src/ui/components/trace.tsx`, vendored from shadcn AI Elements (`npx shadcn@latest add trace`). The CLI writes to `web/src/components/ui/trace.tsx` — `web/components.json`'s `ui` alias is `@/components/ui` — and the vendored source is kept at `web/src/ui/components/trace.tsx`, replacing the file there; the chat imports it by the relative path `../components/trace.tsx`. It is not bespoke: air-d79 vendors the shadcn part, and pro-d55 lists `Trace` among the adopted shadcn parts.
+
+Its exports are the whole part surface: `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger` and `TraceCollapsibleContent`. The part classes (fonts, colours, sizes, the rail, the chevron, the shimmer) live **once** in `trace.tsx`, on each part's `data-slot="trace*"` root; the callers set only data attributes — `data-kind` (`thinking`, `chain-of-thought`, `tool`, `tool-group`, `fold`, `compaction`, `orphan-result`) and `data-part` (`label`, `meta`, `thinking-body`, `glyph`, `name`, `detail`, `delta`, `status`, `group-header`, `summary`, `totals`, `group-rows`, `tick-strip`, `tick`, …) — plus `data-tool`/`data-status`/`data-fold` hooks, and never restyle a part's chrome. Tests pin the `data-kind`/`data-part` hooks, not CSS values.
+
+**One token source (air-d79).** The visual language of both comes from `web/src/ui/app.css`'s `@theme` — the single token source; no component redefines a token. The fonts are `--font-sans` (Roboto) and `--font-mono` (Roboto Mono); the text sizes are `--text-meta` (11px), `--text-key`, `--text-body` and `--text-title`; the shared colours are `--muted-foreground`, `--destructive` and the status colours `--status-done`, `--status-active`, `--status-blocked`. The tool rows keep their **semantic colours** (air-d79): the diff counts read `text-status-done` (added) and `text-status-blocked` (removed), the glyphs carry `data-tone`/`data-glyph` and a failed group's icon is `text-destructive`; only their chrome — fonts, sizes and muted text colours — matches the Reasoning block through the shared parts.
+
 ---
 
 ## 0. Shared pieces
@@ -236,7 +242,7 @@ Trace[data-kind="chain-of-thought"]
             └─ tools    → ToolGroup (3.4)
 ```
 
-- **Reasoning block** (`ReasoningBlock`): `Trace[data-kind="thinking"]`. Its line: `TraceIcon` (`Spinner` while running, else `BrainIcon`), `TraceTitle[data-part="label"]` `Thinking` while running, else `Thought`, and `TraceDescription[data-part="meta"]` with the thought's clock (`formatClock(at)`, when non-null). A thought with text is a `TraceCollapsible` whose content is `div[data-part="thinking-body"]` (`whitespace-pre-wrap`, the Markdown of the text); a thought with no text is the line alone. Its open state: `open ?? (running || defaultOpen)`, `defaultOpen = thinking === "expanded"`.
+- **Reasoning block** (`ReasoningBlock`): `Trace[data-kind="thinking"]`. It renders through the shared vendored Trace (air-d79, header), the same component the tool calls render through, so the two share one visual language from the `@theme` tokens. Its line: `TraceIcon` (`Spinner` while running, else `BrainIcon`), `TraceTitle[data-part="label"]` `Thinking` while running, else `Thought`, and `TraceDescription[data-part="meta"]` (`font-mono text-xs`) with the thought's clock (`formatClock(at)`, when non-null). A thought with text is a `TraceCollapsible` whose content is `div[data-part="thinking-body"]` (`whitespace-pre-wrap`, the Markdown of the text); a thought with no text is the line alone. Its open state: `open ?? (running || defaultOpen)`, `defaultOpen = thinking === "expanded"`.
 - **Default**: the Chain is collapsed by default (`thinking` and `tools` both at their defaults). The Chain's `data-state` is `open` or `closed`. A Chain with a running step opens only through its own state (the `running` flag shows the spinner, not the open state).
 - **Re-apply:** a change of `thinking` or `tools` clears the local open state, so the new default applies (the Phase 2 re-apply rule, KEPT).
 - **Keys:** the Chain's row key is `chain:<key of its first step>` (`rows.ts`, unchanged in behaviour).
@@ -403,18 +409,19 @@ export const OrphanRow: MemoExoticComponent<(props: { item: OrphanResultItem }) 
 ```
 TraceCollapsible[data-kind="tool"][data-tool={tool.name}][data-status={tool.status}][data-state="open"|"closed"]    KEPT hooks       div
 ├─ TraceCollapsibleTrigger
-│   └─ TraceLine[className="font-mono text-xs"][status]    status "running" for a running tool, "error" for a failed one, none otherwise
+│   └─ TraceLine[status]    status "running" for a running tool, "error" for a failed one, none otherwise.    chrome `text-sm font-sans` (the part's own muted `text-muted-foreground`), not `font-mono text-xs` — the Reasoning block's line chrome (2.4.2, air-d79)
 │       ├─ TraceIcon: span[data-part="glyph"][aria-hidden="true"][data-tone][data-glyph]   ToolIcon (the glyph by tool name and status)
-│       ├─ span[data-part="name"]  {toolName(tool)}    shrink-0 text-muted-foreground
-│       ├─ TraceTitle[data-part="detail"]  {toolDetail(tool)}   text-foreground
-│       ├─ TraceDescription[data-part="delta"]  (edit with a diff only)
+│       ├─ span[data-part="name"]  {toolName(tool)}    shrink-0 text-sm font-sans text-muted-foreground
+│       ├─ TraceTitle[data-part="detail"]  {toolDetail(tool)}   font-mono text-xs text-muted-foreground/70
+│       ├─ TraceDescription[data-part="delta"]  (edit with a diff only)   font-mono text-xs text-muted-foreground/70; the semantic colours are kept (air-d79)
 │       │   ├─ span[data-part="added"]    `+${A}`               text-status-done
 │       │   └─ span[data-part="removed"]  `−${R}` (U+2212)      text-status-blocked
-│       └─ TraceDescription[data-part="status"]  {statusOf(tool)}   font-mono
+│       └─ TraceDescription[data-part="status"]  {statusOf(tool)}   font-mono text-xs text-muted-foreground/70
 └─ TraceCollapsibleContent   (only when the row has output, 3.6)
 ```
 
 - A row with **no output** (no `result`, or an `edit` with no diff) is `div[data-kind="tool"]` with the same line and no trigger.
+- The row's own classes above (`text-sm font-sans` line, `font-mono text-xs text-muted-foreground/70` parts) are the caller's, and match the Reasoning block's meta line through the shared `@theme` tokens (air-d79); the part classes themselves stay in `trace.tsx`.
 - **Resolution:** the Phase 2 `div[data-part="tool-rail"]` is retired. The row's rail is its own `Trace` (3.3).
 
 ### 3.3 Lone tool row
@@ -436,12 +443,12 @@ export const ToolGroup: MemoExoticComponent<(props: { tools: readonly ToolItem[]
 Trace[data-kind="tool-group"][data-tool-count={n}][data-status={agg}]
 └─ TraceCollapsible[open = open ?? (running || mode === "expanded")]   reset when `mode` changes
     ├─ TraceCollapsibleTrigger[data-part="group-header"]
-    │   └─ TraceLine[className="text-xs"][status = agg "running" → "running", "failed" → "error", else none]
+    │   └─ TraceLine[status = agg "running" → "running", "failed" → "error", else none]    chrome `text-sm font-sans`, as the ToolRow line (3.2, air-d79)
     │       ├─ TraceIcon[data-part="glyph"][data-tone][data-glyph]   running → Spinner · failed → CircleXIcon (text-destructive) · done → CircleCheckIcon
-    │       ├─ span[data-part="name"]  {toolName(first)}   shrink-0 font-mono text-fg-strong
-    │       ├─ TraceTitle[data-part="summary"]  `${toolDetail(first)} + ${n} more step(s)`   n = tools.length − 1 ("step" for 1, "steps" otherwise)
+    │       ├─ span[data-part="name"]  {toolName(first)}   shrink-0 text-sm font-sans text-fg-strong
+    │       ├─ TraceTitle[data-part="summary"]  `${toolDetail(first)} + ${n} more step(s)`   n = tools.length − 1 ("step" for 1, "steps" otherwise)   font-mono text-xs text-muted-foreground/70
     │       ├─ ToolTickStrip(statuses)   (3.5)
-    │       ├─ TraceDescription[data-part="totals"]  font-mono   text below
+    │       ├─ TraceDescription[data-part="totals"]  font-mono text-xs text-muted-foreground/70   text below
     │       └─ span.sr-only[data-part="group-count"]  `${tools.length} tool calls`
     └─ TraceCollapsibleContent
         └─ Trace[data-part="group-rows"] › ToolRow[nested] ×tools
@@ -464,7 +471,7 @@ span[data-part="tick-strip"][role="img"][aria-label={label}]       flex gap-0.5 
 ```
 
 - A tick is a glyph, not a row: its 10px height is the glyph's size and does not set any row's height.
-- Colour (literal fills, tokens): `done` → `bg-status-done` (`#8da96e`), `failed` → `bg-status-blocked` (`#e17f6e`), `running` → `bg-status-active` (`#67ada7`). One tick per call: `statuses.length` ticks (12 calls: 12 × 3 + 11 × 2 = 58px wide).
+- Colour (tokens from `web/src/ui/app.css`'s `@theme`, the single token source; air-d79): `done` → `bg-status-done` (`--status-done`, `#8da96e`), `failed` → `bg-status-blocked` (`--status-blocked`, `#e17f6e`), `running` → `bg-status-active` (`--status-active`, `#67ada7`). One tick per call: `statuses.length` ticks (12 calls: 12 × 3 + 11 × 2 = 58px wide).
 - `label` (exact): `` `${n} steps` `` when no tick is failed, else `` `${n} steps, ${f} failed` `` (board: `12 steps, 1 failed`); `n = statuses.length`, `f` = failed count. A group has `n ≥ 2`, so the singular is not needed; for `n = 1` the label is `1 steps` (never rendered by `Transcript`).
 - **Resolution:** the board draws ticks only for done and failed (`No tick for running or queued`); the brief says one tick per call, so a running call has a `bg-status-active` tick (the protocol has no `queued` tool status).
 - Not interactive; no focus; no motion.
@@ -547,5 +554,6 @@ Data absent from `web/src/protocol/**` and the store; each element is omitted (o
 | pro-d60 | ChatHeader shows only the title; `ask_user_question` interactive for pi (DESIGN-compose 4, CONTRACT 6.5) | 1 |
 | pro-d61 | consecutive thoughts and tools form one collapsed Chain of Thought row with a step count and a time; user and echoed messages show image thumbnails | 2.3.1, 2.4.2, 2.7 |
 | pro-d437 | the completion badge shares the title's row: title on the left, badge on the right as the header's last child, one row that never wraps; supersedes the pro-d422 placement ('before the title') | 1.2, 1.3, 1.4 |
+| air-d79 | the Reasoning block and the tool calls render through one shared Trace vendored from shadcn AI Elements (`web/src/ui/components/trace.tsx`); part classes live once in `trace.tsx`, callers set `data-kind`/`data-part`; `web/src/ui/app.css`'s `@theme` is the single token source; tool rows keep their semantic colours while their chrome matches the Reasoning block | header, 2.4.2, 3.2, 3.4, 3.5 |
 
 ---

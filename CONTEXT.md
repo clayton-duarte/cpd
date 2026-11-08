@@ -402,13 +402,13 @@ _Avoid_: uptime, ping, status page
 
 ## Checks and gates
 
-**Gate** (mechanism, changed, pro-d146):
-The repo's `pre-merge` hook, run by cpd on a Workflow's Lead Branch at the submit of its open or update Job, before cpd pushes, and by the repair commands `pr open`, `pr push` and `pr rebase`; only when the policy key `gate.pr` is `local` (cpd's default is `none`: core/src/policy/default.toml). It is never run per Job. Where `gate.pr` is `none`, CI is the check where it exists. Keys and hooks: contract §7.3, §8.3.
+**Gate** (mechanism, changed, pro-d146; changed, air-d86):
+A check that stops undesired behaviour from going further; cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). The word's cpd instances are named hooks: the repo's `pre-merge` hook, run by cpd on a Workflow's Lead Branch at the submit of its open or update Job, before cpd pushes, and by the repair commands `pr open`, `pr push` and `pr rebase`; only when the policy key `gate.pr` is `local` (cpd's default is `none`: core/src/policy/default.toml). It is never run per Job. Where `gate.pr` is `none`, CI is the check where it exists. Keys and hooks: contract §7.3, §8.3.
 _Avoid_: CI; checks (GitHub's word); quick check (that is the `pre-commit` hook)
 
-**Quick check** (mechanism, pro-d146):
-The repo's `pre-commit` hook, run by cpd on a Worker's Attempt at its merge, only when the policy key `gate.merge` is `local` (default `none`). With no such hook there is no Quick check and nothing runs instead.
-_Avoid_: pre-flight, lint step; Gate (that is `pre-merge`)
+**Quick check** (mechanism, pro-d146; changed, air-d86):
+The repo's `pre-commit` hook, run by cpd on a Worker's Attempt at its merge — a Gate in the sense of the canonical definition in [README.md](README.md), not only a hook of this repo — only when the policy key `gate.merge` is `local` (default `none`). With no such hook there is no Quick check and nothing runs instead.
+_Avoid_: pre-flight, lint step; Gate (that is the `pre-merge` hook)
 
 **Mechanical checks** (mechanism, changed hs-d340, hs-d341):
 The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (refused only on a conflict) and the Gate. The Worker fixes what they report; the Lead runs none. Not a step of the CPD flow: part of Deploying.
@@ -416,6 +416,17 @@ The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job th
 **CI** (other):
 The repo's GitHub checks on a pull request, where CI exists (this repo runs none). cpd's `pr.feedback.checks` key decides whether failing checks raise `pr-feedback`. Not the Gate and not Mechanical checks.
 _Avoid_: checks (alone)
+
+**Guard** (mechanism, air-d86):
+A check that refuses an action as it is attempted, as a reply to the call — the explore Worker's tool-call refusals (`φ: <rule>`; contract §6.6) and the red-test guard are instances — one of the ways cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). A guard is not an OS sandbox: it stops mistakes, not a determined agent.
+_Avoid_: sandbox
+
+**Enforcement** (other, air-d86):
+How cpd makes its protocols hold: through tooling that can refuse, rather than prose (the canonical definition in [README.md](README.md); the contract's own rule, prose is not enforcement, docs/contract.md §8). A rule is enforced when something refuses; a sentence in a document is not enforcement.
+_Avoid_: prompt enforcement; convention
+
+**Refusal metric** (other, air-d86):
+Design intent, not a built thing: every gate refusal is logged as a metric, so the refusal rate is measured and improved on (the canonical definition in [README.md](README.md)). No refusal Events, metrics or alerts exist today; the work is Plan `agent-refusals`. Today's closest surfaces are the failed-Attempt causes in `cpd metrics` (`cpd_attempts_failed`, `cpd_attempt_retries`) and a `gate_failed` Attempt's gate columns (commands.md §14.7).
 
 ## Policy
 

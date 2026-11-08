@@ -245,7 +245,7 @@ export type ErrorCode =
   | "unknown_action" // a cockpit action kind is not one of the listed kinds
   | "unsupported_capability" // the session's capabilities say no; message = the capability reason
   | "invalid_submission" // empty text, or text longer than the backend allows
-  | "tool_failed" // a tool result arrived with status "failed" (15.1); message = the reason, shown in the cockpit error toast, never inline in the row
+  | "tool_failed" // a tool result arrived with status "failed" (16.1); no toast is raised for it (16.1, amended by air-d77): a failed agent tool call shows as a failed tool row
   | "not_attached" // a session message names a session that is not the attached one
   | "internal";
 
