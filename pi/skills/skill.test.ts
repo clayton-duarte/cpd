@@ -279,6 +279,39 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   }
 });
 
+test("cpd-lead: the skill text states the bounds the guards enforce (air-d66, air-n53, air-d80)", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const text = skillMd!.text;
+  // The loop guard while grounding: the read-streak limit and the state-write reset.
+  const grounding = section(text, "### Grounding");
+  assert.match(grounding, /more than 12 consecutive read-only tool calls/);
+  assert.match(grounding, /resets the count/, "the Grounding bullet states what resets the read streak");
+  assert.match(grounding, /`cpd job add`/);
+  // ask_user_question's 1500-character limit and the fields the guard sums.
+  const questions = refs.find((f) => f.name.endsWith("questions.md"))!.text;
+  assert.match(questions, /1500-character limit/);
+  assert.match(questions, /summed over every question, header, option label, description and preview/);
+  // A tdd Workflow's kinds; `work` is config-shape only.
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("- **Workflow shape:**"));
+  assert.ok(at >= 0, "Splitting states the Workflow shape");
+  let shape = lines[at]!;
+  for (let i = at + 1; i < lines.length && !/^- |^#{2,3} /.test(lines[i]!); i++) shape += `\n${lines[i]}`; // the bullet's code block and continuation
+  assert.match(shape, /allows only the kinds `docs`, `test`, `impl` and `verify`/);
+  assert.match(shape, /`work` is the `config` shape's kind/);
+  assert.match(shape, /`shape_violation`/);
+  // No example shows a bash timeout over the Lead's 30 s bound.
+  for (const { name, text: t } of [skillMd!, ...refs]) assert.doesNotMatch(t, /timeout 6\d/, `${name}: no example sets a bash timeout over 30 s`);
+  const pr = refs.find((f) => f.name.endsWith("pr-description.md"))!.text;
+  assert.match(pr, /`timeout 25 npm run build` succeeds/);
+  // The test-name grammar in spec-files.md.
+  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  const tests = section(spec, "## Test Jobs");
+  assert.match(tests, /`pi\/test\/<file>\.test\.ts::<title>`/);
+  assert.match(tests, /`web\/<file>\.test\.ts\(x\)::<title>`/);
+  assert.match(tests, /as nextest filters it/);
+});
+
 test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is the Gate's", () => {
   const [skillMd, ...refs] = skillFiles("cpd-lead");
   const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;

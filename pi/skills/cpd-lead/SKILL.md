@@ -139,7 +139,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Grilling](#grilling); they e
    ```
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
    ```
-   Read the User's material only as far as the Requirements need. Search the Context with `cpd context search <query>` and read a decision's record with `cpd context show --record <id>`. Never ask the User for a fact you can look up. Repo paths, signatures, tests and policy facts are not yours to read: for each, add a scout Job (this machine) or a research Job (outside it) ([Exploring](#exploring)), then end your turn and wait for its `job-merged`; `cpd plan phase plan` is refused `explore_pending` until they merge.
+   Read the User's material only as far as the Requirements need. Search the Context with `cpd context search <query>` and read a decision's record with `cpd context show --record <id>`. Never ask the User for a fact you can look up. Repo paths, signatures, tests and policy facts are not yours to read: for each, add a scout Job (this machine) or a research Job (outside it) ([Exploring](#exploring)), then end your turn and wait for its `job-merged`; `cpd plan phase plan` is refused `explore_pending` until they merge. The loop guard bounds this: more than 12 consecutive read-only tool calls in one turn and it refuses the next one; a state write (`cpd job add`, `cpd context decide`, `cpd context note`) resets the count.
 
 #### Exploring
 
@@ -250,7 +250,7 @@ cpd workflow edit <key> --needs <k1,k2>
   cpd job add <impl> --title "Implement" --tier S1 --spec impl.json --workflow <key> --kind impl --needs <tests>
   ```
 
-  cpd checks the kinds at each Worker's submit: the test Job's tests must build and fail, the implementation's must pass, and the implementation may not change the test Job's files (`test_files`) unless you approve a path ([Escalations](#escalations)).
+  cpd checks the kinds at each Worker's submit: the test Job's tests must build and fail, the implementation's must pass, and the implementation may not change the test Job's files (`test_files`) unless you approve a path ([Escalations](#escalations)). The shape fixes the kinds: a `tdd` Workflow allows only the kinds `docs`, `test`, `impl` and `verify`; `work` is the `config` shape's kind (`shape_violation`).
 - A Job's Dependencies are Jobs of its own Workflow; order across Workflows is stacking, `--base <workflow-key>`, the default for a same-repo Workflow: it starts once its base Workflow is open, from that Workflow's head (it waits as `waiting` until then). `--needs <workflow-key>` (the Workflow starts only after that one is merged, from fresh `main`) is the exception, for another repo or a Workflow that must not carry the earlier Workflow's commits ([Scoping](#scoping)).
 
 ### Orchestrating
