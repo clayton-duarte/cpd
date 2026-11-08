@@ -16,7 +16,7 @@ use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use cpd_core::{
     ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp,
-    metrics, models, plan, policy, pr, prune, resource, secret, session, swr, tag, testsel,
+    metrics, models, plan, policy, pr, protocol, prune, resource, secret, session, swr, tag, testsel,
     version_sync,
 };
 use cpd_engine::watch::restart;
@@ -144,6 +144,9 @@ pub enum Command {
     /// The release plumbing (commands.md §26.2)
     #[command(subcommand)]
     Version(VersionCommand),
+    /// The bug record: the bug report protocol as commands (commands.md §33)
+    #[command(subcommand)]
+    Protocol(protocol::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -262,6 +265,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Version(VersionCommand::Sync { print }) => {
             release_exit(version_sync::sync(&repo_root()?, print))
         }
+        Command::Protocol(c) => protocol::run(c),
     }
 }
 

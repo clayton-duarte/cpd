@@ -1257,6 +1257,67 @@
     },
     "required": []
   },
+  "protocol bug close": {
+    "flags": {
+      "--help": false,
+      "--regression-test": true,
+      "--root-fix": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "protocol bug list": {
+    "flags": {
+      "--help": false,
+      "--mitigated": true,
+      "--plan": true,
+      "--status": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "protocol bug mitigate": {
+    "flags": {
+      "--cause": true,
+      "--help": false,
+      "--mitigation": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "protocol bug report": {
+    "flags": {
+      "--cause": true,
+      "--help": false,
+      "--plan": true,
+      "--symptom": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "protocol bug show": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "prune": {
     "flags": {
       "--apply": false,

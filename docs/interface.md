@@ -206,3 +206,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |
+| `cpd protocol` | The bug record: the bug report protocol as commands (commands.md §33) | | |
+| `cpd protocol bug` | The bug record: report, mitigate, close, list, show (commands.md §33) | | |
+| `cpd protocol bug report` | Record a bug and open its protocol state (commands.md §33.1) | Lead, Manager | |
+| `cpd protocol bug mitigate` | Record the mitigation applied to an open bug (commands.md §33.2) | Lead, Manager | |
+| `cpd protocol bug close` | Close a bug whose root fix and regression test are in (commands.md §33.3) | Lead, Manager | |
+| `cpd protocol bug list` | List bug records, id ascending (commands.md §33.4) | Manager, Lead, Worker | |
+| `cpd protocol bug show` | Show one bug record (commands.md §33.5) | Manager, Lead, Worker | |

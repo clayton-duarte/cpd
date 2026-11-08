@@ -160,6 +160,11 @@ pub const TABLE: &[Entry] = &[
     ("cockpit serve", &[], false),
     ("tag", &[Lead], false),
     ("version sync", &[Lead], false),
+    ("protocol bug report", &[Lead, Manager], false),
+    ("protocol bug mitigate", &[Lead, Manager], false),
+    ("protocol bug close", &[Lead, Manager], false),
+    ("protocol bug list", &[Manager, Lead, Worker], false),
+    ("protocol bug show", &[Manager, Lead, Worker], false),
 ];
 
 /// The tree of `cpd --help`: clap's commands depth-first in clap's order,

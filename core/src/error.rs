@@ -275,6 +275,8 @@ error_codes! {
     // The tier-preset switch (commands.md §14.6): the registry refused the preset, before any write.
     PresetProviderUnconfigured = "preset_provider_unconfigured" => Refused,
     PresetModelUnoffered = "preset_model_unoffered" => Refused,
+    // `protocol bug close` without a root-fix link and a regression test (air-d107; commands.md §33.3).
+    RootFixRequired = "root_fix_required" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -285,6 +287,8 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     TopicNotFound = "topic_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
+    // A bug id no `bug_records` row holds (commands.md §33).
+    BugNotFound = "bug_not_found" => NotFound,
     McpUnknown = "mcp_unknown" => NotFound,
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
