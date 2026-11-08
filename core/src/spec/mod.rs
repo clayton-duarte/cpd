@@ -20,6 +20,9 @@ use crate::home::{CpdHome, Hook};
 use crate::ids::{AttemptId, EscalationId, PlanId};
 
 #[cfg(test)]
+mod agent_refusals_tests;
+
+#[cfg(test)]
 mod resources_tests;
 
 #[cfg(test)]
