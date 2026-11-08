@@ -1210,6 +1210,10 @@ pub(crate) fn arm_for_behind_head(
 mod poll_uptodate_tests;
 
 #[cfg(test)]
+#[path = "poll_ready_tests.rs"]
+mod poll_ready_tests;
+
+#[cfg(test)]
 mod due_reads_tests {
     use super::super::comments::{Item, Kind};
     use super::super::status::{MergeState, Mergeable, ReviewDecision};

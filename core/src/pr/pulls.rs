@@ -1162,3 +1162,7 @@ mod tests {
         assert_eq!(open, [7, 8]);
     }
 }
+
+#[cfg(test)]
+#[path = "pulls_uptodate_tests.rs"]
+mod pulls_uptodate_tests;
