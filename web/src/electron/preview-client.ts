@@ -125,7 +125,7 @@ export function createPreviewClient(deps: PreviewClientDeps): PreviewClient {
     },
 
     async tick(): Promise<void> {
-      if (!active || loaded) return;
+      if (!active) return;
       await deps.watchdog.tick();
       if (!active || loaded) return;
       // §19.3: readiness is the preview server, bounded by PREVIEW_READINESS_TIMEOUT_MS — never
