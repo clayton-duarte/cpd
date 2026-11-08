@@ -910,7 +910,9 @@ fn is_refusal(code: ErrorCode) -> bool {
     )
 }
 
-/// A git or `gh` failure ends the Attempt `crashed` (the ladder retries it); any other error propagates.
+/// A git or `gh` failure ends the Attempt `crashed` (the ladder retries it); any other error propagates. An exhausted GitHub
+/// rate limit (`gh_failed` marked `rate_limited`) is a transient provider failure instead: same Tier, <=3 tries, 30 s hold, and
+/// excluded from `automatic_attempts`, so it never burns the ladder (contract §7.4 step 8b, §3.4).
 fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> {
     let label = match e.code() {
         ErrorCode::GhFailed | ErrorCode::ToolTimeout => "gh_failed",
@@ -918,12 +920,23 @@ fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> 
         ErrorCode::GitFailed | ErrorCode::BaseNotFound => e.code().as_str(),
         _ => return Err(e),
     };
-    let detail = format!("{label}: {}", e.message());
+    let detail = format!(
+        "{label}: {} stderr: {}",
+        e.message(),
+        e.details()
+            .get("stderr")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    );
+    let cause = if e.code() == ErrorCode::GhFailed
+        && e.details().get("rate_limited") == Some(&Value::Bool(true))
+    {
+        Failure::ProviderError
+    } else {
+        Failure::Crashed
+    };
     Ok(Stepped {
-        end: End::Failed {
-            cause: Failure::Crashed,
-            detail,
-        },
+        end: End::Failed { cause, detail },
         stale,
         push: None,
         pulled: None,
