@@ -40,9 +40,11 @@ it("the curate dialog body scrolls with a ScrollArea", () => {
       ],
     } as Partial<InboxRow>),
   ]);
-  const first = m.container.querySelector("[data-kind][data-id]");
+  // the card click opens the owner; the Curate action button opens the dialog
+  const curate = m.container.querySelector<HTMLButtonElement>('[data-kind][data-id] button[data-part="item-action"]');
+  expect(curate?.textContent).toBe("Curate");
   act(() => {
-    first?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    curate?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   const box = document.body.querySelector('input[type="checkbox"]');
   expect(box).not.toBeNull();

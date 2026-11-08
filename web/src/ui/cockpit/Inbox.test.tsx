@@ -16,8 +16,9 @@ function model(rows: InboxRow[], engineRunning = true): InboxModel {
 function render(rows: InboxRow[]) {
   const onAction = vi.fn();
   const onSelectSession = vi.fn();
-  const m = mount(<Inbox inbox={model(rows)} onAction={onAction} onSelectSession={onSelectSession} />);
-  return { ...m, onAction, onSelectSession };
+  const onSelectPlan = vi.fn();
+  const m = mount(<Inbox inbox={model(rows)} onAction={onAction} onSelectSession={onSelectSession} onSelectPlan={onSelectPlan} />);
+  return { ...m, onAction, onSelectSession, onSelectPlan };
 }
 const items = (c: Element) => Array.from(c.querySelectorAll("[data-kind][data-id]"));
 function click(el: Element | null | undefined): void {
@@ -68,6 +69,7 @@ function stubLayout(available: number, required: number): void {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  document.body.innerHTML = "";
   delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
   delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
 });
@@ -114,16 +116,16 @@ it("a label with a newline shows its second line as the item description", () =>
   m.unmount();
 });
 
-it("a linked row is a button item whose title and icon are anchors to its url", () => {
+it("a row with a url is a button item whose top-right slot is an external-link anchor and whose title is plain text", () => {
   const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", url: "https://example.test/run/1" })]);
   const el = items(m.container)[0];
   expect(el?.tagName).toBe("DIV");
   expect(el?.getAttribute("role")).toBe("button");
-  for (const a of [el?.querySelector('[data-slot="item-title"] a'), el?.querySelector('a[data-part="item-link"]')]) {
-    expect(a?.getAttribute("href")).toBe("https://example.test/run/1");
-    expect(a?.getAttribute("target")).toBe("_blank");
-    expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
-  }
+  expect(el?.querySelector('[data-slot="item-title"] a')).toBeNull();
+  const a = el?.querySelector('a[data-part="item-link"]');
+  expect(a?.getAttribute("href")).toBe("https://example.test/run/1");
+  expect(a?.getAttribute("target")).toBe("_blank");
+  expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
   expect(el?.querySelector('[data-slot="item-actions"] svg.lucide-external-link')).not.toBeNull();
   m.unmount();
 });
@@ -196,24 +198,27 @@ it("left click on a PR row selects the Plan Lead session", () => {
   m.unmount();
 });
 
-it("left click on a review-requested row copies its url and opens it", () => {
+it("left click on a review-requested row with an owner selects the owner instead of copying or opening its url", () => {
   const writeText = vi.fn(async () => undefined);
   const open = vi.fn();
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   vi.stubGlobal("open", open);
-  const m = render([row(1, "review-requested", "Review PR 9", { urgency: "red", url: "https://example.test/pr/9" })]);
+  const m = render([row(1, "review-requested", "Review PR 9", { urgency: "red", planId: "p1", url: "https://example.test/pr/9" })]);
   click(items(m.container)[0]);
-  expect(writeText).toHaveBeenCalledExactlyOnceWith("https://example.test/pr/9");
-  expect(open).toHaveBeenCalledExactlyOnceWith("https://example.test/pr/9", "_blank", "noopener,noreferrer");
-  expect(m.onSelectSession).not.toHaveBeenCalled();
+  expect(m.onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(writeText).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
   m.unmount();
 });
 
-it("left click on an engine-down row starts the engine", () => {
-  const m = render([row(1, "engine-down", "engine is down", { urgency: "red" })]);
+it("the engine-down card starts the engine only through its Start button", () => {
+  const m = render([row(1, "engine-down", "engine is down", { urgency: "red", planId: null })]);
   click(items(m.container)[0]);
+  expect(m.onAction).not.toHaveBeenCalled();
+  const start = items(m.container)[0]?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(start?.textContent).toBe("Start");
+  click(start);
   expect(m.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "engine.start" });
-  expect(m.onSelectSession).not.toHaveBeenCalled();
   m.unmount();
 });
 
@@ -573,5 +578,126 @@ it("a row without a primary action shows only the Dismiss button (pro-d53)", () 
 it("the age is not inside the item actions", () => {
   const m = render([row(1, "dialog", "Need an answer", { sessionId: "s1" })]);
   expect(items(m.container)[0]?.querySelector('[data-slot="item-actions"] [data-part="age"]')).toBeNull();
+  m.unmount();
+});
+
+// air-d121: the card click opens its owner, the top-right slot holds the external link, and the
+// action button runs the primary action (never an owner link or an external link).
+
+it("card click opens the owning Lead or Manager", () => {
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
+  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", planId: "p1", sessionId: "mgr1", url: "https://example.test/run/1" })]);
+  click(items(m.container)[0]);
+  expect(m.onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(m.onSelectSession).toHaveBeenCalledExactlyOnceWith("mgr1");
+  expect(m.onAction).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  const [planAt = 0] = m.onSelectPlan.mock.invocationCallOrder;
+  const [sessionAt = 0] = m.onSelectSession.mock.invocationCallOrder;
+  expect(planAt).toBeLessThan(sessionAt);
+  m.unmount();
+});
+
+it("card click with no owner opens the external link", () => {
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
+  const m = render([row(1, "engine-down", "engine is down", { urgency: "red", planId: null, sessionId: null, url: "https://example.test/engine" })]);
+  click(items(m.container)[0]);
+  expect(open).toHaveBeenCalledExactlyOnceWith("https://example.test/engine", "_blank", "noopener,noreferrer");
+  expect(m.onSelectPlan).not.toHaveBeenCalled();
+  expect(m.onSelectSession).not.toHaveBeenCalled();
+  expect(m.onAction).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+it("card click with no owner and no url does nothing", () => {
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
+  const m = render([row(1, "engine-down", "engine is down", { urgency: "red", planId: null, sessionId: null, url: null })]);
+  click(items(m.container)[0]);
+  expect(open).not.toHaveBeenCalled();
+  expect(m.onSelectPlan).not.toHaveBeenCalled();
+  expect(m.onSelectSession).not.toHaveBeenCalled();
+  expect(m.onAction).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+it("the top-right slot is the external link whenever the row has a url", () => {
+  // a kind the old linkKinds list excluded: the slot still holds the anchor for any url
+  const m = render([row(1, "dialog", "Need an answer", { urgency: "red", planId: null, url: "https://example.test/thread/1" })]);
+  const slot = items(m.container)[0]?.querySelector('[data-slot="item-actions"]');
+  const a = slot?.querySelector<HTMLAnchorElement>('a[data-part="item-link"]');
+  expect(slot?.firstElementChild?.matches('a[data-part="item-link"]')).toBe(true);
+  expect(a?.getAttribute("href")).toBe("https://example.test/thread/1");
+  expect(a?.getAttribute("target")).toBe("_blank");
+  expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(a?.getAttribute("aria-label")).toBe("Open external link");
+  expect(a?.querySelector("svg.lucide-external-link")).not.toBeNull();
+  expect(slot?.querySelector("svg.lucide-chevron-right")).toBeNull();
+  m.unmount();
+});
+
+it("the top-right slot is the internal indicator when the row has no url", () => {
+  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", planId: "p1", url: null })]);
+  const el = items(m.container)[0];
+  const slot = el?.querySelector('[data-slot="item-actions"]');
+  expect(slot?.firstElementChild?.matches("svg.lucide-chevron-right")).toBe(true);
+  expect(slot?.querySelector('a[data-part="item-link"]')).toBeNull();
+  // with no url the card opens its owner rather than a link
+  click(el);
+  expect(m.onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(m.onSelectSession).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+it("the card title is not a link", () => {
+  const m = render([row(1, "deploy", "Deploy ready", { urgency: "yellow", url: "https://example.test/run/1" })]);
+  const title = items(m.container)[0]?.querySelector('[data-slot="item-title"]');
+  expect(title?.textContent).toBe("Deploy ready");
+  expect(title?.querySelector("a")).toBeNull();
+  m.unmount();
+});
+
+it("the action button runs the primary action and never an owner link or external link", () => {
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
+  const m = render([row(1, "pr-ready", "acme/api#3 ready to merge", { urgency: "yellow", planId: "p1", sessionId: "s1", url: "https://example.test/pr/3", actions: [mergeAction] })]);
+  const el = items(m.container)[0];
+  expect(el?.querySelector('[data-slot="item-title"] a')).toBeNull();
+  const button = el?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(button?.tagName).toBe("BUTTON");
+  expect(button?.textContent).toBe("Merge");
+  click(button);
+  expect(m.onAction).toHaveBeenCalledExactlyOnceWith(mergeAction.action);
+  expect(m.onSelectPlan).not.toHaveBeenCalled();
+  expect(m.onSelectSession).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  m.unmount();
+});
+
+it("the action button falls back to Curate then Dismiss", () => {
+  const curation = [{ id: "r1", text: "first record", detail: "stale a.md" }];
+  const m = render([
+    row(1, "curate-retire", "Curate c1", { urgency: "blue", contextId: "c1", planId: "p1", sessionId: "s1", curation }),
+    row(2, "dialog", "Just a note", { urgency: "white", planId: null, sessionId: null }),
+  ]);
+  const [first, second] = items(m.container);
+  const curate = first?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  const dismiss = second?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(curate?.textContent).toBe("Curate");
+  expect(dismiss?.textContent).toBe("Dismiss");
+  // the card click opens the owner, never the curate dialog
+  expect(document.body.querySelector('[data-slot="dialog-content"]')).toBeNull();
+  click(first);
+  expect(m.onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(m.onSelectSession).toHaveBeenCalledExactlyOnceWith("s1");
+  expect(document.body.querySelector('[data-slot="dialog-content"]')).toBeNull();
+  // the Curate button opens the dialog
+  click(curate);
+  expect(document.body.querySelector('[data-slot="dialog-content"]')?.textContent).toContain("Retire records of c1");
+  // the Dismiss fallback dispatches inbox.dismiss
+  click(dismiss);
+  expect(m.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "inbox.dismiss", itemId: 2 });
   m.unmount();
 });
