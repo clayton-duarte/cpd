@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog as electronDialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, shell as electronShell, Tray } from "electron";
 import { boot } from "./boot.ts";
 import { createPreviewClient, type PreviewClient } from "./preview-client.ts";
-import { createHealthWatchdog, createPreviewWatchdog, productionEnv } from "./watchdog.ts";
+import { createHealthWatchdog, createPreviewWatchdog } from "./watchdog.ts";
 import type { Build } from "./watchdog.ts";
 import { parseCockpitHealth, parseHealth, type HealthRecord } from "./health.ts";
 import { previousBuildDirs } from "./update/bundle.ts";
 import { createEventReporter } from "./events.ts";
-import { DEFAULT_DEV_URL, readPreviewMode } from "./preview-mode.ts";
+import { DEFAULT_DEV_URL, MODE_ARG, readPreviewMode } from "./preview-mode.ts";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
 import { watchAttention } from "./attention.ts";
@@ -299,12 +299,12 @@ async function main(): Promise<void> {
       if (build === "prod") return path.join(root, "web", "dist-electron");
       return previousBuildDirs(root)[build === "head-1" ? 0 : 1];
     };
-    let currentBuild: Build = readPreviewMode(env).mode === "preview" ? "preview" : "prod";
-    // The rung above prod is loaded by relaunching the app in production mode (air-d95): CPD_MODE
-    // and the preview's dev URL go, so the app boots the built renderer.
+    let currentBuild: Build = readPreviewMode(env, process.argv.slice(1)).mode === "preview" ? "preview" : "prod";
+    // The rung above prod is loaded by relaunching the app in production mode (air-d95). Electron's
+    // relaunch boots the new process with the ORIGINAL environment, so a mutated `process.env`
+    // never reaches it; the `--cpd-mode=production` argument does, and beats `CPD_MODE=preview`.
     const relaunchInProduction = (): void => {
-      process.env = productionEnv(process.env) as NodeJS.ProcessEnv;
-      app.relaunch();
+      app.relaunch({ args: [...process.argv.slice(1), `${MODE_ARG}production`] });
       app.exit(0);
     };
     const watchdog = createHealthWatchdog({
@@ -602,6 +602,7 @@ async function main(): Promise<void> {
     loadDevUrl: (w, url) => (w as BrowserWindow).loadURL(url),
     loadFile: (w) => (w as BrowserWindow).loadFile(path.join(here, "renderer", "electron.html")),
     env: process.env,
+    argv: process.argv.slice(1),
   });
 }
 

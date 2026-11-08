@@ -13,7 +13,8 @@ export interface WatchdogPorts {
   signalReload?(pid: number): void;
   /** Resolves once the process is gone. */
   terminate(pid: number): void | Promise<void>;
-  relaunch(): Promise<void>;
+  /** Relaunch the app asking explicitly for `mode`, carried past Electron's environment-preserving relaunch (air-d95). */
+  relaunch(mode: 'production'): Promise<void>;
   restore: RestorePoints;
   log(entry: object): Promise<void>;
 }
@@ -159,10 +160,10 @@ export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = 
       rolledBack = true;
       if (ports.pidAlive(rec.pid)) {
         await ports.terminate(rec.pid);
-        await ports.relaunch();
+        await ports.relaunch("production");
       } else {
         await log({ event: "relaunch", ...base, mode: "production" });
-        await ports.relaunch();
+        await ports.relaunch("production");
       }
     } catch (error) {
       await log({ event: "rollback-failed", ...base, error: (error as Error).message });
