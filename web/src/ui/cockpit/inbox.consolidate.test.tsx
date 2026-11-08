@@ -319,7 +319,8 @@ it("inbox unread row click selects the session and dispatches inbox.dismiss", ()
 function errorToastApp(error: { code: string; message: string; details?: Record<string, unknown> }) {
   vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
   const transport = new FakeTransport();
-  const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
+  let nextId = 0;
+  const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => `c${++nextId}`} />);
   act(() => transport.emitStatus("open"));
   act(() => transport.emitMessage(snapshot([mergeRow()])));
   click(actionBtn(view.container));
@@ -418,5 +419,23 @@ it("keeps the failure actionable and deduplicates retry clicks", () => {
   });
   expect(transport.sent.filter((m) => (m as { action?: { kind?: string } }).action?.kind === "error.report")).toHaveLength(2);
   expect((reportBtn() as HTMLButtonElement).disabled).toBe(true);
+  view.unmount();
+});
+
+
+it("a failed report can be retried and acknowledged on success", () => {
+  const { transport, view } = errorToastApp({ code: "protocol_error", message: "bad frame" });
+  click(reportBtn());
+  act(() => transport.emitMessage({ type: "action.result", actionId: sentReport(transport).actionId, ok: false, error: { code: "cpd_failed", message: "session_not_found" } }));
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')?.textContent).toContain("session_not_found");
+  click(document.body.querySelector('[data-part="error-toast-retry"]'));
+  const reports = transport.sent.filter((m) => (m as { action?: { kind?: string } }).action?.kind === "error.report") as { actionId: string }[];
+  expect(reports).toHaveLength(2);
+  expect(reports[1]!.actionId).not.toBe(reports[0]!.actionId);
+  act(() => transport.emitMessage({ type: "action.result", actionId: reports[1]!.actionId, ok: true, output: {} }));
+  expect(document.body.querySelector('[data-part="cockpit-error-toast"]')).toBeNull();
+  expect(document.body.querySelector('[role="status"]')?.textContent).toContain("Report sent");
+  click(document.body.querySelector('[aria-label="Dismiss report confirmation"]'));
+  expect(document.body.querySelector('[role="status"]')).toBeNull();
   view.unmount();
 });
