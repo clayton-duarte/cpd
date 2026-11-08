@@ -920,6 +920,37 @@ Contract §6.20 fixes the read path of a durable Session before `cpd chat` exist
 
 No test opens a socket, starts a process, runs real tmux, pi-durable or a model, or sleeps: time moves only through the `ManualClock`. The statements §6.20 marks unverified (the per-event fold's shapes, the back-off and deadline) are pinned by those fakes, not by a real run.
 
+## The command-example guard (Plan `agent-refusals`)
+
+Contract §8.3 "Delivery to agents" fixes the rule (the §10 traceability row "The command-example guard" cites it). This section says where it lives. Two files, both under `pi/`, so the one-area rule does not apply (the guard is not a Rust area; its tests run with `node --test` like every `pi/test` file).
+
+**`pi/lib/command-guard.ts`** is pure: it takes the files to scan and returns the violations, it imports nothing but what it needs to read text, it starts no process and opens no store. The callers read the files; the lib judges text.
+
+**Collection.** The files are the ones `skillFiles` of `pi/skills/skill.test.ts` builds for `cpd-lead` and `cpd-manager`: each skill's `SKILL.md` plus every file of its `references/` directory, sorted — the same set the existing command test and fact check scan. `pi/skills/writing-for-agents/` is upstream's unchanged text and is not scanned. From each file's text the guard collects every command example, the way `commandsNamed` of `skill.test.ts` does: every `cpd …` line of every fenced block (indented or not) and every inline backtick span — and, beyond what `commandsNamed` takes, the fenced JSON examples of a Job Spec (the blocks of `references/spec-files.md`) and the `ask_user_question` call shapes (the blocks of `references/questions.md`).
+
+**The context of an example is static**, read from where the skill teaches it to run, never from execution:
+
+- a `SKILL.md`'s own text teaches its role's context: `cpd-lead/SKILL.md` is Lead context, `cpd-manager/SKILL.md` is Manager context;
+- the explore rules of `references/spec-files.md` (its scout/research section) teach explore context;
+- a fenced Spec JSON example, and the acceptance and test-command examples inside Spec material, teach what a Worker runs: bounded by `attempt_minutes`, not 30 s;
+- the acceptance-criteria examples of `references/pr-description.md` teach what a pull request body promises: the same Worker bound.
+
+**The checks** — each reports the example with the file, the position and the refusal the runtime would give:
+
+1. **The 30 s bound.** A `timeout <n> …` with `n > 30`, in Lead, Manager or explore context: refused `timeout` at runtime (`BOUND_SECONDS`, `pi/lib/noblock.ts`, G24; commands.md §15.11; the explore profile's own bound, contract §6.6). `cpd ask` at 7200 s is never flagged: the explore rules teach it as the one bound of its own, the command blocks until the Lead answers.
+2. **The Spec example.** A fenced JSON example of a Job Spec must parse and hold only fields the Spec schema knows, with none of the required ones missing (`spec_invalid`): the same fields the boundary checks at `job add`.
+3. **The kind and the shape.** A `--kind` on a `job add` or `job edit` example must be a kind the Workflow shape the example teaches allows (`shape_violation`), and `scout`/`research` go with `--plan`, never `--workflow` (`explore_workflow_forbidden`).
+4. **The ask limit.** An `ask_user_question` call shape must sum, as `pi/lib/askguard.ts` sums it (`LIMIT` 1500), to at most 1500 characters.
+
+**The exemption.** An example scoped to a Worker or a PR acceptance (above) is never flagged for the size of its `timeout`, whatever the value: its bound is the Job's `attempt_minutes` (or `explore_minutes` for an explore Job), not `BOUND_SECONDS`. The exemption is only from the 30 s bound; the other checks apply to it as to any example.
+
+**`pi/test/skill-commands.test.ts`** runs the guard over the real `pi/skills/**` files and over a synthetic example. It is picked up by the default file list of the root `package.json` `test` script (`pi/test/*.test.ts`), so it runs in `pnpm test` and the Gate, with no wiring beyond the file name. It holds the two tests the Jobs of Workflow `enforce` pin, named exactly (a pi test id is the file path, `::`, the exact `node:test` title, which must appear verbatim in a `test(` call — `run/agent-refusals/explore/scout-test-names.md`):
+
+- `pi/test/skill-commands.test.ts::the command-example guard flags a Lead example over 30 s` — a synthetic Lead-context example using `timeout 60` is flagged;
+- `pi/test/skill-commands.test.ts::every command example in the skills passes the guard` — every real example of `pi/skills/**` passes.
+
+Nothing real runs: no subprocess, no store, no timer. Sources for the shape of the work: the Plan's explore artefacts `$CPD_HOME/run/agent-refusals/explore/scout-skills.md` (the inventory of every example and where a check attaches in `skill.test.ts`), `scout-timeout-seed.md` (the `timeout 60` seed and the refusal text) and `scout-test-names.md` (the test-id format).
+
 ## Measuring tool-result bloat (hs-d737)
 
 **Command.** `node pi/measure/session-bloat.ts [--root <dir>] [--since <ISO time>] [--until <ISO time>] [--top <n>] [--json]`; it reads every `*.jsonl` file one directory below `--root` (default: pi's agent sessions directory, `~/.pi/agent/sessions`), never writes or changes a file, and exits 0 with a report. A bad option, a bad time or an unreadable root exits 2 with one line on stderr (no silent default).
@@ -945,7 +976,3 @@ No test opens a socket, starts a process, runs real tmux, pi-durable or a model,
 **What it cannot measure.** What a codemode script read and filtered away (nested results are never stored), so the saving shows only as a change in `result_chars`, `turns` and `cost_usd` between two windows of comparable work; sessions differ, so compare medians over many sessions, not one pair.
 
 **How to use it for the experiment.** The baseline is `--until <time the project setting reached the machine>`, the comparison `--since` that time.
-
-## The command-example guard (Plan `agent-refusals`)
-
-Contract §8.3 "Delivery to agents" fixes the rule; this section (skeleton) will say where it lives in the code: `pi/lib/command-guard.ts` and `pi/test/skill-commands.test.ts`.
