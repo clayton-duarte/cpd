@@ -82,10 +82,7 @@ pub fn queued(
 
 /// [`merge_method`] inside the caller's transaction, from `swr_repos`: the first allowed of squash, merge, rebase;
 /// `None` when the row is missing or none is allowed.
-pub(crate) fn merge_method_tx(
-    tx: &WriteTxn<'_>,
-    repo: &str,
-) -> Result<Option<Method>, CpdError> {
+pub(crate) fn merge_method_tx(tx: &WriteTxn<'_>, repo: &str) -> Result<Option<Method>, CpdError> {
     let flags: Option<MergeMethods> = tx
         .query_row(
             "SELECT squash_merge_allowed, merge_commit_allowed, rebase_merge_allowed FROM swr_repos WHERE repo = ?1",

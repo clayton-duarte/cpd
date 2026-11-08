@@ -124,12 +124,13 @@ fn merge_it(rig: &Rig) -> bool {
         .args;
     Ports::scope(&rig.fakes.ports, || merge::merge(&rig.fakes.ports, args)).expect("queued");
     // The command's only `gh` call is the containment read: it writes nothing (the drain does).
-    assert!(
-        rig.fakes.runner.calls().iter().all(|c| {
-            c.tool != "gh" || (c.args.first().map(String::as_str) == Some("api")
-                && c.args.iter().any(|a| a.starts_with("repos/acme/pay/compare/")))
-        })
-    );
+    assert!(rig.fakes.runner.calls().iter().all(|c| {
+        c.tool != "gh"
+            || (c.args.first().map(String::as_str) == Some("api")
+                && c.args
+                    .iter()
+                    .any(|a| a.starts_with("repos/acme/pay/compare/")))
+    }));
     drain(rig)
 }
 

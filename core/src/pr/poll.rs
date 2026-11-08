@@ -511,20 +511,20 @@ fn apply(
             // The armed merge: once the checks passed on a head that contains the default branch, the merge is queued
             // (commands.md §9.10). The intent stays until the merge, a close or a cancel clears it.
             if after.state == "open" && after.checks == "passed" {
-                let contained = armed.iter().find(|a| {
-                    a.repo == after.repo && a.number == after.number && a.contained
-                });
-                if let Some(a) = contained {
-                    if let Some(method) = github_write::merge_method_tx(tx, &after.repo)? {
-                        github_write::enqueue_merge_tx(
-                            tx,
-                            now,
-                            &after.repo,
-                            after.number,
-                            &a.head,
-                            method,
-                        )?;
-                    }
+                let contained = armed
+                    .iter()
+                    .find(|a| a.repo == after.repo && a.number == after.number && a.contained);
+                if let Some(a) = contained
+                    && let Some(method) = github_write::merge_method_tx(tx, &after.repo)?
+                {
+                    github_write::enqueue_merge_tx(
+                        tx,
+                        now,
+                        &after.repo,
+                        after.number,
+                        &a.head,
+                        method,
+                    )?;
                 }
             }
         }
@@ -1140,11 +1140,9 @@ fn armed_reads(
             [row.id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let (Some(base), Some(default), Some(head)) = (
-            row.base_ref.as_deref(),
-            row.default_branch.as_deref(),
-            head,
-        ) else {
+        let (Some(base), Some(default), Some(head)) =
+            (row.base_ref.as_deref(), row.default_branch.as_deref(), head)
+        else {
             continue;
         };
         if armed && base == default {

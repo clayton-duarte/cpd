@@ -115,19 +115,17 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         (e.row.base_ref.as_deref(), e.row.default_branch.as_deref())
         && base == default
     {
-        let contained =
-            gh::head_contains_base(&*ports.runner, home.root(), &repo, default, &head)?;
+        let contained = gh::head_contains_base(&*ports.runner, home.root(), &repo, default, &head)?;
         if !contained {
             poll::arm_for_behind_head(&mut store, &home, &repo, number)?;
             return Err(CpdError::new(
                 ErrorCode::HeadBehindMain,
-                format!(
-                    "{repo}#{number} is behind {default}, updated, waiting for gate."
-                ),
+                format!("{repo}#{number} is behind {default}, updated, waiting for gate."),
             )
             .with("repo", repo.as_str())
             .with("number", number)
-            .with("base", default));
+            .with("head", head.as_str())
+            .with("main", default));
         }
     }
     let method = match merge_method(&mut store, &repo)? {
