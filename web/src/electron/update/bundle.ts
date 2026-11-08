@@ -38,6 +38,7 @@ export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
     return (a ?? b) !== null && a !== b;
   };
   const mainChanged = MAIN_ARTEFACTS.some(differs);
+  const [head1, head2] = previousBuildDirs(root);
   const prev = `${cur(root)}.prev`;
   fs.rename(cur(root), prev);
   try {
@@ -46,6 +47,10 @@ export function swapBundle(fs: UpdateFs, root: string): { mainChanged: boolean }
     fs.rename(prev, cur(root));
     throw e;
   }
-  fs.remove(prev);
+  // Rotate the revert ladder: the displaced prod build becomes HEAD-1, demoting the former HEAD-1 to HEAD-2 and
+  // pruning anything older, so the current build, HEAD-1 and HEAD-2 stay on disk (air-d95).
+  fs.remove(head2);
+  fs.rename(head1, head2);
+  fs.rename(prev, head1);
   return { mainChanged };
 }
