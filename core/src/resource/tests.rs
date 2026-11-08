@@ -484,7 +484,7 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     drop(second);
 }
 
-/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs; `d` is `failed`, so a tenant still).
+/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs; `d` is `failed`, and its every Attempt has ended, so it holds no Worker slot).
 fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -537,7 +537,7 @@ fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
 }
 
 #[test]
-fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
+fn workers_is_a_host_resource_with_concurrency_slots_and_live_attempts_as_tenants() {
     let (dir, mut store) = store_with_attempts();
 
     let pool = store.read(|conn| workers(conn, 3)).unwrap();
@@ -555,16 +555,15 @@ fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
         [
             tenant("a", "2026-10-26T21:40:00.000Z"),
             tenant("b", "2026-10-26T21:41:00.000Z"),
-            tenant("c", "2026-10-26T21:42:00.000Z"),
-            tenant("d", "2026-10-26T21:43:00.000Z")
+            tenant("c", "2026-10-26T21:42:00.000Z")
         ],
-        "every tenant Job of `workers` in start order: the `failed` Job `d` keeps its worker though its Attempt ended"
+        "every live Attempt of `workers` in start order: the `failed` Job `d`, its only Attempt ended, holds no slot"
     );
     // The slots follow the config, the tenants do not.
     assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().slots, 1);
     assert_eq!(
         store.read(|conn| workers(conn, 1)).unwrap().holders.len(),
-        4,
+        3,
         "an urgent Job's slot beyond concurrency is a tenant too"
     );
     // No lock file: the Ledger is the record.

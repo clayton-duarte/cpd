@@ -439,7 +439,7 @@ fn resource_run_refuses_workers_as_usage() {
 #[test]
 fn resource_list_shows_workers_with_the_running_attempts() {
     let (fx, repo) = world("[resources.e2e-port]\n");
-    // Concurrency 3, two Attempts not ended (one `starting`, one `running`) and one that ended with its Job `failed`: Plan `pl`'s Jobs `a`, `b` and `c`.
+    // Concurrency 3, two Attempts not ended (one `starting`, one `running`) and one that ended with its Job `failed`: Plan `pl`'s Jobs `a`, `b` and `c` (only the live Attempts hold a slot, air-n90).
     super::job::setup(&fx.env);
     fs::write(
         fx.env.cpd_home().join("config.toml"),
@@ -476,8 +476,8 @@ fn resource_list_shows_workers_with_the_running_attempts() {
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
     // The built-in `workers` is listed with the declared resources, sorted by name (commands.md §30.1): host scope, `concurrency`
-    // slots, one holder `{slot, holder}` per tenant Job (`c` is `failed` with its Attempt ended and keeps its worker, contract §3.4
-    // "Tenancy"), `holder` the shape `{by: "attempt", plan, job, attempt, at}`.
+    // slots, one holder `{slot, holder}` per live Attempt (`c` is `failed` with its every Attempt ended, so it holds no slot,
+    // contract §3.4 "Tenancy", air-n90), `holder` the shape `{by: "attempt", plan, job, attempt, at}`.
     let resources = out["resources"].as_array().unwrap();
     assert_eq!(
         resources
@@ -490,15 +490,18 @@ fn resource_list_shows_workers_with_the_running_attempts() {
     let workers = &resources[1];
     assert_eq!(
         (&workers["scope"], &workers["slots"], &workers["free"]),
-        (&json!("host"), &json!(3), &json!(0)),
+        (&json!("host"), &json!(3), &json!(1)),
         "{workers}"
     );
     let holders = workers["holders"].as_array().unwrap();
-    assert_eq!(holders.len(), 3, "one per tenant Job: {workers}");
+    assert_eq!(
+        holders.len(),
+        2,
+        "one per live Attempt; the `failed` Job `c` holds none: {workers}"
+    );
     for (i, (job, at)) in [
         ("a", "2026-10-26T21:40:00.000Z"),
         ("b", "2026-10-26T21:41:00.000Z"),
-        ("c", "2026-10-26T21:42:00.000Z"),
     ]
     .into_iter()
     .enumerate()
