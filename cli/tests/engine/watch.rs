@@ -4475,6 +4475,9 @@ struct Titles {
     fx: Ip,
     panes: Vec<String>,
     children: Arc<Mutex<common::fx::Children>>,
+    /// Set once E5's first pass has ended (the first [`Titles::drive`] waited for it): later runs start no poll, so
+    /// they wait no longer.
+    pass_ended: Arc<AtomicBool>,
     _driver: Flock<File>,
 }
 
@@ -4581,6 +4584,7 @@ impl Titles {
             fx,
             panes: ids,
             children,
+            pass_ended: Arc::new(AtomicBool::new(false)),
             _driver: driver,
         }
     }
@@ -4631,23 +4635,46 @@ impl Titles {
 
     /// The engine runs `naps` naps of virtual time (a tick is ten naps), and the retitle runs it started are run before each nap passes.
     fn run(&self, naps: usize) {
-        let children = self.children.clone();
-        self.fx
-            .watch(naps, move |_| {
-                children.lock().unwrap().run_pending();
-            })
-            .unwrap();
+        self.drive(move |nap| nap >= naps);
     }
 
     /// The engine runs until `step(nap)` says the nap is the last, after the retitle runs it started were run; `step` is a closure of
     /// the test's own (it owns what it reads: a [`Db`], the `FakeRunner`, the clock).
-    fn run_steps(&self, mut step: impl FnMut(usize) -> bool + Send + 'static) {
+    fn run_steps(&self, step: impl FnMut(usize) -> bool + Send + 'static) {
+        self.drive(step);
+    }
+
+    /// [`Titles::run`]/[`Titles::run_steps`]: the engine on virtual time, the retitle runs it started run before each
+    /// nap passes. The first step waits once for E5's pass to end. E5's pass opens a store of its own on its poll
+    /// thread; a run that opened its store across the pass's setup lock (`locks/store.lock`) would spend the manual
+    /// clock's whole budget at once instead of waiting and fail `lock_timeout` (exit 5) - a schedule's failure, not the
+    /// state's, and load-dependently. E9's `drive` waits the same way.
+    fn drive(&self, mut step: impl FnMut(usize) -> bool + Send + 'static) {
+        /// How long the run waits for E5's pass to end before running the runs it starts (a real wait on a channel,
+        /// as E9's `drive`; the pass answers at once in these fixtures).
+        const WAIT: Duration = Duration::from_secs(10);
         let children = self.children.clone();
+        let ended = self.pass_ended.clone();
+        let (ended_tx, ended_rx) = std::sync::mpsc::channel::<()>();
+        let ended_tx = Mutex::new(ended_tx);
         self.fx
-            .watch_steps(move |nap| {
-                children.lock().unwrap().run_pending();
-                step(nap)
-            })
+            .watch_gated(
+                move |nap| {
+                    if !ended.swap(true, Ordering::SeqCst) {
+                        ended_rx
+                            .recv_timeout(WAIT)
+                            .expect("E5's pass ended and let the runs go");
+                    }
+                    children.lock().unwrap().run_pending();
+                    step(nap)
+                },
+                move || {
+                    // The hook must not panic (it runs in a thread-local destructor): a poisoned lock is dropped silently.
+                    if let Ok(tx) = ended_tx.lock() {
+                        let _ = tx.send(());
+                    }
+                },
+            )
             .unwrap();
     }
 
