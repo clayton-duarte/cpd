@@ -21,20 +21,34 @@ export interface ViewsDeps {
 export type ViewResult = { ok: true; outDir: string; sha: string } | { ok: false; log: string };
 
 /**
- * Build one view from `checkout` into `outDir` with the command prod is built with, and stamp the
- * sha it was built from. Out of scope for this Job: the implementing change fills this in.
+ * The latest commit of `checkout` as git reports it. The views are built from a checkout, so the sha
+ * is the checkout's HEAD at build time (air-d89 points 3-4).
  */
-export function buildView(
+export async function headSha(exec: UpdateExec, checkout: string): Promise<string> {
+  return (await exec('git', ['rev-parse', 'HEAD'], { cwd: checkout })).stdout.trim();
+}
+
+/**
+ * Build one view from `checkout` into `outDir` with the command prod is built with, and stamp the
+ * sha it was built from. The build dir is named to the build through `CPD_ELECTRON_OUT`, the same
+ * env the updater's bundle build sets, so prod and preview share one build command (air-d89 point 3).
+ */
+export async function buildView(
   deps: ViewsDeps,
   opts: { checkout: string; outDir: string; sha: string },
 ): Promise<ViewResult> {
-  throw new Error('buildView is not implemented');
+  deps.log?.(`building view into ${opts.outDir} from ${opts.sha}`);
+  const r = await deps.exec('pnpm', [...VIEW_BUILD_ARGS], { cwd: opts.checkout, env: { CPD_ELECTRON_OUT: opts.outDir } });
+  if (r.code !== 0) return { ok: false, log: `${r.stderr}\n${r.stdout}` };
+  deps.fs.writeText(`${opts.checkout}/${opts.outDir}/${BUILT_SHA_FILE}`, opts.sha);
+  return { ok: true, outDir: opts.outDir, sha: opts.sha };
 }
 
 /**
  * The prod view: the default build of the latest commit on main, in the checkout's prod build dir
- * (air-d89 point 4). Out of scope for this Job: the implementing change fills this in.
+ * (air-d89 point 4).
  */
-export function buildProdView(deps: ViewsDeps, checkout: string): Promise<ViewResult> {
-  throw new Error('buildProdView is not implemented');
+export async function buildProdView(deps: ViewsDeps, checkout: string): Promise<ViewResult> {
+  const sha = await headSha(deps.exec, checkout);
+  return buildView(deps, { checkout, outDir: PROD_VIEW_DIR, sha });
 }

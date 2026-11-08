@@ -1,8 +1,10 @@
+import path from 'node:path';
 import { ensureCli } from './bootstrap';
 import { buildBundle, readBuiltSha, swapBundle } from './bundle';
 import { resolveCheckout, syncCheckout } from './checkout';
 import { installCli, readInstalledSha } from './cli';
 import { createUpdater } from './controller';
+import { rebuildViews } from './preview';
 import { followMerges } from './follow';
 import type { SpawnFollow } from './follow';
 import { readPreviewMode } from '../preview-mode';
@@ -30,6 +32,12 @@ export async function startAutoUpdate(deps: AutoUpdateDeps): Promise<{ bootstrap
     whenApplicable: () => whenApplicable({ isFocused: deps.isFocused, systemIdleSeconds: deps.systemIdleSeconds, timers: deps.timers }),
     reloadRenderer: deps.reloadRenderer,
     installCli: (sha) => installCli({ exec: deps.exec, fs: deps.fs, timers: deps.timers, log: deps.log }, root, sha),
+    rebuildViews: async () => {
+      const previewRoot = deps.env['CPD_WEB_PREVIEW_WORKTREE'] ?? path.resolve(root, '..', 'cpd.preview.web');
+      const r = await rebuildViews({ exec: deps.exec, fs: deps.fs, log: deps.log }, { prod: root, preview: previewRoot });
+      if (!r.prod.ok) deps.log(`prod view build failed: ${r.prod.log}`);
+      if (!r.preview.ok) deps.log(`preview view build failed: ${r.preview.log}`);
+    },
     onState: deps.onState,
     log: deps.log,
   });

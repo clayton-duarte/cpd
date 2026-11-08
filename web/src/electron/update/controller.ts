@@ -1,7 +1,7 @@
 import type { SyncResult } from './checkout';
 import type { UpdateState } from './types';
 
-export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; relaunch?(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; onState(s: UpdateState): void; log(line: string): void }
+export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; relaunch?(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; rebuildViews(): Promise<void>; onState(s: UpdateState): void; log(line: string): void }
 
 export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
   let restartNeeded = false;
@@ -37,7 +37,13 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
   async function cliFlow(sha: string): Promise<void> {
     if (deps.cliSha() === sha) return;
     const r = await deps.installCli(sha);
-    if (!r.ok) deps.log(`cli install failed: ${r.log}`);
+    if (!r.ok) {
+      deps.log(`cli install failed: ${r.log}`);
+      return;
+    }
+    // The CLI update landed: rebuild the views from the checkout so the new build becomes the prod
+    // view and the preview branch is rebuilt alongside it (air-d89 point 6).
+    await deps.rebuildViews();
   }
 
   async function run(): Promise<void> {
