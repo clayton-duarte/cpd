@@ -1,17 +1,17 @@
 # Stale-while-revalidate: the Slack datasource (`slack`)
 
-Status: **normative for the Slack SWR Workflow** (Plan `external-sync-arch`, Job `swr-slack-docs` writes this page; the Workflow that cuts Slack over builds it). Parent design: [swr.md](swr.md) (cache, outbox, overlay, fence, E24). Schema: [contract §4.4 "The SWR tables"](../contract.md). Decisions: pro-d444 (Slack), pro-d440, pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend). Accepted assumptions of swr.md §17 apply, with A5 and A6 as stated here.
+Status: **normative for the Slack SWR Workflow** (Plan `external-sync-arch`, Job `swr-slack-docs` writes this page; the Workflow that cuts Slack over builds it). Parent design: [swr.md](swr.md) (cache, outbox, overlay, fence, `swr`). Schema: [contract §4.4 "The SWR tables"](../contract.md). Decisions: pro-d444 (Slack), pro-d440, pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend). Accepted assumptions of swr.md §17 apply, with A5 and A6 as stated here.
 
-The Lead's answer to the one open question (swr-slack-docs-a1-q1) is in §6.2 and is the rule for E11.
+The Lead's answer to the one open question (swr-slack-docs-a1-q1) is in §6.2 and is the rule for `team-review`.
 
 ## 1. What moves
 
 | Today | After the Slack cutover |
 |---|---|
-| `run/team-review.json`, written by E11 (`engine/src/watch/team.rs`) and read by E8 and `inbox claim` | `swr_slack_posts` rows of the query `slack:channel:<C>` |
-| E11 spawns the helper and writes the file, and confirms own posts (`team.rs` `confirm_own_posts`) | the `slack` Source (`core/src/swr/source/slack.rs`): `fetch` runs the helper, `apply` writes the rows and confirms posts |
-| the `slack_reactions` queue and E17 (`core/src/pr/reactions.rs`, `engine/src/watch/react.rs`) | `swr_mutations`, `system` `slack`, `op_kind` `reaction` |
-| `pr post` sends at once and writes its row after the send | `pr post` enqueues `op_kind` `post`; E24 sends it, then writes the row |
+| `run/team-review.json`, written by `team-review` (`engine/src/watch/team.rs`) and read by `inbox` and `inbox claim` | `swr_slack_posts` rows of the query `slack:channel:<C>` |
+| `team-review` spawns the helper and writes the file, and confirms own posts (`team.rs` `confirm_own_posts`) | the `slack` Source (`core/src/swr/source/slack.rs`): `fetch` runs the helper, `apply` writes the rows and confirms posts |
+| the `slack_reactions` queue and `merge-reaction` (`core/src/pr/reactions.rs`, `engine/src/watch/react.rs`) | `swr_mutations`, `system` `slack`, `op_kind` `reaction` |
+| `pr post` sends at once and writes its row after the send | `pr post` enqueues `op_kind` `post`; `swr` sends it, then writes the row |
 | `pr repost` sends at once | `pr repost` enqueues `op_kind` `repost` |
 | `watch.team_review_seconds` (contract §8.2) sets the read cadence | the key stays and is the cadence of the channel query (default 1800 s, the 30 min staleTime of swr.md §4); a failed read is retried 60 s later (the Lead's decision, swr-slack-impl-a1-q4) |
 
@@ -47,13 +47,13 @@ CREATE TABLE swr_slack_posts (
 
 Why the key has `repo, number`: a message can link two pull requests, and the match rule of contract §2.2 ("PR post") counts a link anywhere in the text, not only the primary one. One key of `(channel, ts)` would drop the second. `reactions_json` and the thread fields are per message and repeated on each of its rows.
 
-Column meanings that differ from swr.md §3.9: `primary_pr` (E8 reads primary rows only, as today's `primary`), `author_id` and `author` (kept for E11's match, contract §2.2 (a)), `reactions_json` now holds **counts** (today the helper drops them, `pi/lib/slack-parse.ts` `parseReactions`), `claim_json` (the claim object), `eyes_me` and `thread_tags_me` are NULL until read.
+Column meanings that differ from swr.md §3.9: `primary_pr` (`inbox` reads primary rows only, as today's `primary`), `author_id` and `author` (kept for `team-review`'s match, contract §2.2 (a)), `reactions_json` now holds **counts** (today the helper drops them, `pi/lib/slack-parse.ts` `parseReactions`), `claim_json` (the claim object), `eyes_me` and `thread_tags_me` are NULL until read.
 
 ## 3. The helper: `slack-channel.ts`
 
 ### 3.1 Invocation
 
-Argv is unchanged: `node <adapter>/lib/slack-channel.ts --coding-agent <…/dist/index.js> --channel <C…> --me <U…>`, with `PI_CODING_AGENT_DIR`, cwd `$CPD_HOME`. The new part is **stdin**: one JSON value. It is started through the Runner port, `cpd_core::slack::call(config, "slack-channel.ts", args, Some(stdin), DEADLINE)` (core/src/slack.rs:18), run with `Runner::run(&Call)`, which writes `call.stdin` and closes it (core/src/host/runner.rs:33). Today E11 calls `runner.output` with stdin null (team.rs:151), so the Source's call is the one place that changes. Deadline 120 s, as today.
+Argv is unchanged: `node <adapter>/lib/slack-channel.ts --coding-agent <…/dist/index.js> --channel <C…> --me <U…>`, with `PI_CODING_AGENT_DIR`, cwd `$CPD_HOME`. The new part is **stdin**: one JSON value. It is started through the Runner port, `cpd_core::slack::call(config, "slack-channel.ts", args, Some(stdin), DEADLINE)` (core/src/slack.rs:18), run with `Runner::run(&Call)`, which writes `call.stdin` and closes it (core/src/host/runner.rs:33). Today `team-review` calls `runner.output` with stdin null (team.rs:151), so the Source's call is the one place that changes. Deadline 120 s, as today.
 
 ### 3.2 Input (stdin), fields
 
@@ -126,13 +126,13 @@ The rules are the Lead's (swr-slack-docs-a1 brief) plus two stated by this page,
 
 **Known limit** (stated, not fixed): a swap of one `:eyes:` reactor for another keeps the count, so E4 keeps the old `eyes_me` until the count moves. Its cost is one stale claim owner until the next change.
 
-**Known limit**: a message the User wrote (T1, E1) keeps whatever `thread_tags_me` it had, and it is `null` if none. E8 reads a `null` as "not tagged".
+**Known limit**: a message the User wrote (T1, E1) keeps whatever `thread_tags_me` it had, and it is `null` if none. `inbox` reads a `null` as "not tagged".
 
 ### 3.5 Commit, apply, and the rows
 
 - **Hash.** `fetch` computes the data hash over the canonical JSON of `posts` (sorted by `ts` descending, then `repo`, then `number`, keys sorted), without `read`. Equal to `swr_queries.data_hash` is **Unchanged**: no write (D5).
 - **Changed.** `cache::commit` runs `apply` in one `Store::write`: upsert every `posts` entry on its key, `fetched_at` = now, `inactive_at` NULL; set `inactive_at` = now on every row of the channel whose key is not in the answer (the answer is the newest 200 messages and the 7-day window, so a message that leaves it is inactive, as a rewritten file dropped it). Rows are never deleted here: gc deletes them after `swr.gc_days` (swr.md §4).
-- **Confirm.** The E11 confirmation of §6 runs after **every** successful fetch, Changed or Unchanged. It writes only when it records a post or enqueues an `auto_merge`, which is a change of `pr_posts` or of the outbox, not of the channel (so D5 holds for the channel data).
+- **Confirm.** The `team-review` confirmation of §6 runs after **every** successful fetch, Changed or Unchanged. It writes only when it records a post or enqueues an `auto_merge`, which is a change of `pr_posts` or of the outbox, not of the channel (so D5 holds for the channel data).
 - **Failure.** A failed helper run calls `cache::fail` and `endpoint::record_*` (§3.6) and writes no row (swr.md §16).
 
 ### 3.6 Endpoint classes
@@ -178,7 +178,7 @@ Reactions in use today, all `reaction` ops:
 | Helper answer | Outcome | Store |
 |---|---|---|
 | `ok` (`already` true or false) | `Done` → `complete` | the channel query is invalidated; the next fetch shows the new count and settles it |
-| `slack_refused` | `Failed` → `fail(Retry::Never)` | the row is `failed` with `error` = the Slack error name; one `error` Event `slack_refused`, scoped to the Plan for a merge reaction, as today (contract §3.7 E17, A4) |
+| `slack_refused` | `Failed` → `fail(Retry::Never)` | the row is `failed` with `error` = the Slack error name; one `error` Event `slack_refused`, scoped to the Plan for a merge reaction, as today (contract §3.7 `merge-reaction`, A4) |
 | any other code (§3.6) | `Retry { after: 600 s }` | the endpoint's failure is recorded; the outage Event is the endpoint's (A3) |
 
 **Merge reactions and the parked policy.** A merge reaction's emoji is read from the Workflow's policy when it is placed (contract §3.7 A1), so the emoji is resolved at `execute`, not at enqueue. A parked merge reaction (`failed`) is **re-enqueued** by the Source's `due` on a pass where the policy names a non-empty emoji different from the parked row's (a new mutation, with the new `vars_json`). That replaces today's reopen-in-place (`react.rs` `reopen_parked`), because a `failed` mutation never revalidates (swr.md §8). A policy that names no emoji parks it with `policy_empty` and no re-enqueue.
@@ -198,7 +198,7 @@ Reactions in use today, all `reaction` ops:
 2. insert the `post` mutation with its `vars_json`, and the Workflow's `pr_posts` overlay.
 3. return `{ok, plan, workflow, queued: true, mutation_id, message}`. The `pr_posts` row does not exist until the send answers.
 
-When E24 completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Then it enqueues the `auto_merge` mutation (§6.3); the repo gate of §6.2 is in its executor.
+When `swr` completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Then it enqueues the `auto_merge` mutation (§6.3); the repo gate of §6.2 is in its executor.
 
 `pr repost` (commands §9.8b2) checks 1 and 2 as today and enqueues `repost`. Its `last_posted_at` is set on completion, as today.
 
@@ -206,11 +206,11 @@ When E24 completes the send, `execute` writes the `pr_posts` row (`channel`, `ts
 
 `inbox claim` (commands §21.7) enqueues the `eyes` `reaction` in its own transaction (`core/src/inbox/cmd.rs:680` today). Its precondition "the team review cache holds a primary post" (`post_not_found`) reads `swr_slack_posts` (`primary_pr` = 1 and `inactive_at` NULL) instead of the file.
 
-## 6. E11: the confirmation of own posts
+## 6. `team-review`: the confirmation of own posts
 
 ### 6.1 Today
 
-`confirm_own_posts` (`engine/src/watch/team.rs:230`) confirms, for each open Workflow with an open pull request, no `pr_posts` row, and `pr.post.enabled` true, the earliest message of the User (`author_id`) that carries the pull request. It inserts the row through `posts::insert` (`core/src/pr/posts.rs:49`), which writes `auto_merge` `pending` for **every** confirmed post. E18 then asks GitHub (`engine/src/watch/auto_merge.rs`).
+`confirm_own_posts` (`engine/src/watch/team.rs:230`) confirms, for each open Workflow with an open pull request, no `pr_posts` row, and `pr.post.enabled` true, the earliest message of the User (`author_id`) that carries the pull request. It inserts the row through `posts::insert` (`core/src/pr/posts.rs:49`), which writes `auto_merge` `pending` for **every** confirmed post. `auto-merge` then asks GitHub (`engine/src/watch/auto_merge.rs`).
 
 Checked against the contract (§2.2 "PR post", the match rule), this code has three defects:
 
@@ -224,7 +224,7 @@ D1 to D3 are defects found by reading the code, **unverified by a run**. The tes
 
 ### 6.2 The rule (the Lead's answer, swr-slack-docs-a1-q1)
 
-A post confirmed from the channel by E11 (an own message of an open Workflow whose repo policy has `pr.post.enabled` true) **queues an `auto_merge` outbox mutation** (`op_kind` `auto_merge`, `target_key` `github:pr:<repo>#<n>`), as it gets `auto_merge` `pending` today. The decision is **policy only**: it is not gated on `swr_repos.auto_merge_allowed` at confirm time. The gate is in the executor: the `auto_merge` op reads `swr_repos` (24 h, no `gh` call) and finishes as `not_allowed` without calling GitHub when `auto_merge_allowed` is 0, as today's `not_allowed` answer (stored `none`).
+A post confirmed from the channel by `team-review` (an own message of an open Workflow whose repo policy has `pr.post.enabled` true) **queues an `auto_merge` outbox mutation** (`op_kind` `auto_merge`, `target_key` `github:pr:<repo>#<n>`), as it gets `auto_merge` `pending` today. The decision is **policy only**: it is not gated on `swr_repos.auto_merge_allowed` at confirm time. The gate is in the executor: the `auto_merge` op reads `swr_repos` (24 h, no `gh` call) and finishes as `not_allowed` without calling GitHub when `auto_merge_allowed` is 0, as today's `not_allowed` answer (stored `none`).
 
 Nothing is queued when:
 - the message is not an own message of an open Workflow with a confirmed PR match (no row to confirm);
@@ -235,9 +235,9 @@ Nothing is queued when:
 
 ### 6.3 The `auto_merge` mutation
 
-`pr post` (after its send) and E11 both enqueue `auto_merge` through the same function. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues.
+`pr post` (after its send) and `team-review` both enqueue `auto_merge` through the same function. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues.
 
-**Ordering.** The Slack cutover must not enqueue `auto_merge` before the github Workflow's `auto_merge` executor is live: a mutation with no executor stays `pending` forever. Until then, E11 and `pr post` keep writing `pr_posts.auto_merge` `pending`, which E18 runs as today (`engine/src/watch/auto_merge.rs`), and they do not do both. The github cutover retires that column and E18 together (swr.md §15).
+**Ordering.** The Slack cutover must not enqueue `auto_merge` before the github Workflow's `auto_merge` executor is live: a mutation with no executor stays `pending` forever. Until then, `team-review` and `pr post` keep writing `pr_posts.auto_merge` `pending`, which `auto-merge` runs as today (`engine/src/watch/auto_merge.rs`), and they do not do both. The github cutover retires that column and `auto-merge` together (swr.md §15).
 
 ## 7. Unverified
 
@@ -249,7 +249,7 @@ Nothing is queued when:
 - `:memo:` has no producer (§4.2). A caller must name it or it is dropped from the brief.
 - The swap limit of `eyes_me` (§3.4) and the `thread_tags_me` of the User's own messages (§3.4).
 - The `pr_posts.auto_merge` column is retired by the github Workflow's cutover, not here (swr.md §15); this Workflow stops writing its own queue and keeps the column until then.
-- The E8 memo token of contract §2.2 "The team review rule" reads `swr_slack_posts` in place of the file. Its rule is unchanged here; the cutover Job wires it.
+- The `inbox` memo token of contract §2.2 "The team review rule" reads `swr_slack_posts` in place of the file. Its rule is unchanged here; the cutover Job wires it.
 
 ## 9. Retired at the Slack cutover
 
@@ -258,10 +258,10 @@ Each is removed in the cutover PR, with its old reader (swr.md §15, no dual wri
 | Retired | Where | Replaced by |
 |---|---|---|
 | the team review cache `run/team-review.json` and its `.tmp` (contract §1.4) | `engine/src/watch/team.rs` `cache_path`, `store` | `swr_slack_posts` |
-| E11, the team review step; its number is **not reused** (as E23, contract §3.7) | `engine/src/watch/team.rs` (whole file) | the `slack` Source under E24 |
+| `team-review`, the team review step; its number is **not reused** (as `overdue-bump`, contract §3.7) | `engine/src/watch/team.rs` (whole file) | the `slack` Source under `swr` |
 | the file's readers | `core/src/inbox/team.rs` `read_cache` and `Cache::primary_post`, read by `core/src/inbox/rules.rs` `review_requested` (rules.rs:662) and `core/src/inbox/cmd.rs` (line 564) | `swr_slack_posts` queries |
 | the Slack reaction queue API | `core/src/pr/reactions.rs` `queue`, `queue_merge`, `next_due`, `mark_reacted`, `parked`, `set_emoji`, `reopen`, `refuse` | `swr_mutations` (§4) |
-| E17, the reaction step; its number is **not reused** | `engine/src/watch/react.rs` (whole file) | the `slack` Source under E24 |
+| `merge-reaction`, the reaction step; its number is **not reused** | `engine/src/watch/react.rs` (whole file) | the `slack` Source under `swr` |
 | the reaction callers | `core/src/pr/poll.rs:973`, `core/src/pr/open.rs:540`, `core/src/pr/review.rs:191`, `core/src/inbox/cmd.rs:680` | enqueue (§4, §5) |
 | `policy_emoji` and `repo_sets_reaction` | `core/src/pr/reactions.rs` | moved into `source/slack.rs`, read at `execute` (§4.3) |
 | the table `slack_reactions` | contract §4.4 (migrations `slack-reactions` and `20261102T1300-slack-reaction-refusal`) | dropped by the Slack breaking migration (A1) |
@@ -269,14 +269,14 @@ Each is removed in the cutover PR, with its old reader (swr.md §15, no dual wri
 
 **The breaking migration** (A1: a source Workflow adds only a breaking migration that copies open rows and drops a table it retires; name chosen by the Workflow, `<YYYYMMDDTHHMM>-swr-slack`). It copies each `slack_reactions` row with `reacted_at` NULL and `refused_at` NULL to a `pending` `reaction` mutation (`submitted_at` = `queued_at`, `vars_json` as §4.2), a parked row (`refused_at` set) to a `failed` mutation with `error` = `refusal`, and drops the reacted rows. Then it drops `slack_reactions`. `swr_slack_posts` is not migrated: the first fetch after upgrade is due at once and fills it.
 
-Docs changed by the cutover PR, not by this page: commands §21.5 (the cache), §21.6 (the output of §3.3), §21.9 (the queue, replaced by §4), contract §1.4 (the file's row), contract §3.7 E11 and E17 rows (replaced by E24 for Slack), contract §8.2 (`watch.team_review_seconds`).
+Docs changed by the cutover PR, not by this page: commands §21.5 (the cache), §21.6 (the output of §3.3), §21.9 (the queue, replaced by §4), contract §1.4 (the file's row), contract §3.7 `team-review` and `merge-reaction` rows (replaced by `swr` for Slack), contract §8.2 (`watch.team_review_seconds`).
 
 ## 10. For the test Job
 
 The Spec of the test Job must carry these rules:
 
 - Every test mocks the helper, `gh` and time (FakeRunner, ManualClock, `core/src/ports.rs`; swr.md §16). No real Slack, no real process, no sleep.
-- Each row of the §3.4 tables has a test that fails first, for the right reason: T1 to T6, E1 to E4, and the echo of a known value.
+- Each row of the §3.4 tables has a test that fails first, for the right reason: T1 to T6, `escalations` to `open-jobs`, and the echo of a known value.
 - The helper's own test pins a recorded fixture (§7). The implementation Worker verifies the real output with `cpd mcp attach slack`, and escalates if a field is absent.
 - Each of D1 to D3 has a test that fails on today's code.
 - The `reaction` dedupe, the `post` guard (`already_posted` on an active mutation) and the `repost` non-coalescing have tests.
