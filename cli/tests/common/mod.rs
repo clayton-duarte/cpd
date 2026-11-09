@@ -570,6 +570,10 @@ pub fn output_within(cmd: &mut Command, deadline: Duration) -> io::Result<Output
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
             // The group is dead, so its pipes close and the waiter returns.
             let _ = rx.recv();
+            // Return only once the group is gone (its killed members reaped), so none is seen alive as a zombie.
+            let _ = poll(WAIT, || {
+                nix::sys::signal::killpg(group, None).is_err().then_some(())
+            });
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "the child did not exit before its deadline",
