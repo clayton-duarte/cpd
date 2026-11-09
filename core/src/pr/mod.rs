@@ -16,6 +16,8 @@
 //! repair's Gate runs in the Workflow's Lead worktree at the gated commit (hs-d679).
 
 #[cfg(test)]
+mod checks_rerun_tests;
+#[cfg(test)]
 mod closed_tests;
 #[cfg(test)]
 mod comments_tests;
