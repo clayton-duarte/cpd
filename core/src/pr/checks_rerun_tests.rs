@@ -112,6 +112,7 @@ fn rig(gh: Gh) -> Rig {
     rig.workflow("api", "open");
     let dir = rig.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner.toml"), "").unwrap();
     std::fs::write(dir.join("pay.toml"), ANY).unwrap();
     rig.sql(&format!(
         "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', head_oid = '{OLD}', checks = 'failed',
@@ -138,11 +139,12 @@ fn poll(rig: &Rig) -> Result<(), CpdError> {
 }
 
 fn column(rig: &Rig, column: &str) -> Option<String> {
+    // CAST: `base_contained` is an INTEGER column, read here as text like the others.
     let mut store = Store::open(&rig.home, 5000).unwrap();
     store
         .read(|c| {
             Ok(c.query_row(
-                &format!("SELECT {column} FROM pull_requests WHERE number = 801"),
+                &format!("SELECT CAST({column} AS TEXT) FROM pull_requests WHERE number = 801"),
                 [],
                 |r| r.get::<_, Option<String>>(0),
             )
