@@ -191,10 +191,11 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         },
     };
     let catalog = engine.catalog_of_job(plan, target.job.as_str())?;
+    let fresh = cpd_core::config::Config::load(&engine.home)?;
     let ladder = Ladder {
         catalog: &catalog,
-        retry_cap: engine.config.retry_cap,
-        roles: engine.config.role_tiers(),
+        retry_cap: fresh.retry_cap,
+        roles: fresh.role_tiers(),
     };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| {
@@ -232,14 +233,12 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
 fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog_of_attempt(&active.plan, &active.id)?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
-    let classifier = merge::real_classifier(
-        &engine.config,
-        &engine.home,
-        &cpd_core::ports::Ports::current(),
-    );
+    let fresh = cpd_core::config::Config::load(&engine.home)?;
+    let classifier =
+        merge::real_classifier(&fresh, &engine.home, &cpd_core::ports::Ports::current());
     let ctx = merge::Ctx {
         home: &engine.home,
-        config: &engine.config,
+        config: &fresh,
         catalog: &catalog,
         source: SOURCE,
         metrics: &metrics,

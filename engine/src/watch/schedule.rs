@@ -357,10 +357,8 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(fresh) => fresh,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    let mut config = engine.config.clone();
-    config.experimental.durable_workers = fresh.experimental.durable_workers;
-    config.concurrency = fresh.concurrency;
     let (home, concurrency) = (engine.home.clone(), fresh.concurrency);
+    let config = fresh;
     let mut remaining = ready;
     // The walk names the Jobs to start and the Jobs it skips. A start that fails (a tier outside the Worker range, a tampered Job,
     // a lost race) takes no slot, so the walk runs again without the Jobs tried.
