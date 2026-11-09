@@ -1466,7 +1466,7 @@ pub fn lookup(
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    let found = lookup_call(runner, cwd, prs, false, bots).map_err(|e| polled_call("lookup", e))?;
+    let found = lookup_call(runner, cwd, prs, true, bots).map_err(|e| polled_call("lookup", e))?;
     Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
