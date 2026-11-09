@@ -39,18 +39,17 @@ fn world(fx: &Fx) {
         "pay",
     ])
     .ok();
-    for key in ["api-config", "open-api"] {
-        fx.cpd(&[
-            "job",
-            "cancel",
-            key,
-            "--reason",
-            "a stub of the template",
-            "--plan",
-            "pay",
-        ])
-        .ok();
-    }
+    // The template's stub (the `open` Job is queued only at the Workflow's start, so none exists while it waits).
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "api-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx.env.sql(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');

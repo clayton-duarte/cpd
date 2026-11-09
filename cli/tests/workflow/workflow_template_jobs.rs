@@ -150,7 +150,7 @@ fn jobs_queue_the_template_after_lock() {
     let out = fx.add_k("tdd", &["--no-needs", "--jobs", &file]).ok();
     assert_eq!(
         out["workflow"]["jobs"],
-        json!(["k-docs", "k-tests", "k-impl", "open-k"])
+        json!(["k-docs", "k-tests", "k-impl"])
     );
     assert_eq!(
         fx.rows_of_k(),
@@ -185,16 +185,6 @@ fn jobs_queue_the_template_after_lock() {
                 true,
                 "k-tests"
             ],
-            [
-                "open-k",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                1,
-                true,
-                false,
-                ""
-            ],
         ])
     );
     assert_eq!(
@@ -212,7 +202,7 @@ fn jobs_queue_the_template_after_lock() {
             .query::<String>("SELECT goal FROM jobs WHERE key = 'k-impl'"),
         "Do it."
     );
-    // One `job-added` Event per Job, the three queued, the opener a draft.
+    // One `job-added` Event per Job, the three queued; the opener is inserted only at the Workflow's start.
     let added = fx.cpd(&["events", "list", "--kind", "job-added"]).ok();
     let statuses: Vec<(Value, Value)> = added["events"]
         .as_array()
@@ -225,8 +215,7 @@ fn jobs_queue_the_template_after_lock() {
         [
             (json!("k-docs"), json!("queued")),
             (json!("k-tests"), json!("queued")),
-            (json!("k-impl"), json!("queued")),
-            (json!("open-k"), json!("draft"))
+            (json!("k-impl"), json!("queued"))
         ]
     );
 }
@@ -319,10 +308,7 @@ fn jobs_on_a_workflow_that_waits_for_another_workflow_queue_the_jobs_too() {
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
     fx.add_k("tdd", &["--needs", "base", "--jobs", &file]).ok();
     let statuses: String = fx.env.query("SELECT group_concat(key || '=' || status) FROM (SELECT key, status FROM jobs WHERE workflow = 'k' ORDER BY rowid)");
-    assert_eq!(
-        statuses,
-        "k-docs=queued,k-tests=queued,k-impl=queued,open-k=draft"
-    );
+    assert_eq!(statuses, "k-docs=queued,k-tests=queued,k-impl=queued");
 }
 
 /// A waiting Workflow after the lock is refused `draft_parked` without `--jobs` (hs-d731 superseded by pro-d404): the message
@@ -404,16 +390,6 @@ fn in_phase_plan_the_template_is_unchanged() {
                 false,
                 false,
                 "k-tests"
-            ],
-            [
-                "open-k",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                0,
-                true,
-                false,
-                ""
             ],
         ])
     );

@@ -268,7 +268,7 @@ fn add_creates_a_waiting_workflow_with_its_event_and_no_git_write() {
     assert_eq!(
         out["workflow"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_workflow": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jira": null, "jobs": ["api-config", "open-api"]})
+               "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jira": null, "jobs": ["api-config"]})
     );
     assert!(out.get("already").is_none());
     let out = fx
@@ -443,10 +443,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
             out["workflow"]["shape"].clone(),
             out["workflow"]["jobs"].clone()
         ),
-        (
-            json!("tdd"),
-            json!(["api-docs", "api-tests", "api-impl", "open-api"])
-        )
+        (json!("tdd"), json!(["api-docs", "api-tests", "api-impl"]))
     );
     assert_eq!(
         fx.stubs("api"),
@@ -481,16 +478,6 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
                 false,
                 ["api-tests"]
             ],
-            [
-                "open-api",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                false,
-                true,
-                true,
-                []
-            ],
         ])
     );
     assert_eq!(
@@ -511,8 +498,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
         [
             (json!("api-docs"), json!("docs")),
             (json!("api-tests"), json!("test")),
-            (json!("api-impl"), json!("impl")),
-            (json!("open-api"), json!("open"))
+            (json!("api-impl"), json!("impl"))
         ]
     );
     assert_eq!(
@@ -536,32 +522,20 @@ fn add_lays_out_one_stub_for_docs_and_for_config() {
             out["workflow"]["shape"].clone(),
             out["workflow"]["jobs"].clone()
         ),
-        (json!("docs"), json!(["api-docs", "open-api"]))
+        (json!("docs"), json!(["api-docs"]))
     );
     assert_eq!(
         fx.stubs("api"),
-        json!([
-            [
-                "api-docs",
-                "docs",
-                "Docs: Add retries",
-                "draft",
-                false,
-                false,
-                false,
-                []
-            ],
-            [
-                "open-api",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                false,
-                true,
-                true,
-                []
-            ],
-        ])
+        json!([[
+            "api-docs",
+            "docs",
+            "Docs: Add retries",
+            "draft",
+            false,
+            false,
+            false,
+            []
+        ],])
     );
     let out = fx.add_shape("web", Some("config")).ok();
     assert_eq!(
@@ -569,140 +543,40 @@ fn add_lays_out_one_stub_for_docs_and_for_config() {
             out["workflow"]["shape"].clone(),
             out["workflow"]["jobs"].clone()
         ),
-        (json!("config"), json!(["web-config", "open-web"]))
+        (json!("config"), json!(["web-config"]))
     );
     assert_eq!(
         fx.stubs("web"),
-        json!([
-            [
-                "web-config",
-                "work",
-                "Config: Add retries",
-                "draft",
-                false,
-                false,
-                false,
-                []
-            ],
-            [
-                "open-web",
-                "open",
-                "Open the pull request: Add retries",
-                "draft",
-                false,
-                true,
-                true,
-                []
-            ],
-        ])
+        json!([[
+            "web-config",
+            "work",
+            "Config: Add retries",
+            "draft",
+            false,
+            false,
+            false,
+            []
+        ],])
     );
     assert_eq!(fx.env.query::<String>("SELECT group_concat(key || '=' || shape) FROM (SELECT key, shape FROM workflows ORDER BY key)"), "api=docs,web=config");
 }
 
 #[test]
-fn add_lays_out_the_opener_stub_in_every_shape() {
+fn add_lays_out_no_opener_stub_in_any_shape() {
+    // The `open` Job is inserted queued when its Workflow starts (contract §3.8 "Opening"), so no template lays one out.
     let fx = crud("plan");
     for (key, shape) in [("api", "tdd"), ("web", "docs"), ("cfg", "config")] {
         let out = fx.add_shape(key, Some(shape)).ok();
-        let opener = format!("open-{key}");
         let jobs = out["workflow"]["jobs"].as_array().unwrap();
-        assert_eq!(
-            jobs.last().unwrap(),
-            &json!(opener),
-            "the opener is the last Job of the {shape} template"
-        );
         assert!(
-            jobs.contains(&json!(opener)),
-            "{shape} does not report the opener key in pr.jobs"
-        );
-        // The inserted row: kind `open`, the PR's own, `draft`, no Dependencies.
-        let row: (String, String, i64, String) = fx
-            .store()
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT j.kind, j.workflow, (SELECT count(*) FROM dependencies d WHERE d.plan = j.plan AND d.job = j.key), j.status
-                       FROM jobs j WHERE j.plan = 'pay-1' AND j.key = ?1",
-                    [opener.as_str()],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )?)
-            })
-            .unwrap();
-        assert_eq!(
-            row,
-            ("open".into(), key.into(), 0, "draft".into()),
-            "the {shape} opener row"
+            !jobs.contains(&json!(format!("open-{key}"))),
+            "the {shape} template lays out an opener: {jobs:?}"
         );
     }
-}
-
-#[test]
-fn the_opener_stub_carries_the_fixed_spec_and_worker_tier() {
-    let fx = crud("plan");
-    fx.add_shape("api", None).ok();
-    let worker_tier = fx.cpd(&["config"]).ok()["config"]["worker_tier"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let row: (String, String, Option<String>, i64, String, String, String, String, String) = fx
-        .store()
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT status, kind, fingerprint, appended, goal, context, touches, acceptance, out_of_scope
-                   FROM jobs WHERE plan = 'pay-1' AND key = 'open-api'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
-            )?)
-        })
-        .unwrap();
-    // A draft with no fingerprint; the fixed Spec is stored, the Tier is the config's `worker_tier`.
     assert_eq!(
-        (row.0.as_str(), row.1.as_str(), row.2.is_some(), row.3),
-        ("draft", "open", false, 0)
-    );
-    let tier: String = fx
-        .store()
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT tier FROM jobs WHERE plan = 'pay-1' AND key = 'open-api'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(
-        tier, worker_tier,
-        "the opener is at the config's worker_tier"
-    );
-    for (name, value) in [
-        ("goal", &row.4),
-        ("context", &row.5),
-        ("touches", &row.6),
-        ("acceptance", &row.7),
-        ("out_of_scope", &row.8),
-    ] {
-        assert!(
-            !value.trim().is_empty() && value != "[]" && value != "null",
-            "the fixed Spec has no {name}: {value}"
-        );
-    }
-    // The fixed Spec is rendered from the PR: its goal names the base the opener works against.
-    assert!(
-        row.4.contains("fit its base main"),
-        "the fixed goal does not name the PR's base: {}",
-        row.4
-    );
-    let added = fx.events("job-added");
-    let event = added
-        .iter()
-        .find(|e| e["job"] == "open-api")
-        .unwrap_or_else(|| panic!("no job-added for the opener: {added:?}"));
-    assert_eq!(
-        (
-            &event["data"]["workflow"],
-            &event["data"]["kind"],
-            &event["data"]["status"]
-        ),
-        (&json!("api"), &json!("open"), &json!("draft"))
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay-1' AND kind = 'open'"),
+        0
     );
 }
 
@@ -717,28 +591,16 @@ fn the_stubs_of_a_workflow_added_after_the_lock_are_appended_and_a_reopened_plan
             .ok();
         assert_eq!(
             fx.stubs("late"),
-            json!([
-                [
-                    "late-docs",
-                    "docs",
-                    "Docs: Add retries",
-                    "queued",
-                    true,
-                    true,
-                    true,
-                    []
-                ],
-                [
-                    "open-late",
-                    "open",
-                    "Open the pull request: Add retries",
-                    "draft",
-                    true,
-                    true,
-                    true,
-                    []
-                ],
-            ]),
+            json!([[
+                "late-docs",
+                "docs",
+                "Docs: Add retries",
+                "queued",
+                true,
+                true,
+                true,
+                []
+            ],]),
             "{phase}"
         );
         assert_eq!(
@@ -3331,7 +3193,7 @@ fn a_waiting_tdd_workflow_with_its_template_stubs_is_cancelled_before_the_lock()
     assert_eq!(
         fx.env
             .query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'gone' AND status = 'draft'"),
-        4
+        3
     );
 
     let out = fx.pr(&["cancel", "gone"]).ok();
@@ -3340,7 +3202,7 @@ fn a_waiting_tdd_workflow_with_its_template_stubs_is_cancelled_before_the_lock()
         json!({"key": "gone", "status": "cancelled"})
     );
     assert_eq!(fx.workflow_status("gone"), "cancelled");
-    for key in ["gone-docs", "gone-tests", "gone-impl", "open-gone"] {
+    for key in ["gone-docs", "gone-tests", "gone-impl"] {
         assert_eq!(fx.job_row(key), "cancelled/workflow cancelled/-", "{key}");
     }
 }

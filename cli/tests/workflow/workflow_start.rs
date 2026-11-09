@@ -574,7 +574,7 @@ fn lock_starts_only_the_workflows_without_needs() {
     );
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"],
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["schema", "ui", "open-api"],
                "workflows": [{"key": "api", "status": "dispatch", "needs": [], "base_workflow": null, "lead_branch": "pay/api",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
                        {"key": "web", "status": "waiting", "needs": ["api"], "base_workflow": null, "lead_branch": "pay/web",
@@ -611,7 +611,7 @@ fn lock_starts_only_the_workflows_without_needs() {
         fx.env.query::<i64>(
             "SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"
         ),
-        4
+        3
     );
     assert_eq!(
         fx.env
@@ -622,7 +622,7 @@ fn lock_starts_only_the_workflows_without_needs() {
     let phase = fx.events("plan-phase");
     assert_eq!(
         phase.last().unwrap()["data"],
-        json!({"from": "plan", "to": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"], "workflows": ["api"]})
+        json!({"from": "plan", "to": "dispatch", "jobs": ["schema", "ui", "open-api"], "workflows": ["api"]})
     );
     let started = fx.events("workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
@@ -660,7 +660,7 @@ fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
     let worktree = fx.lead_path(&repo.path, "a1");
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-a1", "open-b1", "schema", "ui"],
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["schema", "ui", "open-a1"],
                "workflows": [{"key": "a1", "status": "dispatch", "needs": [], "base_workflow": null, "lead_branch": "pay/a1",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
                        {"key": "b1", "status": "waiting", "needs": [], "base_workflow": "pay/a1", "lead_branch": "pay/b1",
@@ -694,7 +694,7 @@ fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
         fx.env.query::<i64>(
             "SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"
         ),
-        4
+        3
     );
     assert_eq!(
         fx.env
@@ -839,7 +839,7 @@ fn lock_is_all_or_nothing_when_a_workflow_fails_to_start() {
     assert_eq!(
         fx.env
             .query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"),
-        4
+        2
     );
     assert!(fx.events("workflow-started").is_empty());
     assert!(fx.calls("cpd").iter().all(|c| c.args[0] != "watch"));
@@ -851,17 +851,6 @@ fn lock_refuses_a_workflow_without_a_draft_job() {
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("api", &api.path, &[]);
     fx.add("web", &web.path, &[]);
-    // As a Lead cancels a stub it does not need: the opener stub too, so `api` has no draft Job left.
-    fx.cpd(&[
-        "job",
-        "cancel",
-        "open-api",
-        "--reason",
-        "a stub of the template",
-        "--plan",
-        "pay",
-    ])
-    .ok();
     fx.job("ui", "web");
     // `plan review` refuses `pr_empty` itself, so the approved review of the current fingerprint is written by SQL:
     // the lock then reaches its own `pr_empty` refusal.
@@ -1962,5 +1951,64 @@ fn a_waiting_workflow_has_no_open_job_until_it_starts() {
         ),
         "queued",
         "the start creates the open Job queued"
+    );
+}
+
+#[test]
+fn the_start_queues_the_open_job_with_the_fixed_spec_and_worker_tier() {
+    let fx = fx();
+    let api = fx.repo("api");
+    fx.add("api", &api.path, &[]);
+    fx.job("schema", "api");
+    fx.approve();
+    fx.lock().ok();
+
+    let worker_tier = fx.cpd(&["config"]).ok()["config"]["worker_tier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'open-api'"),
+        "queued"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT kind FROM jobs WHERE key = 'open-api'"),
+        "open"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT tier FROM jobs WHERE key = 'open-api'"),
+        worker_tier,
+        "the opener is at the config's worker_tier"
+    );
+    // Queued at the insert, so its fingerprint is stored then (contract §2.3).
+    assert_eq!(
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM jobs WHERE key = 'open-api' AND fingerprint IS NOT NULL"
+        ),
+        1
+    );
+    // The fixed Spec is rendered from the PR: its goal names the base the opener works against.
+    let goal = fx
+        .env
+        .query::<String>("SELECT goal FROM jobs WHERE key = 'open-api'");
+    assert!(
+        goal.contains("fit its base main"),
+        "the fixed goal does not name the PR's base: {goal}"
+    );
+    let added = fx.events("job-added");
+    let event = added
+        .iter()
+        .find(|e| e["job"] == "open-api")
+        .unwrap_or_else(|| panic!("no job-added for the opener: {added:?}"));
+    assert_eq!(
+        (
+            &event["data"]["workflow"],
+            &event["data"]["kind"],
+            &event["data"]["status"]
+        ),
+        (&json!("api"), &json!("open"), &json!("queued"))
     );
 }
