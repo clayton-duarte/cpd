@@ -2,8 +2,6 @@ name: CI
 
 # cpd's PR gate (hs-d16, hs-d17): the Gate, `pnpm run verify`, on the self-hosted runner on hs.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -11,11 +9,9 @@ permissions:
   contents: read
 
 # One run per branch: a newer push cancels the older run of a pull request (each runner runs one job at a time; hs has two).
-# A push to main is never cancelled. GitHub keeps one running and one pending run per group, so a burst of merges
-# checks the first and the last (the last contains the others).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   gate:
