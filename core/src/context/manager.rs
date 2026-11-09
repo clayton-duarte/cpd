@@ -19,6 +19,7 @@ use crate::host::Tmux;
 use crate::host::layout::context_window;
 use crate::ids::{ContextId, SessionId};
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::session::{lead_spawn, no_cockpit};
 use crate::store::Store;
 
@@ -186,7 +187,13 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let mut pane = manager.pane.clone();
     let mut window = None;
     if needs_pane {
-        let spawn = lead_spawn(&home, &manager.id, None, Path::new(&manager.cwd));
+        let spawn = lead_spawn(
+            &home,
+            &Ports::current(),
+            &manager.id,
+            None,
+            Path::new(&manager.cwd),
+        );
         let (new_window, new_pane) =
             tmux.new_window(&cockpit, &context_window(&context), &spawn)?;
         tmux.set_pane_session(&new_pane, &manager.id)?;
