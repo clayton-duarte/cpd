@@ -28,7 +28,7 @@ pub struct Models {
     #[serde(rename = "G")]
     pub g: String,
     /// The decide role's letter (contract §8.3 "Models", §9 "Roles and ranges").
-    #[serde(rename = "J", default)]
+    #[serde(rename = "J")]
     pub j: String,
 }
 
@@ -171,12 +171,15 @@ impl Set for ModelSet {
     fn fill(&self, base: &Models) -> (Models, Vec<&'static str>) {
         let pick =
             |set: &Option<String>, base: &String| set.clone().unwrap_or_else(|| base.clone());
+        let g = pick(&self.g, &base.g);
+        // No J in the winning table: J is the resolved G, never the default's J.
+        let j = self.j.clone().unwrap_or_else(|| g.clone());
         let value = Models {
             o: pick(&self.o, &base.o),
             s: pick(&self.s, &base.s),
             h: pick(&self.h, &base.h),
-            g: pick(&self.g, &base.g),
-            j: pick(&self.j, &base.j),
+            g,
+            j,
         };
         let left_out = [
             ("O", self.o.is_none()),
@@ -192,12 +195,13 @@ impl Set for ModelSet {
     }
 
     fn complete(&self) -> Option<Models> {
+        let g = self.g.clone()?;
         Some(Models {
             o: self.o.clone()?,
             s: self.s.clone()?,
             h: self.h.clone()?,
-            g: self.g.clone()?,
-            j: self.j.clone()?,
+            j: self.j.clone().unwrap_or_else(|| g.clone()),
+            g,
         })
     }
 }

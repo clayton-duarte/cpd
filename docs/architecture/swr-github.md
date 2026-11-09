@@ -77,7 +77,7 @@ fragment Light on PullRequest {
 
 fragment Heavy on PullRequest {
   latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } }
-  reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } }
+  reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } }
   comments(first: 50) { nodes { id author { __typename login } body url createdAt } }
   commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
     __typename
@@ -90,7 +90,7 @@ fragment Heavy on PullRequest {
 Notes on the shape:
 
 - **`labels`, `autoMergeRequest`, `latestReviews` and `reviewThreads` are light** here, though the spec's list put them elsewhere. Reason: `labels` and `autoMergeRequest` are header scalars that the readers need on every pass; `latestReviews` (pro-d453: it replaces `latestOpinionatedReviews`, and adds `commit { oid }`) is what the human-approval rule of contract §7.6 step 2 (pro-d158) reads, so `review_decision` cannot be computed without it on every pass, and it gives every polled pull request its reviewers' state and reviewed commit without a heavy read. The pass stores the `latestReviews` nodes, the label names and the author's login in `pull_requests.reviews_json`, `labels_json` and `author_login` (migration `pr-light-cache`); `reviewThreads(first: 100){ id isResolved }` is what the pro-d387 resolution check reads (contract §7.6 step 3a), and a thread resolved on GitHub moves no `updatedAt`, so without it on every pass a resolution would be invisible. The last one is selected only for pull requests a Plan owns (the builder knows them from `workflows`).
-- **`comments(first: 50)` and `reviewThreads(first: 50)` are heavy, and the `first` counts are this page's choice.** Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 covers the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
+- **`comments(first: 50)` is heavy, and `reviewThreads` is `first: 100` in both fragments (pro-d457): `Light` and `Heavy` read the same 100 threads.** The `first` counts are this page's choice. Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 comments and 100 threads cover the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
 - The check contexts (`... on CheckRun`, `... on StatusContext`) replace `gh run list --commit` and the `gh pr view --json statusCheckRollup` of `pr view`. `checkSuite.workflowRun.databaseId` is the id `pr rerun` needs (§9, `rerun`).
 - Repository metadata (`m<i>`) is fetched only for a repository missing from `swr_repos` or whose `fetched_at` is older than 24 h.
 
@@ -103,6 +103,8 @@ Notes on the shape:
 | `Heavy` | a pull request whose `updatedAt` differs from `swr_pr_detail.updated_at`, whose `headRefOid` differs from `swr_pr_detail.head_oid`, or that has no `swr_pr_detail` row |
 | `viewerDidAuthor`, `viewerLatestReviewRequest` | an absent-pull-request alias (§4.2), which needs them to decide `authored` and `review_requested` |
 | `m<i>` (repository metadata) | §3.1's rule |
+
+The `Heavy` fragment is sent only when the poll has heavy pull requests (a non-empty `Heavy` set); a poll with none sends no `Heavy` selection (pro-d457).
 
 The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydrated_at`" test of the spec: a row whose `updated_at` or `head_oid` differs from what the last hydrate stored is re-read, and a successful hydrate sets `hydrated_at`. A pull request whose detail did not move, costs no heavy fields.
 
