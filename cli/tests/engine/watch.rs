@@ -6174,6 +6174,26 @@ fn distilling(config_extra: &str, fits: u32) -> (Ip, Arc<Mutex<Vec<u32>>>) {
     (fx, sizes)
 }
 
+/// Pi's observed permanent quota refusal (air-d141), on fake runner and spawn ports.
+fn quota_distilling() -> (Ip, Arc<Mutex<Vec<u32>>>) {
+    let fx = engine("");
+    let sizes = Arc::new(Mutex::new(Vec::new()));
+    let seen = sizes.clone();
+    fx.route_fn("pi", move |call| {
+        let batch = fs::read_to_string(call.cwd.as_ref().unwrap().join("batch.md")).unwrap();
+        let n = u32::try_from(batch.lines().filter(|line| line.starts_with('[')).count()).unwrap();
+        seen.lock().unwrap().push(n);
+        let stream = json!({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}},
+            "stopReason": "error",
+            "errorMessage": "The ChatGPT user has reached their Subscription Sharing usage limit."
+        }});
+        Reply::ok(&format!("{stream}\n"))
+    });
+    (fx, sizes)
+}
+
 /// The batch sizes pi saw, in order, a run of equal ones (the ladder's steps of one run) counted once.
 fn batch_sizes(sizes: &Mutex<Vec<u32>>) -> Vec<u32> {
     let mut sizes = sizes.lock().unwrap().clone();
@@ -6405,6 +6425,63 @@ fn e9_starts_again_at_60_when_the_state_changes() {
         batch_sizes(&seen).len() > 5
     });
     assert_eq!(batch_sizes(&sizes)[..6], [60, 30, 15, 5, 1, 60]);
+}
+
+/// Exhaust the quota-failed batch ladder and let the batch-1 child finish before restarting the engine.
+fn exhaust_quota(fx: &Ip, sizes: &Arc<Mutex<Vec<u32>>>) {
+    let seen = sizes.clone();
+    drive_until(fx, move || seen.lock().unwrap().contains(&1), 5 * SECOND);
+    assert_eq!(batch_sizes(sizes), [60, 30, 15, 5, 1]);
+    assert!(
+        fx.events("error").iter().any(|(_, _, _, data)| {
+            data["source"] == "context distill"
+                && data["code"] == "distill_failed"
+                && data["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("Subscription Sharing usage limit"))
+        }),
+        "the quota failure is visible"
+    );
+}
+
+#[test]
+fn e9_permanent_quota_failure_is_not_retried_until_input_changes() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // A fresh engine must not forget the exhausted permanent failure (air-d141).
+    drive_for(&fx, 15 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must not be retried after an engine restart"
+    );
+}
+
+#[test]
+fn e9_changed_input_after_quota_failure_starts_at_full_batch() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // First verify the same input remains parked across restart; otherwise a full-batch
+    // call after adding a record would not prove that the changed key enabled it.
+    drive_for(&fx, 5 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must remain parked before it changes"
+    );
+    old_notes(&fx, 71, 1);
+    drive_for(&fx, SECOND);
+    assert_eq!(
+        sizes.lock().unwrap()[before],
+        60,
+        "changed input starts at full batch"
+    );
 }
 
 // ---- E9 and the curation floor (hs-d592 R2, R5) ----
