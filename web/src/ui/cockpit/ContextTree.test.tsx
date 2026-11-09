@@ -1230,3 +1230,43 @@ it("the selected manager context sorts first", () => {
   expect(ids(section(m.container, "contexts"))).toEqual(["old", "hot", "new", "cpd", "host", "codereview"]);
   m.unmount();
 });
+
+const rowSel = {
+  "s-mgr": 'button[data-select="context"]',
+  "s-lead": '[data-plan="p1"] button[data-select="plan"]',
+  abcd1234: 'button[data-session="abcd1234"]',
+} as const;
+
+function expectSelectedRow(id: keyof typeof rowSel, withAction: boolean): void {
+  const extra = withAction ? { onAction: vi.fn() } : {};
+  const m = mount(<ContextTree {...props({ selectedSessionId: id, ...extra })} />);
+  const btn = q(m.container, rowSel[id]);
+  expect(btn?.getAttribute("data-active")).toBe("true");
+  expect(btn?.getAttribute("aria-current")).toBe("true");
+  m.unmount();
+}
+
+it("selected Manager row has data-active true and aria-current true", () => {
+  expectSelectedRow("s-mgr", false);
+  expectSelectedRow("s-mgr", true);
+});
+
+it("selected Plan Lead row has data-active true and aria-current true", () => {
+  expectSelectedRow("s-lead", false);
+  expectSelectedRow("s-lead", true);
+});
+
+it("selected Fork row has data-active true and aria-current true", () => {
+  expectSelectedRow("abcd1234", false);
+  expectSelectedRow("abcd1234", true);
+});
+
+it("selected rows keep data-active true and aria-current true when onAction wraps them in the row menu", () => {
+  for (const id of ["s-mgr", "s-lead", "abcd1234"] as const) expectSelectedRow(id, true);
+});
+
+it("a row that is not selected has data-active false", () => {
+  const m = mount(<ContextTree {...props({ selectedSessionId: "s-mgr" })} />);
+  expect(q(m.container, rowSel["s-lead"])?.getAttribute("data-active")).toBe("false");
+  m.unmount();
+});
