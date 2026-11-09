@@ -24,7 +24,6 @@ pub(super) fn repost(ports: &Ports, args: RepostArgs) -> Result<Output, CpdError
     let mut env = super::Env::open_with(ports)?;
     let plan = env.plan(&id)?;
     let key = plan.select(&args.workflow)?.key.clone();
-    let approval = super::approval::post_guard(&mut env, &id, &key)?;
 
     let post = env
         .store
@@ -37,6 +36,8 @@ pub(super) fn repost(ports: &Ports, args: RepostArgs) -> Result<Output, CpdError
             .with("plan", id.as_str())
             .with("workflow", key.as_str())
         })?;
+
+    let approval = super::approval::post_guard(&mut env, &id, &key)?;
 
     let vars = json!({
         "channel": post.channel, "plan": id.as_str(), "text": slack::REPOST_TEXT,
