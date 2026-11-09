@@ -692,8 +692,6 @@ pub(crate) fn start_parked(
     );
     let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
     let started = kill_window_on_error(&tmux, &window, || {
-        // The mark first: `check_pane` of the pane's `session run` never sees a pane without it.
-        tmux.set_pane_session(&pane, &row.id)?;
         row.set_pill(&tmux, &pane)?;
         let won = env.store.write(command, |tx| {
             let changed = tx.execute(
@@ -706,6 +704,10 @@ pub(crate) fn start_parked(
             moved(tx, row, &pane, &window, "parked")?;
             Ok(true)
         })?;
+        if won {
+            // The go signal only once the store knows the pane; on failure the window is killed and E2 stops the row.
+            tmux.set_pane_session(&pane, &row.id)?;
+        }
         Ok(won)
     })?;
     if started {

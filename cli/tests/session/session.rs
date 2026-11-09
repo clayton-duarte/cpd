@@ -2061,45 +2061,6 @@ fn lead_spawn_runs_the_engines_own_exe_not_bare_cpd() {
     assert_eq!(argv[0], EXE, "E2 restarted with {argv:?}");
 }
 
-/// `lead1` is `stopped` with no pane: `session send` starts it.
-fn stop_lead1(fx: &Fx) {
-    fx.env
-        .sql("UPDATE sessions SET state = 'stopped' WHERE id = 'lead1'");
-}
-
-/// `start_parked` marks the pane with `@cpd_session` before the store records `tmux_pane`, so the pane's `session run`
-/// (`check_pane`, 5 s) never sees a pane without the mark; when the mark fails the row has no pane.
-#[test]
-fn start_parked_sets_cpd_session_before_it_records_the_pane() {
-    let fx = Fx::with_ports();
-    setup(&fx.env);
-    fx.cockpit();
-    stop_lead1(&fx);
-    let signals = GoSignals::record(&fx);
-    fx.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"])
-        .ok();
-    let (pane, recorded) = signals.pane_and_store(LEAD1);
-    assert_eq!(
-        recorded,
-        Value::Null,
-        "pane {pane} got @cpd_session {LEAD1} after the store recorded it: {recorded}"
-    );
-
-    // A refused mark: no pane in the row.
-    drop(fx);
-    let fx = Fx::with_ports();
-    setup(&fx.env);
-    fx.cockpit();
-    stop_lead1(&fx);
-    tmux_refusing_the_session_mark(&fx);
-    let _ = fx.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"]);
-    assert_eq!(
-        show(&fx, LEAD1)["tmux_pane"],
-        Value::Null,
-        "the row records a pane that never got @cpd_session"
-    );
-}
-
 /// `lead1` (idle) parked in `park-pay` and `lead2` (made `working`) parked in `park-other`, the chat slot the placeholder.
 fn two_parked_leads(fx: &Fx) -> (String, String) {
     dying_leads(fx);
