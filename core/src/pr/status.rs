@@ -799,4 +799,30 @@ mod tests {
             ["none", "approved", "changes_requested"]
         );
     }
+
+    #[test]
+    fn required_check_cancelled_or_skipped_is_missing() {
+        let req = vec!["gate".to_owned()];
+        let of = |checks: &[Check]| ChecksSummary::of(checks, &[], &req, false);
+
+        // gate CANCELLED => ChecksSummary::Pending and Required::Missing
+        let cancelled = [run(Some("w"), "gate", "CANCELLED", Some(T1))];
+        assert_eq!(required_states(&cancelled, &req), [("gate", Required::Missing)]);
+        assert_eq!(of(&cancelled), ChecksSummary::Pending);
+
+        // gate SKIPPED => ChecksSummary::Pending and Required::Missing
+        let skipped = [run(Some("w"), "gate", "SKIPPED", Some(T1))];
+        assert_eq!(required_states(&skipped, &req), [("gate", Required::Missing)]);
+        assert_eq!(of(&skipped), ChecksSummary::Pending);
+
+        // gate SUCCESS => ChecksSummary::Passed and Required::Passed
+        let success = [run(Some("w"), "gate", "SUCCESS", Some(T1))];
+        assert_eq!(required_states(&success, &req), [("gate", Required::Passed)]);
+        assert_eq!(of(&success), ChecksSummary::Passed);
+
+        // gate FAILURE => ChecksSummary::Failed and Required::Failed
+        let failure = [run(Some("w"), "gate", "FAILURE", Some(T1))];
+        assert_eq!(required_states(&failure, &req), [("gate", Required::Failed)]);
+        assert_eq!(of(&failure), ChecksSummary::Failed);
+    }
 }
