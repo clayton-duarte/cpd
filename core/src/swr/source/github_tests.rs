@@ -775,7 +775,8 @@ fn behind_head_rearm_success_raises_no_mutation_failed() {
         !matches!(outcome, ExecOutcome::Failed { .. }),
         "a handled re-arm raises no swr_mutation_failed: {outcome:?}"
     );
-=======
+}
+
 #[test]
 fn non_empty_heavy_uses_reviewthreads_first_100_in_both_fragments() {
     let q = build_poll_query(&PollPlan {
@@ -797,5 +798,4 @@ fn empty_heavy_omits_the_heavy_fragment() {
     let q = build_poll_query(&PollPlan::default());
     assert!(!q.contains("fragment Heavy"), "{q}");
     assert!(!q.contains("...Heavy"), "{q}");
->>>>>>> origin/main
 }
