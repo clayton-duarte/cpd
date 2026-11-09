@@ -148,6 +148,7 @@ fn decide(
     edits: &Edits,
 ) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
+    crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
     // open and update Jobs are cpd's, a draft one included.
