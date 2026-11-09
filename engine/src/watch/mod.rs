@@ -182,10 +182,18 @@ pub struct Args {
     mark_restart: bool,
 }
 
+/// `watch --check --migrate-scratch`: opens the store of `CPD_HOME`, which migrates it. Only for a scratch copy.
+fn migrate_scratch() -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = cpd_core::config::Config::load(&home)?;
+    cpd_core::store::Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    Ok(Output::success(serde_json::json!({})))
+}
+
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
     if args.check && args.migrate_scratch {
-        ensure::migrate_scratch()
+        migrate_scratch()
     } else if args.check {
         ensure::check()
     } else if args.ensure {
