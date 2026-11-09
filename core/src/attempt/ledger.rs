@@ -225,6 +225,8 @@ causes! {
     GateError = "gate_error",
     /// A5: pi stopped on a provider error ("Connection error.", "Request timed out.", HTTP 5xx): a retry cause, not a ladder cause.
     ProviderError = "provider_error",
+    /// A5: pi stopped on a provider usage limit or quota: never retried under any Tier (the Lead decides).
+    Quota = "quota",
 }
 
 /// What `attempts.cause` stores (§3.4): `merged`, `cancel_requested` or the [`Cause`] of a failed Attempt.
@@ -865,6 +867,10 @@ fn next_rung(
     ladder: &Ladder<'_>,
 ) -> Result<Option<Tier>, CpdError> {
     // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
+    // A quota is not retried under any Tier: only a Lead's `job retry` spends the provider again.
+    if cause == Cause::Quota {
+        return Ok(None);
+    }
     if cause == Cause::ProviderError {
         let used = ended_with(tx, attempt.plan.as_str(), attempt.job.as_str(), cause)?;
         return Ok((used <= PROVIDER_RETRIES).then_some(attempt.tier));
@@ -964,20 +970,38 @@ pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
 
-/// Stub (red): the cause pi's stop error text ends the Attempt with: `quota`, `provider_error` or `crashed`.
-pub fn classify_stop_text(_text: &str) -> &'static str {
-    Cause::Crashed.as_str()
+/// The cause pi's stop error text ends the Attempt with: `quota`, `provider_error` or `crashed`.
+pub fn classify_stop_text(text: &str) -> &'static str {
+    let lower = text.to_lowercase();
+    if lower.contains("usage limit") || lower.contains("quota") {
+        Cause::Quota.as_str()
+    } else if crate::driver::worker::is_provider_error(text) {
+        Cause::ProviderError.as_str()
+    } else {
+        Cause::Crashed.as_str()
+    }
 }
 
-/// Stub (red): the detail of a crashed Attempt: the error message, the stderr tail, the exit status and the driver log path.
+/// The detail of a crashed Attempt: the stop reason, the error message, the stderr tail, the exit status and the driver log path.
 pub fn crashed_detail(
     reason: &str,
-    _error_message: Option<&str>,
-    _stderr_tail: &str,
-    _exit_status: Option<i32>,
-    _driver_log: &std::path::Path,
+    error_message: Option<&str>,
+    stderr_tail: &str,
+    exit_status: Option<i32>,
+    driver_log: &std::path::Path,
 ) -> String {
-    format!("pi stopped with stopReason {reason}.")
+    let mut detail = format!("pi stopped with stopReason {reason}.");
+    if let Some(message) = error_message.filter(|m| !m.trim().is_empty()) {
+        detail.push_str(&format!(" errorMessage: \"{}\".", message.trim()));
+    }
+    if let Some(status) = exit_status {
+        detail.push_str(&format!(" Exit status {status}."));
+    }
+    if !stderr_tail.trim().is_empty() {
+        detail.push_str(&format!(" stderr tail: {}", stderr_tail.trim()));
+    }
+    detail.push_str(&format!(" Driver log: {}", driver_log.display()));
+    detail
 }
 
 #[cfg(test)]
@@ -998,7 +1022,7 @@ mod tests {
     #[test]
     fn every_cause_is_listed_and_reads_back() {
         use super::{Cause, Stored};
-        assert_eq!(Cause::ALL.len(), 12);
+        assert_eq!(Cause::ALL.len(), 13);
         for cause in Cause::ALL {
             assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
             assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));

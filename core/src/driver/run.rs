@@ -16,7 +16,9 @@ use super::lock;
 use super::runner;
 use super::stall;
 use super::worker;
-use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
+use crate::attempt::ledger::{
+    self, Attempt as Target, Cause, End, Ladder, Stage, classify_stop_text, crashed_detail,
+};
 use crate::clock;
 use crate::config::{Catalog, Config, WorkerRunner, load_catalog};
 use crate::env::Env;
@@ -135,6 +137,8 @@ enum Decision {
     Crashed(String),
     /// pi stopped on a provider error (the `errorMessage`): the Attempt ends `provider_error`.
     ProviderError(String),
+    /// pi stopped on a provider usage limit or quota (the `errorMessage`): the Attempt ends `quota`.
+    Quota(String),
 }
 
 /// A5's judgement, pure. `state` is the Session's state; `last_stop` the last
@@ -156,11 +160,26 @@ fn judge(
         (Some("stop"), Some(at)) if turns > at => Decision::NoSubmit,
         // Mid-turn, no assistant message yet, or nudged and no new turn since.
         (Some("stop") | Some("toolUse") | None, _) => Decision::Wait,
+        (Some("error"), _)
+            if error_message.is_some_and(|m| classify_stop_text(m) == Cause::Quota.as_str()) =>
+        {
+            Decision::Quota(error_message.unwrap_or_default().to_owned())
+        }
         (Some("error"), _) if error_message.is_some_and(worker::is_provider_error) => {
             Decision::ProviderError(error_message.unwrap_or_default().to_owned())
         }
         (Some(other), _) => Decision::Crashed(other.to_owned()),
     }
+}
+
+/// The last 2000 bytes of the driver's stderr log, empty when it cannot be read.
+fn stderr_tail(log: &std::path::Path) -> String {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let mut start = text.len().saturating_sub(2000);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_owned()
 }
 
 /// How the Attempt ended, as the driver prints it.
@@ -1227,8 +1246,21 @@ impl Driver {
                         dirs,
                     );
                 }
+                Decision::Quota(message) => {
+                    let detail = format!("pi stopped on a usage limit or quota: \"{message}\".");
+                    return self.end(
+                        &now,
+                        End::Failed {
+                            cause: Cause::Quota,
+                            detail,
+                        },
+                        dirs,
+                    );
+                }
                 Decision::Crashed(reason) => {
-                    let detail = format!("pi stopped with stopReason {reason}.");
+                    let log = self.home.driver_log(&self.plan, &self.id);
+                    let tail = stderr_tail(&log);
+                    let detail = crashed_detail(&reason, error.as_deref(), &tail, None, &log);
                     return self.end(
                         &now,
                         End::Failed {
