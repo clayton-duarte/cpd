@@ -5,7 +5,8 @@
 //! `FakeRunner`, the store is the rig's temp database. No process, no network, no real git.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use rusqlite::OptionalExtension;
 use serde_json::json;
@@ -19,12 +20,18 @@ use crate::store::Store;
 
 const CONTAINED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BEHIND: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// A head the pull request had before a force-push: GitHub answers 404 to a compare on it.
+const REPLACED: &str = "dddddddddddddddddddddddddddddddddddddddd";
 
 /// The `gh` of the poll: the open pull request `acme/pay#801` is clean and passed; the head it reports follows the
 /// round, and the compare answers whether the asked head contains `main`.
 #[derive(Default)]
 struct Gh {
     round: AtomicUsize,
+    /// The search lists the pull request as `MERGED` instead of `OPEN`.
+    merged: AtomicBool,
+    /// The endpoint of every compare call.
+    compares: Mutex<Vec<String>>,
 }
 
 impl Gh {
@@ -35,6 +42,11 @@ impl Gh {
         } else {
             BEHIND
         }
+    }
+
+    /// The compare endpoints called so far.
+    fn compared(&self) -> Vec<String> {
+        self.compares.lock().unwrap().clone()
     }
 
     /// Moves the head the fake GitHub reports, as a push between polls does.
@@ -48,7 +60,10 @@ impl Handler for Gh {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         match args[..] {
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
-                Reply::ok(&search_reply(self.head()))
+                Reply::ok(&search_reply(
+                    self.head(),
+                    self.merged.load(Ordering::SeqCst),
+                ))
             }
             ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => {
                 Reply::ok(&comments_reply())
@@ -61,8 +76,12 @@ impl Handler for Gh {
             }
             // The containment comparison the merge gate reads: `ahead`/`identical` mean the head contains the base's head.
             ["api", endpoint, ..] if endpoint.starts_with("repos/acme/pay/compare/") => {
+                self.compares.lock().unwrap().push(endpoint.to_owned());
                 let status = if endpoint.ends_with(BEHIND) {
                     "behind"
+                } else if endpoint.ends_with(REPLACED) {
+                    // GitHub no longer has the replaced commit.
+                    return Reply::exit(1, "", "gh: Not Found (HTTP 404)\n");
                 } else {
                     "ahead"
                 };
@@ -76,7 +95,7 @@ impl Handler for Gh {
     }
 }
 
-fn search_reply(head: &str) -> String {
+fn search_reply(head: &str, merged: bool) -> String {
     let node = json!({
         "repository": {
             "nameWithOwner": "acme/pay",
@@ -87,10 +106,10 @@ fn search_reply(head: &str) -> String {
         "url": "https://github.com/acme/pay/pull/801",
         "title": "Workflow 801",
         "isDraft": false,
-        "state": "OPEN",
+        "state": if merged { "MERGED" } else { "OPEN" },
         "createdAt": "opened",
         "updatedAt": "U1",
-        "mergedAt": null,
+        "mergedAt": if merged { json!("2026-11-08T12:00:00Z") } else { json!(null) },
         "baseRefName": "main",
         "reviewDecision": null,
         "latestOpinionatedReviews": {"nodes": []},
@@ -165,7 +184,7 @@ fn rig(gh: Arc<Gh>, base: &str, head: &str) -> Rig {
 }
 
 /// One pass of `pr poll` on the rig's Ports.
-fn poll(rig: &Rig) {
+fn try_poll(rig: &Rig) -> Result<(), crate::error::CpdError> {
     Ports::scope(&rig.fakes.ports, || {
         super::poll(
             &rig.fakes.ports,
@@ -174,7 +193,26 @@ fn poll(rig: &Rig) {
             },
         )
     })
-    .expect("the poll succeeds");
+    .map(drop)
+}
+
+/// One pass of `pr poll`, which must succeed.
+fn poll(rig: &Rig) {
+    try_poll(rig).expect("the poll succeeds");
+}
+
+/// The stored `head_oid` of `number`.
+fn head_oid(rig: &Rig, number: i64) -> Option<String> {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT head_oid FROM pull_requests WHERE number = ?1",
+                [number],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
+        })
+        .unwrap()
 }
 
 /// The stored `base_contained` of `number`: `None` when NULL.
@@ -225,4 +263,79 @@ fn the_poll_persists_the_containment_flag() {
         None,
         "a stacked pull request's base_contained stays NULL"
     );
+}
+
+#[test]
+fn base_contained_from_poll_read() {
+    // The stored head is stale (the pull request was pushed since): the flag comes from the fresh `headRefOid` of the
+    // poll's read, never from the stored head, and the stored head is updated from it first.
+    let gh = Arc::new(Gh::default());
+    let rig = rig(gh.clone(), "main", REPLACED);
+    poll(&rig);
+    assert_eq!(
+        flag(&rig, 801),
+        Some(1),
+        "base_contained is derived from the head the poll read reports"
+    );
+    assert_eq!(
+        head_oid(&rig, 801).as_deref(),
+        Some(CONTAINED),
+        "head_oid is updated from the poll read before the containment check"
+    );
+    assert!(
+        gh.compared().iter().all(|e| !e.ends_with(REPLACED)),
+        "no compare is made on the stale stored head: {:?}",
+        gh.compared()
+    );
+}
+
+#[test]
+fn replaced_head_sha_compare_404_does_not_abort_poll() {
+    // Force-push: the stored head is gone from GitHub (a compare on it is HTTP 404). The poll must not abort; the flag is
+    // computed on the fresh head (here behind main, so 0).
+    let gh = Arc::new(Gh::default());
+    gh.bump();
+    let rig = rig(gh.clone(), "main", REPLACED);
+    let result = try_poll(&rig);
+    assert!(
+        result.is_ok(),
+        "a 404 on a replaced head never aborts the poll: {result:?}"
+    );
+    assert_eq!(
+        flag(&rig, 801),
+        Some(0),
+        "base_contained comes from the fresh headRefOid, which is behind main"
+    );
+    assert!(
+        gh.compared().iter().all(|e| !e.ends_with(REPLACED)),
+        "no compare on the replaced head: {:?}",
+        gh.compared()
+    );
+}
+
+#[test]
+fn merged_pr_closes_stale_pr_ready() {
+    // The row is already stored `merged` (a header write stores a merge without closing the Inbox item) and its `pr-ready`
+    // item is still open: a poll that sees the pull request MERGED closes it, whether or not the upsert changed the row.
+    let gh = Arc::new(Gh::default());
+    gh.merged.store(true, Ordering::SeqCst);
+    let rig = rig(gh, "main", CONTAINED);
+    rig.sql(
+        "UPDATE pull_requests SET state = 'merged', merged_at = '2026-11-08T12:00:00Z', title = 'Workflow 801',
+                created_at = 'opened', authored = 1 WHERE number = 801;
+         INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+           VALUES ('pr-ready', 'yellow', 'pr:acme/pay#801', 'pay#801 ready', 't');",
+    );
+    poll(&rig);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let open: i64 = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND subject = 'pr:acme/pay#801' AND closed_at IS NULL",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(open, 0, "the stale pr-ready item of a merged PR is closed");
 }

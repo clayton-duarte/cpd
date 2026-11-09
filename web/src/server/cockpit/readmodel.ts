@@ -351,7 +351,7 @@ function rowActions(i: RawInboxItem): InboxRowAction[] {
       add("Merge", { kind: "pr.merge", ...(i.plan !== null ? { planId: i.plan } : {}), pull });
     } else if (status === "ready for user review" && i.plan !== null && pull !== null) {
       add("Post", { kind: "pr.post", planId: i.plan, pull });
-    } else if (status === "review overdue" && i.plan !== null && pull !== null) {
+    } else if ((status === "review overdue" || status === "waiting for peer review") && i.plan !== null && pull !== null) {
       add("RePost", { kind: "pr.repost", planId: i.plan, pull });
     }
   }

@@ -58,7 +58,7 @@ fn letter_j_parses_and_round_trips() {
 }
 
 /// J ranks below G (contract §9 "Ladder order"): every J rung is below every G rung, and within J
-/// effort 0 < X < 1.
+/// effort 0 < 1 < X.
 #[test]
 fn letter_rank_puts_j_below_g() {
     assert!(
@@ -74,7 +74,32 @@ fn letter_rank_puts_j_below_g() {
         .to_vec();
     tiers.sort();
     let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
-    assert_eq!(sorted, ["J0", "JX", "J1", "G0", "GX"]);
+    assert_eq!(sorted, ["J0", "J1", "JX", "G0", "GX"]);
+}
+
+/// R1: within a letter 0 < 1 < X < 2 < 3 < 4, and a letter ranks above every effort of the one before.
+#[test]
+fn tier_x_orders_between_effort_1_and_2() {
+    let t = |s: &str| Tier::parse(s).unwrap();
+    for letter in ["G", "H", "S", "O"] {
+        let (e0, x, e1) = (
+            t(&format!("{letter}0")),
+            t(&format!("{letter}X")),
+            t(&format!("{letter}1")),
+        );
+        assert!(e0 < e1, "{e0} < {e1}");
+        assert!(e1 < x, "{e1} < {x}");
+        assert!(x < t(&format!("{letter}2")));
+        assert!(x < t(&format!("{letter}4")));
+    }
+    assert!(t("G4") < t("HX"), "X sits below the next letter");
+    assert!(t("H4") < t("SX"));
+    assert!(t("S4") < t("OX"));
+    assert!(t("GX") > t("G0") && t("HX") > t("H0"));
+    let mut tiers: Vec<Tier> = ["G1", "GX", "G0", "H2", "HX", "H0"].map(t).to_vec();
+    tiers.sort();
+    let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
+    assert_eq!(sorted, ["G0", "G1", "GX", "H0", "HX", "H2"]);
 }
 
 #[cfg(test)]
@@ -201,29 +226,6 @@ mod tests {
         }
     }
 
-    /// R1: within a letter 0 < X < 1 < 2 < 3 < 4, and a letter ranks above every effort of the one before.
-    #[test]
-    fn tier_x_orders_between_effort_0_and_1() {
-        for letter in ["G", "H", "S", "O"] {
-            let (e0, x, e1) = (
-                t(&format!("{letter}0")),
-                t(&format!("{letter}X")),
-                t(&format!("{letter}1")),
-            );
-            assert!(e0 < x, "{e0} < {x}");
-            assert!(x < e1, "{x} < {e1}");
-            assert!(x < t(&format!("{letter}4")));
-        }
-        assert!(t("G4") < t("HX"), "X sits below the next letter");
-        assert!(t("H4") < t("SX"));
-        assert!(t("S4") < t("OX"));
-        assert!(t("GX") > t("G0") && t("HX") > t("H0"));
-        let mut tiers: Vec<Tier> = ["G1", "GX", "G0", "H2", "HX", "H0"].map(t).to_vec();
-        tiers.sort();
-        let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
-        assert_eq!(sorted, ["G0", "GX", "G1", "H0", "HX", "H2"]);
-    }
-
     /// R3: X sends no effort, so pi's model argument is the bare model, on a model with efforts and on one with none;
     /// a digit gives `model:level`.
     #[test]
@@ -246,19 +248,19 @@ mod tests {
         );
     }
 
-    /// R4: next never lands on X on a model with efforts: from `<L>X` it goes to the lowest offered effort >= 1, from
-    /// effort 0 too, and leaving a letter lands on the lowest effort >= 1; a model with no efforts keeps X as its rung.
+    /// R4 and air-d140: next includes X in order within a letter; leaving a letter lands on the lowest effort
+    /// >= 1, or X when the model has no efforts.
     #[test]
-    fn tier_x_next_climbs_to_the_lowest_effort_from_1() {
+    fn tier_x_next_follows_the_ordered_rungs() {
         let mut c = gappy();
         c.g = model("gemini", &[0, 1, 3]);
         c.h = model("haiku", &[0, 2, 3]);
         c.s = model("sonnet", &[0, 1, 3]);
         let all = Range {
-            floor: t("GX"),
+            floor: t("G0"),
             ceiling: t("OX"),
         };
-        assert_eq!(c.next_in(all, t("GX")), Some(t("G1")));
+        assert_eq!(c.next_in(all, t("GX")), Some(t("G3")));
         assert_eq!(c.next_in(all, t("G0")), Some(t("G1")));
         assert_eq!(
             c.next_in(all, t("G3")),
@@ -272,18 +274,21 @@ mod tests {
             Some(t("OX")),
             "O offers no efforts: X is its rung"
         );
-        // The whole climb: X only where the model has no efforts.
-        let mut walk = vec![t("GX")];
+        // The whole climb includes X at its ordered position within each letter.
+        let mut walk = vec![t("G0")];
         while let Some(next) = c.next_in(all, *walk.last().unwrap()) {
             walk.push(next);
             assert!(walk.len() < 20, "the climb ends");
         }
         let names: Vec<String> = walk.iter().map(Tier::to_string).collect();
-        assert_eq!(names, ["GX", "G1", "G3", "H2", "H3", "S1", "S3", "OX"]);
+        assert_eq!(
+            names,
+            ["G0", "G1", "GX", "G3", "H2", "H3", "S1", "SX", "S3", "OX"]
+        );
     }
 
     #[test]
-    fn tiers_order_by_the_ladder_g_h_s_o_then_effort_with_x_between_0_and_1() {
+    fn tiers_order_by_the_ladder_g_h_s_o_then_effort_with_x_between_1_and_2() {
         let mut tiers: Vec<Tier> = [
             "OX", "S3", "G2", "H4", "GX", "O0", "H0", "SX", "G0", "S1", "O4", "HX",
         ]
@@ -294,12 +299,15 @@ mod tests {
         assert_eq!(
             sorted,
             [
-                "G0", "GX", "G2", "H0", "HX", "H4", "SX", "S1", "S3", "O0", "OX", "O4"
+                "G0", "GX", "G2", "H0", "HX", "H4", "S1", "SX", "S3", "O0", "OX", "O4"
             ]
         );
         assert!(t("H4") < t("SX"), "a higher letter beats any effort");
         assert!(t("S4") < t("OX"));
-        assert!(t("G0") < t("GX"), "X is above effort 0 and below effort 1");
+        assert!(
+            t("G0") < t("G1") && t("G1") < t("GX"),
+            "X is above effort 1"
+        );
         assert!(t("O3") > t("O2"));
     }
 

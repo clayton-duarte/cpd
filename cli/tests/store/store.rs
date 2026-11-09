@@ -340,7 +340,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        45, // 32 (33 less `jira_transitions`, dropped by `jira-swr`) and the 13 tables of `swr`
+        46, // 32 (33 less `jira_transitions`, dropped by `jira-swr`), the 13 tables of `swr` and `test_replacements`
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {

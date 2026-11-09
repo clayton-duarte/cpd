@@ -147,6 +147,20 @@ describe("tree menu actions", () => {
 
   const polled = { ok: true, workflows: [{ key: "w1", pull_request: { repo: "acme/api", number: 3 } }] };
 
+  it("pr.merge head_behind_main returns armed instead of throwing", async () => {
+    const { cpd } = fakeCpd(async () => {
+      throw new WebError("cpd_failed", "behind main, updated, waiting for gate", { cpdCode: "head_behind_main", exitCode: 1 });
+    });
+    await expect(runAction(cpd, { kind: "pr.merge", pull: "acme/api#3" })).resolves.toEqual({ armed: true, message: "behind main, updated, waiting for gate" });
+  });
+
+  it("pr.merge with another cpdCode still throws", async () => {
+    const { cpd } = fakeCpd(async () => {
+      throw new WebError("cpd_failed", "not mergeable", { cpdCode: "not_mergeable", exitCode: 1 });
+    });
+    await expect(runAction(cpd, { kind: "pr.merge", pull: "acme/api#3" })).rejects.toMatchObject({ details: { cpdCode: "not_mergeable" } });
+  });
+
   it("pr.merge with a pull runs pr merge with it", async () => {
     const { cpd, calls } = fakeCpd();
     await runAction(cpd, { kind: "pr.merge", pull: "acme/api#3" });

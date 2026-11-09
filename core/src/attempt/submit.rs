@@ -27,6 +27,8 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let attempt = env.store.read(|conn| row::load(conn, &plan, &id))?;
+    env.store
+        .read(|conn| crate::job::replace_test::check_fence(conn, &plan, &attempt.job))?;
     let kind: String = env.store.read(|conn| {
         Ok(conn.query_row(
             "SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2",
@@ -121,6 +123,7 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
 
     let written = env.store.write(COMMAND, |tx| {
         let now = row::load(tx, &plan, &id)?;
+        crate::job::replace_test::check_fence(tx, &plan, &now.job)?;
         if now.status != "running" {
             return match already(&now, Some(&sha)) {
                 Some(_) => Ok(true),

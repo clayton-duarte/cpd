@@ -673,6 +673,20 @@
     },
     "required": []
   },
+  "job abandon-test-replacement": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--reason": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--reason"
+    ]
+  },
   "job add": {
     "flags": {
       "--draft": false,
@@ -792,6 +806,25 @@
       "min": 0
     },
     "required": []
+  },
+  "job replace-test": {
+    "flags": {
+      "--help": false,
+      "--new-key": true,
+      "--plan": true,
+      "--reason": true,
+      "--revise": false,
+      "--test-files": true,
+      "--tests": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--new-key",
+      "--reason"
+    ]
   },
   "job retry": {
     "flags": {
