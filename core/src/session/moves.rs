@@ -31,15 +31,21 @@ use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 
-/// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
-/// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
+/// What `tmux new-window` runs for Lead `id`: `<exe> session run <id>` in its
+/// cwd (the engine's own executable, `ports.spawn.self_exe()`, never a `cpd` found on PATH; the bare `cpd` only when the
+/// ports have no record of their own path), with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
 /// Context's Manager has no Plan, so no `CPD_PLAN` (§3.10).
 pub(crate) fn lead_spawn(
     home: &CpdHome,
+    ports: &Ports,
     id: &SessionId,
     plan: Option<&PlanId>,
     cwd: &Path,
 ) -> Spawn {
+    let exe = ports
+        .spawn
+        .self_exe()
+        .unwrap_or_else(|_| PathBuf::from(PROGRAM));
     let mut env = BTreeMap::from([
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), id.to_string()),
@@ -50,9 +56,12 @@ pub(crate) fn lead_spawn(
     Spawn {
         cwd: Some(cwd.to_path_buf()),
         env,
-        argv: [PROGRAM, "session", "run", id.as_str()]
-            .map(str::to_owned)
-            .into(),
+        argv: vec![
+            exe.display().to_string(),
+            "session".to_owned(),
+            "run".to_owned(),
+            id.as_str().to_owned(),
+        ],
     }
 }
 
@@ -217,7 +226,13 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         Ok(row)
     })?;
 
-    let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
+    let spawn = lead_spawn(
+        &env.home,
+        &env.ports,
+        &id,
+        Some(&plan),
+        Path::new(&source.cwd),
+    );
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
         crate::session::row::set_pill(&tmux, &pane, None, &name, true)?;
@@ -317,6 +332,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         None => {
             let spawn = lead_spawn(
                 &env.home,
+                &env.ports,
                 &lead.id,
                 lead.plan.as_ref(),
                 Path::new(&lead.cwd),
@@ -667,9 +683,17 @@ pub(crate) fn start_parked(
     {
         tmux.kill_pane(&dead.pane)?;
     }
-    let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
+    let spawn = lead_spawn(
+        &env.home,
+        &env.ports,
+        &row.id,
+        row.plan.as_ref(),
+        Path::new(&row.cwd),
+    );
     let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
     let started = kill_window_on_error(&tmux, &window, || {
+        // The mark first: `check_pane` of the pane's `session run` never sees a pane without it.
+        tmux.set_pane_session(&pane, &row.id)?;
         row.set_pill(&tmux, &pane)?;
         let won = env.store.write(command, |tx| {
             let changed = tx.execute(
@@ -682,10 +706,6 @@ pub(crate) fn start_parked(
             moved(tx, row, &pane, &window, "parked")?;
             Ok(true)
         })?;
-        if won {
-            // The go signal only once the store knows the pane; on failure the window is killed and E2 stops the row.
-            tmux.set_pane_session(&pane, &row.id)?;
-        }
         Ok(won)
     })?;
     if started {

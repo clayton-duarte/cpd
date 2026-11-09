@@ -2086,6 +2086,7 @@ fn start_parked_sets_cpd_session_before_it_records_the_pane() {
     );
 
     // A refused mark: no pane in the row.
+    drop(fx);
     let fx = Fx::with_ports();
     setup(&fx.env);
     fx.cockpit();
