@@ -311,9 +311,9 @@ impl GithubSource {
                         {
                             return failed(e.message());
                         }
-                        return failed(format!(
-                            "{repo}#{number} is now behind the default branch, updated, waiting for gate."
-                        ));
+                        // Handled: the update Job is queued and the intent stays armed; no error Event.
+                        // Not Done: the merge did not run; the drain re-checks the head after RETRY.
+                        return ExecOutcome::Retry { after: RETRY };
                     }
                     Err(e) => return retry(&e),
                 }
