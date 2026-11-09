@@ -98,4 +98,27 @@ describe("settings", () => {
     await expect(saveSettings(cpd, { tiers: { lead: "S2" }, experimental: { write_curation: false, failure_triage: false } })).rejects.toThrow("refused");
     expect(calls).toEqual(["config", "config experimental", "config tiers set --decide JX --auxiliar GX --worker H3 --lead S2 --manager O3", "config experimental write_curation off"]);
   });
+
+  it("settings.save carries per-role model and effort as the role's Tier flag", async () => {
+    const { cpd, calls } = fake({ config, "config experimental": experimental });
+    await saveSettings(cpd, {
+      tiers: { decide: { model: "J", effort: "0" }, worker: { model: "H", effort: "2" }, lead: { model: "S", effort: "X" } },
+    } as unknown as SettingsChanges);
+    expect(calls).toEqual([
+      "config",
+      "config experimental",
+      "config tiers set --decide J0 --auxiliar GX --worker H2 --lead SX --manager O3",
+      "session retier --all",
+    ]);
+  });
+
+  it("settings.read accepts catalog letters and efforts and rejects others", async () => {
+    const withTier = (key: string, value: string) => fake({ config: { ok: true, config: { ...config.config, [key]: value } }, "config experimental": experimental }).cpd;
+    for (const ok of ["M2", "K1", "L0", "P2", "A1", "JX", "OX"]) {
+      expect((await readSettings(withTier("worker_tier", ok))).tiers.worker).toBe(ok);
+    }
+    for (const bad of ["H3", "S4", "Z1", "H5", "h1", "H"]) {
+      await expect(readSettings(withTier("worker_tier", bad))).rejects.toMatchObject({ code: "cpd_malformed_json" });
+    }
+  });
 });

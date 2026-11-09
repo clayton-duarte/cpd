@@ -24,6 +24,41 @@ describe("parseClientMessage", () => {
   });
 });
 
+describe("settings.save changes", () => {
+  const save = (changes: unknown) => ({ type: "settings.save", changes });
+  it("accepts a role's model and effort as separate fields, catalog letters and efforts only", () => {
+    for (const model of ["H", "S", "O", "G", "M", "K", "L", "P", "A", "J"]) {
+      for (const effort of ["0", "1", "X", "2"]) {
+        const raw = save({ tiers: { worker: { model, effort } } });
+        expect(parseClientMessage(raw)).toEqual(raw);
+      }
+    }
+    for (const bad of [{ model: "Z", effort: "1" }, { model: "H", effort: "3" }, { model: "H", effort: "5" }, { model: "h", effort: "1" }, { model: "H" }, { effort: "1" }]) {
+      expect(() => parseClientMessage(save({ tiers: { worker: bad } }))).toThrowError(expect.objectContaining({ code: "invalid_message" }));
+    }
+  });
+
+  it("rejects a combined Tier string once model and effort are separate", () => {
+    expect(() => parseClientMessage(save({ tiers: { worker: "H1" } }))).toThrowError(expect.objectContaining({ code: "invalid_message" }));
+  });
+
+  it("parseChanges keeps a concurrency-only change", () => {
+    const raw = save({ concurrency: 12 });
+    expect(parseClientMessage(raw)).toEqual(raw);
+  });
+
+  it("parseChanges rejects a non-integer concurrency", () => {
+    for (const concurrency of [1.5, "12", Number.NaN, null]) {
+      expect(() => parseClientMessage(save({ concurrency }))).toThrowError(expect.objectContaining({ code: "invalid_message" }));
+    }
+  });
+
+  it("parseChanges accepts decide in tiers", () => {
+    const raw = save({ tiers: { decide: { model: "J", effort: "X" } } });
+    expect(parseClientMessage(raw)).toEqual(raw);
+  });
+});
+
 describe("parseServerMessage", () => {
   const completion = { label: "safe_to_archive", text: "Safe to archive · 93%", score: 93, tone: "done" };
   it("session.completion parses with a completion", () => {

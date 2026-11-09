@@ -191,6 +191,42 @@ describe("cockpit service events", () => {
   });
 });
 
+describe("cockpit service settings save", () => {
+  it("saveSettings refreshes the status snapshot after saving", async () => {
+    const scheduler = new FakeScheduler();
+    const readModel: ReadModel = {
+      async loadAll() { return { tree: tree(1), plan: null, inbox }; },
+      async loadPanes() { return {}; },
+    };
+    const cpd: Cpd = { json: async () => ({ ok: true }) };
+    const follow: FollowBoundary = { start: (args) => new FakeFollow(args) };
+    const order: string[] = [];
+    const extras: Extras = {
+      async status() {
+        order.push("status");
+        return { runner: null, preview: null, incident: null, workers: { queued: 0, waiting: 0, tenants: 0, limit: 12 }, version: null, hostAlert: false, mode: "production", drift: null };
+      },
+      async costs() { return {}; },
+      async logs() { return []; },
+      async settings() { throw new Error("settings are not read in this test"); },
+      async saveSettings() { order.push("save"); },
+    };
+    const service = createCockpitService({ readModel, cpd, follow, scheduler, extras });
+    const updates: CockpitUpdate[] = [];
+    service.subscribe((u) => updates.push(u));
+    await service.start();
+    await flush();
+    order.length = 0;
+    updates.length = 0;
+    await service.saveSettings({ concurrency: 12 });
+    await flush();
+    // The status is re-read after the save finished, so StatusBar shows the new concurrency with a quiet cpd.db.
+    expect(order).toEqual(["save", "status"]);
+    expect(updates.some((u) => u.kind === "pane" && u.pane === "status")).toBe(true);
+    service.stop();
+  });
+});
+
 const TREE_EVENT_KINDS = "context-created context-grounded context-record context-renamed context-archived context-curated context-owner context-deleted plan-created plan-phase plan-done plan-renamed plan-archived plan-review plan-outlined plan-deleted job-added job-addendum job-blocked job-cancel-requested job-edited job-merged job-failed job-retried job-cancelled attempt-started attempt-retry attempt-status attempt-ended attempt-aborted attempt-nudge all-merged workflow-added workflow-base-changed workflow-described workflow-edited workflow-cancelled workflow-started pr-added pr-base-changed pr-cancelled pr-described pr-edited pr-feedback pr-opened pr-started pr-merged escalation escalation-answered escalation-expired review-opened review-closed session-registered session-state session-moved session-renamed session-archived session-asleep session-message session-resumed session-retiered inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed watch-started watch-stopped incident-started incident-ended incident-plans error".split(" ");
 const INBOX_EVENT_KINDS = "inbox-opened inbox-closed inbox-claimed inbox-snoozed inbox-dismissed session-state session-message session-resumed plan-created plan-review job-failed job-blocked pr-opened pr-merged pr-feedback watch-started watch-stopped incident-started incident-ended session-registered session-moved".split(" ");
 
