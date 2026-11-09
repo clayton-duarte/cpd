@@ -33,6 +33,8 @@ mod fix_retry_tests;
 pub mod guard;
 pub mod home;
 pub mod open;
+#[cfg(test)]
+mod replace_test_tests;
 mod retry;
 pub(crate) mod show;
 pub(crate) mod spec;
