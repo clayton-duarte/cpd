@@ -418,3 +418,15 @@ fn in_phase_plan_the_template_is_unchanged() {
         ])
     );
 }
+
+#[test]
+fn a_template_pr_that_has_not_started_has_no_open_job_row() {
+    let fx = crud("plan");
+    fx.add_k("docs", &["--no-needs"]).ok();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'open-k'"),
+        0,
+        "the open Job is created at the Workflow's start, not at add"
+    );
+}

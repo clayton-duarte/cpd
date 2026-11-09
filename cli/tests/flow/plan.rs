@@ -3725,3 +3725,22 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     );
     assert_eq!(text.matches("Spec: not written yet").count(), 1, "{text}");
 }
+
+#[test]
+fn lock_and_review_leave_no_draft_open_job_and_lock_queues_the_started_workflows_open_job() {
+    let fx = Fx::with_ports();
+    let repo = inproc::locking(&fx);
+    let drafts = "SELECT count(*) FROM jobs WHERE kind = 'open' AND status = 'draft'";
+    assert_eq!(fx.env.query::<i64>(drafts), 0, "before the review");
+    inproc::approved(&fx, &repo);
+    assert_eq!(fx.env.query::<i64>(drafts), 0, "after the review");
+
+    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    assert_eq!(fx.env.query::<i64>(drafts), 0, "after the lock");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'open-pay'"),
+        "queued"
+    );
+}

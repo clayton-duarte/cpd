@@ -3534,3 +3534,19 @@ fn a_null_owner_is_still_set_while_a_workflow_row_exists() {
         .ok();
     assert_eq!(out["context"], json!({"id": "ctx", "owner": "acme"}));
 }
+
+#[test]
+fn add_creates_no_open_job_row_for_a_waiting_workflow() {
+    let fx = crud("plan");
+    let out = fx.add_shape("api", None).ok();
+    assert_eq!(
+        out["workflow"]["jobs"],
+        json!(["api-docs", "api-tests", "api-impl"]),
+        "the open Job is not listed before the Workflow starts"
+    );
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'open-api'"),
+        0
+    );
+}

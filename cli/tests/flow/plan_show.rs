@@ -568,3 +568,19 @@ fn workflow_pr_posted_is_true_after_a_post() {
     let show = fx.show();
     assert_eq!(show["workflows"][0]["pr"]["posted"], json!(true));
 }
+
+#[test]
+fn a_waiting_pr_has_no_open_job_row_though_render_shows_the_placeholder() {
+    let fx = fx("plan");
+    fx.pr("web", "waiting", &[]);
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'open-web'"),
+        0
+    );
+    let (_, text) = fx.render();
+    assert!(
+        text.contains("| `open-web` | Open the pull request: web | open |"),
+        "{text}"
+    );
+}

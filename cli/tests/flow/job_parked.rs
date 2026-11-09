@@ -311,3 +311,13 @@ fn the_open_jobs_draft_never_makes_a_plan_refuse_anything() {
     let run = job(&fx, &["edit", "open-repo", "--title", "Open it"], "pl");
     assert_ne!(run.json()["error"]["code"], "draft_parked", "{run:?}");
 }
+
+#[test]
+fn a_started_workflow_has_no_draft_open_job_to_exempt() {
+    let fx = locked();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE kind = 'open' AND status = 'draft'"),
+        0
+    );
+}

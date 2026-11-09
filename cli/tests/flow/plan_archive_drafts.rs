@@ -158,3 +158,43 @@ fn plan_cancel_still_cancels_drafts() {
         "cancelled"
     );
 }
+
+#[test]
+fn a_new_workflow_leaves_no_open_job_to_cancel_before_archive() {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cpd(&[
+        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
+    ])
+    .ok();
+    fx.cpd(&[
+        "plan",
+        "new",
+        "pay",
+        "--context",
+        "ctx",
+        "--title",
+        "Plan pay",
+    ])
+    .ok();
+    let repo = fx.keyed_repo("api");
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'open-api'"),
+        0
+    );
+}
