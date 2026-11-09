@@ -71,12 +71,23 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
         require_pushable(&plan, &args)?;
         super::rebase::refuse_running_conn(tx, &id, &key, "do the push")?;
 
-        match git::push_commit(&lead, &remote_branch, &sha)? {
+        let to_push = match crate::merge::reconcile(&lead, &branch, &remote_branch, &sha)? {
+            crate::merge::Reconciled::Push(to_push) => to_push,
+            crate::merge::Reconciled::Contained(remote) => return Ok((false, remote)),
+            crate::merge::Reconciled::Conflict { remote, files } => {
+                return Err(crate::merge::remote_conflict(&remote_branch, &sha, &remote, &files)
+                    .with("workflow", key.as_str()));
+            }
+        };
+        match git::push_commit(&lead, &remote_branch, &to_push)? {
             Push::Pushed { new } => {
                 if new {
                     super::pulls::reset_after_push(tx, &id, &key)?;
                 }
-                Ok((new, sha.clone()))
+                if to_push != sha {
+                    git::sync_lead(&lead, &branch)?;
+                }
+                Ok((new, to_push.clone()))
             }
             Push::Contained { remote } => Ok((false, remote)),
             Push::Rejected { stderr } => {

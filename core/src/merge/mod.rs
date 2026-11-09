@@ -610,10 +610,19 @@ fn finish_merge(
     // An `open` or `update` Job's push is part of the Job: one that fails ends the Attempt `failed` / `crashed` after the
     // fast-forward (the next Attempt finds the Lead Branch already holding the merge, and its submit runs the Gate again).
     if let Some(e) = push {
-        let detail = format!("push_failed: {}", e.message());
+        let conflict = e.details().contains_key("remote_conflict");
+        let detail = if conflict {
+            format!("remote_conflict: {}", e.message())
+        } else {
+            format!("push_failed: {}", e.message())
+        };
         return Ok(Stepped {
             end: End::Failed {
-                cause: Failure::Crashed,
+                cause: if conflict {
+                    Failure::MergeConflict
+                } else {
+                    Failure::Crashed
+                },
                 detail,
             },
             stale,
@@ -971,14 +980,24 @@ pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
     if target.adopted && !is_cpd_kind(target) {
         return None;
     }
-    push(&target.lead_worktree, &target.remote_branch, sha)
+    push(
+        &target.lead_worktree,
+        &target.lead_branch,
+        &target.remote_branch,
+        sha,
+    )
 }
 
 /// Rule P (§7.4) for `sha` on the Lead Branch `branch`, from the Lead worktree
 /// `lead`, as step 8 and R2 push: `None` when it pushed, when the remote
 /// already contains `sha`, or when the repo has no `origin` (A3); else the
 /// `push_failed` error to append. A push never fails the merge (R35).
-pub(super) fn push(lead: &std::path::Path, branch: &str, sha: &str) -> Option<CpdError> {
+pub(super) fn push(
+    lead: &std::path::Path,
+    lead_branch: &str,
+    branch: &str,
+    sha: &str,
+) -> Option<CpdError> {
     let failed = |stderr: &str, exit: Option<i64>, why: String| {
         let e = CpdError::new(
             ErrorCode::PushFailed,
@@ -994,7 +1013,11 @@ pub(super) fn push(lead: &std::path::Path, branch: &str, sha: &str) -> Option<Cp
     };
     match git::run::has_origin(lead).and_then(|origin| {
         if origin {
-            git::push_commit(lead, branch, sha).map(Some)
+            match reconcile(lead, lead_branch, branch, sha)? {
+                Reconciled::Push(to_push) => git::push_commit(lead, branch, &to_push).map(Some),
+                Reconciled::Contained(remote) => Ok(Some(git::Push::Contained { remote })),
+                Reconciled::Conflict { remote, files } => Err(remote_conflict(branch, sha, &remote, &files)),
+            }
         } else {
             Ok(None)
         }
@@ -1005,6 +1028,7 @@ pub(super) fn push(lead: &std::path::Path, branch: &str, sha: &str) -> Option<Cp
             None,
             "was rejected: not a fast-forward.".to_owned(),
         )),
+        Err(e) if e.details().contains_key("remote_conflict") => Some(e),
         Err(e) => {
             let detail = |key: &str| e.details().get(key).cloned();
             let stderr = detail("stderr")
@@ -1147,4 +1171,111 @@ mod gate_detail_tests {
             assert_eq!(parse_gate_detail(detail), None, "{detail:?}");
         }
     }
+}
+
+/// What rule P's reconcile (§7.4) decided for the commit `S` a push names.
+pub(crate) enum Reconciled {
+    /// Push this commit: `S` itself (the remote branch is absent or behind `S`) or the merge commit `M`.
+    Push(String),
+    /// The remote tip already contains `S`: nothing to push.
+    Contained(String),
+    /// `S` and the remote tip conflict.
+    Conflict { remote: String, files: Vec<String> },
+}
+
+/// The reconcile rounds of rule P (§7.4), run in `dir` (the Lead worktree, which shares the repo's refs): the remote
+/// tip of `branch` is fetched to `refs/cpd/publish/<branch>` (never the tracking ref) and, when it diverged from `sha`,
+/// merged into the Lead Branch `lead_branch` (a compare-and-swap from `sha`); the caller syncs the Lead worktree.
+pub(crate) fn reconcile(
+    dir: &Path,
+    lead_branch: &str,
+    branch: &str,
+    sha: &str,
+) -> Result<Reconciled, CpdError> {
+    let ours = format!("refs/cpd/publish/{branch}");
+    let mut sha = sha.to_owned();
+    for _ in 0..=CAS_RETRIES {
+        let heads = format!("refs/heads/{branch}");
+        let listed = run(dir, &["ls-remote", "--exit-code", "--heads", "origin", &heads])?;
+        match listed.code {
+            0 => {}
+            2 => return Ok(Reconciled::Push(sha)),
+            code => return Err(git_error("git ls-remote", code, &listed.stderr)),
+        }
+        git::run::ok(dir, &["fetch", "origin", &format!("+{heads}:{ours}")])?;
+        let tip = git::run::rev_parse(dir, &ours)?;
+        if ancestor(dir, &sha, &tip)? {
+            return Ok(Reconciled::Contained(tip));
+        }
+        if ancestor(dir, &tip, &sha)? {
+            return Ok(Reconciled::Push(sha));
+        }
+        let tree = run(dir, &["merge-tree", "--write-tree", "--name-only", &sha, &tip])?;
+        match tree.code {
+            0 => {}
+            1 => {
+                let files = tree.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect();
+                return Ok(Reconciled::Conflict { remote: tip, files });
+            }
+            code => return Err(git_error("git merge-tree", code, &tree.stderr)),
+        }
+        let merged_tree = tree.stdout.lines().next().unwrap_or_default().to_owned();
+        let message = format!("cpd: merge {branch} from origin");
+        let made = git::run::ok(
+            dir,
+            &["commit-tree", &merged_tree, "-p", &sha, "-p", &tip, "-m", &message],
+        )?;
+        let made = made.trim().to_owned();
+        let moved = run(
+            dir,
+            &[
+                "update-ref",
+                "-m",
+                &format!("cpd: merge remote {branch}"),
+                &format!("refs/heads/{lead_branch}"),
+                &made,
+                &sha,
+            ],
+        )?;
+        if moved.code == 0 {
+            return Ok(Reconciled::Push(made));
+        }
+        // The Lead Branch moved: start again from its tip.
+        sha = git::run::rev_parse(dir, &format!("refs/heads/{lead_branch}"))?;
+    }
+    Err(CpdError::new(
+        ErrorCode::CasLost,
+        format!("{lead_branch} kept moving while the remote {branch} was merged."),
+    ))
+}
+
+fn ancestor(dir: &Path, a: &str, b: &str) -> Result<bool, CpdError> {
+    let out = run(dir, &["merge-base", "--is-ancestor", a, b])?;
+    match out.code {
+        0 => Ok(true),
+        1 => Ok(false),
+        code => Err(git_error("git merge-base --is-ancestor", code, &out.stderr)),
+    }
+}
+
+fn git_error(what: &str, code: i32, stderr: &str) -> CpdError {
+    CpdError::new(ErrorCode::GitFailed, format!("{what} failed."))
+        .with("exit", code)
+        .with("stderr", git::tail(stderr, git::TAIL_LINES))
+}
+
+/// The refusal of a remote tip that conflicts with `sha` (§7.4 rule P's `remote_conflict`).
+pub(crate) fn remote_conflict(branch: &str, sha: &str, remote: &str, files: &[String]) -> CpdError {
+    CpdError::new(
+        ErrorCode::PushRejected,
+        format!(
+            "The remote {branch} conflicts with {sha} in {}: merge {remote} yourself, resolve the conflict and push again.",
+            files.join(", ")
+        ),
+    )
+    .with("remote_conflict", true)
+    .with("branch", branch)
+    .with("sha", sha)
+    .with("remote", remote)
+    .with("files", files.to_vec())
 }
