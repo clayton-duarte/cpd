@@ -66,7 +66,7 @@ fn tick(
                 let how =
                     other.map_or_else(|| "its status is unknown".to_owned(), |s| s.to_string());
                 engine.log.line(&format!(
-                    "E9: curate run of Context {context} failed ({how}); backing off {delay:?}"
+                    "curation: curate run of Context {context} failed ({how}); backing off {delay:?}"
                 ));
                 // A run that ended non-zero is not silent: it raises one `error` Event for E9
                 // (contract §3.7 E9), once until it clears, so a judge unreachable or a crash is
@@ -98,7 +98,7 @@ fn tick(
         Ok(pid) => {
             engine.curating.insert(context.clone(), Pid(pid));
             engine.log.line(&format!(
-                "E9: started the curate run of Context {context} (pid {pid})"
+                "curation: started the curate run of Context {context} (pid {pid})"
             ));
         }
         Err(e) => {

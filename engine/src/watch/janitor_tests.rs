@@ -118,7 +118,7 @@ fn e16_holds_while_incident_mode_is_on() {
     tick(&mut fx);
 
     assert!(
-        watch_log(&fx).contains("E16: holding: incident mode is on"),
+        watch_log(&fx).contains("cpd watch: janitor: holding: incident mode is on"),
         "{}",
         watch_log(&fx)
     );
