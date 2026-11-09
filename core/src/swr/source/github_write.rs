@@ -25,6 +25,9 @@ use crate::swr::outbox::{self, Coalesce, Mutation, Op};
 #[path = "github_write_uptodate_tests.rs"]
 mod github_write_uptodate_tests;
 
+/// How long an `auto_merge` waits for the poll to read the pull request's merge state (`unknown` until then).
+const UNREAD_RETRY: Duration = Duration::from_secs(1);
+
 /// How long a transient failure waits before the drain tries again.
 const RETRY: Duration = Duration::from_secs(60);
 
@@ -161,6 +164,45 @@ pub(crate) fn enqueue_merge_tx(
         },
         coalesce,
     )
+}
+
+/// What a refused `auto_merge` becomes (swr-github.md §9).
+enum Fallback {
+    /// The stored `merge_state` is `clean`: the `merge` op was enqueued in its place.
+    Merge,
+    /// The refusal stands.
+    Refused,
+}
+
+/// The clean fallback of a refused `auto_merge` (swr-github.md §9): decided from the stored `merge_state` of
+/// `repo#number`, never from the refusal's text. When it is `clean` and its head and a merge method are known, the `merge`
+/// op is enqueued in the same transaction.
+fn merge_instead_of_auto_merge(
+    cx: &mut Cx<'_>,
+    repo: &str,
+    number: i64,
+) -> Result<Fallback, CpdError> {
+    let now = cx.ports.clock.utc();
+    cx.store.write("swr auto_merge clean", |tx| {
+        let row: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT merge_state, head_oid FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                rusqlite::params![repo, number],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((state, head)) = row else {
+            return Ok(Fallback::Refused);
+        };
+        let (true, Some(head)) = (state == "clean", head) else {
+            return Ok(Fallback::Refused);
+        };
+        let Some(method) = merge_method_tx(tx, repo)? else {
+            return Ok(Fallback::Refused);
+        };
+        enqueue_merge_tx(tx, now, repo, number, &head, method)?;
+        Ok(Fallback::Merge)
+    })
 }
 
 /// The merge method a repo allows (the first of squash, merge, rebase), from `swr_repos`; `None` when the row is missing.
@@ -350,6 +392,27 @@ impl GithubSource {
                     Ok(false) => {}
                     Err(e) => return retry(&e),
                 }
+                // A Workflow's pull request the poll has not read yet has no `merge_state` to decide a refusal on: ask for a poll and wait.
+                let unread = cx.store.read(|c| {
+                    Ok(c.query_row(
+                        "SELECT merge_state = 'unknown' AND EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pull_requests.id)
+                           FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                        rusqlite::params![repo, number],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(false))
+                });
+                match unread {
+                    Ok(true) => {
+                        crate::pr::request_poll_now_in(cx.home);
+                        return ExecOutcome::Retry {
+                            after: UNREAD_RETRY,
+                        };
+                    }
+                    Ok(false) => {}
+                    Err(e) => return retry(&e),
+                }
                 match auto_merge::attempt(runner, cwd, repo, number) {
                     Outcome::Enabled => {
                         settle(cx, "enabled");
@@ -360,9 +423,24 @@ impl GithubSource {
                         settle(cx, "none");
                         ExecOutcome::Done
                     }
-                    Outcome::Refused(why) => {
+                    Outcome::NoMethod(why) => {
                         settle(cx, "refused");
                         failed(why)
+                    }
+                    Outcome::Refused(why) => {
+                        // GitHub refuses auto-merge on a clean pull request: nothing to wait for, so the merge op takes its
+                        // place (swr-github.md §9). Decided from the stored `merge_state`, never from `why`.
+                        match merge_instead_of_auto_merge(cx, repo, number) {
+                            Ok(Fallback::Merge) => {
+                                settle(cx, "none");
+                                ExecOutcome::Done
+                            }
+                            Ok(Fallback::Refused) => {
+                                settle(cx, "refused");
+                                failed(why)
+                            }
+                            Err(e) => retry(&e),
+                        }
                     }
                     Outcome::Failed(e) => retry(&e),
                 }

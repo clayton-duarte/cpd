@@ -1408,7 +1408,9 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
             let head = raw.head_ref_oid.clone();
             let pr = reply.polled(raw, bots)?;
             if let Some(head) = head
-                && !heads.iter().any(|(r, n, _)| (r, n) == (&pr.repo, &pr.number))
+                && !heads
+                    .iter()
+                    .any(|(r, n, _)| (r, n) == (&pr.repo, &pr.number))
             {
                 heads.push((pr.repo.clone(), pr.number, head));
             }
