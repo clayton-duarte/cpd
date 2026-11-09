@@ -153,7 +153,7 @@ test("lead_trip_reports_actual_guard_kind_and_count", { timeout: 20_000 }, async
     await f.quiet();
     const trips = f.reports().filter((x) => x.details?.kind === "inter-turn");
     assert.equal(trips.length, 1, "one trip report with its guard kind");
-    assert.equal(trips[0]!.details.count, 2, "count is loop_guard_turns + 1");
+    assert.equal(trips[0]!.details!.count, 2, "count is loop_guard_turns + 1");
     assert.match(trips[0]!.message ?? "", /loop guard, 2 turns in 10 min/);
   } finally {
     await f.close();
@@ -179,7 +179,7 @@ test("lead_trip_wakes_manager", { timeout: 20_000 }, async () => {
     await f.quiet();
     const trips = f.reports().filter((x) => x.details?.kind === "turn-refusals");
     assert.equal(trips.length, 1, "one report (one transaction) carries the Event and the Manager's wake");
-    assert.equal(trips[0]!.details.count, 3);
+    assert.equal(trips[0]!.details!.count, 3);
     assert.match(trips[0]!.message ?? "", new RegExp(`tripped: loop guard, 3 refused calls in one turn\\. It waits for the User's message or for cpd session resume ${ID}\\.`));
   } finally {
     await f.close();
