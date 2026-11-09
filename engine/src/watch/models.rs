@@ -19,11 +19,21 @@ use cpd_core::models::{Answer, Helper, Outcome};
 use cpd_core::swr::endpoint::{self, Kind};
 use cpd_core::swr::source::models::{apply_answer, endpoint_of, kind_of, newest_polled_at};
 
+/// A run in flight: where its answer arrives, and the thread that will send it (joined by tests, [`join`]).
+type Run = (
+    Receiver<Result<Answer, CpdError>>,
+    std::thread::JoinHandle<()>,
+);
+
 /// What E15 remembers between ticks.
 #[derive(Default)]
 pub(super) struct State {
     /// The run in flight: its answer arrives here.
     running: Option<Receiver<Result<Answer, CpdError>>>,
+    /// The run's own thread, so a test can wait for the answer ([`join`]) instead of racing the scheduler. The
+    /// engine itself never blocks on it.
+    #[cfg(test)]
+    handle: Option<std::thread::JoinHandle<()>>,
     /// When the last run ended (or failed to start).
     last_end: Option<Instant>,
 }
@@ -39,6 +49,11 @@ pub(super) fn run(engine: &mut Engine) {
             )),
         };
         engine.models.running = None;
+        #[cfg(test)]
+        {
+            // The thread has sent its answer (it sends before it ends); dropping the handle detaches one still finishing.
+            engine.models.handle = None;
+        }
         engine.models.last_end = Some(engine.ports.clock.now());
         let at = engine.ports.clock.utc();
         match answer.and_then(|answer| apply_answer(&mut engine.store, &answer, at)) {
@@ -62,7 +77,15 @@ pub(super) fn run(engine: &mut Engine) {
             Ok(None)
         }
     }) {
-        Ok(Some(running)) => engine.models.running = Some(running),
+        Ok(Some((running, handle))) => {
+            engine.models.running = Some(running);
+            #[cfg(test)]
+            {
+                engine.models.handle = Some(handle);
+            }
+            #[cfg(not(test))]
+            let _ = handle;
+        }
         Ok(None) => {}
         Err(e) => {
             // The next try is a period away, as after a run that failed.
@@ -80,16 +103,25 @@ fn due(engine: &mut Engine) -> Result<bool, CpdError> {
 }
 
 /// Starts the helper on its own thread, through the engine's runner (a test's `FakeRunner` sees the call); returns where
-/// its answer will arrive.
-fn start(engine: &Engine) -> Result<Receiver<Result<Answer, CpdError>>, CpdError> {
+/// its answer will arrive and the thread itself ([`join`] waits on it in tests).
+fn start(engine: &Engine) -> Result<Run, CpdError> {
     let helper = Helper::new(&engine.config, &engine.home)?;
     let runner = engine.ports.runner.clone();
     let (tx, rx) = channel();
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         // The engine may have stopped: nobody to tell.
         let _ = tx.send(helper.run_with(&*runner));
     });
-    Ok(rx)
+    Ok((rx, handle))
+}
+
+/// Waits for the run in flight to end: by then its answer is on the channel, so the next tick collects it. A test calls
+/// this from its wait loop so the answer arrives without a race with the scheduler; the engine never blocks here.
+#[cfg(test)]
+pub(super) fn join(engine: &mut Engine) {
+    if let Some(handle) = engine.models.handle.take() {
+        let _ = handle.join();
+    }
 }
 
 /// Reports what the write found: a failing provider once per outage (a permanent code at once, a transient one after

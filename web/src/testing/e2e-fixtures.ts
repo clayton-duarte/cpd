@@ -9,8 +9,8 @@ import { test as base, expect } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 
-/** The web/ package root (two levels up from web/src/testing/). */
-const webRoot = fileURLToPath(new URL("../..", import.meta.url));
+/** The web/ package root (two levels up from web/src/testing/), the default `CPD_CHECKOUT`. */
+export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
@@ -59,6 +59,12 @@ type LaunchAppOptions = {
   userDataDir: string;
   /** The renderer URL the app is told to load (`CPD_ELECTRON_DEV_URL`). */
   rendererUrl: string;
+  /**
+   * The Electron app path (the one non-flag argument). Defaults to `"."`, the checkout's `web/`,
+   * where every existing scenario runs. A scenario that stages an installed app dir passes its
+   * absolute path so the app is launched from that dir (`app.getAppPath()` is the staged dir).
+   */
+  appPath?: string;
   /** Extra env for a scenario (for example `CPD_CHECKOUT`); it never overrides the hidden/isolation keys. */
   env?: Record<string, string>;
   /**
@@ -69,6 +75,29 @@ type LaunchAppOptions = {
    */
   hidden?: boolean;
 };
+
+/**
+ * The house pattern for a scenario's fake `cpd` on PATH: a staged `bin` dir holding a `cpd`
+ * symlink to `cpdPath`, first on PATH, behind a fake login shell that reports PATH unchanged (so
+ * `resolveLoginPath`'s `$SHELL -ilc` keeps the staged dir first). Sets `CPD_BIN`, `SHELL` and
+ * `PATH` on `process.env`, which the launched app inherits. Exported so a scenario that boots the
+ * app against its own staged checkout reuses the exact setup instead of copying it.
+ */
+export function stageFakeBin(staging: string, cpdPath: string): { bin: string; shell: string } {
+  const bin = join(staging, "bin");
+  const shell = join(staging, "shell");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    shell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(shell, 0o755);
+  symlinkSync(cpdPath, join(bin, "cpd"));
+  process.env["CPD_BIN"] = cpdPath;
+  process.env["SHELL"] = shell;
+  process.env["PATH"] = `${bin}:${process.env["PATH"] ?? ""}`;
+  return { bin, shell };
+}
 
 /**
  * The one launcher for the suite's Electron app. It pins what every launch must have: the Linux
@@ -84,8 +113,9 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
   const app = await electron.launch({
     executablePath: electronExecutable,
     // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and app
-    // data) in a temp dir, so the run never touches the User's real profile.
-    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, "."],
+    // data) in a temp dir, so the run never touches the User's real profile. The last argument is
+    // the Electron app path: `"."` is the checkout's `web/`, or the staged installed app dir.
+    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? "."],
     cwd: webRoot,
     env: {
       ...process.env,
@@ -212,7 +242,7 @@ export const test = base.extend<Fixtures>({
  * The app's first window. `firstWindow()` waits for the "window" event; if that event does not fire
  * (or fired before the fixture ran) fall back to polling `windows()` — no sleep.
  */
-async function firstWindow(app: ElectronApplication): Promise<Page> {
+export async function firstWindow(app: ElectronApplication): Promise<Page> {
   try {
     return await app.firstWindow({ timeout: 20_000 });
   } catch (error) {

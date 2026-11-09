@@ -185,6 +185,13 @@ describe("tree menu actions", () => {
     expect(post.calls.at(-1)).toEqual(["pr", "post", "--workflow", "w1", "--plan", "p7"]);
     expect(repost.calls.at(-1)).toEqual(["pr", "repost", "--workflow", "w1", "--plan", "p7"]);
   });
+  it("maps context.new to context new", async () => {
+    const { cpd, calls } = fakeCpd(async () => ({ ok: true }));
+    const out = await runAction(cpd, { kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" });
+    expect(calls).toEqual([["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]]);
+    expect(out).toEqual({ ok: true });
+  });
+
   it("error.report sends the report to the bare Context id with unblocks", async () => {
     const { cpd, calls } = fakeCpd();
     await runAction(cpd, { kind: "error.report", target: "host", code: "store_too_new", message: "x\ny" });

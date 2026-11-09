@@ -1,7 +1,22 @@
+import { BUILT_SHA_FILE, swapBundle } from './bundle';
 import type { SyncResult } from './checkout';
-import type { UpdateState } from './types';
+import type { UpdateFs, UpdateState } from './types';
 
-export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; relaunch?(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; onState(s: UpdateState): void; log(line: string): void }
+export interface UpdaterDeps { sync(): Promise<SyncResult>; headSha(): Promise<string>; builtSha(): string | null; cliSha(): string | null; build(opts: { lockfileChanged: boolean; sha: string }): Promise<{ ok: true } | { ok: false; log: string }>; swap(): { mainChanged: boolean }; whenApplicable(): Promise<void>; reloadRenderer(): void; relaunch?(): void; installCli(sha: string): Promise<{ ok: true } | { ok: false; log: string }>; rebuildViews(): Promise<void>; onState(s: UpdateState): void; log(line: string): void }
+
+export interface PromoteDeps { fs: UpdateFs; root: string; headSha(): Promise<string> }
+
+/**
+ * Launch promote (web/CONTRACT.md §19.1): before the window opens, `web/dist-electron.next` is swapped
+ * into `web/dist-electron` when its `.built-sha` equals `git rev-parse HEAD`; otherwise nothing happens.
+ */
+export async function promoteOnLaunch(deps: PromoteDeps): Promise<void> {
+  const nextSha = deps.fs.readText(`${deps.root}/web/dist-electron.next/${BUILT_SHA_FILE}`)?.trim();
+  if (!nextSha) return;
+  const head = (await deps.headSha()).trim();
+  if (nextSha !== head) return;
+  swapBundle(deps.fs, deps.root);
+}
 
 export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
   let restartNeeded = false;
@@ -37,7 +52,13 @@ export function createUpdater(deps: UpdaterDeps): { check(): Promise<void> } {
   async function cliFlow(sha: string): Promise<void> {
     if (deps.cliSha() === sha) return;
     const r = await deps.installCli(sha);
-    if (!r.ok) deps.log(`cli install failed: ${r.log}`);
+    if (!r.ok) {
+      deps.log(`cli install failed: ${r.log}`);
+      return;
+    }
+    // The CLI update landed: rebuild the views from the checkout so the new build becomes the prod
+    // view and the preview branch is rebuilt alongside it (air-d89 point 6).
+    await deps.rebuildViews();
   }
 
   async function run(): Promise<void> {

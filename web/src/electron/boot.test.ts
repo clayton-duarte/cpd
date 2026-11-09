@@ -154,6 +154,44 @@ describe('boot', () => {
     expect(s.log).toContain('reloadServer');
     expect(s.log).not.toContain('reloadRenderer');
   });
+  // air-n62's defect class at the reload: reading `webContents` on a destroyed window throws
+  // `Object has been destroyed`, so the guard must ask the window itself (`win.isDestroyed()`)
+  // before `webContents` is touched.
+  it('a SIGUSR1 after the window is destroyed does not throw', async () => {
+    const handlers: Record<string, () => void> = {};
+    let destroyed = false;
+    let reloads = 0;
+    class DestroyedWindow {
+      isDestroyed(): boolean {
+        return destroyed;
+      }
+      get webContents(): { isDestroyed(): boolean; reloadIgnoringCache(): void } {
+        if (destroyed) throw new Error('Object has been destroyed');
+        return { isDestroyed: () => destroyed, reloadIgnoringCache: () => void (reloads += 1) };
+      }
+    }
+    const deps: BootDeps = {
+      app: { setName: () => undefined, whenReady: async () => undefined },
+      BrowserWindow: DestroyedWindow,
+      powerMonitor: {},
+      process: { on: (signal, handler) => void (handlers[signal] = handler) },
+      startAutoUpdate: async () => ({ bootstrap: { state: 'ready' } }),
+      startServices: () => undefined,
+      initMode: async () => undefined,
+      registerIpc: () => undefined,
+      registerWebuiIpc: () => undefined,
+      loadDevUrl: async () => undefined,
+      loadFile: async () => undefined,
+      env: {},
+      reloadServer: async () => undefined,
+    };
+    await boot(deps);
+    destroyed = true;
+    const handler = handlers['SIGUSR1'];
+    expect(handler).toBeTypeOf('function');
+    await expect(Promise.resolve(handler?.())).resolves.toBeUndefined();
+    expect(reloads).toBe(0);
+  });
   it('boot applies the mode after the window is created', async () => {
     const s = setup();
     await boot(s.deps);

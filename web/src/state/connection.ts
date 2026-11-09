@@ -36,6 +36,8 @@ export interface Connection {
 }
 export const FRAME_MS = 16;
 export const PENDING_ECHO_MS = 30000;
+/** How long after a 'cockpit not ready' hub error the client re-sends `cockpit.subscribe` (20.1). */
+export const RESUBSCRIBE_MS = 1000;
 const DEFAULT_BACKOFF = { baseMs: 500, maxMs: 10_000 };
 
 // Required fields per server message type: [field, primitive type] (the full shapes are the server's contract).
@@ -103,7 +105,24 @@ export function createConnection(options: ConnectionOptions): Connection {
   let timer: Disposable | null = null;
   let buffer: ServerMessage[] = [];
   let frame: Disposable | null = null;
+  let resubscribeTimer: Disposable | null = null;
   const echoTimers = new Map<string, Disposable>();
+
+  const clearResubscribe = (): void => {
+    resubscribeTimer?.dispose();
+    resubscribeTimer = null;
+  };
+  // 20.1: the hub answers 'cockpit not ready' when a subscribe arrives before the cockpit's first
+  // load lands. The hub holds such a frame now, but a surface that still sees the error must heal:
+  // re-send `cockpit.subscribe` after a short backoff, once per outstanding error.
+  const scheduleResubscribe = (): void => {
+    if (closed || resubscribeTimer !== null) return;
+    resubscribeTimer = scheduler.after(RESUBSCRIBE_MS, () => {
+      resubscribeTimer = null;
+      if (closed) return;
+      send({ type: "cockpit.subscribe" });
+    });
+  };
 
   const dropBuffer = (): void => {
     frame?.dispose();
@@ -157,7 +176,9 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     const lead = objectOf(out["lead"])?.["session"];
     const forked = objectOf(out["session"])?.["id"];
-    const next = typeof lead === "string" ? lead : typeof forked === "string" ? forked : null;
+    // context.new replies with the new Context's Manager (`manager.session`), like `context manager`.
+    const manager = objectOf(out["manager"])?.["session"];
+    const next = typeof lead === "string" ? lead : typeof forked === "string" ? forked : typeof manager === "string" ? manager : null;
     const before = store.getState().selectedSessionId;
     if (next === null || next === before) return;
     dropBuffer();
@@ -187,6 +208,8 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "cockpit.snapshot") clearResubscribe();
+    if (message.type === "cockpit.error" && message.error.code === "internal" && message.error.message === "cockpit not ready") scheduleResubscribe();
     if (message.type === "cockpit.snapshot" || (message.type === "cockpit.patch" && message.pane === "tree")) {
       const st = store.getState();
       if (st.connection === "open" && st.selectedSessionId !== null && st.session?.attached !== true && st.session?.error?.code === "session_not_found") {
@@ -207,6 +230,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     if (closed) return;
     if (status === "open") {
       attempt = 0;
+      clearResubscribe();
       store.dispatch({ type: "connection", status: "open", retryAttempt: 0 });
       send({ type: "cockpit.subscribe" });
       const { cockpit, selectedSessionId } = store.getState();
@@ -215,6 +239,7 @@ export function createConnection(options: ConnectionOptions): Connection {
       return;
     }
     timer?.dispose();
+    clearResubscribe();
     store.dispatch({ type: "connection", status: "reconnecting", retryAttempt: attempt });
     const delay = Math.min(backoff.maxMs, backoff.baseMs * 2 ** attempt);
     attempt++;
@@ -306,6 +331,7 @@ export function createConnection(options: ConnectionOptions): Connection {
       closed = true;
       timer?.dispose();
       timer = null;
+      clearResubscribe();
       dropBuffer();
       dropEchoTimers();
       store.dispatch({ type: "connection", status: "closed" });

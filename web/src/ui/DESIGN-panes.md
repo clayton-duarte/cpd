@@ -348,7 +348,7 @@ aside[aria-label="Inbox"]
 ├─ TopPaneHeader[data-part="inbox-header"]   the shared header (DESIGN 3i), `hasOverlayControls` false
 │   ├─ h2   "INBOX"        shrink-0; font-mono text-[14px] font-semibold uppercase text-fg-strong
 │   └─ actions: the tier filter (2.4): ToggleGroup[data-part="inbox-filters"] (shrink-0), or the collapsed trigger (2.4.2)
-├─ p[data-empty]     only when the filtered list is empty; text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
+├─ Empty[data-empty] only when the filtered list is empty; the `Empty` part (DESIGN 2f `empty.tsx`); text exactly "up to date, drink some water"; px-[14px] py-3 text-muted-foreground
 └─ ScrollArea   min-h-0 flex-1 (pro-d69; the list scrolls here, the aside clips)     (only when filtered rows exist)
     └─ ItemGroup   gap-2 px-2.5 py-1.5
         └─ InboxItemRow ×filtered rows, in `inbox.rows` order (2.5)
@@ -418,37 +418,35 @@ Item[role=button][variant=outline][size=sm]   (the preview renders a role=button
 │   └─ span.mt-auto.block.text-sm.leading-normal → span[data-part="age"]   font-mono text-[10px] text-muted-foreground
 ├─ ItemContent  justify-between self-stretch                                    (column 2: text)
 │   ├─ ItemTitle  className = urgency text colour
-│   │     first label line; when the row is linked (2.6): a[href=row.url][target=_blank][rel="noopener noreferrer"] hover:underline
+│   │     first label line, plain text: the title is never a link — the card click owns navigation (2.6, air-d121)
 │   └─ ItemDescription   only when the rest of the label is non-empty (the rest joined by a space)
 └─ ItemActions  flex-col items-end justify-between gap-1.5 self-stretch         (column 3: actions)
-    ├─ linked row: a[data-part="item-link"][aria-label="Open external link"][href=row.url]  ExternalLinkIcon size-4 mt-[1.5px]
+    ├─ row.url !== null: a[data-part="item-link"][aria-label="Open external link"][href=row.url][target="_blank"][rel="noopener noreferrer"]  ExternalLinkIcon size-4 mt-[1.5px]
+    │     (air-d121: whenever the row has a url — no kind gate; the old linked-row list of 2.6 is gone)
     │   else: ChevronRightIcon size-4 mt-[1.5px] text-muted-foreground
     └─ primary action or fallback (2.7): Button[type="button"][variant="outline"][size="sm"][data-part="item-action"] h-6 gap-1 px-2 text-xs
 ```
 
-- **`Item` root.** The preview renders `role="button"` on the `Item` root, with the click, `Enter` and `Space` handled on the root. pro-d51 names `asChild <a>` for the root; the approved preview does not do that, so this contract follows the preview (flagged in the consolidate report).
+- **`Item` root.** The preview renders `role="button"` on the `Item` root, with the click, `Enter` and `Space` handled on the root. pro-d51 names `asChild <a>` for the root; the approved preview does not do that, so this contract follows the preview (flagged in the consolidate report). The click opens the card's owner (2.6, air-d121).
 - The age is `age(row.ageSeconds)`: `s < 60` → `{s}s`; `s < 3600` → `{floor(s/60)}m`; `s < 86400` → `{floor(s/3600)}h`; else `{floor(s/86400)}d`.
 - Media and actions are full-height vertical columns (pro-d52): the icon sits at the top of column 1 and the age at the bottom, on the last text line's baseline (`mt-auto` + `leading-normal`); the external link or chevron sits at the top of column 3 and the primary button at the bottom.
 - `first` = `row.label.split("\n")[0]`; the description is the rest, joined by a space, trimmed, shown only when non-empty.
 - The row's `Item` is wrapped in the context menu (2.3), except `engine-down`, which has no menu.
 
-**Primary action** (`primaryActionOf`): the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start`. Without one, the UI derives it, in this order: `engine-down` → `Start` (`engine.start`); `deploy` → `Approve` (`inbox.approve`, `itemId: row.id`); `review-requested` → `Claim` (`inbox.claim`); `pr-ready` whose label's status reads `ready to merge` → `Merge` (`pr.merge` with `planId`, `workflow`, `pull`), `ready for user review` → `Post` (`pr.post`), `review overdue` → `RePost` (`pr.repost`), each when the Plan or pull is known. When there is no primary action: a `curate-retire` row with a `contextId` shows `Curate` (opens 2.6); any other row with `id >= 0` shows `Dismiss` (`inbox.dismiss`); otherwise no button.
+**Primary action** (`primaryActionOf`): the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start`. Without one, the UI derives it, in this order: `engine-down` → `Start` (`engine.start`); `deploy` → `Approve` (`inbox.approve`, `itemId: row.id`); `review-requested` → `Claim` (`inbox.claim`); `pr-ready` whose label's status reads `ready to merge` → `Merge` (`pr.merge` with `planId`, `workflow`, `pull`), `ready for user review` → `Post` (`pr.post`), `review overdue` → `RePost` (`pr.repost`), each when the Plan or pull is known. When there is no primary action: a `curate-retire` row with a `contextId` shows `Curate` (opens 2.6); any other row with `id >= 0` shows `Dismiss` (`inbox.dismiss`); otherwise no button. The button runs the item's primary action and never an owner-link or an external link (air-d121): navigation lives on the card click and the top-right slot.
 
-### 2.6. Selection, links and the curate dialog (pro-d53)
+### 2.6. Selection, links and the curate dialog (pro-d53; the card click amended by air-d121)
 
-**Clicking the row** (`jump`), by kind:
+**Clicking the card (air-d121).** A click anywhere on the card (and `Enter` / `Space` on the focused card) opens its owner, by one rule for every kind (the per-kind click table of pro-d53 is superseded):
 
-| `row.kind` | click |
-|---|---|
-| `engine-down` | `engine.start` (the engine starts; the row's `Start` button does the same) |
-| `curate-retire` | select the row's Plan and Session (below), then open the curate dialog (below) |
-| `review-requested` | copy `row.url` to the clipboard and open it in a new tab (`noopener,noreferrer`); nothing when there is no url |
-| `deploy` | open `row.url` in a new tab; nothing when there is no url |
-| `dialog`, `unread`, `loop-guard`, `question`, `plan-review`, `drafts-parked`, `pr-ready`, `pr-closed`, with a `sessionId` | select the row's Plan and Session (below) |
-| any other kind with a `url` | open `row.url` in a new tab |
+- the row has an owner (`row.planId !== null` or `row.sessionId !== null`) → `selectRowSession` (below): `onSelectPlan(row.planId)` when non-null, then `onSelectSession(row.sessionId)` when non-null;
+- else, `row.url !== null` → open `row.url` in a new tab (`openExternalUrl`, `noopener,noreferrer`);
+- else → nothing.
+
+There are no per-kind extras on the click: `review-requested` no longer copies the url, `curate-retire` no longer opens the curate dialog from the click (the dialog opens through the card's `Curate` button, 2.5 and 2.7), and `engine-down`'s action runs only through its `Start` button (2.5).
 
 - **Select both.** `selectRowSession`: `onSelectPlan(row.planId)` when `planId !== null`, then `onSelectSession(row.sessionId)` when `sessionId !== null`. The read model resolves a missing `sessionId` (`readmodel.ts`, `resolveSessionId`): the row's own session; else the Plan's `lead_session`; else the live Lead of the Plan (`plan_lead`, not archived); else, for `question` and `curate-retire` rows, the live Manager of the Context (role `manager`, no Plan). Null when none of these exists, and the click then selects nothing.
-- **Links.** A row is linked when `row.url !== null` and its kind is one of `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy`. The linked title `a` and the item-link icon `a` open `row.url` in a new tab and stop the click from reaching the row (`stopPropagation`), so they do not also select.
+- **Links (air-d121).** The top-right slot is the external-link anchor whenever `row.url !== null`, with no kind gate (the old linked-row list `plan-review`, `pr-ready`, `pr-closed`, `review-requested`, `deploy` is gone): `a[data-part="item-link"][aria-label="Open external link"][href=row.url][target="_blank"][rel="noopener noreferrer"]` with `ExternalLinkIcon size-4` (2.5). Its click stops propagation, so it opens the url without also selecting the owner. The title text is not a link: the card click owns navigation.
 - **Curate dialog.** `Dialog` (`dialog.tsx`), title `Retire records of <contextId>` (or `Retire records` without a contextId), description `Checked records will be retired; unchecked records will be kept.` Opening it checks every record. Each record is a `label` with a checkbox, the record id and `— <detail>`, and its `text`. With no records: `No pending records to retire.` Footer: `Cancel` (closes) and `Confirm`. The checklist scrolls through `ScrollArea` (pro-d69); the dialog's own content scrolls through `ScrollArea` too (`components/dialog.tsx`, pro-d72).
 - **Confirm**: with a `contextId`, `approve` = the checked record ids joined by `,`, `reject` = the unchecked ids joined by `,`; when either is non-empty it dispatches `context.retire {contextId, approve, reject}`; when both are empty and `row.id >= 0` it dispatches `inbox.dismiss`. Then it closes. Confirm is not tracked in `pendingActionIds`.
 - **Records.** `InboxRow.curation` holds the records of `cpd context curation --context=<id> --limit=10` (CONTRACT 5.3): `{ id, text, detail }`, `detail` = `reason` and `target` joined by a space.
@@ -460,7 +458,7 @@ The row buttons are `Approve`, `Claim`, `Merge`, `Post`, `RePost`, `Start` (the 
 1. `connection.action(action)` mints `actionId`, dispatches `actionStart` (adds the id to `store.pendingActionIds`) and returns it. The row stores it as `activeActionId`.
 2. While `activeActionId` is in `pendingActionIds`, the button is `disabled` and its label is preceded by `LoaderCircleIcon` (`size-3 animate-spin`). A click while pending does nothing.
 3. `action.result` with `ok: true` removes the id from `pendingActionIds` and adds it to `completedActionIds`. While `activeActionId` is in `completedActionIds` the button is **not rendered** (it disappears).
-4. `action.result` with `ok: false` removes the id from `pendingActionIds` and sets `store.lastError` to the wire error. The button is enabled again, and the error shows as a dismissible destructive `Alert` (4.8).
+4. `action.result` with `ok: false` removes the id from `pendingActionIds` and sets `store.lastError` to the wire error. The button is enabled again, and the error shows through the cockpit error toast (4.8) — air-d44: every error of the User's own actions goes through the toast, never inline.
 
 The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` and `completedActionIds: readonly string[]`, both `[]` at start.
 
@@ -471,8 +469,8 @@ The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` 
 | State | Rendering |
 |---|---|
 | `inbox === null` | the 2b first outline: `INBOX` heading and `Loading inbox…` |
-| no rows in the snapshot | the header (the filters at `all 0`), `p[data-empty]` `up to date, drink some water`; no list |
-| rows exist, the filter selects none | the same `p[data-empty]` copy; the header keeps its filters |
+| no rows in the snapshot | the header (the filters at `all 0`), `Empty[data-empty]` (the `Empty` part, DESIGN 2f `empty.tsx`) `up to date, drink some water`; no list |
+| rows exist, the filter selects none | the same `Empty[data-empty]` copy; the header keeps its filters |
 | engine stopped | no banner. The read model's `engine-down` row, when it sends one, is an ordinary row with `Start` |
 
 ### 2.9. Not built (Inbox)
@@ -492,7 +490,7 @@ The ids live in the store (CONTRACT 6.2): `pendingActionIds: readonly string[]` 
 | `Inbox.test.tsx` selection rules | the 2.4 rules, with the `value` list checked after each click | **new** |
 | `Inbox.test.tsx` collapse | with `ResizeObserver` and `clientWidth`/`scrollWidth` mocked (external), the trigger `[data-part="inbox-filters-trigger"]` appears and its popover holds a vertical ToggleGroup | **new** |
 | `Inbox.test.tsx` item layout | `ItemMedia` holds the icon and `[data-part="age"]`; `ItemActions` holds the link or chevron and `[data-part="item-action"]` | **new** |
-| `Inbox.test.tsx` selection | a click on a row with a `planId` and a `sessionId` calls `onSelectPlan` then `onSelectSession`; a `curate-retire` click opens `Retire records of <contextId>` | **new** |
+| `Inbox.test.tsx` selection | a click on a row with a `planId` or a `sessionId` calls `onSelectPlan` then `onSelectSession` (2.6, air-d121); a row with neither opens its `url`, else does nothing | **changed** (air-d121: no per-kind click, no curate dialog from the click) |
 | `Inbox.test.tsx` async actions | the button is disabled with `animate-spin` while pending, disappears when completed, comes back enabled on `ok:false` | **new** |
 | `Inbox.test.tsx` "row actions call onAction with the typed action" | Phase 2 inline buttons | **changed**: the actions are the row's primary button and the right-click menu |
 | `Inbox.test.tsx` "shows the open item count" (`Inbox (2)`) | Phase 2 | **removed** (no count beside the title) |
@@ -507,7 +505,7 @@ Not changed: `data-kind`, `data-urgency`, `data-id` on the item root; `aside[ari
 
 Plan View: stepper has 9 `li`, current has `aria-current="step"` and `data-state="current"` (`phase: "dispatch"` → `li[data-phase="dispatch"]`; `phase: "plan"` → the text `planning`); node `li` has inline `left`/`top` and the 148×46 classes; DAG fixtures: (1) chain of 3 → `ncols=3`, `W=3·148+2·28=500`, `H=46`, two straight paths with `d` `M149 23H173M169 19.5L173 23 169 26.5` and `M325 23H349M345 19.5L349 23 345 26.5`; (2) one root with two dependents → `H=100`, root `top` 27, dependents `top` 0 and 54, paths `M149 50C162 50 160 23 173 23` and `M149 50C162 50 160 77 173 77`; (3) two roots into one target (fan-in) → `H=100`, roots `top` 0 and 54, target `top` 27, paths `M149 23C162 23 160 50 173 50` and `M149 77C162 77 160 50 173 50`; `data-state` `done` for a merged source (stroke opacity `.6`), `pending` otherwise (`stroke-dasharray="3 3"`); `Retry ▸` absent without `onRetryJob`, present and calling it with `(jobKey, wf.key)` with it, and never calls `onAction`; `Post PR` dispatches `{ kind: "pr.post", planId, workflow }`; subtitle `failed ×2`, `blocked on 2`; chip summary text; `No workflows yet`.
 
-Inbox: rows are listed in `inbox.rows` order with no groups; the `all` filter count is `rows.length` (4 for the four-row fixture) and each tier count is over all rows; the seven filter items in the 2.4 order with `<label> <count>` text and none disabled; the 2.4 selection rules (isolate, additive, reset at empty or all six); the popover collapse appears when `clientWidth < scrollWidth` (mocked); no key handler and no footer text; `p[data-empty]` text exact `up to date, drink some water`; the click per kind (2.6) calls `onSelectPlan` then `onSelectSession` for a row with both ids, `onSelectSession` only when `planId` is null, and nothing for a row with `sessionId: null`; the async button states (2.7); right-click menu entries and their order (2.3); age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).
+Inbox: rows are listed in `inbox.rows` order with no groups; the `all` filter count is `rows.length` (4 for the four-row fixture) and each tier count is over all rows; the seven filter items in the 2.4 order with `<label> <count>` text and none disabled; the 2.4 selection rules (isolate, additive, reset at empty or all six); the popover collapse appears when `clientWidth < scrollWidth` (mocked); no key handler and no footer text; `p[data-empty]` text exact `up to date, drink some water`; the card click (2.6, air-d121) calls `onSelectPlan` then `onSelectSession` for a row with an owner, opens the url for a row with neither, and does nothing when it has neither and no url; the async button states (2.7); right-click menu entries and their order (2.3); age formatting (`38`→`38s`, `240`→`4m`, `3600`→`1h`, `79200`→`22h`, `172800`→`2d`).
 
 ## 4. Cockpit amendments pro-d48..pro-d61 (consolidate-docs)
 
@@ -521,6 +519,7 @@ The contract of each item below is stated in full in the section it names. This 
 | pro-d51 Inbox rows | `Item` rows in an `ItemGroup`, icon / text / actions | 2.5 |
 | pro-d52 columns | full-height media and actions columns; age and primary button at the bottom | 2.5 |
 | pro-d53 links, selection, actions | link opens `row.url`; click selects Plan and Session; curate dialog; engine start; async action buttons; error Alert | 2.6, 2.7, 4.8 |
+| air-d121 card interaction (Plan `inbox-cards`) | the card click opens the owner (`onSelectPlan` + `onSelectSession`); a no-owner row opens its url, else nothing; the top-right slot is the external-link anchor whenever `row.url` is non-null, else `ChevronRight`; the title is not a link; the action button keeps the primary-action ladder and never links; errors through the toast | 2.5, 2.6, 2.7, 4.8 |
 | pro-d60 breadcrumb (superseded by pro-d87) | Header `Breadcrumb` crumbs `<host>/<group>/<manager>/<lead>/<worker>` | 4.1 |
 
 ### 4.1 Header breadcrumb (pro-d60), superseded by pro-d87

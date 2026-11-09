@@ -131,6 +131,7 @@ fn words(step: &Step) -> Vec<String> {
             .map(str::to_owned)
             .chain(
                 [
+                    ("--decide", t.decide),
                     ("--auxiliar", t.auxiliar),
                     ("--worker", t.worker),
                     ("--lead", t.lead),

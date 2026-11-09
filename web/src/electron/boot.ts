@@ -1,5 +1,10 @@
 import { readPreviewMode } from './preview-mode';
 export interface BootWindow {
+  /**
+   * Whether the window itself is destroyed (a real BrowserWindow's `isDestroyed`). Optional so a
+   * test double that only exposes `webContents` still satisfies this interface; a real window has it.
+   */
+  isDestroyed?(): boolean;
   webContents: { isDestroyed(): boolean; reloadIgnoringCache(): void };
 }
 export interface BootDeps {
@@ -8,6 +13,8 @@ export interface BootDeps {
   powerMonitor: unknown;
   process: { on(signal: string, handler: () => void): unknown };
   startAutoUpdate(win: BootWindow): Promise<{ bootstrap: { state: string } }>;
+  /** §19.1: promotes a ready `web/dist-electron.next` before the window opens. */
+  promoteOnLaunch?(): Promise<void>;
   startServices(): void;
   initMode(win: BootWindow): Promise<void>;
   registerIpc(): void;
@@ -37,6 +44,9 @@ export async function boot(deps: BootDeps): Promise<void> {
     mark('whenReady-start');
     await deps.app.whenReady();
     mark('whenReady-done');
+    mark('promote-start');
+    await deps.promoteOnLaunch?.();
+    mark('promote-done');
     const win = new deps.BrowserWindow({ title: 'CPD', show: !hidden });
     mark('window-created');
     await deps.initMode(win);
@@ -47,6 +57,9 @@ export async function boot(deps: BootDeps): Promise<void> {
       } catch (error) {
         console.error(error);
       }
+      // air-n62: on a destroyed window, reading `win.webContents` throws `Object has been
+      // destroyed` before `webContents.isDestroyed()` can run, so ask the window itself first.
+      if (win.isDestroyed?.()) return;
       if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
     });
     deps.registerIpc();

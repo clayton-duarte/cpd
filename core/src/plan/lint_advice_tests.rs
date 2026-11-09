@@ -231,6 +231,10 @@ fn model(name: &str, efforts: &[u8]) -> TierModel {
 
 fn catalog(s_efforts: &[u8]) -> Catalog {
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.2.0".into(),
         o: model("opus", &[0, 1, 2, 3, 4, 5]),
         s: model("sonnet", s_efforts),

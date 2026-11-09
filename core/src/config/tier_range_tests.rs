@@ -13,6 +13,10 @@ fn model(name: &str, efforts: &[u8]) -> TierModel {
 /// H offers efforts 1 and 3, S offers 0, 1 and 3, O and G offer no levels (only `OX` and `GX`).
 fn catalog() -> Catalog {
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.5.0".into(),
         o: model("opus", &[]),
         s: model("sonnet", &[0, 1, 3]),
@@ -31,6 +35,7 @@ fn names(tiers: &[Tier]) -> Vec<String> {
 
 fn defaults(auxiliar: &str, worker: &str, lead: &str, manager: &str) -> RoleTiers {
     RoleTiers {
+        decide: crate::config::Tier::x(crate::config::Letter::O),
         auxiliar: t(auxiliar),
         worker: t(worker),
         lead: t(lead),
@@ -267,4 +272,87 @@ fn step_up_in_takes_the_lowest_valid_rung_at_or_above() {
     // Above the ceiling: nothing.
     assert_eq!(up("S4"), None);
     assert_eq!(up("OX"), None);
+}
+
+fn defaults5(decide: &str, auxiliar: &str, worker: &str, lead: &str, manager: &str) -> RoleTiers {
+    RoleTiers {
+        decide: t(decide),
+        auxiliar: t(auxiliar),
+        worker: t(worker),
+        lead: t(lead),
+        manager: t(manager),
+    }
+}
+
+/// This machine's models (contract §9 "Roles and ranges", worked example): J `openrouter/typesafe/jev-router`
+/// at efforts 0, 1, 2 and 3; O at 0, 3 and 4; S at 0, 1 and 3; H and G at 1 and 3.
+fn machine_catalog() -> Catalog {
+    Catalog {
+        pi_version: "1.0.0".into(),
+        o: model("deepseek-v4-pro", &[0, 3, 4]),
+        s: model("deepseek-v4.1-flash", &[0, 1, 3]),
+        h: model("glm-5.3-flash", &[1, 3]),
+        g: model("glm-5.3-flash", &[1, 3]),
+        j: model("jev-router", &[0, 1, 2, 3]),
+    }
+}
+
+/// The decide role (contract §9 "Roles and ranges", air-d113/air-d115/air-d120): its range is its default
+/// `JX` only, and holds nothing else — not another J effort, and no rung of another letter.
+#[test]
+fn decide_role_range_is_jx_only() {
+    let catalog = machine_catalog();
+    let defaults = defaults5("JX", "G1", "H3", "S3", "O3");
+    let range = catalog.range(Role::Decide, &defaults);
+    assert!(range.is_some(), "the decide role has a range");
+    let range = range.unwrap();
+    assert_eq!((range.floor, range.ceiling), (t("JX"), t("JX")));
+    assert!(range.contains(t("JX")));
+    assert!(!range.contains(t("J0")) && !range.contains(t("J1")) && !range.contains(t("J3")));
+    assert!(!range.contains(t("GX")) && !range.contains(t("G1")));
+}
+
+/// The five role ranges ascend strictly on the ladder, decide < auxiliar < worker < lead < manager
+/// (contract §9 "Roles and ranges", air-d113/air-d115/air-d120).
+#[test]
+fn five_role_ranges_ascend() {
+    let catalog = machine_catalog();
+    let defaults = defaults5("JX", "G1", "H3", "S3", "O3");
+    for role in [
+        Role::Decide,
+        Role::Auxiliar,
+        Role::Worker,
+        Role::Lead,
+        Role::Manager,
+    ] {
+        assert!(
+            catalog.range(role, &defaults).is_some(),
+            "{role:?} has a range"
+        );
+    }
+    let ranges = [
+        catalog.range(Role::Decide, &defaults).unwrap(),
+        catalog.range(Role::Auxiliar, &defaults).unwrap(),
+        catalog.range(Role::Worker, &defaults).unwrap(),
+        catalog.range(Role::Lead, &defaults).unwrap(),
+        catalog.range(Role::Manager, &defaults).unwrap(),
+    ];
+    for range in ranges {
+        assert!(
+            range.floor <= range.ceiling,
+            "{} <= {}",
+            range.floor,
+            range.ceiling
+        );
+    }
+    for pair in ranges.windows(2) {
+        assert!(
+            pair[0].ceiling < pair[1].floor,
+            "{} < {}",
+            pair[0].ceiling,
+            pair[1].floor
+        );
+        assert!(pair[0].floor < pair[1].floor);
+        assert!(pair[0].ceiling < pair[1].ceiling);
+    }
 }

@@ -31,6 +31,7 @@ import type {
 } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
+import { Empty } from "../components/empty.tsx";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -63,12 +64,7 @@ import {
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
-import {
-  age,
-  linkKinds,
-  sessionKinds,
-  urgencyText,
-} from "./inbox/format.ts";
+import { age, urgencyText } from "./inbox/format.ts";
 
 const SNOOZES: readonly [string, SnoozeDuration][] = [
   ["Snooze 15 min", "15m"],
@@ -142,37 +138,13 @@ function selectRowSession(row: InboxRow, h: Handlers): void {
   if (row.sessionId !== null) h.onSelectSession(row.sessionId);
 }
 
-/** Left click, per kind (TUI inbox.rs jump). */
-function jump(row: InboxRow, h: Handlers): void {
-  if (row.kind === "engine-down") {
-    h.onAction({ kind: "engine.start" });
-    return;
-  }
-  if (row.kind === "curate-retire") {
+/** Card click: open the row's owner, else its external link (air-d121). */
+function openRow(row: InboxRow, h: Handlers): void {
+  if (row.planId !== null || row.sessionId !== null) {
     selectRowSession(row, h);
-    h.onOpenCurate?.(row);
     return;
   }
-  if (row.kind === "review-requested") {
-    if (row.url !== null) {
-      copy(row.url);
-      openExternalUrl(row.url);
-    }
-    return;
-  }
-  if (row.kind === "deploy") {
-    if (row.url !== null) openExternalUrl(row.url);
-    return;
-  }
-  if (row.sessionId !== null && sessionKinds.includes(row.kind)) {
-    selectRowSession(row, h);
-    // pro-d63: opening an unread row's chat reads it, so the item is dismissed (a synthetic row, id < 0, cannot be)
-    if (row.kind === "unread" && row.id >= 0) h.onAction({ kind: "inbox.dismiss", itemId: row.id });
-    return;
-  }
-  if (row.url !== null) {
-    openExternalUrl(row.url);
-  }
+  if (row.url !== null) openExternalUrl(row.url);
 }
 
 const PRIMARY_ACTION_KINDS: ReadonlySet<CockpitAction["kind"]> = new Set([
@@ -367,7 +339,6 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [first = "", ...rest] = row.label.split("\n");
   const second = rest.join(" ").trim();
-  const linked = row.url !== null && linkKinds.includes(row.kind);
   const primary = primaryActionOf(row);
   const startAsyncAction = (action: CockpitAction): void => {
     const id = onAction(action);
@@ -401,11 +372,11 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
       data-kind={row.kind}
       data-urgency={row.urgency}
       data-id={row.id}
-      onClick={() => jump(row, props)}
+      onClick={() => openRow(row, props)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          jump(row, props);
+          openRow(row, props);
         }
       }}
       className="cursor-pointer hover:bg-accent/50"
@@ -425,24 +396,12 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
       </ItemMedia>
       <ItemContent className="justify-between self-stretch">
         <ItemTitle className={urgencyText[row.urgency]}>
-          {linked && row.url !== null ? (
-            <a
-              href={row.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="hover:underline"
-            >
-              {first}
-            </a>
-          ) : (
-            first
-          )}
+          {first}
         </ItemTitle>
         {second === "" ? null : <ItemDescription>{second}</ItemDescription>}
       </ItemContent>
       <ItemActions className="flex-col items-end justify-between gap-1.5 self-stretch">
-        {linked && row.url !== null ? (
+        {row.url !== null ? (
           <a
             href={row.url}
             target="_blank"
@@ -482,7 +441,7 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
   if (row.kind === "engine-down") return item;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+      <ContextMenuTrigger render={item} />
       <Menu {...props} />
     </ContextMenu>
   );
@@ -592,7 +551,7 @@ export function Inbox(props: {
         value="all"
         data-tier-filter="all"
         onClick={() => setSelectedTiers("all")}
-        className="h-6 gap-1.5 px-1.5 text-xs text-fg-strong hover:text-fg-strong data-[state=on]:text-fg-strong"
+        className="h-6 gap-1.5 px-1.5 text-xs text-fg-strong hover:text-fg-strong aria-pressed:text-fg-strong"
       >
         <span>all</span>
         <span className="font-mono text-[10px] opacity-80">{rows.length}</span>
@@ -650,26 +609,28 @@ export function Inbox(props: {
           <>
         {collapsed ? (
           <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-part="inbox-filters-trigger"
-                aria-label="Filter inbox by tier"
-                className="h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
-              >
-                <ListFilterIcon className="size-3.5 text-muted-foreground" />
-                <span>
-                  {allSelected
-                    ? "all"
-                    : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`}
-                </span>
-                <span className="font-mono text-[10px] opacity-80">
-                  {filteredRows.length}
-                </span>
-              </Button>
-            </PopoverTrigger>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-part="inbox-filters-trigger"
+                  aria-label="Filter inbox by tier"
+                  className="h-6 shrink-0 gap-1.5 px-2 text-xs text-fg-strong shadow-none"
+                >
+                  <ListFilterIcon className="size-3.5 text-muted-foreground" />
+                  <span>
+                    {allSelected
+                      ? "all"
+                      : `${selectedTiers.size} tier${selectedTiers.size === 1 ? "" : "s"}`}
+                  </span>
+                  <span className="font-mono text-[10px] opacity-80">
+                    {filteredRows.length}
+                  </span>
+                </Button>
+              }
+            />
             <PopoverContent
               align="end"
               className="w-auto min-w-[8.5rem] p-1.5"
@@ -710,9 +671,11 @@ export function Inbox(props: {
       {inbox === null ? (
         <p className="px-[14px] text-fg-dim">Loading inbox…</p>
       ) : filteredRows.length === 0 ? (
-        <p data-empty className="px-[14px] py-3 text-muted-foreground">
+        <Empty
+          className="flex-none items-start justify-start gap-0 p-0 px-[14px] py-3 text-left text-muted-foreground"
+        >
           up to date, drink some water
-        </p>
+        </Empty>
       ) : (
         <ScrollArea data-part="inbox-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
         <ItemGroup className="gap-2 px-2.5 py-1.5">

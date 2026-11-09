@@ -47,6 +47,8 @@ export interface ContextNode {
 }
 export interface ContextTreeModel {
   readonly hostname?: string;
+  /** The policy-owner stems (CONTRACT 20.1): the directories of `$CPD_HOME/policy/<owner>/owner.toml`. Absent before the first tree read. */
+  readonly owners?: readonly string[];
   readonly contexts: readonly ContextNode[];
   readonly cursor: number; // min of the events_cursor of the four commands
 }
@@ -124,6 +126,7 @@ export type CockpitAction =
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
   | { kind: "plan.new"; planId: string; contextId: string; title: string }
+  | { kind: "context.new"; contextId: string; title: string; owner: string }
   | { kind: "context.rename"; contextId: string; title: string }
   | { kind: "plan.rename"; planId: string; title: string }
   | { kind: "session.rename"; sessionId: string; name: string }
@@ -167,6 +170,7 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "session.retier": ["sessionId", "tier"],
     "plan.reject": ["planId", "review"],
     "plan.new": ["planId", "contextId", "title"],
+    "context.new": ["contextId", "title", "owner"],
     "context.rename": ["contextId", "title"],
     "plan.rename": ["planId", "title"],
     "session.rename": ["sessionId", "name"],

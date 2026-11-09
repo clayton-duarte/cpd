@@ -7,13 +7,13 @@ use serde_json::json;
 
 use super::view_tests::{Act, Commands, call, first_screen, popup, reads};
 
-/// The rows of the docs' Experimental block with the focus on `write_curation`, turned off by a click.
-const AFTER_CLICK: [&str; 5] = [
+/// The rows of the docs' Experimental block that the 64x24 popup shows with the focus on `write_curation`,
+/// turned off by a click: the header and the three switches above the fold (`turn_question_guard` is below it).
+const AFTER_CLICK: [&str; 4] = [
     " Experimental",
     "     durable_workers      off",
     "   ▸ write_curation       off*",
     "     failure_triage       on",
-    "     turn_question_guard  on",
 ];
 
 fn experimental_block(rows: &[String]) -> Vec<String> {
@@ -21,7 +21,7 @@ fn experimental_block(rows: &[String]) -> Vec<String> {
         .iter()
         .position(|r| r.contains("Experimental"))
         .expect("the screen has an Experimental header");
-    rows[at..at + 5].to_vec()
+    rows[at..at + 4].to_vec()
 }
 
 fn scroll_to_the_buttons() -> Act {
@@ -37,9 +37,9 @@ fn settings_first_screen_shows_the_experimental_rows_below_tiers() {
     assert!(run.result.is_ok(), "{:?}", run.result.err());
     let rows = run.snaps[0].rows();
     assert_eq!(rows, first_screen());
-    assert_eq!(rows[17], " Experimental");
-    assert_eq!(rows[18], "     durable_workers      off");
-    assert_eq!(rows[21], "     turn_question_guard  on");
+    assert_eq!(rows[19], " Experimental");
+    assert_eq!(rows[20], "     durable_workers      off");
+    assert_eq!(rows[22], "     failure_triage       on");
 }
 
 #[test]
@@ -69,9 +69,9 @@ fn save_runs_cpd_config_experimental_for_each_changed_feature_only() {
         &commands,
         vec![
             Act::Key(KeyCode::Enter),
-            Act::ClickEnd("turn_question_guard"),
             Act::ClickEnd("durable_workers"),
             scroll_to_the_buttons(),
+            Act::ClickEnd("turn_question_guard"),
             Act::Click("[ Save ]", "[ Save ]"),
         ],
     );
@@ -126,7 +126,6 @@ fn experimental_rows_load_from_cpd_config_json() {
             "     durable_workers      on",
             "     write_curation       off",
             "     failure_triage       on",
-            "     turn_question_guard  off",
         ]
         .map(str::to_owned),
         "the values come from the experimental object, with no change marker"

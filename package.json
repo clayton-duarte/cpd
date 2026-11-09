@@ -22,6 +22,7 @@
     "verify:fmt": "scripts/cargo.sh fmt --all --check",
     "verify:clippy": "scripts/cargo.sh clippy --workspace --all-targets -- -D warnings",
     "verify:web": "pnpm --filter cpd-web-client run typecheck && pnpm --filter cpd-web-client run build && pnpm --filter cpd-web-client run test",
+    "verify:e2e": "pnpm --filter cpd-web-client run build:electron && pnpm --filter cpd-web-client run e2e",
     "verify:steps": "pnpm run verify:migrations && pnpm run verify:portable && pnpm run typecheck && pnpm run verify:pi && pnpm run verify:fmt && pnpm run verify:build && pnpm run verify:clippy && pnpm run verify:web && pnpm run verify:node && pnpm run verify:rust"
   },
   "dependencies": {

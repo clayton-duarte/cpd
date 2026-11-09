@@ -135,8 +135,18 @@ pub enum Step {
     Retier,
 }
 
-const LETTERS: [Letter; 4] = [Letter::O, Letter::S, Letter::H, Letter::G];
-const ROLES: [Role; 4] = [Role::Auxiliar, Role::Worker, Role::Lead, Role::Manager];
+/// The catalog's letters, as `cpd tiers` reports them (J first in the ladder, but the backend prints O, S, H, G, J).
+const LETTERS: [Letter; 5] = [Letter::O, Letter::S, Letter::H, Letter::G, Letter::J];
+/// The four letters a preset holds (contract §8.2): `cpd preset set` takes O, S, H and G, never J.
+const PRESET_LETTERS: [Letter; 4] = [Letter::O, Letter::S, Letter::H, Letter::G];
+/// The roles, ascending (contract §9): decide < auxiliar < worker < lead < manager.
+const ROLES: [Role; 5] = [
+    Role::Decide,
+    Role::Auxiliar,
+    Role::Worker,
+    Role::Lead,
+    Role::Manager,
+];
 
 fn index(letter: Letter) -> usize {
     LETTERS.iter().position(|l| *l == letter).unwrap_or(0)
@@ -149,6 +159,8 @@ fn provider_of(model_ref: &str) -> &str {
 
 fn tier_of(tiers: &RoleTiers, role: Role) -> Tier {
     match role {
+        // Placeholder: the TUI's Agent Tiers screen still shows the four legacy roles (out of scope).
+        Role::Decide => tiers.decide,
         Role::Auxiliar => tiers.auxiliar,
         Role::Worker => tiers.worker,
         Role::Lead => tiers.lead,
@@ -158,6 +170,7 @@ fn tier_of(tiers: &RoleTiers, role: Role) -> Tier {
 
 fn set_tier(tiers: &mut RoleTiers, role: Role, tier: Tier) {
     match role {
+        Role::Decide => tiers.decide = tier,
         Role::Auxiliar => tiers.auxiliar = tier,
         Role::Worker => tiers.worker = tier,
         Role::Lead => tiers.lead = tier,
@@ -167,6 +180,7 @@ fn set_tier(tiers: &mut RoleTiers, role: Role, tier: Tier) {
 
 fn role_name(role: Role) -> &'static str {
     match role {
+        Role::Decide => "decide",
         Role::Auxiliar => "auxiliar",
         Role::Worker => "worker",
         Role::Lead => "lead",
@@ -249,6 +263,11 @@ pub fn catalog(tiers: &Value) -> Result<Catalog, CpdError> {
         s: tier_model(tm, Letter::S)?,
         h: tier_model(tm, Letter::H)?,
         g: tier_model(tm, Letter::G)?,
+        // Placeholder: the TUI's catalog still reads the four legacy letters (out of scope).
+        j: tier_model(tm, Letter::J).unwrap_or(cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        }),
     })
 }
 
@@ -260,6 +279,9 @@ impl Reads {
             .ok_or_else(|| shape("config.config is missing"))?;
         let tier = |key: &str| Tier::parse(text(cfg, key, "config")?);
         let role_tiers = RoleTiers {
+            // Placeholder: the TUI's config read still shows the four legacy roles (out of scope).
+            decide: tier("decide_tier")
+                .unwrap_or_else(|_| Tier::parse("JX").expect("a valid Tier")),
             auxiliar: tier("context_distill_tier")?,
             worker: tier("worker_tier")?,
             lead: tier("lead_tier")?,
@@ -331,10 +353,10 @@ pub struct Model {
     catalog: Catalog,
     preset: usize,
     provider: String,
-    models: [Option<String>; 4],
+    models: [Option<String>; 5],
     tiers: RoleTiers,
     saved_provider: String,
-    base_models: [Option<String>; 4],
+    base_models: [Option<String>; 5],
     base_tiers: RoleTiers,
     concurrency: u32,
     base_concurrency: u32,
@@ -352,14 +374,16 @@ pub struct Model {
 
 impl Model {
     /// The rows before the Experimental ones.
-    const TIERS_END: usize = 10;
-    const ROWS: [Row; 14] = [
+    const TIERS_END: usize = 12;
+    const ROWS: [Row; 16] = [
         Row::Preset,
         Row::Provider,
         Row::Model(Letter::O),
         Row::Model(Letter::S),
         Row::Model(Letter::H),
         Row::Model(Letter::G),
+        Row::Model(Letter::J),
+        Row::Tier(Role::Decide),
         Row::Tier(Role::Auxiliar),
         Row::Tier(Role::Worker),
         Row::Tier(Role::Lead),
@@ -578,6 +602,7 @@ impl Model {
                             Letter::S => "sonnet",
                             Letter::H => "haiku",
                             Letter::G => "gemini",
+                            Letter::J => "jev",
                         };
                         (
                             format!("{l}  {name}"),
@@ -593,7 +618,8 @@ impl Model {
                         false,
                     ),
                     Row::Tier(r) => {
-                        let range = if r == Role::Auxiliar {
+                        // The decide and the auxiliar run at their default only (contract §9).
+                        let range = if r == Role::Decide || r == Role::Auxiliar {
                             "default only".to_owned()
                         } else {
                             self.catalog.range(r, &self.tiers).map_or_else(
@@ -807,7 +833,9 @@ impl Model {
             return Effect::None;
         };
         self.provider = provider_of(&preset.models[0]).to_owned();
-        self.models = preset.models.clone().map(Some);
+        for (i, model) in preset.models.iter().enumerate() {
+            self.models[i] = Some(model.clone());
+        }
         self.refusal = None;
         self.reread()
     }
@@ -844,9 +872,15 @@ impl Model {
 
     pub fn steps(&self) -> Vec<Step> {
         let mut steps = Vec::new();
-        let refs: Option<Vec<String>> = self.models.iter().cloned().collect();
+        let refs: Option<Vec<String>> = PRESET_LETTERS
+            .iter()
+            .map(|l| self.models[index(*l)].clone())
+            .collect();
+        let preset_changed = PRESET_LETTERS
+            .iter()
+            .any(|l| self.models[index(*l)] != self.base_models[index(*l)]);
         if let Some(refs) = refs
-            && self.models != self.base_models
+            && preset_changed
             && let Ok(four) = <[String; 4]>::try_from(refs)
         {
             steps.push(Step::PresetSet(four));
@@ -873,7 +907,9 @@ impl Model {
     pub fn step_done(&mut self, step: &Step) {
         match step {
             Step::PresetSet(refs) => {
-                self.base_models = refs.clone().map(Some);
+                for (i, model) in refs.iter().enumerate() {
+                    self.base_models[i] = Some(model.clone());
+                }
                 self.saved_provider = provider_of(&refs[0]).to_owned();
                 self.retier_pending = true;
             }

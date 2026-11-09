@@ -71,6 +71,10 @@ fn fixture_with(
         efforts: vec![0, 1, 2, 3, 4, 5],
     };
     env.catalog = Some(Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),

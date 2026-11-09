@@ -9,6 +9,7 @@ const PLANS = 'cpd plan list';
 const LIST = (id: string) => `cpd attempt list --active --plan ${id}`;
 const BUILD = 'scripts/cargo.sh build --release --locked -p cpd';
 const INSTALL = 'scripts/install-cpd.sh';
+const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
 const json = (v: unknown) => ({ stdout: JSON.stringify(v) });
 const idle = { [PLANS]: json({ plans: [] }) };
 
@@ -52,11 +53,25 @@ describe('countRunningAttempts', () => {
     const f = fakeExec({ [PLANS]: { stdout: 'not json' } });
     await expect(countRunningAttempts(f.exec, ROOT)).rejects.toThrow(/plan list/);
   });
+  it("countRunningAttempts names the refused call's error code and message", async () => {
+    const f = fakeExec({
+      [PLANS]: {
+        code: 3,
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'plan_has_lead', message: 'plan app-boot already has a lead' },
+        }),
+        stderr: '',
+      },
+    });
+    await expect(countRunningAttempts(f.exec, ROOT)).rejects.toThrow(/plan_has_lead/);
+    await expect(countRunningAttempts(f.exec, ROOT)).rejects.toThrow(/plan app-boot already has a lead/);
+  });
 });
 
 describe('installCli', () => {
   it('installCli builds release before installing', async () => {
-    const f = fakeExec({ [BUILD]: {}, ...idle, [INSTALL]: {} });
+    const f = fakeExec({ [BUILD]: {}, [NO_FOLLOW_UP]: {}, ...idle, [INSTALL]: {} });
     const { timers } = manualTimers();
     expect(await installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1')).toEqual({ ok: true });
     const keys = f.calls.map((c) => [c.cmd, ...c.args].join(' '));
@@ -64,29 +79,26 @@ describe('installCli', () => {
     expect(keys[keys.length - 1]).toBe(INSTALL);
     expect(f.calls.every((c) => c.cwd === ROOT)).toBe(true);
   });
-  it('installCli waits while attempts run and installs when idle', async () => {
-    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
-    let n = 0;
+  it('the CLI installs while Attempts are running', async () => {
     const f = fakeExec({
       [BUILD]: {},
       [PLANS]: () => json({ plans: [{ id: 'a' }] }),
-      [LIST('a')]: () => json({ attempts: n++ === 0 ? [{ status: 'running' }] : [] }),
+      [LIST('a')]: () => json({ attempts: [{ status: 'running' }] }),
       [NO_FOLLOW_UP]: {},
       [INSTALL]: {},
     });
     const { timers, pending } = manualTimers();
-    const logs: string[] = [];
     const invoked = () => f.calls.map((c) => [c.cmd, ...c.args].join(' '));
-    const p = installCli({ exec: f.exec, fs: fakeFs(), timers, log: (l) => logs.push(l), retryMs: 1234 }, ROOT, 's1');
+    let result: { ok: boolean } | null = null;
+    void installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1').then((r) => {
+      result = r;
+    });
     await flush();
-    expect(pending.map((t) => t.ms)).toEqual([1234]);
-    expect(logs.length).toBeGreaterThan(0);
-    // The binary is installed at once; the full install, which runs the follow-ups, waits for zero attempts.
-    expect(invoked()).toContain(NO_FOLLOW_UP);
-    expect(invoked()).not.toContain(INSTALL);
-    pending[0]?.fn();
-    expect(await p).toEqual({ ok: true });
-    expect(invoked().filter((k) => k === INSTALL)).toHaveLength(1);
+    // The install never waits for the running Attempts to reach zero: no timer is armed, and the full
+    // install (scripts/install-cpd.sh, the follow-ups included) runs at once and resolves.
+    expect(pending).toEqual([]);
+    expect(invoked()).toContain(INSTALL);
+    expect(result).toEqual({ ok: true });
   });
   it('installCli returns the log when the build fails', async () => {
     const f = fakeExec({ [BUILD]: { code: 101, stderr: 'compile error', stdout: 'out' } });
@@ -98,7 +110,7 @@ describe('installCli', () => {
   });
   it('installCli returns the log when install-cpd fails', async () => {
     const fs = fakeFs();
-    const f = fakeExec({ [BUILD]: {}, ...idle, [INSTALL]: { code: 2, stderr: 'install broke' } });
+    const f = fakeExec({ [BUILD]: {}, [NO_FOLLOW_UP]: {}, ...idle, [INSTALL]: { code: 2, stderr: 'install broke' } });
     const { timers } = manualTimers();
     const r = await installCli({ exec: f.exec, fs, timers, log: () => {} }, ROOT, 's1');
     expect(r.ok).toBe(false);
@@ -107,65 +119,10 @@ describe('installCli', () => {
   });
   it('installCli stamps the installed sha', async () => {
     const fs = fakeFs();
-    const f = fakeExec({ [BUILD]: {}, ...idle, [INSTALL]: {} });
+    const f = fakeExec({ [BUILD]: {}, [NO_FOLLOW_UP]: {}, ...idle, [INSTALL]: {} });
     const { timers } = manualTimers();
     await installCli({ exec: f.exec, fs, timers, log: () => {} }, ROOT, 'abc123');
     expect(fs.files.get(STAMP)).toBe('abc123');
-  });
-  it('installCli fails loud when counting attempts fails', async () => {
-    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
-    const f = fakeExec({ [BUILD]: {}, [NO_FOLLOW_UP]: {}, [PLANS]: { code: 1, stderr: 'down' } });
-    const { timers } = manualTimers();
-    const r = await installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.log).toMatch(/plan list/);
-    // The binary-only install ran at once; the full install, which runs the follow-ups, never did.
-    const invoked = f.calls.map((c) => [c.cmd, ...c.args].join(' '));
-    expect(invoked).toContain(NO_FOLLOW_UP);
-    expect(invoked).not.toContain(INSTALL);
-  });
-  it('installCli installs the binary before waiting for running attempts', async () => {
-    const NO_FOLLOW_UP = `${INSTALL} --no-follow-up`;
-    let n = 0;
-    const f = fakeExec({
-      [BUILD]: {},
-      [PLANS]: () => json({ plans: [{ id: 'a' }] }),
-      [LIST('a')]: () => json({ attempts: n++ === 0 ? [{ status: 'running' }] : [] }),
-      [NO_FOLLOW_UP]: {},
-      [INSTALL]: {},
-    });
-    const { timers, pending } = manualTimers();
-    const invoked = () => f.calls.map((c) => [c.cmd, ...c.args].join(' '));
-    const p = installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {}, retryMs: 1234 }, ROOT, 's1');
-    await flush();
-    // The binary is installed at once, before any wait: only the follow-ups wait for zero running attempts.
-    expect(invoked()).toContain(NO_FOLLOW_UP);
-    expect(invoked()).not.toContain(INSTALL);
-    expect(pending.map((t) => t.ms)).toEqual([1234]);
-    // The full install (the follow-ups) runs once, only when no attempt is running.
-    pending[0]?.fn();
-    expect(await p).toEqual({ ok: true });
-    expect(invoked().filter((k) => k === INSTALL)).toHaveLength(1);
-  });
-  it("update error log includes the refused call's error code and message", async () => {
-    const f = fakeExec({
-      [BUILD]: {},
-      [PLANS]: {
-        code: 3,
-        stdout: JSON.stringify({
-          ok: false,
-          error: { code: 'plan_has_lead', message: 'plan app-boot already has a lead' },
-        }),
-        stderr: '',
-      },
-    });
-    const { timers } = manualTimers();
-    const r = await installCli({ exec: f.exec, fs: fakeFs(), timers, log: () => {} }, ROOT, 's1');
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.log).toContain('plan_has_lead');
-      expect(r.log).toContain('plan app-boot already has a lead');
-    }
   });
 });
 

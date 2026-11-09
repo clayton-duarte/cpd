@@ -56,6 +56,36 @@ describe("connection", () => {
     expect(store.getState().session?.pending[0]).toMatchObject({ clientSubmissionId: "id1", state: "sending" });
   });
 
+  it("the client re-subscribes after a hub error", () => {
+    const { transport, scheduler, store, connection } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    expect(transport.sent).toEqual([{ type: "cockpit.subscribe" }]);
+
+    // The hub answers the ws start gate's race: a subscribe that arrives while the cockpit service
+    // is still starting is refused 'cockpit not ready' and is never subscribed (web/CONTRACT.md
+    // §20.1). If the client sends `cockpit.subscribe` only when the transport opens, this one
+    // error leaves the cockpit empty — no tree, no inbox, no status bar, no transcript — until a
+    // full page reload.
+    transport.emitMessage({ type: "cockpit.error", error: { code: "internal", message: "cockpit not ready" } });
+    expect(store.getState().cockpit.error?.message).toBe("cockpit not ready");
+    // The re-subscribe is backed off, not sent synchronously.
+    expect(transport.sent).toEqual([{ type: "cockpit.subscribe" }]);
+
+    // After the backoff the client re-sends `cockpit.subscribe`, so the readiness window heals.
+    scheduler.advance(10_000);
+    const subscribes = transport.sent.filter((m) => (m as { type?: string }).type === "cockpit.subscribe");
+    expect(subscribes.length).toBeGreaterThan(1);
+
+    // The later snapshot recovers the cockpit: live data fills and the error clears.
+    const tree = { contexts: [], cursor: 1 };
+    const inbox = { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 };
+    transport.emitMessage({ type: "cockpit.snapshot", tree, plan: null, inbox });
+    expect(store.getState().cockpit.tree).toBe(tree);
+    expect(store.getState().cockpit.inbox).toEqual(inbox);
+    expect(store.getState().cockpit.error).toBeNull();
+  });
+
   it("reconnect backs off through the injected scheduler", () => {
     const { transport, scheduler, store, connection } = setup();
     connection.start();

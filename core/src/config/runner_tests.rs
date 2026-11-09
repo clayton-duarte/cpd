@@ -40,6 +40,7 @@ fn levels() -> String {
         "S": ["minimal", "off", "low"],
         "H": ["off", "low", "medium"],
         "G": ["off"],
+        "J": ["off"],
     })
     .to_string()
 }
@@ -68,6 +69,7 @@ fn read_with_asks_the_runner_for_node_running_the_module_on_pis_entries_and_the_
             format!("S={}", models.s),
             format!("H={}", models.h),
             format!("G={}", models.g),
+            format!("J={}", models.j),
         ]
     );
 }
