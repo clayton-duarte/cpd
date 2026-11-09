@@ -1287,7 +1287,7 @@ fn dispatch_web_name_runs_vitest() {
             "vitest",
             "run",
             "--testNamePattern",
-            "renders a button",
+            "(?:^| > )renders a button$",
             "web/sample.test.tsx"
         ]],
         "the web dispatch is the package's vitest, filtered by the title: {}",
