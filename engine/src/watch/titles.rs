@@ -50,6 +50,8 @@ pub(super) struct Runs {
     running: HashMap<SessionId, Run>,
     failing_since: HashMap<SessionId, Instant>,
     reported: HashSet<SessionId>,
+    /// B07: Sessions whose run failed with auth. Never respawned, no timer, until the engine restarts (the User acts).
+    paused: HashSet<SessionId>,
 }
 
 /// `locks/title-<session>.lock`, held by the Session's retitle run (contract §1.4).
@@ -134,6 +136,10 @@ pub(super) fn run(engine: &mut Engine) {
         engine.clear(Step::E10, &About::TitleRun(session.clone()));
         engine.titles.reported.remove(&session);
     }
+    let due_now: Vec<SessionId> = due_now
+        .into_iter()
+        .filter(|s| !engine.titles.paused.contains(s))
+        .collect();
     let held = match held(engine) {
         Ok(held) => held,
         Err(e) => return engine.fail(Step::E10, About::Machine, &e),
@@ -273,6 +279,19 @@ fn reap(engine: &mut Engine) {
             engine.log.line(&format!(
                 "E10: the retitle of Session {session} found another run of it"
             ));
+        } else if is_auth_failure(&output) {
+            let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>();
+            let tail: Vec<&str> = tail.into_iter().rev().collect();
+            engine.log.line(&format!(
+                "E10: the retitle of Session {session} failed with auth; paused"
+            ));
+            let failure = Failure {
+                code: "title_auth".to_owned(),
+                message: "Its retitle run failed to authenticate (401 / token_expired); retitling is paused until the engine restarts, after you fix pi's login.".to_owned(),
+                details: json!({"session": session, "tail": tail.join("\n"), "log": log.display().to_string()}),
+            };
+            engine.titles.paused.insert(session);
+            engine.fail(Step::E10, about, failure);
         } else {
             let since = *engine
                 .titles
@@ -305,6 +324,15 @@ fn reap(engine: &mut Engine) {
             engine.fail(Step::E10, about, failure);
         }
     }
+}
+
+/// Whether a run's output reports an authentication failure (B07): `401` or `token_expired`, by text only (pi's exact
+/// stderr is unverified). Same match as `core/src/session/retitle.rs`.
+fn is_auth_failure(text: &str) -> bool {
+    text.contains("token_expired")
+        || text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w == "401")
 }
 
 /// What a run wrote to its log, from `offset` on (lossy: it is for people).
