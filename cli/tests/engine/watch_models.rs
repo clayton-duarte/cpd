@@ -785,10 +785,8 @@ fn e15_skips_bifrost_on_air_even_when_configured() {
     );
     assert_eq!(errors[0]["code"], "models_unauthorized");
     assert_eq!(errors[0]["details"]["provider"], "other");
-    assert!(
-        fx.file("bifrost").is_none(),
-        "air must not cache configured Bifrost"
-    );
+    let bifrost = fx.file("bifrost");
+    drop(fx);
 
     // A failed Bifrost entry must not be recorded or reported on air either.
     let failed_fx = fx_on(
@@ -822,6 +820,7 @@ fn e15_skips_bifrost_on_air_even_when_configured() {
     );
     assert_eq!(errors[0]["code"], "models_unauthorized");
     assert_eq!(errors[0]["details"]["provider"], "other");
+    assert!(bifrost.is_none(), "air must not cache configured Bifrost");
 }
 
 #[test]
@@ -837,6 +836,9 @@ fn e15_keeps_bifrost_behavior_on_non_air() {
         ]),
     );
     air.run_until(|p| p.file("github-copilot").is_some(), 3);
+    let air_errors = air.errors();
+    let air_bifrost_rows = air.query("SELECT count(*) FROM swr_models WHERE provider = 'bifrost'");
+    drop(air);
 
     let other = fx_on(
         "m1",
@@ -858,6 +860,7 @@ fn e15_keeps_bifrost_behavior_on_non_air() {
         other.file("github-copilot").unwrap()["ids"],
         json!(["gpt-5"])
     );
+    drop(other);
 
     let listed_fx = fx_on(
         "m1",
@@ -877,12 +880,8 @@ fn e15_keeps_bifrost_behavior_on_non_air() {
     assert!(listed_fx.errors().is_empty());
 
     assert!(
-        air.errors().is_empty(),
-        "air must suppress only Bifrost's failure: {:?}",
-        air.errors()
+        air_errors.is_empty(),
+        "air must suppress only Bifrost's failure: {air_errors:?}"
     );
-    assert_eq!(
-        air.query("SELECT count(*) FROM swr_models WHERE provider = 'bifrost'"),
-        0
-    );
+    assert_eq!(air_bifrost_rows, 0);
 }
