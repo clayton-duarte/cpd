@@ -27,6 +27,9 @@ mod deploys_tests;
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
+pub mod merge_green;
+#[cfg(test)]
+mod merge_green_tests;
 #[cfg(test)]
 mod open_reopen_tests;
 #[cfg(test)]
@@ -54,6 +57,7 @@ pub mod deploys;
 mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
+pub(crate) use gh::in_merge;
 pub(crate) use gh::{Adoptable, adoptable};
 mod merge;
 pub mod merge_method;
@@ -127,6 +131,8 @@ pub enum Command {
     Repost(repost::RepostArgs),
     /// Merge a clean pull request on GitHub with a method the repo allows (§9.10)
     Merge(merge::MergeArgs),
+    /// Update the branch, wait for green checks on the new head, then squash-merge (§9.10a)
+    MergeGreen(merge::MergeArgs),
     /// Record the User's approval for one agent reply, post or repost (adapter)
     #[command(hide = true)]
     Approve(approval::ApproveArgs),
@@ -199,6 +205,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Post(args) => post::post(ports, args),
         Command::Repost(args) => repost::repost(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
+        Command::MergeGreen(args) => merge_green::merge_green(ports, args),
         Command::Approve(args) => approval::approve(ports, args),
     }
 }

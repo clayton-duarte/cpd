@@ -1146,6 +1146,16 @@
     },
     "required": []
   },
+  "pr merge-green": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "pr open": {
     "flags": {
       "--help": false,
