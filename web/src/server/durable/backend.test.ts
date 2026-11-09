@@ -109,9 +109,10 @@ async function tick(): Promise<void> {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 }
 
-async function setup(initial: HostFrame[], opts: { windowSize?: number } = {}) {
+async function setup(initial: HostFrame[], opts: { windowSize?: number; show?: Obj } = {}) {
   const host = new FakeHost(initial);
-  const cpd = { json: vi.fn(async (_args: readonly string[]) => ({}) as Readonly<Record<string, unknown>>) };
+  const { show, ...backendOpts } = opts;
+  const cpd = { json: vi.fn(async (args: readonly string[]) => (show !== undefined && args.includes("show") ? { session: show } : {}) as Readonly<Record<string, unknown>>) };
   const backend = createDurableBackend({
     connect: async (path) => {
       expect(path).toBe("/run/host/s1.sock");
@@ -120,7 +121,7 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number } = {}) {
     cpd,
     git: { branch: async () => "main" },
     scheduler: new FakeScheduler(),
-    ...opts,
+    ...backendOpts,
   });
   const messages: SessionServerMessage[] = [];
   const handle: SessionHandle = await backend.attach(SESSION, (m) => messages.push(m));
@@ -318,6 +319,13 @@ describe("durable backend", () => {
     const tiers = ofType(messages.slice(mark), "session.footer").map((m) => m.footer.tier);
     expect(tiers).not.toContainEqual({ state: "known", value: "S1" });
     expect(cpd.json).toHaveBeenCalledWith(expect.arrayContaining(["session", "show"]));
+  });
+
+  it("durable backend reports the session's recorded model when the host has none", async () => {
+    const { cpd, messages } = await setup([viewFrame([userEntry(0)])], { show: { model: "anthropic/claude" } });
+    expect(cpd.json).toHaveBeenCalledWith(expect.arrayContaining(["session", "show"]));
+    const footer = ofType(messages, "session.footer").at(-1)?.footer as FooterStats;
+    expect(footer.model).toEqual({ state: "known", value: "anthropic/claude" });
   });
 
   const flagged = { type: "ui_request", id: "f1", purpose: "host_approve", approval: true, created_at: 1, method: "select", title: "Run it?", options: ["Allow once", "Deny"] } as unknown as HostFrame;

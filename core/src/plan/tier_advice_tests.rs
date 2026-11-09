@@ -344,9 +344,9 @@ fn advice_stays_inside_the_worker_range() {
     ];
     let got = recommend_in(&rows, 30, range, next);
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0].tier, t("S2"));
-    // The ceiling follows lead_tier: with lead_tier = S2 the range is H3..S1 and S2 is out.
-    let low = catalog.range(Role::Worker, &roles("S2")).unwrap();
+    assert_eq!(got[0].tier, t("S1"));
+    // The ceiling follows lead_tier: with lead_tier = S1 the range is H3..S1 and S2 is out.
+    let low = catalog.range(Role::Worker, &roles("S1")).unwrap();
     assert_eq!((low.floor, low.ceiling), (t("H3"), t("S1")));
     let rows = [
         row("work", "S1", 40, 40, Some(0.3)),

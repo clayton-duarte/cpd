@@ -49,3 +49,27 @@ export async function writeReport(file: string, report: EndReport): Promise<void
   await writeFile(temp, JSON.stringify(report));
   await rename(temp, file);
 }
+
+type Block = { type?: string; text?: string; name?: string; arguments?: unknown };
+
+/** The identity of the latest assistant turn: its text trimmed with whitespace collapsed, plus its tool-call signature. Undefined when there is no assistant entry. */
+export function turnIdentity(entries: readonly Entry[]): string | undefined {
+  const last = entries.filter((e) => e.kind === "pi.assistant").at(-1);
+  if (last === undefined) return undefined;
+  const content = ((last.model?.[0] as { content?: readonly Block[] } | undefined)?.content ?? []) as readonly Block[];
+  const text = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ").replace(/\s+/g, " ").trim();
+  const calls = content.filter((b) => b.type === "toolCall").map((b) => `${b.name}(${JSON.stringify(b.arguments ?? {})})`);
+  return JSON.stringify([text, calls]);
+}
+
+/** Counts consecutive identical settled turns; `settle` returns true exactly once per run of three identical turns. */
+export class Repetition {
+  private last: string | undefined;
+  private count = 0;
+  settle(identity: string | undefined): boolean {
+    if (identity === undefined) return false;
+    this.count = identity === this.last ? this.count + 1 : 1;
+    this.last = identity;
+    return this.count === 3;
+  }
+}

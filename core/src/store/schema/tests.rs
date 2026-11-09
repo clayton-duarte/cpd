@@ -2942,9 +2942,13 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
             Some(0)
         ); // `slack-reactions`: a new empty table
         assert_eq!(
+            rows_after.remove("test_replacements").map(|r| r.len()),
+            Some(0)
+        ); // `test-replacement`: a new empty table
+        assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
-            Some(27)
-        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda`, `context_reads` and `record_topics`
+            Some(28)
+        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda`, `context_reads`, `record_topics` and `test_replacements`
         let (txns_before, txns_after) = (
             rows_before.remove("txns").unwrap(),
             rows_after.remove("txns").unwrap(),

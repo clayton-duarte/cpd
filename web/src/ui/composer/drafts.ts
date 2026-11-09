@@ -1,19 +1,41 @@
-const key = (sessionId: string): string => `cpd-ui:draft:${sessionId}`;
+import type { Attachment } from "../../protocol/domain.ts";
 
-export function loadDraft(sessionId: string): string {
+const key = (sessionId: string): string => `cpd-ui:draft:${sessionId}`;
+// A text-only draft is stored as the bare text; one with attachments is this prefix plus JSON.
+// The prefix starts with a NUL, which a typed message cannot contain, so the two never collide.
+const PREFIX = "\u0000cpd-draft:";
+
+export interface Draft {
+  readonly text: string;
+  readonly attachments: readonly Attachment[];
+}
+
+export function loadDraft(sessionId: string): Draft {
+  let raw: string | null;
   try {
-    return window.localStorage.getItem(key(sessionId)) ?? "";
+    raw = window.localStorage.getItem(key(sessionId));
   } catch {
-    return "";
+    return { text: "", attachments: [] };
+  }
+  if (raw === null) return { text: "", attachments: [] };
+  if (!raw.startsWith(PREFIX)) return { text: raw, attachments: [] };
+  try {
+    const parsed = JSON.parse(raw.slice(PREFIX.length)) as Draft;
+    if (typeof parsed.text !== "string" || !Array.isArray(parsed.attachments)) throw new Error("bad draft");
+    return parsed;
+  } catch {
+    return { text: "", attachments: [] };
   }
 }
 
-export function saveDraft(sessionId: string, text: string): void {
+/** Returns false when the draft could not be stored (quota, storage unavailable). */
+export function saveDraft(sessionId: string, text: string, attachments: readonly Attachment[] = []): boolean {
   try {
-    if (text === "") window.localStorage.removeItem(key(sessionId));
-    else window.localStorage.setItem(key(sessionId), text);
+    if (text === "" && attachments.length === 0) window.localStorage.removeItem(key(sessionId));
+    else window.localStorage.setItem(key(sessionId), attachments.length === 0 ? text : PREFIX + JSON.stringify({ text, attachments }));
+    return true;
   } catch {
-    // storage unavailable: keep in-memory state only
+    return false;
   }
 }
 

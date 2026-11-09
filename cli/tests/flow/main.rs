@@ -66,6 +66,7 @@ mod job_open_jira;
 mod job_parked;
 mod job_refusals;
 mod job_resources;
+mod job_retry_queued_tier;
 mod job_touches_stacked;
 mod job_verify;
 mod metrics;
