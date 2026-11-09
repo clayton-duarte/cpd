@@ -384,7 +384,7 @@ fn explore_ladder_stays_inside_the_kind_range() {
         1
     );
 
-    // A research Job climbs S1 > SX > S2 > S3, then fails: it never leaves S.
+    // A research Job climbs S1 > SX > S2 > S3 > S4, then fails: with lead_tier S4 (inclusive ceiling), S4 is the worker ceiling, and it never leaves S.
     add_explore(&mut fx, "research", "S1", "web", &[], &running("web"));
     assert!(fail_attempt(&mut fx, "web", 1, "S1", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "queued");
@@ -410,10 +410,20 @@ fn explore_ladder_stays_inside_the_kind_range() {
     assert_eq!(fx.job_status("web"), "queued");
     fx.fixture(&running("web"));
     assert!(fail_attempt(&mut fx, "web", 4, "S3", Cause::NoSubmit, 5));
+    assert_eq!(fx.job_status("web"), "queued");
+    assert!(
+        tiers_retried(&mut fx)
+            .last()
+            .is_some_and(|d| d.contains("S4")),
+        "{:?}",
+        tiers_retried(&mut fx)
+    );
+    fx.fixture(&running("web"));
+    assert!(fail_attempt(&mut fx, "web", 5, "S4", Cause::NoSubmit, 5));
     assert_eq!(
         fx.job_status("web"),
         "failed",
-        "after S3 the research Job fails: S4 is not a Worker Tier"
+        "after S4 the research Job fails: S5 is above the worker ceiling S4"
     );
 
     // retry_cap is unchanged: with retry_cap 1 a scout fails at its second Attempt, though HX/H2/H3 are left on the ladder.

@@ -97,7 +97,7 @@ fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_err
         ("api", "O3"),
         ("web", "O4"),
         ("app", "H0"),
-        ("ui", "O2"),
+        ("ui", "O3"),
         ("cli", "H2"),
     ] {
         fx.add_job_on(tier, "repo", key, &[], "");
