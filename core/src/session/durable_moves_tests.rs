@@ -41,8 +41,13 @@ struct World {
 /// A home with Leads `dlead` (runner `durable`) and `plead` (runner `pi`), both `stopped` with no pane, each of its own Plan,
 /// and a fake tmux server with the cockpit session `cpd`. `$CPD_HOME` is this test's (nextest runs one test per process).
 fn world() -> World {
+    world_at("cpd")
+}
+
+/// [`world`] with `$CPD_HOME` at `<tempdir>/<sub>`.
+fn world_at(sub: &str) -> World {
     let dir = tempfile::tempdir().unwrap();
-    let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+    let home = CpdHome::resolve(Some(dir.path().join(sub).into()), None).unwrap();
     fs::create_dir_all(home.config().parent().unwrap()).unwrap();
     fs::write(
         home.config(),
@@ -301,4 +306,23 @@ fn open_of_an_asleep_unlatched_session_keeps_the_stored_restart_bound() {
     w.host_socket.script(vec![Reach::Accepted]);
     try_cpd(&w, &["open", "dlead"]).unwrap();
     assert_eq!(bound(&mut w), (2, Some("w".to_owned())));
+}
+
+#[test]
+fn host_socket_path_over_107_bytes_is_refused() {
+    // `$CPD_HOME/run/host/dlead.sock` is far over the 107 bytes a unix socket path holds.
+    let w = world_at(&"h".repeat(120));
+    w.host_socket.script(vec![Reach::Accepted]);
+    let err = try_cpd(&w, &["open", "dlead"]).expect_err("an over-long socket path is refused");
+    assert_eq!(err.code(), ErrorCode::Usage, "{}", err.message());
+    assert!(
+        err.message().contains("socket_path_too_long"),
+        "{}",
+        err.message()
+    );
+    assert!(
+        w.host_socket.paths().is_empty(),
+        "the over-long path is never probed: {:?}",
+        w.host_socket.paths()
+    );
 }
