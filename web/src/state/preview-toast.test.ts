@@ -32,6 +32,56 @@ const expectNoToast = (state: AppState, items: ToolItem[]): void => {
 };
 
 describe("agent failures and action toasts", () => {
+  const guardRunning: ToolItem = {
+    kind: "tool", id: "tool:guard", callId: "guard", name: "bash",
+    args: { command: "cpd job show example", timeout: 60 }, status: "running",
+  };
+  // Representative guard output; the source session of the reported toast is unverified.
+  const guardRefusal: ToolItem = {
+    ...guardRunning, status: "failed", result: {
+      text: "φ: a Lead never blocks: a wait over 30 s runs in the background or is left to the engine's Events; refused: bash timeout 60",
+      isError: true,
+    },
+  };
+  const ordinaryFailure: ToolItem = {
+    kind: "tool", id: "tool:ordinary", callId: "ordinary", name: "bash", args: { command: "false" },
+    status: "failed", result: { text: "Command exited with code 1", isError: true },
+  };
+  const helpFailure: ToolItem = {
+    kind: "tool", id: "tool:help", callId: "help", name: "bash",
+    args: { command: "cpd job edit --help; false" }, status: "failed",
+    result: { text: '{"ok":true,"help":"cpd job edit"}\nCommand exited with code 1', isError: true },
+  };
+
+  it("keeps a live Lead guard refusal as a failed row, not a toast", () => {
+    const before = run(attached(), tail([guardRunning]));
+    expectNoToast(before, [guardRunning]);
+    const after = run(before, server({ type: "session.update", sessionId: "s1", items: [guardRefusal] }));
+    expectNoToast(after, [guardRefusal]);
+  });
+
+  it("keeps ordinary failures and successful help stdout from a failed compound command in the transcript", () => {
+    const after = run(attached(), server({ type: "session.append", sessionId: "s1", items: [ordinaryFailure, helpFailure] }));
+    expectNoToast(after, [ordinaryFailure, helpFailure]);
+  });
+
+  it("replays guard and ordinary failures without a toast on attach and reconnect", () => {
+    const items = [guardRefusal, ordinaryFailure, helpFailure];
+    const historical = run(attached(), tail(items));
+    expectNoToast(historical, items);
+    const reconnected = run(historical, { type: "connection", status: "reconnecting" },
+      { type: "connection", status: "open" }, tail(items));
+    expectNoToast(reconnected, items);
+  });
+
+  it("keeps an existing user-action toast when an agent guard refusal arrives", () => {
+    const actionError: WireError = { code: "cpd_failed", message: "action failed" };
+    const before = run(attached(), tail([guardRunning]),
+      server({ type: "action.result", actionId: "a1", ok: false, error: actionError }));
+    const after = run(before, server({ type: "session.update", sessionId: "s1", items: [guardRefusal] }));
+    expect(after.session?.transcript.items).toEqual([guardRefusal]);
+    expect(after.lastError ?? after.cockpit.error).toEqual(actionError);
+  });
   it("retains a compound failure with successful stdout without a toast on live update", () => {
     const before = run(attached(), tail([success, running]));
     expectNoToast(before, [success, running]);
