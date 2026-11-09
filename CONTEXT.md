@@ -62,7 +62,7 @@ What a Job is for, and so which checks its submit runs: `work` (the default), `d
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
-The last Job of every started Workflow, added by cpd (engine E4), never by the Lead: a Job of kind `open` that is Ready when every other Job of its Workflow is merged or cancelled. Its Worker merges the base into the Lead Branch only if the two conflict; cpd then runs the Gate and opens the Workflow's pull request, ready, never a draft. `pr open` repairs a failed one or a down engine.
+The last Job of every started Workflow, added by cpd (engine `open-jobs`), never by the Lead: a Job of kind `open` that is Ready when every other Job of its Workflow is merged or cancelled. Its Worker merges the base into the Lead Branch only if the two conflict; cpd then runs the Gate and opens the Workflow's pull request, ready, never a draft. `pr open` repairs a failed one or a down engine.
 _Avoid_: opener, release Job
 
 **Update Job** (new, hs-d340):
@@ -148,7 +148,7 @@ The terminal success state of a Job, and the outcome of its successful Attempt: 
 _Avoid_: done (that is phase `done`), completed
 
 **Skipped** (state, pro-d106):
-A Ready Job that E3 could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 E3). Not a GitHub check conclusion.
+A Ready Job that `scheduling` could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 `scheduling`). Not a GitHub check conclusion.
 
 **Workflow status** (state, pro-d144, pro-d146):
 Where a Workflow is, stored as `waiting`, `dispatch`, `open`, `merged` or `cancelled` (contract §3.8). Qualified in prose: "a waiting Workflow" is one whose needs or base are not yet met; `dispatch` means started, its Jobs running, no pull request yet; `open` means its pull request is open; `merged` means its pull request is squash-merged; `cancelled` means given up. The words `dispatch` and `waiting` here are not the Dispatch stage and not a Session's waiting state.
@@ -164,7 +164,7 @@ _Avoid_: edit (an edit changes the Spec: `job edit --spec`)
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):
-Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
+Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step `workflow-start`" (contract §3.7).
 _Avoid_: stage for a phase, step for a Job
 
 **Context stage** (stage, pro-d145):
@@ -246,7 +246,7 @@ A workflow file of GitHub Actions, always written in full so that it is never ta
 _Avoid_: workflow (alone), deploy (for it)
 
 **PR poll** (mechanism, hs-d565):
-The engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`. It stores them (table `pull_requests`) and sends `pr-feedback` only to the Lead of the Workflow that owns the pull request needing attention (contract §3.7 E5, §7.6). A pull request the search misses is read directly and never dropped on the search's absence. `cpd pr poll` runs it by hand and `cpd pr view` reads the detail.
+The engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`. It stores them (table `pull_requests`) and sends `pr-feedback` only to the Lead of the Workflow that owns the pull request needing attention (contract §3.7 `pr-poll`, §7.6). A pull request the search misses is read directly and never dropped on the search's absence. `cpd pr poll` runs it by hand and `cpd pr view` reads the detail.
 _Avoid_: PR watcher, PR sync
 
 **Feedback item** (entity, pro-d68):
@@ -258,7 +258,7 @@ One Slack message announcing a pull request for review, made by `cpd pr post`; o
 _Avoid_: Slack announcement, PR announcement
 
 **Jira status sync** (new, pro-d127):
-For a PR that has its own Jira ticket (`--jira` on `pr add` or `pr edit`), cpd moves the ticket's status: to the policy's `pr.jira.in_progress` when the PR's first Attempt starts, to `pr.jira.in_review` when the PR is opened or adopted (the Workflow binds an open PR) or posted, (a ticket set on a Workflow also queues the target of its status),  and to `pr.jira.done` when it is recorded merged. The steps that reach those points only queue the move, each in its own transaction; engine E19 drains the queue through the pi helper `jira-transition.ts`, which calls the Atlassian MCP. Every run also assigns the ticket to the authenticated Atlassian user (pro-d454). A ticket never moves backwards, a target whose policy name is empty has no transition, and a move the ticket refuses is parked until the ticket or the policy changes. Specified in `docs/commands.md` §21.11 and §21.12.
+For a PR that has its own Jira ticket (`--jira` on `pr add` or `pr edit`), cpd moves the ticket's status: to the policy's `pr.jira.in_progress` when the PR's first Attempt starts, to `pr.jira.in_review` when the PR is opened or adopted (the Workflow binds an open PR) or posted, (a ticket set on a Workflow also queues the target of its status),  and to `pr.jira.done` when it is recorded merged. The steps that reach those points only queue the move, each in its own transaction; engine `jira-transitions` drains the queue through the pi helper `jira-transition.ts`, which calls the Atlassian MCP. Every run also assigns the ticket to the authenticated Atlassian user (pro-d454). A ticket never moves backwards, a target whose policy name is empty has no transition, and a move the ticket refuses is parked until the ticket or the policy changes. Specified in `docs/commands.md` §21.11 and §21.12.
 _Avoid_: Jira update
 
 ## Roles
@@ -340,7 +340,7 @@ The one `cpd watch` per machine: it schedules every Plan's Jobs under one concur
 _Avoid_: daemon, scheduler, one watcher per Workflow
 
 **engine step** (mechanism, pro-d146):
-One numbered part of the engine's loop, E1 to E17, always written "engine step E7" (contract §3.7). Not a step of the CPD flow.
+One numbered part of the engine's loop, `escalations` to `merge-reaction`, always written "engine step `workflow-start`" (contract §3.7). Not a step of the CPD flow.
 _Avoid_: step (alone)
 
 **Board post** (entity):

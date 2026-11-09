@@ -16,7 +16,7 @@ documents current behaviour ([CONTEXT — How to read this glossary](../CONTEXT.
 Each Workflow gets one long-lived **Lead worktree** and the **Lead Branch** checked out in
 it ([contract §7.1](../contract.md), [CONTEXT — Lead worktree](../CONTEXT.md)). It is
 created at the Workflow's start — by `plan lock` for a Workflow with no needs and no base
-Workflow, or by engine E7 / `cpd pr start` for the others ([contract
+Workflow, or by engine `workflow-start` / `cpd pr start` for the others ([contract
 §7.1](../contract.md), [contract §3.8](../contract.md)).
 
 | What | Path | Branch |
@@ -65,21 +65,21 @@ is blocking, so a Worker never starts before setup finished ([contract §7.3](..
 
 ```mermaid
 flowchart TD
-  L["Lead worktree + Lead Branch<br/>&lt;repo&gt;.&lt;plan&gt;.&lt;key&gt; / &lt;plan&gt;/&lt;key&gt;<br/>created at start (plan lock · E7 · pr start), runs pre-start"] --> LIN["Linear Attempt<br/>reuses the Lead worktree, no pre-start"]
+  L["Lead worktree + Lead Branch<br/>&lt;repo&gt;.&lt;plan&gt;.&lt;key&gt; / &lt;plan&gt;/&lt;key&gt;<br/>created at start (plan lock · workflow-start · pr start), runs pre-start"] --> LIN["Linear Attempt<br/>reuses the Lead worktree, no pre-start"]
   L --> PAR["Parallel Attempt<br/>&lt;repo&gt;.&lt;plan&gt;--&lt;attempt&gt; / cpd/&lt;plan&gt;--&lt;attempt&gt;<br/>own worktree, runs pre-start"]
   LIN --> MERGE["Merge (driver A8)<br/>fast-forward the Lead Branch"]
   PAR --> MERGE
   MERGE --> SYNC["Rule S: sync the Lead worktree<br/>Rule P: push the named commit"]
   SYNC --> DONE{"Workflow merged or cancelled?"}
-  DONE -->|"yes"| JAN["Janitor (E16, every watch.janitor_minutes)<br/>removes the Lead worktree + Attempt worktrees"]
+  DONE -->|"yes"| JAN["Janitor (janitor step, every watch.janitor_minutes)<br/>removes the Lead worktree + Attempt worktrees"]
   DONE -->|"no"| LIVE["worktree stays; more Attempts may start"]
 ```
 
 ## Clean-up: the janitor and prune
 
-**The janitor** (`cpd janitor`, engine step E16) removes the worktrees and branches of
+**The janitor** (`cpd janitor`, engine step `janitor`) removes the worktrees and branches of
 merged and cancelled Workflows, and of the ended Attempts of merged Jobs on live Workflows
-([commands §29](../commands.md), [contract §3.7](../contract.md) E16, [contract
+([commands §29](../commands.md), [contract §3.7](../contract.md) `janitor`, [contract
 §7.2](../contract.md)). One pass, then exit; the engine starts one every
 `watch.janitor_minutes` (default 60) and the User may run it by hand ([commands
 §29](../commands.md)). Per pending Workflow it checks idleness (every Attempt `ended` and
@@ -92,7 +92,7 @@ is renamed aside, pruned, branch-deleted and deleted, idempotently ([contract
 `lead_worktree` is cleared and its worktrees and branches are removed by the next pass
 ([contract §7.1](../contract.md)).
 
-**The prune** (pro-d378, the same pass, before that clean-up) removes two whole directories, idempotently and with no Event: the `target` directory of the Lead of each `open`, `merged` or `cancelled` Workflow that has no queued or running Job and no Attempt starting, running or merging (the Lead worktree, its branch and its sources stay), and `run/<plan>/durable` of each archived or deleted Plan whose Attempts are all ended ([commands §29](../commands.md) §4a, [contract §3.7](../contract.md) E16, [contract §7.2](../contract.md)). Each removal is one `pruned` entry of the pass's output and one line in `run/janitor.log`.
+**The prune** (pro-d378, the same pass, before that clean-up) removes two whole directories, idempotently and with no Event: the `target` directory of the Lead of each `open`, `merged` or `cancelled` Workflow that has no queued or running Job and no Attempt starting, running or merging (the Lead worktree, its branch and its sources stay), and `run/<plan>/durable` of each archived or deleted Plan whose Attempts are all ended ([commands §29](../commands.md) §4a, [contract §3.7](../contract.md) `janitor`, [contract §7.2](../contract.md)). Each removal is one `pruned` entry of the pass's output and one line in `run/janitor.log`.
 
 **`prune`** is the by-hand clean-up of leftover worktrees whose work already reached
 `origin/main`, run by the Manager after a Plan ([commands §23](../commands.md)). Its rules
@@ -111,7 +111,7 @@ worktrees and branches only; neither it nor the janitor touches a remote branch 
 - [contract §7.1](../contract.md) — worktrees and branches, and the paths of cancelled Workflows
 - [contract §7.2](../contract.md) — creating worktrees, the linear/parallel rule and removal
 - [contract §7.4](../contract.md) — the merge, rule S and rule P
-- [contract §3.7](../contract.md) — the engine, step E16 (janitor)
+- [contract §3.7](../contract.md) — the engine, step `janitor` (janitor)
 - [contract §3.8](../contract.md) — Workflow statuses and the start
 - [commands §29](../commands.md) — `janitor`
 - [commands §23](../commands.md) — `prune`
