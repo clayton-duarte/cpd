@@ -68,6 +68,14 @@ fn home(dir: &tempfile::TempDir) -> CpdHome {
     CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap()
 }
 
+#[test]
+fn a_fresh_store_opens_with_the_built_in_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+}
+
 /// A database at version `n` holding `sql`, written as cpd's txn 1.
 fn database_at(home: &CpdHome, n: usize, sql: &str) {
     std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
