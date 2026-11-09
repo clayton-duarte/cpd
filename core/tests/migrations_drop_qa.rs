@@ -94,7 +94,7 @@ const LATER: &[(&str, &str)] = &[
     ),
     (
         "event_kinds",
-        "DELETE FROM event_kinds WHERE name = 'bug-breach'",
+        "DELETE FROM event_kinds WHERE name IN ('bug-breach', 'protocol-breach')",
     ),
 ];
 
