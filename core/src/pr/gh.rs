@@ -157,6 +157,21 @@ fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
     run_on(&*Ports::current().runner, cwd, args)
 }
 
+/// STUB (red tests, ghfail2): a merge's `gh <args>` call on `runner` and `clock`: a `RATE_LIMITED` reply waits in place until the
+/// reset (read with `gh api rate_limit`: `graphql` or `core`, plus 3 s; 60 s when unreadable), repeats the same argv, burns no
+/// try, and past 3 600 s of waiting in total fails `gh_failed` with the message `rate_limited: <message>` (contract §7.4).
+/// Not implemented: it panics.
+#[cfg(test)]
+pub(super) fn run_in_merge(
+    runner: &dyn Runner,
+    _clock: &dyn crate::clock::Clock,
+    _cwd: &Path,
+    _args: &[&str],
+) -> Result<String, CpdError> {
+    let _ = runner;
+    unimplemented!("ghfail2: the merge's rate-limit wait")
+}
+
 /// [`run`] on `runner`.
 fn run_on(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
     let out = run_raw_with(runner, cwd, args, TIMEOUT)?;

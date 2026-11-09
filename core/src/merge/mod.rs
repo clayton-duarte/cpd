@@ -943,6 +943,18 @@ fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> 
     })
 }
 
+/// STUB (red tests, ghfail2): the detail of the `crashed` End that `crash_end` gives `e`; `None` when it ends any other way.
+#[cfg(test)]
+pub(crate) fn crashed_detail(e: CpdError) -> Option<String> {
+    match crash_end(e, None).ok()?.end {
+        End::Failed {
+            cause: Failure::Crashed,
+            detail,
+        } => Some(detail),
+        _ => None,
+    }
+}
+
 /// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let workflow = workflow_row(store, target)?;
