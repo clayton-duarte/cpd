@@ -50,13 +50,36 @@ function dragEvent(type: string, files: unknown[]): Event {
   return e;
 }
 
-it("enter submits text and retains the input while pending", () => {
+const FEEDBACK = '[data-part="submission-feedback"]';
+
+it("after Enter the composer stays enabled, empty and shows no submission feedback", () => {
+  const { m } = setup();
+  const t = textarea(m.container);
+  typeText(t, "hello");
+  press(t, "Enter");
+  expect(textarea(m.container).disabled).toBe(false);
+  expect(textarea(m.container).value).toBe("");
+  expect(m.container.querySelector(FEEDBACK)).toBeNull();
+  m.unmount();
+});
+
+it("after the Send button the composer stays enabled, empty and shows no submission feedback", () => {
+  const { m } = setup();
+  typeText(textarea(m.container), "hello");
+  click(m.container.querySelector('button[data-action="send"]')!);
+  expect(textarea(m.container).disabled).toBe(false);
+  expect(textarea(m.container).value).toBe("");
+  expect(m.container.querySelector(FEEDBACK)).toBeNull();
+  m.unmount();
+});
+
+it("enter submits text and clears the input", () => {
   const { m, submits } = setup();
   const t = textarea(m.container);
   typeText(t, "hello");
   press(t, "Enter");
   expect(submits).toEqual([{ text: "hello", attachments: [], whenBusy: "followUp" }]);
-  expect(textarea(m.container).value).toBe("hello");
+  expect(textarea(m.container).value).toBe("");
   m.unmount();
 });
 
@@ -213,15 +236,15 @@ it("draft: switching session shows that session draft and keeps the other", () =
   container.remove();
 });
 
-it("draft: sending retains the stored draft until disposition is known", () => {
+it("draft: sending clears the stored draft", () => {
   const { m, submits } = setup();
   const t = textarea(m.container);
   typeText(t, "hello");
   expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
   press(t, "Enter");
   expect(submits).toHaveLength(1);
-  expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
-  expect(textarea(m.container).value).toBe("hello");
+  expect(window.localStorage.getItem(KEY("s1"))).toBeNull();
+  expect(textarea(m.container).value).toBe("");
   m.unmount();
 });
 

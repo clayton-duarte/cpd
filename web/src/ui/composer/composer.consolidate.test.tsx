@@ -75,8 +75,9 @@ it("composer keeps send enabled and submits as follow-up", () => {
   expect(send()!.disabled, "busy never disables Send").toBe(false);
   act(() => send()!.click());
   expect(submits).toEqual([{ text: "go on", attachments: [], whenBusy: "followUp" }]);
+  typeText(textarea(m.container), "again");
   act(() => { textarea(m.container).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-  expect(submits).toHaveLength(1);
+  expect(submits[1]).toEqual({ text: "again", attachments: [], whenBusy: "followUp" });
   m.unmount();
 });
 

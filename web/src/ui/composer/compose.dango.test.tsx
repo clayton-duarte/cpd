@@ -88,8 +88,9 @@ it("composer sends a follow-up on Enter, busy or not, and ignores Alt Enter as a
   typeText(t, "go");
   press(t, "Enter");
   expect(submits).toEqual([{ text: "go", attachments: [], whenBusy: "followUp" }]);
+  typeText(t, "later");
   press(t, "Enter", { altKey: true });
-  expect(submits).toHaveLength(1);
+  expect(submits[1]).toEqual({ text: "later", attachments: [], whenBusy: "followUp" });
   m.unmount();
 });
 
