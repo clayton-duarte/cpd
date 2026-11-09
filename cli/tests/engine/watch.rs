@@ -2266,7 +2266,7 @@ fn e3_starts_a_job_stored_on_a_tier_of_the_worker_range_at_that_tier() {
 }
 
 /// The roles GX / H3 / `lead` / O3 on the catalog H [0-4], S [0,1,3,4], O [0,2,3,4], G []: the worker range is H3..S3
-/// for `lead` = S3 and H3..SX for S2 (the ceiling is inclusive; X sits between 1 and 2). S has no effort 2, so `S2` is no Tier.
+/// for `lead` = S4 and H3..S1 for S2. S has no effort 2, so `S2` is a Tier the catalog refuses.
 fn ranged_roles(lead: &str) -> String {
     format!(
         "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n"
@@ -2298,7 +2298,7 @@ fn tier_not_allowed_errors(fx: &Ip) -> Vec<(String, i64)> {
 #[test]
 fn e3_never_starts_a_job_stored_outside_the_worker_range() {
     {
-        let fx = engine_scheduling(&ranged_roles("S3"));
+        let fx = engine_scheduling(&ranged_roles("S4"));
         ranged_catalog(&fx);
         // Outside H3..S3: below the floor, above the ceiling, another letter.
         fx.add_job_on("H2", "repo", "low", &[], "");
@@ -2333,7 +2333,7 @@ fn e3_never_starts_a_job_stored_outside_the_worker_range() {
         fx.watch_first_tick().unwrap();
     }
 
-    // A second config moves the ceiling: with lead_tier = S2 the range is H3..SX (inclusive; X is between 1 and 2) and a Job on S3 is refused.
+    // A second config moves the ceiling: with lead_tier = S2 the range is H3..S1 and a Job on S3 is refused.
     let fx = engine_scheduling(&ranged_roles("S2"));
     ranged_catalog(&fx);
     fx.add_job_on("S3", "repo", "high", &[], "");
@@ -2387,7 +2387,7 @@ fn e2_ladder_climbs_inside_the_worker_range_and_fails_at_its_ceiling() {
     assert_eq!(
         fx.job_status("api"),
         "failed",
-        "no rung of H3..SX at or above S2"
+        "no rung of H3..S1 at or above S2"
     );
     assert_eq!(
         fx.env
@@ -3057,7 +3057,7 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
 }
 
 /// The `update` Job runs at `worker_tier`, floored to a valid rung when it is not one: H4 is no rung (H offers 0-3 here), so the
-/// lowest valid rung at or above it is S1: S offers 1-5, no S0, and within a letter X sits between 1 and 2, so S1 comes before SX (contract §9).
+/// lowest valid rung at or above it is SX: S offers 1-5, no S0, and within a letter X sits between 0 and 1 (contract §9).
 #[test]
 fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     let (fx, says) = open_pr_with("worker_tier = \"H4\"\nlead_tier = \"S4\"");
@@ -3070,7 +3070,7 @@ fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     assert_eq!(
         fx.env
             .query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'up-repo'"),
-        "S1",
+        "SX",
         "worker_tier H4 floored to its rung"
     );
 }
@@ -6174,6 +6174,26 @@ fn distilling(config_extra: &str, fits: u32) -> (Ip, Arc<Mutex<Vec<u32>>>) {
     (fx, sizes)
 }
 
+/// Pi's observed permanent quota refusal (air-d141), on fake runner and spawn ports.
+fn quota_distilling() -> (Ip, Arc<Mutex<Vec<u32>>>) {
+    let fx = engine("");
+    let sizes = Arc::new(Mutex::new(Vec::new()));
+    let seen = sizes.clone();
+    fx.route_fn("pi", move |call| {
+        let batch = fs::read_to_string(call.cwd.as_ref().unwrap().join("batch.md")).unwrap();
+        let n = u32::try_from(batch.lines().filter(|line| line.starts_with('[')).count()).unwrap();
+        seen.lock().unwrap().push(n);
+        let stream = json!({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}},
+            "stopReason": "error",
+            "errorMessage": "The ChatGPT user has reached their Subscription Sharing usage limit."
+        }});
+        Reply::ok(&format!("{stream}\n"))
+    });
+    (fx, sizes)
+}
+
 /// The batch sizes pi saw, in order, a run of equal ones (the ladder's steps of one run) counted once.
 fn batch_sizes(sizes: &Mutex<Vec<u32>>) -> Vec<u32> {
     let mut sizes = sizes.lock().unwrap().clone();
@@ -6405,6 +6425,63 @@ fn e9_starts_again_at_60_when_the_state_changes() {
         batch_sizes(&seen).len() > 5
     });
     assert_eq!(batch_sizes(&sizes)[..6], [60, 30, 15, 5, 1, 60]);
+}
+
+/// Exhaust the quota-failed batch ladder and let the batch-1 child finish before restarting the engine.
+fn exhaust_quota(fx: &Ip, sizes: &Arc<Mutex<Vec<u32>>>) {
+    let seen = sizes.clone();
+    drive_until(fx, move || seen.lock().unwrap().contains(&1), 5 * SECOND);
+    assert_eq!(batch_sizes(sizes), [60, 30, 15, 5, 1]);
+    assert!(
+        fx.events("error").iter().any(|(_, _, _, data)| {
+            data["source"] == "context distill"
+                && data["code"] == "distill_failed"
+                && data["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("Subscription Sharing usage limit"))
+        }),
+        "the quota failure is visible"
+    );
+}
+
+#[test]
+fn e9_permanent_quota_failure_is_not_retried_until_input_changes() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // A fresh engine must not forget the exhausted permanent failure (air-d141).
+    drive_for(&fx, 15 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must not be retried after an engine restart"
+    );
+}
+
+#[test]
+fn e9_changed_input_after_quota_failure_starts_at_full_batch() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // First verify the same input remains parked across restart; otherwise a full-batch
+    // call after adding a record would not prove that the changed key enabled it.
+    drive_for(&fx, 5 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must remain parked before it changes"
+    );
+    old_notes(&fx, 71, 1);
+    drive_for(&fx, SECOND);
+    assert_eq!(
+        sizes.lock().unwrap()[before],
+        60,
+        "changed input starts at full batch"
+    );
 }
 
 // ---- E9 and the curation floor (hs-d592 R2, R5) ----
