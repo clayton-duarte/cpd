@@ -393,13 +393,12 @@ fn poll_pass(
     let moved = env.store.read(|conn| {
         let mut moved = Vec::new();
         for (repo, number, head) in &fresh {
-            let stored: Option<Option<String>> = rusqlite::OptionalExtension::optional(
-                conn.query_row(
+            let stored: Option<Option<String>> =
+                rusqlite::OptionalExtension::optional(conn.query_row(
                     "SELECT head_oid FROM pull_requests WHERE repo = ?1 AND number = ?2",
                     rusqlite::params![repo, number],
                     |r| r.get(0),
-                ),
-            )?;
+                ))?;
             if stored.is_some_and(|s| s.as_deref() != Some(head.as_str())) {
                 moved.push((repo.clone(), *number, head.clone()));
             }
