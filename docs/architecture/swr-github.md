@@ -6,11 +6,11 @@ Scope: the GitHub **read** of every pull request, repository, deploy and the vie
 
 ## 1. The idea in one pass
 
-One engine pass (E5, every `pr_poll_seconds`) sends **one** GraphQL read document to GitHub. Its answer is committed into SQLite, key by key. Every reader afterwards reads SQLite through one function, `swr::github::effective_pr`. Every GitHub write is an outbox row, drained by the engine, and shows at once as an overlay on the row it changes.
+One engine pass (`pr-poll`, every `pr_poll_seconds`) sends **one** GraphQL read document to GitHub. Its answer is committed into SQLite, key by key. Every reader afterwards reads SQLite through one function, `swr::github::effective_pr`. Every GitHub write is an outbox row, drained by the engine, and shows at once as an overlay on the row it changes.
 
 Three rules follow, and §16 of [swr.md](swr.md) binds them:
 
-- A reader never calls GitHub. `cpd pr view`, `cpd inbox claim`, `cpd pr merge`, `cpd pr post`, E8, the TUI and `cpd plan show` all read the cache.
+- A reader never calls GitHub. `cpd pr view`, `cpd inbox claim`, `cpd pr merge`, `cpd pr post`, `inbox`, the TUI and `cpd plan show` all read the cache.
 - A failed pass never overwrites or deletes a row. A rate-limit pause or an outage is a row of `swr_endpoints`, not a file.
 - A write is visible before GitHub has it, and it stops being an overlay only when a pass that started after the write proves GitHub has it (the fence, [swr.md §10](swr.md)).
 
@@ -77,7 +77,7 @@ fragment Light on PullRequest {
 
 fragment Heavy on PullRequest {
   latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } }
-  reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } }
+  reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } }
   comments(first: 50) { nodes { id author { __typename login } body url createdAt } }
   commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
     __typename
@@ -90,7 +90,7 @@ fragment Heavy on PullRequest {
 Notes on the shape:
 
 - **`labels`, `autoMergeRequest`, `latestReviews` and `reviewThreads` are light** here, though the spec's list put them elsewhere. Reason: `labels` and `autoMergeRequest` are header scalars that the readers need on every pass; `latestReviews` (pro-d453: it replaces `latestOpinionatedReviews`, and adds `commit { oid }`) is what the human-approval rule of contract §7.6 step 2 (pro-d158) reads, so `review_decision` cannot be computed without it on every pass, and it gives every polled pull request its reviewers' state and reviewed commit without a heavy read. The pass stores the `latestReviews` nodes, the label names and the author's login in `pull_requests.reviews_json`, `labels_json` and `author_login` (migration `pr-light-cache`); `reviewThreads(first: 100){ id isResolved }` is what the pro-d387 resolution check reads (contract §7.6 step 3a), and a thread resolved on GitHub moves no `updatedAt`, so without it on every pass a resolution would be invisible. The last one is selected only for pull requests a Plan owns (the builder knows them from `workflows`).
-- **`comments(first: 50)` and `reviewThreads(first: 50)` are heavy, and the `first` counts are this page's choice.** Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 covers the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
+- **`comments(first: 50)` is heavy, and `reviewThreads` is `first: 100` in both fragments (pro-d457): `Light` and `Heavy` read the same 100 threads.** The `first` counts are this page's choice. Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 comments and 100 threads cover the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
 - The check contexts (`... on CheckRun`, `... on StatusContext`) replace `gh run list --commit` and the `gh pr view --json statusCheckRollup` of `pr view`. `checkSuite.workflowRun.databaseId` is the id `pr rerun` needs (§9, `rerun`).
 - Repository metadata (`m<i>`) is fetched only for a repository missing from `swr_repos` or whose `fetched_at` is older than 24 h.
 
@@ -103,6 +103,8 @@ Notes on the shape:
 | `Heavy` | a pull request whose `updatedAt` differs from `swr_pr_detail.updated_at`, whose `headRefOid` differs from `swr_pr_detail.head_oid`, or that has no `swr_pr_detail` row |
 | `viewerDidAuthor`, `viewerLatestReviewRequest` | an absent-pull-request alias (§4.2), which needs them to decide `authored` and `review_requested` |
 | `m<i>` (repository metadata) | §3.1's rule |
+
+The `Heavy` fragment is sent only when the poll has heavy pull requests (a non-empty `Heavy` set); a poll with none sends no `Heavy` selection (pro-d457).
 
 The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydrated_at`" test of the spec: a row whose `updated_at` or `head_oid` differs from what the last hydrate stored is re-read, and a successful hydrate sets `hydrated_at`. A pull request whose detail did not move, costs no heavy fields.
 
@@ -143,7 +145,7 @@ Each step is one function in `core/src/swr/source/github.rs`; the reader is `cor
 
 A pass that starts while a previous one still runs does not happen: the endpoint's `fetch_status` is `fetching` for the call (swr.md §16).
 
-**A reopen is not a second pass (rule 1 of the spec).** Today a pass that reopens a Workflow runs again: `core/src/pr/poll.rs:102-106` loops on `again`, which `rebind_reopened` sets (pro-d362). The github Workflow removes the loop. A Workflow reopened by a commit is owned from the next pass; that pass's document selects its heavy fields, because it has no `swr_pr_detail` row yet (§3.2), and reads its checks and feedback then. The cost is one pass of latency, which E5's cadence already has.
+**A reopen is not a second pass (rule 1 of the spec).** Today a pass that reopens a Workflow runs again: `core/src/pr/poll.rs:102-106` loops on `again`, which `rebind_reopened` sets (pro-d362). The github Workflow removes the loop. A Workflow reopened by a commit is owned from the next pass; that pass's document selects its heavy fields, because it has no `swr_pr_detail` row yet (§3.2), and reads its checks and feedback then. The cost is one pass of latency, which `pr-poll`'s cadence already has.
 
 ### 4.1 Which pull requests a pass reads
 
@@ -210,7 +212,7 @@ pub struct EffectivePr {
 }
 ```
 
-The names are this page's; the shape is the contract. `EffectivePr` is the only type a reader of GitHub state uses. **Every consumer calls it**: the E8 rules `pr-ready`, `pr-closed`, `review-requested` and `deploy` (contract §2.2), `cpd pr view`, `cpd inbox claim` (its live check, §9), `cpd pr merge` and `cpd pr post` (their prechecks), the TUI tree and `cpd plan show`. A consumer that reads `pull_requests` directly for a GitHub value is a defect of this design, and a test pins it (§11).
+The names are this page's; the shape is the contract. `EffectivePr` is the only type a reader of GitHub state uses. **Every consumer calls it**: the `inbox` rules `pr-ready`, `pr-closed`, `review-requested` and `deploy` (contract §2.2), `cpd pr view`, `cpd inbox claim` (its live check, §9), `cpd pr merge` and `cpd pr post` (their prechecks), the TUI tree and `cpd plan show`. A consumer that reads `pull_requests` directly for a GitHub value is a defect of this design, and a test pins it (§11).
 
 `effective_pr` reads no clock and no GitHub. It takes no `now` because nothing it returns depends on time: the freshness of a value is `fetched_at` and `stale_after`, which the reader returns as data where a caller needs them (`cpd swr show`).
 
@@ -231,7 +233,7 @@ The two rules that were in the engine's memory move into the endpoint row, so ev
 - **The floor.** `RATE_FLOOR` is `100` (`engine/src/watch/pr.rs:35`, moved to `core/src/swr/source/github.rs`). After a pass, `endpoint::record_rate(remaining, reset_at)` stores `rate_remaining` and `rate_reset_at`, and when `remaining < RATE_FLOOR` it pauses the endpoint until `reset_at` (`pause_until`). This replaces the check at `engine/src/watch/pr.rs:337` (`if remaining >= RATE_FLOOR`). It corrects swr.md §7, which paused only at `remaining` 0; this is a newer decision and it wins (§14 records the superseding note).
 - **The hard pause.** A `RATE_LIMITED` reply pauses the endpoint until `reset_at` plus `RATE_GRACE` (3 s), or `RATE_FALLBACK` (60 s) when no reset is known (`engine/src/watch/pr.rs:130-143`, `37` and `39`). It is `endpoint::pause_until(reset_at + grace)`. It is not an error, and it raises no Event: it writes one `watch.log` line, as today. The fallback when the reset is unknown is kept as it is.
 
-A paused endpoint is skipped by the pass, by E24 for its own sources and by the outbox drain (§9). A success after the pause has passed clears the pause (`record_ok`, swr.md §7).
+A paused endpoint is skipped by the pass, by `swr` for its own sources and by the outbox drain (§9). A success after the pause has passed clears the pause (`record_ok`, swr.md §7).
 
 ### 7.3 One port for `gh`
 
@@ -284,7 +286,7 @@ A write command enqueues a row of `swr_mutations` and returns `{queued, mutation
 
 **A failed write's overlay goes at once** (swr.md §8: `fail` with `Retry::Never`). That is a true revert: the item returns to its raw state, and an error Event says why.
 
-**Writes in a pass.** A write is not a read; it is not counted by the "one document" rule (§3.1). A drain is its own call. The pass and the drain run in one engine step (E5, then the drain of §4 step 10), and neither starts while the endpoint is paused.
+**Writes in a pass.** A write is not a read; it is not counted by the "one document" rule (§3.1). A drain is its own call. The pass and the drain run in one engine step (`pr-poll`, then the drain of §4 step 10), and neither starts while the endpoint is paused.
 
 ## 10. Guarantees
 
@@ -292,7 +294,7 @@ These are the guarantees of the spec's point 5. Each names its mechanism and its
 
 **(a) Leads are told from the cache.** `checks_failed`, `changes_requested` and `comments` are decided in the commit transaction of the pass, from the raw rows it just wrote (contract §7.6 step 6, unchanged in content). A Lead that is woken reads the same cache that `cpd pr view` reads, so what it is told and what it can see agree.
 
-**(b) The review Lead is woken on a new head.** A Review Lead is the Lead of a Plan whose `reviewed_repo` and `reviewed_number` name a pull request that some `inbox_items` row has `claimed_at` set for. Today only a User's re-claim wakes it (contract §2.2, commands §21.7, the reused-Plan path). The new rule: **in the commit transaction that stores a `head_oid` change, or a `checks` change to `passed`, of such a pull request, one `session-message` Event is appended to the Lead** (`data.from` null, `wake` true, the form of contract §3.7 E20 and E21) when all of these hold:
+**(b) The review Lead is woken on a new head.** A Review Lead is the Lead of a Plan whose `reviewed_repo` and `reviewed_number` name a pull request that some `inbox_items` row has `claimed_at` set for. Today only a User's re-claim wakes it (contract §2.2, commands §21.7, the reused-Plan path). The new rule: **in the commit transaction that stores a `head_oid` change, or a `checks` change to `passed`, of such a pull request, one `session-message` Event is appended to the Lead** (`data.from` null, `wake` true, the form of contract §3.7 `parked-drafts` and `closed-pr-wake`) when all of these hold:
 
 - the claimed item's `head_oid` (the head at claim time, `inbox_items.head_oid`) differs from the stored new `head_oid`;
 - the new `checks` is `passed`;
@@ -302,7 +304,7 @@ Its text names the pull request's URL, the new head and the claimed head, and te
 
 **(c) Managers see each Workflow's PR state.** `cpd plan show` prints each Workflow's `pull_request` from `effective_pr`: `checks`, `review_decision`, `feedback_open` and `head_oid` (added to the printed row by this design; commands §4.3). A Manager reads it from the cache with no call.
 
-**(d) Inbox items do not flicker.** The items of E8 for CI, review, mergeable and deploy are computed from `effective_pr` only. Their value changes in two ways only: a Changed commit of the raw row, which is a real change of GitHub's state, and an overlay's start or end, which is a real change of intent (a write queued, or a fence settled or a write failed). A pass that changes nothing writes nothing (D5), so an item's colour does not alternate between two passes. The identity rule of contract §2.2 still applies: a colour change closes and opens the item, and a change of label inside a colour updates it in place.
+**(d) Inbox items do not flicker.** The items of `inbox` for CI, review, mergeable and deploy are computed from `effective_pr` only. Their value changes in two ways only: a Changed commit of the raw row, which is a real change of GitHub's state, and an overlay's start or end, which is a real change of intent (a write queued, or a fence settled or a write failed). A pass that changes nothing writes nothing (D5), so an item's colour does not alternate between two passes. The identity rule of contract §2.2 still applies: a colour change closes and opens the item, and a change of label inside a colour updates it in place.
 
 **(e) Deploys.** `swr_deploys` holds the waiting runs; the reads are delta-only (§8); `approve` is an outbox op whose overlay closes the item at once (§9); a row goes inactive when its pull request is closed or merged, and `gc` deletes it seven days later (§8, `swr.gc_days`).
 
@@ -335,14 +337,14 @@ Each row is removed in the same change as its replacement, with no flag and no d
 
 | Deleted | Where it is | Replaced by |
 |---|---|---|
-| the static `GITHUB` memo of E8 | `core/src/inbox/rules.rs:49`, used at `:88` | `effective_pr`, read per tick from SQLite |
-| `team::GITHUB_TTL` and its `Memo` | `core/src/inbox/team.rs:27`, `:392-420` | nothing: E8 reads the rows the pass wrote |
-| the team lookup's own `gh api graphql` call | `core/src/inbox/team.rs:264-288` | the pass's document: E11's team lookup reads GitHub only through the single poll |
+| the static `GITHUB` memo of `inbox` | `core/src/inbox/rules.rs:49`, used at `:88` | `effective_pr`, read per tick from SQLite |
+| `team::GITHUB_TTL` and its `Memo` | `core/src/inbox/team.rs:27`, `:392-420` | nothing: `inbox` reads the rows the pass wrote |
+| the team lookup's own `gh api graphql` call | `core/src/inbox/team.rs:264-288` | the pass's document: `team-review`'s team lookup reads GitHub only through the single poll |
 | `run/team-review.json` | `core/src/inbox/team.rs:69` (the writer and the reader) | `swr_slack_posts` (the slack Workflow) |
 | `run/deploy-runs.json` | `core/src/inbox/rules.rs:151`, its writer in the poll, and the rewrite of `inbox approve` | `swr_deploys` (§8) and the `approve` op (§9) |
 | `run/pr-poll-failing.json` | `engine/src/watch/pr.rs:228-240`, `:190-297`; `engine/src/watch/report.rs:309-336` | `swr_endpoints` `failing_since` and `reported_at` (§7.1) |
 | the RATE_FLOOR check and the rate pause in engine memory | `engine/src/watch/pr.rs:35`, `:130-143`, `:337` | `swr_endpoints` `record_rate` and `pause_until` (§7.2) |
-| the E18 queue use of `pr_posts.auto_merge` | the E18 step's selection of `pr_posts` rows with `auto_merge` `pending` | the `auto_merge` op and its retry in `swr_mutations` (§9). The column stays, as the stored history of a post |
+| the `auto-merge` queue use of `pr_posts.auto_merge` | the `auto-merge` step's selection of `pr_posts` rows with `auto_merge` `pending` | the `auto_merge` op and its retry in `swr_mutations` (§9). The column stays, as the stored history of a post |
 | the TUI's in-memory Posting set | `tui/src/widgets/mod.rs:567-572` | the overlay `posting` of the `post` op (§9) |
 | the merge marker file | `tui/src/merge/marker.rs` | the `merge` op's status (`in_flight`, `revalidating`) |
 
@@ -367,11 +369,11 @@ These are added to [swr.md §17](swr.md). Each is stated so a later Job can test
 Not decided by this page. Each is recorded so no Job guesses it.
 
 - **Which writes stay synchronous.** `pr open`, `pr push`, `pr rebase`, `workflow add --adopt` and the codereview `review submit` call `gh` and push git branches. This design enqueues the writes of §9 only. The Lead decides whether the git writes (a push and a Gate cannot be a row without their own design) and the review submit join the outbox.
-- **`run/pr-poll-now`** (contract §1.4, the immediate-poll request, pro-d392, pro-d394): its replacement is `cache::invalidate` on the `github:pr` keys plus a wake, which is the swr.md §16 rule. Not decided here; the Job that cuts over E5 decides it.
+- **`run/pr-poll-now`** (contract §1.4, the immediate-poll request, pro-d392, pro-d394): its replacement is `cache::invalidate` on the `github:pr` keys plus a wake, which is the swr.md §16 rule. Not decided here; the Job that cuts over `pr-poll` decides it.
 - **`pull_requests.updated_at`** (pro-d68) is superseded by `swr_pr_detail.updated_at` for the heavy trigger. Dropping it is a breaking migration; not decided here.
 - **Storing `rateLimit.cost`** (§5): logged for now.
 - **The paging cursor** (§3.3, G4): a text column for the second search page. Decide whether the github Workflow's breaking migration adds `swr_queries.cursor`, or the page is skipped.
-- **The superseding notes of this Job** (rule 4 and G7). swr.md §7 and contract §3.7 E5 say the old rule. They are annotated, not rewritten: the newer decision stands and the older text is marked superseded (AGENTS, "Recency wins").
+- **The superseding notes of this Job** (rule 4 and G7). swr.md §7 and contract §3.7 `pr-poll` say the old rule. They are annotated, not rewritten: the newer decision stands and the older text is marked superseded (AGENTS, "Recency wins").
 - **`pr view` when no detail is hydrated yet**: the design prints `detail` `null`. Whether the Lead should wait for it is not decided.
 - **`prune/mod.rs:179`** calls `gh` directly (§7.3). It is not an SWR reader; moving it is in this Plan's scope by rule 7, but its owner Job is not named here.
 - **The `triggering_actor.login` of the deploy list** is compared case-insensitively against the viewer's login (§8). Assumption from contract §7.6 step 8; verified only against the live example of 2026-10-27 that the contract cites.
