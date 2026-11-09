@@ -2399,7 +2399,8 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
                    {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
                    {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
                "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
-               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
+               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET},
+               "calls": {"search": 1, "absent": 0, "comments": 0, "checks": 0, "deploys": 0}})
     );
     assert_eq!(
         fx.pull_requests(),
@@ -4567,7 +4568,8 @@ fn a_second_identical_poll_writes_nothing() {
     assert_eq!(
         again,
         json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
-               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "workflows": again["workflows"]})
+               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "workflows": again["workflows"],
+               "calls": {"search": 1, "absent": 0, "comments": 0, "checks": 1, "deploys": 0}})
     );
     assert_eq!(
         (fx.txns(), fx.event_count()),

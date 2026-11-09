@@ -4218,8 +4218,8 @@ fn poll_now_file(fx: &Ip) -> PathBuf {
 fn pr_poll_now_file_triggers_immediate_poll() {
     let fx = engine_home("");
     fx.engine_routes_polling();
-    // The poll period is an hour and a poll takes 2 s: only the file can bring the second poll forward.
-    fx.export("CPD_TEST_PR_POLL", "3600");
+    // The poll period is 30 s (minimum spacing 10 s) and a poll takes 2 s: only the file can bring the second poll forward.
+    fx.export("CPD_TEST_PR_POLL", "30");
     let takes = Duration::from_secs(2);
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
     let file_at_call = Arc::new(Mutex::new(Vec::<bool>::new()));

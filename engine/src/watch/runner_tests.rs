@@ -196,7 +196,7 @@ fn poll_logs_cost_remaining_and_calls_by_kind() {
     let log = std::fs::read_to_string(fx.engine.home.watch_log()).unwrap();
     assert!(
         log.contains(
-            "E5: polled 3 pull request(s): 0 changed, 0 feedback, 0 merged, 0 plan(s) done; cost 7, remaining 4900, search 1, absent 2, comments 3, checks 4, deploys 5"
+            "pr-poll: polled 3 pull request(s): 0 changed, 0 feedback, 0 merged, 0 plan(s) done; cost 7, remaining 4900, search 1, absent 2, comments 3, checks 4, deploys 5"
         ),
         "a poll that changed nothing still writes its measure line: {log}"
     );
