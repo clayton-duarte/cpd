@@ -171,10 +171,24 @@ pub fn load(config: &Config, models: &Models) -> Result<Catalog, CpdError> {
 /// [`load`] through a `store` the caller already holds, so the catalog does not
 /// open a second one (flock, pragmas, schema hash).
 pub fn load_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
-    load_from(&locate_pi()?, models, store)
+    load_with_runner(&*Ports::current().runner, models, store)
 }
 
-fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+/// [`load_with`] on `runner`, including a cold cache's catalog module.
+pub fn load_with_runner(
+    runner: &dyn Runner,
+    models: &Models,
+    store: &mut Store,
+) -> Result<Catalog, CpdError> {
+    load_from(&locate_pi()?, models, store, runner)
+}
+
+fn load_from(
+    pi: &PiInstall,
+    models: &Models,
+    store: &mut Store,
+    runner: &dyn Runner,
+) -> Result<Catalog, CpdError> {
     let refs = [
         models.o.as_str(),
         models.s.as_str(),
@@ -186,7 +200,7 @@ fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catal
     if let Some(cached) = cache::read_refs(store, &pi.version, &sha, refs)? {
         return Ok(cached);
     }
-    let catalog = read(pi, models, NODE_DEADLINE)?;
+    let catalog = read_with(runner, pi, models, NODE_DEADLINE)?;
     cache::write(store, &sha, &catalog)?;
     Ok(catalog)
 }
@@ -368,7 +382,11 @@ mod tests {
         };
         cache::write(&mut store, "", &cached).unwrap();
 
-        // pi's entry points do not exist: a cache miss would fail in `read`.
-        assert_eq!(load_from(&pi(), &models, &mut store).unwrap(), cached);
+        let runner = crate::host::runner::FakeRunner::new(crate::clock::ManualClock::new());
+        assert_eq!(
+            load_from(&pi(), &models, &mut store, &runner).unwrap(),
+            cached
+        );
+        assert!(runner.calls().is_empty(), "a cache hit starts no node");
     }
 }
