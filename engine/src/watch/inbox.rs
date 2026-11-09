@@ -20,20 +20,20 @@ pub(super) fn run(engine: &mut Engine) {
         Ok((changes, told, asked)) => {
             if !changes.is_empty() {
                 engine.log.line(&format!(
-                    "E8: opened {} Inbox item(s), closed {}",
+                    "inbox: opened {} Inbox item(s), closed {}",
                     changes.opened.len(),
                     changes.closed.len()
                 ));
             }
             if told > 0 {
                 engine.log.line(&format!(
-                    "E8: told the Manager of {told} stuck Job Workflow(s)"
+                    "inbox: told the Manager of {told} stuck Job Workflow(s)"
                 ));
             }
             if asked > 0 {
-                engine
-                    .log
-                    .line(&format!("E8: told the Manager of {asked} repeated ask(s)"));
+                engine.log.line(&format!(
+                    "inbox: told the Manager of {asked} repeated ask(s)"
+                ));
             }
             engine.clear(Step::E8, &About::Machine);
         }

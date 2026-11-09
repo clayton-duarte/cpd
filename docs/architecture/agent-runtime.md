@@ -16,7 +16,7 @@ This is the design stance, not an accident (hs-d802, item 3): cpd does not abstr
 
 - **First messages.** cpd builds each role's first message and passes it to pi as an `@file` after `--`, never as inline text, because Linux caps one argument at 131072 bytes ([contract §6.6](../contract.md)). A User-created Lead's first message is replayed by the adapter through `cpd session first-message` ([commands §15.7a](../commands.md)); the adapter stores it as a silent entry before the first turn ([contract §6.13](../contract.md), "The first message of a by-user Session").
 - **Dialog serialization.** The adapter opens and closes pi's blocking dialogs and reports them: `ui_prompt_start` and `ui_prompt_end` open one `dialog` reason (or `verdict: <option>`), depth-counted so nested prompts give one pair ([commands §15.4](../commands.md)). The Plan review's own `select` and `editor` dialogs open no `dialog` reason; they are represented by `plan-review:<review>` ([commands §15.4](../commands.md), [commands §15.5](../commands.md)). A Worker's dialogs are not reported: it never talks to the User, it asks its Lead with `cpd ask` ([commands §15.4](../commands.md)).
-- **Titles.** Engine step E10 starts `cpd session retitle` for a finished Lead or Manager turn, and the title writer is itself a one-shot pi run whose prompt asks for one `TITLE:` line ([contract §3.7](../contract.md) E10, [contract §6.6](../contract.md), [commands §10.14](../commands.md)).
+- **Titles.** Engine step `session-titles` starts `cpd session retitle` for a finished Lead or Manager turn, and the title writer is itself a one-shot pi run whose prompt asks for one `TITLE:` line ([contract §3.7](../contract.md) `session-titles`, [contract §6.6](../contract.md), [commands §10.14](../commands.md)).
 - **State reporting.** The adapter keeps `active`, its own reasons (`escalation:<id>`, `plan-review:<review>`, `loop-guard`) and blocking dialogs, and reports `working`, `waiting`, `blocked` or `idle` through `cpd session state` ([commands §15.4](../commands.md), [contract §3.6](../contract.md)). It also records whether a run is a **reply run** and reports it with the `idle` ([commands §15.4](../commands.md)).
 
 ## The worker runner: pi and pi-durable
@@ -46,7 +46,7 @@ The runtime sits on the SDK ([[sdk]]); it starts the three agent roles and the a
 - [contract §6.13](../contract.md) — the durable session host
 - [contract §6.14](../contract.md) — the host socket protocol
 - [contract §1.1](../contract.md) — system dependencies; tmux the only host
-- [contract §3.6](../contract.md), [contract §3.7](../contract.md) — Session states; E10 titles
+- [contract §3.6](../contract.md), [contract §3.7](../contract.md) — Session states; `session-titles` titles
 - [commands §15](../commands.md) — the pi adapter's protocol ([§15.1](../commands.md), [§15.4](../commands.md), [§15.5](../commands.md))
 - [CONTEXT — Worker runner](../CONTEXT.md), [CONTEXT — Session](../CONTEXT.md), [CONTEXT — Cockpit](../CONTEXT.md)
 - [ADR-0005](../adr/0005-cpd-cli-control-plane.md) — the CLI control plane keeps the path open to other agents

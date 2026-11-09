@@ -704,7 +704,7 @@ fn a_row_the_engine_cannot_parse_is_a_store_fault_reported_once() {
         .sql("UPDATE swr_models SET catalog_json = '{not json' WHERE provider = 'bifrost';");
     fx.run_until(
         |p| {
-            p.query("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%E15%'")
+            p.query("SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%failed at model-discovery for%'")
                 > 0
         },
         3,
@@ -712,7 +712,7 @@ fn a_row_the_engine_cannot_parse_is_a_store_fault_reported_once() {
 
     assert_eq!(
         fx.query(
-            "SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%E15%'"
+            "SELECT count(*) FROM events WHERE kind = 'error' AND data LIKE '%store_failed%' AND text LIKE '%failed at model-discovery for%'"
         ),
         1,
         "once"
