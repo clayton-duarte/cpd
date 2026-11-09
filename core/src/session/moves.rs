@@ -8,6 +8,7 @@
 //! takes the slot. So at most one placeholder exists, and only in the slot.
 
 use std::collections::BTreeMap;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -385,8 +386,22 @@ const SOCKET_NAP_MAX: Duration = Duration::from_secs(1);
 const SOCKET_DEADLINE: Duration = Duration::from_secs(30);
 
 /// `$CPD_HOME/run/host/<session>.sock` (contract §6.14).
-fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
-    home.run_dir().join("host").join(format!("{session}.sock"))
+/// Refused as `socket_path_too_long` over 107 bytes (`sun_path[108]` minus the NUL), as `session tail` refuses it.
+fn socket_path(home: &CpdHome, session: &SessionId) -> Result<PathBuf, CpdError> {
+    let path = home.run_dir().join("host").join(format!("{session}.sock"));
+    let length = path.as_os_str().as_bytes().len();
+    if length > super::tail::SOCKET_PATH_MAX {
+        let max = super::tail::SOCKET_PATH_MAX;
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("The host socket path for Session {session} is {length} bytes, over the {max}-byte limit: socket_path_too_long."),
+        )
+        .with("session", session.as_str())
+        .with("socket", path.display().to_string())
+        .with("length", length)
+        .with("max", max));
+    }
+    Ok(path)
 }
 
 /// Wakes a durable Session in the caller's transaction: clears `asleep_at` and the `host crash loop` label (only that
@@ -406,9 +421,9 @@ pub(super) fn wake_durable(tx: &WriteTxn<'_>, id: &SessionId) -> Result<(), CpdE
 /// label) and wait for its host's socket through the port. No pane, and never the chat slot.
 fn open_durable(env: &mut Env, lead: &Row) -> Result<Output, CpdError> {
     let id = lead.id.clone();
+    let path = socket_path(&env.home, &id)?;
     env.store
         .write("session open", |tx| wake_durable(tx, &id))?;
-    let path = socket_path(&env.home, &id);
     wait_for_socket(&path, &id)?;
     Ok(Output::success(json!({"session": id, "pane": Value::Null})))
 }

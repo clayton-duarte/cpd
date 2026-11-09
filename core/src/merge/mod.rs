@@ -195,6 +195,14 @@ pub fn merge(
         if target.kind == "update" && matches!(end, End::Merged { .. }) {
             crate::pr::pulls::reset_after_push(tx, plan, &workflow)?;
         }
+        // The Lead Branch moved: refresh the Workflows stacked on it (pro-d466).
+        if matches!(end, End::Merged { .. })
+            && let Some(lead) = crate::plan::fingerprint::load_workflows(tx, plan)?
+                .into_iter()
+                .find(|w| w.key == workflow)
+        {
+            queue_stacked_updates(tx, plan, &lead.lead_branch, target.tier)?;
+        }
         if let Some(e) = &stale {
             ledger::append_error(
                 tx,
@@ -1102,15 +1110,28 @@ pub(crate) fn rebase_with(
 }
 
 /// Queues the `update` Job (cause `base-moved`, pro-d466) of every open stacked Workflow whose `base` is
-/// `base_lead_branch`, in the Job-merge transaction `tx` that moved that Lead Branch. Stub: queues nothing.
-#[cfg_attr(not(test), allow(dead_code))]
+/// `base_lead_branch`, in the Job-merge transaction `tx` that moved that Lead Branch. A Workflow with a live `update`
+/// Job queues none (`queue_update`).
 pub(crate) fn queue_stacked_updates(
-    _tx: &crate::store::WriteTxn<'_>,
-    _plan: &PlanId,
-    _base_lead_branch: &str,
-    _tier: crate::config::Tier,
+    tx: &crate::store::WriteTxn<'_>,
+    plan: &PlanId,
+    base_lead_branch: &str,
+    tier: crate::config::Tier,
 ) -> Result<Vec<crate::ids::JobKey>, crate::error::CpdError> {
-    Ok(Vec::new())
+    let mut queued = Vec::new();
+    for workflow in crate::plan::fingerprint::load_workflows(tx, plan)? {
+        if workflow.status == "open" && workflow.base == base_lead_branch {
+            queued.extend(crate::job::open::queue_update(
+                tx,
+                plan,
+                &workflow,
+                tier,
+                "job merge",
+                crate::job::open::Cause::BaseMoved,
+            )?);
+        }
+    }
+    Ok(queued)
 }
 
 #[cfg(test)]
