@@ -112,7 +112,13 @@ fn start_if_due(
         .get(context)
         .filter(|(started, _)| *started == key)
         .map(|(_, batch)| *batch);
+    if quota_parked(engine, context, key)? {
+        return Ok(());
+    }
     if previous == Some(BATCHES[BATCHES.len() - 1]) {
+        if !running(&engine.home, context)? && !engine.home.distill_pid(context).exists() {
+            park_if_quota(engine, context, key)?;
+        }
         return Ok(());
     }
     if uncurated.len() < BACKLOG && !quiet(&newest.1.at, now)? {
@@ -136,6 +142,90 @@ fn start_if_due(
     engine.distill_started.insert(context.clone(), (key, batch));
     engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
     Ok(())
+}
+
+/// `run/context-digests/<context>/quota.key`: the E9 state key of a permanent quota failure, `<seq> <count>`.
+fn quota_path(engine: &Engine, context: &ContextId) -> std::path::PathBuf {
+    engine.home.context_digest_dir(context).join("quota.key")
+}
+
+fn quota_error(
+    context: &ContextId,
+    path: &std::path::Path,
+    what: &str,
+    e: impl std::fmt::Display,
+) -> CpdError {
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!(
+            "Cannot {what} the quota state of Context {context} at {}: {e}.",
+            path.display()
+        ),
+    )
+}
+
+/// Whether `key` is the state a permanent quota failure was recorded for. A recorded key that no longer matches
+/// is stale: it is removed, so a changed state starts at batch 60.
+fn quota_parked(engine: &Engine, context: &ContextId, key: (i64, i64)) -> Result<bool, CpdError> {
+    let path = quota_path(engine, context);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(quota_error(context, &path, "read", e)),
+    };
+    let parsed = text
+        .trim()
+        .split_once(' ')
+        .and_then(|(a, b)| Some((a.parse::<i64>().ok()?, b.parse::<i64>().ok()?)));
+    let Some(recorded) = parsed else {
+        return Err(quota_error(
+            context,
+            &path,
+            "parse",
+            format!("invalid content {text:?}"),
+        ));
+    };
+    if recorded == key {
+        return Ok(true);
+    }
+    fs::remove_file(&path).map_err(|e| quota_error(context, &path, "remove", e))?;
+    Ok(false)
+}
+
+/// Records `key` durably when the Context's latest `distill_failed` Event is a permanent provider quota refusal.
+fn park_if_quota(
+    engine: &mut Engine,
+    context: &ContextId,
+    key: (i64, i64),
+) -> Result<(), CpdError> {
+    let id = context.as_str().to_string();
+    let data: Option<String> = engine.store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT data FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'distill_failed' \
+             AND json_extract(data, '$.details.context') = ?1 ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map([&id], |r| r.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    })?;
+    if !data.is_some_and(|d| permanent_quota(&d)) {
+        return Ok(());
+    }
+    let path = quota_path(engine, context);
+    fs::write(&path, format!("{} {}\n", key.0, key.1))
+        .map_err(|e| quota_error(context, &path, "write", e))?;
+    engine.log.line(&format!(
+        "E9: Context {context} hit a permanent quota failure at record {}; parked until its state changes",
+        key.0
+    ));
+    Ok(())
+}
+
+/// Whether a `distill_failed` Event's text is a permanent provider quota refusal.
+fn permanent_quota(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.contains("subscription sharing usage limit")
+        || text.contains("quota_exceeded")
+        || (text.contains("429") && text.contains("quota"))
 }
 
 /// Spawns `cpd context distill --context <context>` through `engine.ports.spawn`, detached (`setsid`), stdin from
@@ -190,6 +280,17 @@ mod tests {
         assert!(quiet("2026-10-18T11:50:00.000Z", now).unwrap());
         assert!(quiet("2026-10-17T00:00:00.000Z", now).unwrap());
         assert!(!quiet("2026-10-18T12:00:00.000Z", now).unwrap());
+    }
+
+    #[test]
+    fn quota_refusals_are_permanent() {
+        assert!(permanent_quota(
+            "The ChatGPT user has reached their Subscription Sharing usage limit."
+        ));
+        assert!(permanent_quota("error: quota_exceeded"));
+        assert!(permanent_quota("HTTP 429: You exceeded your current quota"));
+        assert!(!permanent_quota("HTTP 429: rate limited"));
+        assert!(!permanent_quota("pi exited with status 1"));
     }
 
     #[test]
