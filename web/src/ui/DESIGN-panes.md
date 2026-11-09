@@ -577,6 +577,8 @@ div[data-part="cockpit-error-toast"]   fixed right-4 bottom-8 z-50 w-full max-w-
     └─ Button[type="button"][variant="ghost"][size="icon-sm"][aria-label="Dismiss error"]   absolute top-2 right-2; XIcon size-3.5
 ```
 
-The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dismissError`, which clears both. The toast is dismissible and nothing else closes it.
+The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dismissError`, which clears both. The toast is dismissible and nothing else closes it, except a successful report (below).
+
+**The report toast (pro-d465, Bug report protocol; CONTRACT 11.7).** The toast's `Send to <target>` button sends an `error.report`. The toast closes when that send succeeds (`action.result` `ok: true`). While the send is in flight the Report and Dismiss buttons are disabled. When the send fails, the toast stays open and shows the failure, with Report and Dismiss enabled again, so the User can retry or dismiss it.
 
 ---
