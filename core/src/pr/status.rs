@@ -71,6 +71,8 @@ fn required_states_held<'a>(
                         }
                     } else if PENDING.contains(&conclusion.as_str()) {
                         Required::Pending
+                    } else if matches!(conclusion.as_str(), "CANCELLED" | "SKIPPED") {
+                        Required::Missing
                     } else {
                         Required::Passed
                     }
