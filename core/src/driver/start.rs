@@ -394,6 +394,7 @@ fn decide(
         _ => None,
     };
     let range = roles.job_range(catalog, &job.kind)?;
+    let mut clamp = matches!(job.kind.as_str(), "open" | "update");
     let (tier, origin) = match (retry, &previous) {
         (Some(tier), _) => (
             Tier::parse(tier).map_err(|_| bad(format!("retry_tier {tier:?} of Job {key}")))?,
@@ -411,6 +412,7 @@ fn decide(
             let same_tier = cause.is_some_and(|c| c.retries_same_tier() || c == Cause::GateFailed);
             let last = Tier::parse(tier)
                 .map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
+            clamp |= same_tier;
             if *never_started || same_tier || !catalog.is_valid(last) {
                 // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error, a crash or a conflict never raises the Tier, pro-d102, pro-d265; nor does a failed Gate, pro-d280).
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
@@ -430,6 +432,11 @@ fn decide(
         range
             .and_then(|r| catalog.step_up_in(r, tier))
             .unwrap_or(tier)
+    };
+    // pro-d484: an open/update Job, or a same-tier retry, below the current floor starts at the floor.
+    let tier = match range {
+        Some(r) if clamp && catalog.is_valid(tier) && tier < r.floor => r.floor,
+        _ => tier,
     };
     // pro-d328 to pro-d332: a Job stored on a Tier outside its range (the worker range, or inside the letter of an
     // explore kind) is never started (E3 raises one `error` per Job).
