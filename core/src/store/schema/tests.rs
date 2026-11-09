@@ -4610,11 +4610,12 @@ fn stacked_prs_keeps_every_pr_and_need() {
         vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
-    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row, `pr-description` `prs.description` after them, null in every row.
+    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row, `pr-description` `prs.description` after them, null in every row, `workflow-repair` `workflows.repair` last, null in every row.
     let without_shape: Vec<String> = after["workflows"]
         .iter()
         .map(|row| {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+            assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
@@ -5023,7 +5024,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     };
     assert_eq!(strip(&after["jobs"], 8, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
-    assert_eq!(strip(&after["workflows"], 4, "free"), before["prs"]);
+    assert_eq!(strip(&after["workflows"], 5, "free"), before["prs"]);
     assert_eq!(
         count(
             &mut store,

@@ -49,6 +49,7 @@ fn dump(store: &mut Store) -> String {
                 // `pr-light-cache` (a later migration) adds `pull_requests.author_login`, `reviews_json`, `labels_json`: likewise.
                 // `20261107T2330-pr-merge-armed` (a later migration) adds `pull_requests.merge_armed`: likewise.
                 // `20261107T2331-pr-base-contained` (a later migration) adds `pull_requests.base_contained`: likewise.
+                // `20261109T1804-workflow-repair` (a later migration) adds `workflows.repair`: likewise.
                 Ok(rows
                     .into_iter()
                     .filter(|n| {
@@ -63,6 +64,7 @@ fn dump(store: &mut Store) -> String {
                             "labels_json",
                             "merge_armed",
                             "base_contained",
+                            "repair",
                         ]
                         .contains(&n.as_str())
                             && !n.starts_with("reviewed_")

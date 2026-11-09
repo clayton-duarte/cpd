@@ -31,6 +31,7 @@ fn raw(home: &CpdHome) -> Connection {
 /// schema: its undo deletes the one `event_kinds` row it inserted, so the migration can run again.
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
+    ("workflows", "ALTER TABLE workflows DROP COLUMN repair"),
     (
         "event_kinds",
         "DELETE FROM event_kinds WHERE name = 'guard'",
@@ -118,7 +119,7 @@ fn rewind(conn: &Connection) {
             .collect();
         for trigger in triggers {
             // Hand-written and owned by the migrations (§4.5 K4), they name none of the added columns: reconcile does not recreate them.
-            // The hand-written `plans` triggers likewise: none names a `reviewed_*` column (`plan-reviewed-pr`); nor does a `sessions_working_pr_*` one name `host_restarts` or `host_window_start`.
+            // The hand-written `plans` triggers likewise: none names a `reviewed_*` column (`plan-reviewed-pr`); nor does a `sessions_working_pr_*` one name `host_restarts` or `host_window_start`; nor a `workflows_*` one (`workflow-repair`) name `repair`.
             if matches!(
                 trigger.as_str(),
                 "pull_requests_hist_del"
@@ -129,6 +130,10 @@ fn rewind(conn: &Connection) {
                     | "sessions_working_pr_new"
                     | "sessions_working_pr_valid"
                     | "sessions_working_pr_clear"
+                    | "workflows_head_ref_fixed"
+                    | "workflows_locked"
+                    | "workflows_shape_fixed"
+                    | "workflows_status"
             ) {
                 continue;
             }
