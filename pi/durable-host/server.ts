@@ -25,7 +25,7 @@ export type ServerDeps = {
   epoch: string;
   ring: Ring;
   /** `client` is the hello client name of the connection whose submit this is: `cpd-web` is the WebUI surface (§15.3). */
-  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[] }, client: string): Promise<{ submissionId: number; status: string }>;
+  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[] }, client: string, webuiToken?: string): Promise<{ submissionId: number; status: string }>;
   /** Contract §6.17: the five conversation commands; each port settles one reply or throws a `ProtocolError`. */
   compact(instructions?: string): Promise<{ task_id: number }>;
   configure(change: { model?: string; thinkingLevel?: string | null }): Promise<{ agent: AgentState }>;
@@ -63,6 +63,8 @@ type State = {
   id: string;
   /** The `hello` client name: `cpd-web` is the WebUI surface (§15.3), every other client is not. */
   client: string;
+  /** The `hello`'s `webui_token`, held in memory only: it is checked by the host at each submit and never stored or logged (contract §6.16). */
+  webuiToken: string | undefined;
   attached: boolean;
   closed: boolean;
   cancelHello: () => void;
@@ -145,7 +147,7 @@ export function createServer(deps: ServerDeps): Server {
         if (msg.type === "submit") {
           run(st, msg.req, async () => {
             const imgs = msg.images === undefined ? {} : { images: msg.images.map((i) => ({ mimeType: i.mime_type, data: i.data })) };
-            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs }, st.client);
+            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs }, st.client, st.webuiToken);
             return { submission_id: r.submissionId, status: r.status };
           });
         } else if (msg.type === "compact") {
@@ -192,7 +194,7 @@ export function createServer(deps: ServerDeps): Server {
 
   return {
     connect(conn) {
-      const st: State = { conn, greeted: false, id: "", client: "", attached: false, closed: false, cancelHello: () => {} };
+      const st: State = { conn, greeted: false, id: "", client: "", webuiToken: undefined, attached: false, closed: false, cancelHello: () => {} };
       if (down) {
         fail(st, "shutting_down", "host is shutting down");
         drop(st);
@@ -232,6 +234,7 @@ export function createServer(deps: ServerDeps): Server {
             }
             st.greeted = true;
             st.client = msg.client;
+            st.webuiToken = msg.webui_token;
             st.id = deps.clientId();
             st.cancelHello();
             send(st, {

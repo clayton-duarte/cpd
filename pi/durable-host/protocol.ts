@@ -37,7 +37,7 @@ export class ProtocolError extends Error {
 }
 
 export type ToHost =
-  | { type: "hello"; protocol: number; min_protocol: number; client: string; name?: string }
+  | { type: "hello"; protocol: number; min_protocol: number; client: string; name?: string; webui_token?: string }
   | { type: "attach"; req: string; cursor?: Cursor; conversation?: string }
   | { type: "submit"; req: string; text: string; when_busy: "followUp" | "steer" | "reject"; request_id?: string; images?: readonly { mime_type: string; data: string }[] }
   | { type: "compact"; req: string; instructions?: string }
@@ -164,7 +164,8 @@ function uiAnswer(o: Record<string, unknown>): { value?: string; confirmed?: boo
 function build(o: Record<string, unknown>, type: string): ToHost {
   if (type === "hello") {
     const name = optStr(o, "name");
-    return { type, protocol: int(o, "protocol"), min_protocol: int(o, "min_protocol"), client: str(o, "client"), ...(name === undefined ? {} : { name }) };
+    const webuiToken = optStr(o, "webui_token");
+    return { type, protocol: int(o, "protocol"), min_protocol: int(o, "min_protocol"), client: str(o, "client"), ...(name === undefined ? {} : { name }), ...(webuiToken === undefined ? {} : { webui_token: webuiToken }) };
   }
   if (type === "ping") {
     const req = optStr(o, "req");

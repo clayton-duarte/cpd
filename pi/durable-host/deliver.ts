@@ -12,6 +12,8 @@ export type Input = {
   entry: { kind: string; data: Record<string, unknown> };
   /** True when the User wrote the message: the run that answers it reports `idle --reply`. */
   reply?: true;
+  /** True for verified human input (contract §6.16 "The clear and its evidence"): it is the User's, not a self-started turn. */
+  verified?: true;
 };
 
 /**
@@ -30,7 +32,8 @@ export function inputOf(event: CpdEvent, session: string, info: { role: string; 
     const e = event as EventOf<"session-message">;
     const from = e.data.from;
     const message = input(sessionMessage(e, session, from === null ? null : { id: from, name: sender ?? null }).content, "followUp");
-    return from === null ? { ...message, reply: true } : message;
+    if (from === null) return e.data.origin === "webui" ? { ...message, reply: true, verified: true } : { ...message, reply: true };
+    return message;
   }
   if (!info.planLead) return undefined;
   const rule = leadRule(event);
