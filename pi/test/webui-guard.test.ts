@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ENTRY_TYPE } from "../lib/loop-guard.ts";
-import { ev, Fixture, ID, OTHER, sessionShow, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, sessionShow, stateCalls } from "./fake.ts";
 import { CONFIG, withHost } from "./durable-host/rig.ts";
 
 const LABEL = "blocked:φ: loop guard";
@@ -30,7 +30,8 @@ test("webui_human_input_restores_tripped_guard", { timeout: 20_000 }, async (t) 
       await f.pi.fire("session_start");
       await f.followerStarted();
       for (let i = 0; i < 2; i++) await f.pi.fire("before_agent_start", { messageType: "custom", prompt: "x", message: { customType: "cpd", content: "x", details: {} } });
-      await waitFor("loop guard blocked", () => stateCalls(f).includes(LABEL));
+      await f.quiet();
+      assert.ok(stateCalls(f).includes(LABEL));
       assert.deepEqual(tripEntries(f), [true]);
 
       f.emit(
@@ -50,11 +51,13 @@ test("webui_human_input_restores_tripped_guard", { timeout: 20_000 }, async (t) 
 
       await f.pi.fire("before_agent_start", { messageType: "user", prompt: "continue" });
       await f.pi.fire("agent_start");
-      await waitFor("TUI User restores working", () => stateCalls(f).at(-1) === "working");
+      await f.quiet();
+      assert.equal(stateCalls(f).at(-1), "working");
       assert.deepEqual(tripEntries(f), [true, false], "the actual local User prompt clears the trip");
       f.emit(ev(305, "job-failed"));
-      const probe = await waitFor("post-reset delivery", () => f.pi.delivered().find((s) => (s.message.details as any).id === 305));
-      assert.deepEqual(probe.options, { triggerTurn: true, deliverAs: "followUp" });
+      await f.drain();
+      const probe = f.pi.delivered().find((s) => (s.message.details as any).id === 305);
+      assert.deepEqual(probe?.options, { triggerTurn: true, deliverAs: "followUp" });
     } finally {
       await f.close();
     }
@@ -149,8 +152,8 @@ test("lead_trip_reports_actual_guard_kind_and_count", { timeout: 20_000 }, async
     await f.pi.fire("session_start");
     await f.followerStarted();
     for (let i = 0; i < 2; i++) await f.pi.fire("before_agent_start", { messageType: "custom", prompt: "x", message: { customType: "cpd", content: "x", details: {} } });
-    await waitFor("loop guard blocked", () => stateCalls(f).includes(LABEL));
     await f.quiet();
+    assert.ok(stateCalls(f).includes(LABEL));
     const trips = f.reports().filter((x) => x.details?.kind === "inter-turn");
     assert.equal(trips.length, 1, "one trip report with its guard kind");
     assert.equal(trips[0]!.details!.count, 2, "count is loop_guard_turns + 1");
@@ -175,8 +178,8 @@ test("lead_trip_wakes_manager", { timeout: 20_000 }, async () => {
       if (verdict?.block) blocked++;
     }
     assert.equal(blocked, 3, "calls 13 to 15 are refused");
-    await waitFor("loop guard blocked", () => stateCalls(f).includes(LABEL));
     await f.quiet();
+    assert.ok(stateCalls(f).includes(LABEL));
     const trips = f.reports().filter((x) => x.details?.kind === "turn-refusals");
     assert.equal(trips.length, 1, "one report (one transaction) carries the Event and the Manager's wake");
     assert.equal(trips[0]!.details!.count, 3);

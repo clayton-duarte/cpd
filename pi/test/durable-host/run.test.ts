@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { Extension, ToolHooks } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
@@ -359,14 +362,36 @@ const clearEntries = (r: { written: unknown[] }) =>
     return e?.kind === ENTRY_TYPE && e.data?.tripped === false;
   });
 
-test("a cpd-chat User prompt clears a tripped host", { timeout: 20_000 }, async () => {
+test("a cpd-chat User prompt without a valid webui token does not clear a tripped host", { timeout: 20_000 }, async () => {
   await withHost({ sessionOver: { loop_guard_turns: 1 } }, async (r) => {
     const { client } = await tripped(r);
     client.send({ type: "submit", req: "r2", text: "carry on", when_busy: "followUp" });
     await r.drain();
-    assert.equal(clearEntries(r).length, 1, "the User's prompt appends the cleared entry");
-    assert.equal(r.submitted.length, 3, "the prompt is submitted, not held");
+    assert.equal(clearEntries(r).length, 0, "without a valid webui token, the prompt does not clear the trip");
+    assert.equal(r.submitted.length, 2, "the prompt is held, not submitted");
   });
+});
+
+test("a cpd-chat User prompt with a valid webui token clears a tripped host", { timeout: 20_000 }, async () => {
+  const token = "t".repeat(64);
+  const home = mkdtempSync(join(tmpdir(), "durable-host-guard-"));
+  try {
+    mkdirSync(join(home, "run"));
+    writeFileSync(join(home, "run", "webui-token"), token, { mode: 0o600 });
+    await withHost({ sessionOver: { loop_guard_turns: 1 }, config: { ...CONFIG, home } }, async (r) => {
+      await tripped(r);
+      const verified = r.connect();
+      verified.send({ type: "hello", protocol: 2, min_protocol: 2, client: "cpd-web", webui_token: token });
+      verified.send({ type: "attach", req: "attach-verified" });
+      await r.drain();
+      verified.send({ type: "submit", req: "r2", text: "carry on", when_busy: "followUp" });
+      await r.until(() => verified.received().find((m) => m.req === "r2" && (m.type === "result" || m.type === "error")));
+      assert.equal(clearEntries(r).length, 1, "the User's verified prompt appends the cleared entry");
+      assert.equal(r.submitted.length, 3, "the prompt is submitted, not held");
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("a session-message without a sender does not clear a tripped host", { timeout: 20_000 }, async () => {
