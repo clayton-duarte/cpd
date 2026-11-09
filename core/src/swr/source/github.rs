@@ -436,6 +436,19 @@ impl GithubSource {
                     }
                 }
                 None => {
+                    // Whoever authored a pull request never changes: a read that says otherwise (or nothing) keeps the stored flag.
+                    let authored: bool = cx.store.read(|c| {
+                        Ok(c.query_row(
+                            "SELECT authored FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                            params![id.0, id.1],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(false))
+                    })?;
+                    let mut node = node;
+                    if node.is_open() {
+                        node.flag(authored, false);
+                    }
                     merged.insert(id.clone(), node);
                 }
             }

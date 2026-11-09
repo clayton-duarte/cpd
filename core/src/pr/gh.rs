@@ -962,10 +962,8 @@ struct RawPr {
     /// `latestReviews` of the Light read (pro-d453); the legacy search still selects `latestOpinionatedReviews`, the same nodes.
     #[serde(rename = "latestReviews", alias = "latestOpinionatedReviews", default)]
     latest_reviews: RawReviews,
-    /// Absent from a `PeerLight` node (the review-requested search): then `UNKNOWN`.
-    #[serde(default = "unknown_state")]
     mergeable: String,
-    #[serde(rename = "mergeStateStatus", default = "unknown_state")]
+    #[serde(rename = "mergeStateStatus")]
     merge_state: String,
     /// Absent in the review-requested search (slim).
     #[serde(default)]
@@ -981,10 +979,6 @@ struct RawPr {
         deserialize_with = "present"
     )]
     viewer_review_request: Option<Value>,
-}
-
-fn unknown_state() -> String {
-    "UNKNOWN".to_owned()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2944,6 +2938,13 @@ fn poll_node(
             reply.fail("gh api graphql answered a pull request without headRefOid.".into())
         })?
         .to_owned();
+    // A `PeerLight` node (the review-requested search) selects neither `mergeable` nor `mergeStateStatus`: both read `UNKNOWN`.
+    let mut v = v;
+    for field in ["mergeable", "mergeStateStatus"] {
+        if v.get(field).is_none() {
+            v[field] = json!("UNKNOWN");
+        }
+    }
     let raw: RawPr = serde_json::from_value(v.clone()).map_err(|e| {
         reply.fail(format!(
             "gh api graphql answered a malformed pull request: {e}."
@@ -3011,11 +3012,11 @@ fn poll_node(
 
 fn parse_poll(
     reply: &Reply,
-    aliases: usize,
-    metas: usize,
+    plan: &PollPlan,
     bots: &[String],
     excused_labels: &[String],
 ) -> Result<PollRead, CpdError> {
+    let (aliases, metas) = (plan.heavy.len() + plan.absent.len(), plan.meta.len());
     let (data, errors): (Value, _) = reply.envelope()?;
     if let Some(other) = errors
         .iter()
@@ -3050,7 +3051,20 @@ fn parse_poll(
     let mut found = Vec::with_capacity(aliases);
     for i in 0..aliases {
         let alias = format!("p{i}");
-        let slot = data.get(&alias).ok_or_else(|| missing(&alias))?;
+        let Some(slot) = data.get(&alias) else {
+            // A repository whose metadata alias resolves to null has no pull requests to answer for: not found.
+            let (repo, _) = plan.heavy.iter().chain(&plan.absent).nth(i).expect("alias i");
+            let gone = plan
+                .meta
+                .iter()
+                .position(|m| m == repo)
+                .is_some_and(|j| data.get(format!("m{j}")).is_some_and(Value::is_null));
+            if gone {
+                found.push(None);
+                continue;
+            }
+            return Err(missing(&alias));
+        };
         found.push(match slot.get("pullRequest").filter(|p| !p.is_null()) {
             Some(p) => Some(poll_node(reply, p.clone(), bots, excused_labels)?),
             None => None,
@@ -3106,8 +3120,7 @@ pub fn poll_once(
                 args: &refs,
                 out: &out,
             },
-            plan.heavy.len() + plan.absent.len(),
-            plan.meta.len(),
+            plan,
             bots,
             excused_labels,
         )
