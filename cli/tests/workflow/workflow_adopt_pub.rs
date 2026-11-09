@@ -486,22 +486,7 @@ fn pr_push_pushes_to_the_head_branch() {
     // A head that moved and conflicts is refused, and nothing is forced.
     let moved = fx.move_remote();
     // The commit conflicts with the moved head's, so the reconcile cannot merge it.
-    fs::write(fx.lead.join("remote.txt"), "mine").unwrap();
-    fx.git(&fx.lead, &["add", "-A"]);
-    fx.git(
-        &fx.lead,
-        &[
-            "-c",
-            "user.name=cpd test",
-            "-c",
-            "user.email=cpd@cpd.invalid",
-            "commit",
-            "-q",
-            "-m",
-            "mine",
-        ],
-    );
-    let mine = fx.lead_sha();
+    let mine = fx.commit("remote.txt");
     let run = fx.pr("push");
     assert_eq!(
         (run.error()["code"].as_str(), run.exit),
