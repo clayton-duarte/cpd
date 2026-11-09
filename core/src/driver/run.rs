@@ -1568,7 +1568,18 @@ fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
     if !status.trim().is_empty() {
         return Err(CpdError::new(
             ErrorCode::SetupFailed,
-            format!("the Lead worktree {} is not clean", worktree.display()),
+            format!(
+                "the Lead worktree {} is not clean. This Attempt did not start; cpd left the worktree unchanged.\n\
+                 Porcelain status:\n{status}\
+                 Inspect and preserve any wanted work before deciding how to resolve the state. \
+                 From the Lead worktree, run these read-only commands:\n\
+                 git status --short --branch\n\
+                 git diff\n\
+                 git diff --cached\n\
+                 git ls-files --others --exclude-standard\n\
+                 Inspect any in-progress merge or rebase state without changing it, and have the Lead review the work before choosing a resolution.",
+                worktree.display()
+            ),
         )
         .with("status", status.trim()));
     }
@@ -1601,6 +1612,36 @@ pub(super) fn reset_linear_lead_branch(
     git::run::ok(lead_worktree, &["reset", "--hard", base_sha])?;
     git::run::ok(lead_worktree, &["clean", "-fd"])?;
     Ok(())
+}
+
+/// Test-only seam into A2 and A9, without starting a driver process.
+#[cfg(test)]
+pub(super) fn dirty_setup_for_test(
+    home: CpdHome,
+    store: Store,
+    ports: Ports,
+    lock: lock::Inherited,
+    target: &Target,
+    job: &jobs::Job,
+    catalog: Catalog,
+) -> Result<(), CpdError> {
+    let config = crate::driver::ports_tests::config();
+    let mut driver = Driver {
+        home: home.clone(),
+        config,
+        store,
+        tmux: Tmux::new("test").with_runner(ports.runner.clone()),
+        plan: target.plan.clone(),
+        id: target.id.clone(),
+        lock,
+        exe: Exe::current()?,
+        catalog: Some(catalog),
+        runner: Some(WorkerRunner::Durable),
+        began: Some((0.0, ports.clock.now())),
+        ports: ports.clone(),
+    };
+    let dirs = PiDirs::resolve(Some(home.root().to_path_buf()), None, None)?;
+    Ports::scope(&ports, || driver.start(target, job, &dirs).map(|_| ()))
 }
 
 #[cfg(test)]
