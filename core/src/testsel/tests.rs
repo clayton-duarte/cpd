@@ -1305,6 +1305,41 @@ fn dispatch_web_name_runs_vitest() {
     );
 }
 
+/// A web title with regex metacharacters reaches vitest escaped and anchored (a nested title is prefixed `describe > `).
+#[test]
+fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
+    let s = Sample::new();
+    let fakes = s.fakes(|r| {
+        r.on(
+            "pnpm",
+            |c| c.args.iter().any(|a| a == "vitest"),
+            Reply::ok("✓ a.c (1+1) [x] (2ms)\n"),
+        )
+    });
+    let out = s.run(&fakes, &["web/sample.test.tsx::a.c (1+1) [x]"]);
+    let vitest: Vec<Vec<&str>> = out
+        .calls_of("pnpm")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|a| a == "vitest"))
+        .map(words)
+        .collect();
+    assert_eq!(
+        vitest,
+        [vec![
+            "--filter",
+            "cpd-web-client",
+            "exec",
+            "vitest",
+            "run",
+            "--testNamePattern",
+            r"(?:^| > )a\.c \(1\+1\) \[x\]$",
+            "web/sample.test.tsx"
+        ]],
+        "{}",
+        out.what()
+    );
+}
+
 /// A web title the web package does not contain is refused (`list` exits non-zero and starts no Rust or node run).
 #[test]
 fn list_web_unknown_title() {

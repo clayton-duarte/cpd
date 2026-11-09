@@ -1552,12 +1552,15 @@ export function buildPrompt(text: string, attachments: readonly Attachment[]): {
 #### `drafts.ts`
 
 ```ts
-export function loadDraft(sessionId: string): string; // stored text; "" when none or storage unavailable
-export function saveDraft(sessionId: string, text: string): void; // stores; an empty text removes the key
+export interface Draft { readonly text: string; readonly attachments: readonly Attachment[] }
+export function loadDraft(sessionId: string): Draft; // stored draft; `{text: "", attachments: []}` when none or storage cannot be read
+export function saveDraft(sessionId: string, draft: Draft): void; // stores; an empty text with no attachments removes the key; throws when the browser refuses the write
 export function clearDraft(sessionId: string): void; // removes the key
 ```
 
-The draft is the composer text of one session, kept in the browser's localStorage under the key `cpd-ui:draft:<sessionId>` (`sessionId` = `SessionView.id` = `ref.id`). Only the text is stored, never attachments. An empty text removes the key, so there is at most one draft per session. Storage errors (unavailable or throwing localStorage) are swallowed: `loadDraft` returns `""`, and the Composer keeps in-memory behaviour, as in `cockpit/persisted.ts`.
+The draft is the composer text and the staged attachments of one session, kept in the browser's localStorage under the key `cpd-ui:draft:<sessionId>` (`sessionId` = `SessionView.id` = `ref.id`), as JSON `{text, attachments}` (the `Attachment` values of 3.9). An empty text with no attachments removes the key, so there is at most one draft per session. A renderer reload never discards a draft: the Composer restores the text and the attachments on mount (ELECTRON.md, Renderer and main-process behaviour). A write that the browser refuses (quota exceeded, or storage unavailable) is never swallowed: `saveDraft` throws, and the Composer shows the User the failure. Reads that fail still return an empty draft, as before this amendment.
+
+Status: decided by Plan desktop-ui-followups, assumption A4; as of this amendment the code still stores text only (`web/src/ui/composer/drafts.ts`, whose `saveDraft` swallows storage errors). The implementing change brings it in line.
 
 #### `Composer.tsx`
 
@@ -1575,7 +1578,7 @@ export function Composer(props: {
 DOM and behaviour:
 
 - Structure and keys: DESIGN-compose 1.2 and 1.4. `textarea[aria-label="Message"]`: Enter submits `{text, attachments, whenBusy: "followUp"}` and clears; Shift+Enter is a newline; IME composition is ignored.
-- **Draft.** The textarea starts with `loadDraft(sessionId)`. Every text change calls `saveDraft(sessionId, text)` in the change handler (not in an effect). A send (Enter or the Send button) calls `clearDraft(sessionId)`. When `sessionId` changes, the textarea shows `loadDraft(<new sessionId>)` (the previous session's draft stays stored, unchanged), and `attachments` and `rejections` reset to empty.
+- **Draft.** The textarea starts with `loadDraft(sessionId).text`, and `attachments` starts with `loadDraft(sessionId).attachments`. Every change of the text or the attachments saves the draft with `saveDraft(sessionId, {text, attachments})`; a refused save is shown to the User, never swallowed. A send (Enter or the Send button) calls `clearDraft(sessionId)`. When `sessionId` changes, the textarea and `attachments` show `loadDraft(<new sessionId>)` (the previous session's draft stays stored, unchanged), and `rejections` reset to empty.
 - **Regression pin (no submission lock).** After a send (Enter or the Send button) the textarea stays enabled, its value is empty, the draft is cleared, `attachments` and `rejections` are empty, and the Composer renders no `[data-part="submission-feedback"]` element; there is no submission lock and no receipt warning (pro-d462, pro-d463).
 - **Send**: `button[data-action="send"][aria-label="Send"]`, disabled when there is nothing to send or `capabilities` is `null`; a click submits `whenBusy: "followUp"`.
 - **Busy**: the Stop button, `button[data-action="abort"][aria-label="Stop"]`, is shown while busy when `capabilities.abort.supported` (pro-d402, which supersedes the Stop removal of pro-d57; DESIGN-compose 1.2); its click calls `onAbort` (`connection.abort`). It is absent when not busy and for pi sessions (abort unsupported, 8). The prompt border pulses (`prompt-border-pulse`, DESIGN.md 2h) while busy or a send is pending. Send submits a follow-up. There is no Steer or Follow-up button (pro-d57).
