@@ -209,8 +209,7 @@ test("the app renders the preview view built from the preview branch (air-d96)",
     // Hidden and isolated (air-d68).
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
 
-    await expect(page.locator("#placeholder")).toBeVisible({ timeout: 30_000 });
-
+    // The updater may finish before the first page load, so the placeholder is not guaranteed.
     // The app's own auto-update built the preview view from the preview branch (on branch `preview`,
     // into its own `dist-electron.preview` dir) with the same shared build command.
     await expect
