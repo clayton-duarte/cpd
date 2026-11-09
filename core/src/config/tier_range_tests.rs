@@ -362,13 +362,98 @@ fn five_role_ranges_ascend() {
 fn worker_range_includes_sx_below_s2() {
     let mut catalog = catalog();
     catalog.s = model("sonnet", &[0, 1, 2, 3]);
+    catalog.o = model("opus", &[0, 2, 3, 4]);
     let defaults = defaults5("JX", "GX", "HX", "SX", "O3");
     let worker = defaults.range(&catalog, Role::Worker).unwrap();
     assert_eq!((worker.floor, worker.ceiling), (t("HX"), t("SX")));
     for tier in ["S1", "SX"] {
+        assert!(catalog.check(t(tier)).is_ok(), "{tier} is a valid rung");
         assert!(worker.contains(t(tier)), "worker range includes {tier}");
         assert!(defaults.check_job(&catalog, "test", t(tier)).is_ok());
     }
+    assert!(catalog.check(t("S2")).is_ok());
     assert!(!worker.contains(t("S2")));
     assert!(defaults.check_job(&catalog, "test", t("S2")).is_err());
+
+    let scout = defaults.job_range(&catalog, "scout").unwrap().unwrap();
+    assert_eq!((scout.floor, scout.ceiling), (t("H1"), t("H3")));
+    for tier in ["H1", "HX", "H3"] {
+        assert!(scout.contains(t(tier)));
+        assert!(defaults.check_job(&catalog, "scout", t(tier)).is_ok());
+    }
+    for tier in ["H0", "S1", "SX", "S2"] {
+        assert!(!scout.contains(t(tier)));
+        assert!(defaults.check_job(&catalog, "scout", t(tier)).is_err());
+    }
+
+    // A lower worker ceiling also caps the scout inside H, regardless of the worker floor.
+    let capped = defaults5("JX", "GX", "G1", "HX", "O3");
+    let scout = capped.job_range(&catalog, "scout").unwrap().unwrap();
+    assert_eq!((scout.floor, scout.ceiling), (t("H1"), t("HX")));
+    assert!(capped.check_job(&catalog, "scout", t("HX")).is_ok());
+    assert!(capped.check_job(&catalog, "scout", t("H3")).is_err());
+}
+
+/// The same effort order applies to every letter, independently of catalog gaps.
+#[test]
+fn tier_order_is_consistent_for_every_letter() {
+    let mut catalog = catalog();
+    for letter in [Letter::J, Letter::G, Letter::H, Letter::S, Letter::O] {
+        let offered = model("fake", &[0, 1, 2, 3, 4]);
+        match letter {
+            Letter::J => catalog.j = offered,
+            Letter::G => catalog.g = offered,
+            Letter::H => catalog.h = offered,
+            Letter::S => catalog.s = offered,
+            Letter::O => catalog.o = offered,
+        }
+        let rungs = [
+            Tier::new(letter, 0).unwrap(),
+            Tier::new(letter, 1).unwrap(),
+            Tier::x(letter),
+            Tier::new(letter, 2).unwrap(),
+            Tier::new(letter, 3).unwrap(),
+            Tier::new(letter, 4).unwrap(),
+        ];
+        assert!(rungs.iter().all(|rung| catalog.check(*rung).is_ok()));
+        for pair in rungs.windows(2) {
+            assert!(pair[0] < pair[1], "{} < {}", pair[0], pair[1]);
+        }
+    }
+    for pair in [Letter::J, Letter::G, Letter::H, Letter::S, Letter::O].windows(2) {
+        assert!(Tier::new(pair[0], 4).unwrap() < Tier::new(pair[1], 0).unwrap());
+    }
+    catalog.s = model("sonnet", &[0, 3]);
+    assert!(catalog.check(t("S1")).is_err());
+    assert!(catalog.check(t("SX")).is_ok());
+    assert!(catalog.check(t("S2")).is_err());
+    assert!(catalog.check(t("S3")).is_ok());
+}
+
+/// Both adjacent roles include a valid shared default; gaps floor up and ceiling down.
+#[test]
+fn role_ranges_include_valid_next_defaults_and_respect_catalog_gaps() {
+    let mut catalog = catalog();
+    catalog.h = model("haiku", &[1, 3]);
+    catalog.s = model("sonnet", &[0, 1, 3]);
+    catalog.o = model("opus", &[0, 2, 3, 4]);
+    let defaults = defaults5("JX", "GX", "H1", "S1", "O3");
+    let worker = defaults.range(&catalog, Role::Worker).unwrap();
+    let lead = defaults.range(&catalog, Role::Lead).unwrap();
+    let manager = defaults.range(&catalog, Role::Manager).unwrap();
+    assert_eq!((worker.floor, worker.ceiling), (t("H1"), t("S1")));
+    assert_eq!((lead.floor, lead.ceiling), (t("S1"), t("O3")));
+    assert_eq!((manager.floor, manager.ceiling), (t("O3"), t("O4")));
+    assert!(worker.contains(t("S1")) && lead.contains(t("S1")));
+    assert!(lead.contains(t("O3")) && manager.contains(t("O3")));
+    assert_eq!(range(&catalog, Role::Decide, &defaults), pair("JX", "JX"));
+    assert_eq!(range(&catalog, Role::Auxiliar, &defaults), pair("GX", "GX"));
+
+    let gap = defaults5("JX", "GX", "H2", "S2", "O1");
+    assert!(catalog.check(t("H2")).is_err());
+    assert!(catalog.check(t("S2")).is_err());
+    assert!(catalog.check(t("O1")).is_err());
+    assert_eq!(range(&catalog, Role::Worker, &gap), pair("H3", "SX"));
+    assert_eq!(range(&catalog, Role::Lead, &gap), pair("S3", "OX"));
+    assert_eq!(range(&catalog, Role::Manager, &gap), pair("O2", "O4"));
 }
