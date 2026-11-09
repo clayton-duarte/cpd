@@ -24,8 +24,8 @@ use crate::swr::source::github_write::{
 /// `<owner>/<repo>#<n>`: `owner` and `repo` non-empty, with no `/` or `#`; `n` a positive integer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRef {
-    repo: String,
-    number: i64,
+    pub(super) repo: String,
+    pub(super) number: i64,
 }
 
 impl FromStr for PullRef {
@@ -69,6 +69,12 @@ pub struct MergeArgs {
     /// The pull request, as the Dispatch column shows it
     #[arg(value_name = "owner/repo#n")]
     pull: PullRef,
+}
+
+impl MergeArgs {
+    pub(super) fn pull(self) -> PullRef {
+        self.pull
+    }
 }
 
 /// `pr merge` queues the merge (swr-github.md §9): it checks the effective state of the cached pull request, then enqueues a

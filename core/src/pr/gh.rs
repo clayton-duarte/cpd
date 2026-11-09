@@ -562,6 +562,84 @@ pub fn merge_pr(
     }
 }
 
+/// `gh pr update-branch <number> --repo <repo>`: merges the base into the head on GitHub (`pr merge-green`).
+pub fn update_branch(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
+    let n = number.to_string();
+    run_on(runner, cwd, &["pr", "update-branch", &n, "--repo", repo]).map(drop)
+}
+
+/// `gh pr view <number> --repo <repo> --json headRefOid,statusCheckRollup`: the head and whether every check of it passed.
+pub fn head_and_green(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(String, bool), CpdError> {
+    let n = number.to_string();
+    let out = run_on(
+        runner,
+        cwd,
+        &[
+            "pr",
+            "view",
+            &n,
+            "--repo",
+            repo,
+            "--json",
+            "headRefOid,statusCheckRollup",
+        ],
+    )?;
+    let v: Value = serde_json::from_str(&out).map_err(|e| {
+        CpdError::new(
+            ErrorCode::GhFailed,
+            format!("gh pr view printed no JSON: {e}."),
+        )
+    })?;
+    let head = v["headRefOid"].as_str().unwrap_or_default().to_owned();
+    let rollup = v["statusCheckRollup"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let green = !rollup.is_empty()
+        && rollup.iter().all(|c| {
+            c["conclusion"].as_str() == Some("SUCCESS")
+                || c["state"].as_str() == Some("SUCCESS")
+                || matches!(c["conclusion"].as_str(), Some("NEUTRAL" | "SKIPPED"))
+        });
+    Ok((head, green))
+}
+
+/// `gh pr merge <number> --repo <repo> --squash --match-head-commit <head>`.
+pub fn merge_squash(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    head: &str,
+) -> Result<(), CpdError> {
+    let n = number.to_string();
+    run_on(
+        runner,
+        cwd,
+        &[
+            "pr",
+            "merge",
+            &n,
+            "--repo",
+            repo,
+            "--squash",
+            "--match-head-commit",
+            head,
+        ],
+    )
+    .map(drop)
+}
+
 /// Whether a refused `gh pr merge` says the pull request is the base of a stack (pro-d355).
 fn is_stack_refusal(err: &CpdError) -> bool {
     let text = match err.details().get("stderr").and_then(|v| v.as_str()) {
@@ -643,7 +721,7 @@ macro_rules! pr_fields {
     };
     ($repo:expr) => {
         concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
-         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+         mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
          reviewThreads(first: 100) { nodes { id isResolved } }")
     };
 }
@@ -661,7 +739,7 @@ macro_rules! search_pr_fields {
 macro_rules! slim_pr_fields {
     () => {
         concat!(repo_node!(settings), " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
-         mergeable mergeStateStatus")
+         mergeable mergeStateStatus headRefOid")
     };
 }
 
@@ -744,6 +822,9 @@ pub struct Search {
     /// The settings the search's `repository` nodes carried, one per repo, in first-seen order (air-n71): empty when a
     /// canned reply did not select them, and the poll then writes no row.
     pub repo_settings: Vec<(String, RepoMeta)>,
+    /// The `headRefOid` the read carried for each pull request, as `(owner/name, number, oid)`: the head the containment
+    /// flag is computed on (contract §2.2 "Ready to merge"), never the stored one.
+    pub heads: Vec<(String, i64, String)>,
 }
 
 #[derive(Deserialize)]
@@ -865,6 +946,9 @@ struct RawPr {
     /// The search always selects it; it is optional only so that a reply without it (a test's fake `gh`) follows nothing.
     #[serde(rename = "baseRefName", default)]
     base_ref: Option<String>,
+    /// The head commit; optional only so that a reply without it (a test's fake `gh`) carries no fresh head.
+    #[serde(rename = "headRefOid", default)]
+    head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
     /// `latestReviews` of the Light read (pro-d453); the legacy search still selects `latestOpinionatedReviews`, the same nodes.
@@ -1395,10 +1479,19 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
     let mut repo_settings: Vec<(String, RepoMeta)> = Vec::new();
+    let mut heads: Vec<(String, i64, String)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
             let settings = raw.repository.settings();
+            let head = raw.head_ref_oid.clone();
             let pr = reply.polled(raw, bots)?;
+            if let Some(head) = head
+                && !heads
+                    .iter()
+                    .any(|(r, n, _)| (r, n) == (&pr.repo, &pr.number))
+            {
+                heads.push((pr.repo.clone(), pr.number, head));
+            }
             if let Some(meta) = settings
                 && !repo_settings.iter().any(|(repo, _)| repo == &pr.repo)
             {
@@ -1429,6 +1522,7 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
         issue_count,
         prs,
         repo_settings,
+        heads,
         rate: Rate {
             cost: rate.cost,
             remaining: rate.remaining,
@@ -2114,10 +2208,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision mergeable mergeStateStatus } } } \
+             baseRefName reviewDecision mergeable mergeStateStatus headRefOid } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }

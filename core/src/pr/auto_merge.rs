@@ -17,8 +17,10 @@ pub enum Outcome {
     Enabled,
     /// The repo does not allow auto-merge: nothing was requested, and that is a stated condition, not an error.
     NotAllowed,
-    /// GitHub answered the mutation with an error (its message), or the repo allows no merge method; never retried.
+    /// GitHub answered the mutation with an error (its message); never retried.
     Refused(String),
+    /// The repo allows no merge method (its message): nothing was requested; never retried.
+    NoMethod(String),
     /// `gh` itself failed (timeout, HTTP 5xx, bad JSON): retried later.
     Failed(CpdError),
 }
@@ -49,7 +51,7 @@ pub fn after_read(runner: &dyn Runner, cwd: &Path, read: &gh::AutoMergeRead) -> 
         return Outcome::Enabled;
     }
     let Some(method) = read.methods.choose() else {
-        return Outcome::Refused("the repo allows no merge method".to_owned());
+        return Outcome::NoMethod("the repo allows no merge method".to_owned());
     };
     match gh::enable_auto_merge(runner, cwd, &read.id, method) {
         Ok(Ok(())) => Outcome::Enabled,
