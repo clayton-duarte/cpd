@@ -9,7 +9,10 @@
 /// The lines cargo reads from the build script's stdout, for the commit the build was given (`CPD_COMMIT`, if set)
 /// and the package version.
 pub fn directives(commit: Option<&str>, version: &str) -> Vec<String> {
-    let commit = commit.filter(|c| !c.is_empty()).unwrap_or("dev");
+    let commit = commit
+        .filter(|c| !c.is_empty())
+        .map(|c| &c[..c.floor_char_boundary(7)])
+        .unwrap_or("dev");
     vec![
         "cargo:rerun-if-env-changed=CPD_COMMIT".to_owned(),
         format!("cargo:rustc-env=CPD_VERSION={version}-{commit}"),

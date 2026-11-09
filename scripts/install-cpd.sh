@@ -5,7 +5,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-CPD_COMMIT=$(git -C "$root" rev-parse --short HEAD) "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
+CPD_COMMIT=$(git -C "$root" rev-parse --short=7 HEAD) "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
 "${CARGO_TARGET_DIR:-$root/target}/release/cpd" install --root "$root" "$@"
 
 # Package the Electron app and install it into the app dir (air-d89 point 1), so `cpd desktop`
