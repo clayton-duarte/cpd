@@ -88,7 +88,7 @@ function setup(dialog: Dialog | null) {
   mounted = m;
   return m.container;
 }
-const composerOf = (c: HTMLElement) => c.querySelector('[data-part="composer"]:not([hidden] *)');
+const composerOf = (c: HTMLElement) => c.querySelector('[data-part="composer"]:not([hidden])');
 const askOf = (c: HTMLElement) => c.querySelector("[data-question]");
 const planOf = (c: HTMLElement) => c.querySelector('[data-part="decision-bar"]');
 

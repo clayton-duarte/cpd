@@ -71,9 +71,9 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         thinking={toggles.thinking}
         tools={toggles.tools}
       />
-      <div hidden={dialog !== null}>
         <Composer
           ref={composer}
+          hidden={dialog !== null}
           sessionId={view.id}
           sessionKey={sessionKey}
           capabilities={view.capabilities}
@@ -94,14 +94,11 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           onSubmit={({ text, attachments, whenBusy }) => {
             const { text: prompt, images } = buildPrompt(text, attachments);
             const id = connection.submit({ text: prompt, images, whenBusy });
-            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, (result) => {
-              settle(view.ref?.runner === "pi" && result.type === "ack" ? { type: "unknown" } : result);
-            });
+            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, settle);
           }}
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}
         />
-      </div>
       {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (

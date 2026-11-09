@@ -35,7 +35,7 @@ export interface Connection {
   saveSettings(changes: SettingsChanges): void;
   close(): void;
 }
-export type SubmissionResult = { type: "ack" } | { type: "error"; message: string } | { type: "unknown" };
+export type SubmissionResult = { type: "receipt" } | { type: "error"; message: string } | { type: "unknown" };
 export const FRAME_MS = 16;
 export const PENDING_ECHO_MS = 30000;
 /** How long after a 'cockpit not ready' hub error the client re-sends `cockpit.subscribe` (20.1). */
@@ -220,7 +220,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     flush();
     store.dispatch({ type: "server", message });
     if (message.type === "session.submitAck") {
-      settleSubmission(message.sessionId, message.clientSubmissionId, message.submissionId === -1 ? { type: "unknown" } : { type: "ack" });
+      settleSubmission(message.sessionId, message.clientSubmissionId, message.submissionId === -1 ? { type: "unknown" } : { type: "receipt" });
     }
     if (message.type === "session.error" && message.sessionId !== null && message.clientSubmissionId !== undefined) {
       settleSubmission(message.sessionId, message.clientSubmissionId, { type: "error", message: message.error.message });

@@ -160,7 +160,7 @@ describe("App", () => {
     });
   });
 
-  it("preserves a blocked target's draft and attachments until its correlated acknowledgement without duplicate sends", async () => {
+  it("preserves a blocked target's draft and attachments after an unqualified receipt without duplicate sends", async () => {
     const { transport, container } = start();
     const blockedRef = { ...ref, state: "blocked", key: "cpd:worker-loop" };
     const blockedNode = { ...node, ref: blockedRef, dot: { state: "blocked", attention: null } };
@@ -183,9 +183,9 @@ describe("App", () => {
     act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "other", queued: false }));
     expect(ta.value).toBe("do not lose this");
     act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false }));
-    expect(ta.value).toBe("");
-    expect(container.querySelector('[aria-label="Staged attachments"]')).toBeNull();
-    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent ?? "").not.toMatch(/delivered|restored/i);
+    expect(ta.value).toBe("do not lose this");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/consumption.*unconfirmed/i);
   });
 
   it("keeps the draft and attachment on a correlated send failure and does not resend automatically", async () => {
@@ -259,6 +259,15 @@ describe("App", () => {
     expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
     expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown|unconfirmed/i);
     expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
+  it("does not treat an unqualified durable acknowledgement as consumption", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    typeAndEnter(container, "unconfirmed durable message");
+    act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false, submissionId: 7 }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("unconfirmed durable message");
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown|unconfirmed/i);
   });
 
   it("selecting an archived session disables the Composer", () => {

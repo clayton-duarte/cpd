@@ -23,7 +23,7 @@ function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queue
   const onCancelQueued = vi.fn();
   const m = mount(
     <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
-      reader={reader} onSubmit={(i) => { submits.push(i); }} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
+      reader={reader} onSubmit={(i) => { submits.push(i); return () => ({ dispose() {} }); }} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
   );
   return { m, submits, onAbort, onCancelQueued };
 }
@@ -50,13 +50,13 @@ function dragEvent(type: string, files: unknown[]): Event {
   return e;
 }
 
-it("enter submits text and clears the input", () => {
+it("enter submits text and retains the input while pending", () => {
   const { m, submits } = setup();
   const t = textarea(m.container);
   typeText(t, "hello");
   press(t, "Enter");
   expect(submits).toEqual([{ text: "hello", attachments: [], whenBusy: "followUp" }]);
-  expect(textarea(m.container).value).toBe("");
+  expect(textarea(m.container).value).toBe("hello");
   m.unmount();
 });
 
@@ -164,7 +164,7 @@ it("without capabilities the textarea, attach button and send button are disable
 it("archived Composer is disabled with the archived placeholder", () => {
   const m = mount(
     <Composer sessionId="s1" capabilities={base} archived busy={false} queued={[]} reader={reader}
-      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
+      onSubmit={() => () => ({ dispose() {} })} onAbort={() => {}} onCancelQueued={() => {}} />,
   );
   const t = textarea(m.container);
   expect(t.disabled).toBe(true);
@@ -198,7 +198,7 @@ it("draft: switching session shows that session draft and keeps the other", () =
   const root = createRoot(container);
   const render = (id: string) => act(() => root.render(
     <Composer sessionId={id} capabilities={base} busy={false} queued={[]} reader={reader}
-      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
+      onSubmit={() => () => ({ dispose() {} })} onAbort={() => {}} onCancelQueued={() => {}} />,
   ));
   render("s1");
   typeText(textarea(container), "alpha");
@@ -213,15 +213,15 @@ it("draft: switching session shows that session draft and keeps the other", () =
   container.remove();
 });
 
-it("draft: sending clears the stored draft", () => {
+it("draft: sending retains the stored draft until disposition is known", () => {
   const { m, submits } = setup();
   const t = textarea(m.container);
   typeText(t, "hello");
   expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
   press(t, "Enter");
   expect(submits).toHaveLength(1);
-  expect(window.localStorage.getItem(KEY("s1"))).toBeNull();
-  expect(textarea(m.container).value).toBe("");
+  expect(window.localStorage.getItem(KEY("s1"))).toBe("hello");
+  expect(textarea(m.container).value).toBe("hello");
   m.unmount();
 });
 

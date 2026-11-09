@@ -26,7 +26,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "../components/input-group.tsx";
-import { clearDraft, loadDraft, saveDraft } from "./drafts.ts";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { addFiles, filesFromClipboard } from "./attachments.ts";
 import type {
   AttachmentRejection,
@@ -51,13 +51,14 @@ interface ComposerProps {
     busy: boolean;
     queued: readonly QueuedSubmission[];
     reader: FileReaderBoundary;
-    onSubmit(s: ComposerSubmit): void | ObserveSubmission;
+    onSubmit(s: ComposerSubmit): ObserveSubmission;
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     sessionId: string;
     settings?: ReactNode;
     archived?: boolean;
     sessionKey?: string;
+    hidden?: boolean;
 }
 
 // Keyed by session so text and attachments never carry over to another session.
@@ -71,7 +72,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
-  const [submission, setSubmission] = useState<{ type: "pending" | "unknown" | "error"; message?: string } | null>(null);
+  const [submission, setSubmission] = useState<{ type: "pending" | "receipt" | "unknown" | "error"; message?: string } | null>(null);
   const submissionRef = useRef<Disposable | null>(null);
   const locked = useRef(false);
   useEffect(() => () => submissionRef.current?.dispose(), []);
@@ -104,31 +105,12 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const send = (): void => {
     if (!canSubmit || locked.current) return;
     locked.current = true;
-    const clear = (): void => {
-      clearDraft(props.sessionId);
-      setText("");
-      setAttachments([]);
-      setRejections([]);
-    };
     try {
       const observe = onSubmit({ text, attachments, whenBusy: "followUp" });
-      if (observe === undefined) {
-        clear();
-        locked.current = false;
-        return;
-      }
       setSubmission({ type: "pending" });
       submissionRef.current = observe((result: SubmissionResult) => {
         submissionRef.current = null;
-        if (result.type === "ack") {
-          clear();
-          setSubmission(null);
-          locked.current = false;
-        } else if (result.type === "error") {
-          setSubmission({ type: "error", message: result.message });
-        } else {
-          setSubmission({ type: "unknown" });
-        }
+        setSubmission(result);
       });
     } catch (e) {
       setSubmission({ type: "error", message: e instanceof Error ? e.message : String(e) });
@@ -149,7 +131,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   };
 
   return (
-    <div data-part="composer" className="mx-3 mb-2.5 flex shrink-0 flex-col gap-2">
+    <div data-part="composer" hidden={props.hidden} className="mx-3 mb-2.5 flex shrink-0 flex-col gap-2">
       <input
         ref={fileInputRef}
         type="file"
@@ -167,9 +149,11 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
         <p role="status" data-part="submission-feedback" className="m-0 font-mono text-xs text-status-blocked-bright">
           {submission.type === "pending"
             ? `${props.sessionKey ?? props.sessionId}: awaiting acknowledgement; delivery and agent response are not confirmed.`
-            : submission.type === "unknown"
-              ? `${props.sessionKey ?? props.sessionId}: message outcome is unknown. Do not resend until its disposition is verified.`
-              : `${props.sessionKey ?? props.sessionId}: ${submission.message ?? "submission failed"}. Message outcome may be unknown; verify before resending.`}
+            : submission.type === "receipt"
+              ? `${props.sessionKey ?? props.sessionId}: receipt received; agent consumption and response are unconfirmed. Verify before resending.`
+              : submission.type === "unknown"
+                ? `${props.sessionKey ?? props.sessionId}: message outcome is unknown. Do not resend until its disposition is verified.`
+                : `${props.sessionKey ?? props.sessionId}: ${submission.message ?? "submission failed"}. Message outcome may be unknown; verify before resending.`}
           {submission.type === "pending" ? null : (
             <Button type="button" variant="outline" size="xs" onClick={() => { locked.current = false; setSubmission(null); }}>
               Continue editing after verification
