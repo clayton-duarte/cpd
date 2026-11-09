@@ -75,9 +75,13 @@ pub struct MergeArgs {
 /// `merge` mutation whose overlay `merging` closes the `pr-ready` item at once. The engine drains it; nothing here calls GitHub.
 /// The Workflow's merge, the unstack of what depends on it and the `pr-merged` Event happen when the poll reads `MERGED`.
 pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> {
+    merge_in(ports, &CpdHome::from_env()?, args)
+}
+
+/// [`merge`] in `home`: the home is the caller's, never the process environment's, so a test's rig passes its own.
+pub(super) fn merge_in(ports: &Ports, home: &CpdHome, args: MergeArgs) -> Result<Output, CpdError> {
     let PullRef { repo, number } = args.pull;
-    let home = CpdHome::from_env()?;
-    let mut store = Store::open(&home, STORE_BUSY_MS)?;
+    let mut store = Store::open(home, STORE_BUSY_MS)?;
     let now = ports.clock.utc();
     let Some(e) = effective_pr(&mut store, &repo, number)? else {
         return Err(CpdError::new(
@@ -100,7 +104,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", e.state.as_str())
         .with("merge_state", e.row.merge_state.as_str()));
     }
-    refuse_unless_required_passed(&home, &repo, number, &e.row.checks, e.detail.as_ref())?;
+    refuse_unless_required_passed(home, &repo, number, &e.row.checks, e.detail.as_ref())?;
     let Some(head) = e.head_oid.clone() else {
         return Err(CpdError::new(
             ErrorCode::ItemNotFound,
@@ -119,7 +123,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
     {
         let contained = gh::head_contains_base(&*ports.runner, home.root(), &repo, default, &head)?;
         if !contained {
-            poll::arm_for_behind_head(&mut store, &home, &repo, number)?;
+            poll::arm_for_behind_head(&mut store, home, &repo, number)?;
             return Err(CpdError::new(
                 ErrorCode::HeadBehindMain,
                 "behind main, updated, waiting for gate".to_owned(),

@@ -126,7 +126,11 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 }
 
 /// [`poll`] in `home`: the home is the caller's, never the process environment's, so a test's rig passes its own.
-fn poll_in(ports: &Ports, home: &crate::home::CpdHome, args: PollArgs) -> Result<Output, CpdError> {
+pub(super) fn poll_in(
+    ports: &Ports,
+    home: &crate::home::CpdHome,
+    args: PollArgs,
+) -> Result<Output, CpdError> {
     let mut env = Env::open_home_with(ports, home.clone())?;
     let selected = args.plan.plan;
     if let Some(id) = &selected {
