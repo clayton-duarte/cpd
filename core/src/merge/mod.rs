@@ -1101,6 +1101,18 @@ pub(crate) fn rebase_with(
     Ok(Some(files))
 }
 
+/// Queues the `update` Job (cause `base-moved`, pro-d466) of every open stacked Workflow whose `base` is
+/// `base_lead_branch`, in the Job-merge transaction `tx` that moved that Lead Branch. Stub: queues nothing.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn queue_stacked_updates(
+    _tx: &crate::store::WriteTxn<'_>,
+    _plan: &PlanId,
+    _base_lead_branch: &str,
+    _tier: crate::config::Tier,
+) -> Result<Vec<crate::ids::JobKey>, crate::error::CpdError> {
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod gate_detail_tests {
     use super::*;

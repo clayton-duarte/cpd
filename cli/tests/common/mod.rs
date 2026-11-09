@@ -535,6 +535,12 @@ pub fn output(cmd: &mut Command) -> io::Result<Output> {
     .wait_with_output()
 }
 
+/// [`output`] bounded by `deadline`: the child runs in its own process group, and when it outlives `deadline` the
+/// whole group is `killpg`'d (SIGKILL) and `io::ErrorKind::TimedOut` is returned. Stub: no deadline yet.
+pub fn output_within(cmd: &mut Command, _deadline: Duration) -> io::Result<Output> {
+    output(cmd)
+}
+
 /// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
 /// the wait: the child is killed and reaped when it outlives `deadline`, and
 /// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],

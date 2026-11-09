@@ -917,3 +917,27 @@ fn checks_confirm_only_for_owned_or_authored() {
         "a review-requested-only PR triggers no checks read"
     );
 }
+
+#[test]
+fn job_merge_into_base_lead_branch_queues_stacked_update_job() {
+    // `web` is stacked on `api` (its base is api's Lead Branch); `solo` is on main.
+    let rig = open_rig(&["api", "web", "solo"]);
+    rig.sql("UPDATE workflows SET base = 'cpd/pay/api' WHERE plan = 'pay' AND key = 'web'");
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+
+    // A Job merges into api's Lead Branch (pro-d466): its transaction queues the dependants' update Jobs.
+    let queued = store
+        .write("job merge", |tx| {
+            crate::merge::queue_stacked_updates(tx, &pay, "cpd/pay/api", tier())
+        })
+        .unwrap();
+
+    assert_eq!(queued.len(), 1, "only the stacked dependant is refreshed");
+    assert_eq!(
+        update_jobs(&mut store),
+        vec![queued[0].as_str().to_owned()],
+        "exactly one update Job, for web"
+    );
+    assert_eq!(last_reason(&mut store).as_deref(), Some("base-moved"));
+}

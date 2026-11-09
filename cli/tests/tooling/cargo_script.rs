@@ -660,3 +660,57 @@ fn without_cpd_on_path_cargo_runs_directly() {
     );
     assert_eq!(read_or_empty(&log), "cargo build --workspace\nheld=unset\n");
 }
+
+/// Whether process `pid` is alive (`kill -0`).
+fn alive(pid: &str) -> bool {
+    Command::new("/bin/kill")
+        .args(["-0", pid])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+/// Kills the fake sccache when the test ends, pass or fail: no orphan.
+struct Fake(std::process::Child);
+
+impl Drop for Fake {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn test_output_deadline_kills_group_but_not_sccache() {
+    use std::os::unix::process::CommandExt;
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A fake shared sccache server: detached in its own group, outside the child's.
+    let sccache = tmp.path().join("sccache");
+    write_executable(&sccache, "#!/bin/sh\nexec sleep 30\n");
+    let server = Fake(common::spawn(Command::new(&sccache).process_group(0)).unwrap());
+    let server_pid = server.0.id().to_string();
+
+    // A fake child that records a grandchild of its group, then outlives the deadline (3 s, bounded).
+    let pids = tmp.path().join("grandchild.pid");
+    let child = tmp.path().join("child.sh");
+    write_executable(
+        &child,
+        &format!("#!/bin/sh\nsleep 3 &\necho $! > {}\nwait\n", pids.display()),
+    );
+
+    let got = common::output_within(
+        &mut Command::new(&child),
+        std::time::Duration::from_millis(300),
+    );
+    let err = got.expect_err("a child past its deadline is an error");
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+
+    let grandchild = fs::read_to_string(&pids).unwrap();
+    assert!(
+        !alive(grandchild.trim()),
+        "the deadline killed the child's whole group"
+    );
+    assert!(alive(&server_pid), "the fake sccache survived");
+}
