@@ -250,6 +250,7 @@ impl GitRoute {
             "cat-file" => cat_file(&mut ctx, rest),
             "merge-base" => merge_base(&mut ctx, rest),
             "merge-tree" => merge_tree(&mut ctx, rest),
+            "commit-tree" => merge::commit_tree_cmd(&mut ctx, rest),
             "rebase" => rebase(&mut ctx, rest),
             "rev-list" => rev_list(&mut ctx, rest),
             "ls-tree" => ls_tree(&mut ctx, rest),

@@ -1016,7 +1016,9 @@ pub(super) fn push(
             match reconcile(lead, lead_branch, branch, sha)? {
                 Reconciled::Push(to_push) => git::push_commit(lead, branch, &to_push).map(Some),
                 Reconciled::Contained(remote) => Ok(Some(git::Push::Contained { remote })),
-                Reconciled::Conflict { remote, files } => Err(remote_conflict(branch, sha, &remote, &files)),
+                Reconciled::Conflict { remote, files } => {
+                    Err(remote_conflict(branch, sha, &remote, &files))
+                }
             }
         } else {
             Ok(None)
@@ -1125,54 +1127,6 @@ pub(crate) fn rebase_with(
     Ok(Some(files))
 }
 
-#[cfg(test)]
-mod gate_detail_tests {
-    use super::*;
-
-    #[test]
-    fn the_three_forms_round_trip() {
-        let log = Path::new("/h/run/pay/logs/api-a1.pre-commit.log");
-        let forms = [
-            GateEnd::Failed {
-                exit: 3,
-                tail: "red\nmore",
-            },
-            GateEnd::Unjudged {
-                why: "killed. log: x (really)",
-                tail: "t",
-            },
-            GateEnd::CouldNotRun {
-                message: "no such file. log: y",
-            },
-        ];
-        for end in forms {
-            for hook in [Hook::PreCommit, Hook::PreMerge] {
-                let detail = gate_detail(hook, log, end);
-                assert_eq!(
-                    parse_gate_detail(&detail),
-                    Some((hook, log.to_path_buf())),
-                    "{detail}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn another_shape_is_not_a_gate_detail() {
-        for detail in [
-            "",
-            "The rebase onto the Lead Branch conflicted in: a.txt.",
-            "pre-start failed (exit 1). log: /l\ntail:\nx",
-            "pre-commit failed (exit x). log: /l\ntail:\nx",
-            "pre-commit failed (exit 1). log: \ntail:\nx",
-            "pre-commit failed (exit 1). log: /l",
-            "pre-commit exploded. log: /l",
-        ] {
-            assert_eq!(parse_gate_detail(detail), None, "{detail:?}");
-        }
-    }
-}
-
 /// What rule P's reconcile (§7.4) decided for the commit `S` a push names.
 pub(crate) enum Reconciled {
     /// Push this commit: `S` itself (the remote branch is absent or behind `S`) or the merge commit `M`.
@@ -1196,7 +1150,10 @@ pub(crate) fn reconcile(
     let mut sha = sha.to_owned();
     for _ in 0..=CAS_RETRIES {
         let heads = format!("refs/heads/{branch}");
-        let listed = run(dir, &["ls-remote", "--exit-code", "--heads", "origin", &heads])?;
+        let listed = run(
+            dir,
+            &["ls-remote", "--exit-code", "--heads", "origin", &heads],
+        )?;
         match listed.code {
             0 => {}
             2 => return Ok(Reconciled::Push(sha)),
@@ -1210,11 +1167,20 @@ pub(crate) fn reconcile(
         if ancestor(dir, &tip, &sha)? {
             return Ok(Reconciled::Push(sha));
         }
-        let tree = run(dir, &["merge-tree", "--write-tree", "--name-only", &sha, &tip])?;
+        let tree = run(
+            dir,
+            &["merge-tree", "--write-tree", "--name-only", &sha, &tip],
+        )?;
         match tree.code {
             0 => {}
             1 => {
-                let files = tree.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect();
+                let files = tree
+                    .stdout
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.is_empty())
+                    .map(str::to_owned)
+                    .collect();
                 return Ok(Reconciled::Conflict { remote: tip, files });
             }
             code => return Err(git_error("git merge-tree", code, &tree.stderr)),
@@ -1223,7 +1189,16 @@ pub(crate) fn reconcile(
         let message = format!("cpd: merge {branch} from origin");
         let made = git::run::ok(
             dir,
-            &["commit-tree", &merged_tree, "-p", &sha, "-p", &tip, "-m", &message],
+            &[
+                "commit-tree",
+                &merged_tree,
+                "-p",
+                &sha,
+                "-p",
+                &tip,
+                "-m",
+                &message,
+            ],
         )?;
         let made = made.trim().to_owned();
         let moved = run(
@@ -1278,4 +1253,52 @@ pub(crate) fn remote_conflict(branch: &str, sha: &str, remote: &str, files: &[St
     .with("sha", sha)
     .with("remote", remote)
     .with("files", files.to_vec())
+}
+
+#[cfg(test)]
+mod gate_detail_tests {
+    use super::*;
+
+    #[test]
+    fn the_three_forms_round_trip() {
+        let log = Path::new("/h/run/pay/logs/api-a1.pre-commit.log");
+        let forms = [
+            GateEnd::Failed {
+                exit: 3,
+                tail: "red\nmore",
+            },
+            GateEnd::Unjudged {
+                why: "killed. log: x (really)",
+                tail: "t",
+            },
+            GateEnd::CouldNotRun {
+                message: "no such file. log: y",
+            },
+        ];
+        for end in forms {
+            for hook in [Hook::PreCommit, Hook::PreMerge] {
+                let detail = gate_detail(hook, log, end);
+                assert_eq!(
+                    parse_gate_detail(&detail),
+                    Some((hook, log.to_path_buf())),
+                    "{detail}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn another_shape_is_not_a_gate_detail() {
+        for detail in [
+            "",
+            "The rebase onto the Lead Branch conflicted in: a.txt.",
+            "pre-start failed (exit 1). log: /l\ntail:\nx",
+            "pre-commit failed (exit x). log: /l\ntail:\nx",
+            "pre-commit failed (exit 1). log: \ntail:\nx",
+            "pre-commit failed (exit 1). log: /l",
+            "pre-commit exploded. log: /l",
+        ] {
+            assert_eq!(parse_gate_detail(detail), None, "{detail:?}");
+        }
+    }
 }
