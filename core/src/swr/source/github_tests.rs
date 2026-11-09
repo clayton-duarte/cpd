@@ -775,4 +775,27 @@ fn behind_head_rearm_success_raises_no_mutation_failed() {
         !matches!(outcome, ExecOutcome::Failed { .. }),
         "a handled re-arm raises no swr_mutation_failed: {outcome:?}"
     );
+=======
+#[test]
+fn non_empty_heavy_uses_reviewthreads_first_100_in_both_fragments() {
+    let q = build_poll_query(&PollPlan {
+        heavy: vec![("acme/pay".to_owned(), 1)],
+        absent: vec![],
+        meta: vec![],
+    });
+    assert!(q.contains("fragment Light"), "{q}");
+    assert!(q.contains("fragment Heavy"), "{q}");
+    assert!(
+        q.matches("reviewThreads(first: 100)").count() >= 2,
+        "both fragments page 100 threads: {q}"
+    );
+    assert!(!q.contains("reviewThreads(first: 50)"), "{q}");
+}
+
+#[test]
+fn empty_heavy_omits_the_heavy_fragment() {
+    let q = build_poll_query(&PollPlan::default());
+    assert!(!q.contains("fragment Heavy"), "{q}");
+    assert!(!q.contains("...Heavy"), "{q}");
+>>>>>>> origin/main
 }
