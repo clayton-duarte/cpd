@@ -76,10 +76,10 @@ test("the CI workflow sets NEXTEST_TEST_THREADS: \"8\" in the env of the Rust te
   assert.equal(parts[0].includes("NEXTEST_TEST_THREADS"), false);
 });
 
-// A push to main runs the Gate too: two green pull requests can break main together.
-test("the CI workflow runs on pull_request, workflow_dispatch and a push to main", () => {
+// CI runs on pull_request and workflow_dispatch (push to main removed per pro-d498).
+test("the CI workflow runs on pull_request and workflow_dispatch", () => {
   const ci = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8");
-  assert.match(ci, /^on:\n(?:  .*\n)*?  push:\n    branches: \[main\]\n/m);
+  assert.doesNotMatch(ci, /^  push:/m);
   assert.match(ci, /^  pull_request:$/m);
   assert.match(ci, /^  workflow_dispatch:$/m);
 });
