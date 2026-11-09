@@ -708,3 +708,71 @@ fn gh_poll_keeps_excused_labels_reduction_of_checks() {
         "no label, no excuse"
     );
 }
+
+/// `gh` of the merge drain: the compare read says the head is behind `main`; nothing else is expected.
+struct BehindGh;
+
+impl Handler for BehindGh {
+    fn handle(&self, call: &Call) -> Reply {
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            ["api", _, ..] if args[1].starts_with("repos/acme/pay/compare/main...") => {
+                Reply::ok(r#"{"status":"behind"}"#)
+            }
+            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
+        }
+    }
+}
+
+#[test]
+fn behind_head_rearm_success_raises_no_mutation_failed() {
+    use super::{ExecOutcome, Source};
+    const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+    let mut rig = crate::janitor_tests::Rig::new();
+    rig.workflow("api", "open");
+    rig.sql(&format!(
+        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}',
+                mergeable = 'mergeable', merge_state = 'clean', checks = 'passed' WHERE number = 801;
+         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
+                                merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
+           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');"
+    ));
+    let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(BehindGh));
+    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let now = rig.fakes.ports.clock.utc();
+    let id = super::github_write::enqueue(
+        &mut store,
+        now,
+        "github:pr:acme/pay#801",
+        "merge",
+        json!({"expected_head_oid": HEAD, "method": "squash"}),
+        Some(json!({"state": "merging"})),
+    )
+    .unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let m = crate::swr::outbox::get(&mut store, id).unwrap().unwrap();
+    let outcome = Ports::scope(&rig.fakes.ports, || {
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        GithubSource::default().execute(&mut cx, &m)
+    });
+    let armed: i64 = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT merge_armed FROM pull_requests WHERE number = 801",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(armed, 1, "the merge intent stays armed");
+    assert!(
+        !matches!(outcome, ExecOutcome::Failed { .. }),
+        "a handled re-arm raises no swr_mutation_failed: {outcome:?}"
+    );
+}
