@@ -14,6 +14,10 @@ Three rules follow, and §16 of [swr.md](swr.md) binds them:
 - A failed pass never overwrites or deletes a row. A rate-limit pause or an outage is a row of `swr_endpoints`, not a file.
 - A write is visible before GitHub has it, and it stops being an overlay only when a pass that started after the write proves GitHub has it (the fence, [swr.md §10](swr.md)).
 
+**Containment (`base_contained`).** For each open pull request whose `base_ref` is its repository's default branch, the poll sets `pull_requests.base_contained` from the one poll read: the default branch name is the Light read's `repository.defaultBranchRef.name` and the pull-request head oid is its `headRefOid`, both of the same pass (not the head stored by an earlier pass). The check is one `gh api repos/{repo}/compare/{default-branch-head}...{pull-request-head}` read per such pull request, made in that pass after the document is read. It is an additional per-PR read, not a second poll document, and it adds no cadence (`pr_poll_seconds`, [clocks](clocks.md)). The authoritative field is the compare response's `status`: `ahead` or `identical` means the pull request head contains the current default-branch head; `behind` or `diverged` means it does not. `mergeStateStatus` is not a containment signal (`UNKNOWN` does not establish containment). Unknown or missing inputs, and a compare that fails or does not answer, leave that pull request's flag NULL (unknown): an unknown flag is never treated as contained or as silently ready, and a failed compare does not fail the pass. A stacked pull request (base differs from the default branch) is not subject to this rule and keeps NULL. The cached flag serves readiness only: at merge enqueue, the merge gate reads fresh and checks containment again ([commands §9.10](../commands.md)).
+
+E5 sends one GraphQL read document per `pr_poll_seconds` cadence ([clocks](clocks.md)); the containment compare is the per-PR read above, not a reason to add another poll/document cadence.
+
 ## 2. Query keys and tables
 
 | Key (`github:<kind>:<id>`) | Row | Staleness (swr.md §4) |
