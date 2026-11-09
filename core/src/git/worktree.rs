@@ -1069,7 +1069,7 @@ pub fn remove_merged_lead(
         if has_unpushed_work(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
-        if let Err(e) = std::fs::rename(path, &aside) {
+        if let Err(e) = move_aside(path, &aside, &mut |p| std::fs::remove_dir_all(p)) {
             return Ok(LeadRemoval::Kept(Kept::Rename(e.to_string())));
         }
     }
@@ -1078,12 +1078,7 @@ pub fn remove_merged_lead(
         ok(repo, &["branch", "-D", branch])?;
     }
     if aside.exists() {
-        std::fs::remove_dir_all(&aside).map_err(|e| {
-            CpdError::new(
-                ErrorCode::GitFailed,
-                format!("remove {}: {e}", aside.display()),
-            )
-        })?;
+        delete_aside(&aside)?;
     }
     Ok(LeadRemoval::Removed)
 }
@@ -1138,12 +1133,33 @@ fn delete_aside(aside: &Path) -> Result<(), CpdError> {
     delete_aside_with(aside, &mut |p| std::fs::remove_dir_all(p))
 }
 
-/// `delete_aside` with the remove function injected. Stub: one attempt, no retry on ENOTEMPTY yet.
+/// Attempts of `remove_dir_all` on a directory that reports ENOTEMPTY (macOS Spotlight/Watchman races).
+const REMOVE_ATTEMPTS: usize = 3;
+
+fn is_not_empty(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::DirectoryNotEmpty || matches!(e.raw_os_error(), Some(66 | 39))
+}
+
+/// Call `remove` on `path`, retrying up to `REMOVE_ATTEMPTS` times while it fails with ENOTEMPTY.
+fn remove_retrying(
+    path: &Path,
+    remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut attempt = 1;
+    loop {
+        match remove(path) {
+            Err(e) if is_not_empty(&e) && attempt < REMOVE_ATTEMPTS => attempt += 1,
+            other => return other,
+        }
+    }
+}
+
+/// `delete_aside` with the remove function injected; retries on ENOTEMPTY.
 fn delete_aside_with(
     aside: &Path,
     remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
 ) -> Result<(), CpdError> {
-    remove(aside).map_err(|e| {
+    remove_retrying(aside, remove).map_err(|e| {
         CpdError::new(
             ErrorCode::GitFailed,
             format!("remove {}: {e}", aside.display()),
@@ -1151,13 +1167,15 @@ fn delete_aside_with(
     })
 }
 
-/// Rename `path` to `aside`, first deleting an `aside` that already exists (via `remove`). Stub: renames only.
-#[allow(dead_code)]
+/// Rename `path` to `aside`, first deleting an `aside` that already exists (via `remove`, with retry).
 fn move_aside(
     path: &Path,
     aside: &Path,
-    _remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+    remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
+    if aside.exists() {
+        remove_retrying(aside, remove)?;
+    }
     std::fs::rename(path, aside)
 }
 
@@ -1183,10 +1201,7 @@ fn remove(
             )
             .with("path", path.display().to_string()));
         }
-        if aside.exists() {
-            delete_aside(&aside)?;
-        }
-        std::fs::rename(path, &aside).map_err(|e| {
+        move_aside(path, &aside, &mut |p| std::fs::remove_dir_all(p)).map_err(|e| {
             CpdError::new(
                 ErrorCode::GitFailed,
                 format!("rename {} to {}: {e}", path.display(), aside.display()),
