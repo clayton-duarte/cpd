@@ -48,10 +48,10 @@ it is `GX` only ([contract §9](../contract.md), "Auxiliary Tiers (hs-d562)"). T
 two named auxiliaries are:
 
 - **the distiller / curator** — the curator of a Context's records, run by engine
-  step E9 (`cpd context distill`) or by `cpd context distill` on demand
-  ([contract §3.7](../contract.md) E9; [CONTEXT — Distilled Context](../../CONTEXT.md));
-- **retitle (the title writer)** — the Session-title writer run by engine step E10
-  ([contract §3.7](../contract.md) E10).
+  step `curation` (`cpd context distill`) or by `cpd context distill` on demand
+  ([contract §3.7](../contract.md) `curation`; [CONTEXT — Distilled Context](../../CONTEXT.md));
+- **retitle (the title writer)** — the Session-title writer run by engine step `session-titles`
+  ([contract §3.7](../contract.md) `session-titles`).
 
 ## The levels table
 
@@ -82,8 +82,8 @@ flowchart LR
     direction LR
     grounding["grounding<br/>Manager"] --> plan["plan<br/>Lead"] --> dispatch["dispatch<br/>Worker"] --> deploy["deploy"] --> done["done"]
   end
-  distiller(["distiller / curator<br/>auxiliary · E9 · GX"])
-  retitle(["retitle (title writer)<br/>auxiliary · E10 · GX"])
+  distiller(["distiller / curator<br/>auxiliary · curation · GX"])
+  retitle(["retitle (title writer)<br/>auxiliary · session-titles · GX"])
   distiller -.->|orbits| machine
   retitle -.->|orbits| machine
 ```

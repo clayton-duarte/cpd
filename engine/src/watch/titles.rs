@@ -93,7 +93,9 @@ const IDLE: &str = "SELECT s.id, s.titled_at,
 
 pub(super) fn run(engine: &mut Engine) {
     if incident_holds(engine, Step::E10) {
-        engine.log.line("E10: holding: incident mode is on");
+        engine
+            .log
+            .line("session-titles: holding: incident mode is on");
         return;
     }
     reap(engine);
@@ -164,7 +166,7 @@ pub(super) fn run(engine: &mut Engine) {
         match spawn(engine, &session, width) {
             Ok(run) => {
                 engine.log.line(&format!(
-                    "E10: started the retitle of Session {session} (pid {})",
+                    "session-titles: started the retitle of Session {session} (pid {})",
                     run.pid.0
                 ));
                 engine.titles.running.insert(session, run);
@@ -268,16 +270,16 @@ fn reap(engine: &mut Engine) {
         let log = log_path(&engine.home, &session);
         let output = output_since(&log, run.offset);
         if status.success() {
-            engine
-                .log
-                .line(&format!("E10: the retitle of Session {session} ended"));
+            engine.log.line(&format!(
+                "session-titles: the retitle of Session {session} ended"
+            ));
             engine.titles.failing_since.remove(&session);
             engine.titles.reported.remove(&session);
             engine.clear(Step::E10, &about);
         } else if lost_the_lock(&output) {
             // Another run held the Session's lock: that run is the one that counts (commands.md §10.14).
             engine.log.line(&format!(
-                "E10: the retitle of Session {session} found another run of it"
+                "session-titles: the retitle of Session {session} found another run of it"
             ));
         } else if is_auth_failure(&output) {
             let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>();
@@ -302,7 +304,7 @@ fn reap(engine: &mut Engine) {
                 .code()
                 .map_or("a signal".to_owned(), |c| format!("exit {c}"));
             engine.log.line(&format!(
-                "E10: the retitle of Session {session} failed ({exit})"
+                "session-titles: the retitle of Session {session} failed ({exit})"
             ));
             if engine.ports.clock.now().saturating_duration_since(since) < FAILING {
                 continue;
