@@ -286,7 +286,12 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
             && !TEST_FIELDS.contains(&k.as_str())
             && !OPTIONAL_FIELDS.contains(&k.as_str())
     }) {
-        return Err(invalid(&format!("$.{unknown}"), "unknown field"));
+        let why = if unknown == "outOfScope" {
+            "unknown field: cpd reads `out_of_scope`, the column's name"
+        } else {
+            "unknown field"
+        };
+        return Err(invalid(&format!("$.{unknown}"), why));
     }
     let tests = fields
         .contains_key("tests")

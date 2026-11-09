@@ -100,22 +100,26 @@ function WorkflowsDisplay({ wfs }: { wfs: readonly PlanWorkflowSummary[] }): Rea
       : "border-mizu/45 bg-mizu/10 text-mizu-bright";
   return (
     <span data-part="plan-workflows" className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
-      <HoverCard open={open} onOpenChange={setOpen} openDelay={10} closeDelay={100}>
-        <HoverCardTrigger asChild>
-          <button
-            type="button"
-            data-part="wf-pr-summary"
-            onFocus={() => setOpen(true)}
-            className={cn(
-              "inline-flex h-4 cursor-pointer items-center gap-1 rounded-[4px] border px-1.5 font-mono text-[10px]",
-              tone,
-            )}
-          >
-            <GitPullRequestIcon aria-hidden="true" className="size-2.5 shrink-0" />
-            <span>{`${wfs.length} PRs`}</span>
-            <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 opacity-70" />
-          </button>
-        </HoverCardTrigger>
+      <HoverCard open={open} onOpenChange={setOpen}>
+        <HoverCardTrigger
+          delay={10}
+          closeDelay={100}
+          render={
+            <button
+              type="button"
+              data-part="wf-pr-summary"
+              onFocus={() => setOpen(true)}
+              className={cn(
+                "inline-flex h-4 cursor-pointer items-center gap-1 rounded-[4px] border px-1.5 font-mono text-[10px]",
+                tone,
+              )}
+            >
+              <GitPullRequestIcon aria-hidden="true" className="size-2.5 shrink-0" />
+              <span>{`${wfs.length} PRs`}</span>
+              <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 opacity-70" />
+            </button>
+          }
+        />
         <HoverCardContent
           align="end"
           data-part="wf-pr-hover-list"
@@ -223,7 +227,7 @@ export function ManagerView(props: ManagerViewProps): ReactElement {
 
   if (context === null) {
     // 14.2 (air-d28): the empty state is text, not the flowchart; CpdFlowCanvas renders only in the Documentation dialog.
-    return <p data-part="manager-empty" className="grid h-full place-items-center text-muted-foreground">Select a lead to see plans</p>;
+    return <Empty data-part="manager-empty" className="h-full text-muted-foreground">Select a lead to see plans</Empty>;
   }
 
   const plans = livePlans(context);

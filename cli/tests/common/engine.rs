@@ -149,19 +149,31 @@ impl Fx {
     }
 
     /// What every engine test needs of the runner, with no answer for `cpd pr poll` yet: the engine's executable
-    /// ([`ENGINE_EXE`]) and a tmux that has no server.
+    /// ([`ENGINE_EXE`]), a tmux that has no server, and the default answer of E5's in-process github poll
+    /// ([`Fx::engine_gh_route`]).
     pub fn engine_base_routes(&self) {
         self.fakes.spawn.set_self_exe(ENGINE_EXE);
         self.fake(
             "tmux",
             Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"),
         );
+        self.engine_gh_route();
+    }
+
+    /// The default answer of E5's in-process `gh api graphql` poll (the github SWR pass, docs/architecture/swr-github.md
+    /// §3): the engine fixtures that do not script `gh` get an empty GitHub answer shaped to the one document the source
+    /// sends, so a tick that polls github is answered instead of tripping the unscripted-call guard. A `gh` call the
+    /// test scripts with [`Fx::fake_gh`] or [`Fx::route_fn`] answers first; one that is not the poll document this route
+    /// refuses by name rather than answering.
+    pub fn engine_gh_route(&self) {
+        let _ = (*self.fakes.runner).clone().route("gh", Arc::new(GhPoll));
     }
 
     /// [`Fx::engine_routes`] with the tmux route left to answer, not a tmux with no server: the fake server of [`Fx::tmux`] is the
     /// engine's (give it the config of [`Fx::engine_config_on_tmux`]). Faults: `fx.fakes.runner` `once`/`on` (the tmux route docs).
     pub fn engine_routes_on_tmux(&self) {
         self.fakes.spawn.set_self_exe(ENGINE_EXE);
+        self.engine_gh_route();
         let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
         self.fake("cpd", Reply::ok(&poll.to_string()));
     }
@@ -689,6 +701,68 @@ impl Handler for CpdRoute {
             takes: Duration::ZERO,
         }
     }
+}
+
+/// The engine fixtures' default `gh api graphql` answer: the github poll document (the only document E5's SWR pass
+/// sends, [`is_github_poll`]) is answered with an empty result; any other `gh` call the test did not script is refused.
+struct GhPoll;
+
+impl Handler for GhPoll {
+    fn handle(&self, call: &Call) -> Reply {
+        // The containment compare main's poll makes per open default-branch pull request
+        // (`gh api repos/<repo>/compare/<default>...<head>`) is a read of its own, not the poll document (D10): answer
+        // it before the poll check, which refuses anything that is not the document.
+        if call.args.iter().any(|arg| arg.contains("/compare/")) {
+            return Reply::ok(r#"{"status":"ahead"}"#);
+        }
+        let query = call.args.iter().find_map(|arg| arg.strip_prefix("query="));
+        let Some(query) = query.filter(|query| is_github_poll(query)) else {
+            return Reply::exit(
+                1,
+                "",
+                &format!(
+                    "the engine fixtures answer only the github poll document, not {} {:?}\n",
+                    call.program, call.args
+                ),
+            );
+        };
+        let mut data = serde_json::Map::new();
+        data.insert("viewer".into(), json!({"login": "cpd"}));
+        data.insert(
+            "rateLimit".into(),
+            json!({"remaining": 5000, "resetAt": "2030-01-01T00:00:00Z", "cost": 1}),
+        );
+        for alias in ["authored", "reviews"] {
+            data.insert(
+                alias.into(),
+                json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}),
+            );
+        }
+        for i in 0..64 {
+            if !query.contains(&format!("p{i}: repository(owner: ")) {
+                break;
+            }
+            data.insert(format!("p{i}"), json!({"pullRequest": null}));
+        }
+        for i in 0..64 {
+            if !query.contains(&format!("m{i}: repository(owner: ")) {
+                break;
+            }
+            data.insert(format!("m{i}"), json!(null));
+        }
+        Reply::ok(&json!({"data": data}).to_string())
+    }
+}
+
+/// Whether `query` is the one document `swr::source::github` sends (`build_poll_query`): the viewer and rate limit, the
+/// two searches, and the Light and Heavy fragments. A source change that alters the document makes this refuse the call,
+/// so the fixture is not silently answering a document it no longer recognizes.
+fn is_github_poll(query: &str) -> bool {
+    query.starts_with("query { viewer { login } rateLimit { remaining resetAt cost }")
+        && query.contains("authored: search(type: ISSUE")
+        && query.contains("reviews: search(type: ISSUE")
+        && query.contains("fragment Light on PullRequest {")
+        && query.contains("fragment Heavy on PullRequest {")
 }
 
 type Reply1 = Box<dyn Fn(&Call) -> Reply + Send + Sync>;

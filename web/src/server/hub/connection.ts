@@ -8,6 +8,8 @@ import type { CompletionTracker } from "../completion-service.ts";
 import type { Registry, ResolvedSession } from "./registry.ts";
 
 export interface CockpitService {
+  /** Resolves once the cockpit's first load has landed; a subscribe waits on it before it snapshots (20.1, air-n101). */
+  ready(): Promise<void>;
   snapshot(): CockpitSnapshot;
   selectPlan(planId: string | null): Promise<void>;
   subscribe(listener: (u: CockpitUpdate) => void): Disposable;
@@ -66,17 +68,24 @@ export function createHubConnection(deps: HubDeps): HubConnection {
     if (old !== null) await old.handle.dispose();
   };
 
-  const subscribe = (): void => {
+  const subscribe = async (): Promise<void> => {
+    // Register the subscription regardless: a client that connects before the first load must still
+    // receive every later update, and a normal startup wait is not an error (20.1, air-n101).
+    subscription ??= deps.cockpit.subscribe((u) => {
+      if (u.kind === "error") send({ type: "cockpit.error", error: u.error });
+      else send({ type: "cockpit.patch", pane: u.pane, data: u.data } as ServerMessage);
+    });
+    // Wait for the first load so a subscribe that arrives while the store read is lock-waited is held
+    // until the snapshot lands, not answered 'cockpit not ready'.
+    try {
+      await deps.cockpit.ready();
+    } catch { /* a terminal start failure falls through to the null check below */ }
     const snap = deps.cockpit.snapshot();
     if (snap.tree === null || snap.inbox === null) {
       send({ type: "cockpit.error", error: toWireError(new WebError("internal", "cockpit not ready")) });
       return;
     }
     send({ type: "cockpit.snapshot", tree: snap.tree, plan: snap.plan, inbox: snap.inbox, ...(snap.status === undefined ? {} : { status: snap.status }), ...(snap.costs === undefined ? {} : { costs: snap.costs }) });
-    subscription ??= deps.cockpit.subscribe((u) => {
-      if (u.kind === "error") send({ type: "cockpit.error", error: u.error });
-      else send({ type: "cockpit.patch", pane: u.pane, data: u.data } as ServerMessage);
-    });
   };
 
   const attach = async (sessionId: string): Promise<void> => {

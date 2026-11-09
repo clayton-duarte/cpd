@@ -2,8 +2,18 @@
 //! inserted after the last top-level key, a key already at its value and every other byte stay.
 
 use super::tier_write::set_tiers_in_text;
+use std::path::Path;
 
 const DATE: &str = "2026-01-01";
+
+/// The decide role's key `decide_tier` is a role default like the other four, and its default is `JX`
+/// (contract §8.2 "The five Tier keys", §9 "Roles and ranges"; air-d113, air-d115, air-d120).
+#[test]
+fn decide_tier_defaults_to_jx() {
+    let (config, _) =
+        super::Config::parse("version = 1\nmachine = \"m1\"\n", Path::new("config.toml")).unwrap();
+    assert_eq!(config.decide_tier, super::Tier::parse("JX").unwrap());
+}
 
 #[test]
 fn tiers_rewrite_replaces_only_changed_lines_whole_with_the_comment() {

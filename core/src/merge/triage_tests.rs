@@ -30,6 +30,10 @@ fn catalog() -> Catalog {
         efforts: vec![1, 2, 3],
     };
     Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),

@@ -9,6 +9,7 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
+import { Empty } from "./components/empty.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { HealthBeacon } from "./HealthBeacon.tsx";
@@ -292,7 +293,7 @@ export function App(props: AppProps): ReactElement {
       }
       chat={
         session === null ? (
-          <p data-empty className="grid h-full place-items-center text-muted-foreground">Select a session</p>
+          <Empty className="h-full text-muted-foreground">Select a session</Empty>
         ) : (
           <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} /></ErrorBoundary>
         )

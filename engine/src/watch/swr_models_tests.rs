@@ -153,13 +153,16 @@ impl Ctx {
         }
     }
 
-    /// Ticks until `done` holds; panics when it never does.
+    /// Ticks until `done` holds; panics when it never does. The run is detached, so after each tick it waits for the
+    /// run's helper thread to end ([`models::join`]) rather than spinning a fixed number of times: the answer is on the
+    /// channel by then, and the wait is not a race with the scheduler (no test may depend on load).
     fn until(&mut self, what: &str, done: impl Fn(&mut Ctx) -> bool) {
         for _ in 0..20_000 {
             models::run(&mut self.fx.engine);
             if done(self) {
                 return;
             }
+            models::join(&mut self.fx.engine);
             std::thread::yield_now();
         }
         panic!("never held: {what}");

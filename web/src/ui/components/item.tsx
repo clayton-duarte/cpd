@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { Slot as SlotPrimitive } from "radix-ui";
+import { mergeProps } from "@base-ui/react/merge-props";
+import { useRender } from "@base-ui/react/use-render";
 import * as React from "react";
 import { cn } from "../../lib/utils.ts";
 import { Separator } from "./separator.tsx";
@@ -53,26 +54,32 @@ const itemVariants = cva(
   },
 );
 
+type ItemProps = Omit<useRender.ComponentProps<"div">, "className"> & {
+  className?: string;
+} & VariantProps<typeof itemVariants>;
+
 function Item({
   className,
   variant = "default",
   size = "default",
-  asChild = false,
+  render,
   ...props
-}: React.ComponentProps<"div"> &
-  VariantProps<typeof itemVariants> & {
-    asChild?: boolean;
-  }): React.ReactElement {
-  const Comp = asChild ? SlotPrimitive.Slot : "div";
-  return (
-    <Comp
-      data-slot="item"
-      data-variant={variant}
-      data-size={size}
-      className={cn(itemVariants({ variant, size, className }))}
-      {...props}
-    />
-  );
+}: ItemProps): React.ReactElement {
+  return useRender({
+    defaultTagName: "div",
+    props: mergeProps<"div">(
+      {
+        className: cn(itemVariants({ variant, size, className })),
+      },
+      props,
+    ),
+    render,
+    state: {
+      slot: "item",
+      variant,
+      size,
+    },
+  });
 }
 
 const itemMediaVariants = cva(

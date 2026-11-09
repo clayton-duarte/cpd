@@ -34,7 +34,11 @@ const FAST: &str = "[presets.fast]\nO = \"github-copilot/claude-haiku-4.5\"\nS =
 
 /// The host `[model]` before an apply: `O` is `opus` (the preset's is `haiku`), the other letters are already the
 /// preset's; a comment and another table surround it, so a rewrite must leave them byte-identical.
-const HOST: &str = "# not part of the model\n[model]\nO = \"github-copilot/claude-opus-5.5\"\nS = \"github-copilot/claude-sonnet-5.5\"\nH = \"github-copilot/claude-haiku-4.5\"\nG = \"github-copilot/gemini-3.8-flash\"\n\n[pr]\nfeedback.checks = \"none\"\n";
+const HOST: &str = "# not part of the model\n[model]\nO = \"github-copilot/claude-opus-5.5\"\nS = \"github-copilot/claude-sonnet-5.5\"\nH = \"github-copilot/claude-haiku-4.5\"\nG = \"github-copilot/gemini-3.8-flash\"\nJ = \"github-copilot/gemini-3.8-flash\"\n\n[pr]\nfeedback.checks = \"none\"\n";
+
+/// A host `[model]` of one other provider, `other-provider`, in five refs: the preset of [`HOST_OTHER`]'s test names
+/// the same provider, so `apply`'s one-provider step passes and the registry step refuses.
+const HOST_OTHER: &str = "# not part of the model\n[model]\nO = \"other-provider/old-o\"\nS = \"other-provider/old-s\"\nH = \"other-provider/old-h\"\nG = \"other-provider/old-g\"\nJ = \"other-provider/old-j\"\n\n[pr]\nfeedback.checks = \"none\"\n";
 
 impl TestEnv {
     /// The `session-model-changed` Events, each as `{session, data}`; scoped rows list the Session in `session`.
@@ -195,7 +199,7 @@ fn apply_refuses_a_provider_not_in_the_registry_and_writes_nothing() {
     let fx = Fx::new();
     fx.config(&preset("ext", "other-provider", "fast"));
     fx.registry(&json!([{"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["fast-o", "fast-s", "fast-h", "fast-g"]}]));
-    fx.host(HOST);
+    fx.host(HOST_OTHER);
 
     refused(
         &fx.cpd(&["preset", "apply", "ext"]),
@@ -204,7 +208,7 @@ fn apply_refuses_a_provider_not_in_the_registry_and_writes_nothing() {
     );
     assert_eq!(
         fx.host_text(),
-        HOST,
+        HOST_OTHER,
         "host.toml is untouched by the refusal"
     );
     assert!(fx.env.model_changed().is_empty(), "no Event is appended");
@@ -382,7 +386,7 @@ fn preset_set_writes_the_model_table_and_one_event_per_live_lead_and_manager() {
     assert_eq!(
         fx.host_text(),
         format!(
-            "# not part of the model\n[model]\nO = \"{HAIKU}\"\nS = \"{OPUS}\"\nH = \"{HAIKU}\"\nG = \"{GEMINI}\"\n\n[pr]\nfeedback.checks = \"none\"\n"
+            "# not part of the model\n[model]\nO = \"{HAIKU}\"\nS = \"{OPUS}\"\nH = \"{HAIKU}\"\nG = \"{GEMINI}\"\nJ = \"{GEMINI}\"\n\n[pr]\nfeedback.checks = \"none\"\n"
         )
     );
     let mut events = fx.env.model_changed();

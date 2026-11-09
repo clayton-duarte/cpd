@@ -18,31 +18,43 @@ pub mod cmd;
 pub use cmd::{Command, run};
 
 #[cfg(test)]
+mod pool_tests;
+#[cfg(test)]
 mod tests;
 
 /// The reserved name of the built-in resource: the host's Worker slots (contract §8.3 "The built-in resource `workers`").
 pub const WORKERS: &str = "workers";
 
 /// The built-in resource `workers` as `cpd resource list` and `job show` read it: a host pool of `concurrency` slots, whose
-/// tenants are the Jobs of the `job_tenants` view (contract §3.4 "Tenancy"). It has no lock file: the Ledger is the record.
+/// tenants are the Jobs with a live Attempt (contract §3.4 "Tenancy"): `workers` counts live Attempts, not Jobs (air-n90),
+/// so a `cancelled`, `failed` or requeued Job whose every Attempt has ended holds no slot. It has no lock file: the Ledger is
+/// the record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workers {
     /// The config's `concurrency`.
     pub slots: u32,
-    /// One record per tenant Job, `{by: attempt}` of its latest Attempt, in start order (`started_at`, then Attempt id).
+    /// One record per live Attempt of a tenant Job, `{by: attempt}`, in start order (`started_at`, then Attempt id).
     /// More than `slots` while an urgent Job holds the slot beyond.
     pub holders: Vec<Holder>,
 }
 
-/// The Job tenants of the pool whose identity text is `pool` ([`identity`], or [`WORKERS`]), each as the holder of its latest Attempt,
-/// in start order. The one query every reader of the tenancy shares (E3, the starter, `resource list`, `job show`, `@cpd_workers`).
+/// The Job tenants of the pool whose identity text is `pool` ([`identity`], or [`WORKERS`]), in start order. The one query every
+/// reader of the tenancy shares (E3, the starter, `resource list`, `job show`, `@cpd_workers`).
+///
+/// A Spec pool's tenant Job holds its slot for the Job's life, so it is the holder of its latest Attempt. `workers` counts live
+/// Attempts, not Jobs (contract §3.4 "Tenancy", air-n90): its holders are the Attempts that are not `ended`, one per Job (the
+/// `attempts_one_active` index), so a Job whose every Attempt has ended holds no Worker slot.
 pub fn tenants(conn: &rusqlite::Connection, pool: &str) -> Result<Vec<Holder>, CpdError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(if pool == WORKERS {
+        "SELECT a.plan, a.job, a.id, a.started_at FROM job_tenants t
+           JOIN attempts a ON a.plan = t.plan AND a.job = t.job AND a.status <> 'ended'
+          WHERE t.pool = ?1 ORDER BY a.started_at, a.id"
+    } else {
         "SELECT a.plan, a.job, a.id, a.started_at FROM job_tenants t
            JOIN attempts a ON a.plan = t.plan AND a.job = t.job
             AND a.number = (SELECT max(number) FROM attempts WHERE plan = t.plan AND job = t.job)
-          WHERE t.pool = ?1 ORDER BY a.started_at, a.id",
-    )?;
+          WHERE t.pool = ?1 ORDER BY a.started_at, a.id"
+    })?;
     let holders = stmt
         .query_map([pool], |r| {
             Ok(Holder::Attempt {
@@ -56,7 +68,7 @@ pub fn tenants(conn: &rusqlite::Connection, pool: &str) -> Result<Vec<Holder>, C
     Ok(holders)
 }
 
-/// The Worker slots now: `concurrency` slots, the tenant Jobs of `workers` as holders.
+/// The Worker slots now: `concurrency` slots, the live Attempts as holders.
 pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
     Ok(Workers {
         slots: concurrency,
@@ -65,7 +77,8 @@ pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers,
 }
 
 impl Workers {
-    /// The pool E3 schedules on: `free` = slots no tenant holds, `urgent_free` = the one beyond, while the tenants are at most `slots`.
+    /// The pool E3 schedules on: `free` = slots no live Attempt holds, `urgent_free` = the one beyond, while the live Attempts are
+    /// at most `slots` (contract §3.4 "Tenancy", air-n90).
     pub fn pool(&self) -> crate::driver::schedule::Pool {
         let active = u32::try_from(self.holders.len()).unwrap_or(u32::MAX);
         crate::driver::schedule::Pool {

@@ -258,21 +258,23 @@ it("inbox row click selects the plan and the session", () => {
   expect(onSelectPlan).toHaveBeenCalledExactlyOnceWith("p9");
   expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("s9");
   expect(onAction).not.toHaveBeenCalled();
-  // the linked title and the item-link icon open row.url in a new tab and do not select
+  // the title is not a link; the top-right item-link anchor opens row.url in a new tab and does not select
   onSelectPlan.mockClear();
   onSelectSession.mockClear();
   const second = items(m.container)[1]!;
-  const title = second.querySelector<HTMLAnchorElement>('[data-slot="item-title"] a');
+  expect(second.querySelector('[data-slot="item-title"] a')).toBeNull();
   const icon = second.querySelector<HTMLAnchorElement>('a[data-part="item-link"]');
-  for (const a of [title, icon]) {
-    expect(a?.getAttribute("href")).toBe("https://example.test/pr/1");
-    expect(a?.getAttribute("target")).toBe("_blank");
-    expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
-    click(a);
-  }
+  expect(icon?.getAttribute("href")).toBe("https://example.test/pr/1");
+  expect(icon?.getAttribute("target")).toBe("_blank");
+  expect(icon?.getAttribute("rel")).toBe("noopener noreferrer");
+  click(icon);
   expect(icon?.getAttribute("aria-label")).toBe("Open external link");
   expect(onSelectPlan).not.toHaveBeenCalled();
   expect(onSelectSession).not.toHaveBeenCalled();
+  // the card itself opens its owner rather than the external link
+  click(second);
+  expect(onSelectPlan).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("lead1");
   m.unmount();
 });
 
@@ -287,7 +289,14 @@ it("inbox curate-retire row opens the curate dialog", () => {
   const r = row(7, "curate-retire", "Curate c1", { urgency: "blue", contextId: "c1", planId: null, sessionId: "m1", curation });
   const m = mount(<LooseInbox inbox={model([r])} onAction={onAction} onSelectSession={onSelectSession} onSelectPlan={onSelectPlan} />);
   expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  // the card click opens the owner only: no dialog
   click(items(m.container)[0]);
+  expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("m1");
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  // the Curate action button opens the dialog and does not re-select the owner
+  const curate = items(m.container)[0]?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(curate?.textContent).toBe("Curate");
+  click(curate);
   expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("m1");
   const dialog = document.body.querySelector('[role="dialog"]');
   expect(dialog?.textContent).toContain("Retire records of c1");
@@ -306,7 +315,14 @@ it("inbox unread row click selects the session and dispatches inbox.dismiss", ()
   const onAction = vi.fn();
   const onSelectSession = vi.fn();
   const m = mount(<LooseInbox inbox={model([row(11, "unread", "new reply", { sessionId: "s1" }), row(-1, "unread", "synthetic", { id: -1, sessionId: "s2" })])} onAction={onAction} onSelectSession={onSelectSession} />);
+  // the card click opens the owner only: no dismiss
   click(items(m.container)[0]);
+  expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("s1");
+  expect(onAction).not.toHaveBeenCalled();
+  // the Dismiss action button dispatches inbox.dismiss and does not re-select the owner
+  const dismiss = items(m.container)[0]?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(dismiss?.textContent).toBe("Dismiss");
+  click(dismiss);
   expect(onSelectSession).toHaveBeenCalledExactlyOnceWith("s1");
   expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "inbox.dismiss", itemId: 11 });
   onAction.mockClear();

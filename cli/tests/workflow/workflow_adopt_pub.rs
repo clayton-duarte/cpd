@@ -366,6 +366,10 @@ fn child_merges_the_attempt() {
         efforts: vec![0, 1, 2, 3, 4, 5],
     };
     let catalog = Catalog {
+        j: cpd_core::config::TierModel {
+            model: String::new(),
+            efforts: Vec::new(),
+        },
         pi_version: "1.2.0".to_owned(),
         o: model("p/opus"),
         s: model("p/sonnet"),
