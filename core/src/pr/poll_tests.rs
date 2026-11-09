@@ -941,3 +941,59 @@ fn job_merge_into_base_lead_branch_queues_stacked_update_job() {
     );
     assert_eq!(last_reason(&mut store).as_deref(), Some("base-moved"));
 }
+
+#[test]
+fn stacked_on_adopted_base_resolves_head_ref_on_origin() {
+    // `web` is stacked on `api`, an adopted Workflow: its Lead Branch is `cpd/pay/api`, its pull request's head `feature/api`
+    // is the only one of the two on origin (pro-d480, pro-d479, pro-d481).
+    let rig = open_rig(&["api", "web"]);
+    rig.sql(
+        "DROP TRIGGER workflows_head_ref_fixed;
+         UPDATE workflows SET head_ref = 'feature/api' WHERE plan = 'pay' AND key = 'api';
+         UPDATE workflows SET base = 'cpd/pay/api' WHERE plan = 'pay' AND key = 'web'",
+    );
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let repo = rig.repo.dir().display().to_string();
+
+    // Worker submit (and merge): the refs a protected path may come from, through the mocked git `Universe`.
+    let refs = Ports::scope(&rig.fakes.ports, || {
+        store
+            .read(|c| crate::pr::start::tamper_bases(c, rig.repo.dir(), &repo, "cpd/pay/api"))
+            .unwrap()
+    });
+    assert!(
+        refs.contains(&"origin/feature/api".to_owned()),
+        "submit queries the base's head_ref on origin: {refs:?}"
+    );
+    assert!(
+        !refs.contains(&"origin/cpd/pay/api".to_owned()),
+        "the adopted base's lead_branch is absent on origin: {refs:?}"
+    );
+
+    // Open and update Job specs name the same remote ref.
+    let web = store
+        .read(|c| {
+            Ok(
+                crate::plan::fingerprint::load_workflows(c, &PlanId::parse("pay").unwrap())?
+                    .into_iter()
+                    .find(|w| w.key.as_str() == "web"),
+            )
+        })
+        .unwrap()
+        .expect("web");
+    let specs = store
+        .read(|c| {
+            Ok([
+                crate::job::open::fixed_spec_on(c, &web, false, None),
+                crate::job::open::fixed_spec_on(c, &web, true, None),
+            ])
+        })
+        .unwrap();
+    for spec in specs {
+        let text = format!("{} {}", spec.goal, spec.context);
+        assert!(
+            text.contains("origin/feature/api") && !text.contains("origin/cpd/pay/api"),
+            "spec names origin/<head_ref> of the base: {text}"
+        );
+    }
+}

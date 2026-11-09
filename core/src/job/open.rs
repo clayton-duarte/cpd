@@ -118,6 +118,18 @@ pub(crate) fn fixed_spec(workflow: &WorkflowRow, update: bool, cause: Option<Cau
     }
 }
 
+/// [`fixed_spec`] with the base Workflow's remote ref resolved on `conn`: `origin/<head_ref>` of an adopted base, else
+/// `origin/<base>` (pro-d480). Stub: not resolved yet.
+#[allow(dead_code)]
+pub(crate) fn fixed_spec_on(
+    _conn: &rusqlite::Connection,
+    workflow: &WorkflowRow,
+    update: bool,
+    cause: Option<Cause>,
+) -> JobSpec {
+    fixed_spec(workflow, update, cause)
+}
+
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
 /// cause says what the Worker merges: a conflict merges the base only on a conflict, a base Workflow's merge merges the new base even
 /// without one (§3.7 E5, hs-d794).
