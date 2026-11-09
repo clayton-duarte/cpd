@@ -118,6 +118,19 @@ pub(crate) fn fixed_spec(workflow: &WorkflowRow, update: bool, cause: Option<Cau
     }
 }
 
+/// [`fixed_spec`] with the base Workflow's remote ref resolved on `conn`: `origin/<head_ref>` of an adopted base, else
+/// `origin/<base>` (pro-d480).
+pub(crate) fn fixed_spec_on(
+    conn: &rusqlite::Connection,
+    workflow: &WorkflowRow,
+    update: bool,
+    cause: Option<Cause>,
+) -> JobSpec {
+    let mut resolved = workflow.clone();
+    resolved.base = crate::workflow::start::remote_branch(conn, &workflow.repo, &workflow.base);
+    fixed_spec(&resolved, update, cause)
+}
+
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
 /// cause says what the Worker merges: a conflict merges the base only on a conflict, a base Workflow's merge merges the new base even
 /// without one (§3.7 E5, hs-d794).
@@ -150,7 +163,7 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
                 "Features, refactors or fixes that the conflict does not need",
             ]),
         ),
-        Cause::BaseMerged | Cause::Behind => (
+        Cause::BaseMerged | Cause::Behind | Cause::BaseMoved => (
             format!(
                 "Bring the pull request of Workflow {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it, resolve any conflicts, and submit.",
                 key = workflow.key
@@ -237,6 +250,9 @@ pub enum Cause {
     /// `pr merge` found the head behind the default branch: the Worker merges `origin/<default branch>` into the Lead
     /// Branch unconditionally, like [`Cause::BaseMerged`], so the head contains the default branch again (commands.md §9.10).
     Behind,
+    /// A Job merged into the Lead Branch the stacked Workflow is based on, so the base moved: the Worker merges the
+    /// base into its Lead Branch unconditionally (pro-d466, contract §3.7 E5).
+    BaseMoved,
 }
 
 impl Cause {
@@ -245,14 +261,20 @@ impl Cause {
             Cause::Conflict => "conflict",
             Cause::BaseMerged => "base-merged",
             Cause::Behind => "behind",
+            Cause::BaseMoved => "base-moved",
         }
     }
 
     /// The cause a `reason` spells (the inverse of [`Cause::as_str`]); `None` for a reason no cause spells.
     pub fn parse(text: &str) -> Option<Cause> {
-        [Cause::Conflict, Cause::BaseMerged, Cause::Behind]
-            .into_iter()
-            .find(|cause| cause.as_str() == text)
+        [
+            Cause::Conflict,
+            Cause::BaseMerged,
+            Cause::Behind,
+            Cause::BaseMoved,
+        ]
+        .into_iter()
+        .find(|cause| cause.as_str() == text)
     }
 }
 
@@ -331,7 +353,7 @@ fn insert(
         workflow: Some(workflow.key.as_str().to_owned()),
         title,
         tier: Some(tier.clone()),
-        spec: Some(fixed_spec(workflow, update, cause)),
+        spec: Some(fixed_spec_on(tx, workflow, update, cause)),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended: true,
         kind: kind.to_owned(),

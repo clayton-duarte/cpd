@@ -291,6 +291,17 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
     Ok(base)
 }
 
+/// The name `branch` has on origin: the `head_ref` of the base Workflow whose Lead Branch it is (an adopted pull request's
+/// head), else `branch` itself, COALESCE(head_ref, lead_branch) (pro-d480).
+pub fn remote_branch(conn: &rusqlite::Connection, repo: &str, branch: &str) -> String {
+    conn.query_row(
+        "SELECT COALESCE(head_ref, lead_branch) FROM workflows WHERE repo = ?1 AND lead_branch = ?2",
+        [repo, branch],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| branch.to_owned())
+}
+
 /// The refs a protected path may be brought from by a base merge (§7.5), besides the Lead tip: `origin/<base>` (`<base>`
 /// without `origin`), and for a stacked Workflow `origin/<root>` too, `<root>` the [`root_base`].
 pub fn tamper_bases(
@@ -300,9 +311,15 @@ pub fn tamper_bases(
     base: &str,
 ) -> Result<Vec<String>, CpdError> {
     let root = root_base(conn, repo, base)?;
-    let mut refs = vec![git::tamper::base_ref(dir, base)?];
+    let mut refs = vec![git::tamper::base_ref(
+        dir,
+        &remote_branch(conn, repo, base),
+    )?];
     if root != base {
-        refs.push(git::tamper::base_ref(dir, &root)?);
+        refs.push(git::tamper::base_ref(
+            dir,
+            &remote_branch(conn, repo, &root),
+        )?);
     }
     Ok(refs)
 }
