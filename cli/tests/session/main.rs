@@ -9,6 +9,7 @@ mod agent_key_guards;
 mod agent_key_row;
 mod agent_key_text;
 mod board;
+mod fork_blocked;
 mod host;
 mod host_pill;
 mod mcp_attach;
