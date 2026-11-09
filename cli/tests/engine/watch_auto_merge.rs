@@ -14,7 +14,7 @@ use crate::common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use common::fx::Fx;
@@ -53,6 +53,8 @@ struct Gh {
     /// The engine's home: the SWR poll document's `p<i>` aliases are answered from the stored rows, so a test that stacks
     /// one PR on another's Lead Branch gets the base GitHub would report, not the default branch.
     home: PathBuf,
+    /// A GitHub-side base change, independent of the Workflow row the pass will update.
+    base_override: Mutex<Option<(i64, String)>>,
 }
 
 impl Handler for Gh {
@@ -147,7 +149,7 @@ impl Gh {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        let base: String = conn
+        let stored_base: String = conn
             .query_row(
                 "SELECT base FROM workflows WHERE plan = 'pay' AND status = 'open'
                    AND pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = ?1)",
@@ -157,6 +159,13 @@ impl Gh {
             .optional()
             .unwrap()
             .unwrap_or_else(|| "main".to_owned());
+        let base = self
+            .base_override
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(n, _)| *n == number)
+            .map_or(stored_base, |(_, base)| base.clone());
         let state = match state.as_str() {
             "merged" => "MERGED",
             "closed" => "CLOSED",
@@ -330,10 +339,14 @@ struct Merge {
 /// A fake pi install, `watch.error_repeat_seconds = repeat`, the `gh` route (auto-merge allowed, no refusal, no failure);
 /// Plan `pay` (its Lead stopped, the Plan done now) in Context `ctx`. No PR, no post yet.
 fn merge(repeat: u32) -> Merge {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
+    // Migrate in-process: no template builder or cpd subprocess belongs in this fixture.
+    drop(fx.env.store());
     let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(adapter.join("lib")).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
+    // Nothing in this fixture may find a real Node through the inherited PATH.
+    fx.export("PATH", fx.env.bin().to_str().unwrap());
     fx.env.write_config(&format!(
         "version = 1\nmachine = \"m1\"\npi_adapter = \"{}\"\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\nerror_repeat_seconds = {repeat}\n[tmux]\nsocket = \"{}\"\n",
         adapter.display(),
@@ -351,6 +364,7 @@ fn merge(repeat: u32) -> Merge {
         }),
         seen: Mutex::new(Vec::new()),
         home: fx.env.cpd_home(),
+        base_override: Mutex::new(None),
     });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let now = fx.stamp_ago(0);
@@ -459,11 +473,25 @@ impl Merge {
         self.pr(key, number, "main", "open", "open", "pending");
     }
 
-    /// The engine runs until `step` says so (it is called before each nap, after the tick that came before it) or [`CAP`] naps.
+    /// The engine runs until `step` says so or [`CAP`] naps. Hold the first nap until the initial poll has finished, so its
+    /// GitHub snapshot cannot race a test's later store writes and revert a simulated base change.
     fn run(&self, mut step: impl FnMut(&Probe, usize) -> bool + Send + 'static) {
         let probe = self.probe();
+        let (ended_tx, ended_rx) = mpsc::channel();
+        let mut initial_poll = true;
         self.fx
-            .watch_steps(move |nap| nap >= CAP || step(&probe, nap))
+            .watch_gated(
+                move |nap| {
+                    if initial_poll {
+                        ended_rx.recv().expect("the initial GitHub poll ended");
+                        initial_poll = false;
+                    }
+                    nap >= CAP || step(&probe, nap)
+                },
+                move || {
+                    let _ = ended_tx.send(());
+                },
+            )
             .unwrap();
     }
 }
@@ -515,7 +543,7 @@ fn waits_while_the_base_is_another_prs_lead_branch_then_enables_after_the_unstac
     let t = merge(LONG);
     t.pr("base", 6, "main", "open", "open", "enabled");
     t.pr("top", 7, "cpd/pay/base", "open", "open", "pending");
-    // Five ticks stacked; then the poll's base follow repoints the PR to the default branch.
+    // Five ticks stacked; then simulate the poll's base follow. The initial poll has finished before this write.
     let held = Arc::new(Mutex::new(None));
     let record = held.clone();
     let mut unstacked = false;
@@ -545,6 +573,41 @@ fn waits_while_the_base_is_another_prs_lead_branch_then_enables_after_the_unstac
     );
     assert_eq!(p.mutations().len(), 1, "{:?}", p.calls());
     assert_eq!(p.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_poll_follows_a_remote_base_change_through_the_fake_catalog() {
+    let t = merge(LONG);
+    t.pr("base", 6, "main", "open", "open", "enabled");
+    t.pr("top", 7, "cpd/pay/base", "open", "open", "pending");
+    let home = CpdHome::resolve(Some(t.fx.env.cpd_home().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let config = cpd_core::config::Config::load(&home).unwrap();
+    let mut cx = cpd_core::swr::source::Cx {
+        store: &mut store,
+        ports: &t.fx.fakes.ports,
+        home: &home,
+        config: &config,
+    };
+    *t.gh.base_override.lock().unwrap() = Some((7, "main".to_owned()));
+    cpd_core::swr::source::github::GithubSource::default()
+        .pass_with_effects(&mut cx, t.fx.fakes.clock.utc())
+        .unwrap();
+    let base: String = t
+        .probe()
+        .store()
+        .query_row(
+            "SELECT base FROM workflows WHERE plan = 'pay' AND key = 'top'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(base, "main");
+    assert_eq!(
+        t.fx.calls("node").len(),
+        1,
+        "the cold catalog is read through the fake runner"
+    );
 }
 
 #[test]
