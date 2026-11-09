@@ -35,7 +35,10 @@ fn json(cmd: &mut Command, code: i32) -> Value {
 fn version_prints_the_commit_its_build_was_given_or_dev() {
     let home = temp_home();
     let expected = match BUILD_COMMIT {
-        Some(commit) if !commit.is_empty() => format!("{VERSION}-{commit}"),
+        Some(commit) if !commit.is_empty() => {
+            let capped = &commit[..commit.floor_char_boundary(7)];
+            format!("{VERSION}-{capped}")
+        }
         _ => format!("{VERSION}-dev"),
     };
     let out = json(cpd(&home).arg("--version"), 0);

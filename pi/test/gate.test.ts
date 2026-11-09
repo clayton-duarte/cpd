@@ -28,10 +28,10 @@ test("the verify script runs the portability check and pi-check, in the document
   assert.equal(pkg.scripts["verify:pi"], "scripts/pi-check.sh node_modules/.bin/pi");
   assert.equal(pkg.scripts["verify:fmt"], "scripts/cargo.sh fmt --all --check");
   assert.equal(pkg.scripts["verify:clippy"], "scripts/cargo.sh clippy --workspace --all-targets -- -D warnings");
-  assert.equal(pkg.scripts["verify:build"], "export CPD_COMMIT=$(git rev-parse --short HEAD) && scripts/cargo.sh nextest run --workspace --no-run");
+  assert.equal(pkg.scripts["verify:build"], "export CPD_COMMIT=$(git rev-parse --short=7 HEAD) && scripts/cargo.sh nextest run --workspace --no-run");
   assert.equal(
     pkg.scripts["verify:rust"],
-    'export CPD_COMMIT=$(git rev-parse --short HEAD) && PATH="$PWD/scripts/tripwire:$PATH" scripts/cargo.sh nextest run --workspace',
+    'export CPD_COMMIT=$(git rev-parse --short=7 HEAD) && PATH="$PWD/scripts/tripwire:$PATH" scripts/cargo.sh nextest run --workspace',
   );
 });
 

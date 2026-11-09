@@ -64,6 +64,19 @@ fn a_build_given_cpd_commit_reports_that_commit_not_the_checkout_s() {
 }
 
 #[test]
+fn a_build_given_commit_longer_than_7_characters_is_capped_at_7() {
+    assert_eq!(
+        cpd_version(Some("0123456789abcdef")),
+        format!("{VERSION}-0123456")
+    );
+    assert_eq!(
+        cpd_version(Some("0123456789abcdef0123456789abcdef01234567")),
+        format!("{VERSION}-0123456")
+    );
+    assert_git_never_ran();
+}
+
+#[test]
 fn a_build_given_no_commit_reports_dev_even_in_a_git_checkout() {
     assert_eq!(
         cpd_version(None),
@@ -128,7 +141,7 @@ fn the_install_script_builds_with_the_checkout_s_short_commit() {
         "cargo ran once: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let head = env.git(&checkout.root, &["rev-parse", "--short", "HEAD"]);
+    let head = env.git(&checkout.root, &["rev-parse", "--short=7", "HEAD"]);
     assert_eq!(fs::read_to_string(&given).unwrap(), head);
 }
 
