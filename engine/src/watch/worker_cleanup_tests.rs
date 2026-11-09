@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use cpd_core::driver::lock::Starter;
 use cpd_core::fakes::git::{GitRoute, Head, Repo, Universe};
-use cpd_core::git::run::ok_with;
+use cpd_core::git::run::{ok_with, run_with};
 use cpd_core::host::spawn::{Pid, Signal};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::ports::{Fakes, Ports};
@@ -23,13 +23,14 @@ struct Case {
     tree: PathBuf,
     branch: String,
     pid: Pid,
+    tmux: cpd_core::host::runner::FakeRunner,
 }
 
 impl Case {
     fn new(status: &str, linear: bool) -> Self {
         let mut fx = Fx::with_plan("");
         fx.add_running("work", "running", &ago(1));
-        fx.on_fake_tmux();
+        let tmux = fx.on_fake_tmux();
         let fakes = Fakes::new();
         let root = fx
             .engine
@@ -74,6 +75,7 @@ impl Case {
                 u.add_worktree(repo.id(), &tree, Head::Branch(branch.clone()));
             }
         }
+        std::fs::write(root.join("lead/tracked.txt"), "base\n").unwrap();
         std::fs::write(tree.join("tracked.txt"), "base\n").unwrap();
         let runner_file = fx
             .engine
@@ -102,12 +104,16 @@ impl Case {
             tree,
             branch,
             pid,
+            tmux,
         }
     }
 
     fn run(&mut self) {
         Ports::scope(&self.fakes.ports, || liveness::run(&mut self.fx.engine));
         self.route.assert_supported();
+        assert!(self.fakes.runner.unscripted().is_empty());
+        assert!(self.tmux.unscripted().is_empty());
+        assert_eq!(self.fx.count("error"), 0);
     }
 
     fn git(&self, args: &[&str]) -> String {
@@ -146,6 +152,22 @@ fn driver_death_cleanup_preserves_in_progress_work() {
     assert!(live.fakes.spawn.signals().is_empty());
     drop(held);
 
+    // A liveness probe error is not proof of death either.
+    let mut uncertain = Case::new("running", true);
+    let lock_path = uncertain.fx.engine.home.attempt_lock(&plan, &id);
+    std::fs::create_dir_all(&lock_path).unwrap();
+    std::fs::write(uncertain.tree.join("tracked.txt"), "uncertain edit\n").unwrap();
+    Ports::scope(&uncertain.fakes.ports, || {
+        liveness::run(&mut uncertain.fx.engine)
+    });
+    uncertain.route.assert_supported();
+    assert_eq!(uncertain.status(), "running");
+    assert!(uncertain.fakes.spawn.signals().is_empty());
+    assert_eq!(
+        std::fs::read(uncertain.tree.join("tracked.txt")).unwrap(),
+        b"uncertain edit\n"
+    );
+
     // For a dead driver, uncertain edits and operation markers survive, even though its worker is stopped.
     for marker in ["MERGE_HEAD", "rebase-merge/orig-head"] {
         let mut dead = Case::new("running", true);
@@ -160,6 +182,7 @@ fn driver_death_cleanup_preserves_in_progress_work() {
         let tip = dead.branch_tip();
         let head = dead.git(&["rev-parse", "--verify", "HEAD"]);
         let before = dead.git(&["status", "--porcelain"]);
+        let index = dead.git(&["write-tree"]);
         assert!(
             before.contains("MM tracked.txt"),
             "fixture must have staged and unstaged changes: {before}"
@@ -171,6 +194,7 @@ fn driver_death_cleanup_preserves_in_progress_work() {
         assert_eq!(dead.branch_tip(), tip);
         assert_eq!(dead.git(&["rev-parse", "--verify", "HEAD"]), head);
         assert_eq!(dead.git(&["status", "--porcelain"]), before);
+        assert_eq!(dead.git(&["write-tree"]), index);
         assert_eq!(
             std::fs::read(dead.tree.join("tracked.txt")).unwrap(),
             b"in progress\n"
@@ -180,6 +204,87 @@ fn driver_death_cleanup_preserves_in_progress_work() {
             b"keep me\n"
         );
         assert_eq!(std::fs::read(marker_path).unwrap(), b"operation state\n");
+    }
+
+    // Fake git models conflict stages for both operations; MERGE_HEAD is supplied as a fixture
+    // because the fake does not model that marker. A stopped rebase models its own metadata.
+    for operation in ["merge", "rebase"] {
+        let mut rebasing = Case::new("running", true);
+        let base = rebasing
+            .universe
+            .lock()
+            .unwrap()
+            .ref_oid(rebasing.repo.id(), "refs/heads/main")
+            .unwrap();
+        {
+            let mut u = rebasing.universe.lock().unwrap();
+            let main_blob = u.blob(rebasing.repo.id(), b"main change\n");
+            let main_tree = u.tree(rebasing.repo.id(), &[("tracked.txt", &main_blob)]);
+            let main = u.commit(
+                rebasing.repo.id(),
+                &main_tree,
+                std::slice::from_ref(&base),
+                "main",
+            );
+            u.set_ref(rebasing.repo.id(), "refs/heads/main", &main, "commit: main");
+            let topic_blob = u.blob(rebasing.repo.id(), b"topic change\n");
+            let topic_tree = u.tree(rebasing.repo.id(), &[("tracked.txt", &topic_blob)]);
+            let topic = u.commit(
+                rebasing.repo.id(),
+                &topic_tree,
+                std::slice::from_ref(&base),
+                "topic",
+            );
+            u.set_ref(
+                rebasing.repo.id(),
+                "refs/heads/cpd/pay",
+                &topic,
+                "commit: topic",
+            );
+        }
+        std::fs::write(rebasing.tree.join("tracked.txt"), "topic change\n").unwrap();
+        let out = run_with(
+            &*rebasing.fakes.runner,
+            &rebasing.tree,
+            &[operation, "main"],
+        )
+        .unwrap();
+        assert_eq!(
+            out.code, 1,
+            "fixture must stop at a conflict: {}",
+            out.stderr
+        );
+        let admin = rebasing.universe.lock().unwrap().admin_dir(&rebasing.tree);
+        let marker = if operation == "merge" {
+            let marker = admin.join("MERGE_HEAD");
+            std::fs::write(&marker, "merge operation\n").unwrap();
+            marker
+        } else {
+            admin.join("rebase-merge/orig-head")
+        };
+        let marker_before = std::fs::read(&marker).unwrap();
+        let conflicted = std::fs::read(rebasing.tree.join("tracked.txt")).unwrap();
+        let status = rebasing.git(&["status", "--porcelain"]);
+        assert!(
+            status.contains("UU tracked.txt"),
+            "fixture has no unmerged stages: {status}"
+        );
+        let head = rebasing.git(&["rev-parse", "--verify", "HEAD"]);
+        let tip = rebasing.branch_tip();
+        rebasing.run();
+        assert_eq!(rebasing.status(), "ended");
+        assert_eq!(
+            rebasing.fakes.spawn.signals(),
+            vec![(rebasing.pid, Signal::Kill)]
+        );
+        assert_eq!(rebasing.git(&["status", "--porcelain"]), status);
+        assert_eq!(rebasing.git(&["rev-parse", "--verify", "HEAD"]), head);
+        assert_eq!(rebasing.branch_tip(), tip);
+        assert_eq!(
+            std::fs::read(rebasing.tree.join("tracked.txt")).unwrap(),
+            conflicted
+        );
+        assert_eq!(std::fs::read(marker).unwrap(), marker_before);
     }
 
     // R2 currently removes a clean parallel worktree and its branch after the merge landed.
