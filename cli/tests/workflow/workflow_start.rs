@@ -1940,3 +1940,27 @@ fn e7_unstacks_a_waiting_workflow_whose_base_workflow_merged_and_starts_it_from_
     );
     assert!(fx.events("error").is_empty(), "{:?}", fx.events("error"));
 }
+
+#[test]
+fn a_waiting_workflow_has_no_open_job_until_it_starts() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.a2_ready(&repo.path);
+    let open = "SELECT count(*) FROM jobs WHERE key = 'open-a2'";
+    assert_eq!(
+        fx.env.query::<i64>(open),
+        0,
+        "a waiting Workflow has no open Job row"
+    );
+    fx.land_on_origin(&repo, "what a1 merged");
+
+    fx.start("a2").ok();
+
+    assert_eq!(
+        fx.env.query::<String>(
+            "SELECT status FROM jobs WHERE key = 'open-a2' AND fingerprint IS NOT NULL"
+        ),
+        "queued",
+        "the start creates the open Job queued"
+    );
+}
