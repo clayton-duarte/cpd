@@ -131,7 +131,7 @@ fn the_auxiliar_range_is_its_default_only() {
 #[test]
 fn a_default_that_is_not_a_rung_floors_up_and_ceilings_down() {
     let c = catalog();
-    // H2 and S2 are no rungs: the floor is the next rung up, the ceiling the last rung below the next default.
+    // H2 and S2 are no rungs: the floor is the next rung up, the ceiling the last rung at or below the next default.
     let d = defaults("GX", "H2", "S2", "OX");
     assert_eq!(range(&c, Role::Worker, &d), pair("H3", "SX"));
     assert_eq!(range(&c, Role::Lead, &d), pair("S3", "OX"));
