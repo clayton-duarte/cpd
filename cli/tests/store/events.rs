@@ -549,11 +549,13 @@ const SPEC: &[SpecRow] = &[
     ),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
     (
-        "bug-breach",
+        "protocol-breach",
         "",
-        "cp",
-        &["bug", "reason", "symptom", "bound"],
-        &[],
+        "cps",
+        &["protocol", "source"],
+        &[
+            "role", "model", "tier", "tool", "command", "bug", "reason", "symptom", "bound",
+        ],
     ),
     (
         "guard",

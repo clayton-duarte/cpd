@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 25;
+pub const PROTOCOL: u32 = 26;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -151,7 +151,9 @@ kinds! {
     IncidentStarted = "incident-started",
     IncidentPlans = "incident-plans",
     IncidentEnded = "incident-ended",
-    BugProtocolBreach = "bug-breach",
+    // D14 (air-d119): one kind for every protocol's breach, `data.protocol` naming it; it
+    // generalizes the bug-only `bug-breach` the Workflow `bug-guard` first named.
+    ProtocolBreach = "protocol-breach",
     Guard = "guard",
 }
 
@@ -361,7 +363,13 @@ impl Kind {
             ),
             IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_workflow"]),
             IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
-            BugProtocolBreach => spec([M, M, N, N, N], &["bug", "reason", "symptom", "bound"], &[]),
+            ProtocolBreach => spec(
+                [M, M, N, N, M],
+                &["protocol", "source"],
+                &[
+                    "role", "model", "tier", "tool", "command", "bug", "reason", "symptom", "bound",
+                ],
+            ),
             Error => spec(
                 [M, M, M, M, M],
                 &["source", "code", "message", "details"],
@@ -417,11 +425,13 @@ mod tests {
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
     /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`),
-    /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase) and 24 (`session-message`'s optional `data.origin`,
-    /// Plan ui-origin) and 25 (the `guard` Event kind, Plan `agent-refusals`).
+    /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase), 24 (`session-message`'s optional
+    /// `data.origin`, Plan ui-origin) 25 (the `guard` Event kind, Plan `agent-refusals`) and 26 (`protocol-breach`,
+    /// Plan `protocol-enforce`, D14, air-d119: it replaces `bug-breach`, and the Ledger leg runs `session report`
+    /// with new flags, commands.md §10.18).
     #[test]
-    fn the_protocol_is_25_with_the_guard_kind() {
-        assert_eq!(PROTOCOL, 25);
+    fn the_protocol_is_26_with_protocol_breach() {
+        assert_eq!(PROTOCOL, 26);
     }
 
     #[test]

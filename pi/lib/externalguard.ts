@@ -1,6 +1,9 @@
 /** Decision pro-d451: raw gh comment writes, a raw `cpd pr approve`, `slack-post.ts` and an ungranted Slack send are the User's to approve (tool cpd_external_approve). */
 import { PREFIXES, simpleCommands } from "./shell.ts";
 
+/** The breached protocol's name (contract §5.2), the `protocol` of a `protocol-breach` Event (§10.18). */
+export const PROTOCOL_NAME = "external approval";
+
 export type SlackTool = "slack_send_message" | "slack_send_message_draft";
 export type SlackParts = { channel: string; message: string; thread_ts?: string };
 

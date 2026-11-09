@@ -43,6 +43,10 @@ fn at_version(conn: &Connection, n: usize) {
 /// hold them (contract §4.5 K1, §5.2).
 const RETIRED_OBJECT_KINDS: usize = 6;
 
+/// `bug-breach`, which `bug-protocol-breach` added and `protocol-breach` replaced: it stays in `event_kinds` as
+/// history, since Events are append-only and past ones hold it.
+const RETIRED_BUG_BREACH: usize = 1;
+
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
     // One database taken through the migrations one at a time: the schema after
@@ -2934,7 +2938,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
         assert_eq!(
             rows_after.remove("event_kinds").map(|r| r.len()),
-            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS)
+            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS + RETIRED_BUG_BREACH)
         );
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(
@@ -4806,7 +4810,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
         ),
         vec![serde_json::json!(["pr-base-changed"])]
     );
-    // Later Event-kind migrations include guard-event and bug-protocol-breach.
+    // Later Event-kind migrations include guard-event, bug-protocol-breach and protocol-breach.
     assert_eq!(
         rows(&mut store, "SELECT count(*) FROM event_kinds"),
         vec![serde_json::json!([before
@@ -4819,6 +4823,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 3
             + 1
             + 2
+            + 1
             + 1
             + 1
             + 1

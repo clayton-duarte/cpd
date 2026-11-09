@@ -3,7 +3,7 @@
 //! `protocol-enforce`, Workflow `bug-guard`): every tick E25 reads the open `bug_records` rows and
 //!   - wakes the owner once per bug, ever: a waking `session-message` (`from` null, `wake` true)
 //!     whose text begins `Bug <id> is open`, so a sleeping owner is resumed;
-//!   - appends one `bug-breach` Event when a bug has no mitigation past the 15-minute bound
+//!   - appends one `protocol-breach` Event when a bug has no mitigation past the 15-minute bound
 //!     (`unmitigated_past_bound`) or when a new open bug's normalized symptom equals an open bug's
 //!     (`recurring_symptom`), and, in the same transaction, one waking `session-message` whose text
 //!     begins `Bug <id> breached`;
@@ -58,9 +58,9 @@ fn messages_starting(fx: &mut Fx, prefix: &str) -> Vec<(String, Option<String>, 
         .collect()
 }
 
-/// The `data` of the `bug-breach` Event for bug `id`, when one exists.
+/// The `data` of the `protocol-breach` Event for bug `id`, when one exists.
 fn breach(fx: &mut Fx, id: &str) -> Option<Value> {
-    fx.events("bug-breach")
+    fx.events("protocol-breach")
         .into_iter()
         .map(|e| e.3)
         .find(|d| d["bug"] == id)
@@ -89,7 +89,7 @@ fn fx() -> Fx {
     fx
 }
 
-/// A bug past the 15-minute bound with `mitigation` null breaches: one `bug-breach` Event
+/// A bug past the 15-minute bound with `mitigation` null breaches: one `protocol-breach` Event
 /// (`unmitigated_past_bound`) and one waking `session-message` to the owner.
 #[test]
 fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
@@ -103,7 +103,7 @@ fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
     assert_eq!(data["symptom"], "Payment fails at checkout");
     assert_eq!(data["bound"].as_i64(), Some(BOUND));
     assert_eq!(
-        fx.events("bug-breach")[0].0.as_deref(),
+        fx.events("protocol-breach")[0].0.as_deref(),
         Some("pay"),
         "the Event carries the bug's Plan"
     );
@@ -123,7 +123,7 @@ fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
 }
 
 /// A new open bug whose normalized symptom equals an open bug's breaches as a recurrence: one
-/// `bug-breach` Event (`recurring_symptom`) for the new record, none for the first.
+/// `protocol-breach` Event (`recurring_symptom`) for the new record, none for the first.
 #[test]
 fn alerts_on_a_recurring_normalized_symptom() {
     let mut fx = fx();
@@ -142,7 +142,7 @@ fn alerts_on_a_recurring_normalized_symptom() {
 }
 
 /// A bug reported inside the 15-minute bound with `mitigation` null breaches nothing: no
-/// `bug-breach` Event and no breach alert (the open wake is not a breach).
+/// `protocol-breach` Event and no breach alert (the open wake is not a breach).
 #[test]
 fn stays_silent_below_the_bound() {
     let mut fx = fx();
@@ -157,7 +157,12 @@ fn stays_silent_below_the_bound() {
         "{:?}",
         messages(&mut fx)
     );
-    assert_eq!(fx.count("bug-breach"), 0, "{:?}", fx.events("bug-breach"));
+    assert_eq!(
+        fx.count("protocol-breach"),
+        0,
+        "{:?}",
+        fx.events("protocol-breach")
+    );
     assert!(
         messages_starting(&mut fx, "Bug b1 breached").is_empty(),
         "{:?}",

@@ -959,9 +959,38 @@ impl NewEvent {
         )
     }
 
-    /// `bug-breach` (contract §5.2, §3.7 E25): an open bug breached the bug report protocol, `reason`
-    /// `unmitigated_past_bound` or `recurring_symptom`, `bound` the 900 s mitigation bound.
-    pub fn bug_protocol_breach(
+    /// `protocol-breach` of a pi guard (contract §5.2, commands.md §10.18): `protocol` one of the
+    /// guarded protocol names, `source` the guard module, `role`/`model`/`tier` the refused Session's,
+    /// and `tool`/`command` the refused call's (both null when it has none, as an `ask_user_question`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn protocol_breach(
+        text: impl Into<String>,
+        protocol: &str,
+        source: &str,
+        role: &str,
+        model: &str,
+        tier: &str,
+        tool: Option<&str>,
+        command: Option<&str>,
+    ) -> NewEvent {
+        make(
+            Kind::ProtocolBreach,
+            text,
+            json!({
+                "protocol": protocol,
+                "source": source,
+                "role": role,
+                "model": model,
+                "tier": tier,
+                "tool": tool,
+                "command": command,
+            }),
+        )
+    }
+
+    /// `protocol-breach` of engine E25 (contract §5.2, §3.7 E25): an open bug breached the bug report
+    /// protocol, `reason` `unmitigated_past_bound` or `recurring_symptom`, `bound` the 900 s bound.
+    pub fn protocol_breach_bug(
         text: impl Into<String>,
         bug: &str,
         reason: &str,
@@ -969,9 +998,16 @@ impl NewEvent {
         bound: i64,
     ) -> NewEvent {
         make(
-            Kind::BugProtocolBreach,
+            Kind::ProtocolBreach,
             text,
-            json!({"bug": bug, "reason": reason, "symptom": symptom, "bound": bound}),
+            json!({
+                "protocol": "bug report",
+                "source": "E25",
+                "bug": bug,
+                "reason": reason,
+                "symptom": symptom,
+                "bound": bound,
+            }),
         )
     }
 }
@@ -1138,7 +1174,10 @@ mod tests {
                 NewEvent::incident_plans(T, s, [s], Some(s)),
             ],
             Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s, s)],
-            Kind::BugProtocolBreach => vec![NewEvent::bug_protocol_breach(T, s, s, s, n)],
+            Kind::ProtocolBreach => vec![
+                NewEvent::protocol_breach(T, s, s, s, s, s, Some(s), Some(s)),
+                NewEvent::protocol_breach_bug(T, s, s, s, n),
+            ],
             Kind::Guard => vec![NewEvent::guard(T, s, s, s, s, s, s)],
         }
     }
