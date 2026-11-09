@@ -164,6 +164,7 @@ pub(crate) fn apply_pass_effects(
             reset_at: read.reset_at.clone(),
         },
         repo_settings: Vec::new(),
+        heads: heads_from_read(read),
     };
     let selected = None;
     loop {
@@ -172,6 +173,57 @@ pub(crate) fn apply_pass_effects(
             return Ok(out);
         }
     }
+}
+
+/// The head each node of the GitHub source's one read reports (`headRefOid`), as `(owner/name, number, oid)`.
+fn heads_from_read(read: &PollRead) -> Vec<(String, i64, String)> {
+    let mut heads: Vec<(String, i64, String)> = Vec::new();
+    for node in read
+        .authored
+        .iter()
+        .chain(&read.reviews)
+        .chain(read.aliases.iter().flatten())
+    {
+        let (repo, number) = node.id();
+        if !heads.iter().any(|(r, n, _)| (r, n) == (&repo, &number)) {
+            heads.push((repo, number, node.head_oid.clone()));
+        }
+    }
+    heads
+}
+
+/// Stores each fresh head the read reported, before any containment check reads the stored one: a force-push replaces the
+/// head, and a compare on the replaced commit is HTTP 404.
+fn refresh_heads(env: &mut Env, heads: &[(String, i64, String)]) -> Result<(), CpdError> {
+    let stale = env.store.read(|conn| {
+        let mut stale = Vec::new();
+        for (repo, number, head) in heads {
+            let differs: bool = conn
+                .query_row(
+                    "SELECT head_oid IS NOT ?3 FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                    rusqlite::params![repo, number, head],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(false);
+            if differs {
+                stale.push((repo.clone(), *number, head.clone()));
+            }
+        }
+        Ok(stale)
+    })?;
+    if stale.is_empty() {
+        return Ok(());
+    }
+    env.store.write(COMMAND, |tx| {
+        for (repo, number, head) in &stale {
+            tx.execute(
+                "UPDATE pull_requests SET head_oid = ?3 WHERE repo = ?1 AND number = ?2",
+                rusqlite::params![repo, number, head],
+            )?;
+        }
+        Ok(())
+    })
 }
 
 /// The legacy poll's listing from the GitHub source's one read: every node the document listed or aliased, once, with
@@ -383,39 +435,8 @@ fn poll_pass(
         }
     }
 
-    // pro-d470: the fresh `headRefOid` of every open pull request read is stored before any compare, checks or Event logic
-    // below, so a replaced (force-pushed) head never makes a compare of a gone commit abort the poll. Written only when it differs.
-    let fresh: Vec<(String, i64, String)> = seen
-        .iter()
-        .filter(|l| l.pr.state == PrState::Open)
-        .filter_map(|l| Some((l.pr.repo.clone(), l.pr.number, l.pr.head_oid.clone()?)))
-        .collect();
-    let moved = env.store.read(|conn| {
-        let mut moved = Vec::new();
-        for (repo, number, head) in &fresh {
-            let stored: Option<Option<String>> =
-                rusqlite::OptionalExtension::optional(conn.query_row(
-                    "SELECT head_oid FROM pull_requests WHERE repo = ?1 AND number = ?2",
-                    rusqlite::params![repo, number],
-                    |r| r.get(0),
-                ))?;
-            if stored.is_some_and(|s| s.as_deref() != Some(head.as_str())) {
-                moved.push((repo.clone(), *number, head.clone()));
-            }
-        }
-        Ok(moved)
-    })?;
-    if !moved.is_empty() {
-        env.store.write(COMMAND, |tx| {
-            for (repo, number, head) in &moved {
-                tx.execute(
-                    "UPDATE pull_requests SET head_oid = ?3 WHERE repo = ?1 AND number = ?2",
-                    rusqlite::params![repo, number, head],
-                )?;
-            }
-            Ok::<(), CpdError>(())
-        })?;
-    }
+    // The fresh heads of the one read are stored first: the armed and containment compares below read them.
+    refresh_heads(env, &search.heads)?;
 
     // The armed pull requests (`pr merge` refused a head behind the default branch, commands.md §9.10): one fresh
     // compare read each, before the write transaction, so the write enqueues the merge of a head that now contains
@@ -439,13 +460,12 @@ fn poll_pass(
     let mut contained: Vec<Contained> = Vec::with_capacity(rows.len());
     for (repo, number, base, default, head, stored) in rows {
         let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
-            (Some(base), Some(default), Some(head)) if base == default => Some(
-                if gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)? {
-                    1
-                } else {
-                    0
-                },
-            ),
+            // A compare that fails (a head GitHub no longer has answers 404) leaves the flag unknown and never fails the pass.
+            (Some(base), Some(default), Some(head)) if base == default => {
+                gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)
+                    .ok()
+                    .map(i64::from)
+            }
             _ => None,
         };
         contained.push(Contained {
@@ -471,7 +491,17 @@ fn poll_pass(
         || env.store.read(|conn| {
             for listed in &seen {
                 match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
-                    Some(row) if row.holds(listed, read_of(&reads, listed))? => {}
+                    Some(row) if row.holds(listed, read_of(&reads, listed))? => {
+                        if listed.pr.state == PrState::Merged
+                            && conn.query_row(
+                                "SELECT EXISTS (SELECT 1 FROM inbox_items WHERE kind = 'pr-ready' AND closed_at IS NULL AND subject = ?1)",
+                                [format!("pr:{}#{}", listed.pr.repo, listed.pr.number)],
+                                |r| r.get::<_, bool>(0),
+                            )?
+                        {
+                            return Ok(true);
+                        }
+                    }
                     _ => return Ok(true),
                 }
             }
@@ -635,6 +665,10 @@ fn apply(
         }
         let polled = &listed.pr;
         let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else {
+            // A merge a header write already stored changes no row, yet its stale `pr-ready` item is still open (A47).
+            if polled.state == PrState::Merged {
+                inbox::close_pr_ready(tx, &polled.repo, polled.number)?;
+            }
             continue;
         };
         let after = &change.after;
