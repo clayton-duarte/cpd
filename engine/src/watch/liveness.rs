@@ -543,6 +543,14 @@ fn stop_and_clean(
         pane.session_name == engine.config.tmux.cockpit_session && pane.window_name == MAIN_WINDOW
     });
     if let Some(pane) = dead_lead.filter(|_| !in_slot) {
+        engine.log.line(&format!(
+            "E2: Lead {} ({}) pane {} is dead, exit status {}",
+            session.name,
+            session.id,
+            pane.pane,
+            pane.dead_status
+                .map_or_else(|| "unknown".to_owned(), |c| c.to_string())
+        ));
         engine.tmux.kill_window(&pane.window)?;
         engine.log.line(&format!(
             "E2: killed the window {} of Lead {}'s dead pane {}",

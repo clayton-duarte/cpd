@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::models::{Answer, Helper, Outcome};
+use cpd_core::models::{Answer, Entry, Helper, Outcome};
 use cpd_core::swr::endpoint::{self, Kind};
 use cpd_core::swr::source::models::{apply_answer, endpoint_of, kind_of, newest_polled_at};
 
@@ -56,7 +56,16 @@ pub(super) fn run(engine: &mut Engine) {
         }
         engine.models.last_end = Some(engine.ports.clock.now());
         let at = engine.ports.clock.utc();
-        match answer.and_then(|answer| apply_answer(&mut engine.store, &answer, at)) {
+        match answer.and_then(|mut answer| {
+            // air-d143: Bifrost is excluded on air, even when explicitly configured.
+            if engine.config.machine.as_str() == "air" {
+                answer.entries.retain(|entry| match entry {
+                    Entry::Listed(listed) => listed.provider != "bifrost",
+                    Entry::Failed(failed) => failed.provider != "bifrost",
+                });
+            }
+            apply_answer(&mut engine.store, &answer, at)
+        }) {
             Ok(outcomes) => report(engine, &outcomes, at),
             Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }
