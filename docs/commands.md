@@ -1961,7 +1961,7 @@ Effects (§3.2 "Cancel"):
 {"ok": true, "job": "worker", "status": "cancelled", "cancel_requested": false, "failed": ["dep"], "cancelled": ["draft-dep"]}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a `failed` Job stay `queued`: `job retry` recovers the need, so that wait is legal. **Cancelling a Workflow's `open` Job stands** (contract §3.7 `open-jobs`, §3.8): engine `open-jobs` adds no fresh one, so the Workflow stays `dispatch` with no live `open` Job. It is not a way to start over: to open its pull request later the Lead runs `pr open --workflow <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `workflow cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the Workflow, its `open` Job included, with the Workflow and adds nothing back. `job retry` (§5.4) takes a `failed` Job only and runs it again at another Tier.
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a `failed` Job stay `queued`: `job retry` recovers the need, so that wait is legal. **Cancelling a Workflow's `open` Job stands** (contract §3.7 `open-jobs`, §3.8): engine `open-jobs` adds no fresh one, so the Workflow stays `dispatch` with no live `open` Job. It is not a way to start over: to open its pull request later the Lead runs `pr open --workflow <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `workflow cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the Workflow, its `open` Job included, with the Workflow and adds nothing back. `job retry` (§5.4) takes a `failed` Job, or a queued one whose effective Tier is out of its range (pro-d484), and runs it again at another Tier.
 
 ### 5.4 `job retry`
 
@@ -1974,16 +1974,40 @@ A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager o
 | Precondition | Code | Exit |
 |---|---|---|
 | `--tier` is outside the range of the Job's role, checked after `tier_invalid`: **`job retry --tier` refuses a Tier outside the worker range** (from `worker_tier` up to just below `lead_tier`, `details` `{tier, role: "worker", floor, ceiling, allowed, key: "worker_tier"}`), so a Job that failed at the ceiling cannot be retried higher; its remedy is the same Tier or a new Job with a better Spec. For an explore Job the range is its kind's (`scout`: letter `H`; `research`: letter `S`; effort ≥ 1 or `X`, up to the worker ceiling) and `details` name the kind and its range. Checked first, so a refused Tier changes nothing | `tier_not_allowed` | 2 |
-| the Job is `failed` (or `queued` with this `retry_tier` and no Attempt since: `already`) | `job_not_failed` | 3 |
+| the Job is not `failed`, nor `queued` at a Tier outside its range: a `queued` Job whose effective Tier (the Tier `scheduling` would start its next Attempt at) fails the range check, the `tier_not_allowed` of `scheduling` (contract §3.7 `scheduling`, §9 "Attempt Tier"), may be retried, to a Tier in range (pro-d484); a `queued` Job with this `retry_tier` and no Attempt since is `already`. Otherwise the refusal is `job_not_failed` | `job_not_failed` | 3 |
 | no `needs` Job is `cancelled` (`needs_unavailable`, exit 3, `details.needs` lists them): a Job held by a cancelled need can never start, so cancel it and add a replacement whose needs do not name the cancelled Job. A `failed` need is allowed: retrying recovers it | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null` (the Job's `tier` field is left unchanged). **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier and the ladder restarts from it with a fresh cap (§9; for an explore Job the ladder stays in its kind's range and climbs to the next valid effort inside the letter, and after the top rung a `no_submit` fails the Job, while a `crashed` or `merge_conflict` there is retried at the same Tier under the cap, Plan `explore-roles`, R6; Attempts whose driver never started are never counted). The Plan view, `plan render` and `context pending` show the Tier the Job is displayed at (contract §3.4a), which is `retry_tier` while the Job is queued at it; `plan show` and `job show` print both `tier` and `retry_tier` as raw field values. And, when the Plan's working Lead runs it, it names the Workflow as the Lead's Workflow (§1.3).
+Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null` (the Job's `tier` field is left unchanged; a queued Job stays `queued`, pro-d484). **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier and the ladder restarts from it with a fresh cap (§9; for an explore Job the ladder stays in its kind's range and climbs to the next valid effort inside the letter, and after the top rung a `no_submit` fails the Job, while a `crashed` or `merge_conflict` there is retried at the same Tier under the cap, Plan `explore-roles`, R6; Attempts whose driver never started are never counted). The Plan view, `plan render` and `context pending` show the Tier the Job is displayed at (contract §3.4a), which is `retry_tier` while the Job is queued at it; `plan show` and `job show` print both `tier` and `retry_tier` as raw field values. And, when the Plan's working Lead runs it, it names the Workflow as the Lead's Workflow (§1.3).
 
 ```json
 {"ok": true, "job": "worker", "status": "queued", "tier": "S4"}
 ```
 
 Idempotent: yes, as stated. (The engine also retries a `failed` open or update Job of the same Workflow when its fix merges, contract §3.2 "Engine auto-retry on fix merge" (pro-d89); a Lead normally retries only when no fix is needed or when a fix did not restart the Job.)
+
+### 5.4a `job replace-test`
+
+```
+cpd job replace-test <key> --new-key <key> --tests <selector,…> --test-files <path,…> --reason <text> [--plan <id>]
+```
+
+The sole recovery for a locked `test` Job whose selector or file ownership is wrong after an Attempt exists (contract §3.2 "Replacing a locked test Job with an invalid selector", air-d144). It appends a replacement under a new key; it never edits the source Job's Spec, deletes or rewrites its Attempts, changes their commits, or reuses the source key. It is not `job retry`, `job edit`, or `job cancel` followed by `job add`. **The Lead only**: a Worker (`CPD_ATTEMPT` set) is refused `not_a_lead` (exit 3), and nothing is written.
+
+`--tests` is a comma-separated list of selectors: a pi test as `pi/test/<file>.test.ts::<title>`, a web test as `web/<file>.test.ts(x)::<title>`, a Rust test as nextest filters it (contract §7.7 "Test names"). A bare TypeScript selector, a pi or web name without its `<file>::<title>` form, is refused `selector_unqualified`, and nothing is written. `--test-files` lists the files that own those tests and must satisfy the repository's test ownership checks (contract §7.7).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the caller is a Worker (`CPD_ATTEMPT` set) | `not_a_lead` | 3 |
+| a bare TypeScript selector in `--tests` (no `<file>::<title>`) | `selector_unqualified` | not stated in the contract |
+| the source is not a `test` Job, or the replacement would break the shape or dependency rules (contract §3.2, §7.7) | not stated in the contract | not stated in the contract |
+| the selector/file pairing is invalid: a selector resolves to no test owned by `--test-files`, or the files do not cover those tests | not stated in the contract | not stated in the contract |
+| a downstream dependent is `merged` or `cancelled`, or has a live Attempt | not stated in the contract | not stated in the contract |
+
+A refused replacement is refused whole: nothing is written, and the source keeps its status.
+
+Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
+
+Idempotent: yes, as stated above. An abandoned or failed operation never removes a commit or restores a stopped process.
 
 ### 5.5 `job dispatch`
 
@@ -7595,7 +7619,7 @@ For each such Workflow (a **Workflow to clean**), in this order:
 
 1. **Idle check**: every Attempt of the Workflow's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_workflows_to_clean` does today, contract §7.2). For a swept Attempt of a `dispatch` or `open` Workflow (contract §7.2 'Ended Attempts of merged Jobs on a live Workflow') the check is that Attempt's (`ended`, lock free), not the Workflow's. If not, the outcome is `pending`, nothing is touched, no Event for this Workflow in this pass.
 2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the Workflow's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
-3. **Discard parallel Attempt worktrees**: per Attempt of the Workflow's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside, prune, branch -D, delete the aside; an Attempt's leftover `<path>.removing` counts as on disk.
+3. **Discard parallel Attempt worktrees**: per Attempt of the Workflow's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside (an existing `<path>.removing` is deleted first), prune, branch -D, delete the aside (`ENOTEMPTY` retried); an Attempt's leftover `<path>.removing` counts as on disk.
 4. **Rule S** on the Lead worktree (contract §7.4: fetch, merge base): its local branch stays up to date for the dirty and unpushed check (§4 below).
 5. **Remove the Lead worktree** (§4 below).
 
@@ -7603,10 +7627,10 @@ For each such Workflow (a **Workflow to clean**), in this order:
 
 When the Lead worktree is dirty (output of `git --no-optional-locks status --porcelain` not empty, untracked files included) or unpushed (`git rev-list --no-merges HEAD --not --remotes=origin` not empty, **unless** `HEAD` is the pull request's recorded head commit or an ancestor of it, as the poll checks today with `headRefOid`; a squash-merged PR whose branch GitHub deleted is cleaned up; contract §7.2 "The recorded head and the unpushed rule"), the outcome is `kept` with the reason and nothing is touched. Otherwise, in this order, each step idempotent (a stop at any point leaves the worktree whole or marked for retry):
 
-(a) **Rename**: `<path>` to `<path>.removing` (atomic rename, a sibling in the same directory; Workflow keys have no dot, so no collision; a failing rename is `kept` with the error as reason).
+(a) **Rename**: after deleting any existing `<path>.removing`, `<path>` to `<path>.removing` (atomic rename, a sibling in the same directory; Workflow keys have no dot, so no collision; a failing rename is `kept` with the error as reason).
 (b) **Prune**: `git worktree prune` (the registered directory is gone, so git drops it).
 (c) **Delete branch**: `git branch -D <lead branch>` when it exists.
-(d) **Delete directory**: `std::fs::remove_dir_all(<path>.removing)`.
+(d) **Delete directory**: `std::fs::remove_dir_all(<path>.removing)`, retried up to 3 times on `ENOTEMPTY` (contract §7.2 'Removal').
 
 A stop (kill, crash, failing call) at (a) leaves the worktree whole and untouched. A stop at (b), (c) or (d) leaves the worktree gone (`<path>` absent) with `<path>.removing` as the marker (the directory is present from the rename, empty of tracked files). A pass that finds `<path>` absent and `<path>.removing` present retries (b), (c), (d) again; every step is idempotent. A failure in (b), (c) or (d) is outcome `failed`: the path is gone and later passes retry (a contract violation: the marker stays; the worktree can never be recovered). Renamed but uncleaned paths show in the log (§5).
 
