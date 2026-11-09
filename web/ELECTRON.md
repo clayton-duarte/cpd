@@ -581,6 +581,30 @@ The updater's `log` is injected by the composition root, and this contract does 
 
 A changed non-renderer build artefact (`main.js`, `preload.cjs`, `server.js` or another main-side artefact) never reloads the renderer in place: the updater reports `restart-needed`, and the tray item `Restart to Apply Update` (`menu.ts`, `updateMenuItem`) carries the relaunch — its click runs `app.relaunch()` + `app.exit(0)`; the new main-process, preload and server code load in a fresh process at the next launch. The app never relaunches itself while the User works (air-d76): the running process keeps the bundle it was started with until that restart. Per plan view-menu (air-d40), the relaunched app keeps the WebUI view and restores no persisted TUI mode. A renderer-only change keeps the in-place renderer reload.
 
+## Watchdog
+
+The watchdog keeps the WebUI working: it detects a broken WebUI by health, reverts along the revert ladder and reports every detection and every recovery to the User. Decisions: air-d88 (the detections, in every view mode), air-d95 (the revert ladder over the builds kept on disk) and air-d81 (structured, queryable cpd Events).
+
+### What it detects
+
+The watchdog ticks in every view mode — TUI, WebUI and WebUI Preview — not only while the preview is active (air-d88). It reads the health instrumentation the renderer and main process already write (`health.ts`, `health-main.ts`; web/CONTRACT.md §15.2) and detects five breaks:
+
+- **Empty data.** Health is not `health:ok` until the first `cockpit.snapshot` arrives on the WebSocket transport (web/CONTRACT.md §15.2), so a view that paints but never receives cockpit data is broken: the loading grace detects it.
+- **`cockpit not ready`.** The renderer shows `cockpit.error` "not ready" and no later snapshot arrives within N s. The root cause is a subscribe race in the hub: `web/src/server/hub/connection.ts`'s `subscribe` runs before the cockpit's first load, finds no snapshot, sends the error and drops the client, so the renderer can show `cockpit not ready` with no later snapshot ever coming. The watchdog treats "`cockpit.error` not ready with no later snapshot within N s" as a break whose recovery is a renderer-only reload — not a full app restart and not a ladder step, because the build on disk is not broken. The root fix is Plan incident's cockpit-impl (air-n101); the watchdog's reload is the mitigation until it lands.
+- **A dead or stalled WebSocket.** The transport's heartbeats see the stall in both directions (§WebSocket transport): the server terminates a socket that does not pong, and the renderer closes a socket whose server `pong` misses.
+- **A renderer error or crash.** The health record's typed crash sources — `error-boundary`, `window-error`, `unhandledrejection`, `render-process-gone`, `did-fail-load` (`health.ts`) — with the crash debounce, so one transient error does not trigger.
+- **A hang.** Loading beyond the loading grace, or a dead pid: the view never reports and the process is gone or stuck.
+
+Status: decided by air-d88; as of this amendment the only watchdog that ticks is the in-app preview watchdog, created while the preview is active (`main.ts`, `createPreviewWatchdog`), and it acts only on the three triggers it has today — "loading too long", "crashed" (1 s debounce) and "pid dead" (`watchdog.ts:137-145`). The instrumentation exists (`health.ts`, `drift.ts`) but is write-only: nothing reads it back to decide anything. The implementing change brings the code in line.
+
+### The revert ladder
+
+When a detection fires, the watchdog reverts along the ladder preview > prod > HEAD-1 > HEAD-2 (air-d95), over the builds the updater keeps on disk (§Auto-update and CLI bootstrap): the preview view (`web/dist-electron.preview`, air-d96), the prod view (`web/dist-electron`), then the last two previous prod builds the swap rotates into `dist-electron.head-1` and `dist-electron.head-2` (air-d95). A broken preview reverts to prod; a broken prod reverts to HEAD-1, then HEAD-2. The rung it reverted to is named in the recovery's Event (below). The `cockpit not ready` break is not a ladder step: its recovery is the renderer-only reload (above). Status: decided by air-d95; as of this amendment the ladder's prod rungs exist on disk — the swap keeps HEAD-1 and HEAD-2 (`update/bundle.ts`) — but the watchdog's rollback still restores the single restore point `refs/cpd/preview-last-good` with its `dist-electron.last-good` directory (`restore-points.ts:33`) and nothing walks preview > prod > HEAD-1 > HEAD-2. The implementing change brings the code in line.
+
+### Events
+
+Every detection and every recovery is a structured, queryable cpd Event (air-d81, commands.md §11), the same shape every Event carries (`kind`, `text`, `data`) and readable with `cpd events list` and `cpd events follow` — the same pattern the broken-install detection reports (§Run: a contract §5.2 `error` Event with `source`, `code`, `message` and `details`). A detection Event names the view mode, the detection and the health record that fired it; a recovery Event names the ladder step taken, or the renderer-only reload. Each one is shown to the User — the error box the preview watchdog shows today (`showErrorBox`) is the pattern — so a silent revert is not possible. Status: decided by air-d81; as of this amendment the watchdog logs JSON lines to its own log only and commits no Event. The implementing change brings the code in line.
+
 ## Verification checklist
 
 Run each check against the built app (`pnpm --filter cpd-web-client run electron`). A check passes only when its observable result is seen.

@@ -22,10 +22,12 @@ export interface BootDeps {
   loadDevUrl(win: BootWindow, url: string): Promise<unknown>;
   loadFile(win: BootWindow, path: string): Promise<unknown>;
   env: Record<string, string | undefined>;
+  /** The process arguments; an explicit `--cpd-mode=<mode>` request here beats `env.CPD_MODE` (air-d95). */
+  argv?: readonly string[];
   reloadServer(): Promise<void>;
 }
 export async function boot(deps: BootDeps): Promise<void> {
-  const preview = readPreviewMode(deps.env);
+  const preview = readPreviewMode(deps.env, deps.argv ?? []);
   // Test-only hidden seam: the e2e suite sets CPD_ELECTRON_HIDDEN=1 so the window is
   // created with `show:false` and can never appear on the User's screen (no flash).
   // Unset in production, where Electron's default `show:true` still applies.

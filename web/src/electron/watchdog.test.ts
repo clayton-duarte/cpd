@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
-import type { HealthRecord } from "./health.ts";
+import type { CockpitHealth, HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
-import { createPreviewWatchdog, createWatchdog, productionEnv } from "./watchdog.ts";
+import { createHealthWatchdog, createPreviewWatchdog, createWatchdog, productionEnv } from "./watchdog.ts";
+import type { Build, WatchdogEvent } from "./watchdog.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -31,6 +32,7 @@ type Entry = Record<string, unknown>;
 
 function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error } = {}) {
   const calls: string[] = [];
+  const relaunchModes: Array<string | undefined> = [];
   const logs: Entry[] = [];
   const state = {
     clock: T0,
@@ -51,8 +53,9 @@ function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error
     terminate: (pid: number) => {
       calls.push(`terminate:${pid}`);
     },
-    relaunch: async () => {
+    relaunch: async (mode?: string) => {
       calls.push("relaunch");
+      relaunchModes.push(mode);
     },
     restore: {
       captureCandidate: async () => {
@@ -79,7 +82,7 @@ function setup(opts: { lastGood?: boolean; alive?: boolean; restoreError?: Error
     state.clock += ms;
   };
   const events = () => logs.map((l) => l.event);
-  return { wd, state, calls, logs, advance, events };
+  return { wd, state, calls, logs, relaunchModes, advance, events };
 }
 
 it("first observation of an epoch captures a candidate", async () => {
@@ -140,6 +143,15 @@ it("rollback restores the last good build, terminates the live preview and relau
   expect(s.calls).toEqual(["capture", "restore", "terminate:100", "relaunch"]);
   expect(s.logs[0]).toMatchObject({ event: "rollback", reloadEpoch: 2, pid: 100 });
   expect(typeof s.logs[0]?.reason).toBe("string");
+});
+
+it("the rollback relaunch asks for production explicitly", async () => {
+  const s = setup();
+  s.state.health = crashed(2);
+  await s.wd.tick();
+  s.advance(1000);
+  await s.wd.tick();
+  expect(s.relaunchModes).toEqual(["production"]);
 });
 
 it("a crash that clears within the debounce does nothing", async () => {
@@ -304,4 +316,114 @@ it("productionEnv sets CPD_MODE to production and drops the dev URL", () => {
 it("productionEnv keeps every other variable", () => {
   const input = { CPD_CHECKOUT: "/wt", HOME: "/h", PATH: "/bin" };
   expect(productionEnv({ ...input, CPD_ELECTRON_DEV_URL: "u" })).toEqual({ ...input, CPD_MODE: "production" });
+});
+
+function healthSetup(initial: { build?: Build } = {}) {
+  const calls: string[] = [];
+  const events: WatchdogEvent[] = [];
+  const logs: Entry[] = [];
+  const state = {
+    clock: T0,
+    health: null as CockpitHealth | null,
+    build: (initial.build ?? "preview") as Build,
+  };
+  const wd = createHealthWatchdog({
+    now: () => state.clock,
+    readHealth: async () => state.health,
+    build: () => state.build,
+    revert: async (build: Build) => {
+      calls.push(`revert:${build}`);
+      state.build = build;
+    },
+    // The restart is a port of its own (air-d127): the watchdog relaunches after it commits the
+    // recovery Event, so this fake records nothing and the call log stays as it was.
+    relaunch: async () => {},
+    reloadRenderer: async () => {
+      calls.push("reload-renderer");
+    },
+    stopChildren: async () => {},
+    report: async (event: WatchdogEvent) => {
+      events.push(event);
+    },
+    log: async (entry: object) => {
+      logs.push(entry as Entry);
+    },
+  });
+  const advance = (ms: number) => {
+    state.clock += ms;
+  };
+  return { wd, state, calls, events, logs, advance };
+}
+
+const noData = (epoch: number, startedAt: number): CockpitHealth => ({ epoch, startedAt, tree: null });
+
+it("the ladder takes preview then prod then HEAD-1 then HEAD-2", async () => {
+  const s = healthSetup({ build: "preview" });
+  s.state.health = noData(1, T0);
+  s.advance(10000);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["revert:prod"]);
+  s.state.health = noData(2, s.state.clock);
+  s.advance(10000);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["revert:prod", "revert:head-1"]);
+  s.state.health = noData(3, s.state.clock);
+  s.advance(10000);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["revert:prod", "revert:head-1", "revert:head-2"]);
+  // every rung has failed: no fourth step, and never a rung already tried
+  s.state.health = noData(4, s.state.clock);
+  s.advance(10000);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["revert:prod", "revert:head-1", "revert:head-2"]);
+});
+
+it("each detection and recovery emits a structured event", async () => {
+  const s = healthSetup({ build: "preview" });
+  const health = noData(1, T0);
+  s.state.health = health;
+  s.advance(10000);
+  await s.wd.tick();
+  expect(s.events).toHaveLength(2);
+  const detection = s.events[0];
+  expect(detection).toMatchObject({ kind: "watchdog.break" });
+  expect(detection?.data).toMatchObject({ detection: "empty-data", health });
+  expect(typeof detection?.text).toBe("string");
+  expect(detection?.text.length).toBeGreaterThan(0);
+  const recovery = s.events[1];
+  expect(recovery).toMatchObject({ kind: "watchdog.recovery" });
+  expect(recovery?.data).toMatchObject({ detection: "empty-data", build: "prod" });
+  expect(typeof recovery?.text).toBe("string");
+  expect(recovery?.text.length).toBeGreaterThan(0);
+  // one detection and one recovery per renderer boot
+  s.advance(5000);
+  await s.wd.tick();
+  expect(s.events).toHaveLength(2);
+});
+
+it("cockpit not ready with no later snapshot reloads the renderer only", async () => {
+  // The hub's subscribe runs before the cockpit's first load: it finds no snapshot, sends
+  // cockpit.error "not ready" and drops the client, so no later snapshot ever comes
+  // (web/src/server/hub/connection.ts:69-80; the root fix is Plan incident's cockpit-impl).
+  const s = healthSetup({ build: "prod" });
+  const health: CockpitHealth = { epoch: 1, startedAt: T0, tree: null, error: "not ready", errorAt: T0 };
+  s.state.health = health;
+  s.advance(9999);
+  await s.wd.tick();
+  expect(s.calls).toEqual([]);
+  s.advance(1);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["reload-renderer"]);
+  expect(s.state.build).toBe("prod"); // the view stays: no ladder step, no app restart
+  const detection = s.events[0];
+  expect(detection).toMatchObject({ kind: "watchdog.break" });
+  expect(detection?.data).toMatchObject({ detection: "cockpit-not-ready", health });
+  const recovery = s.events[1];
+  expect(recovery).toMatchObject({ kind: "watchdog.recovery" });
+  expect(recovery?.data).toMatchObject({ detection: "cockpit-not-ready", recovery: "renderer-reload" });
+  // no second reload, and still no ladder step, while the break persists in this boot
+  s.advance(60000);
+  await s.wd.tick();
+  expect(s.calls).toEqual(["reload-renderer"]);
+  expect(s.state.build).toBe("prod");
 });

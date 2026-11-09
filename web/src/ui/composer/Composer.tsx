@@ -2,6 +2,8 @@ import { ArrowUpIcon, FileTextIcon, PlusIcon, SquareIcon, XIcon } from "lucide-r
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent, ReactElement, ReactNode } from "react";
 import { cn } from "../../lib/utils.ts";
+import type { Disposable } from "../../protocol/runtime.ts";
+import type { SubmissionResult } from "../../state/connection.ts";
 import type {
   Attachment as AttachmentItem,
   Capabilities,
@@ -24,13 +26,15 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "../components/input-group.tsx";
-import { clearDraft, loadDraft, saveDraft } from "./drafts.ts";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { addFiles, filesFromClipboard } from "./attachments.ts";
 import type {
   AttachmentRejection,
   FileLike,
   FileReaderBoundary,
 } from "./attachments.ts";
+
+type ObserveSubmission = (settle: (result: SubmissionResult) => void) => Disposable;
 
 export interface ComposerSubmit {
   readonly text: string;
@@ -47,12 +51,16 @@ interface ComposerProps {
     busy: boolean;
     queued: readonly QueuedSubmission[];
     reader: FileReaderBoundary;
-    onSubmit(s: ComposerSubmit): void;
+    onSubmit(s: ComposerSubmit): ObserveSubmission;
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     sessionId: string;
     settings?: ReactNode;
     archived?: boolean;
+    sessionKey?: string;
+    hidden?: boolean;
+    onRetain?(draft: { attachments: AttachmentItem[]; submission: { type: "unknown" } } | null): void;
+    retained?: { attachments: AttachmentItem[]; submission: { type: "unknown" } };
 }
 
 // Keyed by session so text and attachments never carry over to another session.
@@ -63,14 +71,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function SessionComposer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
   const [text, setText] = useState(() => loadDraft(props.sessionId));
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>(() => props.retained?.attachments ?? []);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
+  const [submission, setSubmission] = useState<{ type: "pending" | "receipt" | "unknown" | "error"; message?: string } | null>(() => props.retained?.submission ?? null);
+  const submissionRef = useRef<Disposable | null>(null);
+  const locked = useRef(submission !== null);
+  const retainRef = useRef({ attachments, submission, onRetain: props.onRetain });
+  retainRef.current = { attachments, submission, onRetain: props.onRetain };
+  useEffect(() => () => {
+    submissionRef.current?.dispose();
+    const current = retainRef.current;
+    current.onRetain?.(current.submission === null ? null : { attachments: current.attachments, submission: { type: "unknown" } });
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const archived = props.archived ?? false;
-  const canSend = capabilities !== null && !archived;
+  const canSend = capabilities !== null && !archived && submission === null;
   const hasContent = text.trim() !== "" || attachments.length > 0;
   const canSubmit = canSend && hasContent;
   const stateRef = useRef({ attachments, capabilities, reader });
@@ -79,7 +97,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   });
 
   const handleFiles = async (files: readonly FileLike[]): Promise<void> => {
-    if (files.length === 0) return;
+    if (files.length === 0 || locked.current) return;
     const { attachments: cur, capabilities: cap, reader: r } = stateRef.current;
     const res = await addFiles(files, cur, cap, r);
     if (res.accepted.length > 0) {
@@ -93,12 +111,18 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   }));
 
   const send = (): void => {
-    if (!canSubmit) return;
-    onSubmit({ text, attachments, whenBusy: "followUp" });
-    clearDraft(props.sessionId);
-    setText("");
-    setAttachments([]);
-    setRejections([]);
+    if (!canSubmit || locked.current) return;
+    locked.current = true;
+    try {
+      const observe = onSubmit({ text, attachments, whenBusy: "followUp" });
+      setSubmission({ type: "pending" });
+      submissionRef.current = observe((result: SubmissionResult) => {
+        submissionRef.current = null;
+        setSubmission(result);
+      });
+    } catch (e) {
+      setSubmission({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -115,7 +139,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   };
 
   return (
-    <div data-part="composer" className="mx-3 mb-2.5 flex shrink-0 flex-col gap-2">
+    <div data-part="composer" hidden={props.hidden} className="mx-3 mb-2.5 flex shrink-0 flex-col gap-2">
       <input
         ref={fileInputRef}
         type="file"
@@ -129,6 +153,22 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           e.currentTarget.value = "";
         }}
       />
+      {submission === null ? null : (
+        <p role="status" data-part="submission-feedback" className="m-0 font-mono text-xs text-status-blocked-bright">
+          {submission.type === "pending"
+            ? `${props.sessionKey ?? props.sessionId}: awaiting acknowledgement; delivery and agent response are not confirmed.`
+            : submission.type === "receipt"
+              ? `${props.sessionKey ?? props.sessionId}: receipt received; agent consumption and response are unconfirmed. Verify before resending.`
+              : submission.type === "unknown"
+                ? `${props.sessionKey ?? props.sessionId}: message outcome is unknown. Do not resend until its disposition is verified.`
+                : `${props.sessionKey ?? props.sessionId}: ${submission.message ?? "submission failed"}. Message outcome may be unknown; verify before resending.`}
+          {submission.type === "pending" ? null : (
+            <Button type="button" variant="outline" size="xs" onClick={() => { locked.current = false; setSubmission(null); }}>
+              Continue editing after verification
+            </Button>
+          )}
+        </p>
+      )}
       {rejections.length === 0 ? null : (
         <ul
           role="alert"
@@ -231,6 +271,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
                       <AttachmentAction
                         aria-label={`Remove ${a.name}`}
                         data-action="remove-attachment"
+                        disabled={submission !== null}
                         onClick={() =>
                           setAttachments((cur) =>
                             cur.filter((_, k) => k !== i),

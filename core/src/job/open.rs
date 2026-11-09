@@ -207,7 +207,7 @@ pub fn tier_of_workflow(
             let models = env.store.read(|conn| {
                 crate::policy::model::models_of_workflow(conn, &home, plan, workflow)
             })?;
-            crate::config::catalog::load_with(&models, &mut env.store)?
+            crate::config::catalog::load_with_runner(&*env.ports.runner, &models, &mut env.store)?
         }
     };
     tier(&env.config, &catalog)

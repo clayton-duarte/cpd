@@ -67,10 +67,18 @@ export function App(props: AppProps): ReactElement {
   const onSelectSession = useCallback((id: string) => connection.selectSession(id), [connection]);
   const onSelectPlan = useCallback((id: string) => connection.selectPlan(id), [connection]);
   const onAction = useCallback((a: Parameters<typeof connection.action>[0]) => connection.action(a), [connection]);
-  // The report is fire-and-forget (pro-d452); the toast tracks its actionId so it dismisses on success and
-  // stays open, with the failure under the button and a Retry, when the send fails (air-d27).
+  // Keep the original error visible while its report is pending or has failed.
   const [report, setReport] = useState<{ id: string; error: WireError; failure: WireError | null } | null>(null);
+  const reportInFlight = useRef(false);
+  const [reportSent, setReportSent] = useState(false);
   const onDismissError = useCallback(() => { setReport(null); store.dispatch({ type: "dismissError" }); }, [store]);
+  const sendReport = useCallback((error: WireError) => {
+    if (reportInFlight.current) return;
+    reportInFlight.current = true;
+    setReportSent(false);
+    const id = onAction({ kind: "error.report", target: routeErrorTarget(error), code: error.code, message: error.message });
+    setReport({ id, error, failure: null });
+  }, [onAction]);
   const activeError = lastError ?? cockpit.error;
   // While a report is in flight or failed the toast keeps its own error, so the send's failure (lastError)
   // never replaces it (air-d27).
@@ -108,7 +116,8 @@ export function App(props: AppProps): ReactElement {
   useEffect(() => {
     if (report === null || report.failure !== null) return;
     if (pendingActionIds.includes(report.id)) return;
-    if (completedActionIds.includes(report.id)) { onDismissError(); return; }
+    reportInFlight.current = false;
+    if (completedActionIds.includes(report.id)) { onDismissError(); setReportSent(true); return; }
     setReport((r) => (r === null ? null : { ...r, failure: lastError ?? { code: "cpd_failed", message: "the report could not be sent" } }));
   }, [report, pendingActionIds, completedActionIds, lastError, onDismissError]);
   const live = cockpit.tree !== null; // panes mount on the first snapshot, not before
@@ -179,6 +188,14 @@ export function App(props: AppProps): ReactElement {
   return (
     <>
     <BootstrapOverlay />
+    {reportSent ? (
+      <div role="status" className="fixed right-4 bottom-8 z-50 rounded-lg border bg-card px-4 py-3 shadow-lg">
+        Report sent
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss report confirmation" onClick={() => setReportSent(false)}>
+          <XIcon className="size-3.5" />
+        </Button>
+      </div>
+    ) : null}
     {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
@@ -194,12 +211,10 @@ export function App(props: AppProps): ReactElement {
             size="sm"
             data-part="error-toast-report"
             className="mt-2 col-span-2 justify-self-start"
-            onClick={() => {
-              const id = onAction({ kind: "error.report", target: routeErrorTarget(shownError), code: shownError.code, message: shownError.message });
-              setReport({ id, error: shownError, failure: null });
-            }}
+            disabled={report !== null}
+            onClick={() => sendReport(shownError)}
           >
-            {`Send to ${routeErrorTarget(shownError)}`}
+            {report !== null && report.failure === null ? "Sending…" : `Send to ${routeErrorTarget(shownError)}`}
           </Button>
           {report === null || report.failure === null ? null : (
             <div data-part="error-toast-failure" className="col-span-2 mt-1 flex items-center gap-2 text-xs">
@@ -209,11 +224,7 @@ export function App(props: AppProps): ReactElement {
                 variant="outline"
                 size="xs"
                 data-part="error-toast-retry"
-                onClick={() => {
-                  const error = report.error;
-                  const id = onAction({ kind: "error.report", target: routeErrorTarget(error), code: error.code, message: error.message });
-                  setReport({ id, error, failure: null });
-                }}
+                onClick={() => sendReport(report.error)}
               >
                 Retry
               </Button>
@@ -224,6 +235,7 @@ export function App(props: AppProps): ReactElement {
             variant="ghost"
             size="icon-sm"
             aria-label="Dismiss error"
+            disabled={report !== null && report.failure === null}
             onClick={onDismissError}
             className="absolute top-2 right-2 size-6 text-destructive hover:text-destructive"
           >
