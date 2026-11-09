@@ -308,7 +308,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless it is in the worker range (floor `worker_tier` up to just below `lead_tier`); an explore Job keeps
+    /// unless it is in the worker range (floor `worker_tier` through the highest valid rung at or below `lead_tier`); an explore Job keeps
     /// its letter (H for a scout, S for research), effort >= 1 or X, up to the worker ceiling (pro-d328 to pro-d332).
     ///
     /// The models are those of the Job's Workflow repo key (contract §8.3 "Models" (5)): `pr` is the Workflow the Job is
