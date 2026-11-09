@@ -24,7 +24,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "../components/input-group.tsx";
-import { clearDraft, loadDraft, saveDraft } from "./drafts.ts";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { addFiles, filesFromClipboard } from "./attachments.ts";
 import type {
   AttachmentRejection,
@@ -62,8 +62,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
 const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function SessionComposer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
-  const [text, setText] = useState(() => loadDraft(props.sessionId));
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [initial] = useState(() => loadDraft(props.sessionId));
+  const [text, setText] = useState(initial.text);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([...initial.attachments]);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    setSaveFailed(!saveDraft(props.sessionId, text, attachments));
+  }, [props.sessionId, text, attachments]);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -95,7 +105,6 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const send = (): void => {
     if (!canSubmit) return;
     onSubmit({ text, attachments, whenBusy: "followUp" });
-    clearDraft(props.sessionId);
     setText("");
     setAttachments([]);
     setRejections([]);
@@ -129,6 +138,11 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           e.currentTarget.value = "";
         }}
       />
+      {!saveFailed ? null : (
+        <p role="alert" className="m-0 font-mono text-xs text-destructive">
+          Draft not saved: browser storage is full or unavailable.
+        </p>
+      )}
       {rejections.length === 0 ? null : (
         <ul
           role="alert"
@@ -256,7 +270,6 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            saveDraft(props.sessionId, e.target.value);
           }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
