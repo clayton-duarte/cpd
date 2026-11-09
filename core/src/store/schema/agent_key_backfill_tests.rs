@@ -240,8 +240,13 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261108T0500-guard-event",
             "20261108T0600-refusal-alert-kind",
             "20261108T0800-bug-record",
-            "20261108T0900-bug-protocol-breach",
+            "20261109T1200-test-replacement",
+            "20261109T2108-bug-protocol-breach",
         ]
+    );
+    assert_eq!(
+        NAMED.iter().next_back().map(|n| n.name),
+        Some("20261109T2108-bug-protocol-breach")
     );
 }
 

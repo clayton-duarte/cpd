@@ -81,6 +81,10 @@ const LATER: &[(&str, &str)] = &[
         "DROP TABLE record_topics; DELETE FROM history_tables WHERE name = 'record_topics'",
     ),
     (
+        "test_replacements",
+        "DROP TRIGGER dependencies_no_delete; CREATE TRIGGER dependencies_no_delete BEFORE DELETE ON dependencies WHEN (SELECT status FROM jobs WHERE plan = OLD.plan AND key = OLD.job) <> 'draft' AND NOT ((SELECT deleted_at FROM plans WHERE id = OLD.plan) IS NOT NULL) BEGIN SELECT RAISE(ABORT, 'job_locked'); END; DROP TRIGGER dependencies_locked; CREATE TRIGGER dependencies_locked BEFORE INSERT ON dependencies WHEN (SELECT status FROM jobs WHERE plan = NEW.plan AND key = NEW.job) <> 'draft' AND (SELECT created_txn FROM jobs WHERE plan = NEW.plan AND key = NEW.job) <> cpd_txn() BEGIN SELECT RAISE(ABORT, 'job_locked'); END; DROP TABLE test_replacements; DELETE FROM history_tables WHERE name = 'test_replacements'",
+    ),
+    (
         "jira_transitions",
         "CREATE TABLE jira_transitions (id INTEGER PRIMARY KEY, plan TEXT NOT NULL, pr TEXT NOT NULL, target TEXT NOT NULL CHECK (target IN ('in_progress','in_review','done')), queued_at TEXT NOT NULL, settled_at TEXT, outcome TEXT CHECK (outcome IN ('moved','unchanged','skipped')), refused_at TEXT, refusal TEXT, refused_with TEXT, UNIQUE (plan, pr, target), FOREIGN KEY (plan, pr) REFERENCES workflows(plan, key), CHECK ((settled_at IS NULL) = (outcome IS NULL)), CHECK ((refused_at IS NULL) = (refusal IS NULL) AND (refused_at IS NULL) = (refused_with IS NULL)), CHECK (settled_at IS NULL OR refused_at IS NULL)) STRICT",
     ),
