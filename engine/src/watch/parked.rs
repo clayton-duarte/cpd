@@ -20,7 +20,7 @@ pub(super) fn run(engine: &mut Engine) {
             for plan in plans {
                 match cancel(engine, &plan) {
                     Ok(()) => engine.log.line(&format!(
-                        "E20: cancelled the drafts of archived Plan {plan}"
+                        "parked-drafts: cancelled the drafts of archived Plan {plan}"
                     )),
                     Err(e) => engine.fail(Step::E20, About::Plan(plan), &e),
                 }
@@ -34,7 +34,7 @@ pub(super) fn run(engine: &mut Engine) {
                 match wake(engine, &plan, &lead) {
                     Ok(true) => {
                         engine.log.line(&format!(
-                            "E20: woke the Lead of Plan {plan}: its drafts are parked"
+                            "parked-drafts: woke the Lead of Plan {plan}: its drafts are parked"
                         ));
                         engine.clear(Step::E20, &About::Plan(plan));
                     }

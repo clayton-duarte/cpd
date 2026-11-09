@@ -239,6 +239,8 @@ pub fn run(
         }
     }
     for (file, title) in web {
+        // Vitest prefixes nested titles with `describe > `, so anchor at the start or after a separator.
+        let pattern = format!("(?:^| > ){}", &pi_pattern(&title)[1..]);
         let args = [
             "--filter",
             "cpd-web-client",
@@ -246,7 +248,7 @@ pub fn run(
             "vitest",
             "run",
             "--testNamePattern",
-            title.as_str(),
+            pattern.as_str(),
             file.as_str(),
         ];
         let output = process(ports, "pnpm", "pnpm", &args, &root)?;

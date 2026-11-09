@@ -57,7 +57,7 @@ pub(super) fn run(engine: &mut Engine) {
             Ok(expired) => {
                 if expired {
                     engine.log.line(&format!(
-                        "E1: expired {} of Plan {}: its asker is gone",
+                        "escalations: expired {} of Plan {}: its asker is gone",
                         escalation.id, escalation.plan
                     ));
                 }

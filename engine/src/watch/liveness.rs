@@ -191,10 +191,11 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         },
     };
     let catalog = engine.catalog_of_job(plan, target.job.as_str())?;
+    let fresh = cpd_core::config::Config::load(&engine.home)?;
     let ladder = Ladder {
         catalog: &catalog,
-        retry_cap: engine.config.retry_cap,
-        roles: engine.config.role_tiers(),
+        retry_cap: fresh.retry_cap,
+        roles: fresh.role_tiers(),
     };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| {
@@ -211,7 +212,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     engine.home.remove_infra(plan, id)?;
     drop(lock);
     engine.log.line(&format!(
-        "E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}",
+        "liveness: the driver of {id} (Plan {plan}) is dead: ended {} / {}",
         end.outcome(),
         end.cause()
     ));
@@ -232,14 +233,12 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
 fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog_of_attempt(&active.plan, &active.id)?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
-    let classifier = merge::real_classifier(
-        &engine.config,
-        &engine.home,
-        &cpd_core::ports::Ports::current(),
-    );
+    let fresh = cpd_core::config::Config::load(&engine.home)?;
+    let classifier =
+        merge::real_classifier(&fresh, &engine.home, &cpd_core::ports::Ports::current());
     let ctx = merge::Ctx {
         home: &engine.home,
-        config: &engine.config,
+        config: &fresh,
         catalog: &catalog,
         source: SOURCE,
         metrics: &metrics,
@@ -252,7 +251,7 @@ fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
             |e| format!("ended {} / {}", e.outcome(), e.cause()),
         );
         engine.log.line(&format!(
-            "E2: recovered the merge of {} (Plan {}): {how}",
+            "liveness: recovered the merge of {} (Plan {}): {how}",
             r.attempt, r.plan
         ));
     }
@@ -292,7 +291,7 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     })?;
     if changed == 1 {
         engine.log.line(&format!(
-            "E2: asked the driver of {id} (Plan {plan}) to stop: {request}"
+            "liveness: asked the driver of {id} (Plan {plan}) to stop: {request}"
         ));
     }
     Ok(())
@@ -544,7 +543,7 @@ fn stop_and_clean(
     });
     if let Some(pane) = dead_lead.filter(|_| !in_slot) {
         engine.log.line(&format!(
-            "E2: Lead {} ({}) pane {} is dead, exit status {}",
+            "liveness: Lead {} ({}) pane {} is dead, exit status {}",
             session.name,
             session.id,
             pane.pane,
@@ -553,7 +552,7 @@ fn stop_and_clean(
         ));
         engine.tmux.kill_window(&pane.window)?;
         engine.log.line(&format!(
-            "E2: killed the window {} of Lead {}'s dead pane {}",
+            "liveness: killed the window {} of Lead {}'s dead pane {}",
             pane.window, session.name, pane.pane
         ));
     }
@@ -561,7 +560,7 @@ fn stop_and_clean(
     if let Some(pane) = dead_lead.filter(|_| in_slot && changed) {
         replace_with_placeholder(engine, pane)?;
         engine.log.line(&format!(
-            "E2: replaced Lead {}'s dead pane {} in the chat slot by the placeholder",
+            "liveness: replaced Lead {}'s dead pane {} in the chat slot by the placeholder",
             session.name, pane.pane
         ));
     }
@@ -594,7 +593,7 @@ fn read_restarts(engine: &mut Engine) -> BTreeMap<String, OffsetDateTime> {
         Err(e) => {
             engine
                 .log
-                .line(&format!("E2: cannot read {}: {e}", path.display()));
+                .line(&format!("liveness: cannot read {}: {e}", path.display()));
             return BTreeMap::new();
         }
     };
@@ -607,7 +606,7 @@ fn read_restarts(engine: &mut Engine) -> BTreeMap<String, OffsetDateTime> {
         });
     parsed.unwrap_or_else(|| {
         engine.log.line(&format!(
-            "E2: {} is not a map of Session to time: deleted, written again",
+            "liveness: {} is not a map of Session to time: deleted, written again",
             path.display()
         ));
         let _ = std::fs::remove_file(&path);
@@ -630,7 +629,7 @@ fn write_restart(engine: &mut Engine, id: &str, now: OffsetDateTime) {
     if let Err(e) = cpd_core::atomic::write_atomic(&path, text) {
         engine
             .log
-            .line(&format!("E2: cannot write {}: {e}", path.display()));
+            .line(&format!("liveness: cannot write {}: {e}", path.display()));
     }
 }
 
@@ -671,7 +670,7 @@ fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
     {
         write_restart(engine, id, now);
         engine.log.line(&format!(
-            "E2: restarted Session {} ({}) in the parked pane {pane}",
+            "liveness: restarted Session {} ({}) in the parked pane {pane}",
             session.id, session.name
         ));
     }
@@ -706,7 +705,7 @@ fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError
     })?;
     if changed {
         engine.log.line(&format!(
-            "E2: Session {} ({}) is stopped with no pane: {why}",
+            "liveness: Session {} ({}) is stopped with no pane: {why}",
             session.id, session.name
         ));
     }
