@@ -55,6 +55,14 @@ describe('buildBundle', () => {
   });
 });
 
+describe('buildBundle web sha define', () => {
+  it('the web sha define comes from the built sha', async () => {
+    const f = fakeExec({ [BUILD]: {} });
+    await buildBundle({ exec: f.exec, fs: fakeFs() }, ROOT, { lockfileChanged: false, sha: 'abc123' });
+    expect(f.calls[0]).toMatchObject({ env: { CPD_WEB_SHA: 'abc123', CPD_ELECTRON_OUT: 'dist-electron.next' } });
+  });
+});
+
 describe('readBuiltSha', () => {
   it('readBuiltSha returns null without a stamp', () => {
     expect(readBuiltSha(fakeFs(), ROOT)).toBeNull();

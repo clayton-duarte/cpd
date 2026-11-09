@@ -76,8 +76,13 @@ export function App(props: AppProps): ReactElement {
     if (reportInFlight.current) return;
     reportInFlight.current = true;
     setReportSent(false);
-    const id = onAction({ kind: "error.report", target: routeErrorTarget(error), code: error.code, message: error.message });
-    setReport({ id, error, failure: null });
+    try {
+      const id = onAction({ kind: "error.report", target: routeErrorTarget(error), code: error.code, message: error.message });
+      setReport({ id, error, failure: null });
+    } catch (e) {
+      reportInFlight.current = false;
+      setReport({ id: "", error, failure: { code: "cpd_failed", message: e instanceof Error ? e.message : "the report could not be sent" } });
+    }
   }, [onAction]);
   const activeError = lastError ?? cockpit.error;
   // While a report is in flight or failed the toast keeps its own error, so the send's failure (lastError)
@@ -211,7 +216,7 @@ export function App(props: AppProps): ReactElement {
             size="sm"
             data-part="error-toast-report"
             className="mt-2 col-span-2 justify-self-start"
-            disabled={report !== null}
+            disabled={report !== null && report.failure === null}
             onClick={() => sendReport(shownError)}
           >
             {report !== null && report.failure === null ? "Sending…" : `Send to ${routeErrorTarget(shownError)}`}

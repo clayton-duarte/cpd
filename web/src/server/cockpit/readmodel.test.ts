@@ -446,6 +446,9 @@ describe("inbox primary actions", () => {
   it("a pr-ready item with review overdue gets a RePost action", () => {
     expect(first([pr("review overdue")])).toEqual({ label: "RePost", action: { kind: "pr.repost", planId: "p1", pull: "acme/api#3" } });
   });
+  it("waiting for peer review row exposes RePost", () => {
+    expect(first([pr("waiting for peer review")])).toEqual({ label: "RePost", action: { kind: "pr.repost", planId: "p1", pull: "acme/api#3" } });
+  });
   it("an engine-down item gets only a Start action", () => {
     const row = inboxOf([item(null, { kind: "engine-down", label: "engine down" })], false).rows[0]!;
     expect(row.actions).toEqual([{ label: "Start", action: { kind: "engine.start" } }]);
