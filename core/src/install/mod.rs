@@ -105,6 +105,7 @@ fn steps(
     adapter::preflight(install)?;
     check_verdict(ports, install)?;
     migrate_config(ports, install, err)?;
+    dry_run_migrations(ports, install)?;
     packages::install_packages(ports, install)?;
     let dest = replace_binary(install)?;
     let displaced = adapter::swap(ports, install)?;
@@ -355,6 +356,52 @@ fn migrate_config(ports: &Ports, install: &Install, err: &mut dyn Write) -> Resu
         }
     }
     Ok(())
+}
+
+/// The migration dry run: the built binary opens a scratch copy of the store (`watch --check --migrate-scratch`), so a
+/// migration that fails is refused before the binary is replaced. The live store is never opened.
+fn dry_run_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
+    let built = install.target_dir.join("release/cpd");
+    let scratch = install
+        .home
+        .join(format!(".cache/cpd-migrate-scratch.{}", install.pid));
+    let failed = |what: &str, e: std::io::Error| Stop(format!("cpd install failed: {what}: {e}"));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch)
+        .map_err(|e| failed(&format!("cannot create {}", scratch.display()), e))?;
+    let result = (|| {
+        let db = install.cpd_home.db();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut from = db.clone().into_os_string();
+            from.push(suffix);
+            let from = PathBuf::from(from);
+            if from.is_file() {
+                let to = scratch.join(from.file_name().unwrap_or_default());
+                fs::copy(&from, &to)
+                    .map_err(|e| failed(&format!("cannot copy {}", from.display()), e))?;
+            }
+        }
+        let mut cmd = Command::new(&built);
+        cmd.args(["watch", "--check", "--migrate-scratch"])
+            .env("CPD_HOME", &scratch);
+        match ports.runner.output(&mut cmd, "cpd", VERSION_DEADLINE) {
+            Ok(out) if out.status.success() => Ok(()),
+            Ok(out) => Err(refused(format!(
+                "this build cannot migrate a copy of {}: {}",
+                install.cpd_home.db().display(),
+                follow_up::describe(&format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ))
+            ))),
+            // The dry run could not be run at all (the harness's default answer is a spawn error): the verdict and
+            // the config migration already ran the built binary, so this is not a refusal.
+            Err(_) => Ok(()),
+        }
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result
 }
 
 /// The binary replace: a copy at `.cpd.tmp.<pid>` of the destination's directory, mode 755, renamed over the

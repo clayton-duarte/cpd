@@ -117,6 +117,14 @@ pub(super) fn check() -> Result<Output, CpdError> {
     })))
 }
 
+/// `watch --check --migrate-scratch`: opens the store of `CPD_HOME`, which migrates it. Only for a scratch copy.
+pub(super) fn migrate_scratch() -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    Ok(Output::success(json!({})))
+}
+
 /// Whether this binary opens the store (contract §4.5), from the read-only verdict that
 /// `cpd --version` prints: it never creates, migrates or checks it. No database is no refusal.
 /// The refusal is the store's own error (`store_too_new`, `migration_changed`, …).

@@ -165,6 +165,9 @@ pub struct Args {
     /// Check, read-only, what starting the engine depends on (config, store, tmux, its listing, the home) and print what was checked
     #[arg(long, conflicts_with_all = ["ensure", "restart_tmux"])]
     check: bool,
+    /// With `--check`: open (and so migrate) the store of `CPD_HOME`, then exit (internal: `cpd install` runs it on a scratch copy before the swap)
+    #[arg(long, hide = true, requires = "check")]
+    migrate_scratch: bool,
     /// Start the engine in cpd-work:watch when it is not running, and return at once
     #[arg(long)]
     ensure: bool,
@@ -181,7 +184,9 @@ pub struct Args {
 
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
-    if args.check {
+    if args.check && args.migrate_scratch {
+        ensure::migrate_scratch()
+    } else if args.check {
         ensure::check()
     } else if args.ensure {
         ensure::ensure(args.wait)
