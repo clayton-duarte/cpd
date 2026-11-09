@@ -182,8 +182,8 @@ mod inproc {
     pub fn new_plan(fx: &Fx, id: &str, repo: &Path) -> Value {
         let out = new_plan_only(fx, id);
         fx.github_origin(repo);
-        // `--shape config`: the template's stub drafts, `pay-config` and its opener, which these tests do not use:
-        // they are cancelled, as a Lead cancels a stub it does not need.
+        // `--shape config`: the template's stub draft, `pay-config`, which these tests do not use: it is cancelled,
+        // as a Lead cancels a stub it does not need. The template lays out no opener: the start queues it.
         fx.cpd(&[
             "workflow",
             "add",
@@ -202,16 +202,6 @@ mod inproc {
             "job",
             "cancel",
             "pay-config",
-            "--reason",
-            "a stub of the template",
-            "--plan",
-            id,
-        ])
-        .ok();
-        fx.cpd(&[
-            "job",
-            "cancel",
-            "open-pay",
             "--reason",
             "a stub of the template",
             "--plan",
@@ -1351,10 +1341,10 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         (&pay["id"], &pay["context"], &pay["phase"]),
         (&json!("pay"), &json!("ctx"), &json!("plan"))
     );
-    // The two cancelled are the stubs of the template `new_plan` cancels (`pay-config` and its opener).
+    // The one cancelled is the template's stub `pay-config`: the template lays out no opener.
     assert_eq!(
         pay["counts"],
-        json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 2})
+        json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1})
     );
     assert_eq!(
         pay["workflows"][0]["repo"],
@@ -1594,11 +1584,11 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
 }
 
 #[test]
-fn render_shows_the_planned_opener_and_no_placeholder() {
+fn render_shows_the_opener_placeholder_until_the_pr_starts() {
     let fx = Fx::with_ports();
     let repo = inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
-    // A template PR: `pr add` lays out its opener stub beside the shape's stubs; its other Job is merged away.
+    // A template PR: `workflow add` lays out its shape's stubs and no opener; its `pay-config` stub is cancelled.
     fx.cpd(&[
         "workflow",
         "add",
@@ -1643,30 +1633,19 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
     let out = fx.cpd(&["plan", "render", "--plan", "pay"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
 
-    // The template PR holds its planned opener: the render shows the Job's own row and section, with no placeholder.
+    // The template PR has no opener until it starts: the render shows the placeholder, as for the older PR below.
     let pay = section(&text, "pay");
     assert!(
-        pay.lines().any(|l| l.starts_with("| `open-pay` |")
-            && l.contains("Open the pull request: Change the PR")
-            && l.contains("| open |")
-            && l.contains("| draft |")),
+        pay.contains("| `open-pay` | Open the pull request: Change the PR | open |")
+            && pay.contains("every other Job of the Workflow"),
         "{pay}"
     );
     assert!(
         pay.contains("\n### `open-pay`: Open the pull request: Change the PR\n"),
         "{pay}"
     );
-    assert!(pay.contains("Status: `draft` · Kind: `open`"), "{pay}");
-    assert!(
-        !pay.contains("Added by cpd when the PR starts"),
-        "no placeholder for a PR whose Plan holds an open Job:\n{pay}"
-    );
-    assert!(
-        !pay.contains("every other Job of the Workflow"),
-        "no placeholder `Needs` cell:\n{pay}"
-    );
 
-    // An older PR with no open Job still shows the placeholder, as before the template laid one out.
+    // An older PR with no open Job shows the placeholder too.
     let old = section(&text, "old");
     assert!(
         old.contains("| `open-old` | Open the pull request: Old change | open |")
@@ -2084,17 +2063,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
         "pay",
     ])
     .ok();
-    // Its opener stub is a draft the review did not cover: cancelled, it is none, and the review stays current.
-    fx.cpd(&[
-        "job",
-        "cancel",
-        "open-web",
-        "--reason",
-        "a stub of the template",
-        "--plan",
-        "pay",
-    ])
-    .ok();
+    // Its Workflow waits on `pay`, so it has no opener (the start queues it): the review covers only the drafts and stays current.
     assert_eq!(inproc::show(&fx, "pay")["review"]["current"], true);
 
     // Rejected: the drafts stay drafts, editable.
@@ -2421,7 +2390,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
         .join("pay.pay.pay");
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b", "open-pay"],
                "workflows": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
                         "base_sha": head, "reused": false, "pushed": false, "base_workflow": null}],
                "watch": {"started": true, "pane": "%9"}})
@@ -2472,7 +2441,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let phase = inproc::events(&fx, "plan-phase").last().unwrap().clone();
     assert_eq!(
         phase["data"],
-        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "workflows": ["pay"]})
+        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b", "open-pay"], "workflows": ["pay"]})
     );
     let started = inproc::events(&fx, "workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
@@ -3630,7 +3599,11 @@ fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
     fx.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"])
         .ok();
     let out = lock().ok();
-    assert_eq!(out["jobs"], json!(["a", "b", "also"]), "in creation order");
+    assert_eq!(
+        out["jobs"],
+        json!(["a", "b", "also", "open-pay"]),
+        "in creation order"
+    );
     assert_eq!(job_status(&fx.env, "also"), "queued");
     assert_eq!(job_status(&fx.env, "later"), "cancelled");
 }

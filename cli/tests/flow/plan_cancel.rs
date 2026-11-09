@@ -97,20 +97,11 @@ fn world(fx: &Fx) -> (String, String) {
         ])
         .ok();
         // The stub the shape lays out is cancelled, as a Lead cancels a stub it does not need: these Jobs are the table's.
+        // The template lays out no opener, so there is none to cancel (the start queues it).
         fx.cpd(&[
             "job",
             "cancel",
             &format!("{key}-config"),
-            "--reason",
-            "a stub of the template",
-            "--plan",
-            "pay",
-        ])
-        .ok();
-        fx.cpd(&[
-            "job",
-            "cancel",
-            &format!("open-{key}"),
             "--reason",
             "a stub of the template",
             "--plan",

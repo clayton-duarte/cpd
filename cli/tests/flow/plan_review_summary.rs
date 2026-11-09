@@ -66,16 +66,6 @@ fn plan_with_one_draft(fx: &Fx) -> PathBuf {
         "pay",
     ])
     .ok();
-    fx.cpd(&[
-        "job",
-        "cancel",
-        "open-pay",
-        "--reason",
-        "a stub of the template",
-        "--plan",
-        "pay",
-    ])
-    .ok();
     fx.drop_unreachable_origin(&repo);
     fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     let mut store = Store::open(&home(fx), 5000).unwrap();
