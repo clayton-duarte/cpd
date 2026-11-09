@@ -4918,6 +4918,53 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
     );
 }
 
+/// B07: a retitle run that fails with auth (pi's stderr says 401 / `token_expired`) is not retried at every tick: E10 pauses that
+/// Session, raises one `title_auth` error (the inbox error for the User) and stays paused, however much time passes (no timer).
+#[test]
+fn e10_auth_failure_pauses_retitle_and_raises_inbox_error() {
+    let t = Titles::new(
+        1,
+        Reply::exit(
+            1,
+            "",
+            "Error: 401 {\"error\":\"token_expired\"} authentication failed\n",
+        ),
+    );
+    t.session("due", "lead", "idle", 0, Some(1), Some(20));
+    let (db, runner, clock) = (t.db(), t.fx.fakes.runner.clone(), t.fx.fakes.clock.clone());
+    let mut advanced = None;
+    let calls = Arc::new(Mutex::new(0));
+    let seen = calls.clone();
+
+    t.run_steps(move |nap| match advanced {
+        None if pi_calls(&runner) >= 1 => {
+            clock.advance(Duration::from_secs(60 * 60));
+            advanced = Some(nap);
+            false
+        }
+        Some(at) if nap >= at + 100 => {
+            *seen.lock().unwrap() = pi_calls(&runner);
+            let _ = &db;
+            true
+        }
+        _ => false,
+    });
+
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "a paused Session is not respawned"
+    );
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "one inbox error: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!(
+        (data["source"].as_str(), data["code"].as_str()),
+        (Some("watch"), Some("title_auth"))
+    );
+    assert_eq!(data["details"]["session"], "due");
+}
+
 /// pi's answer to E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, which the old code wrote as the title.
 const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
 

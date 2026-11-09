@@ -139,3 +139,31 @@ fn an_idle_done_plan_lead_whose_state_at_a_machine_reload_just_bumped_must_still
         "a finished Lead with no activity sleeps: the fixture's conditions hold"
     );
 }
+
+/// A37: after a reload (`idle` → `stopped` → `stopped` → `idle`) any later state write (here a refresh `idle` → `idle`
+/// that moves `state_at` to now) is not a turn end. The clock is the latest turn end (`working` → `idle`), which is long
+/// ago, so the finished Lead sleeps.
+#[test]
+fn e13_state_refresh_after_reload_does_not_reset_idle_clock() {
+    let mut fx = Fx::new("");
+    let long_ago = ago(24 * 60);
+    let now = ago(0);
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', '{now}', 't', 'durable');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pay', 'ctx', 'Pay', 'done', 'lead1', 't', 't', '{long_ago}');
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at)
+           VALUES ('pay', 'repo', '/r', 'main', 'cancelled', 'cpd/pay', NULL, 'T', 'config', cpd_txn(), 't');
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+           VALUES (cpd_txn(), '{long_ago}', 'session-state', 'ctx', 'pay', 'lead1', 'x', '{{\"from\":\"working\",\"to\":\"idle\"}}'),
+                  (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'lead1', 'x', '{{\"from\":\"idle\",\"to\":\"stopped\"}}'),
+                  (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'lead1', 'x', '{{\"from\":\"stopped\",\"to\":\"idle\"}}'),
+                  (cpd_txn(), '{now}', 'session-state', 'ctx', 'pay', 'lead1', 'x', '{{\"from\":\"idle\",\"to\":\"idle\"}}');"
+    ));
+    sleep::run(&mut fx.engine);
+    assert!(
+        asleep(&mut fx),
+        "a state refresh after a reload is not a turn end: the finished Lead still sleeps"
+    );
+}
