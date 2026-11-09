@@ -166,7 +166,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           {submission.type === "pending"
             ? `${props.sessionKey ?? props.sessionId}: awaiting acknowledgement; delivery and agent response are not confirmed.`
             : submission.type === "unknown"
-              ? `${props.sessionKey ?? props.sessionId}: connection lost; message outcome is unknown. Do not resend until its disposition is verified.`
+              ? `${props.sessionKey ?? props.sessionId}: message outcome is unknown. Do not resend until its disposition is verified.`
               : `${props.sessionKey ?? props.sessionId}: ${submission.message ?? "submission failed"}. Message outcome may be unknown; verify before resending.`}
           {submission.type === "pending" ? null : (
             <Button type="button" variant="outline" size="xs" onClick={() => { locked.current = false; setSubmission(null); }}>

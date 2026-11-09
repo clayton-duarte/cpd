@@ -71,7 +71,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         thinking={toggles.thinking}
         tools={toggles.tools}
       />
-      {dialog === null ? (
+      <div hidden={dialog !== null}>
         <Composer
           ref={composer}
           sessionId={view.id}
@@ -99,7 +99,8 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}
         />
-      ) : dialog.method === "ask_user_question" ? (
+      </div>
+      {dialog === null ? null : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (
         <PlanReviewCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />

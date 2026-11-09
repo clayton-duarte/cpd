@@ -217,6 +217,34 @@ describe("App", () => {
     expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
   });
 
+  it("keeps a pending draft and its attachment while a session dialog is displayed", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "keep attachment");
+    act(() => transport.emitMessage({ type: "session.dialog", sessionId: "s1", dialog: { id: "d1", interactive: true, method: "cpd_plan_review", title: "Review", summary: "Review" } }));
+    act(() => transport.emitMessage({ type: "session.dialogResolved", sessionId: "s1", dialogId: "d1", outcome: "cancelled" }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("keep attachment");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/awaiting/i);
+  });
+
+  it("does not clear a draft for a durable held submission acknowledgement", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "held message");
+    act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false, submissionId: -1 }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("held message");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown/i);
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
   it("selecting an archived session disables the Composer", () => {
     const transport = new FakeTransport();
     const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);

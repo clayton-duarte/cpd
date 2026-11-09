@@ -219,7 +219,9 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
-    if (message.type === "session.submitAck") settleSubmission(message.sessionId, message.clientSubmissionId, { type: "ack" });
+    if (message.type === "session.submitAck") {
+      settleSubmission(message.sessionId, message.clientSubmissionId, message.submissionId === -1 ? { type: "unknown" } : { type: "ack" });
+    }
     if (message.type === "session.error" && message.sessionId !== null && message.clientSubmissionId !== undefined) {
       settleSubmission(message.sessionId, message.clientSubmissionId, { type: "error", message: message.error.message });
     }
