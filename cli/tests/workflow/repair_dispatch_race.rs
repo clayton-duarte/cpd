@@ -203,6 +203,8 @@ fn repair_marker_cleared_on_every_exit() {
         "cleared on success"
     );
 
+    drop(fx);
+
     // `gate_failed`.
     let fx = self::fx();
     let _ = fx.watch_gate(Reply::exit(1, "", "nope"));
@@ -212,6 +214,8 @@ fn repair_marker_cleared_on_every_exit() {
         Ok(None),
         "cleared on gate_failed"
     );
+
+    drop(fx);
 
     // The conflict stop, then `--abort`.
     let fx = rebase_fx("deploy");
