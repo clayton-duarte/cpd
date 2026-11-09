@@ -42,7 +42,7 @@ const LIVE: &str =
 pub(super) fn run(engine: &mut Engine) {
     sweep_detached(engine);
     if incident_holds(engine, Step::E9) {
-        engine.log.line("E9: holding: incident mode is on");
+        engine.log.line("curation: holding: incident mode is on");
         return;
     }
     let contexts = engine.store.read(|conn| {
@@ -134,7 +134,7 @@ fn start_if_due(
     });
     let pid = spawn(engine, context, batch)?;
     engine.distill_started.insert(context.clone(), (key, batch));
-    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
+    engine.log.line(&format!("curation: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
     Ok(())
 }
 

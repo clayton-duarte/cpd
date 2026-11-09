@@ -60,7 +60,7 @@ pub(super) fn run(engine: &mut Engine) {
     if archived > 0 {
         engine
             .log
-            .line(&format!("E14: archived {archived} Plan(s)"));
+            .line(&format!("archive-asleep: archived {archived} Plan(s)"));
     }
 }
 
@@ -72,7 +72,7 @@ fn stop_hosts(engine: &mut Engine, plan: &PlanId) {
     }) {
         Ok(ids) => ids.iter().filter_map(|id| SessionId::parse(id).ok()).collect(),
         Err(e) => {
-            engine.log.line(&format!("E14: cannot read the durable Leads of Plan {plan}: {}", e.message()));
+            engine.log.line(&format!("archive-asleep: cannot read the durable Leads of Plan {plan}: {}", e.message()));
             return;
         }
     };

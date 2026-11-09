@@ -170,7 +170,7 @@ This is the reachability rule: an answer or a refusal clears an outage, and only
 
 ### 4.3 The outage report (the 10-minute rule)
 
-- **When:** each engine tick, E24 ([contract §4.7](../contract.md), [swr.md §12](swr.md)) calls `endpoint::due_report(now)` for every endpoint row. It is true once per outage: when `now - failing_since >= 10 minutes` and `reported_at` is NULL. A true answer sets `reported_at`.
+- **When:** each engine tick, `swr` ([contract §4.7](../contract.md), [swr.md §12](swr.md)) calls `endpoint::due_report(now)` for every endpoint row. It is true once per outage: when `now - failing_since >= 10 minutes` and `reported_at` is NULL. A true answer sets `reported_at`.
 - **Why the engine and not the caller:** a failing endpoint may get no further call, so no caller would see the 10 minutes pass. The tick does.
 - **What it writes:** one `error` Event, through `engine/src/watch/report.rs` (A3: the existing kind; no new kind, `PROTOCOL` unchanged). Its fields:
 
@@ -196,9 +196,9 @@ Every endpoint row of `swr_endpoints`, its system, its owner and its outage code
 
 | Endpoint | System | Owner | Calls today | Error codes today | Outage `error` code |
 |---|---|---|---|---|---|
-| `github` | `github` | the github Workflow | `gh` through E5 (`engine/src/watch/pr.rs`, `poll_with`) and the `pr` commands | `gh_failed`, `gh_rate_limited` | the github Workflow decides; `run/pr-poll-failing.json` stays until its cutover ([swr.md §15](swr.md)) |
-| `slack` | `slack` | the slack Workflow | `pi/lib/slack-channel.ts` (E11, `engine/src/watch/team.rs`); `pi/lib/slack-react.ts` (E17, `engine/src/watch/react.rs`) | `slack_*` | the slack Workflow decides |
-| `jira` | `jira` | the jira Workflow | `pi/lib/jira-transition.ts` (E19, `engine/src/watch/jira.rs`, `fail_row`) | `jira_*` | the jira Workflow decides |
+| `github` | `github` | the github Workflow | `gh` through `pr-poll` (`engine/src/watch/pr.rs`, `poll_with`) and the `pr` commands | `gh_failed`, `gh_rate_limited` | the github Workflow decides; `run/pr-poll-failing.json` stays until its cutover ([swr.md §15](swr.md)) |
+| `slack` | `slack` | the slack Workflow | `pi/lib/slack-channel.ts` (`team-review`, `engine/src/watch/team.rs`); `pi/lib/slack-react.ts` (`merge-reaction`, `engine/src/watch/react.rs`) | `slack_*` | the slack Workflow decides |
+| `jira` | `jira` | the jira Workflow | `pi/lib/jira-transition.ts` (`jira-transitions`, `engine/src/watch/jira.rs`, `fail_row`) | `jira_*` | the jira Workflow decides |
 | `ollama.lab` | `classifier` | this page | `classify.ts` (`PiClassifier`); the badge; the question guard | `classifier_unreachable`, `classifier_refused`, `classifier_bad_reply` | `classifier_unreachable` |
 | `bifrost` | `classifier` | this page | `judge.ts` (`BifrostJudge`); `embed.ts` (`BifrostEmbedding`) | `judge_unreachable`, `judge_refused`, `judge_bad_reply`, `embedding_unreachable`, `embedding_refused`, `embedding_bad_reply` | `bifrost_unreachable` (new) |
 
