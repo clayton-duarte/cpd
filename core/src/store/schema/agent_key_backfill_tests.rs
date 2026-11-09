@@ -243,7 +243,6 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261108T0900-bug-protocol-breach",
         ]
     );
-
 }
 
 #[test]
