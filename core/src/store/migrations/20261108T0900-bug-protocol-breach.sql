@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 125
+-- cpd-migration: breaking after 127
 -- The Inbox kind `bug` (the owner's wake and the User's breach indicator, contract §2.2 "Inbox item",
 -- "Bug record"; air-d104, air-d105, air-n120) and the Event kind `bug-breach` (contract §5.2, §3.7 E25).
 -- `inbox_items` is rebuilt with `bug` in its kind check, as `pr-closed-kind` rebuilt it, from the shape
