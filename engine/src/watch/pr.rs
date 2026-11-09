@@ -118,7 +118,7 @@ pub(super) fn discard(engine: &mut Engine) {
     }
 }
 
-fn apply(engine: &mut Engine, finished: Finished) {
+pub(super) fn apply(engine: &mut Engine, finished: Finished) {
     let out = match finished.result {
         // A busy store is not a failure (contract §3.7): the poll did not happen, so it is not counted as one; it runs again at the next tick.
         Err(failure) if is_store_busy(&failure) => {

@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::pr::poll_with;
+use super::poll_run::Finished;
+use super::pr::{apply, due, finish, poll_with, start};
+use super::testkit::Fx;
 use super::report::Failure;
 use cpd_core::clock::ManualClock;
 use cpd_core::host::runner::{FakeRunner, Reply};
@@ -121,4 +123,70 @@ fn poll_with_maps_a_scripted_timeout_to_tool_timeout() {
     assert_eq!(failure.details["argv"], json!([EXE, "pr", "poll"]));
     assert_eq!(failure.details["deadline_seconds"], 120);
     assert_eq!(clock.elapsed(), Duration::from_secs(120));
+}
+
+// ---- E5's minimum spacing, coalescing and the poll's measure (gh-budget-and-swr; contract §3.7 E5) -------------------
+
+/// An engine on fakes (no real `gh`, `cpd`, git or tmux), `pr_poll_seconds` = 30 so the spacing is `max(5, 30 / 3)` = 10 s,
+/// whose last poll ended now.
+fn spaced() -> (Fx, std::time::Instant) {
+    let mut fx = Fx::new("[watch]\npr_poll_seconds = 30\n");
+    let fakes = cpd_core::ports::Fakes::new();
+    fakes.spawn.set_self_exe(EXE);
+    let _ = (*fakes.runner).clone().on(
+        "cpd",
+        |_| true,
+        Reply::ok(&printed_ok()),
+    );
+    fx.engine.ports = fakes.ports.clone();
+    let ended = fx.engine.ports.clock.now();
+    fx.engine.last_poll_end = Some(ended);
+    (fx, ended)
+}
+
+#[test]
+fn poll_now_within_min_spacing_waits_for_spacing() {
+    let (fx, ended) = spaced();
+    cpd_core::pr::request_poll_now_in(&fx.engine.home);
+    assert_eq!(
+        due(&fx.engine, ended),
+        Some(ended + Duration::from_secs(10)),
+        "a request moves the poll no sooner than max(5 s, pr_poll_seconds / 3) after the last poll ended"
+    );
+}
+
+#[test]
+fn burst_of_poll_now_requests_costs_one_poll() {
+    let (mut fx, ended) = spaced();
+    for _ in 0..5 {
+        cpd_core::pr::request_poll_now_in(&fx.engine.home);
+    }
+    // Inside the spacing no poll starts, and the one flag is kept for the poll that will serve the whole burst.
+    start(&mut fx.engine);
+    let started_early = fx.engine.poll.is_some();
+    finish(&mut fx.engine);
+    assert!(!started_early, "no poll starts inside the minimum spacing");
+    assert!(
+        fx.engine.home.run_dir().join(cpd_core::pr::POLL_NOW).exists(),
+        "the request waits for the spacing"
+    );
+    assert_eq!(due(&fx.engine, ended), Some(ended + Duration::from_secs(10)));
+}
+
+#[test]
+fn poll_logs_cost_remaining_and_calls_by_kind() {
+    let (mut fx, ended) = spaced();
+    let out = json!({
+        "ok": true, "polled": 3, "changed": [], "base_changed": [], "feedback": [], "merged": [], "done": [],
+        "rate_limit": {"cost": 7, "remaining": 4900, "reset_at": "2030-01-01T00:00:00.000Z"},
+        "calls": {"search": 1, "absent": 2, "comments": 3, "checks": 4, "deploys": 5},
+    });
+    apply(&mut fx.engine, Finished { result: Ok(out), ended });
+    let log = std::fs::read_to_string(fx.engine.home.watch_log()).unwrap();
+    assert!(
+        log.contains(
+            "E5: polled 3 pull request(s): 0 changed, 0 feedback, 0 merged, 0 plan(s) done; cost 7, remaining 4900, search 1, absent 2, comments 3, checks 4, deploys 5"
+        ),
+        "a poll that changed nothing still writes its measure line: {log}"
+    );
 }
