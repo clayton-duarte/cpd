@@ -92,13 +92,14 @@ Notes on the shape:
 - **`labels`, `autoMergeRequest`, `latestReviews` and `reviewThreads` are light** here, though the spec's list put them elsewhere. Reason: `labels` and `autoMergeRequest` are header scalars that the readers need on every pass; `latestReviews` (pro-d453: it replaces `latestOpinionatedReviews`, and adds `commit { oid }`) is what the human-approval rule of contract §7.6 step 2 (pro-d158) reads, so `review_decision` cannot be computed without it on every pass, and it gives every polled pull request its reviewers' state and reviewed commit without a heavy read. The pass stores the `latestReviews` nodes, the label names and the author's login in `pull_requests.reviews_json`, `labels_json` and `author_login` (migration `pr-light-cache`); `reviewThreads(first: 100){ id isResolved }` is what the pro-d387 resolution check reads (contract §7.6 step 3a), and a thread resolved on GitHub moves no `updatedAt`, so without it on every pass a resolution would be invisible. The last one is selected only for pull requests a Plan owns (the builder knows them from `workflows`).
 - **`comments(first: 50)` is heavy, and `reviewThreads` is `first: 100` in both fragments (pro-d457): `Light` and `Heavy` read the same 100 threads.** The `first` counts are this page's choice. Reason: they bound one pull request's node count; a thread or comment beyond them is not read in that pass. Unverified: that 50 comments and 100 threads cover the feedback of a real pull request. The first pass that finds a truncation (`pageInfo` absent from these lists, so the builder reads `totalCount` on the same selection) must report it as an open item.
 - The check contexts (`... on CheckRun`, `... on StatusContext`) replace `gh run list --commit` and the `gh pr view --json statusCheckRollup` of `pr view`. `checkSuite.workflowRun.databaseId` is the id `pr rerun` needs (§9, `rerun`).
-- Repository metadata (`m<i>`) is fetched only for a repository missing from `swr_repos` or whose `fetched_at` is older than 24 h.
+- Repository metadata (`m<i>`) is fetched only for a repository missing from `swr_repos` or whose `fetched_at` is older than 24 h, and never for a tombstoned one (§4.3).
+- **`PeerLight` (gh-budget-and-swr, pro-d474 (a), narrowed by pro-d477).** The `reviews` search (`review-requested:@me`) selects `PeerLight` for its nodes: `Light` without `mergeable`, `mergeStateStatus`, `autoMergeRequest` and `reviewThreads`. Only the User's authored or Plan-owned pull requests use those fields, so a peer's review request does not carry them; pro-d477 records the cost: the search went from about 9.0 s to about 3.5 s. A pull request that the `authored` search also lists keeps the `authored` alias's values. **Open** (§14): a Plan-owned pull request that only the `reviews` search lists then has no `reviewThreads`.
 
 ### 3.2 Which selections a pass sends
 
 | Selection | Sent for |
 |---|---|
-| `Light` | every pull request in the document |
+| `Light` | every pull request in the document, except a node of the `reviews` search, which takes `PeerLight` (§3.1) |
 | the `reviewThreads(first: 100)` part of `Light` | every pull request a Plan owns (a `workflows` row points to it) |
 | `Heavy` | a pull request whose `updatedAt` differs from `swr_pr_detail.updated_at`, whose `headRefOid` differs from `swr_pr_detail.head_oid`, or that has no `swr_pr_detail` row |
 | `viewerDidAuthor`, `viewerLatestReviewRequest` | an absent-pull-request alias (§4.2), which needs them to decide `authored` and `review_requested` |
@@ -108,7 +109,7 @@ The `Heavy` fragment is sent only when the poll has heavy pull requests (a non-e
 
 The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydrated_at`" test of the spec: a row whose `updated_at` or `head_oid` differs from what the last hydrate stored is re-read, and a successful hydrate sets `hydrated_at`. A pull request whose detail did not move, costs no heavy fields.
 
-**Cap (assumption, unverified).** The builder sends at most 25 `Heavy` selections in one document; the rest wait a pass, oldest `hydrated_at` first. The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess.
+**Cap (gh-budget-and-swr, pro-d477).** The builder sends at most `HEAVY_CAP` = 5 `Heavy` selections in one document; the rest wait a pass. Among the candidates the User's authored or Plan-owned pull requests come first (pro-d474 (b)), then the oldest `hydrated_at`. The reason is GitHub's 10 s execution limit for one call, which a document with many `Heavy` selections exceeds (pro-d477). **Superseded:** the cap of 25 that this paragraph first set, and the node-limit reasoning behind it. The code still has 25 until the Job that implements this lands (§14). The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess.
 
 ### 3.3 Paging inside the document
 
@@ -163,6 +164,12 @@ The document carries one alias `p<i>` per **candidate**. A candidate is a stored
 - **(c) review requested:** `review_requested` is 1 and the previous pass's `reviews` search did not list it;
 - **(d) Slack-posted (pro-d453):** an active row of `swr_slack_posts` (the team review channel; `repo` and `number` set, inside the 7-day window) points to it, and it has no row in `pull_requests` yet (first seen) **or** its row is `open` and not archived. A teammate's pull request posted without a review request is neither authored nor requested, so without this it would be read once and then go stale; it is read every pass until it merges or closes. It is an alias at most once per document, and not when it is in the `Heavy` set.
 
+**Caps and order (gh-budget-and-swr, pro-d474 (b), pro-d477).** A document carries at most `ABSENT_CAP` = 10 absent aliases, the four kinds together. The authored or Plan-owned candidates come first, then the oldest; the rest wait a pass. The caps are per kind: a pass carries at most `HEAVY_CAP` (5) heavy selections and `ABSENT_CAP` (10) absent aliases, so 15 aliases beyond the two searches and the viewer. The single total of 10 that pro-d474 set for heavy and absent together is **superseded** by these two caps. The code still has no `ABSENT_CAP` until the implementing Job lands (§14).
+
+**Cold LISTED (gh-budget-and-swr, pro-d477).** Rules (a) to (c) read what the previous pass's searches listed, which the engine keeps in memory. That memory is cold after an engine restart, and the cold state must not stop reconciliation: the absent set is computed whether or not the memory is warm. A stored open, unarchived row that the memory does not hold as listed is a candidate, so a row that a restart left stale is read as absent and reconciled, not skipped. The defect was an absent set built only when the memory was present.
+
+**Slack posts (pro-d474 (b)).** When an active `swr_slack_posts` row's pull request reads `MERGED`, `CLOSED` or not found, its `inactive_at` is set to now in the transaction of that read; an inactive row is no candidate under (d).
+
 "The previous pass" is the document the stored rows came from: the rows are built from it, so the candidate rule is decided before the call, which is why this design can send the alias in the same document. A pull request that left the open list between passes is therefore confirmed by the alias of the **next** pass, not the current one.
 
 The rule's effect, and the reason for it:
@@ -177,11 +184,14 @@ An answer of `NOT_FOUND` for an alias (the pull request or repository is gone) i
 
 `swr_repos` is read for a repository of a listed or aliased pull request when the row is missing or `fetched_at` is older than 24 h, through `m<i>` (§3.1). A repository whose `isArchived` reads true sets `archived` 1 on its pull requests in the same transaction, which removes them from the candidates of §4.2.
 
+**A repository that resolves to null (gh-budget-and-swr, pro-d474 (c)).** When the `m<i>` alias of a repository of `plan.meta` answers null (the repository is gone, or access to it is lost), the pass sets `archived` 1 on that repository's `pull_requests` rows in the same transaction, and writes a tombstone: the repository's `swr_repos` row with `inactive_at` set to now. A tombstoned repository is never queried again: the pass plans no `m<i>` for it, and its rows are no candidate (`archived` 1). The defect this rule fixes: the pass skipped such a repository (`continue`) and so queried it on every pass.
+
 ## 5. The clocks of the GitHub keys
 
 - A **Changed** commit of `github:pr:<key>` sets `stale_after` = `now` + 5 s (open) and `fetched_at` = `now`.
 - A **merged or closed** key sets `stale_after` NULL: it is never stale, and it is read again only when a search lists it (it cannot, since the search is `is:open`) or when a tracked open pull request is confirmed (§4.2). A merged row that a later listing reports as not merged changes nothing (contract §7.6 step 5).
 - The in-memory fresh-until instants (swr.md §4) live in the engine. After a restart every key is due once.
+- **The pass's measure** (gh-budget-and-swr; the line of contract §3.7 E5): the pass appends one `watch.log` line with `cost` (its `rateLimit.cost`), `remaining` and the calls of this document by kind: `search` (the two searches), `absent` (the `p<i>` aliases), `heavy` (the `Heavy` selections, which carry the comments and the checks), `meta` (the `m<i>` aliases) and `deploys` (the REST calls of §8). The kinds differ from E5's `search`, `absent`, `comments`, `checks` and `deploys`, because one document carries them together.
 - `rateLimit.remaining` and `resetAt` of each pass are stored as `swr_endpoints.rate_remaining` and `rate_reset_at` (§7.2). `rateLimit.cost` is not stored: the pass writes it to `watch.log`, one line per pass, which is enough to tune the §3.2 cap. Storing it is an open item (§14).
 
 ## 6. The reader: `swr::github::effective_pr`
@@ -363,6 +373,7 @@ These are added to [swr.md §17](swr.md). Each is stated so a later Job can test
 - **G7. The rate floor pauses**: `remaining < 100` pauses until `resetAt`, which corrects swr.md §7 (§7.2).
 - **G8. A write's precondition is read at enqueue and at drain from the settled cache row**, with GitHub enforcing its own (§9). This is a choice: a write that needs a fresher read than the last pass gives is refused by GitHub, not by cpd.
 - **G9. `head_oid` and `gh_updated_at`** are the migration's columns, written by the pass (§2). `pull_requests.updated_at` keeps its meaning.
+- **G10. The gh-budget-and-swr caps and rules** (pro-d474, pro-d477, the User's urgent report): `HEAVY_CAP` = 5 and `ABSENT_CAP` = 10 per document, `PeerLight` for the `reviews` search, the tombstone of a repository that resolves to null, and the cold-LISTED reconciliation (§3.1, §3.2, §4.2, §4.3). They supersede the cap of 25 in G2 and the total cap of pro-d474 (§3.2, §4.2).
 
 ## 14. Open items
 
@@ -377,6 +388,8 @@ Not decided by this page. Each is recorded so no Job guesses it.
 - **`pr view` when no detail is hydrated yet**: the design prints `detail` `null`. Whether the Lead should wait for it is not decided.
 - **`prune/mod.rs:179`** calls `gh` directly (§7.3). It is not an SWR reader; moving it is in this Plan's scope by rule 7, but its owner Job is not named here.
 - **The `triggering_actor.login` of the deploy list** is compared case-insensitively against the viewer's login (§8). Assumption from contract §7.6 step 8; verified only against the live example of 2026-10-27 that the contract cites.
+- **`PeerLight` and Plan-owned pull requests.** A Plan-owned pull request that only the `reviews` search lists has no `reviewThreads` (§3.1). Decide whether its feedback is read by an absent alias (today a listed pull request is no candidate) or by the owned read of contract §7.6 step 3a.
+- **The implementing Job** of the caps (`HEAVY_CAP` 25 to 5, `ABSENT_CAP` 10, `PeerLight`, the tombstone and the cold-LISTED rule, §3.1 to §4.3) and of the measure line (§5). This page is the target; the code is not changed by it.
 
 ## Decision pro-d453 (Light read, Danger freeze)
 
