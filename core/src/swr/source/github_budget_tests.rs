@@ -4,7 +4,6 @@
 //! `gh` is the in-process `World` of `github_tests` (or a handler here); time is virtual; nothing sleeps.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::json;
 
@@ -244,5 +243,4 @@ fn cold_listed_reconciles_stale_open_rows() {
     let q = rig.graphql().remove(0);
     assert_eq!(aliased(&q), vec![1], "the cold pass reads the row as absent: {q}");
     assert_eq!(rig.pr_state(1).as_deref(), Some("merged"));
-    let _ = Duration::ZERO;
 }
