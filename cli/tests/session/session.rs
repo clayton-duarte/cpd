@@ -1983,6 +1983,122 @@ fn session_errors(fx: &Fx) -> Vec<Value> {
         .collect()
 }
 
+/// E2 names the exit status of a dead Lead pane in the engine's log, before it kills the pane's window, so the next early
+/// death says why it died.
+#[test]
+fn e2_logs_the_dead_pane_exit_status_before_it_kills_the_window() {
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    let lead1_pane = fx.cpd(&["session", "open", LEAD1]).ok()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fx.cpd(&["session", "open", LEAD2]).ok();
+    let log = fx.env.cpd_home().join("run/watch.log");
+    // What the log held as each `kill-window` was about to be answered.
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let at_kill = seen.clone();
+    let _ = (*fx.fakes.runner).clone().on(
+        "tmux",
+        move |call| {
+            if call.args.iter().any(|a| a == "kill-window") {
+                let text = fs::read_to_string(&log).unwrap_or_default();
+                at_kill
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(text);
+            }
+            false
+        },
+        Reply::ok(""),
+    );
+    fx.pane_exit(&lead1_pane, 42);
+
+    fx.engine_tick();
+    let seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
+    assert!(!seen.is_empty(), "E2 never called kill-window");
+    let logged = |text: &String| {
+        text.lines()
+            .any(|l| l.contains(LEAD1) && l.contains("42") && !l.contains("killed the window"))
+    };
+    assert!(
+        seen.iter().all(logged),
+        "the log had no line with {LEAD1} and the exit status 42 before kill-window: {seen:?}"
+    );
+}
+
+/// What `new-window` or `respawn` was given as the program: the engine's own executable, never a `cpd` found on PATH.
+#[test]
+fn lead_spawn_runs_the_engines_own_exe_not_bare_cpd() {
+    const EXE: &str = "/opt/cpd-self/bin/cpd";
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    fx.fakes.spawn.set_self_exe(EXE);
+    fx.env
+        .sql("UPDATE sessions SET state = 'stopped' WHERE id = 'lead1'");
+
+    // `session send` starts a Lead that has no pane.
+    fx.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"])
+        .ok();
+    let started: Vec<PaneRow> = panes(&fx)
+        .into_iter()
+        .filter(|p| p.session == LEAD1)
+        .collect();
+    assert_eq!(started.len(), 1, "{started:?}");
+    let argv = pane_argv(&fx, &started[0].pane);
+    assert_eq!(argv[0], EXE, "session send started {argv:?}");
+
+    // E2 restarts the Lead whose pane died.
+    fx.pane_exit(&started[0].pane, 1);
+    fx.engine_tick();
+    let restarted: Vec<PaneRow> = panes(&fx)
+        .into_iter()
+        .filter(|p| p.session == LEAD1)
+        .collect();
+    assert_eq!(restarted.len(), 1, "{restarted:?}");
+    assert_ne!(restarted[0].pane, started[0].pane, "a new pane");
+    let argv = pane_argv(&fx, &restarted[0].pane);
+    assert_eq!(argv[0], EXE, "E2 restarted with {argv:?}");
+}
+
+/// `lead1` is `stopped` with no pane: `session send` starts it.
+fn stop_lead1(fx: &Fx) {
+    fx.env
+        .sql("UPDATE sessions SET state = 'stopped' WHERE id = 'lead1'");
+}
+
+/// `start_parked` marks the pane with `@cpd_session` before the store records `tmux_pane`, so the pane's `session run`
+/// (`check_pane`, 5 s) never sees a pane without the mark; when the mark fails the row has no pane.
+#[test]
+fn start_parked_sets_cpd_session_before_it_records_the_pane() {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    stop_lead1(&fx);
+    let signals = GoSignals::record(&fx);
+    fx.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"])
+        .ok();
+    let (pane, recorded) = signals.pane_and_store(LEAD1);
+    assert_eq!(
+        recorded,
+        Value::Null,
+        "pane {pane} got @cpd_session {LEAD1} after the store recorded it: {recorded}"
+    );
+
+    // A refused mark: no pane in the row.
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    stop_lead1(&fx);
+    tmux_refusing_the_session_mark(&fx);
+    let _ = fx.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"]);
+    assert_eq!(
+        show(&fx, LEAD1)["tmux_pane"],
+        Value::Null,
+        "the row records a pane that never got @cpd_session"
+    );
+}
+
 /// `lead1` (idle) parked in `park-pay` and `lead2` (made `working`) parked in `park-other`, the chat slot the placeholder.
 fn two_parked_leads(fx: &Fx) -> (String, String) {
     dying_leads(fx);
