@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -438,6 +438,20 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         .collect())
 }
 
+/// The trip text of the newest `loop-guard-trip` Event of `session`, or `None` when it has none.
+fn newest_trip_text(conn: &Connection, session: &SessionId) -> Result<Option<String>, CpdError> {
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT json_extract(data, '$.kind'), json_extract(data, '$.count') FROM events
+             WHERE kind = 'loop-guard-trip' AND session = ?1 ORDER BY id DESC LIMIT 1",
+            [session.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    row.map(|(kind, count)| crate::session::loop_guard_trip_text(&kind, count.unsigned_abs()))
+        .transpose()
+}
+
 /// `loop-guard` (hs-d552, hs-d571): a Lead, fork or Manager is `blocked` with the loop guard's label. Always red, in every
 /// phase. The label counts the turn that tripped the breaker, `loop_guard_turns + 1`.
 fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition>, CpdError> {
@@ -445,14 +459,14 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
     Ok(seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
-            let label = format!(
-                "{}: loop guard, {} turns in 10 min",
-                seat.who,
-                loop_guard_turns + 1
-            );
-            seat_condition(seat, Kind::LoopGuard, Urgency::Red, label)
+            // The text comes from the newest `loop-guard-trip` Event of the Session (contract §6.16 "The trip's cause
+            // and its report"); a trip before that Event existed has none, and reads as an `inter-turn` one.
+            let trip = newest_trip_text(conn, &seat.session)?
+                .unwrap_or_else(|| format!("loop guard, {} turns in 10 min", loop_guard_turns + 1));
+            let label = format!("{}: {trip}", seat.who);
+            Ok(seat_condition(seat, Kind::LoopGuard, Urgency::Red, label))
         })
-        .collect())
+        .collect::<Result<Vec<_>, CpdError>>()?)
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its

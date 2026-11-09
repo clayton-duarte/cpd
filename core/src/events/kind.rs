@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 25;
+pub const PROTOCOL: u32 = 26;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -152,6 +152,7 @@ kinds! {
     IncidentPlans = "incident-plans",
     IncidentEnded = "incident-ended",
     Guard = "guard",
+    LoopGuardTrip = "loop-guard-trip",
 }
 
 impl Kind {
@@ -370,6 +371,7 @@ impl Kind {
                 &["code", "role", "tier", "model", "tool", "excerpt"],
                 &[],
             ),
+            LoopGuardTrip => spec([Y, M, N, N, Y], &["kind", "count"], &[]),
         }
     }
 }
@@ -416,10 +418,10 @@ mod tests {
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
     /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`),
     /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase) and 24 (`session-message`'s optional `data.origin`,
-    /// Plan ui-origin) and 25 (the `guard` Event kind, Plan `agent-refusals`).
+    /// Plan ui-origin) and 25 (the `guard` Event kind, Plan `agent-refusals`) and 26 (the `loop-guard-trip` Event kind).
     #[test]
-    fn the_protocol_is_25_with_the_guard_kind() {
-        assert_eq!(PROTOCOL, 25);
+    fn the_protocol_is_26_with_the_loop_guard_trip_kind() {
+        assert_eq!(PROTOCOL, 26);
     }
 
     #[test]

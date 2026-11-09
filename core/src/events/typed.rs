@@ -911,6 +911,30 @@ impl NewEvent {
         )
     }
 
+    /// `loop-guard-trip` (contract §5.2, §6.16 "The trip's cause and its report"): a loop-guard breaker tripped.
+    /// `kind` is `inter-turn`, `read-streak`, `turn-tools` or `turn-refusals`; `count` is the figure the trip text
+    /// names. Any other `kind` is refused with `usage`.
+    pub fn loop_guard_trip(
+        text: impl Into<String>,
+        kind: &str,
+        count: u64,
+    ) -> Result<NewEvent, CpdError> {
+        if !matches!(
+            kind,
+            "inter-turn" | "read-streak" | "turn-tools" | "turn-refusals"
+        ) {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("A loop-guard trip kind is inter-turn, read-streak, turn-tools or turn-refusals, not {kind:?}."),
+            ));
+        }
+        Ok(make(
+            Kind::LoopGuardTrip,
+            text,
+            json!({"kind": kind, "count": count}),
+        ))
+    }
+
     /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
     /// the incident; `until_workflow` (the `<plan>/<key>` auto-end Workflow) is in `data` only when set.
     pub fn incident_started(
@@ -1123,6 +1147,7 @@ mod tests {
             ],
             Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s, s)],
             Kind::Guard => vec![NewEvent::guard(T, s, s, s, s, s, s)],
+            Kind::LoopGuardTrip => vec![NewEvent::loop_guard_trip(T, "inter-turn", 21).unwrap()],
         }
     }
 

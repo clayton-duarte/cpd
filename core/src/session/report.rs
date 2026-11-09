@@ -92,6 +92,40 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
     } = args;
     let mut details = details.map_or_else(Map::new, |d| d.0);
 
+    // A loop-guard trip (contract §6.16 "The trip's cause and its report"): one `loop-guard-trip` Event, and for a
+    // Lead the Context Manager's wake, in one transaction. A failure writes neither.
+    if code.0 == "loop_guard_trip" {
+        let kind = string_field(&details, "kind");
+        let count = details.get("count").and_then(Value::as_u64).ok_or_else(|| {
+            usage("A loop_guard_trip report carries details.count, a number.".to_owned())
+        })?;
+        let trip_text = loop_guard_trip_text(&kind, count)?;
+        let event = env.store.write("session report", |tx| {
+            let session = row::load(tx, &id)?;
+            let text = format!("Loop guard of Session {} tripped: {trip_text}.", session.id);
+            let trip = NewEvent::loop_guard_trip(text, &kind, count)?
+                .context(session.context.clone())
+                .session(session.id.clone());
+            let trip = match session.plan.clone() {
+                Some(plan) => trip.plan(plan),
+                None => trip,
+            };
+            let event = append(tx, trip)?;
+            if session.role.as_str() == "lead"
+                && let Some(manager) = live_manager(tx, session.context.as_str(), session.id.as_str())?
+            {
+                let wake = format!(
+                    "Session {0} tripped: {trip_text}. It waits for the User's message or for cpd session resume {0}.",
+                    session.id
+                );
+                let message = NewEvent::session_message(wake.clone(), None::<String>, &wake, true, None)?;
+                append(tx, message.session(crate::ids::SessionId::parse(&manager)?))?;
+            }
+            Ok(event)
+        })?;
+        return Ok(Output::success(json!({"event": event})));
+    }
+
     // A refusal report carries the refusal rule in `details.guard`, with the refused call in
     // `details.{tool, excerpt}` (contract §5.2, Plan `agent-refusals`): the adapter's guard refusal, or an
     // agent-caused CLI refusal whose `guard` is the envelope's `code`. The Event is a `guard` Event.
@@ -150,6 +184,39 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         repeat::append_once(tx, window, &same, event)
     })?;
     Ok(Output::success(json!({"event": event})))
+}
+
+/// The trip text of a loop-guard kind and count (contract §6.16 table).
+pub(crate) fn loop_guard_trip_text(kind: &str, count: u64) -> Result<String, CpdError> {
+    Ok(match kind {
+        "inter-turn" => format!("loop guard, {count} turns in 10 min"),
+        "read-streak" => {
+            format!("loop guard, more than {count} consecutive read-only calls in one turn")
+        }
+        "turn-tools" => format!("loop guard, more than {count} read-only calls in one turn"),
+        "turn-refusals" => format!("loop guard, {count} refused calls in one turn"),
+        other => {
+            return Err(usage(format!(
+                "A loop-guard trip kind is inter-turn, read-streak, turn-tools or turn-refusals, not {other:?}."
+            )));
+        }
+    })
+}
+
+/// The id of `context`'s live Manager (role `manager`, not archived) that is not `lead`, the first created.
+fn live_manager(
+    tx: &WriteTxn<'_>,
+    context: &str,
+    lead: &str,
+) -> Result<Option<String>, CpdError> {
+    Ok(tx
+        .query_row(
+            "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1 AND id <> ?2
+             ORDER BY created_at, id LIMIT 1",
+            params![context, lead],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// A string field of the report's `details`, or `""` when it is absent or not a string.

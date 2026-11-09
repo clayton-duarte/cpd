@@ -286,3 +286,102 @@ fn a_report_repeated_for_the_session_after_the_window_appends_again() {
     report(&fx, "lead1", "boom", "m");
     assert_eq!(errors(&fx).len(), 2, "older than the window appends again");
 }
+
+fn add_manager(fx: &Fx) {
+    fx.env
+        .store()
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
+                 VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'Manager', '/', 'O3', 'idle', 't5', 't5', NULL);",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn trip(fx: &Fx, session: &str, kind: &str, count: u64) {
+    fx.cpd(&[
+        "session",
+        "report",
+        "--what",
+        "loop guard",
+        "--code",
+        "loop_guard_trip",
+        "--message",
+        "unused",
+        "--details",
+        &json!({"kind": kind, "count": count}).to_string(),
+        "--session",
+        session,
+    ])
+    .ok();
+}
+
+fn of_kind(fx: &Fx, kind: &str) -> Vec<Value> {
+    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_lead_trip_appends_the_trip_event_and_wakes_the_manager_in_one_transaction() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    add_manager(&fx);
+    trip(&fx, "lead1", "turn-refusals", 3);
+    let trips = of_kind(&fx, "loop-guard-trip");
+    assert_eq!(trips.len(), 1, "{trips:?}");
+    assert_eq!(trips[0]["data"], json!({"kind": "turn-refusals", "count": 3}));
+    assert_eq!(trips[0]["session"], "lead1");
+    assert_eq!(
+        trips[0]["text"],
+        "Loop guard of Session lead1 tripped: loop guard, 3 refused calls in one turn."
+    );
+    let wakes = of_kind(&fx, "session-message");
+    assert_eq!(wakes.len(), 1, "{wakes:?}");
+    assert_eq!(wakes[0]["session"], "mgr1");
+    assert_eq!(wakes[0]["data"]["from"], Value::Null);
+    assert_eq!(wakes[0]["data"]["wake"], true);
+    assert_eq!(
+        wakes[0]["data"]["text"],
+        "Session lead1 tripped: loop guard, 3 refused calls in one turn. It waits for the User's message or for cpd session resume lead1."
+    );
+}
+
+#[test]
+fn a_trip_with_no_live_manager_or_a_manager_trip_writes_no_wake() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    trip(&fx, "lead1", "inter-turn", 21);
+    add_manager(&fx);
+    trip(&fx, "mgr1", "inter-turn", 21);
+    assert_eq!(of_kind(&fx, "loop-guard-trip").len(), 2);
+    assert!(of_kind(&fx, "session-message").is_empty());
+}
+
+#[test]
+fn a_trip_report_with_an_unknown_kind_is_refused_and_writes_nothing() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    refused(
+        &fx.cpd(&[
+            "session",
+            "report",
+            "--what",
+            "loop guard",
+            "--code",
+            "loop_guard_trip",
+            "--message",
+            "m",
+            "--details",
+            "{\"kind\":\"bogus\",\"count\":1}",
+            "--session",
+            "lead1",
+        ]),
+        "usage",
+        2,
+    );
+    assert!(of_kind(&fx, "loop-guard-trip").is_empty());
+}

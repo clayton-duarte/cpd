@@ -535,6 +535,29 @@ fn e8_opens_a_red_loop_guard_item_for_a_blocked_lead_with_the_label() {
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
 }
 
+/// The item's text is the newest `loop-guard-trip` Event's (its kind and count), never recomputed from `loop_guard_turns`.
+#[test]
+fn e8_loop_guard_item_text_comes_from_the_newest_trip_event() {
+    let mut fx = guard_fx("dispatch", "");
+    for (at, kind, count) in [("2026-01-01T00:00:01Z", "inter-turn", 21), ("2026-01-01T00:00:02Z", "turn-refusals", 3)] {
+        fx.fixture(&format!(
+            "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+             VALUES (cpd_txn(), '{at}', 'loop-guard-trip', 'ctx', 'pay', 'lead1', 't', '{{\"kind\":\"{kind}\",\"count\":{count}}}');"
+        ));
+    }
+    guard(&mut fx, "lead1");
+    tick(&mut fx);
+    assert_eq!(
+        open_sessions(&mut fx),
+        [(
+            "loop-guard".into(),
+            "red".into(),
+            Some("lead1".into()),
+            "pay: loop guard, 3 refused calls in one turn".into()
+        )]
+    );
+}
+
 /// The item is red in `grounding` and in `dispatch` (a dialog is magenta in `grounding`), and is never a dialog.
 #[test]
 fn e8_loop_guard_item_is_red_in_every_phase_and_is_no_dialog() {

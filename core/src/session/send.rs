@@ -280,6 +280,26 @@ pub(crate) fn deliver_with_origin(
     Ok((event, target.id, pane))
 }
 
+/// Contract §6.16 "The WebUI token": `presented` against the content of `$CPD_HOME/run/webui-token`, read now and
+/// compared in constant time. No file, no token or no match is `webui_token_invalid` (the token is never echoed).
+fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError> {
+    let invalid = || {
+        CpdError::new(
+            ErrorCode::WebuiTokenInvalid,
+            "A message with --origin webui needs --webui-token, the content of run/webui-token.",
+        )
+    };
+    let presented = presented.ok_or_else(invalid)?.as_bytes();
+    let actual = std::fs::read(env.home.run_dir().join("webui-token")).map_err(|_| invalid())?;
+    let same = presented.len() == actual.len()
+        && presented
+            .iter()
+            .zip(&actual)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0;
+    if same && !actual.is_empty() { Ok(()) } else { Err(invalid()) }
+}
+
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
@@ -290,6 +310,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     };
     let from = sender()?;
     let mut env = Env::open()?;
+    if args.origin.as_deref() == Some("webui") {
+        verify_webui_token(&env, args.webui_token.as_deref())?;
+    }
     let id = env.resolve(&args.id)?;
     let (event, target, pane) = deliver_with_origin(
         &mut env,

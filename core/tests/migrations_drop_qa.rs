@@ -28,9 +28,13 @@ fn raw(home: &CpdHome) -> Connection {
 /// The migrations that sort after `MIGRATION` (`rewind` removes every one of them from the list), with the table each
 /// one changes and the statement that undoes its schema change (all are additive but `jira-swr`, which dropped
 /// `jira_transitions`: its undo recreates the table empty, so the migration can run again). `guard-event` changes no
-/// schema: its undo deletes the one `event_kinds` row it inserted, so the migration can run again.
+/// schema: its undo deletes the one `event_kinds` row it inserted, so the migration can run again; so does `loop-guard-trip`'s.
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
+    (
+        "event_kinds",
+        "DELETE FROM event_kinds WHERE name = 'loop-guard-trip'",
+    ),
     (
         "event_kinds",
         "DELETE FROM event_kinds WHERE name = 'guard'",

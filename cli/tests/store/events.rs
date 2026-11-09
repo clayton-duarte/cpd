@@ -555,6 +555,7 @@ const SPEC: &[SpecRow] = &[
         &["code", "role", "tier", "model", "tool", "excerpt"],
         &[],
     ),
+    ("loop-guard-trip", "cs", "p", &["kind", "count"], &[]),
 ];
 
 fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {

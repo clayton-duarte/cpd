@@ -791,6 +791,7 @@ fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_
 fn session_send_origin_flag_sets_event_data() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
+    write_token(&fx, "t".repeat(64).as_str());
     fx.cpd(&[
         "session",
         "send",
@@ -800,6 +801,8 @@ fn session_send_origin_flag_sets_event_data() {
         "u",
         "--origin",
         "webui",
+        "--webui-token",
+        &"t".repeat(64),
     ])
     .ok();
     fx.cpd(&[
@@ -851,4 +854,33 @@ fn session_send_refuses_invalid_origin() {
         2,
     );
     assert!(messages(&fx).is_empty(), "a refused send writes no Event");
+}
+
+fn write_token(fx: &Fx, token: &str) {
+    let run = fx.env.cpd_home().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("webui-token"), token).unwrap();
+}
+
+#[test]
+fn session_send_origin_webui_needs_the_current_token_and_writes_nothing_otherwise() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    let send = |extra: &[&str]| {
+        let mut argv = vec!["session", "send", "lead1", "hi", "--unblocks", "u", "--origin", "webui"];
+        argv.extend_from_slice(extra);
+        fx.cpd(&argv)
+    };
+    // No token file: even a presented token is refused.
+    refused(&send(&["--webui-token", "abc"]), "webui_token_invalid", 3);
+    write_token(&fx, &"t".repeat(64));
+    refused(&send(&[]), "webui_token_invalid", 3);
+    let wrong = "w".repeat(64);
+    let error = refused(&send(&["--webui-token", &wrong]), "webui_token_invalid", 3);
+    assert!(!error.to_string().contains(&wrong), "the token is never echoed: {error}");
+    assert!(messages(&fx).is_empty(), "a refused send writes no Event");
+    // `tui` needs no token.
+    fx.cpd(&["session", "send", "lead1", "hi", "--unblocks", "u", "--origin", "tui"])
+        .ok();
+    assert_eq!(messages(&fx).len(), 1);
 }
