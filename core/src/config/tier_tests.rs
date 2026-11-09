@@ -77,6 +77,31 @@ fn letter_rank_puts_j_below_g() {
     assert_eq!(sorted, ["J0", "J1", "JX", "G0", "GX"]);
 }
 
+/// R1: within a letter 0 < 1 < X < 2 < 3 < 4, and a letter ranks above every effort of the one before.
+#[test]
+fn tier_x_orders_between_effort_1_and_2() {
+    let t = |s: &str| Tier::parse(s).unwrap();
+    for letter in ["G", "H", "S", "O"] {
+        let (e0, x, e1) = (
+            t(&format!("{letter}0")),
+            t(&format!("{letter}X")),
+            t(&format!("{letter}1")),
+        );
+        assert!(e0 < e1, "{e0} < {e1}");
+        assert!(e1 < x, "{e1} < {x}");
+        assert!(x < t(&format!("{letter}2")));
+        assert!(x < t(&format!("{letter}4")));
+    }
+    assert!(t("G4") < t("HX"), "X sits below the next letter");
+    assert!(t("H4") < t("SX"));
+    assert!(t("S4") < t("OX"));
+    assert!(t("GX") > t("G0") && t("HX") > t("H0"));
+    let mut tiers: Vec<Tier> = ["G1", "GX", "G0", "H2", "HX", "H0"].map(t).to_vec();
+    tiers.sort();
+    let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
+    assert_eq!(sorted, ["G0", "G1", "GX", "H0", "HX", "H2"]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,30 +224,6 @@ mod tests {
                 "{bad}"
             );
         }
-    }
-
-    /// R1: within a letter 0 < 1 < X < 2 < 3 < 4, and a letter ranks above every effort of the one before.
-    #[test]
-    fn tier_x_orders_between_effort_1_and_2() {
-        for letter in ["G", "H", "S", "O"] {
-            let (e0, x, e1) = (
-                t(&format!("{letter}0")),
-                t(&format!("{letter}X")),
-                t(&format!("{letter}1")),
-            );
-            assert!(e0 < e1, "{e0} < {e1}");
-            assert!(e1 < x, "{e1} < {x}");
-            assert!(x < t(&format!("{letter}2")));
-            assert!(x < t(&format!("{letter}4")));
-        }
-        assert!(t("G4") < t("HX"), "X sits below the next letter");
-        assert!(t("H4") < t("SX"));
-        assert!(t("S4") < t("OX"));
-        assert!(t("GX") > t("G0") && t("HX") > t("H0"));
-        let mut tiers: Vec<Tier> = ["G1", "GX", "G0", "H2", "HX", "H0"].map(t).to_vec();
-        tiers.sort();
-        let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
-        assert_eq!(sorted, ["G0", "G1", "GX", "H0", "HX", "H2"]);
     }
 
     /// R3: X sends no effort, so pi's model argument is the bare model, on a model with efforts and on one with none;
