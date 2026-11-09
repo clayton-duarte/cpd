@@ -138,6 +138,8 @@ mod swr_tests;
 mod swr_wake_tests;
 #[cfg(test)]
 mod testkit;
+#[cfg(test)]
+mod tier_refresh_tests;
 mod titles;
 mod wake;
 #[cfg(test)]

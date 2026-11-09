@@ -1068,6 +1068,11 @@ impl Fx {
         );
     }
 
+    /// The engine's log file (`run/watch.log`): what `engine_tick` wrote, whether or not it exists yet.
+    pub fn watch_log_path(&self) -> std::path::PathBuf {
+        self.env.cpd_home().join("run/watch.log")
+    }
+
     /// Whether the fake server has `pane` and its program has ended.
     pub fn pane_dead(&self, pane: &str) -> bool {
         let state = self.tmux_state().expect("a server");
