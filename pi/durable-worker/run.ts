@@ -11,7 +11,7 @@ import { inputOf, type Input } from "./deliver.ts";
 import { codemodeNamespaces } from "../durable-host/codemode.ts";
 import { cpdExtension } from "./extension.ts";
 import { mcpHandler, type McpPort } from "./mcp.ts";
-import { endReport, type EndReport, type Entry } from "./report.ts";
+import { endReport, Repetition, turnIdentity, type EndReport, type Entry } from "./report.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
 export type Conversation = { submit(input: Input): Promise<Submission>; install(extension: Extension): void; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
@@ -84,6 +84,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     );
 
     let pending = 0;
+    const repetition = new Repetition();
     const submit = async (input: Input): Promise<void> => {
       if (over) return;
       pending++;
@@ -93,7 +94,12 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
         .wait()
         .then(async () => {
           pending--;
-          await deps.writeReport(reportPath(config.home, config.plan, config.attempt), endReport(await conversation.entries()));
+          const entries = await conversation.entries();
+          if (repetition.settle(turnIdentity(entries))) {
+            // `cpd ask` blocks until the Lead answers; it must not hold the Session state.
+            deps.cpd(["ask", config.attempt, "The Worker repeated an identical turn three times in a row (same text and tool calls). Please advise."]).catch((e) => failed("the repetition escalation", e));
+          }
+          await deps.writeReport(reportPath(config.home, config.plan, config.attempt), endReport(entries));
           if (pending === 0) reporter.want({ state: "idle" });
         })
         .catch((e) => {
