@@ -69,6 +69,8 @@ mod rerun;
 pub mod review;
 pub mod swr_read;
 #[cfg(test)]
+mod swr_read_tests;
+#[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod status;
 mod view;

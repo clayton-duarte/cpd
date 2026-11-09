@@ -45,8 +45,9 @@ pub fn policy_hold(labels: &[String], excused: &[String]) -> bool {
 }
 
 /// pro-d453: a Light node carries only the rollup state, so a PR whose Danger was excused by the hydrate would read `failed`
-/// again at every pass. For a node without a heavy part, a failed rollup and an excused label, the checks of the stored
-/// `detail` of the same head are reduced again under the policy hold. A detail with no contexts changes nothing.
+/// again at every pass, and the coarse rollup is `FAILURE` while any check is CANCELLED (pro-d489). For a node without a heavy
+/// part and a failed rollup, the checks of the stored `detail` of the same head are reduced again (which drops CANCELLED,
+/// SKIPPED and older attempts), under the policy hold when an excused label is present. A detail with no contexts changes nothing.
 pub fn excuse_from_detail(node: &mut PollNode, detail: &serde_json::Value, excused: &[String]) {
     use super::status::ChecksSummary;
     let labels: Vec<String> = node
@@ -58,14 +59,11 @@ pub fn excuse_from_detail(node: &mut PollNode, detail: &serde_json::Value, excus
                 .collect()
         })
         .unwrap_or_default();
-    if node.heavy.is_some()
-        || node.listed.pr.checks != ChecksSummary::Failed
-        || !policy_hold(&labels, excused)
-    {
+    if node.heavy.is_some() || node.listed.pr.checks != ChecksSummary::Failed {
         return;
     }
     let checks = checks_of_detail(detail);
     if !checks.is_empty() {
-        node.listed.pr.checks = ChecksSummary::of(&checks, &[], &[], true);
+        node.listed.pr.checks = ChecksSummary::of(&checks, &[], &[], policy_hold(&labels, excused));
     }
 }
