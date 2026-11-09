@@ -964,6 +964,22 @@ pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
 
+/// Stub (red): the cause pi's stop error text ends the Attempt with: `quota`, `provider_error` or `crashed`.
+pub fn classify_stop_text(_text: &str) -> &'static str {
+    Cause::Crashed.as_str()
+}
+
+/// Stub (red): the detail of a crashed Attempt: the error message, the stderr tail, the exit status and the driver log path.
+pub fn crashed_detail(
+    reason: &str,
+    _error_message: Option<&str>,
+    _stderr_tail: &str,
+    _exit_status: Option<i32>,
+    _driver_log: &std::path::Path,
+) -> String {
+    format!("pi stopped with stopReason {reason}.")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
