@@ -241,6 +241,10 @@ fn cold_listed_reconciles_stale_open_rows() {
     rig.state().world.insert(("acme/pay".into(), 1), merged);
     rig.pass(0).unwrap();
     let q = rig.graphql().remove(0);
-    assert_eq!(aliased(&q), vec![1], "the cold pass reads the row as absent: {q}");
+    assert_eq!(
+        aliased(&q),
+        vec![1],
+        "the cold pass reads the row as absent: {q}"
+    );
     assert_eq!(rig.pr_state(1).as_deref(), Some("merged"));
 }

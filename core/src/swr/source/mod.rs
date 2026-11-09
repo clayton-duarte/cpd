@@ -26,6 +26,8 @@ mod slack_tests;
 mod slack_write_tests;
 
 #[cfg(test)]
+mod github_budget_tests;
+#[cfg(test)]
 mod github_poll_tests;
 #[cfg(test)]
 mod github_tests;

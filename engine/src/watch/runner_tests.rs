@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::poll_run::Finished;
 use super::pr::{apply, due, finish, poll_with, start};
-use super::testkit::Fx;
 use super::report::Failure;
+use super::testkit::Fx;
 use cpd_core::clock::ManualClock;
 use cpd_core::host::runner::{FakeRunner, Reply};
 
@@ -133,11 +133,9 @@ fn spaced() -> (Fx, std::time::Instant) {
     let mut fx = Fx::new("[watch]\npr_poll_seconds = 30\n");
     let fakes = cpd_core::ports::Fakes::new();
     fakes.spawn.set_self_exe(EXE);
-    let _ = (*fakes.runner).clone().on(
-        "cpd",
-        |_| true,
-        Reply::ok(&printed_ok()),
-    );
+    let _ = (*fakes.runner)
+        .clone()
+        .on("cpd", |_| true, Reply::ok(&printed_ok()));
     fx.engine.ports = fakes.ports.clone();
     let ended = fx.engine.ports.clock.now();
     fx.engine.last_poll_end = Some(ended);
@@ -167,10 +165,17 @@ fn burst_of_poll_now_requests_costs_one_poll() {
     finish(&mut fx.engine);
     assert!(!started_early, "no poll starts inside the minimum spacing");
     assert!(
-        fx.engine.home.run_dir().join(cpd_core::pr::POLL_NOW).exists(),
+        fx.engine
+            .home
+            .run_dir()
+            .join(cpd_core::pr::POLL_NOW)
+            .exists(),
         "the request waits for the spacing"
     );
-    assert_eq!(due(&fx.engine, ended), Some(ended + Duration::from_secs(10)));
+    assert_eq!(
+        due(&fx.engine, ended),
+        Some(ended + Duration::from_secs(10))
+    );
 }
 
 #[test]
@@ -181,7 +186,13 @@ fn poll_logs_cost_remaining_and_calls_by_kind() {
         "rate_limit": {"cost": 7, "remaining": 4900, "reset_at": "2030-01-01T00:00:00.000Z"},
         "calls": {"search": 1, "absent": 2, "comments": 3, "checks": 4, "deploys": 5},
     });
-    apply(&mut fx.engine, Finished { result: Ok(out), ended });
+    apply(
+        &mut fx.engine,
+        Finished {
+            result: Ok(out),
+            ended,
+        },
+    );
     let log = std::fs::read_to_string(fx.engine.home.watch_log()).unwrap();
     assert!(
         log.contains(
