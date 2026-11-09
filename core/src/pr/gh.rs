@@ -562,6 +562,84 @@ pub fn merge_pr(
     }
 }
 
+/// `gh pr update-branch <number> --repo <repo>`: merges the base into the head on GitHub (`pr merge-green`).
+pub fn update_branch(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
+    let n = number.to_string();
+    run_on(runner, cwd, &["pr", "update-branch", &n, "--repo", repo]).map(drop)
+}
+
+/// `gh pr view <number> --repo <repo> --json headRefOid,statusCheckRollup`: the head and whether every check of it passed.
+pub fn head_and_green(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(String, bool), CpdError> {
+    let n = number.to_string();
+    let out = run_on(
+        runner,
+        cwd,
+        &[
+            "pr",
+            "view",
+            &n,
+            "--repo",
+            repo,
+            "--json",
+            "headRefOid,statusCheckRollup",
+        ],
+    )?;
+    let v: Value = serde_json::from_str(&out).map_err(|e| {
+        CpdError::new(
+            ErrorCode::GhFailed,
+            format!("gh pr view printed no JSON: {e}."),
+        )
+    })?;
+    let head = v["headRefOid"].as_str().unwrap_or_default().to_owned();
+    let rollup = v["statusCheckRollup"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let green = !rollup.is_empty()
+        && rollup.iter().all(|c| {
+            c["conclusion"].as_str() == Some("SUCCESS")
+                || c["state"].as_str() == Some("SUCCESS")
+                || matches!(c["conclusion"].as_str(), Some("NEUTRAL" | "SKIPPED"))
+        });
+    Ok((head, green))
+}
+
+/// `gh pr merge <number> --repo <repo> --squash --match-head-commit <head>`.
+pub fn merge_squash(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    head: &str,
+) -> Result<(), CpdError> {
+    let n = number.to_string();
+    run_on(
+        runner,
+        cwd,
+        &[
+            "pr",
+            "merge",
+            &n,
+            "--repo",
+            repo,
+            "--squash",
+            "--match-head-commit",
+            head,
+        ],
+    )
+    .map(drop)
+}
+
 /// Whether a refused `gh pr merge` says the pull request is the base of a stack (pro-d355).
 fn is_stack_refusal(err: &CpdError) -> bool {
     let text = match err.details().get("stderr").and_then(|v| v.as_str()) {
