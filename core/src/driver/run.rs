@@ -1568,7 +1568,18 @@ fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
     if !status.trim().is_empty() {
         return Err(CpdError::new(
             ErrorCode::SetupFailed,
-            format!("the Lead worktree {} is not clean", worktree.display()),
+            format!(
+                "the Lead worktree {} is not clean. This Attempt did not start; cpd left the worktree unchanged.\n\
+                 Porcelain status:\n{status}\
+                 Inspect and preserve any wanted work before deciding how to resolve the state. \
+                 From the Lead worktree, run these read-only commands:\n\
+                 git status --short --branch\n\
+                 git diff\n\
+                 git diff --cached\n\
+                 git ls-files --others --exclude-standard\n\
+                 Inspect any in-progress merge or rebase state without changing it, and have the Lead review the work before choosing a resolution.",
+                worktree.display()
+            ),
         )
         .with("status", status.trim()));
     }
