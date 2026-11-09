@@ -1763,7 +1763,10 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
         fx.events("job-merged")[0].3,
         json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false})
     );
-    assert!(made.path.exists(), "R preserves the recovered Attempt worktree");
+    assert!(
+        made.path.exists(),
+        "R preserves the recovered Attempt worktree"
+    );
     assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), tip);
 }
 

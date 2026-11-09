@@ -1930,7 +1930,6 @@ fn r_after_step_8_ends_merged_at_the_tip_and_preserves_the_stale_lead_worktree()
     assert!(fx.recover().is_empty());
 }
 
-
 /// Reflog membership does not prove that a staged tree belongs to the dead driver.
 #[test]
 fn r_after_step_8_preserves_reflog_matching_staged_work_and_operation_state() {
@@ -1943,7 +1942,10 @@ fn r_after_step_8_preserves_reflog_matching_staged_work_and_operation_state() {
         fs::remove_file(fx.lead.join("later.txt")).unwrap();
         fx.git(&fx.lead, &["add", "later.txt"]);
         let old_index = fx.git(&fx.lead, &["write-tree"]);
-        assert_eq!(old_index, fx.git(&fx.lead, &["rev-parse", &format!("{earlier}^{{tree}}") ]));
+        assert_eq!(
+            old_index,
+            fx.git(&fx.lead, &["rev-parse", &format!("{earlier}^{{tree}}")])
+        );
         let tip = die_after_step_8(&fx, &worktree);
         let admin = fx.universe.lock().unwrap().admin_dir(&fx.lead);
         let marker_path = admin.join(marker);
@@ -1967,14 +1969,29 @@ fn r_after_step_8_preserves_reflog_matching_staged_work_and_operation_state() {
         assert_eq!(fx.git(&fx.lead, &["write-tree"]), old_index);
         assert_eq!(fx.status(&fx.lead), lead_status);
         assert_eq!(fs::read(&marker_path).unwrap(), b"active operation\n");
-        assert_eq!(fs::read(fx.lead.join("untracked.txt")).unwrap(), b"lead work\n");
+        assert_eq!(
+            fs::read(fx.lead.join("untracked.txt")).unwrap(),
+            b"lead work\n"
+        );
         assert_eq!(fx.git(&worktree, &["write-tree"]), worker_index);
         assert_eq!(fx.status(&worktree), worker_status);
-        assert_eq!(fs::read(worktree.join("api.txt")).unwrap(), b"unstaged worker work\n");
-        assert_eq!(fs::read(worktree.join("untracked.txt")).unwrap(), b"worker work\n");
+        assert_eq!(
+            fs::read(worktree.join("api.txt")).unwrap(),
+            b"unstaged worker work\n"
+        );
+        assert_eq!(
+            fs::read(worktree.join("untracked.txt")).unwrap(),
+            b"worker work\n"
+        );
         assert!(fx.branch_exists("cpd/pay--api-a1"));
         for call in &recovery_calls[calls_before..] {
-            assert!(!call.args.iter().any(|a| matches!(a.as_str(), "read-tree" | "reset" | "clean" | "--abort" | "remove" | "-D")), "recovery mutated a worktree: {call:?}");
+            assert!(
+                !call.args.iter().any(|a| matches!(
+                    a.as_str(),
+                    "read-tree" | "reset" | "clean" | "--abort" | "remove" | "-D"
+                )),
+                "recovery mutated a worktree: {call:?}"
+            );
         }
     }
 }
