@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
+use super::replace_test::{self, Boundary, Request};
 use crate::env::Env;
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::PlanId;
 use crate::plan::jobs::{self, Job};
@@ -14,16 +16,6 @@ use crate::ports::Fakes;
 
 const T: &str = "2026-01-01T00:00:00.000Z";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Request {
-    source: String,
-    new_key: String,
-    tests: Vec<String>,
-    test_files: Vec<String>,
-    reason: String,
-    requester: &'static str,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stop {
@@ -48,10 +40,54 @@ struct Boundaries {
     ancestry: BTreeMap<String, Vec<String>>,
 }
 
-// Stub for the missing supported operation. An implementer connects this seam
-// to the service, keeping the store, selector listing, refs and teardown fakeable.
-fn replace_test(_env: &mut Env, _io: &mut Boundaries, _request: &Request) -> Result<(), String> {
-    Err("job replace-test is not implemented".into())
+impl Boundary for Boundaries {
+    fn owner(
+        &mut self,
+        _env: &mut Env,
+        _job: &Job,
+        _request: &Request,
+        selector: &str,
+    ) -> Result<String, CpdError> {
+        self.owners
+            .get(selector)
+            .cloned()
+            .ok_or_else(|| CpdError::new(ErrorCode::Usage, "selector not found"))
+    }
+    fn stop(&mut self, env: &mut Env, plan: &PlanId, request: &Request) -> Result<(), CpdError> {
+        self.fence_checks += 1;
+        self.fenced = env
+            .store
+            .read(|c| Ok(replace_test::check_fence(c, plan, &request.source).is_err()))?;
+        self.stops += 1;
+        if !matches!(self.stop, Stop::Acknowledged | Stop::NaturalEnd) {
+            return Err(CpdError::new(ErrorCode::CasLost, "teardown failed"));
+        }
+        env.store.write("fake stop", |tx| {
+            tx.execute("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'aborted', ended_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND job = ?2 AND status = 'running'", rusqlite::params![plan.as_str(), request.source])?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+    fn quiescent(&mut self, _env: &mut Env, _plan: &PlanId, _source: &str) -> Result<(), CpdError> {
+        if matches!(
+            self.stop,
+            Stop::RunnerStillLive | Stop::TimedOut | Stop::Failed | Stop::MergeInProgress
+        ) {
+            return Err(CpdError::new(ErrorCode::CasLost, "runner not quiescent"));
+        }
+        Ok(())
+    }
+    fn start(
+        &mut self,
+        _env: &mut Env,
+        _plan: &PlanId,
+        request: &Request,
+    ) -> Result<String, CpdError> {
+        let sha = self.refs.get("cpd/pay--old-tests-a1").unwrap().clone();
+        self.refs
+            .insert(format!("{}:start", request.new_key), sha.clone());
+        Ok(sha)
+    }
 }
 
 struct Fixture {
@@ -121,7 +157,7 @@ impl Fixture {
                 tests: vec![selector.into()],
                 test_files: vec![file.into()],
                 reason: "correct the locked selector".into(),
-                requester: "lead-pay",
+                requester: "lead-pay".into(),
             },
             old_selector: old_selector.into(),
             old_files: old_files.iter().map(|s| (*s).into()).collect(),
@@ -152,7 +188,13 @@ impl Fixture {
     }
 
     fn run(&mut self) -> Result<(), String> {
-        replace_test(&mut self.env, &mut self.io, &self.request)
+        replace_test::replace(
+            &mut self.env,
+            &mut self.io,
+            &PlanId::parse("pay").unwrap(),
+            &self.request,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn jobs(&mut self) -> Vec<Job> {
@@ -282,7 +324,7 @@ fn locked_test_job_replacement_preserves_tdd_dependencies() {
             "wrong-owner" => f.request.test_files = vec!["engine/src/".into()],
             "missing" => f.request.tests = vec!["pi/test/no.test.ts::missing".into()],
             "reused" => f.request.new_key = "impl".into(),
-            "worker" => f.request.requester = "worker",
+            "worker" => f.request.requester = "worker".into(),
             "live-dependent" => f.env.store.write("fixture", |tx| {
                 tx.execute_batch(&format!("UPDATE jobs SET status = 'running' WHERE key = 'impl';
                   INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
@@ -290,6 +332,7 @@ fn locked_test_job_replacement_preserves_tdd_dependencies() {
                 Ok(())
             }).unwrap(),
             "merged-dependent" => f.env.store.write("fixture", |tx| {
+                tx.execute("UPDATE jobs SET status = 'running' WHERE key = 'impl'", [])?;
                 tx.execute("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'impl'", [])?;
                 Ok(())
             }).unwrap(),
