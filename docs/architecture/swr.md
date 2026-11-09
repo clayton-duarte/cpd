@@ -1,6 +1,6 @@
 # Stale-while-revalidate (SWR)
 
-Status: **normative for the SWR Jobs** (Plan `external-sync-arch`: `swr-core`, then one Workflow per datasource). Where merged code later differs from this page, the code wins; the names here are the contract the next Jobs build on. Vocabulary: [CONTEXT.md — Data](../../CONTEXT.md). The schema is [contract §4.4](../contract.md); the engine step E24 is [contract §4.7](../contract.md); the commands are [commands §32](../commands.md).
+Status: **normative for the SWR Jobs** (Plan `external-sync-arch`: `swr-core`, then one Workflow per datasource). Where merged code later differs from this page, the code wins; the names here are the contract the next Jobs build on. Vocabulary: [CONTEXT.md — Data](../../CONTEXT.md). The schema is [contract §4.4](../contract.md); the engine step `swr` is [contract §4.7](../contract.md); the commands are [commands §32](../commands.md).
 
 Decisions: pro-d440 (architecture), pro-d441 (GitHub), pro-d443 (Jira), pro-d444 (Slack), pro-d446 (name `swr`), pro-d447 (check-level `excused_labels` kept), pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend; clients call cpd).
 
@@ -19,7 +19,7 @@ flowchart LR
   subgraph READERS["local readers"]
     CLI["cpd commands"]
     TUI["cockpit views"]
-    STEPS["engine steps (E8, E5 …)"]
+    STEPS["engine steps (inbox, pr-poll …)"]
   end
 
   subgraph SWR["core/src/swr/"]
@@ -31,7 +31,7 @@ flowchart LR
   end
 
   DB[("cpd.db: swr_* tables")]
-  POLL["engine poller: E24 (E5 for github, E15 for models)"]
+  POLL["engine poller: swr (pr-poll for github, model-discovery for models)"]
   SRC["Source trait: source/{github,slack,jira,models}.rs"]
   UP["upstream: gh, node helpers, Atlassian, providers"]
 
@@ -214,7 +214,7 @@ One row per **(Slack message, pull request)** that a message of the team channel
 | Column | Meaning |
 |---|---|
 | `channel`, `ts`, `repo`, `number` | the key: the channel id, the message's exact `ts`, the pull request's `owner/name` and number |
-| `primary_pr` | 1 for the first pull request link of the message (E8 reads only these) |
+| `primary_pr` | 1 for the first pull request link of the message (`inbox` reads only these) |
 | `author_id`, `author` | the poster's Slack user id and display name |
 | `author_is_me` | 1 when the User posted it |
 | `reply_count`, `latest_reply` | the thread's replies and the time of the latest reply |
@@ -405,21 +405,21 @@ sequenceDiagram
   autonumber
   participant CLI as CLI command
   participant DB as SQLite
-  participant E24 as engine E24
+  participant SWR as engine step swr
   participant SRC as Source
   participant UP as upstream
 
   CLI->>DB: enqueue (pending, patch_json)
   Note over CLI,DB: readers see the overlay at once
-  E24->>DB: claim_next (in_flight, attempt_count + 1)
-  E24->>SRC: execute(m)
+  SWR->>DB: claim_next (in_flight, attempt_count + 1)
+  SWR->>SRC: execute(m)
   SRC->>UP: the write
   UP-->>SRC: accepted
-  SRC-->>E24: Done
-  E24->>DB: complete (revalidating, completed_at = C, invalidate target)
-  Note over E24: a poll records P before it reads
-  E24->>E24: P = now (before any read)
-  E24->>SRC: fetch(keys, P)
+  SRC-->>SWR: Done
+  SWR->>DB: complete (revalidating, completed_at = C, invalidate target)
+  Note over SWR: a poll records P before it reads
+  SWR->>SWR: P = now (before any read)
+  SWR->>SRC: fetch(keys, P)
   SRC->>UP: read
   UP-->>SRC: data
   alt P >= C
@@ -453,16 +453,16 @@ struct Cx { store: Store, ports: Ports /* Runner, Clock */, home: CpdHome, confi
 - `registry()` returns the four sources as `&'static dyn Source`.
 - `registry()` is the one place a source becomes live: the engine runs only the sources it names, so a source the registry does not list never runs. When a source file carries both a stub and a live implementation, the registry names the live one.
 
-## 12. The engine step E24 and gc
+## 12. The engine step `swr` and gc
 
-Step E24 (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`** and **`models`**: E5's own thread runs `github` through the same trait, and E15 runs `models` through it (`swr-models.md` §1, §3). Exactly one step polls GitHub per tick, never two: **E5 owns the `github` source** — its poll (its `fetch`, [swr-github.md §4](swr-github.md)) and its outbox drain (§9 of that page, `engine/src/watch/pr.rs`) both run in E5's step — and E24 never polls `github`. The engine wake that runs E24 between ticks (`engine/src/watch/wake.rs`) adds no second GitHub poll: the pass still runs only in E5. For each source it:
+Step `swr` (contract §4.7) runs every tick. First, for every endpoint row, it calls `endpoint::due_report` and raises the outage's `error` Event when one is due (`swr-classifier.md` §4.3). Then it runs every source **except `github`** and **`models`**: `pr-poll`'s own thread runs `github` through the same trait, and `model-discovery` runs `models` through it (`swr-models.md` §1, §3). Exactly one step polls GitHub per tick, never two: **`pr-poll` owns the `github` source** — its poll (its `fetch`, [swr-github.md §4](swr-github.md)) and its outbox drain (§9 of that page, `engine/src/watch/pr.rs`) both run in `pr-poll`'s step — and `swr` never polls `github`. The engine wake that runs `swr` between ticks (`engine/src/watch/wake.rs`) adds no second GitHub poll: the pass still runs only in `pr-poll`. For each source it:
 
 1. skips the source while any of its endpoints is paused (`is_paused`);
 2. calls `fetch` for the keys `due` returns;
 3. drains the outbox: `claim_next` and `execute` until nothing is claimable or an endpoint pauses;
-4. runs `gc::sweep` at most once an hour (the last run is kept in engine memory, as E16 keeps the janitor's).
+4. runs `gc::sweep` at most once an hour (the last run is kept in engine memory, as `janitor` keeps the janitor's).
 
-A CLI write that needs fresher data calls `cache::invalidate` and wakes the engine (`engine/src/watch/wake.rs`); the engine then runs E24 without waiting for its tick.
+A CLI write that needs fresher data calls `cache::invalidate` and wakes the engine (`engine/src/watch/wake.rs`); the engine then runs `swr` without waiting for its tick.
 
 ## 13. Commands
 
@@ -512,7 +512,7 @@ Each row is removed in the same PR as the datasource's cutover: its old file, qu
 ## 16. Rules
 
 - **Time is an argument.** Every `swr` function takes `now: OffsetDateTime` (or `poll_started_at`). No function reads the clock. Tests advance time with `ManualClock`.
-- **A read never waits on upstream.** A local reader reads SQLite (through the overlay). When cached data exists, the CLI never reads upstream; a caller that needs fresher data calls `cache::invalidate` and the engine wakes. A query with no row yet is `pending` with no data until E24 fills it (assumption: the design gives no first-read path for the CLI).
+- **A read never waits on upstream.** A local reader reads SQLite (through the overlay). When cached data exists, the CLI never reads upstream; a caller that needs fresher data calls `cache::invalidate` and the engine wakes. A query with no row yet is `pending` with no data until `swr` fills it (assumption: the design gives no first-read path for the CLI).
 - **A failed or paused fetch never overwrites or deletes cached data.** Tests pin it for each source.
 - **No external read or write outside SWR** ([contract §4.7](../contract.md)). A datasource's external calls happen only in its `Source`, and every external write is an outbox mutation.
 - **Cutover is one PR.** A datasource's cutover deletes its old cache file, queue and side-door reads together. No dual write, no flag.
@@ -542,4 +542,4 @@ Not decided by this design. Each is recorded so no Job guesses it.
 - **Columns added to `pull_requests`.** Accepted assumption A1 has the swr-core migration add columns to `pull_requests`, but this design does not name them. The swr-core Job names them when it writes the migration, and they must be additive (nullable, or with a constant default).
 - **The `classifier` source file.** The module list has no `source/classifier.rs`. The classifier Workflow decides its file and its key kind, and whether the badge's helper call moves into it (`swr-classifier.md` §7, open item 3).
 - **Lifetime of `swr_pr_detail` rows.** The table has no `inactive_at`, so `gc::sweep` cannot age it. Its removal rule is for the github Workflow.
-- **The position of E24 in the tick.** Contract §4.7 says it runs every tick and does not place it among E1 to E22. The engine order is set when the step lands.
+- **The position of `swr` in the tick.** Contract §4.7 says it runs every tick and does not place it among `escalations` to `permanent-contexts`. The engine order is set when the step lands.
