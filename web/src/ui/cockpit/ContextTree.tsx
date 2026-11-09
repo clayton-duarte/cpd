@@ -60,9 +60,10 @@ interface MenuApi {
   readonly taken: readonly string[];
 }
 interface MenuItem { readonly label: string; run(): void }
-type MenuKind = "context" | "permanent" | "plan" | "fork" | "archived";
+type MenuKind = "context" | "permanent" | "plan" | "fork" | "archived" | "empty";
 
 const PLAN_MAX = 24;
+const CONTEXT_MAX = 40; // tui/src/tree/slug.rs CONTEXT_MAX: context ids are longer than plan ids
 const NO_ID_ERROR = "A title needs at least two letters or digits, the first a letter, to make an id.";
 
 /** tui/src/tree/slug.rs `derive`: lowercase ASCII slug, cut to `max`, `-2`, `-3`, ... while taken; null when no id fits. */
@@ -122,10 +123,11 @@ const deleteItem = (api: MenuApi, id: string, action: CockpitAction): MenuItem =
 const copyItem = (id: string): MenuItem => ({ label: "Copy id", run: () => copyId(id) });
 const actItem = (api: MenuApi, label: string, action: CockpitAction): MenuItem => ({ label, run: () => api.act(action) });
 
-/** A Plan is quiet when archived or its Lead is stopped (the web's stand-in for the TUI's asleep). */
+/** A Plan is deletable when archived or its Lead is archived or asleep (stopped); a Plan with no Lead never is (CONTRACT 20.1, tui/src/tree/rows.rs:268-283). */
 const isPlanQuiet = (p: PlanNode): boolean => {
+  if (p.archived) return true;
   const lead = leadOf(p);
-  return p.archived || lead === undefined || lead.dot.state === "stopped";
+  return lead !== undefined && (lead.archived || lead.dot.state === "stopped");
 };
 
 /** Wraps the row button in a right-click menu; without a menu API the row is plain. */
@@ -174,6 +176,68 @@ function PromptDialog(props: { spec: PromptSpec | null; onDone(action: CockpitAc
           <DialogFooter>
             <button type="button" className="rounded-md border border-border px-3 py-1 text-sm" onClick={() => props.onDone(null)}>Cancel</button>
             <button type="button" className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground" onClick={submit}>{spec?.confirm ?? "OK"}</button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const NO_OWNER_POLICY = "No owner policy: add $CPD_HOME/policy/<owner>/owner.toml";
+
+/** The New Context dialog (CONTRACT 20.1): Title plus an Owner select over the tree's policy owners; the id is slug-derived. */
+function NewContextDialog(props: {
+  open: boolean;
+  owners: readonly string[];
+  taken: readonly string[];
+  onDone(action: CockpitAction | null): void;
+}): ReactElement {
+  const [title, setTitle] = useState("");
+  const [owner, setOwner] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (props.open !== wasOpen) { // a fresh open starts empty, with the first owner selected
+    setWasOpen(props.open);
+    setTitle("");
+    setError(null);
+    setOwner(props.owners[0] ?? "");
+  }
+  const noOwners = props.owners.length === 0;
+  const submit = (): void => {
+    const missing = required("Title", title);
+    if (missing !== null) { setError(missing); return; }
+    const id = deriveSlug(title.trim(), CONTEXT_MAX, props.taken);
+    if (id === null) { setError(NO_ID_ERROR); return; }
+    props.onDone({ kind: "context.new", contextId: id, title: title.trim(), owner });
+  };
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => { if (!open) props.onDone(null); }}>
+      <DialogContent>
+        <form onSubmit={(e) => { e.preventDefault(); if (!noOwners) submit(); }} className="grid gap-3">
+          <DialogHeader>
+            <DialogTitle>New Context</DialogTitle>
+            <DialogDescription>{noOwners ? NO_OWNER_POLICY : "Title:"}</DialogDescription>
+          </DialogHeader>
+          {noOwners ? null : (
+            <>
+              <Input autoFocus aria-label="Title" aria-invalid={error !== null} value={title} onChange={(e) => { setTitle(e.target.value); setError(null); }} />
+              <label className="grid gap-1 text-meta text-fg-dim">
+                Owner:
+                <select
+                  aria-label="Owner"
+                  className="rounded-md border border-border bg-transparent px-2 py-1 text-sm text-foreground"
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                >
+                  {props.owners.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </label>
+            </>
+          )}
+          {error === null ? null : <p role="alert" className="text-meta text-status-blocked-bright">{error}</p>}
+          <DialogFooter>
+            <button type="button" className="rounded-md border border-border px-3 py-1 text-sm" onClick={() => props.onDone(null)}>Cancel</button>
+            {noOwners ? null : <button type="button" className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground" onClick={submit}>OK</button>}
           </DialogFooter>
         </form>
       </DialogContent>
@@ -496,16 +560,20 @@ export function ContextTree(props: {
 }): ReactElement {
   const { tree, onNewContext, onAction, ...rest } = props;
   const [prompt, setPrompt] = useState<PromptSpec | null>(null);
+  const [newContextOpen, setNewContextOpen] = useState(false);
   const taken = (tree?.contexts ?? []).flatMap((c) => c.plans.map((p) => p.id));
+  const takenContexts = (tree?.contexts ?? []).map((c) => c.id);
   const menu: MenuApi | undefined = onAction === undefined ? undefined : { act: onAction, ask: setPrompt, taken };
   const handlers = menu === undefined ? rest : { ...rest, menu };
   const [archivedOpen, setArchivedOpen] = usePersistedBoolean("section:archive", false);
 
   const all = tree === null ? [] : tree.contexts;
+  const sessionId = props.selectedSessionId;
+  // pro-d86/air-d111: the live Context whose Manager is the selected session is pinned first, before the urgency key.
+  const pinnedFirst = (c: ContextNode): number => (managerOf(c)?.ref.id === sessionId ? 0 : 1);
   const projectContexts = all
     .filter((c) => !c.archived)
-    .sort((a, b) => compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
-  const sessionId = props.selectedSessionId;
+    .sort((a, b) => pinnedFirst(a) - pinnedFirst(b) || compareOrderKey(managerOf(a)?.dot ?? STOPPED, createdOf(a), managerOf(b)?.dot ?? STOPPED, createdOf(b)));
   const archived: ContextNode[] = [
     ...all.filter((c) => c.archived && !isPermanent(c.id)),
     ...all
@@ -566,12 +634,14 @@ export function ContextTree(props: {
               {tree === null ? (
                 <p data-part="loading" className="px-2 text-fg-dim">Loading contexts…</p>
               ) : all.length === 0 ? (
-                <Empty
-                  data-part="empty"
-                  className="flex-none items-start justify-start gap-0 p-0 px-2 text-left text-fg-dim"
-                >
-                  No contexts
-                </Empty>
+                <RowMenu api={menu} kind="empty" items={[{ label: "New Context\u2026", run: () => setNewContextOpen(true) }]}>
+                  <Empty
+                    data-part="empty"
+                    className="flex-none items-start justify-start gap-0 p-0 px-2 text-left text-fg-dim"
+                  >
+                    No contexts
+                  </Empty>
+                </RowMenu>
               ) : (
                 <ContextList contexts={projectContexts} allPlans={false} {...handlers} />
               )}
@@ -586,6 +656,12 @@ export function ContextTree(props: {
         ) : null}
       </SidebarContent>
       <PromptDialog spec={prompt} onDone={(action) => { setPrompt(null); if (action !== null) onAction?.(action); }} />
+      <NewContextDialog
+        open={newContextOpen}
+        owners={tree?.owners ?? []}
+        taken={takenContexts}
+        onDone={(action) => { setNewContextOpen(false); if (action !== null) onAction?.(action); }}
+      />
     </Sidebar>
   );
 }

@@ -355,6 +355,9 @@ async function main(): Promise<void> {
     },
     window: {
       setIgnoreMenuShortcuts: (ignore) => {
+        // air-n62: a destroyed window throws `Object has been destroyed` the moment
+        // `win.webContents` is read, so guard on the window before the webContents check.
+        if (win.isDestroyed()) return;
         if (!win.webContents.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(ignore);
       },
       sendMode: (mode) => send(CHANNELS.uiMode, mode),

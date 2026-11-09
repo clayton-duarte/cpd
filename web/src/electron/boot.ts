@@ -1,5 +1,10 @@
 import { readPreviewMode } from './preview-mode';
 export interface BootWindow {
+  /**
+   * Whether the window itself is destroyed (a real BrowserWindow's `isDestroyed`). Optional so a
+   * test double that only exposes `webContents` still satisfies this interface; a real window has it.
+   */
+  isDestroyed?(): boolean;
   webContents: { isDestroyed(): boolean; reloadIgnoringCache(): void };
 }
 export interface BootDeps {
@@ -52,6 +57,9 @@ export async function boot(deps: BootDeps): Promise<void> {
       } catch (error) {
         console.error(error);
       }
+      // air-n62: on a destroyed window, reading `win.webContents` throws `Object has been
+      // destroyed` before `webContents.isDestroyed()` can run, so ask the window itself first.
+      if (win.isDestroyed?.()) return;
       if (!win.webContents.isDestroyed()) win.webContents.reloadIgnoringCache();
     });
     deps.registerIpc();

@@ -9,7 +9,7 @@ import { test as base, expect } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 
-/** The web/ package root (two levels up from web/src/testing/). */
+/** The web/ package root (two levels up from web/src/testing/), the default `CPD_CHECKOUT`. */
 export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
@@ -31,6 +31,12 @@ type LaunchAppOptions = {
   userDataDir: string;
   /** The renderer URL the app is told to load (`CPD_ELECTRON_DEV_URL`). */
   rendererUrl: string;
+  /**
+   * The Electron app path (the one non-flag argument). Defaults to `"."`, the checkout's `web/`,
+   * where every existing scenario runs. A scenario that stages an installed app dir passes its
+   * absolute path so the app is launched from that dir (`app.getAppPath()` is the staged dir).
+   */
+  appPath?: string;
   /** Extra env for a scenario (for example `CPD_CHECKOUT`); it never overrides the hidden/isolation keys. */
   env?: Record<string, string>;
   /**
@@ -79,8 +85,9 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
   const app = await electron.launch({
     executablePath: electronExecutable,
     // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and app
-    // data) in a temp dir, so the run never touches the User's real profile.
-    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, "."],
+    // data) in a temp dir, so the run never touches the User's real profile. The last argument is
+    // the Electron app path: `"."` is the checkout's `web/`, or the staged installed app dir.
+    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? "."],
     cwd: webRoot,
     env: {
       ...process.env,

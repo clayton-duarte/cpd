@@ -714,6 +714,7 @@ export type CockpitAction =
   | { kind: "pr.post"; planId: string; workflow: string }
   | { kind: "session.retier"; sessionId: string; tier: string }
   | { kind: "plan.reject"; planId: string; review: string }
+  | { kind: "context.new"; contextId: string; title: string; owner: string } // 20.1
   | { kind: "context.retire"; contextId: string; approve: string; reject: string } // 11.1
   | { kind: "error.report"; target: "cpd" | "host"; code: string; message: string }; // 11.7
 export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply object, without `ok`
@@ -728,6 +729,7 @@ export type ActionOutput = Readonly<Record<string, unknown>>; // the cpd reply o
 | `pr.post` | `["pr","post","--workflow",workflow,"--plan",planId]` | `docs/commands.md:2482` and `cpd pr post --help` (run this attempt). Caller is the Lead (`docs/commands.md:275`); allowed for the web User: unverified (O10) |
 | `session.retier` | `["session","retier",sessionId,"--tier",tier]` | scout-cockpit §3 |
 | `plan.reject` | `["plan","decide",review,"--reject","--plan",planId]` | scout-cockpit §3 (internal command; unverified that the web User may call it, O9) |
+| `context.new` | `["context","new",contextId,"--title=<title>","--owner=<owner>"]` | 20.1 (Plan `tree-menu`, air-d111; the TUI's own argv, `tui/src/tree/actions.rs:221-227`) |
 | `context.retire` | `["context","retire","--context=<contextId>"]` plus `--approve=<approve>` and `--reject=<reject>` each only when non-empty (ids are comma-separated) | 11.1 (approved preview, `actions.ts`) |
 | `error.report` | `["session","send","<target>:manager","--unblocks","WebUI error toast (<code>)","--","Error toast reported from WebUI:\n- code: <code>\n- message: <message>"]`; `<target>` is `cpd` or `host`, and `\n` is a newline in the element. The cpd command is `cpd session send <target>:manager --unblocks 'WebUI error toast (<code>)' -- 'Error toast reported from WebUI:\n- code: <code>\n- message: <message>'` | 11.7 (assumption A5, pro-d452) |
 
@@ -2257,6 +2259,24 @@ Normative. Plan `settings-workers` decides the points below for the Agent Tiers 
 - **The range and its refusal (air-d70).** The accepted range is **1 to 16 inclusive**. A value outside it is refused loudly — `config_invalid` (`details.key` `concurrency`), no clamp, no silent default — both by the command (commands.md §14.2c) and, a hand-edited `config.toml` no exception, when the file is loaded (docs/contract.md §8.2). The refusal reaches the web as any CLI refusal does (`cpd_failed` with the CLI's message, §6.3's mapping) and is shown like any Save refusal (17.2).
 - **A refused save stops the remaining writes and is shown as the error toast (air-d44), never inline.** The first failing write stops the save: the writes after it do not run (the same first-refusal rule §17.1 states for the switches), the dialog stays open with the values the User typed, and the whole CLI refusal text appears **once in the cockpit error toast** (the toast surface of 16.1) — never as an inline line in the dialog (the `data-part="settings-error"` paragraph of 17.2 stays gone). A successful save still closes the dialog.
 - **Lowering the count stops nothing (air-d71).** A save that lowers `concurrency` below the number of running Workers stops nothing: the engine reads the count from the config file on each tick, so the set takes effect without a restart, and it gates **new starts only** — the running tenants keep their slots to the end and the urgent one-beyond-`concurrency` rule is unchanged (docs/contract.md §3.7 E3, §8.2). Nothing in the web waits on or re-reads the count after the save; the workers pill (its `/M`, `data-part="workers"`) picks the new value up on the engine's next tick.
+
+---
+
+## 20. The tree creates Contexts, gates Delete and pins the selected Manager (Plan `tree-menu`; air-d111)
+
+Normative. Plan `tree-menu` decides the points below for the WebUI tree (`web/src/ui/cockpit/ContextTree.tsx`; `web/src/ui/DESIGN.md` 3g) and the TUI tree. TUI parity is the reference (air-d98, air-d111): `tui/src/tree/menu.rs` (items per kind), `tui/src/tree/rows.rs:268-283` (`Row::deletable`) and `tui/src/tree/actions.rs:221-227` (`Action::NewContext` argv).
+
+### 20.1 The `context.new` action
+
+- **`context.new`** (new `CockpitAction`): `{ kind: "context.new"; contextId: string; title: string; owner: string }`, added to the union and the argv table of 5.4. `contextId` is the slug derived from the title by the TUI's rules (`tui/src/tree/slug.rs`, the derivation 3g of DESIGN.md states for Plan ids); `owner` is a policy owner. The parser (5.5) requires all three fields as non-empty strings, else `invalid_message` with `details.field`.
+- **argv.** The `CpdCommand` variant's `toArgv` returns `["context","new",contextId,"--title=<title>","--owner=<owner>"]` — the TUI's own argv for `Action::NewContext` (`tui/src/tree/actions.rs:221-227`; the CLI's command is `cpd context new <id> --title <text> --owner <login>`, commands.md §3.1). The variant joins `allCpdCommands()` so the Gate test (18) covers it. The mapping chain is the usual three layers: `web/src/protocol/cockpit.ts` (union + `parseCockpitAction`) -> `web/src/server/cockpit/actions.ts` (`actionArgs`) -> `web/src/server/cpd-argv.ts` (`toArgv` + `allCpdCommands()`).
+- **Owners.** `ContextTreeModel.owners?: readonly string[]`: the policy-owner stems (the directory stems of `$CPD_HOME/policy/<owner>/owner.toml`), read where `buildTree` is built; absent before the first tree read. The New Context dialog's Owner field is a select over this list.
+- **Empty tree area.** The empty tree space offers `New Context…` (the TUI's `Kind::Empty` menu, `tui/src/tree/menu.rs:97`): a ContextMenu with one item that opens the prompt dialog asking Title and Owner; the id is slug-derived from the title. Picking OK sends `context.new`; on an ok `action.result` the new Context's Manager session is selected and attached, the way `selectCreated` selects a created Plan's Lead (`web/src/state/connection.ts:149-169`) — the reply carries the Manager's session id for that.
+- **Delete gating.** Delete is offered only on a Plan or Context row that is deletable in the TUI's sense (`tui/src/tree/rows.rs:268-283`): the Plan's Lead is archived or asleep, or the Context is archived, or the Context's every Plan is archived or asleep. Never on a fork, a Manager row or a toggle row, matching the TUI.
+
+### 20.2 The selected Manager's Context row is pinned first (air-d111)
+
+- On both surfaces, the live Context whose Manager Session is the selected session is pinned first in the live Context order, before the urgency key; the other rows keep the existing key (dot-urgency tier, then creation newest first, stable ties). WebUI: `projectContexts` (`ContextTree.tsx`) compares `managerOf(c)?.ref.id` with `selectedSessionId` before the `compareOrderKey` urgency comparator (`web/src/state/archiveNav.ts`). TUI: `project_items` (`tui/src/tree/rows.rs`) partitions on the Context whose `manager_place == Some(Place::Chat)` before the `dot.order_key(&created_at)` key. Pinning changes the row's place only; no styling change.
 
 ## 20. The ws start gate is re-armed per generation, and the cockpit loads with live data (Plan `incident`; air-n84, air-n85, air-d87)
 

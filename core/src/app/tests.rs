@@ -251,6 +251,32 @@ fn app_launch_reloads_with_sigusr1_when_electron_runs() {
     assert_eq!(rig.fakes.spawn.launches(), vec![]);
 }
 
+/// air-d89 point 1: `cpd desktop` spawns the installed packaged app (`<home>/.local/share/cpd/app`),
+/// not the checkout's `web/node_modules/.bin/electron`.
+#[test]
+fn desktop_spawns_installed_app() {
+    let mut rig = Rig::new();
+    rig.app.macos = true;
+    let launched = launch(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(launched.action, LaunchAction::Launched);
+    let launches = rig.fakes.spawn.launches();
+    assert_eq!(launches.len(), 1, "{launches:?}");
+    let installed = rig
+        .app
+        .home
+        .join(".local/share/cpd/app/CPD.app/Contents/MacOS/CPD");
+    assert_eq!(
+        Path::new(&launches[0].program),
+        installed,
+        "the launcher must spawn the installed app's executable"
+    );
+    assert_ne!(
+        Path::new(&launches[0].program),
+        rig.app.root.join("web/node_modules/.bin/electron"),
+        "the launcher must not spawn the checkout's Electron"
+    );
+}
+
 #[test]
 fn app_launch_ignores_a_stale_health_pid() {
     let rig = Rig::new();

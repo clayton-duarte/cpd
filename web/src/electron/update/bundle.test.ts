@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBundle, readBuiltSha, swapBundle } from './bundle';
+import { buildBundle, previousBuildDirs, readBuiltSha, swapBundle } from './bundle';
 import { fakeExec, fakeFs } from './fakes';
 
 const ROOT = '/repo';
@@ -79,8 +79,6 @@ describe('swapBundle', () => {
     swapBundle(fs, ROOT);
     expect(fs.files.get(`${CUR}/marker`)).toBe('next');
     expect(fs.exists(NEXT)).toBe(false);
-    expect(fs.exists(`${CUR}.prev`)).toBe(false);
-    expect(fs.renames).toEqual([[CUR, `${CUR}.prev`], [NEXT, CUR]]);
   });
   it('swapBundle reports mainChanged when main.js differs', () => {
     expect(swapBundle(fakeFs(both('m1', 'm2', 'p', 'p')), ROOT)).toEqual({ mainChanged: true });
@@ -91,11 +89,34 @@ describe('swapBundle', () => {
   it('swapBundle reports unchanged when both match', () => {
     expect(swapBundle(fakeFs(both('m', 'm', 'p', 'p')), ROOT)).toEqual({ mainChanged: false });
   });
+  it('swapBundle keeps the previous build on disk', () => {
+    const fs = fakeFs(both('m', 'm', 'p', 'p'));
+    const [head1] = previousBuildDirs(ROOT);
+    swapBundle(fs, ROOT);
+    // The displaced prod build (HEAD-1) is kept, not deleted, so a bad build can roll back.
+    expect(fs.files.get(`${head1}/marker`)).toBe('cur');
+  });
+  it('keeps at most the last two previous builds', () => {
+    const [head1, head2] = previousBuildDirs(ROOT);
+    const fs = fakeFs({ [`${CUR}/marker`]: 'g0', [`${NEXT}/marker`]: 'g1' });
+    swapBundle(fs, ROOT); // g1 current, g0 HEAD-1
+    fs.writeText(`${NEXT}/marker`, 'g2');
+    swapBundle(fs, ROOT); // g2 current, g1 HEAD-1, g0 HEAD-2
+    expect(fs.files.get(`${head1}/marker`)).toBe('g1');
+    expect(fs.files.get(`${head2}/marker`)).toBe('g0');
+    fs.writeText(`${NEXT}/marker`, 'g3');
+    swapBundle(fs, ROOT); // g3 current, g2 HEAD-1, g1 HEAD-2, g0 pruned
+    expect(fs.files.get(`${CUR}/marker`)).toBe('g3');
+    expect(fs.files.get(`${head1}/marker`)).toBe('g2');
+    expect(fs.files.get(`${head2}/marker`)).toBe('g1');
+    // Only two previous builds are kept: the one two generations back is gone.
+    const g0Kept = [...fs.files.entries()].some(([p, v]) => p.endsWith('/marker') && v === 'g0');
+    expect(g0Kept).toBe(false);
+  });
   it('swapBundle rolls back when the second rename fails', () => {
     const fs = fakeFs(both('m', 'm', 'p', 'p'), (from) => from === NEXT);
     expect(() => swapBundle(fs, ROOT)).toThrow(/rename failed/);
     expect(fs.files.get(`${CUR}/marker`)).toBe('cur');
-    expect(fs.exists(`${CUR}.prev`)).toBe(false);
     expect(fs.files.get(`${NEXT}/marker`)).toBe('next');
   });
 });

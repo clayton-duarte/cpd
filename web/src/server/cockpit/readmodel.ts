@@ -215,7 +215,7 @@ function sessionNode(s: RawSession, inbox: RawInboxItem[]): SessionNode {
 }
 const ZERO: PlanCounts = { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 };
 
-export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; sessions: RawSession[]; inbox: RawInboxItem[]; cursor: number }): ContextTreeModel {
+export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; sessions: RawSession[]; inbox: RawInboxItem[]; cursor: number; owners?: readonly string[] }): ContextTreeModel {
   const ctxs = new Map<string, { node: Omit<ContextNode, "sessions" | "plans">; sessions: SessionNode[]; plans: Map<string, { node: Omit<PlanNode, "sessions">; sessions: SessionNode[] }> }>();
   const ctx = (id: string) => {
     let c = ctxs.get(id);
@@ -281,6 +281,7 @@ export function buildTree(input: { contexts: RawContext[]; plans: RawPlan[]; ses
   }
   return {
     hostname: os.hostname().replace(/\.local$/i, "") || "host",
+    ...(input.owners !== undefined ? { owners: input.owners } : {}),
     contexts: [...ctxs.values()].map((c) => ({ ...c.node, sessions: c.sessions, plans: [...c.plans.values()].map((p) => ({ ...p.node, sessions: p.sessions })) })),
     cursor: input.cursor,
   };
@@ -424,10 +425,11 @@ function parseCuration(reply: Reply): CurationRecord[] {
 }
 
 type Curation = ReadonlyMap<string, readonly CurationRecord[]>;
-function mapTree(raw: { context: Reply; plan: Reply; session: Reply }, plans: RawPlan[], sessions: RawSession[], inbox: ParsedInbox): ContextTreeModel {
+function mapTree(raw: { context: Reply; plan: Reply; session: Reply }, plans: RawPlan[], sessions: RawSession[], inbox: ParsedInbox, owners?: readonly string[]): ContextTreeModel {
   return buildTree({
     contexts: parseContextList(raw.context), plans, sessions, inbox: inbox.rows,
     cursor: Math.min(cursorOf(raw.context, "context list"), cursorOf(raw.plan, "plan list"), cursorOf(raw.session, "session list"), inbox.cursor),
+    ...(owners !== undefined ? { owners } : {}),
   });
 }
 function mapInbox(inbox: ParsedInbox, sessions: RawSession[], plans: RawPlan[] | undefined, curationByContext: Curation): InboxModel {
@@ -441,7 +443,14 @@ export function mapPanes(raw: { context: Reply; plan: Reply; session: Reply; inb
   return { tree: mapTree(raw, plans, sessions, inbox), inbox: mapInbox(inbox, sessions, plans, curationByContext) };
 }
 
-export function createReadModel(cpd: Cpd): ReadModel {
+export function createReadModel(cpd: Cpd, owners?: () => Promise<readonly string[]>): ReadModel {
+  // The policy-owner stems (CONTRACT 20.1), read once per read model and carried on every tree it builds.
+  let ownerList: Promise<readonly string[]> | null = null;
+  const loadOwners = async (): Promise<readonly string[] | undefined> => {
+    if (owners === undefined) return undefined;
+    ownerList ??= owners().catch(() => []);
+    return ownerList;
+  };
   async function loadPanes(panes: PaneSet, planId: string | null): Promise<PaneUpdate> {
     const wantTree = panes.has("tree");
     const wantInbox = panes.has("inbox") || wantTree;
@@ -459,7 +468,7 @@ export function createReadModel(cpd: Cpd): ReadModel {
     const parsedPlans = planR === undefined ? undefined : parsePlanList(planR);
     const parsedSessions = sessR === undefined ? undefined : parseSessionList(sessR);
     if (ctxR !== undefined && parsedPlans !== undefined && parsedSessions !== undefined && inbox !== undefined) {
-      out.tree = mapTree({ context: ctxR, plan: planR!, session: sessR! }, parsedPlans, parsedSessions, inbox);
+      out.tree = mapTree({ context: ctxR, plan: planR!, session: sessR! }, parsedPlans, parsedSessions, inbox, await loadOwners());
     }
     if (panes.has("inbox") && inbox !== undefined) {
       const curateContexts = [
