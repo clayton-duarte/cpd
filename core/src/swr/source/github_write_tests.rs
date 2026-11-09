@@ -683,7 +683,7 @@ fn waiting(id: u64, updated: &str) -> Value {
            "triggering_actor": {"login": "Ada"}})
 }
 
-/// The deploy REST calls: the waiting list of `deploy.yml` and the `pending_deployments` of each run.
+/// The deploy REST calls: the waiting list of `deploy.yml` (its `in_progress` and `queued` lists are empty) and the `pending_deployments` of each run.
 struct Deploys(Vec<Value>);
 
 impl Handler for Deploys {
@@ -691,6 +691,10 @@ impl Handler for Deploys {
         let path = call.args.get(1).cloned().unwrap_or_default();
         if path.ends_with("deploy.yml/runs?status=waiting&per_page=100") {
             Reply::ok(&json!({"total_count": self.0.len(), "workflow_runs": self.0}).to_string())
+        } else if path.ends_with("deploy.yml/runs?status=in_progress&per_page=100")
+            || path.ends_with("deploy.yml/runs?status=queued&per_page=100")
+        {
+            Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string())
         } else if path.ends_with("/pending_deployments") {
             Reply::ok(
                 &json!([{"environment": {"id": 1, "name": "prod"}, "wait_timer": 0, "current_user_can_approve": true, "reviewers": []}])

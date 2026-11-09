@@ -60,8 +60,34 @@ pub fn read_into_store(
             .optional()?,
         )
     })?;
-    // No viewer yet: the pass writes it; there is nobody to filter by before that.
-    let Some(me) = me else { return Ok(()) };
+    // No viewer yet (pro-d468): fetch it with `gh api user` and keep it, so the read needs no PR pass first.
+    let me = match me {
+        Some(me) => me,
+        // Nothing declared: no run to read, so no reason to ask GitHub who the User is.
+        None if declared.is_empty() => return Ok(()),
+        None => {
+            let args = ["api", "user", "--jq", ".login"];
+            let login = api(runner, home.root(), &args)?.trim().to_owned();
+            if login.is_empty() {
+                return Err(gh_failed(
+                    &args,
+                    "gh api user printed no login.".into(),
+                    Some(0),
+                    "",
+                    None,
+                ));
+            }
+            store.write("swr viewer", |tx| {
+                tx.execute(
+                    "INSERT INTO swr_viewer (id, login, fetched_at) VALUES (1, ?1, ?2)
+                     ON CONFLICT (id) DO NOTHING",
+                    params![login, timestamp(now)],
+                )?;
+                Ok::<(), CpdError>(())
+            })?;
+            login
+        }
+    };
     let at = timestamp(now);
     let mut failure: Option<CpdError> = None;
     let mut writes: Vec<Write> = Vec::new();
@@ -282,13 +308,18 @@ fn changed_runs(
     workflow: &str,
     stored: &[(i64, String, bool, Option<String>)],
 ) -> Result<(Vec<u64>, Vec<Changed>), CpdError> {
-    let path =
-        format!("repos/{repo}/actions/workflows/{workflow}/runs?status=waiting&per_page=100");
-    let args = ["api", path.as_str()];
-    let listed: Runs = parsed(&args, &api(runner, cwd, &args)?)?;
+    // pro-d468: parallel jobs keep a run `in_progress` or `queued` while its deployment is already approvable.
+    let mut workflow_runs = Vec::new();
+    for status in ["waiting", "in_progress", "queued"] {
+        let path =
+            format!("repos/{repo}/actions/workflows/{workflow}/runs?status={status}&per_page=100");
+        let args = ["api", path.as_str()];
+        let listed: Runs = parsed(&args, &api(runner, cwd, &args)?)?;
+        workflow_runs.extend(listed.workflow_runs);
+    }
     let mut ids = Vec::new();
     let mut out = Vec::new();
-    for run in listed.workflow_runs {
+    for run in workflow_runs {
         if !run
             .triggering_actor
             .as_ref()

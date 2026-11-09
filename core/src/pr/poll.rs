@@ -122,6 +122,20 @@ struct Outcome {
 
 pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
+    let polled = poll_prs(&mut env, args);
+    if polled.is_err() {
+        // pro-d468: a failed PR read never skips the deploy read; the PR error is the one reported.
+        let _ = deploys::read_into_store(
+            &*env.ports.runner,
+            &mut env.store,
+            &env.home,
+            env.ports.clock.utc(),
+        );
+    }
+    polled
+}
+
+fn poll_prs(env: &mut Env, args: PollArgs) -> Result<Output, CpdError> {
     let selected = args.plan.plan;
     if let Some(id) = &selected {
         env.plan(id)?;
@@ -132,7 +146,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     loop {
         let root = env.home.root().to_owned();
         let search = gh::search_open(&*env.ports.runner, &root, &env.config.inbox.bot_reviewers)?;
-        let (out, again) = poll_pass(&mut env, &selected, search, None)?;
+        let (out, again) = poll_pass(env, &selected, search, None)?;
         if !again {
             return Ok(Output::success(out));
         }
