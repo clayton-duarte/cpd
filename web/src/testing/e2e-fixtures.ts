@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 
 /** The web/ package root (two levels up from web/src/testing/). */
-const webRoot = fileURLToPath(new URL("../..", import.meta.url));
+export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
@@ -41,6 +41,29 @@ type LaunchAppOptions = {
    */
   hidden?: boolean;
 };
+
+/**
+ * The house pattern for a scenario's fake `cpd` on PATH: a staged `bin` dir holding a `cpd`
+ * symlink to `cpdPath`, first on PATH, behind a fake login shell that reports PATH unchanged (so
+ * `resolveLoginPath`'s `$SHELL -ilc` keeps the staged dir first). Sets `CPD_BIN`, `SHELL` and
+ * `PATH` on `process.env`, which the launched app inherits. Exported so a scenario that boots the
+ * app against its own staged checkout reuses the exact setup instead of copying it.
+ */
+export function stageFakeBin(staging: string, cpdPath: string): { bin: string; shell: string } {
+  const bin = join(staging, "bin");
+  const shell = join(staging, "shell");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    shell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(shell, 0o755);
+  symlinkSync(cpdPath, join(bin, "cpd"));
+  process.env["CPD_BIN"] = cpdPath;
+  process.env["SHELL"] = shell;
+  process.env["PATH"] = `${bin}:${process.env["PATH"] ?? ""}`;
+  return { bin, shell };
+}
 
 /**
  * The one launcher for the suite's Electron app. It pins what every launch must have: the Linux
@@ -184,7 +207,7 @@ export const test = base.extend<Fixtures>({
  * The app's first window. `firstWindow()` waits for the "window" event; if that event does not fire
  * (or fired before the fixture ran) fall back to polling `windows()` — no sleep.
  */
-async function firstWindow(app: ElectronApplication): Promise<Page> {
+export async function firstWindow(app: ElectronApplication): Promise<Page> {
   try {
     return await app.firstWindow({ timeout: 20_000 });
   } catch (error) {
