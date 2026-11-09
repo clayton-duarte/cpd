@@ -34,6 +34,7 @@ mod pr_review;
 mod pr_stacked_ready;
 mod pr_view;
 mod pr_view_feedback;
+mod publish_reconcile;
 mod repo_hooks;
 mod workflow;
 mod workflow_adopt_add;
