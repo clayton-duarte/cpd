@@ -135,6 +135,8 @@ mod swr_wake_tests;
 mod testkit;
 mod titles;
 mod wake;
+#[cfg(test)]
+mod worker_cleanup_tests;
 mod workers;
 
 use std::fs;
