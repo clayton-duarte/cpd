@@ -242,7 +242,7 @@ fn a_failed_ensure_raises_one_error_event_and_the_tick_goes_on() {
     }
     let failed: Vec<_> = errors(&fx)
         .into_iter()
-        .filter(|(t, _)| t.contains("E22 (Permanent Contexts)"))
+        .filter(|(t, _)| t.contains("failed at permanent-contexts for"))
         .collect();
     assert_eq!(failed.len(), 1, "one error Event: {failed:?}");
     assert_eq!(failed[0].1["code"], "context_exists", "{:?}", failed[0].1);

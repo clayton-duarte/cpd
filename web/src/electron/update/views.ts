@@ -38,7 +38,7 @@ export async function buildView(
   opts: { checkout: string; outDir: string; sha: string },
 ): Promise<ViewResult> {
   deps.log?.(`building view into ${opts.outDir} from ${opts.sha}`);
-  const r = await deps.exec('pnpm', [...VIEW_BUILD_ARGS], { cwd: opts.checkout, env: { CPD_ELECTRON_OUT: opts.outDir } });
+  const r = await deps.exec('pnpm', [...VIEW_BUILD_ARGS], { cwd: opts.checkout, env: { CPD_ELECTRON_OUT: opts.outDir, CPD_WEB_SHA: opts.sha } });
   if (r.code !== 0) return { ok: false, log: `${r.stderr}\n${r.stdout}` };
   deps.fs.writeText(`${opts.checkout}/web/${opts.outDir}/${BUILT_SHA_FILE}`, opts.sha);
   return { ok: true, outDir: opts.outDir, sha: opts.sha };
