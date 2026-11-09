@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::StartArgs;
-use crate::config::Config;
+use crate::config::{Config, Tier};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
@@ -463,7 +463,13 @@ fn prepare_as(
 /// Inside the transaction: the Workflow `waiting → dispatch` with its worktree, then
 /// `workflow-started`, and the `error` `push_failed` of a push that failed (R35).
 /// Compare-and-swap on `status = 'waiting'`, else `cas_lost`.
-pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Result<(), CpdError> {
+pub fn record(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pushed: &Pushed,
+    by: By,
+    worker_tier: Tier,
+) -> Result<(), CpdError> {
     let (workflow, lead) = (&pushed.prepared.workflow, &pushed.prepared.lead);
     let worktree = lead.path.display().to_string();
     let moved = tx.execute(
@@ -499,6 +505,22 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
         by.as_str(),
     );
     append(tx, event.plan(plan.clone()))?;
+    // The open Job exists only from the start; a started Workflow that has one already gets no second.
+    let has_open: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND workflow = ?2 AND kind = 'open')",
+        [plan.as_str(), workflow.key.as_str()],
+        |r| r.get(0),
+    )?;
+    if !has_open {
+        crate::job::open::add(
+            tx,
+            plan,
+            workflow,
+            worker_tier,
+            false,
+            crate::job::open::BY_ENGINE,
+        )?;
+    }
     if let Some(error) = &pushed.failed {
         let text = format!(
             "The Lead Branch {} of Workflow {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd workflow open pushes it again.",
@@ -537,7 +559,9 @@ pub fn start(
         .map_err(Failed::Other)?
         .is_some();
     let pushed = prepare_as(home, config, store, plan, workflow, stacked)?.push();
-    match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
+    match store.write(by.source(), |tx| {
+        record(tx, plan, &pushed, by, config.worker_tier)
+    }) {
         Ok(()) => Ok(pushed),
         Err(e) => {
             pushed.discard();

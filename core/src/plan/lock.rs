@@ -150,7 +150,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             NewEvent::plan_phase_locked(text, &keys, started_keys).plan(id.clone()),
         )?;
         for workflow in &started {
-            start::record(tx, &id, workflow, By::Lock)?;
+            start::record(tx, &id, workflow, By::Lock, env.config.worker_tier)?;
         }
         Ok(())
     });
