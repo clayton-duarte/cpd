@@ -17,7 +17,7 @@ const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
 /// The config: roles GX / H3 / `lead` / O3 (plus `tables`). On the catalog of [`fixture`] the lead range is `lead` up to
-/// O2 and the manager range O3..O4.
+/// O3 and the manager range O3..O4.
 fn config(env: &TestEnv, lead: &str, tables: &str) {
     env.write_tmux_config(&format!(
         "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n{tables}\n[timeouts]\nfork_quiet_seconds = 1\n"
@@ -183,7 +183,7 @@ fn retier_tier_beats_the_codereview_target() {
 fn retier_tier_refuses_a_g_tier_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    not_allowed(&fx, LEAD1, "GX", "lead", "S4", "O2", "lead_tier");
+    not_allowed(&fx, LEAD1, "GX", "lead", "S4", "O3", "lead_tier");
 }
 
 #[test]
@@ -276,15 +276,15 @@ fn retier_tier_refuses_a_worker() {
     assert_eq!(state(&fx), before);
 }
 
-/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O2 and the manager range O3..O4.
+/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O3 and the manager range O3..O4.
 /// A Lead is refused a Tier outside the first, the Manager a Tier outside the second, with the details of the range.
 /// Then `lead_tier = S2` moves the lead floor.
 #[test]
 fn retier_tier_is_checked_against_the_lead_and_manager_ranges() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    for tier in ["S3", "H3", "GX", "O3", "O4"] {
-        not_allowed(&fx, LEAD1, tier, "lead", "S4", "O2", "lead_tier");
+    for tier in ["S3", "H3", "GX", "O4"] {
+        not_allowed(&fx, LEAD1, tier, "lead", "S4", "O3", "lead_tier");
     }
     for tier in ["O2", "S4", "H3", "GX", "O0"] {
         not_allowed(&fx, MANAGER, tier, "manager", "O3", "O4", "manager_tier");
@@ -295,16 +295,16 @@ fn retier_tier_is_checked_against_the_lead_and_manager_ranges() {
         "tier_invalid",
         2,
     );
-    // Inside the ranges: the lead floor and ceiling, the manager floor.
-    fx.cpd(&["session", "retier", LEAD1, "--tier", "O2"]).ok();
-    assert_eq!(tier(&fx, LEAD1), "O2");
+    // Inside the ranges: the lead floor and ceiling (O3 is the ceiling), the manager floor.
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "O3"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "O3");
     fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
     assert_eq!(tier(&fx, LEAD1), "S4");
     fx.cpd(&["session", "retier", MANAGER, "--tier", "O3"]).ok();
     assert_eq!(tier(&fx, MANAGER), "O3");
     // A second config moves the lead floor to S2; the manager range is the same.
     config(&fx.env, "S2", "");
-    not_allowed(&fx, LEAD1, "S1", "lead", "S2", "O2", "lead_tier");
+    not_allowed(&fx, LEAD1, "S1", "lead", "S2", "O3", "lead_tier");
     fx.cpd(&["session", "retier", LEAD1, "--tier", "S3"]).ok();
     assert_eq!(tier(&fx, LEAD1), "S3");
 }

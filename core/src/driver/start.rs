@@ -328,6 +328,7 @@ fn decide(
         )
         .optional()?;
     let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
+    crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(
@@ -478,6 +479,12 @@ fn decide(
     // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
     // A requested Linear while another Attempt of the Workflow is live cannot take the Workflow's one Lead worktree: CasLost,
     // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
+    let replacement: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM test_replacements WHERE plan = ?1 AND new_key = ?2 AND state = 'complete')", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let allocation = if replacement {
+        Some(Allocation::Parallel)
+    } else {
+        allocation
+    };
     let linear = match allocation {
         Some(Allocation::Linear) if live > 0 => {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of Workflow {} is live.", job.workflow_str()))

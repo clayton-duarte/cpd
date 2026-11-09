@@ -46,6 +46,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job add` | Add a Job (§5.1) | Lead, Manager | |
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |
 | `cpd job cancel` | Cancel a Job (§5.3) | Lead, Manager | |
+| `cpd job replace-test` | Replace an attempted locked test Job with corrected selectors | Lead | |
+| `cpd job abandon-test-replacement` | Abandon a pending test replacement after the source is quiescent | Lead | |
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead, Manager | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |

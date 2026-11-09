@@ -95,6 +95,10 @@ export async function runAction(cpd: Cpd, raw: unknown): Promise<ActionOutput> {
       await cpd.json(toArgv({ kind: "session.park" })).catch(() => undefined);
       return cpd.json(args);
     }
+    // cpd already queued the update Job and armed the merge: a handled transition
+    if (action.kind === "pr.merge" && e instanceof WebError && e.details?.["cpdCode"] === "head_behind_main") {
+      return { armed: true, message: e.message };
+    }
     throw e;
   }
 }
