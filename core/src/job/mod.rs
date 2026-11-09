@@ -33,6 +33,9 @@ mod fix_retry_tests;
 pub mod guard;
 pub mod home;
 pub mod open;
+pub(crate) mod replace_test;
+#[cfg(test)]
+mod replace_test_tests;
 mod retry;
 pub(crate) mod show;
 pub(crate) mod spec;
@@ -66,6 +69,10 @@ pub enum Command {
     Edit(EditArgs),
     /// Cancel a Job (§5.3)
     Cancel(CancelArgs),
+    /// Replace an attempted locked test Job with corrected selectors
+    ReplaceTest(ReplaceTestArgs),
+    /// Abandon a pending test replacement after the source is quiescent
+    AbandonTestReplacement(AbandonTestReplacementArgs),
     /// Queue a failed Job again at a Tier (§5.4)
     Retry(RetryArgs),
     /// Mark a Job urgent, only when the User asks (§5.8)
@@ -82,6 +89,35 @@ pub enum Command {
     List(ListArgs),
     /// Show a Job and its Attempts (§5.7)
     Show(ShowArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReplaceTestArgs {
+    #[arg(value_name = "key")]
+    key: JobKey,
+    #[arg(long)]
+    new_key: JobKey,
+    #[arg(long, value_delimiter = ',')]
+    tests: Vec<String>,
+    #[arg(long, value_delimiter = ',')]
+    test_files: Vec<String>,
+    #[arg(long)]
+    reason: Text,
+    /// Replace a pending intent after its source has stopped
+    #[arg(long)]
+    revise: bool,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AbandonTestReplacementArgs {
+    #[arg(value_name = "key")]
+    key: JobKey,
+    #[arg(long)]
+    reason: Text,
+    #[command(flatten)]
+    plan: PlanArg,
 }
 
 #[derive(clap::Args, Debug)]
@@ -256,6 +292,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
+        Command::ReplaceTest(args) => replace_test::command(args),
+        Command::AbandonTestReplacement(args) => replace_test::abandon_command(args),
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),
         Command::ApproveTests(args) => approve::approve(args),
@@ -270,7 +308,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless it is in the worker range (floor `worker_tier` up to just below `lead_tier`); an explore Job keeps
+    /// unless it is in the worker range (floor `worker_tier` through the highest valid rung at or below `lead_tier`); an explore Job keeps
     /// its letter (H for a scout, S for research), effort >= 1 or X, up to the worker ceiling (pro-d328 to pro-d332).
     ///
     /// The models are those of the Job's Workflow repo key (contract §8.3 "Models" (5)): `pr` is the Workflow the Job is

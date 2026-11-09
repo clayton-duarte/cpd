@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::{Env, RetryArgs, check_needs_not_cancelled, find, plan_phase};
+use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
@@ -36,15 +37,29 @@ pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdErro
         .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     let key = args.key;
     let tier = args.tier.to_string();
-    let kind: Option<String> = env.store.read(|conn| {
+    let row: Option<(String, String, Option<String>, Option<String>)> = env.store.read(|conn| {
         Ok(conn
             .query_row(
-                "SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2",
+                "SELECT kind, status, retry_tier, tier FROM jobs WHERE plan = ?1 AND key = ?2",
                 [plan.as_str(), key.as_str()],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?)
     })?;
+    let kind = row.as_ref().map(|r| r.0.clone());
+    // pro-d484: a queued Job whose effective Tier fails the worker range (raised floor) is retried at a new Tier.
+    let stuck = match &row {
+        Some((kind, status, retry_tier, tier)) if status == "queued" => {
+            match retry_tier.as_deref().or(tier.as_deref()).map(Tier::parse) {
+                Some(Ok(effective)) => matches!(
+                    env.check_tier(&plan, &key, None, kind, effective),
+                    Err(e) if e.code() == ErrorCode::TierNotAllowed
+                ),
+                _ => false,
+            }
+        }
+        _ => false,
+    };
     env.check_tier(
         &plan,
         &key,
@@ -53,9 +68,9 @@ pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdErro
         args.tier,
     )?;
 
-    let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier))? {
+    let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier, stuck))? {
         Decision::Already => true,
-        Decision::Queue(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &tier)? {
+        Decision::Queue(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &tier, stuck)? {
             Decision::Already => Ok(true),
             Decision::Queue(job) => {
                 let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
@@ -100,8 +115,10 @@ fn decide(
     plan: &PlanId,
     key: &JobKey,
     tier: &str,
+    stuck: bool,
 ) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
+    crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?;
     if let Some(stored) = &job.fingerprint {
@@ -123,7 +140,7 @@ fn decide(
     {
         return Ok(Decision::Already);
     }
-    if job.status != "failed" {
+    if job.status != "failed" && !(stuck && job.status == "queued") {
         return Err(CpdError::new(
             ErrorCode::JobNotFailed,
             format!("Job {key} is {}: only a failed Job is retried.", job.status),

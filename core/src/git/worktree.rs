@@ -1069,7 +1069,7 @@ pub fn remove_merged_lead(
         if has_unpushed_work(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
-        if let Err(e) = std::fs::rename(path, &aside) {
+        if let Err(e) = move_aside(path, &aside, &mut |p| std::fs::remove_dir_all(p)) {
             return Ok(LeadRemoval::Kept(Kept::Rename(e.to_string())));
         }
     }
@@ -1078,12 +1078,7 @@ pub fn remove_merged_lead(
         ok(repo, &["branch", "-D", branch])?;
     }
     if aside.exists() {
-        std::fs::remove_dir_all(&aside).map_err(|e| {
-            CpdError::new(
-                ErrorCode::GitFailed,
-                format!("remove {}: {e}", aside.display()),
-            )
-        })?;
+        delete_aside(&aside)?;
     }
     Ok(LeadRemoval::Removed)
 }
@@ -1135,12 +1130,53 @@ fn removing_aside(path: &Path) -> Result<PathBuf, CpdError> {
 }
 
 fn delete_aside(aside: &Path) -> Result<(), CpdError> {
-    std::fs::remove_dir_all(aside).map_err(|e| {
+    delete_aside_with(aside, &mut |p| std::fs::remove_dir_all(p))
+}
+
+/// Attempts of `remove_dir_all` on a directory that reports ENOTEMPTY (macOS Spotlight/Watchman races).
+const REMOVE_ATTEMPTS: usize = 3;
+
+fn is_not_empty(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::DirectoryNotEmpty || matches!(e.raw_os_error(), Some(66 | 39))
+}
+
+/// Call `remove` on `path`, retrying up to `REMOVE_ATTEMPTS` times while it fails with ENOTEMPTY.
+fn remove_retrying(
+    path: &Path,
+    remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut attempt = 1;
+    loop {
+        match remove(path) {
+            Err(e) if is_not_empty(&e) && attempt < REMOVE_ATTEMPTS => attempt += 1,
+            other => return other,
+        }
+    }
+}
+
+/// `delete_aside` with the remove function injected; retries on ENOTEMPTY.
+fn delete_aside_with(
+    aside: &Path,
+    remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+) -> Result<(), CpdError> {
+    remove_retrying(aside, remove).map_err(|e| {
         CpdError::new(
             ErrorCode::GitFailed,
             format!("remove {}: {e}", aside.display()),
         )
     })
+}
+
+/// Rename `path` to `aside`, first deleting an `aside` that already exists (via `remove`, with retry).
+fn move_aside(
+    path: &Path,
+    aside: &Path,
+    remove: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if aside.exists() {
+        remove_retrying(aside, remove)?;
+    }
+    std::fs::rename(path, aside)
 }
 
 /// Contract §7.2 "Removal": rename aside, prune, delete the branch, delete the aside in this process.
@@ -1165,10 +1201,7 @@ fn remove(
             )
             .with("path", path.display().to_string()));
         }
-        if aside.exists() {
-            delete_aside(&aside)?;
-        }
-        std::fs::rename(path, &aside).map_err(|e| {
+        move_aside(path, &aside, &mut |p| std::fs::remove_dir_all(p)).map_err(|e| {
             CpdError::new(
                 ErrorCode::GitFailed,
                 format!("rename {} to {}: {e}", path.display(), aside.display()),
@@ -1183,4 +1216,46 @@ fn remove(
         delete_aside(&aside)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+
+    #[test]
+    fn worktree_removal_retries_remove_dir_all_on_enotempty() {
+        let mut calls = 0;
+        let r = delete_aside_with(Path::new("/x/wt.removing"), &mut |_| {
+            calls += 1;
+            if calls <= 2 {
+                Err(std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(
+            r.is_ok(),
+            "ENOTEMPTY twice then success must succeed: {r:?}"
+        );
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn worktree_removal_clears_existing_aside_before_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wt");
+        let aside = tmp.path().join("wt.removing");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&aside).unwrap();
+        std::fs::write(aside.join("stale"), "x").unwrap();
+        let mut removed = Vec::new();
+        let r = move_aside(&path, &aside, &mut |p| {
+            removed.push(p.to_path_buf());
+            std::fs::remove_dir_all(p)
+        });
+        assert!(r.is_ok(), "rename must not fail on a stale aside: {r:?}");
+        assert_eq!(removed, vec![aside.clone()]);
+        assert!(!path.exists());
+        assert!(!aside.join("stale").exists());
+    }
 }

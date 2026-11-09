@@ -214,7 +214,7 @@ function primaryActionOf(
       };
     }
     if (
-      status === "review overdue" &&
+      (status === "review overdue" || status === "waiting for peer review") &&
       row.planId !== null &&
       (pull !== undefined || workflow !== undefined)
     ) {

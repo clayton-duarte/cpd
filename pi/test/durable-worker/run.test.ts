@@ -100,8 +100,8 @@ class Store {
   }
 
   /** Ends a turn of the request: the model answered, then the Submission settles. */
-  settle(requestId: string, result: "done" | "unanswered" = "done"): void {
-    const model = { role: "assistant", stopReason: "stop", provider: "anthropic", model: "sonnet", usage: { input: 10, output: 5, cacheRead: 1, cacheWrite: 2, cost: { total: 0.5 } } };
+  settle(requestId: string, result: "done" | "unanswered" = "done", text = "", tool?: string): void {
+    const model = { role: "assistant", content: [{ type: "text", text }, ...(tool ? [{ type: "toolCall", id: "t1", name: tool, arguments: {} }] : [])], stopReason: "stop", provider: "anthropic", model: "sonnet", usage: { input: 10, output: 5, cacheRead: 1, cacheWrite: 2, cost: { total: 0.5 } } };
     this.entries.push({ kind: "pi.assistant", model: [model] });
     this.submissions.get(requestId)!.settle(result);
     notify();
@@ -196,6 +196,10 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
         return shown({ registered_event: 41, state: session.state });
       }
       if (line === "policy show") return POLICY;
+      if (args[0] === "ask") {
+        notify();
+        return { ok: true, escalation: `${CONFIG.attempt}-q1`, answer: "Continue." };
+      }
       if (args[0] === "session" && args[1] === "report") {
         mcp.reportCalls.push([...args]);
         notify();
@@ -852,4 +856,35 @@ test("a server that fails to connect leaves the codemode extension unchanged", {
   assert.equal(r.builds.length, 1);
   assert.ok(!r.store.installs.includes("codemode"));
   assert.equal(await stop(r), 143);
+});
+
+test("durable_worker_repetition_is_detected", { timeout: 20_000 }, async () => {
+  // The runner observes settled turns via the fake conversation and asks through fake cpd.
+  // No assumptions about the unresolved safe-stop mechanics are made here.
+  const r = rig();
+  const hooks = await up(r);
+  const asks = () => r.calls.filter((call) => call[0] === "ask");
+  const texts = ["I read the spec.", "I read the spec.", "I read the spec.", "I read the spec.", "I read the spec.", "I read the spec."];
+  // Same text with a different tool call is not a repeat: turn 3 carries a tool call, so only turns 4-6 are identical.
+  const tools: (string | undefined)[] = [undefined, undefined, "read", undefined, undefined, undefined];
+  try {
+    for (const [index, text] of texts.entries()) {
+      const request = index === 0 ? CONFIG.attempt : `event:${41 + index}`;
+      if (index > 0) {
+        deliver(hooks, nudge(41 + index, `Continue ${index}.`));
+        await r.until("the follow-up submitted", () => r.store.submitted.length > index);
+      }
+      r.store.settle(request, "done", text, tools[index]);
+      await r.until("the settled turn reported", () => r.reports.length > index);
+      if (index < texts.length - 1) {
+        assert.equal(asks().length, 0, `no escalation after turn ${index + 1}: two identical turns and nonconsecutive repeats are not repetition`);
+      }
+    }
+    assert.deepEqual(r.store.entries.map((entry) => (entry.model![0] as { content: { text: string }[] }).content[0]!.text), texts, "settled history is preserved");
+    assert.equal(asks().length, 1, "three consecutive identical settled assistant turns escalate to the Lead");
+    assert.equal(asks()[0]![1], CONFIG.attempt, "the escalation belongs to the Worker Attempt");
+    assert.match(asks()[0]![2]!, /repet|repeat|identical/i, "the question identifies the repetition");
+  } finally {
+    await stop(r);
+  }
 });

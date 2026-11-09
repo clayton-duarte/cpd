@@ -22,7 +22,7 @@ export async function buildBundle(deps: { exec: UpdateExec; fs: UpdateFs }, root
     const r = await deps.exec('pnpm', ['install', '--frozen-lockfile'], { cwd: root });
     if (r.code !== 0) return fail(r);
   }
-  const b = await deps.exec('pnpm', ['--filter', 'cpd-web-client', 'run', 'build:electron'], { cwd: root, env: { CPD_ELECTRON_OUT: 'dist-electron.next' } });
+  const b = await deps.exec('pnpm', ['--filter', 'cpd-web-client', 'run', 'build:electron'], { cwd: root, env: { CPD_ELECTRON_OUT: 'dist-electron.next', CPD_WEB_SHA: opts.sha } });
   if (b.code !== 0) return fail(b);
   deps.fs.writeText(`${next(root)}/${BUILT_SHA_FILE}`, opts.sha);
   return { ok: true };
