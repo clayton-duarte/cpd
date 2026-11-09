@@ -340,7 +340,7 @@ The one `cpd watch` per machine: it schedules every Plan's Jobs under one concur
 _Avoid_: daemon, scheduler, one watcher per Workflow
 
 **engine step** (mechanism, pro-d146):
-One numbered part of the engine's loop, `escalations` to `merge-reaction`, always written "engine step `workflow-start`" (contract §3.7). Not a step of the CPD flow.
+One named part of the engine's loop, identified by its slug (contract §3.7 table; its former `E<n>` number is only its Ref), always written "engine step `workflow-start`" (contract §3.7). Not a step of the CPD flow.
 _Avoid_: step (alone)
 
 **Board post** (entity):

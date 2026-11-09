@@ -111,7 +111,7 @@ worktrees and branches only; neither it nor the janitor touches a remote branch 
 - [contract §7.1](../contract.md) — worktrees and branches, and the paths of cancelled Workflows
 - [contract §7.2](../contract.md) — creating worktrees, the linear/parallel rule and removal
 - [contract §7.4](../contract.md) — the merge, rule S and rule P
-- [contract §3.7](../contract.md) — the engine, step `janitor` (janitor)
+- [contract §3.7](../contract.md) — the engine, step `janitor`
 - [contract §3.8](../contract.md) — Workflow statuses and the start
 - [commands §29](../commands.md) — `janitor`
 - [commands §23](../commands.md) — `prune`

@@ -187,6 +187,6 @@ A message from the User itself arrives as `Message from the User (HH:MM ZZZ): <t
 
 ## 5. The host Manager
 
-The Context `host` (id immutable: `"host"`) is created by dotfiles' `scripts/cpd-install.sh` when it is absent. It is not a product Manager; it keeps the machine healthy. Its first and only job so far is the skipped cpd install (contract §3.7 `host-alert`).
+The Context `host` (id immutable: `"host"`) is created by dotfiles' `scripts/cpd-install.sh` when it is absent. It is not a product Manager; it keeps the machine healthy. Its first and only job so far is the skipped cpd install (contract §3.7 host-alert).
 
 **The incident.** When dotfiles' `scripts/cpd-install.sh` skips the fast-forward of the cpd checkout ($HOME/projects/cpd: tracked files changed, `main` diverged from origin/main, or HEAD on another branch or detached), the status line's version pill turns red. A click on it opens the host Manager and wakes it with the incident: the Manager's one message says to show the User what a repair would discard (read-only git commands), ask with the tool `cpd_host_approve`, and then run `cpd host repair`. The Manager never writes in the checkout with bash (the adapter refuses it), never stashes, and repairs only through `cpd_host_approve` then `cpd host repair` (§9.11, commands.md §9.11-9.12). After the repair, the pill returns to normal at the next sync tick (up to 5 minutes; User decision).
