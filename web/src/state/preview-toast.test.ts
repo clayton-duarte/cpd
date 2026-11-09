@@ -53,6 +53,33 @@ describe("agent failures and action toasts", () => {
     result: { text: '{"ok":true,"help":"cpd job edit"}\nCommand exited with code 1', isError: true },
   };
 
+  // Payloads reported in the incident, not claims about the originating calls.
+  const reportedFailures: ToolItem[] = [
+    { kind: "tool", id: "tool:script", callId: "script", name: "codemode", args: {},
+      status: "failed", result: { text: "Script failed", isError: true } },
+    { kind: "tool", id: "tool:explore", callId: "explore", name: "bash", args: {},
+      status: "failed", result: { text: "φ: explore artefact: $CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job", isError: true } },
+    { kind: "tool", id: "tool:spec", callId: "spec", name: "bash", args: {},
+      status: "failed", result: { text: "spec_invalid: engine-defects /tmp/cpd-engine-defects/followup-cleanup.json $.touches", isError: true } },
+  ];
+
+  it.each(reportedFailures)("keeps reported $id failures in the transcript without a toast", (failure) => {
+    const running: ToolItem = { ...failure, status: "running", result: undefined };
+    const before = run(attached(), tail([running]));
+    const updated = run(before, server({ type: "session.update", sessionId: "s1", items: [failure] }));
+    expectNoToast(updated, [failure]);
+    const appended = run(attached(), server({ type: "session.append", sessionId: "s1", items: [failure] }));
+    expectNoToast(appended, [failure]);
+    const replayed = run(updated, { type: "connection", status: "reconnecting" },
+      { type: "connection", status: "open" }, tail([failure]));
+    expectNoToast(replayed, [failure]);
+    const actionError: WireError = { code: "cpd_failed", message: "action failed" };
+    const actionFirst = run(before, server({ type: "action.result", actionId: "a1", ok: false, error: actionError }),
+      server({ type: "session.update", sessionId: "s1", items: [failure] }));
+    expect(actionFirst.session?.transcript.items).toEqual([failure]);
+    expect(actionFirst.lastError ?? actionFirst.cockpit.error).toEqual(actionError);
+  });
+
   it("keeps a live Lead guard refusal as a failed row, not a toast", () => {
     const before = run(attached(), tail([guardRunning]));
     expectNoToast(before, [guardRunning]);
