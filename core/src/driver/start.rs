@@ -462,6 +462,26 @@ fn decide(
         .with("job", key.as_str())
         .with("pr", job.workflow_str()));
     }
+    // A repair holds update Job dispatch of its Workflow (contract §7.6 "The repair marker", pro-d465), read in this same transaction.
+    if job.kind == "update" {
+        let held: bool = conn.query_row(
+            "SELECT repair IS NOT NULL FROM workflows WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), job.workflow_str()],
+            |r| r.get(0),
+        )?;
+        if held {
+            return Err(CpdError::new(
+                ErrorCode::CasLost,
+                format!(
+                    "Attempt {attempt} of Job {key} cannot start: a repair holds Workflow {}.",
+                    job.workflow_str()
+                ),
+            )
+            .with("plan", plan.as_str())
+            .with("job", key.as_str())
+            .with("pr", job.workflow_str()));
+        }
+    }
     let live: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended' AND a.id <> ?3",

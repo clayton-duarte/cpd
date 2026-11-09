@@ -16,6 +16,10 @@ use crate::policy::Gate;
 const COMMAND: &str = "pr push";
 
 pub(super) fn push(args: Args) -> Result<Output, CpdError> {
+    super::rebase::repaired(COMMAND, args, push_held)
+}
+
+fn push_held(args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
 
