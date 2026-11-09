@@ -87,6 +87,7 @@ pub const TABLE: &[Entry] = &[
     ("pr post", &[Lead], false),
     ("pr repost", &[Lead], false),
     ("pr merge", &[Lead], true),
+    ("pr merge-green", &[Manager], false),
     ("review submit", &[Lead, Manager], false),
     ("policy show", &[Lead, Manager, Worker], false),
     ("mcp attach", &[Manager, Lead, Worker], false),

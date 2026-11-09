@@ -3182,6 +3182,8 @@ Runs the Manager's merge protocol for a green pull request the User names (air-d
 
 **The green-PR check:** on each engine tick, cpd checks for a green PR that has remained unmerged for 30 minutes and alerts both the Manager and the User. The Manager follows up by running this command for the PR.
 
+**Refusal:** when the cached `checks` of the pull request is not `passed`, the command is refused `checks_not_green` (exit 3) before any `gh` write (no `update-branch`, no `merge`).
+
 The command takes the pull-request argument `<owner>/<repo>#<n>`; it does not select a Plan or Workflow. `gh` failures use `gh_failed` (exit 1; §1.3). The command's success output is one JSON value, as for every non-streaming command (§1.2).
 
 ### 9.11 `host approve` and `host repair`
