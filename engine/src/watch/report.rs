@@ -923,4 +923,68 @@ mod tests {
             1
         );
     }
+
+    /// Every Step shows only its kebab slug: no `E<n>`, no parentheses (pro-d473).
+    #[test]
+    fn step_display_uses_readable_slug_only() {
+        let all = [
+            (Step::E1, "escalations"),
+            (Step::E2, "liveness"),
+            (Step::E3, "scheduling"),
+            (Step::E4, "open-jobs"),
+            (Step::E5, "pr-poll"),
+            (Step::E7, "workflow-start"),
+            (Step::Workers, "workers"),
+            (Step::HostAlert, "host-alert"),
+            (Step::E8, "inbox"),
+            (Step::E9, "curation"),
+            (Step::E10, "session-titles"),
+            (Step::E11, "team-review"),
+            (Step::E12, "worker-archive"),
+            (Step::E13, "sleep"),
+            (Step::E14, "archive-asleep"),
+            (Step::E15, "model-discovery"),
+            (Step::E16, "janitor"),
+            (Step::E20, "parked-drafts"),
+            (Step::E22, "permanent-contexts"),
+            (Step::E24, "swr"),
+        ];
+        for (step, slug) in all {
+            assert_eq!(step.to_string(), slug, "{step:?}");
+        }
+    }
+
+    /// The error Event text and the Manager text name the slug, not `E<n>`.
+    #[test]
+    fn step_failure_event_text_names_slug() {
+        let plan = PlanId::parse("pay").unwrap();
+        assert_eq!(
+            About::Plan(plan).lead(Step::E2),
+            "The engine failed at liveness for Plan pay:"
+        );
+        assert_eq!(
+            About::Machine.lead(Step::E24),
+            "The engine failed at swr for the machine:"
+        );
+    }
+
+    /// The watch.log line of a failed step starts with `cpd watch: <slug>`.
+    #[test]
+    fn watch_log_lines_use_slug_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let mut report = Report::new(Duration::ZERO);
+        report.fail(
+            &mut store,
+            &mut log,
+            Step::E2,
+            About::Machine,
+            failure("tmux_failed"),
+        );
+        let text = std::fs::read_to_string(home.watch_log()).unwrap();
+        assert!(text.contains("cpd watch: liveness"), "{text}");
+        assert!(!text.contains("E2"), "{text}");
+    }
 }
