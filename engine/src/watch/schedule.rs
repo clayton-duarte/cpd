@@ -272,7 +272,7 @@ pub(super) fn run(engine: &mut Engine) {
     match restart::holding(&engine.home) {
         Ok(true) => {
             return engine.log.line(
-                "E3: holding: a tmux restart is pending, no new Attempt starts until it has run",
+                "scheduling: holding: a tmux restart is pending, no new Attempt starts until it has run",
             );
         }
         Ok(false) => {}
@@ -420,7 +420,7 @@ pub(super) fn run(engine: &mut Engine) {
             ) {
                 Ok(started) => {
                     engine.log.line(&format!(
-                        "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",
+                        "scheduling: started {} of Plan {plan} at Tier {} ({}), driver pid {}",
                         started.attempt,
                         started.tier,
                         started.origin.as_str(),
@@ -433,7 +433,7 @@ pub(super) fn run(engine: &mut Engine) {
                 // Attempt, no back-off, no Event; the next tick tries again (§3.7 E3 "The queue walk").
                 Err(e) if matches!(e.code(), ErrorCode::NoSlot | ErrorCode::ResourceBusy) => {
                     engine.log.line(&format!(
-                        "E3: Job {key} of Plan {plan} is skipped: {}",
+                        "scheduling: Job {key} of Plan {plan} is skipped: {}",
                         e.message()
                     ));
                     if let Err(e) = record_skips(engine, &[(plan.clone(), key.clone())]) {
@@ -443,7 +443,7 @@ pub(super) fn run(engine: &mut Engine) {
                 // The Job changed since it was read (another starter, a cancel): decided again next tick.
                 Err(e) if matches!(e.code(), ErrorCode::CasLost | ErrorCode::JobNotReady) => {
                     engine.log.line(&format!(
-                        "E3: skipped Job {key} of Plan {plan}: {}",
+                        "scheduling: skipped Job {key} of Plan {plan}: {}",
                         e.message()
                     ));
                 }
