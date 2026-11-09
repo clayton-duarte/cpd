@@ -454,6 +454,9 @@ fn role_ranges_include_valid_next_defaults_and_respect_catalog_gaps() {
     assert!(catalog.check(t("S2")).is_err());
     assert!(catalog.check(t("O1")).is_err());
     assert_eq!(range(&catalog, Role::Worker, &gap), pair("H3", "SX"));
-    assert_eq!(range(&catalog, Role::Lead, &gap), pair("S3", "OX"));
+    // OX is valid even with numeric efforts, but it is above the missing O1.
+    assert!(catalog.check(t("OX")).is_ok());
+    assert!(t("O0") < t("O1") && t("O1") < t("OX"));
+    assert_eq!(range(&catalog, Role::Lead, &gap), pair("S3", "O0"));
     assert_eq!(range(&catalog, Role::Manager, &gap), pair("O2", "O4"));
 }
