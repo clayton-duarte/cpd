@@ -32,6 +32,7 @@ use crate::lock;
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
 use crate::policy::Checks;
+use crate::host::runner::Runner;
 use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 use crate::swr::source::github_write;
@@ -206,6 +207,8 @@ fn poll_pass(
     given_reads: Option<Vec<Read>>,
 ) -> Result<(Value, bool), CpdError> {
     let root = env.home.root().to_owned();
+    // The `gh` calls this pass makes beyond E5's one document, by kind (the E5 log line's measure).
+    let (mut absent_calls, mut comment_calls, mut check_calls) = (0_u32, 0_u32, 0_u32);
 
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned Workflow's `pr.feedback.checks`, resolved before anything is written (§8.3). A Workflow whose policy does not
@@ -262,6 +265,7 @@ fn poll_pass(
             .iter()
             .map(|row| (row.repo.clone(), row.number))
             .collect();
+        absent_calls = u32::from(!keys.is_empty());
         let read = gh::read_absent(
             &*env.ports.runner,
             &root,
@@ -302,6 +306,7 @@ fn poll_pass(
         // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
         // written, so that a failed read writes nothing.
         let due = due_reads(&owned, &seen);
+        comment_calls = u32::from(!due.is_empty());
         reads = gh::read_comments(
             &*env.ports.runner,
             &root,
@@ -367,6 +372,7 @@ fn poll_pass(
                 lists.push((gated.clone(), required.clone(), excused.clone()));
             }
         }
+        check_calls = u32::from(!confirm.is_empty());
         let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
         for listed in &mut seen {
             if let Some(i) = confirm
@@ -479,12 +485,14 @@ fn poll_pass(
     report_unresolved(env, &unresolved)?;
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
+    let counted = Counting::new(env.ports.runner.clone());
     deploys::read_into_store(
-        &*env.ports.runner,
+        &counted,
         &mut env.store,
         &env.home,
         env.ports.clock.utc(),
     )?;
+    let deploy_calls = counted.count();
 
     let printed_prs = match &selected {
         Some(id) => {
@@ -504,11 +512,69 @@ fn poll_pass(
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
         "done": outcome.done,
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
+        "calls": {"search": 1, "absent": absent_calls, "comments": comment_calls, "checks": check_calls, "deploys": deploy_calls},
     });
     if let Some(workflows) = printed_prs {
         out["workflows"] = Value::Array(workflows);
     }
     Ok((out, !reopened.is_empty()))
+}
+
+/// A [`Runner`] that counts the `gh` calls it forwards, for the poll's measure.
+struct Counting {
+    inner: std::sync::Arc<dyn Runner>,
+    calls: std::sync::atomic::AtomicU32,
+}
+
+impl Counting {
+    fn new(inner: std::sync::Arc<dyn Runner>) -> Counting {
+        Counting {
+            inner,
+            calls: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+
+    fn count(&self) -> u32 {
+        self.calls.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn bump(&self) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Runner for Counting {
+    fn output(
+        &self,
+        cmd: &mut std::process::Command,
+        tool: &str,
+        deadline: Duration,
+    ) -> Result<std::process::Output, crate::host::deadline::Failed> {
+        self.bump();
+        self.inner.output(cmd, tool, deadline)
+    }
+
+    fn output_unbounded(
+        &self,
+        cmd: &mut std::process::Command,
+        tool: &str,
+    ) -> std::io::Result<std::process::Output> {
+        self.bump();
+        self.inner.output_unbounded(cmd, tool)
+    }
+
+    fn run(
+        &self,
+        call: &crate::host::runner::Call,
+    ) -> Result<std::process::Output, crate::host::deadline::Failed> {
+        self.bump();
+        self.inner.run(call)
+    }
+
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
 }
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`] on `ports.clock`: `lock_timeout` (exit 5). The

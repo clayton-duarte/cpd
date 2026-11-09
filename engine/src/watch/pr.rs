@@ -43,6 +43,9 @@ const RATE_FALLBACK: Duration = Duration::from_secs(60);
 #[cfg_attr(not(test), allow(dead_code))]
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
+/// The least wait between the end of a poll and a poll-now request's poll (or a third of `pr_poll_seconds`, if more).
+const MIN_SPACING: Duration = Duration::from_secs(5);
+
 /// When the next poll is due: `pr_poll_seconds` after the last one ended (tests: `CPD_TEST_PR_POLL`, [`limit`]), and
 /// not before the rate limit resets; `now` when none has run; `None` while a poll runs. The engine wakes at this time
 /// instead of at the next tick (contract §3.7).
@@ -54,13 +57,14 @@ pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
         "PR_POLL",
         Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)),
     );
-    // A cpd action changed a pull request on GitHub: poll at once (no floor), but never inside a rate-limit pause.
+    // A cpd action changed a pull request on GitHub: poll without waiting the whole period, but never sooner than
+    // `max(5 s, pr_poll_seconds / 3)` after the last poll ended (a burst of requests costs one poll), and never inside a
+    // rate-limit pause.
     let asked = engine.home.run_dir().join(cpd_core::pr::POLL_NOW).exists();
-    let after_last = if asked {
-        now
-    } else {
-        engine.last_poll_end.map_or(now, |end| end + every)
-    };
+    let spacing = (every / 3).max(MIN_SPACING);
+    let after_last = engine.last_poll_end.map_or(now, |end| {
+        end + if asked { spacing.min(every) } else { every }
+    });
     Some(
         engine
             .paused_until
@@ -161,12 +165,19 @@ pub(super) fn apply(engine: &mut Engine, finished: Finished) {
         listed("merged"),
         listed("done"),
     );
-    if changed + feedback + merged + done > 0 {
-        engine.log.line(&format!(
-            "E5: polled {} pull request(s): {changed} changed, {feedback} feedback, {merged} merged, {done} plan(s) done",
-            out["polled"]
-        ));
-    }
+    // Every poll writes its measure: what it cost, what GitHub has left, and the calls it made by kind.
+    let calls = &out["calls"];
+    engine.log.line(&format!(
+        "E5: polled {} pull request(s): {changed} changed, {feedback} feedback, {merged} merged, {done} plan(s) done; cost {}, remaining {}, search {}, absent {}, comments {}, checks {}, deploys {}",
+        out["polled"],
+        out["rate_limit"]["cost"],
+        out["rate_limit"]["remaining"],
+        calls["search"],
+        calls["absent"],
+        calls["comments"],
+        calls["checks"],
+        calls["deploys"],
+    ));
     engine.rate_reset = out["rate_limit"]["reset_at"]
         .as_str()
         .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok());

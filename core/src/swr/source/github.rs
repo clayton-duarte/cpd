@@ -18,8 +18,10 @@ use crate::swr::{cache, endpoint};
 
 /// GitHub's rate-limit floor: below it the endpoint is paused until the limit resets (was `RATE_FLOOR` of the engine).
 const RATE_FLOOR: i64 = 100;
-/// The most `Heavy` selections one document carries (swr-github.md §3.2; the page's guess, unverified).
-const HEAVY_CAP: usize = 25;
+/// The most `Heavy` selections one document carries (swr-github.md §3.2): a document must stay under GitHub's 10 s limit.
+const HEAVY_CAP: usize = 5;
+/// The most `p<i>` aliases (heavy and absent) one document carries (pro-d477); authored or owned first, then the oldest.
+const ABSENT_CAP: usize = 10;
 /// Repository metadata and the viewer are read again after this long.
 const META_TTL: Duration = Duration::from_secs(24 * 3600);
 /// A Slack-posted pull request is first-seen only inside this window (swr-github.md §4.2 d).
@@ -51,6 +53,7 @@ fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<V
         "merged": [],
         "done": [],
         "rate_limit": {"cost": 0, "remaining": remaining, "reset_at": reset_at},
+        "calls": {"search": 0, "absent": 0, "comments": 0, "checks": 0, "deploys": 0},
     }))
 }
 
@@ -71,6 +74,9 @@ struct Stored {
     repo: String,
     number: i64,
     tracked: bool,
+    /// Authored by the User or owned by an open Workflow.
+    own: bool,
+    created_at: String,
     hydrated: bool,
     /// The stored rollup is failed and a label is excused: the contexts are needed to excuse a Danger (pro-d447).
     held_failure: bool,
@@ -104,7 +110,7 @@ impl GithubSource {
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
                         d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
-                        pr.checks = 'failed', pr.labels_json
+                        pr.checks = 'failed', pr.labels_json, pr.created_at
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -113,6 +119,7 @@ impl GithubSource {
                     let (own, review): (bool, bool) = (r.get(2)?, r.get(3)?);
                     let (same, has): (bool, bool) = (r.get(5)?, r.get(6)?);
                     let (failed, labels): (bool, Option<String>) = (r.get(7)?, r.get(8)?);
+                    let created_at: String = r.get(9)?;
                     let labels: Vec<String> = labels
                         .and_then(|l| serde_json::from_str(&l).ok())
                         .unwrap_or_default();
@@ -121,6 +128,8 @@ impl GithubSource {
                             repo: r.get(0)?,
                             number: r.get(1)?,
                             tracked: own || review,
+                            own,
+                            created_at,
                             hydrated: has && same,
                             held_failure: failed
                                 && swr_read::policy_hold(&labels, &self.excused_labels),
@@ -143,16 +152,17 @@ impl GithubSource {
                 .collect())
         })?;
         let mut heavy: Vec<&Stored> = stored.iter().filter(|s| !s.hydrated).collect();
-        heavy.sort_by_key(|s| s.hydrated_at);
+        heavy.sort_by_key(|s| (!s.own, s.hydrated_at));
         heavy.truncate(HEAVY_CAP);
         let heavy: Vec<(String, i64)> = heavy.iter().map(|s| (s.repo.clone(), s.number)).collect();
-        let mut absent: Vec<(String, i64)> = Vec::new();
-        if let Some(prev) = &memory {
-            for s in stored.iter().filter(|s| s.tracked) {
-                let key = (s.repo.clone(), s.number);
-                if !prev.contains(&key) && !heavy.contains(&key) {
-                    absent.push(key);
-                }
+        // (peer, created_at, key): the User's own first, then the oldest. A cold memory (an engine restart) lists nothing, so
+        // every tracked row not listed by a search is confirmed, a few per pass.
+        let mut absent: Vec<(bool, String, (String, i64))> = Vec::new();
+        let prev = memory.unwrap_or_default();
+        for s in stored.iter().filter(|s| s.tracked) {
+            let key = (s.repo.clone(), s.number);
+            if !prev.contains(&key) && !heavy.contains(&key) {
+                absent.push((!s.own, s.created_at.clone(), key));
             }
         }
         let floor = now.unix_timestamp() - SLACK_WINDOW;
@@ -182,11 +192,24 @@ impl GithubSource {
                 .map(|(repo, n, _)| (repo, n))
                 .collect())
         })?;
+        let tombstoned: BTreeSet<String> = cx.store.read(|c| {
+            let mut stmt = c.prepare("SELECT repo FROM swr_repos WHERE inactive_at IS NOT NULL")?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            Ok(rows)
+        })?;
         for key in first_seen {
-            if !absent.contains(&key) && !heavy.contains(&key) {
-                absent.push(key);
+            if !absent.iter().any(|(_, _, k)| *k == key)
+                && !heavy.contains(&key)
+                && !tombstoned.contains(&key.0)
+            {
+                absent.push((true, String::new(), key));
             }
         }
+        absent.sort();
+        let room = ABSENT_CAP.saturating_sub(heavy.len());
+        let absent: Vec<(String, i64)> = absent.into_iter().take(room).map(|(_, _, k)| k).collect();
         let repos: BTreeSet<&str> = stored
             .iter()
             .map(|s| s.repo.as_str())
@@ -206,6 +229,7 @@ impl GithubSource {
         })?;
         let meta = repos
             .into_iter()
+            .filter(|r| !tombstoned.contains(*r))
             .filter(|r| {
                 !fresh
                     .get(*r)
@@ -312,6 +336,10 @@ impl GithubSource {
         } else {
             no_effects(cx.store, now)?
         };
+        let mut effects = effects;
+        // E5's one document is the search call; its `p<i>` aliases ride on it.
+        effects["calls"]["search"] = 1.into();
+        effects["calls"]["absent"] = (plan.heavy.len() + plan.absent.len()).into();
         // The viewer. `cache::commit` rejects a key with one colon (`system()` wants `<system>:<kind>:<id>`), and the key is
         // `github:viewer` (swr.md §4), so its row is written here, with the same rule: unchanged data opens no write.
         let login = read.viewer.clone();
@@ -336,7 +364,23 @@ impl GithubSource {
         }
         // The repositories.
         for (repo, meta) in plan.meta.iter().zip(&read.metas) {
-            let Some(meta) = meta else { continue };
+            let Some(meta) = meta else {
+                // The repository resolves to null (deleted, renamed or no longer visible): its rows are archived and it is
+                // tombstoned, so it is never queried again.
+                cx.store.write("swr repo gone", |tx| {
+                    tx.execute(
+                        "UPDATE pull_requests SET archived = 1 WHERE repo = ?1",
+                        [repo],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO swr_repos (repo, fetched_at, inactive_at) VALUES (?1, ?2, ?2)
+                         ON CONFLICT (repo) DO UPDATE SET fetched_at = excluded.fetched_at, inactive_at = excluded.inactive_at",
+                        params![repo, timestamp(now)],
+                    )?;
+                    Ok::<(), CpdError>(())
+                })?;
+                continue;
+            };
             let key = format!("github:repo:{repo}");
             let hash = sha(&format!("{meta:?}"));
             let changed = cache::commit(cx.store, &key, &hash, now, started, |tx| {
@@ -395,6 +439,21 @@ impl GithubSource {
                     merged.insert(id.clone(), node);
                 }
             }
+        }
+        // A merged, closed or missing pull request closes its Slack post: nothing reads it again.
+        let gone = merged
+            .iter()
+            .filter(|(_, node)| !node.is_open())
+            .map(|(id, _)| id)
+            .chain(&not_found);
+        for (repo, number) in gone {
+            cx.store.write("swr slack inactive", |tx| {
+                tx.execute(
+                    "UPDATE swr_slack_posts SET inactive_at = ?3 WHERE repo = ?1 AND number = ?2 AND inactive_at IS NULL",
+                    params![repo, number, timestamp(now)],
+                )?;
+                Ok::<(), CpdError>(())
+            })?;
         }
         for (repo, number) in &not_found {
             cache::fail(
