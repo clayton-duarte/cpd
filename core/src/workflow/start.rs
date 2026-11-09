@@ -17,7 +17,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{PlanId, WorkflowKey};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::{Phase, WorkflowRow};
 use crate::pr::{plan_phase, wrong_phase};
@@ -462,14 +462,15 @@ fn prepare_as(
 
 /// Inside the transaction: the Workflow `waiting → dispatch` with its worktree, then
 /// `workflow-started`, and the `error` `push_failed` of a push that failed (R35).
-/// Compare-and-swap on `status = 'waiting'`, else `cas_lost`.
+/// Compare-and-swap on `status = 'waiting'`, else `cas_lost`. Returns the key of the `open` Job it
+/// inserted, `None` when the Workflow already had one.
 pub fn record(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     pushed: &Pushed,
     by: By,
     worker_tier: Tier,
-) -> Result<(), CpdError> {
+) -> Result<Option<JobKey>, CpdError> {
     let (workflow, lead) = (&pushed.prepared.workflow, &pushed.prepared.lead);
     let worktree = lead.path.display().to_string();
     let moved = tx.execute(
@@ -511,15 +512,16 @@ pub fn record(
         [plan.as_str(), workflow.key.as_str()],
         |r| r.get(0),
     )?;
+    let mut opened = None;
     if !has_open {
-        crate::job::open::add(
+        opened = Some(crate::job::open::add(
             tx,
             plan,
             workflow,
             worker_tier,
             false,
             crate::job::open::BY_ENGINE,
-        )?;
+        )?);
     }
     if let Some(error) = &pushed.failed {
         let text = format!(
@@ -537,7 +539,7 @@ pub fn record(
         );
         append(tx, event.plan(plan.clone()))?;
     }
-    Ok(())
+    Ok(opened)
 }
 
 /// Starts one Workflow of a Plan in `dispatch` (E7, `workflow start`): [`prepare`], push,
@@ -562,7 +564,7 @@ pub fn start(
     match store.write(by.source(), |tx| {
         record(tx, plan, &pushed, by, config.worker_tier)
     }) {
-        Ok(()) => Ok(pushed),
+        Ok(_) => Ok(pushed),
         Err(e) => {
             pushed.discard();
             Err(Failed::Other(e))

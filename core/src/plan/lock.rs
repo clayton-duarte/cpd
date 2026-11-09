@@ -121,7 +121,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
     let started: Vec<Pushed> = prepared.into_iter().map(start::Prepared::push).collect();
 
-    let keys: Vec<String> = drafts.iter().map(|j| j.key.clone()).collect();
+    let mut keys: Vec<String> = drafts.iter().map(|j| j.key.clone()).collect();
+    let mut opened: Vec<String> = Vec::new();
     let committed = env.store.write(COMMAND, |tx| {
         // Compare-and-swap on what was read: the phase, the drafts and the review.
         let jobs_now = jobs::load(tx, &id)?;
@@ -143,15 +144,19 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
                 [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],
             )?;
         }
-        let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd plan show --plan {id}", keys.len());
+        // A started Workflow's `open` Job is queued here too (contract §3.8 "Opening"): it is reported with the drafts.
+        for workflow in &started {
+            if let Some(key) = start::record(tx, &id, workflow, By::Lock, env.config.worker_tier)? {
+                opened.push(key.as_str().to_string());
+            }
+        }
+        let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd plan show --plan {id}", keys.len() + opened.len());
         let started_keys: Vec<&str> = started.iter().map(|p| p.key()).collect();
+        let all: Vec<&str> = keys.iter().chain(&opened).map(String::as_str).collect();
         append(
             tx,
-            NewEvent::plan_phase_locked(text, &keys, started_keys).plan(id.clone()),
+            NewEvent::plan_phase_locked(text, &all, started_keys).plan(id.clone()),
         )?;
-        for workflow in &started {
-            start::record(tx, &id, workflow, By::Lock, env.config.worker_tier)?;
-        }
         Ok(())
     });
     if let Err(e) = committed {
@@ -159,6 +164,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         return Err(e);
     }
 
+    keys.extend(opened);
     let watch = ensure_watch(&env, &id)?;
     Ok(Output::success(
         json!({"plan": id, "phase": "dispatch", "jobs": keys, "workflows": listed(&workflows, &started, &held), "watch": watch}),
