@@ -1116,7 +1116,7 @@ fn engine_on_tmux_with(config_extra: &str) -> Ip {
 fn workers_errors(fx: &Ip) -> Vec<String> {
     fx.texts("error")
         .into_iter()
-        .filter(|t| t.contains("@cpd_workers"))
+        .filter(|t| t.contains("failed at workers"))
         .collect()
 }
 
