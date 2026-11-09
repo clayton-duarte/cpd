@@ -51,7 +51,7 @@ class FakeConnection implements Connection {
 }
 
 let mounted: { unmount(): void } | null = null;
-afterEach(() => { mounted?.unmount(); mounted = null; });
+afterEach(() => { mounted?.unmount(); mounted = null; window.localStorage.clear(); });
 
 function setup() {
   const connection = new FakeConnection();
