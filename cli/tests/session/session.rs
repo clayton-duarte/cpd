@@ -1994,7 +1994,7 @@ fn e2_logs_the_dead_pane_exit_status_before_it_kills_the_window() {
         .unwrap()
         .to_owned();
     fx.cpd(&["session", "open", LEAD2]).ok();
-    let log = fx.env.cpd_home().join("run/watch.log");
+    let log = fx.watch_log_path();
     // What the log held as each `kill-window` was about to be answered.
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let at_kill = seen.clone();
