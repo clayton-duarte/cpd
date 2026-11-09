@@ -1023,3 +1023,5 @@ fn a_failed_linear_attempt_removes_the_untracked_files_it_left() {
     });
     assert_eq!(status.unwrap(), "", "the worktree is not clean");
 }
+
+// Dirty Lead worktree setup reporting regression.
