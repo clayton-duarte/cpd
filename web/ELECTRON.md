@@ -379,6 +379,7 @@ cpd desktop shows one terminal per tab: the local tab, and one remote tab per ss
 ### Visibility and the view
 
 - The host tabs (`local` plus every remote tab) show only in the TUI view: they are hidden in WebUI and WebUI Preview (air-d50).
+- **No strip at any point of startup (pro-d465, Bug report protocol).** The `<nav id="tab-bar">` starts `hidden` in the markup (`web/electron.html`), so WebUI and WebUI Preview reserve no host-tab strip, and the content sits at the top (`#tab-bar[hidden] ~ #webui-root { top: 0 }`), before the renderer's startup (the Ghostty WASM and the fonts) completes and when that startup rejects. Only the TUI view reveals the strip; `applyView` sets `hidden` on each mode change. The status footer of the cockpit (the Status Bar, web/src/ui/DESIGN.md 3b) is not a host-tab strip and is unaffected.
 - Clicking a remote tab switches the view to TUI for this run (air-d40) and connects that tab's pty if it has none. The `local` tab follows the view the View menu selects; how the menu and the mode switch work is owned by mode.ts and menu.ts (see Module contract and the View menu items) and is not restated here.
 
 ### IPC channels

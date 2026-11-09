@@ -29,7 +29,6 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let workflow = plan.select(&args.workflow)?.clone();
     let key = workflow.key.clone();
-    let approval = super::approval::post_guard(&mut env, &id, &key)?;
 
     // (a)
     if workflow.status != "open" {
@@ -138,6 +137,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("repo", pull.repo.as_str()));
         }
     }
+    let approval = super::approval::post_guard(&mut env, &id, &key)?;
     // (h)
     let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url)
         .map_err(|e| {
