@@ -245,6 +245,22 @@ describe("App", () => {
     expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
   });
 
+  it("retains a pi draft after an Event receipt because consumption is unconfirmed", async () => {
+    const { transport, container } = start();
+    act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
+    const piRef = { ...ref, runner: "pi", state: "blocked", key: "cpd:worker-loop" };
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "worker-loop", meta: { ref: piRef, footer } }));
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "pi message");
+    act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("pi message");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown|unconfirmed/i);
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
   it("selecting an archived session disables the Composer", () => {
     const transport = new FakeTransport();
     const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);

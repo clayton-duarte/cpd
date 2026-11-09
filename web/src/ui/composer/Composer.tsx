@@ -34,6 +34,8 @@ import type {
   FileReaderBoundary,
 } from "./attachments.ts";
 
+type ObserveSubmission = (settle: (result: SubmissionResult) => void) => Disposable;
+
 export interface ComposerSubmit {
   readonly text: string;
   readonly attachments: readonly AttachmentItem[];
@@ -49,7 +51,7 @@ interface ComposerProps {
     busy: boolean;
     queued: readonly QueuedSubmission[];
     reader: FileReaderBoundary;
-    onSubmit(s: ComposerSubmit): unknown;
+    onSubmit(s: ComposerSubmit): void | ObserveSubmission;
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     sessionId: string;
@@ -110,7 +112,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
     };
     try {
       const observe = onSubmit({ text, attachments, whenBusy: "followUp" });
-      if (typeof observe !== "function") {
+      if (observe === undefined) {
         clear();
         locked.current = false;
         return;

@@ -94,7 +94,9 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           onSubmit={({ text, attachments, whenBusy }) => {
             const { text: prompt, images } = buildPrompt(text, attachments);
             const id = connection.submit({ text: prompt, images, whenBusy });
-            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, settle);
+            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, (result) => {
+              settle(view.ref?.runner === "pi" && result.type === "ack" ? { type: "unknown" } : result);
+            });
           }}
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}

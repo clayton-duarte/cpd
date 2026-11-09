@@ -23,7 +23,7 @@ function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queue
   const onCancelQueued = vi.fn();
   const m = mount(
     <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
-      reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
+      reader={reader} onSubmit={(i) => { submits.push(i); }} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
   );
   return { m, submits, onAbort, onCancelQueued };
 }

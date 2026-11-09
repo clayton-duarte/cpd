@@ -24,7 +24,7 @@ function setup(over: { busy?: boolean; queued?: QueuedSubmission[]; settings?: R
   const m = mount(
     <Composer sessionId="s1" capabilities={caps} busy={over.busy ?? false} queued={over.queued ?? []} reader={reader}
       settings={over.settings}
-      onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={() => {}} />,
+      onSubmit={(i) => { submits.push(i); }} onAbort={onAbort} onCancelQueued={() => {}} />,
   );
   return { m, submits, onAbort };
 }
