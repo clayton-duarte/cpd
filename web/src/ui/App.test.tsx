@@ -160,6 +160,48 @@ describe("App", () => {
     });
   });
 
+  it("preserves a blocked target's draft and attachments until its correlated acknowledgement without duplicate sends", async () => {
+    const { transport, container } = start();
+    const blockedRef = { ...ref, state: "blocked", key: "cpd:worker-loop" };
+    const blockedNode = { ...node, ref: blockedRef, dot: { state: "blocked", attention: null } };
+    const blockedPlan = { ...snapshot.tree.contexts[0]!.plans[0]!, sessions: [blockedNode] };
+    const tree = { ...snapshot.tree, contexts: [{ ...snapshot.tree.contexts[0]!, plans: [blockedPlan] }] };
+    act(() => transport.emitMessage({ ...snapshot, tree }));
+    act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "worker-loop", meta: { ref: blockedRef, footer } }));
+    const zone = container.querySelector('[data-chat-dropzone]')!;
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { zone.dispatchEvent(drop); });
+    typeAndEnter(container, "do not lose this");
+    const ta = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+    expect(ta.value).toBe("do not lose this");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/cpd:worker-loop.*(pending|awaiting)/i);
+    act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+    act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "other", queued: false }));
+    expect(ta.value).toBe("do not lose this");
+    act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false }));
+    expect(ta.value).toBe("");
+    expect(container.querySelector('[aria-label="Staged attachments"]')).toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).not.toMatch(/delivered|restored/i);
+  });
+
+  it("keeps the draft and attachment on a correlated send failure and does not resend automatically", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "keep me");
+    act(() => transport.emitMessage({ type: "session.error", sessionId: "s1", clientSubmissionId: "c1", error: { code: "cpd_failed", message: "send failed" } }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("keep me");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/send failed/i);
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
   it("selecting an archived session disables the Composer", () => {
     const transport = new FakeTransport();
     const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
