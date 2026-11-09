@@ -37,7 +37,7 @@ pi/test/review-chat.test.ts 39  # m-pi: sleep or wall-clock wait
 pi/test/session_model_changed.test.ts 2  # m-pi: sleep or wall-clock wait
 pi/test/slack-channel.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
-pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait
+pi/test/state.test.ts 32  # m-pi: sleep or wall-clock wait
 pi/test/testguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/updates.test.ts 1  # m-pi: sleep or wall-clock wait
 tui/src/menu.rs 1  # m-units: sleep or wall-clock wait
