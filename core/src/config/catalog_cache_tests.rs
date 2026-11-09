@@ -10,7 +10,6 @@ use serde_json::json;
 use super::*;
 use crate::clock::ManualClock;
 use crate::host::runner::{FakeRunner, Reply};
-use crate::ports::Ports;
 
 /// pi levels of the three configured models: O and H as given, S as `sonnet`.
 fn levels(sonnet: &[&str]) -> Reply {
@@ -66,12 +65,8 @@ impl Rig {
         for reply in replies {
             runner = runner.once("node", |_| true, reply);
         }
-        let ports = Ports {
-            runner: std::sync::Arc::new(runner.clone()),
-            ..Ports::real()
-        };
         let pi = self.pi();
-        let result = Ports::scope(&ports, || load_from(&pi, &self.models, &mut self.store));
+        let result = load_from(&pi, &self.models, &mut self.store, &runner);
         (runner, result)
     }
 

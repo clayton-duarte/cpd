@@ -354,7 +354,7 @@ fn merge(repeat: u32) -> Merge {
     ));
     fx.env.quiet_models(fx.fakes.clock.utc());
     fx.engine_routes();
-    fx.install_pi();
+    fx.install_catalog();
     let gh = Arc::new(Gh {
         script: Mutex::new(Script {
             allowed: true,
