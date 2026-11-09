@@ -154,27 +154,104 @@ pub(super) fn run_timed_with(
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
 /// and a timeout (60 s) are `gh_failed`.
 fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    run_on(&*Ports::current().runner, cwd, args)
+    let ports = Ports::current();
+    if IN_MERGE.with(std::cell::Cell::get) {
+        return run_in_merge(&*ports.runner, &*ports.clock, cwd, args);
+    }
+    run_on(&*ports.runner, cwd, args)
 }
 
-/// STUB (red tests, ghfail2): a merge's `gh <args>` call on `runner` and `clock`: a `RATE_LIMITED` reply waits in place until the
-/// reset (read with `gh api rate_limit`: `graphql` or `core`, plus 3 s; 60 s when unreadable), repeats the same argv, burns no
-/// try, and past 3 600 s of waiting in total fails `gh_failed` with the message `rate_limited: <message>` (contract §7.4).
-/// Not implemented: it panics.
-#[cfg(test)]
+std::thread_local! {
+    /// Set while the merge runs its `gh` calls: [`run`] then waits out a rate limit instead of failing (contract §7.4).
+    static IN_MERGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with its `gh` calls waiting out a rate limit (see [`run_in_merge`]); the flag is restored after.
+pub(crate) fn in_merge<T>(f: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            IN_MERGE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(IN_MERGE.with(|c| c.replace(true)));
+    f()
+}
+
+/// The longest the waits of one merge total, in seconds: one GitHub rate window.
+const MERGE_WAIT_BOUND: u64 = 3_600;
+/// Added to the reset before the call is repeated, in seconds.
+const MERGE_WAIT_GRACE: u64 = 3;
+/// The wait when the reset cannot be read, in seconds.
+const MERGE_WAIT_FALLBACK: u64 = 60;
+
+/// A merge's `gh <args>` call on `runner` and `clock`: a rate-limited reply waits in place until the reset (read with
+/// `gh api rate_limit`: `graphql` or `core`, plus 3 s; 60 s when unreadable), repeats the same argv, burns no try, and past
+/// 3 600 s of waiting in total fails `gh_failed` with the message `rate_limited: <message>` (contract §7.4).
 pub(super) fn run_in_merge(
     runner: &dyn Runner,
-    _clock: &dyn crate::clock::Clock,
-    _cwd: &Path,
-    _args: &[&str],
+    clock: &dyn crate::clock::Clock,
+    cwd: &Path,
+    args: &[&str],
 ) -> Result<String, CpdError> {
-    let _ = runner;
-    unimplemented!("ghfail2: the merge's rate-limit wait")
+    let mut waited = 0u64;
+    loop {
+        let out = run_raw_with(runner, cwd, args, TIMEOUT)?;
+        let limited = out.exit != Some(0) && rate_limited(&out.stdout, &out.stderr);
+        let graphql = out.stdout.contains("RATE_LIMITED");
+        let e = match finish(out, args) {
+            Ok(stdout) => return Ok(stdout),
+            Err(e) => e,
+        };
+        if !limited {
+            return Err(e);
+        }
+        let wait = reset_wait(runner, clock, cwd, if graphql { "graphql" } else { "core" });
+        if waited + wait > MERGE_WAIT_BOUND {
+            return Err(CpdError::new(
+                ErrorCode::GhFailed,
+                format!("rate_limited: {}", e.message()),
+            )
+            .with("argv", e.details().get("argv").cloned().unwrap_or_default())
+            .with("exit", e.details().get("exit").cloned().unwrap_or_default())
+            .with(
+                "stderr",
+                e.details().get("stderr").cloned().unwrap_or_default(),
+            ));
+        }
+        waited += wait;
+        clock.sleep(Duration::from_secs(wait));
+    }
+}
+
+/// Seconds to wait for `resource`'s reset plus the grace; the fallback when `gh api rate_limit` fails or has no reset.
+fn reset_wait(
+    runner: &dyn Runner,
+    clock: &dyn crate::clock::Clock,
+    cwd: &Path,
+    resource: &str,
+) -> u64 {
+    let reset = run_raw_with(runner, cwd, &["api", "rate_limit"], TIMEOUT)
+        .ok()
+        .filter(|o| o.exit == Some(0))
+        .and_then(|o| serde_json::from_str::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| v["resources"][resource]["reset"].as_u64());
+    match reset {
+        Some(reset) => {
+            let now = u64::try_from(clock.utc().unix_timestamp()).unwrap_or(0);
+            reset.saturating_sub(now) + MERGE_WAIT_GRACE
+        }
+        None => MERGE_WAIT_FALLBACK,
+    }
 }
 
 /// [`run`] on `runner`.
 fn run_on(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let out = run_raw_with(runner, cwd, args, TIMEOUT)?;
+    finish(run_raw_with(runner, cwd, args, TIMEOUT)?, args)
+}
+
+/// A finished call's stdout, or its `gh_failed`.
+fn finish(out: Output, args: &[&str]) -> Result<String, CpdError> {
     match out.exit {
         Some(0) => Ok(out.stdout),
         Some(code) => Err(failed(

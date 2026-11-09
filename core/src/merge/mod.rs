@@ -943,7 +943,7 @@ fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> 
     })
 }
 
-/// STUB (red tests, ghfail2): the detail of the `crashed` End that `crash_end` gives `e`; `None` when it ends any other way.
+/// Test seam: the detail of the `crashed` End that `crash_end` gives `e`; `None` when it ends any other way.
 #[cfg(test)]
 pub(crate) fn crashed_detail(e: CpdError) -> Option<String> {
     match crash_end(e, None).ok()?.end {
@@ -958,7 +958,7 @@ pub(crate) fn crashed_detail(e: CpdError) -> Option<String> {
 /// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let workflow = workflow_row(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, &workflow)
+    crate::pr::in_merge(|| crate::pr::is_merged_on_github(&target.lead_worktree, &workflow))
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
@@ -968,13 +968,15 @@ fn open_pull_request(
     target: &Attempt,
 ) -> Result<crate::pr::Pulled, CpdError> {
     let (workflow, title, description) = workflow_of_job(store, target)?;
-    crate::pr::pull_request(
-        &target.lead_worktree,
-        &workflow,
-        &title,
-        description.as_deref(),
-        &config.inbox.bot_reviewers,
-    )
+    crate::pr::in_merge(|| {
+        crate::pr::pull_request(
+            &target.lead_worktree,
+            &workflow,
+            &title,
+            description.as_deref(),
+            &config.inbox.bot_reviewers,
+        )
+    })
 }
 
 /// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or

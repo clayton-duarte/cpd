@@ -50,6 +50,7 @@ pub mod deploys;
 mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
+pub(crate) use gh::in_merge;
 pub(crate) use gh::{Adoptable, adoptable};
 mod merge;
 pub mod merge_method;
