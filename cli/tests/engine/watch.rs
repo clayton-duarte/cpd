@@ -5229,8 +5229,13 @@ impl InstallRig {
             )
             .on(
                 "cpd",
-                at(built, &["config", "--migrate"]),
+                at(built.clone(), &["config", "--migrate"]),
                 Reply::ok(r#"{"ok":true,"migrated":[]}"#),
+            )
+            .on(
+                "cpd",
+                at(built, &["watch", "--check", "--migrate-scratch"]),
+                Reply::ok(r#"{"ok":true}"#),
             )
             .on(
                 "cpd",
@@ -5343,6 +5348,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
         [
             vec!["--version"],
             vec!["config", "--migrate"],
+            vec!["watch", "--check", "--migrate-scratch"],
             vec!["config"],
             vec!["watch", "--check"]
         ]
