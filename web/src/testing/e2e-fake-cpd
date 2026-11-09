@@ -326,7 +326,7 @@ switch (command) {
     tuiCommand();
     break;
   case "--version":
-    emit({ ok: true, version: "0.0.0", protocol: 24 });
+    emit({ ok: true, version: "0.0.0", protocol: 25 });
     break;
   default:
     emit({ ok: true });

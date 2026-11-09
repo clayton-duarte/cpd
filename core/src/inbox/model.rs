@@ -46,6 +46,9 @@ pub enum Kind {
     DraftsParked,
     /// An open Workflow of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
     PrClosed,
+    /// A Session whose `guard` Events over `watch.refusal_alert_minutes` reach `watch.refusal_alert_threshold` (§3.7 E25, Plan
+    /// `agent-refusals`, air-d85, air-d105); always red, linked to the Session, its Plan and its Context.
+    RefusalAlert,
 }
 
 impl Kind {
@@ -70,6 +73,7 @@ impl Kind {
             Kind::Deploy => "deploy",
             Kind::DraftsParked => "drafts-parked",
             Kind::PrClosed => "pr-closed",
+            Kind::RefusalAlert => "refusal-alert",
         }
     }
 
@@ -94,6 +98,7 @@ impl Kind {
             Deploy,
             DraftsParked,
             PrClosed,
+            RefusalAlert,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)
@@ -701,6 +706,7 @@ mod tests {
             "pr-ready",
             "review-requested",
             "pr-closed",
+            "refusal-alert",
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }

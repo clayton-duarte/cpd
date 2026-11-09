@@ -851,6 +851,19 @@
     },
     "required": []
   },
+  "metrics refusals": {
+    "flags": {
+      "--help": false,
+      "--limit": true,
+      "--since": true,
+      "--until": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "models refresh": {
     "flags": {
       "--help": false

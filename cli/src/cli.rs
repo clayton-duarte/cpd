@@ -111,7 +111,7 @@ pub enum Command {
     /// The tier presets and their machine switch (commands.md §14.6)
     #[command(subcommand)]
     Preset(config::preset::Command),
-    /// The read-only aggregate of the machine's Ledger (commands.md §14.7)
+    /// The read-only aggregate of the machine's Ledger, or of its refusals (`cpd metrics refusals`, commands.md §14.7)
     Metrics(metrics::MetricsArgs),
     /// Install the cpd built from a checkout (commands.md §14.4)
     Install(install::Args),

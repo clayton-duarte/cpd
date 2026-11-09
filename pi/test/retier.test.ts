@@ -191,7 +191,7 @@ test("a failed session show records nothing", async (t) => {
 });
 
 test("the protocol is exactly one past the base", () => {
-  assert.equal(PROTOCOL, 24, "ui-origin raised it to 24 for session-message's optional data.origin; the Lead-less shaping phase raised it to 23; workflow-reopened raised it to 22; agent keys raised it to 21; the Workflow rename raised it to 20; context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; workflow-described raised it to 17; the commands the adapter runs grew it earlier (contract §5.2)");
+  assert.equal(PROTOCOL, 25, "the guard Event kind raised it to 25 (Plan agent-refusals); ui-origin raised it to 24 for session-message's optional data.origin; the Lead-less shaping phase raised it to 23; workflow-reopened raised it to 22; agent keys raised it to 21; the Workflow rename raised it to 20; context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; workflow-described raised it to 17; the commands the adapter runs grew it earlier (contract §5.2)");
 });
 
 test("the protocol was raised past 8 and session-retiered is a known kind delivered as no message", () => {

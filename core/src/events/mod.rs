@@ -4,6 +4,8 @@
 //! Delivery to a Lead's pi session (§5.3) is the pi adapter's, in TypeScript.
 
 mod append;
+#[cfg(test)]
+mod guard_tests;
 mod kind;
 mod notify;
 pub mod repeat;
