@@ -1877,7 +1877,7 @@ fn a_failed_push_of_an_update_job_ends_the_attempt_crashed_with_push_failed_afte
 // ------------------------------------------------------------ R
 
 #[test]
-fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() {
+fn r_after_step_8_ends_merged_at_the_tip_and_preserves_the_stale_lead_worktree() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
     fx.advance_lead("other.txt", "other\n");
@@ -1885,6 +1885,8 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
     // The Lead worktree is stale: index and files are the old tree, HEAD is new.
     assert!(!fx.lead.join("api.txt").exists());
     assert_ne!(fx.status(&fx.lead), "");
+    let lead_status = fx.status(&fx.lead);
+    let lead_index = fx.git(&fx.lead, &["write-tree"]);
     fx.request_cancel("api");
 
     let recovered = fx.recover();
@@ -1892,12 +1894,10 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].attempt, attempt);
     assert_eq!(recovered[0].end, Some(End::Merged { sha: tip.clone() }));
-    // Step 9 finished.
-    assert_eq!(fx.status(&fx.lead), "");
-    assert_eq!(
-        fs::read_to_string(fx.lead.join("api.txt")).unwrap(),
-        "api\n"
-    );
+    // Recovery cannot attribute the old index to the driver rather than staged work.
+    assert_eq!(fx.status(&fx.lead), lead_status);
+    assert_eq!(fx.git(&fx.lead, &["write-tree"]), lead_index);
+    assert!(!fx.lead.join("api.txt").exists());
     assert_eq!(fx.lead_sha(), tip);
     // Step 10, with the cancel request reported as too late.
     assert_eq!(
@@ -1923,9 +1923,9 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
         events[1].1,
         json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false, "cancel_too_late": true})
     );
-    // The rest of A9: the worktree and branch are gone.
-    assert!(!worktree.exists());
-    assert!(!fx.branch_exists("cpd/pay--api-a1"));
+    // Driver-death recovery preserves the Attempt worktree and branch.
+    assert!(worktree.exists());
+    assert!(fx.branch_exists("cpd/pay--api-a1"));
     // Idempotent: nothing left to recover.
     assert!(fx.recover().is_empty());
 }
@@ -2515,19 +2515,14 @@ fn r_recovers_the_orphans_of_its_repo_per_pr_and_pushes_each_prs_branch() {
         (fx.remote_tip(&schema), fx.remote_tip(&web)),
         (on_schema.clone(), on_web.clone())
     );
-    // Step 9 finished in each PR's own Lead worktree.
-    assert_eq!(
-        fs::read_to_string(schema.lead.join("api.txt")).unwrap(),
-        "api\n"
-    );
-    assert_eq!(fs::read_to_string(web.lead.join("ui.txt")).unwrap(), "ui\n");
-    assert_eq!(
-        (fx.status(&schema.lead), fx.status(&web.lead)),
-        (String::new(), String::new())
-    );
+    // Neither PR's stale Lead worktree is rewritten by recovery.
+    assert!(!schema.lead.join("api.txt").exists());
+    assert!(!web.lead.join("ui.txt").exists());
+    assert_eq!(fx.status(&schema.lead), "D  api.txt");
+    assert_eq!(fx.status(&web.lead), "D  ui.txt");
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
     assert_eq!(fx.job_row("ui"), ("merged".into(), Some(on_web), None));
-    assert!(!api_worktree.exists() && !ui_worktree.exists());
+    assert!(api_worktree.exists() && ui_worktree.exists());
 }
 
 #[test]

@@ -1468,8 +1468,8 @@ fn rebase_runs_r_first_for_a_merge_of_its_pr_whose_driver_died() {
         .unwrap();
     assert_eq!(source, "pr rebase");
     assert!(
-        !worktree.exists(),
-        "R's rest of A9 removed the Attempt's worktree"
+        worktree.exists(),
+        "R preserves the Attempt's worktree"
     );
     // Then the rebase of S, which holds the merge, onto the base; pushed despite R's own push.
     let new = fx.lead_sha();

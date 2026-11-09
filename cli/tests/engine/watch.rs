@@ -1763,7 +1763,8 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
         fx.events("job-merged")[0].3,
         json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false})
     );
-    assert!(!made.path.exists());
+    assert!(made.path.exists(), "R preserves the recovered Attempt worktree");
+    assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), tip);
 }
 
 /// A window `pay--api-a1` in the work session, with another to keep the session alive.
@@ -1869,7 +1870,7 @@ fn r3_kills_the_window_of_a_merge_that_did_not_happen_though_the_first_kill_wind
 }
 
 #[test]
-fn r2_removes_the_worktree_though_every_kill_window_fails() {
+fn r2_preserves_the_worktree_though_every_kill_window_fails() {
     let (fx, repo, lead) = engine_on_git();
     let (made, _) = merging_api(&fx, &repo, &lead, true);
     worker_window(&fx);
@@ -1882,8 +1883,8 @@ fn r2_removes_the_worktree_though_every_kill_window_fails() {
         "the fake tmux never failed a kill-window"
     );
     assert!(
-        fx.attempt("api-a1").0 == "ended" && !made.path.exists(),
-        "the merge recorded and its worktree removed"
+        fx.attempt("api-a1").0 == "ended" && made.path.exists(),
+        "the merge recorded and its worktree preserved"
     );
     assert_eq!(fx.attempt("api-a1").1.as_deref(), Some("merged"));
 }
