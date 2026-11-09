@@ -106,6 +106,14 @@ export function createDurableBackend(deps: {
       let busy = false;
       let tier = session.ref.tier;
       let agentModel: string | undefined;
+      let recordedModel: string | undefined; // the Session's model per `cpd session show`, used when the host reports none
+      try {
+        const row = (await deps.cpd.json(toArgv({ kind: "session.show", sessionId }))).session;
+        const m = typeof row === "object" && row !== null ? (row as { model?: unknown }).model : undefined;
+        if (typeof m === "string" && m !== "") recordedModel = m;
+      } catch {
+        // the footer then says the model is unknown, as before
+      }
       let agentThinking: string | null | undefined;
       let branch: Stat<string> = unknown("branch not read yet");
       let models: HostModel[] | null = null;
@@ -127,7 +135,7 @@ export function createDurableBackend(deps: {
 
       const footer = (): FooterStats => {
         const facts = dialect.transcript.facts;
-        const model = agentModel ?? facts.model;
+        const model = agentModel ?? facts.model ?? recordedModel;
         const thinking = agentThinking === undefined ? facts.thinking : agentThinking;
         const window = model === undefined ? undefined : models?.find((m) => `${m.provider}/${m.model_id}` === model)?.context_window;
         return {
