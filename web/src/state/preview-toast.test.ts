@@ -61,6 +61,8 @@ describe("agent failures and action toasts", () => {
       status: "failed", result: { text: "φ: explore artefact: $CPD_HOME/run/<plan>/explore is for Workers; read the job-merged summary or add a follow-up scout Job", isError: true } },
     { kind: "tool", id: "tool:spec", callId: "spec", name: "bash", args: {},
       status: "failed", result: { text: "spec_invalid: engine-defects /tmp/cpd-engine-defects/followup-cleanup.json $.touches", isError: true } },
+    { kind: "tool", id: "tool:tier", callId: "tier", name: "bash", args: {},
+      status: "failed", result: { text: "tier_not_allowed: worker SX rejected; allowed HX-S0, floor HX, ceiling S0, key worker_tier; next-role lead_tier ceiling", isError: true } },
   ];
 
   it.each(reportedFailures)("keeps reported $id failures in the transcript without a toast", (failure) => {
