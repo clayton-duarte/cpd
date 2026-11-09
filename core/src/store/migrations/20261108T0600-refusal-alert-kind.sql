@@ -3,7 +3,7 @@
 -- air-d85, air-d105): `inbox_items` is rebuilt with it in the kind check, as `pr-closed-kind` rebuilt it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug')),
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert')),
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),
