@@ -753,3 +753,14 @@ fn the_helper_runs_with_the_engines_environment_and_the_key_is_never_an_argument
     assert!(!events.contains(KEY), "no Event holds the key");
     assert!(!fx.file("bifrost").unwrap().to_string().contains(KEY));
 }
+
+// air-d143: machine-scoped Bifrost discovery.
+#[test]
+fn e15_skips_bifrost_on_air_even_when_configured() {
+    todo!("air excludes configured Bifrost");
+}
+
+#[test]
+fn e15_keeps_bifrost_behavior_on_non_air() {
+    todo!("non-air preserves Bifrost discovery");
+}
