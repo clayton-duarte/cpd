@@ -66,3 +66,31 @@ fn light_pass_truly_failed_check_stays_failed() {
     excuse_from_detail(&mut node, &d, &[]);
     assert_eq!(node.listed.pr.checks, ChecksSummary::Failed);
 }
+
+#[test]
+fn passed_checks_normalize_unstable_to_clean() {
+    let mut node = light_node(ChecksSummary::Failed);
+    node.listed.pr.merge_state = MergeState::Unstable;
+    let d = detail(&[("gate", "SUCCESS"), ("e2e", "CANCELLED")]);
+    excuse_from_detail(&mut node, &d, &[]);
+    assert_eq!(node.listed.pr.checks, ChecksSummary::Passed);
+    assert_eq!(node.listed.pr.merge_state, MergeState::Clean);
+}
+
+#[test]
+fn failed_check_keeps_unstable() {
+    let mut node = light_node(ChecksSummary::Failed);
+    node.listed.pr.merge_state = MergeState::Unstable;
+    let d = detail(&[("gate", "FAILURE"), ("e2e", "CANCELLED")]);
+    excuse_from_detail(&mut node, &d, &[]);
+    assert_eq!(node.listed.pr.merge_state, MergeState::Unstable);
+}
+
+#[test]
+fn passed_checks_keep_behind() {
+    let mut node = light_node(ChecksSummary::Failed);
+    node.listed.pr.merge_state = MergeState::Behind;
+    let d = detail(&[("gate", "SUCCESS"), ("e2e", "CANCELLED")]);
+    excuse_from_detail(&mut node, &d, &[]);
+    assert_eq!(node.listed.pr.merge_state, MergeState::Behind);
+}

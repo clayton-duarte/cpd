@@ -59,11 +59,17 @@ pub fn excuse_from_detail(node: &mut PollNode, detail: &serde_json::Value, excus
                 .collect()
         })
         .unwrap_or_default();
-    if node.heavy.is_some() || node.listed.pr.checks != ChecksSummary::Failed {
-        return;
+    if node.heavy.is_none() && node.listed.pr.checks == ChecksSummary::Failed {
+        let checks = checks_of_detail(detail);
+        if !checks.is_empty() {
+            node.listed.pr.checks =
+                ChecksSummary::of(&checks, &[], &[], policy_hold(&labels, excused));
+        }
     }
-    let checks = checks_of_detail(detail);
-    if !checks.is_empty() {
-        node.listed.pr.checks = ChecksSummary::of(&checks, &[], &[], policy_hold(&labels, excused));
+    // pro-d490: UNSTABLE only reflects a non-SUCCESS rollup; with the checks passed it is clean.
+    if node.listed.pr.checks == ChecksSummary::Passed
+        && node.listed.pr.merge_state == super::status::MergeState::Unstable
+    {
+        node.listed.pr.merge_state = super::status::MergeState::Clean;
     }
 }
