@@ -86,6 +86,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr post` | Post the Workflow's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr repost` | Repeat the Workflow's post in its Slack thread (§9.8b2) | Lead | |
 | `cpd pr merge` | Merge a clean pull request on GitHub with a method the repo allows (§9.10) | Lead | yes |
+| `cpd pr merge-green` | Update the branch, wait for green checks on the new head, then squash-merge (§9.10a) | Manager | |
 | `cpd pr approve` | Record the User's approval for one agent reply, post or repost (adapter) | internal | |
 | `cpd review` | The GitHub review (commands.md §31.1) | | |
 | `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
