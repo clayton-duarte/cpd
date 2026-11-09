@@ -271,3 +271,51 @@ it("draft: unavailable storage does not break typing", () => {
   expect(submits).toEqual([{ text: "hello", attachments: [], whenBusy: "followUp" }]);
   m.unmount();
 });
+
+async function attach(m: ReturnType<typeof setup>["m"]) {
+  const input = m.container.querySelector<HTMLInputElement>('input[type="file"][aria-label="Attach files"]')!;
+  Object.defineProperty(input, "files", { value: [png], configurable: true });
+  act(() => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+  await flush();
+}
+const chips = (c: HTMLElement) => c.querySelectorAll('[aria-label="Staged attachments"] [data-attachment="image"]');
+
+it("staged attachments survive a remount", async () => {
+  const first = setup();
+  await attach(first.m);
+  expect(chips(first.m.container)).toHaveLength(1);
+  first.m.unmount();
+  const second = setup();
+  const restored = chips(second.m.container);
+  expect(restored).toHaveLength(1);
+  expect(restored[0]!.textContent).toContain("a.png");
+  second.m.unmount();
+});
+
+it("attachments clear after send", async () => {
+  const first = setup();
+  await attach(first.m);
+  expect(window.localStorage.getItem(KEY("s1")), "the staged attachment is persisted").not.toBeNull();
+  typeText(textarea(first.m.container), "hello");
+  press(textarea(first.m.container), "Enter");
+  expect(first.submits).toHaveLength(1);
+  expect(first.submits[0]!.attachments).toHaveLength(1);
+  expect(chips(first.m.container)).toHaveLength(0);
+  expect(window.localStorage.getItem(KEY("s1"))).toBeNull();
+  first.m.unmount();
+  const second = setup();
+  expect(chips(second.m.container)).toHaveLength(0);
+  second.m.unmount();
+});
+
+it("a draft save quota error is shown", async () => {
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new DOMException("quota", "QuotaExceededError");
+  });
+  const { m } = setup();
+  await attach(m);
+  const alert = m.container.querySelector('[role="alert"]');
+  expect(alert, "a failed draft save is surfaced").not.toBeNull();
+  expect(alert!.textContent).toMatch(/draft|storage|quota/i);
+  m.unmount();
+});
