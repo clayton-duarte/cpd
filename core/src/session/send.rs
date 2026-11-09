@@ -297,7 +297,11 @@ fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError
             .zip(&actual)
             .fold(0u8, |diff, (a, b)| diff | (a ^ b))
             == 0;
-    if same && !actual.is_empty() { Ok(()) } else { Err(invalid()) }
+    if same && !actual.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid())
+    }
 }
 
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {

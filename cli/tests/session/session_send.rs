@@ -867,7 +867,16 @@ fn session_send_origin_webui_needs_the_current_token_and_writes_nothing_otherwis
     let fx = Fx::new();
     setup_with_fork(&fx.env);
     let send = |extra: &[&str]| {
-        let mut argv = vec!["session", "send", "lead1", "hi", "--unblocks", "u", "--origin", "webui"];
+        let mut argv = vec![
+            "session",
+            "send",
+            "lead1",
+            "hi",
+            "--unblocks",
+            "u",
+            "--origin",
+            "webui",
+        ];
         argv.extend_from_slice(extra);
         fx.cpd(&argv)
     };
@@ -877,10 +886,22 @@ fn session_send_origin_webui_needs_the_current_token_and_writes_nothing_otherwis
     refused(&send(&[]), "webui_token_invalid", 3);
     let wrong = "w".repeat(64);
     let error = refused(&send(&["--webui-token", &wrong]), "webui_token_invalid", 3);
-    assert!(!error.to_string().contains(&wrong), "the token is never echoed: {error}");
+    assert!(
+        !error.to_string().contains(&wrong),
+        "the token is never echoed: {error}"
+    );
     assert!(messages(&fx).is_empty(), "a refused send writes no Event");
     // `tui` needs no token.
-    fx.cpd(&["session", "send", "lead1", "hi", "--unblocks", "u", "--origin", "tui"])
-        .ok();
+    fx.cpd(&[
+        "session",
+        "send",
+        "lead1",
+        "hi",
+        "--unblocks",
+        "u",
+        "--origin",
+        "tui",
+    ])
+    .ok();
     assert_eq!(messages(&fx).len(), 1);
 }

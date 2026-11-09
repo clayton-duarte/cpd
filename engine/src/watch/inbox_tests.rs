@@ -539,7 +539,10 @@ fn e8_opens_a_red_loop_guard_item_for_a_blocked_lead_with_the_label() {
 #[test]
 fn e8_loop_guard_item_text_comes_from_the_newest_trip_event() {
     let mut fx = guard_fx("dispatch", "");
-    for (at, kind, count) in [("2026-01-01T00:00:01Z", "inter-turn", 21), ("2026-01-01T00:00:02Z", "turn-refusals", 3)] {
+    for (at, kind, count) in [
+        ("2026-01-01T00:00:01Z", "inter-turn", 21),
+        ("2026-01-01T00:00:02Z", "turn-refusals", 3),
+    ] {
         fx.fixture(&format!(
             "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
              VALUES (cpd_txn(), '{at}', 'loop-guard-trip', 'ctx', 'pay', 'lead1', 't', '{{\"kind\":\"{kind}\",\"count\":{count}}}');"

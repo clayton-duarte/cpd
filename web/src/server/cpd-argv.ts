@@ -31,7 +31,7 @@ export type CpdCommand =
   | { readonly kind: "tui.attach" }
   | { readonly kind: "session.list"; readonly archived?: boolean }
   | { readonly kind: "session.show"; readonly sessionId: string }
-  | { readonly kind: "session.send"; readonly sessionId: string; readonly text: string; readonly unblocks: string; readonly origin?: string }
+  | { readonly kind: "session.send"; readonly sessionId: string; readonly text: string; readonly unblocks: string; readonly origin?: string; readonly webuiToken?: string }
   | { readonly kind: "session.retier"; readonly sessionId: string; readonly tier: string }
   | { readonly kind: "session.retierAll" }
   | { readonly kind: "session.park" }
@@ -112,6 +112,8 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "session.send": {
       const argv = ["session", "send", cmd.sessionId];
       if (cmd.origin !== undefined && cmd.origin !== "") argv.push("--origin", cmd.origin);
+      // contract §6.16 "The WebUI token": the CLI checks it before it writes a message of origin webui.
+      if (cmd.webuiToken !== undefined) argv.push("--webui-token", cmd.webuiToken);
       argv.push("--unblocks", cmd.unblocks, "--", cmd.text);
       return argv;
     }

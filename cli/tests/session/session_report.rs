@@ -333,7 +333,10 @@ fn a_lead_trip_appends_the_trip_event_and_wakes_the_manager_in_one_transaction()
     trip(&fx, "lead1", "turn-refusals", 3);
     let trips = of_kind(&fx, "loop-guard-trip");
     assert_eq!(trips.len(), 1, "{trips:?}");
-    assert_eq!(trips[0]["data"], json!({"kind": "turn-refusals", "count": 3}));
+    assert_eq!(
+        trips[0]["data"],
+        json!({"kind": "turn-refusals", "count": 3})
+    );
     assert_eq!(trips[0]["session"], "lead1");
     assert_eq!(
         trips[0]["text"],

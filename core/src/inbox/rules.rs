@@ -456,7 +456,7 @@ fn newest_trip_text(conn: &Connection, session: &SessionId) -> Result<Option<Str
 /// phase. The label counts the turn that tripped the breaker, `loop_guard_turns + 1`.
 fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'blocked' AND s.state_label = '{LOOP_GUARD_LABEL}'");
-    Ok(seats(conn, LATEST_STATE, &filter)?
+    seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
             // The text comes from the newest `loop-guard-trip` Event of the Session (contract §6.16 "The trip's cause
@@ -466,7 +466,7 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
             let label = format!("{}: {trip}", seat.who);
             Ok(seat_condition(seat, Kind::LoopGuard, Urgency::Red, label))
         })
-        .collect::<Result<Vec<_>, CpdError>>()?)
+        .collect()
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its

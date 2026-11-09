@@ -925,7 +925,9 @@ impl NewEvent {
         ) {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A loop-guard trip kind is inter-turn, read-streak, turn-tools or turn-refusals, not {kind:?}."),
+                format!(
+                    "A loop-guard trip kind is inter-turn, read-streak, turn-tools or turn-refusals, not {kind:?}."
+                ),
             ));
         }
         Ok(make(

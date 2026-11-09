@@ -3511,7 +3511,7 @@ Effects, in this order:
 ### 10.13 `session send`
 
 ```
-cpd session send <id> (<text> | --file <f>) --unblocks <reason> [--origin <tui|webui>]
+cpd session send <id> (<text> | --file <f>) --unblocks <reason> [--origin <tui|webui>] [--webui-token <token>]
 ```
 
 Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It appends an Event; the target's adapter delivers it (§15.3). The message always wakes: when the target is idle it starts a turn at once; a working, waiting or blocked target gets it after its running turn, never interrupted. It carries a required statement of what it unblocks (hs-d507, hs-d514). The command is not the User's only way to write one: the engine writes the same Event, from the User's side (`from` null), to a Context's Manager for each of its own step errors (contract §3.7, hs-d314) and for each stuck Job (contract §3.7 "A stuck Job", hs-d318) and for each repeated ask (contract section 3.7 "A repeated ask").
@@ -3523,6 +3523,7 @@ Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It 
 | `--file <f>` | the message read from a file, same limits |
 | `--unblocks <reason>` | what the message unblocks, 1–200 characters, one line (hs-d514); shown in the Event's text as `Message from <who> (unblocks: <reason>): <preview>` (Effects) |
 | `--origin <tui\|webui>` | the surface the message was submitted from (Plan ui-origin, air-d23): `tui` or `webui`; written as the optional `origin` of the `session-message` Event's `data` (contract §5.2). Optional; absent means no origin. Any other value is refused as `usage` (§1.5) |
+| `--webui-token <token>` | the per-boot WebUI token (contract §6.16 "The WebUI token"): required with `--origin webui`, compared in constant time with the content of `$CPD_HOME/run/webui-token` before any write; a missing or wrong token (or no file) is refused as `webui_token_invalid` (exit 3) and nothing is written. Ignored with any other origin. It is never written to an Event or echoed |
 
 Exactly one of `<text>` and `--file` (else `usage`).
 

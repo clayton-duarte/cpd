@@ -91,7 +91,7 @@ const HELLO_MS = 5000; // LIMITS.helloMs, protocol.ts:6
 type Pending = { resolve: (frame: HostFrame) => void; reject: (error: Error) => void };
 type Answer = Parameters<HostClient["respond"]>[1];
 
-export async function connectHost(socketPath: string, deps: { factory: SocketFactory; scheduler: Scheduler }): Promise<HostClient> {
+export async function connectHost(socketPath: string, deps: { factory: SocketFactory; scheduler: Scheduler; webuiToken?: string }): Promise<HostClient> {
   let socket: SocketLike;
   try {
     socket = await deps.factory.connect(socketPath);
@@ -181,7 +181,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       timer.dispose();
       resolve(outcome);
     };
-    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, min_protocol: MIN_PROTOCOL, client: CLIENT_NAME })}\n`);
+    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, min_protocol: MIN_PROTOCOL, client: CLIENT_NAME, ...(deps.webuiToken === undefined ? {} : { webui_token: deps.webuiToken }) })}\n`);
   });
   onHandshake = null;
   if (first instanceof Error) {

@@ -95,7 +95,7 @@ const ref = (over: Partial<SessionRef> = {}): SessionRef => ({
   ...over,
 });
 
-async function setup(opts: { text?: string; ref?: Partial<SessionRef>; branch?: string | null } = {}) {
+async function setup(opts: { text?: string; ref?: Partial<SessionRef>; branch?: string | null; webuiToken?: string } = {}) {
   const fs = new FakeFile(opts.text ?? `${userLine(0)}\n`);
   const cpd = new FakeCpd();
   const watch = new FakeWatch();
@@ -108,7 +108,7 @@ async function setup(opts: { text?: string; ref?: Partial<SessionRef>; branch?: 
   };
   const out: SessionServerMessage[] = [];
   const scheduler = new FakeScheduler();
-  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home", attachmentsDir: "/att", now: () => 1000, scheduler });
+  const backend = createPiBackend({ cpd, fs, watch, git, cpdHome: "/home", attachmentsDir: "/att", now: () => 1000, scheduler, ...(opts.webuiToken === undefined ? {} : { webuiToken: opts.webuiToken }) });
   const attach = () => backend.attach({ ref: ref(opts.ref), file: opts.ref && "file" in opts.ref ? opts.ref.file : FILE, tierOptions: ["S1", "S2", "S3"] }, (m) => out.push(m));
   return { fs, cpd, watch, gitCalls, out, attach, scheduler };
 }
@@ -155,6 +155,12 @@ describe("pi backend", () => {
     expect(f.tier).toEqual({ state: "known", value: "S3" });
     await s.handle.dispose();
     expect(s.watch.disposed).toBe(1);
+  });
+
+  it("send passes this boot's WebUI token to cpd session send (contract §6.16)", async () => {
+    const s = await attached({ webuiToken: "tok" });
+    await s.handle.submit({ clientSubmissionId: "c1", text: "hello", images: [], whenBusy: "followUp" });
+    expect(s.cpd.calls).toContainEqual(["session", "send", "s1", "--origin", "webui", "--webui-token", "tok", "--unblocks", "User message from the web chat", "--", "hello"]);
   });
 
   it("send maps to cpd session send with the text", async () => {

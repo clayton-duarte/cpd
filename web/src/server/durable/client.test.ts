@@ -95,6 +95,16 @@ describe("durable client", () => {
     expect(client.welcome.pi_durable).toBe("1.5.0");
   });
 
+  it("hello carries the webui_token when the client has one, and no field otherwise (contract §6.16)", async () => {
+    const socket = new FakeSocket();
+    const factory: SocketFactory = { connect: async () => socket };
+    const pending = connectHost("/run/host/s1.sock", { factory, scheduler: new FakeScheduler(), webuiToken: "tok" });
+    await tick();
+    expect(socket.lines[0]).toBe('{"type":"hello","protocol":2,"min_protocol":1,"client":"cpd-web","webui_token":"tok"}\n');
+    socket.emitFrame(WELCOME);
+    await pending;
+  });
+
   it("splits NDJSON frames across chunk boundaries", async () => {
     const { socket, client } = await open();
     const frames: HostFrame[] = [];

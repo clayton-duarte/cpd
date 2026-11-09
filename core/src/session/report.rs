@@ -96,9 +96,12 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
     // Lead the Context Manager's wake, in one transaction. A failure writes neither.
     if code.0 == "loop_guard_trip" {
         let kind = string_field(&details, "kind");
-        let count = details.get("count").and_then(Value::as_u64).ok_or_else(|| {
-            usage("A loop_guard_trip report carries details.count, a number.".to_owned())
-        })?;
+        let count = details
+            .get("count")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                usage("A loop_guard_trip report carries details.count, a number.".to_owned())
+            })?;
         let trip_text = loop_guard_trip_text(&kind, count)?;
         let event = env.store.write("session report", |tx| {
             let session = row::load(tx, &id)?;
@@ -204,11 +207,7 @@ pub(crate) fn loop_guard_trip_text(kind: &str, count: u64) -> Result<String, Cpd
 }
 
 /// The id of `context`'s live Manager (role `manager`, not archived) that is not `lead`, the first created.
-fn live_manager(
-    tx: &WriteTxn<'_>,
-    context: &str,
-    lead: &str,
-) -> Result<Option<String>, CpdError> {
+fn live_manager(tx: &WriteTxn<'_>, context: &str, lead: &str) -> Result<Option<String>, CpdError> {
     Ok(tx
         .query_row(
             "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1 AND id <> ?2
