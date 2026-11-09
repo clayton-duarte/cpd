@@ -264,3 +264,161 @@ fn replaced_head_sha_does_not_abort_poll() {
     assert_eq!(column(&rig, "head_oid").as_deref(), Some(NEW));
     assert_eq!(column(&rig, "base_contained").as_deref(), Some("1"));
 }
+
+// pro-d482: "ready to merge" needs a stored head, and a newly opened, rebased or pushed pull request stores it at once.
+
+fn polled_head(head: Option<&str>) -> super::gh::PolledPr {
+    use super::status::{MergeState, Mergeable, PrState, ReviewDecision};
+    super::gh::PolledPr {
+        repo: "acme/pay".into(),
+        number: 901,
+        url: "https://github.com/acme/pay/pull/901".into(),
+        title: "T".into(),
+        draft: false,
+        state: PrState::Open,
+        review_decision: ReviewDecision::None,
+        checks: ChecksSummary::Passed,
+        mergeable: Mergeable::Clean,
+        merge_state: MergeState::Clean,
+        created_at: "t".into(),
+        updated_at: "t".into(),
+        merged_at: None,
+        base_ref: Some("main".into()),
+        default_branch: Some("main".into()),
+        open_threads: vec![],
+        archived: false,
+        head_oid: head.map(str::to_owned),
+    }
+}
+
+fn listed(head: Option<&str>) -> super::gh::Listed {
+    super::gh::Listed {
+        pr: polled_head(head),
+        membership: super::gh::Membership {
+            authored: true,
+            review_requested: false,
+        },
+    }
+}
+
+fn stored_head(store: &mut Store) -> Option<String> {
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT head_oid FROM pull_requests WHERE number = 901",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn ready_to_merge_requires_head_oid() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    rig.sql(
+        "UPDATE pull_requests SET state = 'open', draft = 0, merge_state = 'clean', base_ref = 'main',
+                default_branch = 'main', base_contained = 1, head_oid = NULL WHERE number = 801;",
+    );
+    let sql = format!(
+        "SELECT {} FROM pull_requests p WHERE p.number = 801",
+        super::pulls::ready_to_merge_sql("p")
+    );
+    let ready = |rig: &Rig| -> i64 {
+        let mut store = Store::open(&rig.home, 5000).unwrap();
+        store
+            .read(|c| Ok(c.query_row(&sql, [], |r| r.get(0))?))
+            .unwrap()
+    };
+    assert_eq!(ready(&rig), 0, "no head_oid: not ready to merge");
+    rig.sql(&format!(
+        "UPDATE pull_requests SET head_oid = '{NEW}' WHERE number = 801;"
+    ));
+    assert_eq!(ready(&rig), 1, "with a head_oid it is ready to merge");
+}
+
+#[test]
+fn open_records_head_oid() {
+    // `pr open` writes the looked-up row with `pulls::ensure` (a new row) at once, before any poll.
+    let rig = Rig::new();
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("test", |tx| {
+            super::pulls::ensure(tx, &polled_head(Some(NEW))).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(stored_head(&mut store).as_deref(), Some(NEW));
+
+    // The lookup that feeds it carries the head.
+    let _rig = rig;
+    let gh_rig = rig_for_lookup();
+    let found = super::gh::lookup(
+        &*gh_rig.fakes.runner,
+        std::path::Path::new("/"),
+        &[("acme/pay".to_owned(), 801)],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        found[0].as_ref().and_then(|p| p.head_oid.as_deref()),
+        Some(NEW)
+    );
+}
+
+fn rig_for_lookup() -> Rig {
+    let rig = Rig::new();
+    let _ = (*rig.fakes.runner).clone().route(
+        "gh",
+        Arc::new(Gh {
+            listed: false,
+            rollup: "SUCCESS",
+            contexts: vec![],
+        }),
+    );
+    rig
+}
+
+#[test]
+fn upsert_stores_head_oid() {
+    let rig = Rig::new();
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("test", |tx| {
+            super::pulls::upsert(tx, &listed(Some(NEW)), None).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(
+        stored_head(&mut store).as_deref(),
+        Some(NEW),
+        "a new row stores the head"
+    );
+
+    // A listing without a head never erases the stored one.
+    store
+        .write("test", |tx| {
+            super::pulls::upsert(tx, &listed(None), None).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(stored_head(&mut store).as_deref(), Some(NEW));
+}
+
+#[test]
+fn rebase_and_push_record_head_oid() {
+    // A rebase or push replaces the head: the same row, otherwise unchanged, now has head NEW. The upsert of that lookup
+    // stores it at once, without waiting for the next poll.
+    let rig = Rig::new();
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("test", |tx| {
+            super::pulls::upsert(tx, &listed(Some(OLD)), None).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(stored_head(&mut store).as_deref(), Some(OLD));
+    store
+        .write("test", |tx| {
+            super::pulls::upsert(tx, &listed(Some(NEW)), None).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(stored_head(&mut store).as_deref(), Some(NEW));
+}
