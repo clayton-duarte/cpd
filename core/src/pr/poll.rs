@@ -25,6 +25,7 @@ use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
+use crate::host::runner::Runner;
 use crate::ids::{JobKey, OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::inbox::model as inbox;
 use crate::job::open::{self, Cause};
@@ -32,7 +33,6 @@ use crate::lock;
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
 use crate::policy::Checks;
-use crate::host::runner::Runner;
 use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 use crate::swr::source::github_write;
@@ -486,12 +486,7 @@ fn poll_pass(
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
     let counted = Counting::new(env.ports.runner.clone());
-    deploys::read_into_store(
-        &counted,
-        &mut env.store,
-        &env.home,
-        env.ports.clock.utc(),
-    )?;
+    deploys::read_into_store(&counted, &mut env.store, &env.home, env.ports.clock.utc())?;
     let deploy_calls = counted.count();
 
     let printed_prs = match &selected {

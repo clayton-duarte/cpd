@@ -3053,7 +3053,12 @@ fn parse_poll(
         let alias = format!("p{i}");
         let Some(slot) = data.get(&alias) else {
             // A repository whose metadata alias resolves to null has no pull requests to answer for: not found.
-            let (repo, _) = plan.heavy.iter().chain(&plan.absent).nth(i).expect("alias i");
+            let (repo, _) = plan
+                .heavy
+                .iter()
+                .chain(&plan.absent)
+                .nth(i)
+                .expect("alias i");
             let gone = plan
                 .meta
                 .iter()
