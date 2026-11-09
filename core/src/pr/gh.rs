@@ -643,7 +643,7 @@ macro_rules! pr_fields {
     };
     ($repo:expr) => {
         concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
-         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+         mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
          reviewThreads(first: 100) { nodes { id isResolved } }")
     };
 }
@@ -661,7 +661,7 @@ macro_rules! search_pr_fields {
 macro_rules! slim_pr_fields {
     () => {
         concat!(repo_node!(settings), " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
-         mergeable mergeStateStatus")
+         mergeable mergeStateStatus headRefOid")
     };
 }
 
@@ -744,6 +744,9 @@ pub struct Search {
     /// The settings the search's `repository` nodes carried, one per repo, in first-seen order (air-n71): empty when a
     /// canned reply did not select them, and the poll then writes no row.
     pub repo_settings: Vec<(String, RepoMeta)>,
+    /// The `headRefOid` the read carried for each pull request, as `(owner/name, number, oid)`: the head the containment
+    /// flag is computed on (contract §2.2 "Ready to merge"), never the stored one.
+    pub heads: Vec<(String, i64, String)>,
 }
 
 #[derive(Deserialize)]
@@ -865,6 +868,9 @@ struct RawPr {
     /// The search always selects it; it is optional only so that a reply without it (a test's fake `gh`) follows nothing.
     #[serde(rename = "baseRefName", default)]
     base_ref: Option<String>,
+    /// The head commit; optional only so that a reply without it (a test's fake `gh`) carries no fresh head.
+    #[serde(rename = "headRefOid", default)]
+    head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
     /// `latestReviews` of the Light read (pro-d453); the legacy search still selects `latestOpinionatedReviews`, the same nodes.
@@ -1395,10 +1401,17 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
     let mut repo_settings: Vec<(String, RepoMeta)> = Vec::new();
+    let mut heads: Vec<(String, i64, String)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
             let settings = raw.repository.settings();
+            let head = raw.head_ref_oid.clone();
             let pr = reply.polled(raw, bots)?;
+            if let Some(head) = head
+                && !heads.iter().any(|(r, n, _)| (r, n) == (&pr.repo, &pr.number))
+            {
+                heads.push((pr.repo.clone(), pr.number, head));
+            }
             if let Some(meta) = settings
                 && !repo_settings.iter().any(|(repo, _)| repo == &pr.repo)
             {
@@ -1429,6 +1442,7 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
         issue_count,
         prs,
         repo_settings,
+        heads,
         rate: Rate {
             cost: rate.cost,
             remaining: rate.remaining,
