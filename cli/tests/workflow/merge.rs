@@ -1930,6 +1930,55 @@ fn r_after_step_8_ends_merged_at_the_tip_and_preserves_the_stale_lead_worktree()
     assert!(fx.recover().is_empty());
 }
 
+
+/// Reflog membership does not prove that a staged tree belongs to the dead driver.
+#[test]
+fn r_after_step_8_preserves_reflog_matching_staged_work_and_operation_state() {
+    for marker in ["MERGE_HEAD", "rebase-merge/orig-head"] {
+        let fx = fx();
+        let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+        // A user deliberately stages the earlier tree; it is also in the reflog.
+        let earlier = fx.git(&fx.lead, &["rev-parse", "HEAD"]);
+        fx.advance_lead("later.txt", "later\n");
+        fs::remove_file(fx.lead.join("later.txt")).unwrap();
+        fx.git(&fx.lead, &["add", "later.txt"]);
+        let old_index = fx.git(&fx.lead, &["write-tree"]);
+        assert_eq!(old_index, fx.git(&fx.lead, &["rev-parse", &format!("{earlier}^{{tree}}") ]));
+        let tip = die_after_step_8(&fx, &worktree);
+        let admin = fx.universe.lock().unwrap().admin_dir(&fx.lead);
+        let marker_path = admin.join(marker);
+        fs::create_dir_all(marker_path.parent().unwrap()).unwrap();
+        fs::write(&marker_path, "active operation\n").unwrap();
+        fs::write(fx.lead.join("untracked.txt"), "lead work\n").unwrap();
+        fs::write(worktree.join("api.txt"), "staged worker work\n").unwrap();
+        fx.git(&worktree, &["add", "api.txt"]);
+        fs::write(worktree.join("api.txt"), "unstaged worker work\n").unwrap();
+        fs::write(worktree.join("untracked.txt"), "worker work\n").unwrap();
+        let worker_status = fx.status(&worktree);
+        let worker_index = fx.git(&worktree, &["write-tree"]);
+        let lead_status = fx.status(&fx.lead);
+        let calls_before = fx.calls("git").len();
+
+        let recovered = fx.recover();
+        let recovery_calls = fx.calls("git");
+        assert_eq!(recovered[0].end, Some(End::Merged { sha: tip.clone() }));
+        assert_eq!(fx.attempt_row(&attempt).1.as_deref(), Some("merged"));
+        assert_eq!(fx.lead_sha(), tip);
+        assert_eq!(fx.git(&fx.lead, &["write-tree"]), old_index);
+        assert_eq!(fx.status(&fx.lead), lead_status);
+        assert_eq!(fs::read(&marker_path).unwrap(), b"active operation\n");
+        assert_eq!(fs::read(fx.lead.join("untracked.txt")).unwrap(), b"lead work\n");
+        assert_eq!(fx.git(&worktree, &["write-tree"]), worker_index);
+        assert_eq!(fx.status(&worktree), worker_status);
+        assert_eq!(fs::read(worktree.join("api.txt")).unwrap(), b"unstaged worker work\n");
+        assert_eq!(fs::read(worktree.join("untracked.txt")).unwrap(), b"worker work\n");
+        assert!(fx.branch_exists("cpd/pay--api-a1"));
+        for call in &recovery_calls[calls_before..] {
+            assert!(!call.args.iter().any(|a| matches!(a.as_str(), "read-tree" | "reset" | "clean" | "--abort" | "remove" | "-D")), "recovery mutated a worktree: {call:?}");
+        }
+    }
+}
+
 #[test]
 fn r_before_step_8_ends_crashed_and_retries_at_the_same_tier() {
     let fx = fx();
