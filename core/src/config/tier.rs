@@ -512,9 +512,7 @@ impl Catalog {
             range.contains(*r)
                 && *r > tier
                 && r.effort != Some(0)
-                && (r.letter == tier.letter
-                    || !r.is_x()
-                    || self.model(r.letter).efforts.is_empty())
+                && (r.letter == tier.letter || !r.is_x() || self.model(r.letter).efforts.is_empty())
         })
     }
 
