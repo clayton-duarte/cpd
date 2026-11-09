@@ -11,7 +11,7 @@ export interface StreamChild {
   onLine(cb: (line: string) => void): void;
   onExit(cb: (info: { code: number | null; stderr: string }) => void): void;
 }
-export interface StreamPanes { readonly context: unknown; readonly plan: unknown; readonly session: unknown; readonly inbox: unknown }
+export interface StreamPanes { readonly context: unknown; readonly plan: unknown; readonly session: unknown; readonly inbox: unknown; /** The serve status pane of CONTRACT §20, passed through unparsed: the four-pane checks stay, this one is read by the cockpit service. */ readonly status?: unknown }
 export interface StreamSnapshot { readonly seq: number; readonly panes: StreamPanes }
 export interface StreamDeps {
   spawn(args: string[]): StreamChild;

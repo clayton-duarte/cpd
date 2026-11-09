@@ -76,6 +76,36 @@ pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers,
     })
 }
 
+/// Every `queued` Job, the waiting ones included (contract §20.1; the `@cpd_workers` step's Q).
+pub const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
+
+/// Ready (§3.2): the query E3 lists the Ready Jobs with (contract §3.2, §20.1). E3's scheduler
+/// (engine/src/watch/schedule.rs), the `@cpd_workers` step (engine/src/watch/workers.rs) and the
+/// cockpit `status` pane (core/src/cockpit/mod.rs) all count or walk these rows, so the rule lives
+/// here once and every reader names it. `SELECT count(*) FROM (READY)` is the `W waiting` count.
+pub const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
+  LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
+  WHERE j.status = 'queued' AND p.archived_at IS NULL
+    AND ((j.workflow IS NOT NULL AND (p.phase IN ('dispatch', 'deploy') OR (p.phase = 'plan' AND p.locked_at IS NOT NULL)) AND r.status IN ('dispatch', 'open'))
+      OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
+          AND p.phase IN ('shaping', 'grounding', 'plan', 'dispatch', 'deploy')))
+    AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
+                     WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
+    AND (j.kind <> 'open' OR (r.status = 'dispatch'
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                           AND o.status NOT IN ('merged', 'cancelled'))
+         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                       AND o.status = 'merged')))
+    AND (j.kind <> 'update' OR (r.status = 'open'
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                           AND o.status IN ('queued', 'running'))))
+  ORDER BY j.urgent DESC, j.seq";
+
+/// The number of Ready Jobs (E3's rule, contract §3.2): `SELECT count(*) FROM (READY)`.
+pub fn ready_count(conn: &rusqlite::Connection) -> Result<u32, CpdError> {
+    Ok(conn.query_row(&format!("SELECT count(*) FROM ({READY})"), [], |r| r.get(0))?)
+}
+
 impl Workers {
     /// The pool E3 schedules on: `free` = slots no live Attempt holds, `urgent_free` = the one beyond, while the live Attempts are
     /// at most `slots` (contract §3.4 "Tenancy", air-n90).

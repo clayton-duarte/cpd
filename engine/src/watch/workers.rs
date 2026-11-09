@@ -16,11 +16,11 @@
 use super::engine::Engine;
 use super::report::{About, Step};
 use super::restart;
-use super::schedule::READY;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::tmux::RUNNER_OPTION;
 use cpd_core::incident::is_on;
+use cpd_core::resource::{QUEUED, READY};
 use rusqlite::OptionalExtension;
 
 /// The options the status line draws: the long form and the short form.
@@ -32,9 +32,6 @@ const INCIDENT: &str = "@cpd_incident";
 
 /// The tenant Jobs of `workers` (§3.4 "Tenancy"): the occupancy the starter counts, a `failed` Job included.
 const HELD: &str = "SELECT count(*) FROM job_tenants WHERE pool = 'workers'";
-
-/// Every `queued` Job, the waiting ones included.
-const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
 
 /// The glyph between the three numbers (User, hs-d749): a private-use Nerd Font glyph, one cell wide like the buttons' glyphs.
 const SEPARATOR: char = '\u{f0798}';

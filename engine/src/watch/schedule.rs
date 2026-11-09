@@ -89,32 +89,10 @@ pub(super) fn backing_off_with(
     backing_off(conn, plan, key, clock.utc())
 }
 
-/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy` (or in `plan` once locked: a re-planned Plan, pro-d433), whose Workflow is `dispatch`
-/// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no Workflow) is Ready in a live Plan (not archived)
-/// in `shaping`, `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged` (a Lead-less `shaping` Plan's explore
-/// Jobs are dispatched like a Lead Plan's; air-d19, air-d22). `driver::start`'s `require_ready` says the same.
-/// An `open` or `update` Job has no Dependency rows: its rule is derived from the Workflow's other Jobs (§3.2),
-/// which are the Jobs that are neither `open` nor `update` (those do not count each other). An `open` Job is
-/// Ready when its Workflow is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
-/// an `update` Job when its Workflow is `open` and none of them is `queued` or `running`.
-/// The `workers` step counts these rows too (the StatusBar's `W waiting`).
-pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
-  LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
-  WHERE j.status = 'queued' AND p.archived_at IS NULL
-    AND ((j.workflow IS NOT NULL AND (p.phase IN ('dispatch', 'deploy') OR (p.phase = 'plan' AND p.locked_at IS NOT NULL)) AND r.status IN ('dispatch', 'open'))
-      OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
-          AND p.phase IN ('shaping', 'grounding', 'plan', 'dispatch', 'deploy')))
-    AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
-                     WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
-    AND (j.kind <> 'open' OR (r.status = 'dispatch'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
-                           AND o.status NOT IN ('merged', 'cancelled'))
-         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
-                       AND o.status = 'merged')))
-    AND (j.kind <> 'update' OR (r.status = 'open'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
-                           AND o.status IN ('queued', 'running'))))
-  ORDER BY j.urgent DESC, j.seq";
+/// Ready (§3.2): the one query that lists the Ready Jobs, defined once in
+/// [`cpd_core::resource::READY`] and shared by E3 (this scheduler), the `@cpd_workers` step
+/// (engine/src/watch/workers.rs) and the cockpit `status` pane (core/src/cockpit/mod.rs).
+pub(super) use cpd_core::resource::READY;
 
 /// The allocation E3 derives for each Ready Job it is about to start (pro-d52), per Workflow, from the Ledger: a Workflow with a
 /// live linear Attempt starts nothing (`None`: its Jobs are held); a Workflow with live parallel Attempts starts all

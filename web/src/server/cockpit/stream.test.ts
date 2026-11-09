@@ -229,4 +229,15 @@ describe("cockpit stream", () => {
     scheduler.advance(1);
     expect(children).toHaveLength(3);
   });
+
+  it("passes the serve status pane through the snapshot unparsed", () => {
+    const { stream, children, snapshots, errors } = setup();
+    stream.start();
+    children[0]!.feed(hello);
+    const status = { ok: true, workers: { queued: 1, waiting: 2, running: 3, limit: 4 }, incident: { on: false, started_at: null, lead: null } };
+    children[0]!.feed({ t: "snapshot", seq: 1, panes: { ...panes, status } });
+    expect(errors).toEqual([]);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.panes.status).toEqual(status);
+  });
 });

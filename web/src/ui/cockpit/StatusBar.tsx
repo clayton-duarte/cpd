@@ -11,8 +11,8 @@ import { dotDisplay, glyphClass, sessionDisplay } from "../dango-status.ts";
 export interface StatusModel {
   readonly runner: "pi" | "durable" | null;
   readonly preview: string | null;
-  /** Elapsed text of an open incident (`5m`, `2h 5m`, `3d`); null when no incident is on. */
-  readonly incident: string | null;
+  /** The open incident: its elapsed text (`5m`, `2h 5m`, `3d`) and its Lead's Session id; null when none is on. */
+  readonly incident: { readonly elapsed: string; readonly lead: string | null } | null;
   readonly workers: { readonly queued: number; readonly ready: number; readonly tenants: number; readonly concurrency: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;
@@ -34,7 +34,7 @@ export function barStatus(s: WireStatus, nowMs: number): StatusModel {
   return {
     runner: s.runner === "pi" || s.runner === "durable" ? s.runner : null,
     preview: s.preview,
-    incident: s.incident === null ? null : elapsed(s.incident.startedAt, nowMs),
+    incident: s.incident === null ? null : { elapsed: elapsed(s.incident.startedAt, nowMs), lead: s.incident.lead },
     workers: s.workers === null ? null : { queued: s.workers.queued, ready: s.workers.waiting, tenants: s.workers.tenants, concurrency: s.workers.limit },
     version: s.version,
     hostAlert: s.hostAlert,
@@ -53,6 +53,7 @@ export interface StatusBarProps {
   readonly onLogs?: () => void;
   readonly onCosts?: () => void;
   readonly onSettings?: () => void;
+  readonly onSelectSession?: (sessionId: string) => void;
   readonly runner?: Runner | null;
   readonly state?: SessionState | null;
   readonly version?: Stat<string> | null;
@@ -60,15 +61,30 @@ export interface StatusBarProps {
 
 const PILL = "font-mono text-meta";
 
-function Pills({ status }: { status: StatusModel }): ReactElement {
+function Pills({ status, onSettings, onSelectSession }: { status: StatusModel; onSettings?: () => void; onSelectSession?: (sessionId: string) => void }): ReactElement {
   const w = status.workers;
+  const incident = status.incident;
   return (
     <>
       {status.runner === null ? null : <span data-part="runner" className={cn(PILL, "text-fg-strong")}>{status.runner}</span>}
       {status.preview === null ? null : <span data-part="preview" className={cn(PILL, "text-status-landing")}>{`preview: ${status.preview}`}</span>}
       <span className="flex-1" />
-      {status.incident === null ? null : <span data-part="incident" className={cn(PILL, "italic text-status-blocked-bright")}>{`Incident Mode: ${status.incident}`}</span>}
-      {w === null ? null : <span data-part="workers" className={cn(PILL, "text-fg-dim")}>{`workers ${w.queued}·${w.ready}·${w.tenants}/${w.concurrency}`}</span>}
+      {incident === null ? null : (
+        <span
+          data-part="incident"
+          role="button"
+          className={cn(PILL, "italic text-status-blocked-bright", incident.lead === null ? undefined : "cursor-pointer")}
+          {...(incident.lead === null ? {} : { onClick: () => onSelectSession?.(incident.lead as string) })}
+        >{`Incident Mode: ${incident.elapsed}`}</span>
+      )}
+      {w === null ? null : (
+        <span
+          data-part="workers"
+          role="button"
+          className={cn(PILL, "text-fg-dim")}
+          onClick={onSettings}
+        >{`workers ${w.queued}\u{f0798}${w.ready}\u{f0798}${w.tenants}/${w.concurrency}`}</span>
+      )}
       {status.drift === null || status.drift.count === 0 ? null : (
         <Badge
           data-part="drift"
@@ -143,7 +159,7 @@ export function StatusBar(props: StatusBarProps): ReactElement {
           </Button>
         ))}
       </span>
-      {status === undefined ? <SessionPills runner={props.runner} state={props.state} version={props.version} /> : <Pills status={status} />}
+      {status === undefined ? <SessionPills runner={props.runner} state={props.state} version={props.version} /> : <Pills status={status} onSettings={onSettings} onSelectSession={props.onSelectSession} />}
     </div>
   );
 }
