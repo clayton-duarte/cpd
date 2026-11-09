@@ -1727,3 +1727,33 @@ mod tests {
         }
     }
 }
+
+/// Test-only seam into A2 and A9, without starting a driver process.
+#[cfg(test)]
+pub(super) fn dirty_setup_for_test(
+    home: CpdHome,
+    store: Store,
+    ports: Ports,
+    lock: lock::Inherited,
+    target: &Target,
+    job: &jobs::Job,
+    catalog: Catalog,
+) -> Result<(), CpdError> {
+    let config = crate::driver::ports_tests::config();
+    let mut driver = Driver {
+        home: home.clone(),
+        config,
+        store,
+        tmux: Tmux::new("test").with_runner(ports.runner.clone()),
+        plan: target.plan.clone(),
+        id: target.id.clone(),
+        lock,
+        exe: Exe::current()?,
+        catalog: Some(catalog),
+        runner: Some(WorkerRunner::Durable),
+        began: Some((0.0, ports.clock.now())),
+        ports: ports.clone(),
+    };
+    let dirs = PiDirs::resolve(Some(home.root().to_path_buf()), None, None)?;
+    Ports::scope(&ports, || driver.start(target, job, &dirs).map(|_| ()))
+}
