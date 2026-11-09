@@ -538,13 +538,20 @@ fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_p
         .unwrap()
         .take()
         .expect("the merge ran inside the Gate");
+    // The merge's push reconciled the remote (pre-rebase head) into the Lead Branch: the tip is that merge commit, a
+    // descendant of the merged sha, which stays the Job's `merged_sha` (docs/contract.md §7.4 rule P's reconcile).
+    let merged_sha = match &merge.end {
+        merge::End::Merged { sha } => sha.clone(),
+        end => panic!("the merge ended {end:?}"),
+    };
     let merged_tip = pay.tip(&lead);
-    assert_eq!(
-        merge.end,
-        merge::End::Merged {
-            sha: merged_tip.clone()
-        }
-    );
+    assert_ne!(merged_sha, merged_tip);
+    for (old, new) in [(&merged_sha, &merged_tip), (&rebased, &merged_sha)] {
+        let under = pay
+            .fx
+            .git_output(&pay.repo, &["merge-base", "--is-ancestor", old, new]);
+        assert_eq!(under.status.code(), Some(0), "{old} is not under {new}");
+    }
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!(
         (out["rebased"].as_bool(), out["new"].as_str()),
@@ -556,28 +563,16 @@ fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_p
         (
             "ended".into(),
             Some("merged".into()),
-            Some(merged_tip.clone()),
+            Some(merged_sha.clone()),
             "merged".into()
         )
     );
-    // The merge landed on R'. It is an ancestor, not the parent: the fake's rebase keeps the Lead commit the merge replays
-    // although R' holds it (patch-id dedup is not modelled, docs/implementing.md "The git route"), where git drops it.
-    let landed_on_rebased = pay.fx.git_output(
-        &pay.repo,
-        &["merge-base", "--is-ancestor", &rebased, &merged_tip],
-    );
-    assert_eq!(
-        landed_on_rebased.status.code(),
-        Some(0),
-        "{rebased} is not under {merged_tip}"
-    );
-    // The merge's rejected push is the one Event, as accepted; the rebase pushed R' and then the merge after it, by rule P.
+    // The merge landed on R' (checked above; the fake's rebase keeps the Lead commit the merge replays, docs/implementing.md
+    // "The git route"). Its push was reconciled, not rejected: no Event.
     let errors = pay.errors();
-    assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(
-        (errors[0].1.as_deref(), errors[0].2["code"].as_str()),
-        (Some("api-a1"), Some("push_failed")),
-        "{errors:?}"
+        errors,
+        Vec::<(Option<String>, Option<String>, Value)>::new()
     );
     assert_eq!(pay.remote_tip(&lead), merged_tip);
     // The Lead worktree followed the Lead Branch (rule S).

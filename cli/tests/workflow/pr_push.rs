@@ -541,17 +541,14 @@ fn push_with_gate_ci_runs_no_gate_and_pushes() {
 fn push_refuses_a_remote_that_moved_and_forces_nothing() {
     let fx = fx("open");
     let moved = fx.move_remote();
-    let tip = fx.commit("mine.txt");
+    // The commit conflicts with the moved remote's: the reconcile cannot merge it (a clean one is merged and pushed).
+    fx.commit_file(&fx.lead, "remote.txt", "mine\n", "mine");
+    let tip = fx.lead_sha();
 
     let run = fx.push();
 
     assert_eq!(code(&run), ("push_rejected".into(), 3));
-    assert!(
-        !run.error()["details"]["stderr"]
-            .as_str()
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(run.error()["details"]["remote_conflict"], true);
     assert_eq!(fx.remote_sha(), moved, "the remote is untouched");
     assert_eq!(fx.lead_sha(), tip);
 }
