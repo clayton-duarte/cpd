@@ -9,6 +9,8 @@ import { mount } from "../../testing/render.tsx";
 import { ChatPane } from "../ChatPane.tsx";
 import type { FileReaderBoundary } from "./attachments.ts";
 
+vi.mock("@base-ui/react/scroll-area", () => import("../../testing/scroll-area-mock.tsx"));
+
 // jsdom has no ResizeObserver, which ChatPane's virtualised transcript (external) may need: an inert double.
 vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
 

@@ -6,6 +6,8 @@ import { FakeScheduler } from "../testing/scheduler.ts";
 import { mount } from "../testing/render.tsx";
 import { App } from "./App.tsx";
 
+vi.mock("@base-ui/react/scroll-area", () => import("../testing/scroll-area-mock.tsx"));
+
 // jsdom has no ResizeObserver, which react-resizable-panels (external) needs: an inert double.
 vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
 
