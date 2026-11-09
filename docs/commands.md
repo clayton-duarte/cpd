@@ -1984,6 +1984,30 @@ Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `fail
 
 Idempotent: yes, as stated. (The engine also retries a `failed` open or update Job of the same Workflow when its fix merges, contract §3.2 "Engine auto-retry on fix merge" (pro-d89); a Lead normally retries only when no fix is needed or when a fix did not restart the Job.)
 
+### 5.4a `job replace-test`
+
+```
+cpd job replace-test <key> --new-key <key> --tests <selector,…> --test-files <path,…> --reason <text> [--plan <id>]
+```
+
+The sole recovery for a locked `test` Job whose selector or file ownership is wrong after an Attempt exists (contract §3.2 "Replacing a locked test Job with an invalid selector", air-d144). It appends a replacement under a new key; it never edits the source Job's Spec, deletes or rewrites its Attempts, changes their commits, or reuses the source key. It is not `job retry`, `job edit`, or `job cancel` followed by `job add`. **The Lead only**: a Worker (`CPD_ATTEMPT` set) is refused `not_a_lead` (exit 3), and nothing is written.
+
+`--tests` is a comma-separated list of selectors: a pi test as `pi/test/<file>.test.ts::<title>`, a web test as `web/<file>.test.ts(x)::<title>`, a Rust test as nextest filters it (contract §7.7 "Test names"). A bare TypeScript selector, a pi or web name without its `<file>::<title>` form, is refused `selector_unqualified`, and nothing is written. `--test-files` lists the files that own those tests and must satisfy the repository's test ownership checks (contract §7.7).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the caller is a Worker (`CPD_ATTEMPT` set) | `not_a_lead` | 3 |
+| a bare TypeScript selector in `--tests` (no `<file>::<title>`) | `selector_unqualified` | not stated in the contract |
+| the source is not a `test` Job, or the replacement would break the shape or dependency rules (contract §3.2, §7.7) | not stated in the contract | not stated in the contract |
+| the selector/file pairing is invalid: a selector resolves to no test owned by `--test-files`, or the files do not cover those tests | not stated in the contract | not stated in the contract |
+| a downstream dependent is `merged` or `cancelled`, or has a live Attempt | not stated in the contract | not stated in the contract |
+
+A refused replacement is refused whole: nothing is written, and the source keeps its status.
+
+Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
+
+Idempotent: yes, as stated above. An abandoned or failed operation never removes a commit or restores a stopped process.
+
 ### 5.5 `job dispatch`
 
 ```
