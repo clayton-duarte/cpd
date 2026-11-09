@@ -36,6 +36,7 @@ class FakeConnection implements Connection {
   selectPlan(): void {}
   loadEarlier(): void {}
   submit(input: SubmitInput): string { this.submits.push(input); return "c1"; }
+  observeSubmission(): { dispose(): void } { return { dispose() {} }; }
   abort(): void {}
   abortSubmission(): void {}
   compact(): void {}
@@ -65,6 +66,7 @@ const connection = new (class implements Connection {
   selectPlan(): void {}
   loadEarlier(): void {}
   submit(_input: SubmitInput): string { return "c1"; }
+  observeSubmission(): { dispose(): void } { return { dispose() {} }; }
   abort(): void {}
   abortSubmission(): void {}
   compact(): void {}

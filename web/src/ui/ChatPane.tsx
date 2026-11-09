@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
-import type { Connection } from "../state/connection.ts";
+import type { Connection, SubmissionResult } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
 import { Transcript } from "./chat/Transcript.tsx";
@@ -75,6 +75,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         <Composer
           ref={composer}
           sessionId={view.id}
+          sessionKey={sessionKey}
           capabilities={view.capabilities}
           archived={view.archived ?? false}
           busy={isBusy}
@@ -92,7 +93,8 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           }
           onSubmit={({ text, attachments, whenBusy }) => {
             const { text: prompt, images } = buildPrompt(text, attachments);
-            connection.submit({ text: prompt, images, whenBusy });
+            const id = connection.submit({ text: prompt, images, whenBusy });
+            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, settle);
           }}
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}

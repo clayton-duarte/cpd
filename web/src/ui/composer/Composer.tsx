@@ -2,6 +2,8 @@ import { ArrowUpIcon, FileTextIcon, PlusIcon, SquareIcon, XIcon } from "lucide-r
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent, ReactElement, ReactNode } from "react";
 import { cn } from "../../lib/utils.ts";
+import type { Disposable } from "../../protocol/runtime.ts";
+import type { SubmissionResult } from "../../state/connection.ts";
 import type {
   Attachment as AttachmentItem,
   Capabilities,
@@ -47,12 +49,13 @@ interface ComposerProps {
     busy: boolean;
     queued: readonly QueuedSubmission[];
     reader: FileReaderBoundary;
-    onSubmit(s: ComposerSubmit): void;
+    onSubmit(s: ComposerSubmit): unknown;
     onAbort(): void;
     onCancelQueued(clientSubmissionId: string): void;
     sessionId: string;
     settings?: ReactNode;
     archived?: boolean;
+    sessionKey?: string;
 }
 
 // Keyed by session so text and attachments never carry over to another session.
@@ -66,11 +69,15 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
+  const [submission, setSubmission] = useState<{ type: "pending" | "unknown" | "error"; message?: string } | null>(null);
+  const submissionRef = useRef<Disposable | null>(null);
+  const locked = useRef(false);
+  useEffect(() => () => submissionRef.current?.dispose(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const archived = props.archived ?? false;
-  const canSend = capabilities !== null && !archived;
+  const canSend = capabilities !== null && !archived && submission === null;
   const hasContent = text.trim() !== "" || attachments.length > 0;
   const canSubmit = canSend && hasContent;
   const stateRef = useRef({ attachments, capabilities, reader });
@@ -79,7 +86,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   });
 
   const handleFiles = async (files: readonly FileLike[]): Promise<void> => {
-    if (files.length === 0) return;
+    if (files.length === 0 || locked.current) return;
     const { attachments: cur, capabilities: cap, reader: r } = stateRef.current;
     const res = await addFiles(files, cur, cap, r);
     if (res.accepted.length > 0) {
@@ -93,12 +100,37 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   }));
 
   const send = (): void => {
-    if (!canSubmit) return;
-    onSubmit({ text, attachments, whenBusy: "followUp" });
-    clearDraft(props.sessionId);
-    setText("");
-    setAttachments([]);
-    setRejections([]);
+    if (!canSubmit || locked.current) return;
+    locked.current = true;
+    const clear = (): void => {
+      clearDraft(props.sessionId);
+      setText("");
+      setAttachments([]);
+      setRejections([]);
+    };
+    try {
+      const observe = onSubmit({ text, attachments, whenBusy: "followUp" });
+      if (typeof observe !== "function") {
+        clear();
+        locked.current = false;
+        return;
+      }
+      setSubmission({ type: "pending" });
+      submissionRef.current = observe((result: SubmissionResult) => {
+        submissionRef.current = null;
+        if (result.type === "ack") {
+          clear();
+          setSubmission(null);
+          locked.current = false;
+        } else if (result.type === "error") {
+          setSubmission({ type: "error", message: result.message });
+        } else {
+          setSubmission({ type: "unknown" });
+        }
+      });
+    } catch (e) {
+      setSubmission({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -129,6 +161,20 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           e.currentTarget.value = "";
         }}
       />
+      {submission === null ? null : (
+        <p role="status" data-part="submission-feedback" className="m-0 font-mono text-xs text-status-blocked-bright">
+          {submission.type === "pending"
+            ? `${props.sessionKey ?? props.sessionId}: awaiting acknowledgement; delivery and agent response are not confirmed.`
+            : submission.type === "unknown"
+              ? `${props.sessionKey ?? props.sessionId}: connection lost; message outcome is unknown. Do not resend until its disposition is verified.`
+              : `${props.sessionKey ?? props.sessionId}: ${submission.message ?? "submission failed"}. Message outcome may be unknown; verify before resending.`}
+          {submission.type === "pending" ? null : (
+            <Button type="button" variant="outline" size="xs" onClick={() => { locked.current = false; setSubmission(null); }}>
+              Continue editing after verification
+            </Button>
+          )}
+        </p>
+      )}
       {rejections.length === 0 ? null : (
         <ul
           role="alert"
@@ -231,6 +277,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
                       <AttachmentAction
                         aria-label={`Remove ${a.name}`}
                         data-action="remove-attachment"
+                        disabled={submission !== null}
                         onClick={() =>
                           setAttachments((cur) =>
                             cur.filter((_, k) => k !== i),

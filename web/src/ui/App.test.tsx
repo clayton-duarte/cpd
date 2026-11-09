@@ -185,7 +185,7 @@ describe("App", () => {
     act(() => transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: "c1", queued: false }));
     expect(ta.value).toBe("");
     expect(container.querySelector('[aria-label="Staged attachments"]')).toBeNull();
-    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).not.toMatch(/delivered|restored/i);
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent ?? "").not.toMatch(/delivered|restored/i);
   });
 
   it("keeps the draft and attachment on a correlated send failure and does not resend automatically", async () => {
@@ -199,6 +199,21 @@ describe("App", () => {
     expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("keep me");
     expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
     expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/send failed/i);
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
+  it("reports an unknown outcome on disconnect and never replays the retained draft", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "uncertain");
+    act(() => transport.emitStatus("closed"));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("uncertain");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/outcome is unknown/i);
+    act(() => transport.emitStatus("open"));
     expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
   });
 
