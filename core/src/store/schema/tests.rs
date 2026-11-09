@@ -68,6 +68,14 @@ fn home(dir: &tempfile::TempDir) -> CpdHome {
     CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap()
 }
 
+#[test]
+fn a_fresh_store_opens_with_the_built_in_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+}
+
 /// A database at version `n` holding `sql`, written as cpd's txn 1.
 fn database_at(home: &CpdHome, n: usize, sql: &str) {
     std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
@@ -4798,7 +4806,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
         ),
         vec![serde_json::json!(["pr-base-changed"])]
     );
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-ended-kind`, the one of `attempt-aborted-kind`, the one of `job-blocked-kind`, the one of `job-addenda`, the one of `workflow-reopen`, the one of `bug-protocol-breach`, and the six of `workflow-event-kinds`: the later migrations that add Event kinds
+    // Later Event-kind migrations include guard-event and bug-protocol-breach.
     assert_eq!(
         rows(&mut store, "SELECT count(*) FROM event_kinds"),
         vec![serde_json::json!([before

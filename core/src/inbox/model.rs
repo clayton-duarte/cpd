@@ -46,9 +46,10 @@ pub enum Kind {
     DraftsParked,
     /// An open Workflow of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
     PrClosed,
-    /// An open, unmitigated bug record (contract §2.2 "Bug record", "Inbox item"; air-d104, air-d105, air-n120);
-    /// always red, the owner's wake item and the User's breach indicator, linked to the owner Session, the Plan and its Context.
+    /// An open, unmitigated bug record; always red and linked to its owner.
     Bug,
+    /// A Session whose guard Events reach the configured refusal threshold.
+    RefusalAlert,
 }
 
 impl Kind {
@@ -74,6 +75,7 @@ impl Kind {
             Kind::DraftsParked => "drafts-parked",
             Kind::PrClosed => "pr-closed",
             Kind::Bug => "bug",
+            Kind::RefusalAlert => "refusal-alert",
         }
     }
 
@@ -99,6 +101,7 @@ impl Kind {
             DraftsParked,
             PrClosed,
             Bug,
+            RefusalAlert,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)
@@ -804,6 +807,7 @@ mod tests {
             "pr-ready",
             "review-requested",
             "pr-closed",
+            "refusal-alert",
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }

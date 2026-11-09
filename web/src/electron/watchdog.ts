@@ -1,4 +1,6 @@
 import type { UiMode } from "./channels.ts";
+import type { Break, CockpitHealth, HealthLimits } from "./health.ts";
+import { DEFAULT_HEALTH_LIMITS, detectBreak } from "./health.ts";
 import type { HealthRecord } from "./health.ts";
 import { HealthParseError } from "./health.ts";
 import type { RestorePoints } from "./restore-points.ts";
@@ -11,7 +13,8 @@ export interface WatchdogPorts {
   signalReload?(pid: number): void;
   /** Resolves once the process is gone. */
   terminate(pid: number): void | Promise<void>;
-  relaunch(): Promise<void>;
+  /** Relaunch the app asking explicitly for `mode`, carried past Electron's environment-preserving relaunch (air-d95). */
+  relaunch(mode: 'production'): Promise<void>;
   restore: RestorePoints;
   log(entry: object): Promise<void>;
 }
@@ -157,10 +160,10 @@ export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = 
       rolledBack = true;
       if (ports.pidAlive(rec.pid)) {
         await ports.terminate(rec.pid);
-        await ports.relaunch();
+        await ports.relaunch("production");
       } else {
         await log({ event: "relaunch", ...base, mode: "production" });
-        await ports.relaunch();
+        await ports.relaunch("production");
       }
     } catch (error) {
       await log({ event: "rollback-failed", ...base, error: (error as Error).message });
@@ -208,6 +211,135 @@ export function createWatchdog(ports: WatchdogPorts, options: WatchdogOptions = 
       lastMalformed = null;
       if (rec === null) return;
       await observe(rec);
+    },
+  };
+}
+
+/** A build kept on disk that the watchdog can revert to. */
+export type Build = "preview" | "prod" | "head-1" | "head-2";
+
+/** The revert ladder, in order (air-d95): preview > prod > HEAD-1 > HEAD-2. */
+export const LADDER: readonly Build[] = ["preview", "prod", "head-1", "head-2"];
+
+/**
+ * A structured cpd Event (air-d81, docs/commands.md §11): the shape every Event carries.
+ * A detection Event names the detection and the health record that fired it; a recovery Event
+ * names the ladder rung taken, or the renderer-only reload.
+ */
+export interface WatchdogEvent {
+  kind: "watchdog.break" | "watchdog.recovery";
+  text: string;
+  data: Record<string, unknown>;
+}
+
+export interface HealthWatchdogPorts {
+  now(): number;
+  /** The renderer's cockpit and transport report; null when it has written none. */
+  readHealth(): Promise<CockpitHealth | null>;
+  /** The build the view runs from now. */
+  build(): Build;
+  /**
+   * Apply another build kept on disk as the current one (a ladder step): swap it into the prod build
+   * dir and report it as the build in force. It must NOT restart the app — the recovery Event is
+   * committed after this returns and before the relaunch, so the Event can never race the restart
+   * (air-d127).
+   */
+  revert(build: Build): Promise<void>;
+  /**
+   * Restart the app after a ladder step, asking for `mode` explicitly so the rollback relaunch boots
+   * production and loads the built renderer, carried past Electron's environment-preserving relaunch
+   * (air-d126, air-d95).
+   */
+  relaunch(mode: "production"): Promise<void>;
+  /** Reload the renderer in place: the app process and the view stay (not a ladder step). */
+  reloadRenderer(): Promise<void>;
+  /**
+   * Stop the app's long-lived children (the update pass's `cpd events follow`) before the relaunch.
+   * The relaunch ends the process with `app.exit(0)`, which never runs the before-quit teardown, so
+   * without this the follow child survives the exit holding the sockets it inherited; on Linux the
+   * inherited DevTools listening socket keeps the relaunched process from binding its reserved
+   * `--remote-debugging-port`, and no page target is ever reported.
+   */
+  stopChildren(): Promise<void>;
+  /** Commit one structured Event (air-d81). */
+  report(event: WatchdogEvent): Promise<void>;
+  log(entry: Record<string, unknown>): Promise<void>;
+}
+
+export interface HealthWatchdog {
+  tick(): Promise<void>;
+}
+
+/**
+ * The watchdog that reads the cockpit/transport report in every view mode (air-d88), reverts
+ * along the ladder (air-d95) and commits an Event for every detection and every recovery
+ * (air-d81). `cockpit not ready` is not a ladder step: the build on disk is not broken, so its
+ * recovery is the renderer-only reload.
+ */
+export function createHealthWatchdog(
+  ports: HealthWatchdogPorts,
+  limits: HealthLimits = DEFAULT_HEALTH_LIMITS,
+): HealthWatchdog {
+  // One detection and one recovery per renderer boot (epoch): the report is fresh only when the
+  // renderer reloaded, so a break that persists in the same boot is not acted on twice.
+  let actedEpoch: number | null = null;
+
+  const detect = async (brk: Break, health: CockpitHealth): Promise<void> => {
+    await ports.report({
+      kind: "watchdog.break",
+      text: `CPD watchdog detected ${brk.kind}: ${brk.detail}`,
+      data: { detection: brk.kind, health },
+    });
+  };
+
+  const revert = async (brk: Break): Promise<void> => {
+    const current = ports.build();
+    const at = LADDER.indexOf(current);
+    const next = at >= 0 ? LADDER[at + 1] : undefined;
+    if (next === undefined) {
+      // Every rung has failed: no fourth step, and never a rung already tried. The User sees the
+      // detection event; the skip is named in the log.
+      await ports.log({ at: new Date(ports.now()).toISOString(), event: "ladder-exhausted", detection: brk.kind, build: current });
+      return;
+    }
+    await ports.revert(next);
+    // The rung is applied: announce the recovery before the restart, so the Event is committed and
+    // cannot be lost to the process exiting mid-write (air-d127).
+    await ports.report({
+      kind: "watchdog.recovery",
+      text: `CPD watchdog recovered from ${brk.kind} by reverting to ${next}`,
+      data: { detection: brk.kind, build: next },
+    });
+    // The follow child is stopped before the restart: the relaunch exits through `app.exit(0)`,
+    // which skips the before-quit teardown, so this is the only chance to release the child's
+    // inherited sockets before the relaunched process binds its own (air-d127's walk order plus
+    // this stop is what the Linux runner needs to load the rung's view).
+    await ports.stopChildren();
+    await ports.relaunch("production");
+  };
+
+  const reload = async (brk: Break): Promise<void> => {
+    await ports.reloadRenderer();
+    await ports.report({
+      kind: "watchdog.recovery",
+      text: `CPD watchdog recovered from ${brk.kind} by reloading the renderer`,
+      data: { detection: brk.kind, recovery: "renderer-reload" },
+    });
+  };
+
+  return {
+    async tick() {
+      const health = await ports.readHealth();
+      if (health === null) return;
+      if (actedEpoch === health.epoch) return;
+      const brk = detectBreak(health, ports.now(), limits);
+      if (brk === null) return;
+      actedEpoch = health.epoch;
+      await detect(brk, health);
+      // `cockpit not ready` is not a ladder step: the build on disk is not broken, so its recovery
+      // is the renderer-only reload (air-n101). Every other break walks the ladder.
+      if (brk.kind === "cockpit-not-ready") await reload(brk);
+      else await revert(brk);
     },
   };
 }

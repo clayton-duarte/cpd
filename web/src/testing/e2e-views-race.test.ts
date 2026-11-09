@@ -26,7 +26,7 @@ vi.mock("./e2e-fixtures", () => {
     toBe: (value: unknown) => expect(target).toBe(value),
     toContain: (value: string) => expect(target).toContain(value),
     toBeVisible: async () => {
-      // The placeholder is gone when the first load sees the already-built renderer.
+// The placeholder is gone when the first load sees the already-built renderer.
       expect((target as { selector: string }).selector).toBe("#built-view");
     },
     toHaveText: async (value: string) => {

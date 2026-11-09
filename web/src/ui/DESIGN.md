@@ -556,7 +556,7 @@ Files: `web/src/ui/cockpit/StatusBar.tsx` (the bar), `web/src/ui/cockpit/LegendD
 
 The web draws the TUI's pills as coloured text on `bg-surface-sunken`: the TUI's caps and reversed blocks are tmux drawing, not data. Buttons are shadcn/ui `Button` (`ghost`), dialogs are shadcn/ui `Dialog` (2f), all on the Dango tokens (2b). The TUI's `━` joins are not drawn; the gap between elements separates them. Icons are lucide icons of the same meaning as the TUI glyphs (named in the table); the lucide names are checked at implementation.
 
-Status data is read by the server (`web/src/server/cockpit/`) and sent to the client; the client never reads a file or runs a command. Sources are in "Data sources" below.
+Status data is read by the server (`web/src/server/cockpit/`) and sent to the client; the client never reads a file or runs a command. Sources are in "Data sources" below. **Amended by Plan `status-workers` (CONTRACT §20, §21):** the Workers segment and the Incident pill are fed by the serve status pane — not tmux `@cpd_workers`, not `cpd incident status`, and no 30 s poll — and both are clickable.
 
 | # | Element (`data-part`) | Shown when | Exact text, or accessible name | Source | TUI colour (index → token) |
 |---|---|---|---|---|---|
@@ -568,8 +568,8 @@ Status data is read by the server (`web/src/server/cockpit/`) and sent to the cl
 | 6 | Runner (`runner`) | the runner is known | `pi` or `durable` | `cpd config experimental` | 15 → `text-fg-strong` |
 | 7 | Preview (`preview`) | tmux option `@cpd_preview` is set | `preview: <value>` | tmux `@cpd_preview` | 3 (review, yellow) → `text-status-landing` |
 | 8 | fill | always | none | none | none |
-| 9 | Incident (`incident`) | `cpd incident status` reports the incident on | `Incident Mode: <elapsed>`, italic | `cpd incident status` | 9 (failed, bright) → `text-status-blocked-bright` |
-| 10 | Workers (`workers`) | tmux option `@cpd_workers` is set | `workers Q·W·N/M` | tmux `@cpd_workers` | 8 → `text-fg-dim` |
+| 9 | Incident (`incident`) | the serve status pane reports the incident on (§20) | `Incident Mode: <elapsed>`, italic | serve status pane `incident` (§20) | 9 (failed, bright) → `text-status-blocked-bright` |
+| 10 | Workers (`workers`) | the serve status pane carries `workers` (§20) | `workers Q<U+F0798>W<U+F0798>N/M`, the TUI's exact long text | serve status pane `workers` (§20) | 8 → `text-fg-dim` |
 | 11 | Version (`version`, `data-alert`) | the version is known | `cpd: <version>`; red when the host alert is set | `cpd --version`; `run/cpd-install.json` | 8 → `text-fg-dim`; alert 9 → `text-status-blocked-bright` |
 
 DOM (inside `footer[aria-label="Status bar"]`, which `Shell` writes and styles, 3c; the footer is 30px):
@@ -584,15 +584,15 @@ div[data-part="status-bar"]                                flex h-full w-full it
 ├─ span[data-part="runner"]        "pi" | "durable"; only when the runner is known; font-mono text-meta text-fg-strong
 ├─ span[data-part="preview"]       "preview: <value>"; only when set; font-mono text-meta text-status-landing
 ├─ span.flex-1                     the fill
-├─ span[data-part="incident"]      "Incident Mode: <elapsed>"; only when on; font-mono text-meta italic text-status-blocked-bright
-├─ span[data-part="workers"]       "workers Q·W·N/M"; only when set; font-mono text-meta text-fg-dim
+├─ span[data-part="incident"]      "Incident Mode: <elapsed>"; only when on; font-mono text-meta italic text-status-blocked-bright; clickable (§21)
+├─ span[data-part="workers"]       "workers Q<U+F0798>W<U+F0798>N/M"; only when carried; font-mono text-meta text-fg-dim; clickable (§21)
 └─ span[data-part="version"][data-alert="true|false"]   "cpd: <version>"; only when known; font-mono text-meta text-fg-dim, text-status-blocked-bright when data-alert="true"
 ```
 
 - **Runner.** The machine's runner, not the selected session's (Phase 2 read `session.ref.runner`). It is `durable` when `experimental.durable_workers` is on, else `pi`: the engine's rule that writes `@cpd_runner` (`core/src/config/file.rs:229-232`, `engine/src/watch/workers.rs:93-94`). The pill shows the value only, with no label.
 - **Preview.** `preview: <value>`, where `<value>` is the text of the tmux option `@cpd_preview`, `<worktree basename> <sha>`, set by `scripts/preview-tui.sh` (`docs/ui-preview.md`).
-- **Incident.** `<elapsed>` is the TUI's text (contract 6.1.1, `engine/src/watch/workers.rs:137-170`), from the incident's `started_at` to now, in whole minutes: under 60 minutes `<m>m`; under 24 hours `<h>h`, plus ` <m>m` when the minutes are not zero; else `<d>d`, plus ` <h>h` when the hours are not zero. A `started_at` in the future reads `0m`.
-- **Workers.** `workers Q·W·N/M`: Q = Jobs with status `queued`; W = Ready Jobs; N = tenant Jobs of pool `workers`; M = the concurrency setting (`engine/src/watch/workers.rs:27-40`, `:81-133`). The TUI puts a glyph (U+F0798) between the four numbers; the web's separator is `·`. The engine writes the option on each tick, so a stopped engine leaves the last value on screen.
+- **Incident.** The data is the serve status pane's `incident` (CONTRACT §20): `on`, `started_at`, and `lead` (the incident Plan's Lead's Session id, null when no Lead resolves). `<elapsed>` is the TUI's text (contract 6.1.1, `engine/src/watch/workers.rs:161-192`), from the incident's `started_at` to now, in whole minutes: under 60 minutes `<m>m`; under 24 hours `<h>h`, plus ` <m>m` when the minutes are not zero; else `<d>d`, plus ` <h>h` when the hours are not zero. A `started_at` in the future reads `0m`. **Click (CONTRACT §21):** a click calls `connection.selectSession(lead)` when `lead` is set, attaching the incident Plan's Lead in the chat slot as a tree row does; with `lead` null the pill draws but a click does nothing.
+- **Workers.** The text is the TUI's exact long form (CONTRACT §21, `engine/src/watch/workers.rs:68-80`): `workers Q<U+F0798>W<U+F0798>N/M` — Q = the pane's `workers.queued` (Jobs with status `queued`); W = `workers.waiting` (the Ready Jobs); N = `workers.running` (the tenant Jobs of pool `workers`); M = `workers.limit` (the concurrency setting); the separator is the TUI's glyph U+F0798 between the numbers, `/` before M. The web's former `·` separator is gone. The TUI's short form `Q<U+F0798>W<U+F0798>N/M` is its narrow-client fallback (`core/src/host/tmux.rs:305`) and is not built: the web always draws the long form (the bar clips with `overflow-hidden`), and it never reads `@cpd_workers_short`. The values arrive live on the serve stream's status pane (§20), so no stopped-engine stale option is read. **Click (CONTRACT §21):** a click opens the Settings dialog — the Agent Tiers dialog, exactly as the Settings button opens it (`connection.readSettings()`, then `SettingsDialog`). This is a deliberate WebUI deviation: the TUI's Workers pill is non-interactive.
 - **Version.** `cpd: <version>`, the `version` field of `cpd --version`. The text is the Phase 2 text, kept. The segment is absent while the version is unknown (the TUI draws the pill only when it is set).
 - **Host alert.** The version segment turns red (`data-alert="true"`) when `$CPD_HOME/run/cpd-install.json` has `status` `skipped`; the alert is its `reason` (`core/src/host/install_state.rs:135-141`). The bar shows the colour only.
 
@@ -661,15 +661,15 @@ A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model
 | Tiers, presets | `cpd config` | `.config.{decide_tier,context_distill_tier,worker_tier,lead_tier,manager_tier,presets}` | Agent Tiers rows 0, 6 to 9 |
 | Models, rungs | `cpd tiers` | `.tiers.{O,S,H,G}.{model,efforts}` | Agent Tiers rows 2 to 5 and ranges |
 | Provider lists | `cpd models show` | `.providers[].{provider,ids}` | Agent Tiers rows 1 and 2 to 5 |
-| Incident | `cpd incident status` | `on`, `incident.started_at` | Incident |
+| Incident | the serve status pane (CONTRACT §20), over the WebSocket | `incident.{on, started_at, lead}` | Incident |
 | Version | `cpd --version` | `version` | Version |
-| Workers | tmux option `@cpd_workers` (`show -gqv`) | text | Workers |
+| Workers | the serve status pane (CONTRACT §20), over the WebSocket | `workers.{queued, waiting, running, limit}` | Workers |
 | Preview | tmux option `@cpd_preview` (`show -gqv`) | text | Preview |
 | Host alert | `$CPD_HOME/run/cpd-install.json` | `status`, `reason` | Version colour |
 | Cost | session JSONL files, and three cpd calls (below) | `usage.cost.total` | Costs toggle (3d) |
 | Events | `cpd events follow` (above) | `at`, `kind`, `text` | Logs |
 
-The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `config.toml` (default `cpd`). Refresh cadence: not set by the Context (open, for the Lead).
+The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `config.toml` (default `cpd`) — `@cpd_preview` only: the Incident and Workers reads are the serve status pane (CONTRACT §20), not tmux, and the 30 s status poll is removed (CONTRACT §21): the counts and the incident arrive with the serve stream's snapshots and patches. Refresh cadence for the remaining tmux read: not set by the Context (open, for the Lead).
 
 **Cost** (pro-d40: "cost by parsing session JSONL, usage.cost.total, summed, no dedup, cached by (mtime, size), 3 cpd calls per refresh"; the rules below are the TUI's, the contract for this value):
 
@@ -679,9 +679,9 @@ The tmux reads go to the cockpit's tmux server: socket `tmux.socket` from `confi
 - **The three cpd calls per refresh:** `cpd context list` (Plan ids); `cpd session list --archived` (`role`, `plan`, `context`, `attempt`, `file`); `cpd events list --kind attempt-ended --since <cursor> --limit 5000` (stored Attempt costs; repeated while a page is full). Today's read model calls `session list` without `--archived`; the cost needs it.
 - **Format** (`core/src/metrics/mod.rs:244-253`): `NaN` or below `0.0005` → `$0.000`; below `9.9995` → `$` and 3 decimals (`$0.120`); below `99.995` → 2 decimals; below `999.95` → 1 decimal; below `9995` → thousands, 2 decimals and `k` (`$1.23k`); below `99950` → thousands, 1 decimal and `k`; otherwise thousands, 0 decimals and `k`. Exact ties round to even, as Rust's formatting does (JavaScript's `toFixed` does not).
 
-**Not wired** (omitted, never faked): the runner choice (the `pi | durable` segmented control; the TUI runner pill flips `durable_workers`, and the Context does not decide that for the web), clicks on the runner, incident and version pills (the TUI's `incident` and `host` actions; not decided), the `?` key binding (TUI only), the version `HoverCard`, host `cpu / ram / disk` (not in the TUI bar), the TUI's short workers form and its drop of segments on a narrow client (the bar clips with `overflow-hidden`).
+**Not wired** (omitted, never faked): the runner choice (the `pi | durable` segmented control; the TUI runner pill flips `durable_workers`, and the Context does not decide that for the web), clicks on the runner and version pills (the TUI's `runner` and `host` actions; not decided; the workers and incident pills are clickable, CONTRACT §21), the `?` key binding (TUI only), the version `HoverCard`, host `cpu / ram / disk` (not in the TUI bar), the TUI's short workers form and its drop of segments on a narrow client (the bar clips with `overflow-hidden`).
 
-**Built by pro-d40** (absent in Phase 2): the Reset layout, Legend, Logs, Costs and Settings buttons (the Settings button is the Agent Tiers dialog, formerly "Tiers"); the Incident pill; the Workers pill (the Q·W·N/M meter); the Preview pill; the Runner pill as the machine's runner; the Version pill's host-alert colour.
+**Built by pro-d40** (absent in Phase 2): the Reset layout, Legend, Logs, Costs and Settings buttons (the Settings button is the Agent Tiers dialog, formerly "Tiers"); the Incident pill; the Workers pill (the Workers meter, CONTRACT §21); the Preview pill; the Runner pill as the machine's runner; the Version pill's host-alert colour.
 
 **Changed from Phase 2:** the `State:` segment is removed; `Runner: <x>` is `<x>`, and is absent when unknown (was `Runner: none`); `cpd: unknown` is absent when the version is unknown; the reset and `$` buttons are replaced by the five buttons; `App` passes the status data and the handlers (3e). The Phase 2 tests this changes are in 3f.
 

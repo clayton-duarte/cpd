@@ -196,7 +196,7 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
 export interface StatusModel {
   readonly runner: string | null;
   readonly preview: string | null;
-  readonly incident: { readonly startedAt: string } | null;
+  readonly incident: { readonly startedAt: string; readonly lead: string | null } | null;
   readonly workers: { readonly queued: number; readonly waiting: number; readonly tenants: number; readonly limit: number } | null;
   readonly version: string | null;
   readonly hostAlert: boolean;

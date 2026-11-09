@@ -22,6 +22,7 @@ export interface Connection {
   selectPlan(planId: string | null): void;
   loadEarlier(): void;
   submit(input: SubmitInput): string;
+  observeSubmission(sessionId: string, clientSubmissionId: string, settle: (result: SubmissionResult) => void): Disposable;
   abort(): void;
   abortSubmission(clientSubmissionId: string): void;
   compact(instructions?: string): void;
@@ -34,6 +35,7 @@ export interface Connection {
   saveSettings(changes: SettingsChanges): void;
   close(): void;
 }
+export type SubmissionResult = { type: "receipt" } | { type: "error"; message: string } | { type: "unknown" };
 export const FRAME_MS = 16;
 export const PENDING_ECHO_MS = 30000;
 /** How long after a 'cockpit not ready' hub error the client re-sends `cockpit.subscribe` (20.1). */
@@ -107,6 +109,15 @@ export function createConnection(options: ConnectionOptions): Connection {
   let frame: Disposable | null = null;
   let resubscribeTimer: Disposable | null = null;
   const echoTimers = new Map<string, Disposable>();
+  const submissions = new Map<string, { sessionId: string; settle: (result: SubmissionResult) => void }>();
+  const submissionKey = (sessionId: string, id: string): string => JSON.stringify([sessionId, id]);
+  const settleSubmission = (sessionId: string, id: string, result: SubmissionResult): void => {
+    const key = submissionKey(sessionId, id);
+    const pending = submissions.get(key);
+    if (pending === undefined) return;
+    submissions.delete(key);
+    pending.settle(result);
+  };
 
   const clearResubscribe = (): void => {
     resubscribeTimer?.dispose();
@@ -208,6 +219,12 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "session.submitAck") {
+      settleSubmission(message.sessionId, message.clientSubmissionId, message.submissionId === -1 ? { type: "unknown" } : { type: "receipt" });
+    }
+    if (message.type === "session.error" && message.sessionId !== null && message.clientSubmissionId !== undefined) {
+      settleSubmission(message.sessionId, message.clientSubmissionId, { type: "error", message: message.error.message });
+    }
     if (message.type === "cockpit.snapshot") clearResubscribe();
     if (message.type === "cockpit.error" && message.error.code === "internal" && message.error.message === "cockpit not ready") scheduleResubscribe();
     if (message.type === "cockpit.snapshot" || (message.type === "cockpit.patch" && message.pane === "tree")) {
@@ -240,6 +257,10 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     timer?.dispose();
     clearResubscribe();
+    for (const [key, pending] of submissions) {
+      submissions.delete(key);
+      pending.settle({ type: "unknown" });
+    }
     store.dispatch({ type: "connection", status: "reconnecting", retryAttempt: attempt });
     const delay = Math.min(backoff.maxMs, backoff.baseMs * 2 ** attempt);
     attempt++;
@@ -290,6 +311,11 @@ export function createConnection(options: ConnectionOptions): Connection {
         throw e;
       }
       return clientSubmissionId;
+    },
+    observeSubmission(sessionId, clientSubmissionId, settle) {
+      const key = submissionKey(sessionId, clientSubmissionId);
+      submissions.set(key, { sessionId, settle });
+      return { dispose: () => { submissions.delete(key); } };
     },
     abort() {
       send({ type: "session.abort", sessionId: selected() });

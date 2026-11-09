@@ -101,3 +101,7 @@ The concrete file plan of the decision (air-d46). Repo-relative paths; the build
 ## Rejected alternative
 
 **Keep option A unchanged and only add the watchdog.** Rejected as a whole answer: the watchdog fixes invisibility but not the reconnect hole — IPC never emits `"closed"`, so the renderer's reconnect path stays dead on the desktop (transport.ts:18-25; connection.ts:205-224) — and leaves the two client transports duplicated and R3 unreachable (air-d35). The watchdog is needed on top of any transport, not instead of one.
+
+## Amended, 2026-11-08: the cockpit status pane rides this transport (Plan `status-workers`)
+
+The cockpit `status` pane (web/CONTRACT.md §20) — the Workers counts (queued, waiting, running, limit) and the incident state (on, started_at, lead) the StatusBar shows — rides the transport this ADR decided, with no second computation and no second transport: the serve child's `snapshot` frame gains the pane, and the WebUI's one WebSocket carries it to the renderer in the `cockpit.snapshot` and `cockpit.patch` messages it already has. The pane's numbers are read from the store with the engine's own queries (the one shared tenancy query of core/src/resource/mod.rs:38 and the shared READY query), the same numbers the TUI's `@cpd_workers` step reads, so nothing is computed twice; the `@cpd_workers` tmux scrape of `web/src/server/cockpit/status.ts` is retired for the workers and incident fields.

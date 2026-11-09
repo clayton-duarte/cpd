@@ -138,6 +138,12 @@ test.afterAll(() => {
  * served placeholder so the boot load never 404s.
  */
 function resetStaging(): void {
+  // Each run starts without build stamps/artifacts: only this run's updater may decide the views
+  // are built, never a reused checkout from an earlier test or worker run.
+  rmSync(join(checkout, "web", "dist-electron"), { recursive: true, force: true });
+  rmSync(join(previewCheckout, "web", "dist-electron.preview"), { recursive: true, force: true });
+  mkdirSync(join(checkout, "web", "dist-electron", "renderer"), { recursive: true });
+  mkdirSync(join(previewCheckout, "web", "dist-electron.preview", "renderer"), { recursive: true });
   writeFileSync(join(checkout, "web", "dist-electron", ".built-sha"), HEAD_SHA);
   writeFileSync(join(checkout, "target", ".cli-installed-sha"), OLD_CLI_SHA);
   writeFileSync(join(checkout, "web", "dist-electron", "renderer", "electron.html"), PLACEHOLDER);
@@ -182,7 +188,7 @@ test("the app renders the prod view built from the checkout (air-d89 points 3-4)
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
     expect(await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"))).toContain("cpd-e2e-userdata-");
 
-    // The updater may finish before the first page load, so the placeholder is not guaranteed.
+// The updater may finish before the first page load, so the placeholder is not guaranteed.
     // The app's own auto-update rebuilt the prod view from the checkout with the shared build
     // command, writing the deterministic prod marker into the served build dir.
     await expect
@@ -209,7 +215,7 @@ test("the app renders the preview view built from the preview branch (air-d96)",
     // Hidden and isolated (air-d68).
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible()))).toBe(true);
 
-    // The updater may finish before the first page load, so the placeholder is not guaranteed.
+// The updater may finish before the first page load, so the placeholder is not guaranteed.
     // The app's own auto-update built the preview view from the preview branch (on branch `preview`,
     // into its own `dist-electron.preview` dir) with the same shared build command.
     await expect

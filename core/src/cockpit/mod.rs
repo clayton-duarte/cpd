@@ -137,6 +137,43 @@ struct InboxCli {
     command: crate::inbox::cmd::Command,
 }
 
+/// The `status` pane (contract §20.1): the Workers counts and the incident state, read fresh from the
+/// store on every snapshot, through the one open `Env` `serve` holds. The counts are the engine's own
+/// numbers — the tenant Jobs of `workers` (the shared tenancy query, [`crate::resource::tenants`]), the
+/// Ready Jobs (E3's rule, [`crate::resource::READY`]), the `queued` Jobs and the config `concurrency` —
+/// read with the incident state in one read transaction, like the `@cpd_workers` step.
+fn status_pane(env: &mut Env) -> Result<Value, CpdError> {
+    // `M`, read fresh on every snapshot (engine/src/watch/workers.rs).
+    let limit = crate::config::Config::load(&env.home)?.concurrency;
+    let (running, waiting, queued, incident) = env.store.read(|conn| {
+        let running =
+            u32::try_from(crate::resource::tenants(conn, crate::resource::WORKERS)?.len())
+                .unwrap_or(u32::MAX);
+        let waiting = crate::resource::ready_count(conn)?;
+        let queued: u32 = conn.query_row(crate::resource::QUEUED, [], |r| r.get(0))?;
+        Ok((running, waiting, queued, incident_state(conn)?))
+    })?;
+    Ok(json!({
+        "ok": true,
+        "workers": {"queued": queued, "waiting": waiting, "running": running, "limit": limit},
+        "incident": incident,
+    }))
+}
+
+/// The incident fields of the `status` pane (contract §20.1): `on` is true exactly when the `incident`
+/// row exists; `started_at` and `lead` are that row's, null while `on` is false or no Lead resolves.
+fn incident_state(conn: &rusqlite::Connection) -> Result<Value, CpdError> {
+    if !crate::incident::is_on(conn) {
+        return Ok(json!({"on": false, "started_at": null, "lead": null}));
+    }
+    let started_at: String =
+        conn.query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| {
+            r.get(0)
+        })?;
+    let lead = crate::incident::lead(conn)?.map(|id| id.as_str().to_owned());
+    Ok(json!({"on": true, "started_at": started_at, "lead": lead}))
+}
+
 /// The four panes: what the list commands print (same functions), read through `env`.
 fn panes(env: &mut Env) -> Result<Value, CpdError> {
     let crate::context::Command::List(_) = ContextCli::parse_from(["cpd", "list"]).command else {
@@ -163,6 +200,7 @@ fn panes(env: &mut Env) -> Result<Value, CpdError> {
         "plan": pane(crate::plan::list::list_in(env, plan))?,
         "session": pane(crate::session::row::list_in(env, session))?,
         "inbox": pane(crate::inbox::cmd::list_in(env, inbox))?,
+        "status": status_pane(env)?,
     }))
 }
 

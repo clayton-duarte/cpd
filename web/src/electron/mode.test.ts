@@ -1,11 +1,13 @@
 import path from "node:path";
 import type { UiMode } from "./channels.ts";
 import type { MenuTemplate } from "./menu.ts";
-import { createModeController, parseUiMode, LAUNCH_MODE, type ModeFs } from "./mode.ts";
+import { createModeController, parseUiMode, bootIdentity, LAUNCH_MODE, type BootIdentity, type ModeFs } from "./mode.ts";
 
 const LEGACY = "/h/run/ui-mode.json";
 const VIEW = "/h/run/ui-view.json";
 const PID = 4242;
+/** A boot identity distinct from every view, so the marker's boot fields are proven their own. */
+const BOOT: BootIdentity = { mode: "production", build: "prod" };
 
 // The dropped ui-mode.json is never read: the fs surface has no read at all (air-d40).
 function fakeFs(initial: Record<string, string> = {}, log: string[] = [], writes: Write[] = []) {
@@ -55,6 +57,7 @@ function harness(initial: Record<string, string> = {}, platform: NodeJS.Platform
     legacyFile: LEGACY,
     viewFile: VIEW,
     pid: PID,
+    boot: BOOT,
     platform,
     log: (line) => log.push(`log ${line}`),
     menu: {
@@ -90,6 +93,16 @@ test("parseUiMode accepts tui, webui and webui-preview only", () => {
   expect(() => parseUiMode(1)).toThrow("invalid ui mode: 1");
 });
 
+test("bootIdentity reads the boot mode and build, the --cpd-mode argument beating CPD_MODE", () => {
+  expect(bootIdentity({}, [])).toEqual({ mode: "production", build: "prod" });
+  expect(bootIdentity({ CPD_MODE: "preview", CPD_CHECKOUT: "/c" }, [])).toEqual({ mode: "preview", build: "preview" });
+  // A rollback relaunch carries production as an argument (air-d95), which beats the preview env.
+  expect(bootIdentity({ CPD_MODE: "preview", CPD_CHECKOUT: "/c" }, ["--cpd-mode=production"])).toEqual({
+    mode: "production",
+    build: "prod",
+  });
+});
+
 test("launches in webui and never reads ui-mode.json", async () => {
   const h = harness({ [LEGACY]: '{"mode":"tui"}' });
   expect(h.controller.getMode()).toBe(LAUNCH_MODE);
@@ -121,9 +134,9 @@ test("writes the ui-view marker on launch and on every setMode", async () => {
   await h.controller.setMode("tui");
   await h.controller.setMode("webui-preview");
   expect(markerWrites(h)).toEqual([
-    { view: "webui", pid: PID },
-    { view: "tui", pid: PID },
-    { view: "webui-preview", pid: PID },
+    { view: "webui", pid: PID, mode: BOOT.mode, build: BOOT.build },
+    { view: "tui", pid: PID, mode: BOOT.mode, build: BOOT.build },
+    { view: "webui-preview", pid: PID, mode: BOOT.mode, build: BOOT.build },
   ]);
   expect(h.log).toContain(`mkdir ${path.dirname(VIEW)}`);
   expect(h.controller.getMode()).toBe("webui-preview");
@@ -159,7 +172,7 @@ test("setMode applies menu, shortcuts and the renderer channel in order", async 
   expect(step("menu true,false,false")).toBeGreaterThanOrEqual(0);
   expect(step("menu true,false,false")).toBeLessThan(step("ignore true"));
   expect(step("ignore true")).toBeLessThan(step("send tui"));
-  expect(JSON.parse(h.writes.at(-1)!.data)).toEqual({ view: "tui", pid: PID });
+  expect(JSON.parse(h.writes.at(-1)!.data)).toEqual({ view: "tui", pid: PID, mode: BOOT.mode, build: BOOT.build });
 });
 
 test("setMode to the current view applies nothing", async () => {
@@ -180,5 +193,5 @@ test("menu click selects the mode through the controller", async () => {
   await flush();
   expect(h.errors).toEqual([]);
   expect(h.controller.getMode() satisfies UiMode).toBe("webui-preview");
-  expect(markerWrites(h).at(-1)).toEqual({ view: "webui-preview", pid: PID });
+  expect(markerWrites(h).at(-1)).toEqual({ view: "webui-preview", pid: PID, mode: BOOT.mode, build: BOOT.build });
 });

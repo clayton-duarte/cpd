@@ -14,6 +14,7 @@
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
 //! - [`host_alert`] E6: the `@cpd_host_alert` step, which turns the version pill red (hs-d618);
+//! - [`refusal_alert`] E25: the refusal threshold, one alert and one Manager wake per Session and window;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
 //! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`, and `watch --check`, which verifies what that start depends on without touching anything;
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
@@ -99,6 +100,10 @@ mod provider_hold_e3_tests;
 mod provider_hold_tests;
 #[cfg(test)]
 mod repeated_asks_tests;
+// E25: the refusal threshold (contract §3.7 E25, Plan `agent-refusals`).
+mod refusal_alert;
+#[cfg(test)]
+mod refusal_alert_tests;
 mod report;
 #[cfg(test)]
 mod report_restart_tests;

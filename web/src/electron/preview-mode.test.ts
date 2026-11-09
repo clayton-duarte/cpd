@@ -30,6 +30,19 @@ it('readPreviewMode rejects an unknown CPD_MODE', () => {
   expect(() => readPreviewMode({ CPD_MODE: 'staging' })).toThrow('CPD_MODE must be production or preview, got "staging"');
 });
 
+it('an explicit production request beats a preview environment', () => {
+  // The relaunch carries the request as an argument (--cpd-mode=production): Electron's
+  // relaunch keeps the original environment, so the argument must beat CPD_MODE=preview.
+  const env = { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: 'http://127.0.0.1:5173/electron.html' };
+  const read = readPreviewMode as unknown as (
+    env: Readonly<Record<string, string | undefined>>,
+    args: readonly string[],
+  ) => ReturnType<typeof readPreviewMode>;
+  const mode = read(env, ['--cpd-mode=production']);
+  expect(mode).toEqual({ mode: 'production' });
+  expect('devUrl' in mode).toBe(false);
+});
+
 it('readPreviewMode rejects preview without CPD_CHECKOUT', () => {
   expect(() => readPreviewMode({ CPD_MODE: 'preview' })).toThrow('CPD_MODE=preview needs CPD_CHECKOUT');
   expect(() => readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '' })).toThrow('CPD_MODE=preview needs CPD_CHECKOUT');

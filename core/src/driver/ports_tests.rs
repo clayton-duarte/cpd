@@ -1023,3 +1023,185 @@ fn a_failed_linear_attempt_removes_the_untracked_files_it_left() {
     });
     assert_eq!(status.unwrap(), "", "the worktree is not clean");
 }
+
+// Dirty Lead worktree setup reporting regression.
+
+#[test]
+fn dirty_lead_setup_reports_safe_recovery() {
+    use std::os::fd::IntoRawFd;
+
+    let mut rig = start_rig(false);
+    let fakes = Fakes::new();
+    let mut universe = Universe::new(fakes.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
+    let route = Arc::new(GitRoute::new(universe.clone()));
+    let _ = (*fakes.runner).clone().with_git(&route);
+    let root = rig._dir.path().canonicalize().unwrap();
+    let repo = Repo::init(&universe, &root.join("repo"));
+    for path in ["staged.txt", "unstaged.txt"] {
+        repo.write(path, "base\n");
+    }
+    let base = repo.commit("base");
+    let lead = "cpd/pay/api";
+    repo.branch(lead);
+    let worktree = root.join("lead");
+    universe
+        .lock()
+        .unwrap()
+        .add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
+    std::fs::write(worktree.join("staged.txt"), "staged content\n").unwrap();
+    std::fs::write(worktree.join("unstaged.txt"), "unstaged content\n").unwrap();
+    std::fs::write(worktree.join("untracked.txt"), "untracked content\n").unwrap();
+    let (head, index, index_file, marker) = {
+        let mut u = universe.lock().unwrap();
+        let staged = u.blob(repo.id(), b"staged content\n");
+        // Populate the index with both tracked paths before staging the modification.
+        let unstaged = u.blob(repo.id(), b"base\n");
+        u.stage(&worktree, "staged.txt", &staged, 0);
+        u.stage(&worktree, "unstaged.txt", &unstaged, 0);
+        let marker = u.admin_dir(&worktree).join("MERGE_HEAD");
+        std::fs::write(&marker, format!("{base}\n")).unwrap();
+        (
+            u.head(&worktree),
+            u.index(&worktree),
+            u.index_path(&worktree),
+            marker,
+        )
+    };
+    let before_index_file = std::fs::read(&index_file).unwrap();
+    let before_marker = std::fs::read(&marker).unwrap();
+    let files: Vec<_> = ["staged.txt", "unstaged.txt", "untracked.txt"]
+        .iter()
+        .map(|p| (*p, std::fs::read(worktree.join(p)).unwrap()))
+        .collect();
+    let expected_status = "M  staged.txt\n M unstaged.txt\n?? untracked.txt\n";
+    let status = Ports::scope(&fakes.ports, || {
+        crate::git::run::ok(&worktree, &["--no-optional-locks", "status", "--porcelain"])
+    })
+    .unwrap();
+    assert_eq!(
+        status, expected_status,
+        "fixture has all three kinds of work"
+    );
+
+    let policy_dir = rig.home.root().join("policy/acme");
+    std::fs::create_dir_all(&policy_dir).unwrap();
+    std::fs::write(policy_dir.join("owner.toml"), "").unwrap();
+    rig.store.write("fixture", |tx| {
+        tx.execute("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'", [])?;
+        tx.execute("UPDATE workflows SET lead_worktree = ?1 WHERE plan = 'pay' AND key = 'api'", [worktree.to_str().unwrap()])?;
+        tx.execute("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'a'", [])?;
+        tx.execute("INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, runner, started_at) VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'starting', 'cpd/pay/api', ?1, 'durable', 't')", [worktree.to_str().unwrap()])?;
+        Ok(())
+    }).unwrap();
+    let plan = PlanId::parse("pay").unwrap();
+    let id = AttemptId::parse("a-a1").unwrap();
+    let target = rig
+        .store
+        .read(|c| crate::attempt::ledger::load(c, &plan, &id))
+        .unwrap();
+    let job = rig
+        .store
+        .read(|c| crate::plan::jobs::load(c, &plan))
+        .unwrap()
+        .into_iter()
+        .find(|j| j.key == "a")
+        .unwrap();
+    let lock_path = rig.home.attempt_lock(&plan, &id);
+    std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let fd = std::fs::File::create(&lock_path).unwrap().into_raw_fd();
+    let lock = super::lock::inherited_on(fd, &rig.home, &plan, &id).unwrap();
+    let calls_before = fakes.runner.calls().len();
+    let launches_before = fakes.spawn.launches().len();
+    super::run::dirty_setup_for_test(
+        rig.home.clone(),
+        rig.store,
+        fakes.ports.clone(),
+        lock,
+        &target,
+        &job,
+        catalog(),
+    )
+    .unwrap();
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let (state, outcome, cause, base_sha, worker): (String, String, String, Option<String>, Option<String>) = store.read(|c| Ok(c.query_row("SELECT status, outcome, cause, base_sha, worker_session FROM attempts WHERE plan = 'pay' AND id = 'a-a1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?)).unwrap();
+    assert_eq!(
+        (state.as_str(), outcome.as_str(), cause.as_str()),
+        ("ended", "failed", "setup_failed")
+    );
+    assert_eq!(base_sha, None, "no base SHA was captured");
+    assert_eq!(worker, None, "no Worker Session was registered");
+    assert_eq!(
+        fakes.spawn.launches().len(),
+        launches_before,
+        "no Worker was spawned"
+    );
+    let calls = &fakes.runner.calls()[calls_before..];
+    assert!(
+        calls.iter().all(|c| !c
+            .args
+            .iter()
+            .any(|a| a == "reset" || a == "clean" || a == "--abort")),
+        "no destructive Git calls: {calls:?}"
+    );
+    {
+        let u = universe.lock().unwrap();
+        assert_eq!(u.head(&worktree), head);
+        assert_eq!(
+            u.ref_oid(repo.id(), &format!("refs/heads/{lead}")),
+            Some(base)
+        );
+        assert_eq!(u.index(&worktree), index);
+    }
+    assert_eq!(std::fs::read(index_file).unwrap(), before_index_file);
+    assert_eq!(std::fs::read(marker).unwrap(), before_marker);
+    for (path, bytes) in files {
+        assert_eq!(std::fs::read(worktree.join(path)).unwrap(), bytes);
+    }
+    let detail: String = store.read(|c| Ok(c.query_row("SELECT json_extract(data, '$.detail') FROM events WHERE kind IN ('job-failed', 'attempt-retry') AND plan = 'pay' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?)).unwrap();
+    let lower = detail.to_lowercase();
+    assert!(
+        lower.contains("did not start"),
+        "failure must say the Attempt did not start: {detail}"
+    );
+    assert!(
+        lower.contains("unchanged") || lower.contains("preserved"),
+        "failure must promise preservation: {detail}"
+    );
+    assert!(
+        lower.contains("inspect") && (lower.contains("before") || lower.contains("decid")),
+        "failure must advise inspection before deciding how to resolve: {detail}"
+    );
+    assert!(
+        detail.contains(worktree.to_str().unwrap()),
+        "failure must report the path: {detail}"
+    );
+    assert!(
+        detail.contains(expected_status),
+        "failure must include exact porcelain status: {detail}"
+    );
+    for command in [
+        "git status --short --branch",
+        "git diff",
+        "git diff --cached",
+        "git ls-files --others --exclude-standard",
+    ] {
+        assert!(
+            detail.contains(command),
+            "missing safe read-only command {command}: {detail}"
+        );
+    }
+    for dangerous in [
+        "git reset --hard",
+        "git clean",
+        "git merge --abort",
+        "git rebase --abort",
+    ] {
+        assert!(
+            !lower.contains(dangerous),
+            "must not recommend destructive cleanup: {detail}"
+        );
+    }
+}

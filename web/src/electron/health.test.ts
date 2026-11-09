@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { createHealthRecorder, HealthParseError, parseHealth } from './health.ts'
+import { createHealthRecorder, detectBreak, HealthParseError, parseHealth } from './health.ts'
+import type { CockpitHealth, HealthLimits } from './health.ts'
+import type { ContextNode, ContextTreeModel } from '../protocol/cockpit.ts'
 
 void describe
 
@@ -147,4 +149,35 @@ it('recorder treats an unreadable previous file as epoch 0', async () => {
   await s.recorder.init()
   await s.recorder.begin()
   expect(s.rec()).toMatchObject({ status: 'loading', reloadEpoch: 1 })
+})
+
+const T0 = Date.parse('2026-01-01T00:00:00.000Z')
+const LIMITS: HealthLimits = { snapshotGraceMs: 10000, heartbeatTimeoutMs: 5000 }
+
+const ctx = (id: string): ContextNode => ({ id, title: id, archived: false, records: 0, openQuestions: 0, sessions: [], plans: [] })
+const tree = (contexts: readonly ContextNode[]): ContextTreeModel => ({ contexts, cursor: 0 })
+
+it('an empty cockpit tree is a break', () => {
+  const empty: CockpitHealth = { epoch: 1, startedAt: T0, tree: null }
+  expect(detectBreak(empty, T0, LIMITS)).toBeNull() // inside the loading grace
+  expect(detectBreak(empty, T0 + 9999, LIMITS)).toBeNull()
+  const break_ = detectBreak(empty, T0 + 10000, LIMITS)
+  expect(break_).toMatchObject({ kind: 'empty-data' })
+  expect(typeof break_?.detail).toBe('string')
+  expect(break_?.detail.length).toBeGreaterThan(0)
+  // a painted cockpit that received data and keeps its heartbeat is not a break
+  const live: CockpitHealth = { epoch: 1, startedAt: T0, tree: tree([ctx('c1')]), snapshotAt: T0, heartbeatAt: T0 + 10000 }
+  expect(detectBreak(live, T0 + 10000, LIMITS)).toBeNull()
+})
+
+it('a stalled WebSocket is a break', () => {
+  const live: CockpitHealth = { epoch: 1, startedAt: T0, tree: tree([ctx('c1')]), snapshotAt: T0, heartbeatAt: T0 }
+  expect(detectBreak(live, T0 + 4999, LIMITS)).toBeNull()
+  const break_ = detectBreak(live, T0 + 5000, LIMITS)
+  expect(break_).toMatchObject({ kind: 'websocket-stalled' })
+  expect(typeof break_?.detail).toBe('string')
+  expect(break_?.detail.length).toBeGreaterThan(0)
+  // no heartbeat reported yet is not a stall: there is nothing to measure
+  const { heartbeatAt: _heartbeatAt, ...silent } = live
+  expect(detectBreak(silent, T0 + 50000, LIMITS)).toBeNull()
 })

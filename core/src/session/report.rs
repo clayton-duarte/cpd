@@ -1,17 +1,20 @@
-//! `session report` (commands.md §10.18; hs-d573 M3/M4): an adapter error for the Manager. One `error` Event with
-//! no Plan and no Session, so no Lead's follower receives it back.
+//! `session report` (commands.md §10.18; hs-d573 M3/M4): an adapter error for the Manager, or a refusal of the
+//! reporting Session's own tool call or command (contract §5.2, Plan `agent-refusals`), which appends the `guard`
+//! kind instead of `error`.
 
 use std::str::FromStr;
 
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
 use super::row;
 use super::{Env, ReportArgs};
 use crate::args::SessionArg;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::NewEvent;
 use crate::events::repeat::{self, Same, Scope};
+use crate::events::{NewEvent, append};
 use crate::output::Output;
+use crate::store::WriteTxn;
 
 const TEXT_MAX: usize = 2000;
 const CODE_MAX: usize = 64;
@@ -87,9 +90,50 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         details,
         ..
     } = args;
+    let mut details = details.map_or_else(Map::new, |d| d.0);
+
+    // A refusal report carries the refusal rule in `details.guard`, with the refused call in
+    // `details.{tool, excerpt}` (contract §5.2, Plan `agent-refusals`): the adapter's guard refusal, or an
+    // agent-caused CLI refusal whose `guard` is the envelope's `code`. The Event is a `guard` Event.
+    if let Some(rule) = details
+        .get("guard")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let tool = string_field(&details, "tool");
+        let excerpt = string_field(&details, "excerpt");
+        let session = env.store.read(|c| row::load(c, &id))?;
+        let model = row::model_and_level(
+            &row::models_of(&mut env, &session)?,
+            &session.id,
+            &session.tier,
+        )?
+        .0;
+        let role = session.role.as_str();
+        let text = format!("{role} {} refused: {rule}: {excerpt}", session.id);
+        let guard = NewEvent::guard(text, &rule, role, &session.tier, &model, &tool, &excerpt)
+            .context(session.context.clone())
+            .session(session.id.clone());
+        let guard = match session.plan.clone() {
+            Some(plan) => guard.plan(plan),
+            None => guard,
+        };
+        let guard = match session
+            .attempt
+            .as_deref()
+            .and_then(|a| crate::ids::AttemptId::parse(a).ok())
+        {
+            Some(attempt) => guard.attempt(attempt),
+            None => guard,
+        };
+        let event = env.store.write("session report", |tx| {
+            append_guard_once(tx, window, &rule, &excerpt, &session.id, guard)
+        })?;
+        return Ok(Output::success(json!({"event": event})));
+    }
+
     let event = env.store.write("session report", |tx| {
         let session = row::load(tx, &id)?;
-        let mut details = details.map_or_else(Map::new, |d| d.0);
         details.insert("what".into(), json!(what.0));
         details.insert("session".into(), json!(session.id));
         details.insert("plan".into(), json!(session.plan));
@@ -106,4 +150,43 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         repeat::append_once(tx, window, &same, event)
     })?;
     Ok(Output::success(json!({"event": event})))
+}
+
+/// A string field of the report's `details`, or `""` when it is absent or not a string.
+fn string_field(details: &Map<String, Value>, key: &str) -> String {
+    details
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Appends the `guard` Event unless an earlier one of the same Session carries the same `code` and `excerpt`
+/// inside the repeat window (contract §5.2 "The dedupe is the existing repeat window", §3.7), in which case it
+/// returns that Event's id and appends nothing.
+fn append_guard_once(
+    tx: &WriteTxn<'_>,
+    window: std::time::Duration,
+    code: &str,
+    excerpt: &str,
+    session: &crate::ids::SessionId,
+    event: NewEvent,
+) -> Result<i64, CpdError> {
+    if !window.is_zero() {
+        let cutoff = format!("-{} seconds", window.as_secs_f64());
+        let earlier: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM events WHERE kind = 'guard' AND session = ?1
+                   AND json_extract(data, '$.code') = ?2 AND json_extract(data, '$.excerpt') = ?3
+                   AND at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?4)
+                 ORDER BY id DESC LIMIT 1",
+                params![session.as_str(), code, excerpt, cutoff],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(earlier) = earlier {
+            return Ok(earlier);
+        }
+    }
+    append(tx, event)
 }

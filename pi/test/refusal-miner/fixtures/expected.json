@@ -1,0 +1,34 @@
+{
+  "total": 9,
+  "guards": {
+    "cli: usage": 2,
+    "φ: loop_guard_read_streak (>12)": 2,
+    "cli: spec_invalid": 1,
+    "φ: explore_bash_timeout": 1,
+    "φ: explore_network_write": 1,
+    "φ: noblock_lead": 1,
+    "φ: noblock_manager": 1
+  },
+  "byRole": [
+    { "guard": "cli: spec_invalid", "role": "Lead", "count": 1 },
+    { "guard": "cli: usage", "role": "Manager", "count": 1 },
+    { "guard": "cli: usage", "role": "Worker", "count": 1 },
+    { "guard": "φ: explore_bash_timeout", "role": "scout", "count": 1 },
+    { "guard": "φ: explore_network_write", "role": "scout", "count": 1 },
+    { "guard": "φ: loop_guard_read_streak (>12)", "role": "Lead", "count": 1 },
+    { "guard": "φ: loop_guard_read_streak (>12)", "role": "Worker", "count": 1 },
+    { "guard": "φ: noblock_lead", "role": "Lead", "count": 1 },
+    { "guard": "φ: noblock_manager", "role": "Manager", "count": 1 }
+  ],
+  "byModel": [
+    { "guard": "cli: spec_invalid", "model": "openrouter/deepseek/deepseek-v4.1-flash", "count": 1 },
+    { "guard": "cli: usage", "model": "github-copilot/claude-opus-5.5", "count": 1 },
+    { "guard": "cli: usage", "model": "openrouter/deepseek/deepseek-v4.1-flash", "count": 1 },
+    { "guard": "φ: explore_bash_timeout", "model": "github-copilot/claude-sonnet-5.5", "count": 1 },
+    { "guard": "φ: explore_network_write", "model": "github-copilot/claude-sonnet-5.5", "count": 1 },
+    { "guard": "φ: loop_guard_read_streak (>12)", "model": "openrouter/deepseek/deepseek-v4.1-flash", "count": 2 },
+    { "guard": "φ: noblock_lead", "model": "openrouter/deepseek/deepseek-v4.1-flash", "count": 1 },
+    { "guard": "φ: noblock_manager", "model": "github-copilot/claude-opus-5.5", "count": 1 }
+  ],
+  "absent": ["cli: quoted_only", "cli: quoted_two"]
+}

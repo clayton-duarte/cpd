@@ -15,6 +15,34 @@ export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 /** The pinned Electron binary the app runs on (the `electron` devDependency). */
 const electronExecutable = createRequire(import.meta.url)("electron") as string;
 
+/** The scripted fake cpd (`e2e-fake-cpd`) the data plane boots against, never a real cpd. */
+const fakeCpdSource = fileURLToPath(new URL("./e2e-fake-cpd", import.meta.url));
+
+/** The PATH the runner started with, before any spec prepends its private bin dir. */
+const basePath = process.env["PATH"] ?? "";
+
+/**
+ * Stage the suite's private data plane in `staging`: a `bin` dir holding a `cpd` symlink to the
+ * scripted fake cpd, and a fake login shell that reports the app's PATH unchanged (the app runs
+ * `$SHELL -ilc` to resolve the login path, and the real shell would drop the fake dir, so the pty's
+ * `cpd tui --attach` would spawn a real cpd). Sets CPD_BIN, SHELL and PATH so the app spawns the
+ * fake only. The caller removes `staging` in `afterAll`.
+ */
+export function stageFakeCpd(staging: string): void {
+  const fakeBin = join(staging, "bin");
+  const fakeShell = join(staging, "shell");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeShell,
+    `#!/bin/sh\nprintf '%s' '__CPD_PATH_BEGIN__'; printf '%s' "$PATH"; printf '%s' '__CPD_PATH_END__'\n`,
+  );
+  chmodSync(fakeShell, 0o755);
+  symlinkSync(fakeCpdSource, join(fakeBin, "cpd"));
+  process.env["CPD_BIN"] = fakeCpdSource;
+  process.env["SHELL"] = fakeShell;
+  process.env["PATH"] = `${fakeBin}:${basePath}`;
+}
+
 /**
  * Headless Electron on Linux needs these: the bundled `chrome-sandbox` is not SUID (--no-sandbox),
  * a virtual display has no GPU (--disable-gpu), and the CI runner's /dev/shm may be small
@@ -39,6 +67,12 @@ type LaunchAppOptions = {
   appPath?: string;
   /** Extra env for a scenario (for example `CPD_CHECKOUT`); it never overrides the hidden/isolation keys. */
   env?: Record<string, string>;
+  /**
+   * Extra Chromium/Electron switches for a scenario, appended after the app path so they win over
+   * the launcher's own. The rollback relaunch repeats `process.argv.slice(1)`, so a switch here (for
+   * example a reserved `--remote-debugging-port`) is in force in every relaunched process too.
+   */
+  extraArgs?: readonly string[];
   /**
    * Create the window hidden (`CPD_ELECTRON_HIDDEN=1`). Default true: the suite never shows a
    * window on the User's screen (air-d68). The shared fixture passes false on Linux (the CI runner
@@ -87,7 +121,7 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
     // `--user-data-dir` isolates Electron's own state (the single-instance lock, caches and app
     // data) in a temp dir, so the run never touches the User's real profile. The last argument is
     // the Electron app path: `"."` is the checkout's `web/`, or the staged installed app dir.
-    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? "."],
+    args: [...headlessLinuxArgs, `--user-data-dir=${options.userDataDir}`, options.appPath ?? ".", ...(options.extraArgs ?? [])],
     cwd: webRoot,
     env: {
       ...process.env,

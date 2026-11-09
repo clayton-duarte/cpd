@@ -215,7 +215,12 @@ fn snapshot_panes_equal_the_list_readers() {
     });
     let frames = run_quiet(&mut rig, vec![]);
     assert_eq!(frames[1]["t"], "snapshot");
-    assert_eq!(frames[1]["panes"], expect);
+    // The snapshot's four list panes equal the readers, key by key; the fifth pane (`status`, contract
+    // §20.1) has no list reader and is pinned by the `cockpit_status_pane_*` tests below.
+    let panes = frames[1]["panes"].as_object().expect("panes is an object");
+    for key in ["context", "plan", "session", "inbox"] {
+        assert_eq!(panes.get(key), expect.get(key), "pane `{key}`");
+    }
 }
 
 #[test]
@@ -574,4 +579,111 @@ fn cockpit_serve_execs_replaced_binary_on_snapshot_pane_store_too_new_and_embeds
         !frames[1].to_string().contains("store_too_new"),
         "{frames:?}"
     );
+}
+
+// ---- The `status` pane: Workers counts and incident state (contract §20.1, Plan `status-workers`) ----
+
+/// The `status` pane of the first snapshot frame. Missing (no key) fails here, which is the red reason
+/// while the pane is absent; the field assertions below pin the pane's shape.
+fn snapshot_status(frames: &[Value]) -> &Value {
+    let snapshot = frames
+        .iter()
+        .find(|f| f["t"] == "snapshot")
+        .expect("a snapshot frame");
+    snapshot["panes"]
+        .get("status")
+        .expect("the snapshot carries a `status` pane")
+}
+
+/// Seeds the store so the pane's four counts are known: `concurrency = 5` in the config, one `running`
+/// Job with an Attempt (a `workers` tenant, `running` = 1), and two `queued` Jobs of which one is Ready
+/// (E3's rule, `waiting` = 1) and one is not (`queued` = 2).
+fn seed_counts(rig: &Rig) {
+    fs::write(
+        rig.home.config(),
+        "version = 1\nmachine = \"m1\"\nconcurrency = 5\n",
+    )
+    .unwrap();
+    let fingerprint = "f".repeat(64);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("seed counts", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('pay', 'wf', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', NULL, 'ready1', 'Ready', 'scout', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fingerprint}', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'wf', 'wait1', 'Wait', 'work', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fingerprint}', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'wf', 'run1', 'Run', 'work', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                   VALUES ('pay', 'run1-a1', 'run1', 1, 'S2', 'ladder', 'running', 'cpd/pay--run1-a1', '/w', 't');"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Seeds an on incident row: the `started_at` and the Lead `lead1` the pane must carry.
+fn seed_incident(rig: &Rig) {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("seed incident", |tx| {
+            tx.execute(
+                "INSERT INTO incident (id, started_at, started_by, reason, started_txn, lead)
+                   VALUES (1, '2026-10-14T21:10:00.000Z', 'lead1', 'database migration in progress', cpd_txn(), 'lead1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn cockpit_status_pane_includes_counts() {
+    let mut rig = rig();
+    seed_counts(&rig);
+    let frames = run_quiet(&mut rig, vec![]);
+    let status = snapshot_status(&frames);
+    assert_eq!(status["ok"], json!(true), "{status}");
+    let workers = &status["workers"];
+    assert_eq!(workers["running"], json!(1), "{status}");
+    assert_eq!(workers["limit"], json!(5), "{status}");
+    assert_eq!(workers["waiting"], json!(1), "{status}");
+    assert_eq!(workers["queued"], json!(2), "{status}");
+}
+
+#[test]
+fn cockpit_status_pane_includes_incident() {
+    let mut rig = rig();
+    seed_incident(&rig);
+    let frames = run_quiet(&mut rig, vec![]);
+    let status = snapshot_status(&frames);
+    assert_eq!(status["ok"], json!(true), "{status}");
+    let incident = &status["incident"];
+    assert_eq!(incident["on"], json!(true), "{status}");
+    assert_eq!(
+        incident["started_at"],
+        json!("2026-10-14T21:10:00.000Z"),
+        "{status}"
+    );
+    assert_eq!(incident["lead"], json!("lead1"), "{status}");
+}
+
+#[test]
+fn cockpit_status_pane_empty_store_zeroes() {
+    let mut rig = rig();
+    let frames = run_quiet(&mut rig, vec![]);
+    let status = snapshot_status(&frames);
+    assert_eq!(status["ok"], json!(true), "{status}");
+    let workers = &status["workers"];
+    assert_eq!(workers["running"], json!(0), "{status}");
+    assert_eq!(workers["waiting"], json!(0), "{status}");
+    assert_eq!(workers["queued"], json!(0), "{status}");
+    assert_eq!(workers["limit"], json!(3), "{status}");
+    let incident = &status["incident"];
+    assert_eq!(incident["on"], json!(false), "{status}");
+    assert_eq!(incident["started_at"], Value::Null, "{status}");
+    assert_eq!(incident["lead"], Value::Null, "{status}");
 }

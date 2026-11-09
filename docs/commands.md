@@ -3344,7 +3344,7 @@ How the pi adapter reports its agent state (§3.6, D4). `--session <id>` takes a
 | the transition is in §3.6's table | `illegal_transition` | 3 |
 | `blocked` with the label `φ: Worker question` or `φ: question to the Lead` (both are agent waits, `waiting` only: contract §3.6, pro-d427) | `usage` | 2 |
 
-Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. A `stopped` → `idle` call the adapter makes at a reload (§15.6, air-n103, air-n104) is not activity: it moves `state_at`, but engine E13 ignores that round trip, so it does not restart a finished Session's sleep clock (contract §3.7 E13). **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6), so it opens no `replied` Item. No tmux.
+Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6), so it opens no `replied` Item. No tmux.
 
 ```json
 {"ok": true, "session": "596d007f-…", "state": "waiting", "label": "φ: Worker question", "from": "working"}
@@ -3703,6 +3703,8 @@ Output:
 
 `event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
+**A report of a refusal carries the `guard` kind** (contract §5.2, Plan `agent-refusals`): when the report is a refusal of the reporting Session's own tool call or command — an adapter guard refusal (a `toolResult` whose text starts with `φ: ` and whose `details` are empty) or an agent-caused CLI refusal (the `{"ok":false,"error":{…}}` envelope) — the appended Event is a `guard` Event instead of an `error` Event, with `data` `{code, role, tier, model, tool, excerpt}` (`code` the guard rule or the envelope's error code, `excerpt` the refused command line or path cut to 200 characters) and the scope columns of the reporting Session; the dedupe window above is the same, matched on `code` and `excerpt` instead of `code` and `message`. Any other report keeps the `error` kind exactly as the Effects above state.
+
 ### 10.18a `session switch-failed` (internal)
 
 ```
@@ -3924,6 +3926,14 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7). A Manager of a Lead-less Plan also receives the engine's `session-message` for each `job-merged`, `job-failed` and `escalation` Event of that Plan (contract §5.3); the Plan's own Events are still not routed to it.
 
 The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
+
+The kind `guard` (contract §5.2) is read like any other kind too: `cpd events list --kind guard` lists every refusal, scoped by `--plan`, `--context` or `--session` (§1.3), `--since` and `--limit` as always, and `cpd events follow --kind guard` streams them. One Event per guard Event row; its `data` carries the refusal's own fields, so a ranking per guard, role, model and day is an aggregation over these rows:
+
+```json
+{"id": 48216, "at": "2026-11-08T03:10:00.000Z", "kind": "guard", "context": "building-cpd", "plan": "cpd2", "job": "ev-docs", "attempt": "ev-docs-a1", "session": "9f2e…", "text": "Worker ev-docs-a1 refused: explore network write: scout has no network: git fetch", "data": {"code": "explore network write", "role": "worker", "tier": "H3", "model": "github-copilot/gpt-5", "tool": "bash", "excerpt": "git fetch origin agent-refusals/miner"}}
+```
+
+`data.code` separates the two refusal families: a guard rule (`explore network write`, `loop guard`, `primary-checkout`, …) for an adapter guard refusal, a CLI error code (`usage`, `spec_invalid`, `shape_violation`, …) for an agent-caused CLI refusal. To rank one code across the store: `cpd events list --kind guard --context <c> | jq '[.events[] | select(.data.code == "spec_invalid")] | length'`. The repeat dedupe (contract §5.2) shapes what the rows mean: one row per refusal episode, at most one per (`session`, `code`, `excerpt`) per `watch.error_repeat_seconds` window, never one per raw refusal.
 
 ### 11.1 `events list`
 
@@ -4394,6 +4404,7 @@ The header's lines are colour 8 and its two pills are read-only title pills (col
   | `dialog`, `unread` | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there) |
   | `plan-review` | a `Link` widget: the label is the Link's text, the cue `󱆭` follows and a plain left click on them opens the item's `url` when present; with no `url` the label draws with no link and a plain click jumps to the Lead instead (no url, no link drawn, the row's jump rule applies). An item with no `url` still jumps; if that jump fails the failure is a `text` dialog (§17 "No notes") |  
   | `loop-guard` (pro-d372) | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there). The Session is the one the loop guard tripped on; the trip is cleared by the User's next prompt there (L5) or by `cpd session resume` (§10.17) |
+  | `refusal-alert` (Plan `agent-refusals`; contract §2.2, §3.7 E25) | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there). The Session is the one whose refusals crossed the threshold; the rate behind the count is `cpd metrics refusals` (§14.7). No link is drawn and no dialog opens |
   | `drafts-parked` (hs-d731, hs-d733) | jumps to the Plan's Lead Session, as `plan-review` with no `url` does: no link is drawn and no command runs; the contract's rule (§2.2) gives the item its label `<plan>: <N> parked drafts` |
   | `pr-failing`, `pr-changes` (history rows only: hs-d470 dropped the kind, E8 opens none; no check or review state opens an Inbox item, hs-d470) | nothing; no jump, no click action |
   | `pr-ready` (the User's open authored pull request, in every state; the row's colour is the state, contract §2.2 "The authored pull request rule") | the glyph U+F12F4 is drawn in the item's urgency colour. The label is a `Link` widget (the label is the Link's text, the cue `󱆭` follows): a plain left click on it opens the item's `url` (the GitHub pull request page). A click on the rest of the row runs `session open <lead>`, then `select-pane` on the chat slot when a Plan owns the pull request (its Lead Session) and does nothing when none does. While that pull request's merge is running (the merge marker, below, hs-d495) the glyph cell is the yellow spinner and a click does nothing |
@@ -4811,14 +4822,14 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 
 ```
 cpd config [--migrate]
-cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
 cpd config experimental [<feature> <on|off>]
 cpd config concurrency set <n>
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `decide_tier`, `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `decide_tier` `JX` (the decide role's default: the Tier of the cheap decisions — routing, classification, logic gates such as the loop-guard verdicts and tier selection; one step only, no ladder, air-d113, air-d115, air-d120; contract §9 "Roles and ranges"), `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-`config tiers set` (§14.2a) writes the five Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
+`config tiers set` (§14.2a) writes the four Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive), then `worker-runner-to-experimental` (Plan `experimental-config`: the top-level `worker_runner = "durable"` becomes `durable_workers = true` in `[experimental]`, and `worker_runner = "pi"` is only dropped)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -4833,14 +4844,13 @@ With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive m
 ### 14.2a `config tiers set`
 
 ```
-cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
 ```
 
-Sets the five Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--decide` is `decide_tier`, `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All five flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
+Sets the four Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All four flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
 
 | Argument | Meaning |
 |---|---|
-| `--decide <T>` | the decide role's default, `decide_tier` (§9 "Roles and ranges") |
 | `--auxiliar <T>` | the auxiliar role's default, `context_distill_tier` (§9 "Roles and ranges") |
 | `--worker <T>` | the worker role's default, `worker_tier` |
 | `--lead <T>` | the lead role's default, `lead_tier` |
@@ -4851,15 +4861,15 @@ Sets the five Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--decide` 
 | Precondition | Code | Exit |
 |---|---|---|
 | `config.toml` exists (it is read first) | `config_missing` | 1 |
-| each of the five values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
-| the new text parses as a Config: each key's own rules hold, and the five defaults strictly ascend, `decide_tier` < `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
+| each of the four values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
+| the new text parses as a Config: each key's own rules hold, and the four defaults strictly ascend, `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
 | `host.toml` exists and parses, or is absent (the built-in default applies); a file that does not parse is `policy_invalid` (`details.file`) | `policy_invalid` | 1 |
 | the store cannot be opened for the catalog, or the migration wait ends (as `cpd tiers`) | `lock_timeout` | 5 |
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each model read for the catalog (the `[model]` refs of `host.toml`) is in the catalog | `tier_model_unknown` | 1 |
 | each value is a valid rung of its letter's model: a digit only for an effort the model offers, `X` for every model (§9 "Valid efforts per model", air-d16, air-d17, air-d21); `details.key` and `details.efforts` (the model's valid efforts) | `tier_invalid` | 2 |
-| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar and the decide), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
+| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
 
 **Effects.** Only a key whose effective value changes is written; an absent key has its default as its value. The rewrite keeps every other byte of the file:
 - a changed key's line is replaced whole by `<key> = "<T>" # set by the Agent Tiers dialog, <YYYY-MM-DD>`, the date from cpd's ports clock;
@@ -4946,22 +4956,22 @@ Kept from cpd 1 §7 and §11; output of §9.
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each model read is in the catalog: the configured one of each letter, or the `--model` candidate that replaces it | `tier_model_unknown` | 1 |
-| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `J`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
+| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
 
 **`--model <L>=<ref>`** (repeatable) names a candidate model for the letter `L`, for this call only. The catalog is read for the candidate instead of the configured model of `L`, and the output's `tiers.<L>.model` and `efforts` are the candidate's. Nothing is written to `host.toml` or `config.toml`; the candidate's catalog rows are cached like any model's (a cache, no Event). The output shape is unchanged, and `tiers.<L>.model` shows the candidate:
 
 ```json
-{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}, "J": {"model": "openrouter/typesafe/jev-router", "efforts": [0, 1, 2, 3]}}}
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
 ```
 
-The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S`, `G` and `J` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
+The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S` and `G` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
 
 It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
 Effects: the cache is keyed by `install/current-version` and the fingerprint of `<agentDir>/models.json` (`models_sha`: lowercase hex SHA-256 of its bytes, `""` when the file does not exist; any other read error is `catalog_failed` with the path in `details`), so the key is `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp; contract §4.4, §9). When either differs from the cached rows, one transaction inserting `tier_catalog` rows (append-only; old rows stay) (a cache: no Event). The rows of every letter are cached, `G` included (contract §4.4, §9). No tmux, no git.
 
 ```json
-{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}, "J": {"model": "openrouter/typesafe/jev-router", "efforts": [0, 1, 2, 3]}}}
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
 ```
 
 The `efforts` above are an illustration, not verified values. `G` reads like the other letters (pro-d328 to pro-d332): its model here has only `off`, so its `efforts` are `[]` and `GX` is its one valid Tier; a model with an effort level gives `G` efforts like any letter. Efforts are 0–4 (`minimal` and `max` are dropped, §9). Idempotent: yes.
@@ -4986,7 +4996,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
 7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
    - a. `pnpm --dir <root> install --frozen-lockfile`.
-   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`. Then the app packaging (air-d89 point 1): the app is packaged from the checkout with the existing `web/electron-builder.yml`, and the built bundle is installed into the app dir `<home>/.local/share/cpd/app` (`CPD.app` on macOS; the previous bundle is replaced), so `cpd desktop` (§14.4a) launches the installed app and not the checkout's node_modules Electron.
+   - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
    - c. `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`) is written with `<root>` as its one line, the absolute path, after b succeeded (a temporary file, then a rename).
    - d. When `<preview_dir>/web-state` exists (`<preview_dir>` = `$CPD_PREVIEW_DIR`, else `~/.cache/cpd-preview`), a web preview is on: Electron is left alone and stderr says `cpd install: web preview is on; Electron was not signalled`. Otherwise SIGUSR1 goes to the pid in `<cpd_home>/run/preview-health.json` (field `pid`) when that pid is alive. With no live Electron, nothing is signalled and nothing is started.
 
@@ -5001,7 +5011,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 
 Every refusal (steps 1 to 4a, nothing replaced), failure (steps 5 and 6) and failed follow-up (steps 7 and 7a) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
-Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`, the app dir), the checkout's `web/node_modules`, `web/dist-electron` and `web/dist` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
 ### 14.4a `desktop`
 
@@ -5013,17 +5023,15 @@ cpd desktop --off
 cpd desktop --status
 ```
 
-The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd desktop` launches the packaged app the checkout installed (air-d89 point 1; `web/`, `web/ELECTRON.md`, §Run), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
+The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd desktop` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
 
-**The checkout and the app dir.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used. The app itself lives in the app dir `<home>/.local/share/cpd/app`: the packaged bundle (`CPD.app` on macOS; `productName` CPD, `appId` com.cpd.desktop) that the install packages from the checkout with the existing `web/electron-builder.yml` and installs there, replacing the previous bundle (air-d89 point 1). The bundle is a shell: it carries the watchdog in the app's main process and only the tooling its duties need (the pty's `spawn-helper`, the tray and Dock resources); the views keep loading from the checkout named by `app-root`, built and swapped there by the updater (web/ELECTRON.md, §Run and §Auto-update). To install or reinstall the app, run `scripts/install-cpd.sh` — `cpd install --root <checkout>`: its step 7a packages the app from the checkout and installs it into the app dir (§14.4).
+**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
 
 **Plain `cpd desktop`.** Ensure, then reload or launch:
 1. **Ensure** (idempotent). `pnpm --dir <root> --filter cpd-web-client run build:electron` runs only when `<root>/web/dist-electron/main.js` is missing (install always builds, §14.4 step 7a). Then, always: when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before the remaining steps; when the binary is present, no extra install command runs. Always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`. These are the steps of the `electron` script of `web/package.json`. The build is bounded at 10 minutes.
-2. **Reload or launch.** The running Electron is the pid in `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`; field `pid`; every Electron launch writes it), when that pid is alive. Alive: SIGUSR1 to it, action `reloaded`. Otherwise: spawn the installed app — the executable of the bundle in the app dir (`<home>/.local/share/cpd/app/CPD.app/Contents/MacOS/CPD` on macOS), in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, without waiting; action `launched`. The spawned app inherits the environment of `cpd desktop` minus the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the one canonical per-session list of contract §6.6 — which are removed from the child; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable are kept (so a run from inside an agent Session hands no agent identity to the app). The app strips the same five again at its own boot (web/ELECTRON.md, "Boot order").
+2. **Reload or launch.** The running Electron is the pid in `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`; field `pid`; every Electron launch writes it), when that pid is alive. Alive: SIGUSR1 to it, action `reloaded`. Otherwise: spawn `<root>/web/node_modules/.bin/electron .` with cwd `<root>/web`, in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, without waiting; action `launched`. The spawned Electron inherits the environment of `cpd desktop` minus the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the one canonical per-session list of contract §6.6 — which are removed from the child; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable are kept (so a run from inside an agent Session hands no agent identity to the app). The app strips the same five again at its own boot (web/ELECTRON.md, "Boot order").
 
 Output: `{"ok": true, "action": "launched" | "reloaded", "pid": <N>}`, where `pid` is the new process or the signalled one.
-
-Status: decided by air-d89 point 1; as of this amendment the code still spawns `<root>/web/node_modules/.bin/electron .` with cwd `<root>/web` (`core/src/app/mod.rs`, `launch`) and the install has no packaging step; the implementing change brings the launch in line (web/ELECTRON.md, §Run).
 
 **`--preview [<worktree>]`, `--reload [<worktree>]`, `--off`, `--status`.** Each runs `sh <root>/scripts/preview-web.sh on [<worktree>]`, `reload [<worktree>]`, `off` or `status` through the Runner, with a 15-minute deadline, and returns its stdout and stderr text in `output`. `--preview` starts no Electron: the script prints the command that does (docs/ui-preview.md). `--reload` builds and signals as the script does (docs/ui-preview.md, `reload`).
 
@@ -5042,7 +5050,7 @@ Output:
 
 A failed ensure or a failed script exits with its error and runs nothing after it.
 
-Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches the installed app — the bundle in the app dir `<home>/.local/share/cpd/app` — writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
+Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
 
 Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again; `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
 
@@ -5100,10 +5108,10 @@ Effects: the `swr_models` row written for each provider that has a good list; th
 cpd preset list
 cpd preset show <name>
 cpd preset apply <name>
-cpd preset set --O <ref> --S <ref> --H <ref> --G <ref> --J <ref>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
 ```
 
-The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, air-d115, air-d120): a named set of five model refs — the `O`, `S`, `H`, `G` and `J` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the five refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
+The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the four refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
 
 **`preset list`** prints every preset with the provider of its `O` ref. No precondition, no effect (one read of `config.toml`, no store):
 
@@ -5114,7 +5122,7 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, ai
 
 `presets` is sorted by name, `[]` when the config has none. Idempotent: read-only.
 
-**`preset show <name>`** prints the preset's five refs and the current host `[model]`:
+**`preset show <name>`** prints the preset's four refs and the current host `[model]`:
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5124,10 +5132,8 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, ai
 {"ok": true, "name": "fast",
  "O": "github-copilot/claude-haiku-4.5", "S": "github-copilot/claude-sonnet-5.5",
  "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash",
- "J": "openrouter/typesafe/jev-router",
  "host": {"O": "github-copilot/claude-opus-5.5", "S": "github-copilot/claude-sonnet-5.5",
-          "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash",
-          "J": "openrouter/typesafe/jev-router"}}
+          "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash"}}
 ```
 
 `host` is the machine scope's `[model]` refs read from `$CPD_HOME/policy/host.toml`, or the built-in default of contract §8.3 when the file has no `[model]` table. No registry is read and nothing is validated: `show` reports, it never checks. Idempotent: read-only.
@@ -5136,19 +5142,19 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, ai
 
 1. **The name.** `<name>` must be a `[presets.<name>]` table of `config.toml`, else `preset_unknown` (exit 4).
 2. **The host file.** `$CPD_HOME/policy/host.toml` must exist and hold a `[model]` table, else `policy_invalid` (exit 1, `details.file`, `details.key` `model`): there is nothing to rewrite.
-3. **Equality.** When the preset's five refs equal the current host `[model]` refs of step 2, `apply` is a no-op: no write, no Event, `"already": true` (idempotent).
-4. **The one-provider invariant.** The preset's five refs must have one provider, the invariant contract §8.3 holds of a written model table; else `policy_invalid` (exit 1, `details.file`, `details.key` `model`), before anything external runs.
+3. **Equality.** When the preset's four refs equal the current host `[model]` refs of step 2, `apply` is a no-op: no write, no Event, `"already": true` (idempotent).
+4. **The one-provider invariant.** The preset's four refs must have one provider, the invariant contract §8.3 holds of a written model table; else `policy_invalid` (exit 1, `details.file`, `details.key` `model`), before anything external runs.
 5. **The registry** (D3). The command lists pi's **full** registry on this machine — every provider pi can use, the built-in providers included, each with its offered model ids — by running the model-discovery helper (`pi/lib/models-list.ts`, the helper §14.5's `models refresh` and the engine's E15 run with no argument) in its `--all` mode, through the host runner, under pi's Node, in its own process group, with the deadline of `models refresh`'s (120 s). **The cached `run/models-<provider>.json` files are never the source**: they exclude the built-in providers, so the registry is always listed at apply time. The registry listing's own failures are the helper's codes (`pi_not_found`, `spawn_failed`, `tool_timeout` exit 5, `models_helper_failed`, …), writing nothing. Then:
    - a ref whose provider is not in the registry refuses `preset_provider_unconfigured` (exit 3);
    - a ref that is not among its provider's offered ids refuses `preset_model_unoffered` (exit 3).
-6. **The write** (D4). The `[model]` table of `host.toml` is rewritten: the section header `[model]` and its `O`/`S`/`H`/`G`/`J` lines are replaced by the preset's five refs, in that order, and every other byte of the file is unchanged. The write is atomic: a temporary file in the same directory, then a rename over `host.toml` (`write_atomic`). `host.toml` stays the **only** place `[model]` is written (pro-d25): no owner or repo policy file and no dotfiles template.
+6. **The write** (D4). The `[model]` table of `host.toml` is rewritten: the section header `[model]` and its `O`/`S`/`H`/`G` lines are replaced by the preset's four refs, in that order, and every other byte of the file is unchanged. The write is atomic: a temporary file in the same directory, then a rename over `host.toml` (`write_atomic`). `host.toml` stays the **only** place `[model]` is written (pro-d25): no owner or repo policy file and no dotfiles template.
 7. **The live Sessions** (D5). After the write, the command recomputes the model each live (not archived) Lead and Manager Session resolves at its tier's letter — the `model` of `cpd session show` (§10.2), i.e. the ref contract §8.3's resolution gives the letter of the Session's stored tier, so a letter whose effective ref an owner or repo file overrides is unchanged. For every Session whose model differs under the pre-write and the post-write host `[model]`, ONE `session-model-changed` Event is appended, scoped to it (`context` and `plan` when it has them; `data` `{from, to}` = the resolved refs under the pre-write and the post-write `host.toml`), all in one store transaction, in the same style as `session-retiered` (contract §5.2, §5.3). A Session whose letter's model is unchanged gets none. Nothing else is written for Sessions.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `<name>` is a `[presets.<name>]` table of `config.toml` (step 1) | `preset_unknown` | 4 |
 | `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
-| the preset's five refs are one provider — the invariant of contract §8.3 for the written table; `details.file`, `details.key` `model` (step 4) | `policy_invalid` | 1 |
+| the preset's four refs are one provider — the invariant of contract §8.3 for the written table; `details.file`, `details.key` `model` (step 4) | `policy_invalid` | 1 |
 | the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
 | the registry can be listed: the helper starts | `spawn_failed` | 1 |
 | the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
@@ -5170,10 +5176,10 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`; the `J` key air-d113, ai
 ### 14.6a `preset set`
 
 ```
-cpd preset set --O <ref> --S <ref> --H <ref> --G <ref> --J <ref>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
 ```
 
-The switch of `preset apply` with the five refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All five flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
+The switch of `preset apply` with the four refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All four flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
 
 | Argument | Meaning |
 |---|---|
@@ -5181,12 +5187,11 @@ The switch of `preset apply` with the five refs given as flags instead of a `[pr
 | `--S <ref>` | the model ref of the `S` letter |
 | `--H <ref>` | the model ref of the `H` letter |
 | `--G <ref>` | the model ref of the `G` letter |
-| `--J <ref>` | the model ref of the `J` letter |
 
 **Steps, in order.** Every refusal happens before any write: nothing is written and no Event is appended.
 
-1. **The refs.** Each `--O`, `--S`, `--H`, `--G` and `--J` parses as a model ref (`usage` otherwise), before anything is read.
-2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' five refs as the preset's: the host file must hold a `[model]` table; when the five refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the five refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
+1. **The refs.** Each `--O`, `--S`, `--H` and `--G` parses as a model ref (`usage` otherwise), before anything is read.
+2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' four refs as the preset's: the host file must hold a `[model]` table; when the four refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the four refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
 3. **The write and the live Sessions.** Exactly `preset apply`'s steps 6 and 7: the `[model]` table of `host.toml` is rewritten atomically, and one `session-model-changed` Event is appended for each live Lead and Manager whose model changed, in one store transaction.
 
 **Effects.** The `[model]` rewrite of `host.toml` and the Events of step 3, and nothing else: no `config.toml` write, no other row, and no write at all on a refusal or on the no-op of step 2.
@@ -5195,7 +5200,7 @@ The switch of `preset apply` with the five refs given as flags instead of a `[pr
 |---|---|---|
 | a ref does not parse as a model ref of §8.3, or a flag is missing (step 1) | `usage` | 2 |
 | `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
-| the five refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the four refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
 | the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
 | the registry can be listed: the helper starts | `spawn_failed` | 1 |
 | the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
@@ -5212,7 +5217,7 @@ It opens the store only to append the Events of step 3, so it waits out a migrat
    {"session": "596d007f-…", "role": "lead", "from": "github-copilot/claude-opus-5.5", "to": "github-copilot/claude-sonnet-5.5", "event": 48221}]}
 ```
 
-The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same five refs is the no-op above.
+The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same four refs is the no-op above.
 
 ### 14.7 `metrics`
 
@@ -5230,7 +5235,55 @@ The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Le
 - `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
 - `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
 
-**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day, with a threshold crossing over a window that records an Event and alerts the Manager and the Inbox. The surface is the CLI only; nothing here feeds an exporter.
+**Refusals are their own metric** (Plan `agent-refusals`; air-d85): the causes above cover Jobs' Attempts, not an agent's refusals. Every guard refusal and agent-caused CLI refusal is appended as a guard Event (contract §5.2), and `cpd metrics refusals` aggregates those Events into the refusal rate per guard, role, model and day (below).
+
+**`cpd metrics refusals`** is the one aggregate of the refusals this machine's agents suffered: the rate over the guard Events, per guard, role, model and day. Read-only, as its parent is: it opens the store read-only, reads the `guard` Events, prints one JSON value and writes nothing. Callers `[Manager, Lead]` (§2).
+
+```
+cpd metrics refusals [--since <date>] [--until <date>] [--limit <n>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--since <date>` | the window's start, **inclusive**; an RFC 3339 timestamp or a bare `YYYY-MM-DD` date (`YYYY-MM-DD` is `00:00:00Z` of that day). Default: 7 days before `--until` |
+| `--until <date>` | the window's end, **exclusive**, in the same two forms. Default: now, on the reading process's clock |
+| `--limit <n>` | at most this many rows of each table, `0` for every row. Default `20` |
+
+**The window and what it counts.** One guard Event is counted when its `at` is at or after `--since` and before `--until`: every refusal the adapter guards and the agent-caused CLI refusals appended (contract §5.2 "The guard Event"), of every role and every Plan. The window is echoed in the value as `{since, until, days}`, `days` its length in days (`until − since` in seconds, divided by 86400), the divisor of every rate.
+
+**The value**, one JSON object:
+
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+- `window`: `{since, until, days}` as above, `since` and `until` in RFC 3339 UTC.
+- `total`: the count of the counted guard Events.
+- `per_guard`, `per_role`, `per_model`: the same Events in the three other dimensions — one row per `data.code` for `per_guard` (the guard rule, or the CLI envelope's code, contract §5.2), per `data.role` for `per_role` (`manager`, `lead`, `worker`) and per `data.model` for `per_model` (the model ref) — each row `{guard|role|model, count, per_day}`, highest `count` first, a tie by name ascending.
+- `per_day`: the same Events by day, oldest day first, as `{day, count, per_guard}`, `per_guard` an object of `code` → count for that day; only days with at least one counted Event appear.
+
+**The rate** is `per_day` on every row: its `count` divided by the window's `days`, rounded to two decimals, so 70 refusals over a 7-day window is `10.0` and 1 refusal over the same is `0.14`. The `day` of `per_day` is the **UTC calendar day** of the Event's `at` (the store keeps `at` in UTC, contract §5.2): the metric is machine-wide and applies no local zone, so the same store read in any zone gives the same tables.
+
+```json
+{"ok": true, "store": "/home/clayton/.cpd/cpd.db",
+ "window": {"since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z", "days": 7.0},
+ "total": 34,
+ "per_guard": [{"guard": "usage", "count": 21, "per_day": 3.0},
+               {"guard": "explore timeout", "count": 7, "per_day": 1.0}],
+ "per_role": [{"role": "worker", "count": 26, "per_day": 3.71},
+              {"role": "lead", "count": 8, "per_day": 1.14}],
+ "per_model": [{"model": "deepseek/deepseek-v4", "count": 19, "per_day": 2.71},
+               {"model": "github-copilot/claude-sonnet-5.5", "count": 15, "per_day": 2.14}],
+ "per_day": [{"day": "2026-11-06", "count": 12, "per_guard": {"usage": 7, "explore timeout": 5}},
+             {"day": "2026-11-07", "count": 22, "per_guard": {"usage": 14, "explore timeout": 2, "test": 6}}]}
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--since` or `--until` is neither an RFC 3339 timestamp nor a `YYYY-MM-DD` date | `usage` | 2 |
+| `--until` is not after `--since` | `usage` | 2 |
+| `--limit` is not a non-negative integer | `usage` | 2 |
+
+Idempotent: read-only, so a rerun over an unchanged store prints the same value. **There is no `--format` on it:** `--format prometheus` (below) exposes the Attempts' aggregates and nothing else, because a refusal rate feeds no exporter. The surface is the CLI only.
+
+**The threshold alert is the engine's, not this command's** (Plan `agent-refusals`; air-d85, air-d105, air-d64; contract §3.7 E25). Engine step E25 counts the `guard` Events of each Session over a sliding window at every tick, and at or above the configured threshold it (1) appends one structured `error` Event with the code `refusal_threshold`, (2) messages the Context's Manager with a waking `session-message`, the air-d64 pattern so that the Manager acts at once instead of finding the crossing in the Inbox, and (3) leaves a red `refusal-alert` Inbox item for the User, which E8 opens and closes with the count. `cpd metrics refusals` takes no part in the alert: it reads the same Events and reports them, and it is where a Manager sees whether the crossing was real. Its only reader is a command line — no daemon, no scrape, no exported metric.
 
 **`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
 
@@ -5463,8 +5516,6 @@ A line that cannot be written is notified once per run (`ctx.ui.notify`, level `
 3. **pi itself loads the new package** (hs-d255 (a); the bug it replaces: a plain `node` + `jiti` load could not resolve `@earendil-works/pi-tui`, which pi provides to extensions at runtime, so every validation after #61 failed `Cannot find module`), in a child process, never in the live pi: `PI_OFFLINE=1 pi --no-extensions --no-session -e <dir> --mode rpc` with stdin `/dev/null`. `pi` is the one on `PATH`, the binary cpd starts the Session with (same version). Its `PI_CODING_AGENT_DIR` is a scratch empty directory under the OS temp directory (no User settings, sessions or credentials; with no model it needs no network), also its working directory and removed afterwards; the User's sessions and settings are never read or written. Exit 0: the extension loads. Exit 1: pi's stderr says why (`Failed to load extension "<path>": …`, also `Extension does not export a valid factory function`). The child has a timeout of **60 s**, which tolerates a loaded machine; its process group is killed at the timeout and **a timeout is a refusal** (`load timed out after 60000 ms`) retried at a later poll like any other, not a failure of the adapter. **Why a child:** pi's load runs the new module's top-level code and its factory; in the live pi that would be a second load of a package that may throw or hang. The factory runs in the child too, but the adapter activates only in `tui` mode (§15.1), so in `--mode rpc` it starts no follower and runs no `cpd` command. **Why pi itself:** it is the loader that will load the package, with its own aliases and virtual modules, so it cannot pass what pi rejects or fail what pi accepts (verified live: `docs/research/pi-reload.md` "Pre-validation with pi itself").
 
 When a step fails: **no reload**; the recorded identity stays, so the check runs again at a later poll (no limit, the poll interval); and **one visible error**: `ctx.ui.notify("cpd: adapter update not loaded: <reason>", "error")` (`<reason>` is the first line of pi's stderr, `load timed out after <n> ms`, or `entry files missing`), shown once per distinct reason until a poll passes (a poll that passes re-arms it). Step 1 failing is not an error: it only waits. No `cpd` command is run and nothing reaches the model; the notice is the adapter's own, not an Event. Only when all three steps pass does the guard (above) run and the command trigger. A reload that still fails after a passing pre-validation (a load that differs from the child's) is caught by the wrapper's watchdog (§10.8 "Adapter watchdog").
-
-**A reload is not activity** (air-n103, air-n104). The reload stops and starts pi, so the adapter makes the reload's `stopped` → `idle` round trip through `session state` (contract §3.6; §15.4, §10.6): `session state stopped` at `session_shutdown`, `session state idle` at the new instance's `session_start`. Neither is a turn or a message. Engine E13 does not read that round trip as activity, so it does not restart the Session's sleep clock: a finished Lead still sleeps after `timeouts.sleep_seconds` (contract §3.7 E13) however many installs reload it.
 
 **Relation to the wrapper's restart (§10.8; contract §6.7 "Reload on install").** The in-process reload is first. The wrapper's `SIGTERM` + `exec` stays as the fallback for what it cannot do: a pi without interactive UI, a reload refused for a long time (the wrapper's own idle rules: parked, or idle for 10 minutes) and an adapter that fails to load (the reload left pi without it; pre-validation above makes that rare and the wrapper's watchdog, §10.8, recovers it). Both implement hs-d49 with the same guard in spirit (never with unsent typing, never `blocked`); when the adapter reloads first, pi keeps its process and the wrapper's executable check still sees the new `cpd` binary and may restart pi at its own safe point, which is harmless (the new `session run` resumes the session file).
 
@@ -6472,7 +6523,7 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 
 ## 21. `inbox`
 
-Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `drafts-parked` (magenta, label `<plan>: <N> parked drafts`, links the Plan and its Lead, opened from engine E20's wake, contract §2.2, §3.7 "Parked drafts"; hs-d731, hs-d733), `unread` and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314 and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) `pr-closed` (red: a closed-unmerged PR; contract §2.2, §3.8), and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels and their `url` is the pull request's page).
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `refusal-alert` (red, label `<who>: <N> refusals in <M> min`, one item per Session whose `guard` Events of the last `watch.refusal_alert_minutes` reach `watch.refusal_alert_threshold`, opened and closed by E8 from that count; Plan `agent-refusals`, contract §2.2, §3.7 E25, and the same crossing wakes the Context's Manager as a message by E25), `drafts-parked` (magenta, label `<plan>: <N> parked drafts`, links the Plan and its Lead, opened from engine E20's wake, contract §2.2, §3.7 "Parked drafts"; hs-d731, hs-d733), `unread` and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314 and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) `pr-closed` (red: a closed-unmerged PR; contract §2.2, §3.8), and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels and their `url` is the pull request's page).
 
 An item as printed:
 

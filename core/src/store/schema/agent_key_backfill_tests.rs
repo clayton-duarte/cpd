@@ -210,107 +210,40 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         entry.compat == Compat::Breaking,
         "the migration is breaking"
     );
+    let position = NAMED.iter().position(|n| n.name == MIGRATION).unwrap();
+    let later: Vec<_> = NAMED[position + 1..].iter().map(|n| n.name).collect();
     assert_eq!(
-        NAMED.iter().rev().nth(24).map(|n| n.name),
-        Some(MIGRATION),
-        "only `workflow-reopen`, `context-reads`, `context-supersedes-list`, `drop-question-answer`, `bump-last-posted-at`, `record-topics`, `workflow-base-retarget`, `finish-legacy-review-plans`, `codereview-followup`, `pr-archived`, `plan-reviewed-pr`, `host-restarts`, `replan-phase`, `swr`, `jira-swr`, `swr-slack`, `pr-light-cache`, `jira-account-id`, `shaping`, `pr-merge-armed`, `pr-base-contained`, `tier-letter-j`, `bug-record` and `bug-protocol-breach` come after it"
+        later,
+        [
+            "20261103T1100-workflow-reopen",
+            "20261103T1200-context-reads",
+            "20261103T2150-context-supersedes-list",
+            "20261103T2200-drop-question-answer",
+            "20261104T1445-bump-last-posted-at",
+            "20261104T1555-record-topics",
+            "20261104T1600-workflow-base-retarget",
+            "20261104T1601-finish-legacy-review-plans",
+            "20261105T1400-codereview-followup",
+            "20261105T1521-pr-archived",
+            "20261105T1600-plan-reviewed-pr",
+            "20261105T1700-host-restarts",
+            "20261106T0412-replan-phase",
+            "20261106T1659-swr",
+            "20261106T1824-jira-swr",
+            "20261106T1830-swr-slack",
+            "20261106T2127-pr-light-cache",
+            "20261106T2225-jira-account-id",
+            "20261107T1830-shaping",
+            "20261107T2330-pr-merge-armed",
+            "20261107T2331-pr-base-contained",
+            "20261108T0200-tier-letter-j",
+            "20261108T0500-guard-event",
+            "20261108T0600-refusal-alert-kind",
+            "20261108T0800-bug-record",
+            "20261108T0900-bug-protocol-breach",
+        ]
     );
-    assert_eq!(
-        NAMED.iter().rev().nth(23).map(|n| n.name),
-        Some("20261103T1100-workflow-reopen")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(22).map(|n| n.name),
-        Some("20261103T1200-context-reads")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(21).map(|n| n.name),
-        Some("20261103T2150-context-supersedes-list")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(20).map(|n| n.name),
-        Some("20261103T2200-drop-question-answer")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(19).map(|n| n.name),
-        Some("20261104T1445-bump-last-posted-at")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(18).map(|n| n.name),
-        Some("20261104T1555-record-topics")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(17).map(|n| n.name),
-        Some("20261104T1600-workflow-base-retarget")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(16).map(|n| n.name),
-        Some("20261104T1601-finish-legacy-review-plans")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(15).map(|n| n.name),
-        Some("20261105T1400-codereview-followup")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(14).map(|n| n.name),
-        Some("20261105T1521-pr-archived")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(13).map(|n| n.name),
-        Some("20261105T1600-plan-reviewed-pr")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(12).map(|n| n.name),
-        Some("20261105T1700-host-restarts")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(11).map(|n| n.name),
-        Some("20261106T0412-replan-phase")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(10).map(|n| n.name),
-        Some("20261106T1659-swr")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(9).map(|n| n.name),
-        Some("20261106T1824-jira-swr")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(8).map(|n| n.name),
-        Some("20261106T1830-swr-slack")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(7).map(|n| n.name),
-        Some("20261106T2127-pr-light-cache")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(6).map(|n| n.name),
-        Some("20261106T2225-jira-account-id")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(5).map(|n| n.name),
-        Some("20261107T1830-shaping")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(4).map(|n| n.name),
-        Some("20261107T2330-pr-merge-armed")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(3).map(|n| n.name),
-        Some("20261107T2331-pr-base-contained")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(2).map(|n| n.name),
-        Some("20261108T0200-tier-letter-j")
-    );
-    assert_eq!(
-        NAMED.iter().rev().nth(1).map(|n| n.name),
-        Some("20261108T0800-bug-record")
-    );
-    assert_eq!(
-        NAMED.iter().next_back().map(|n| n.name),
-        Some("20261108T0900-bug-protocol-breach")
-    );
+
 }
 
 #[test]

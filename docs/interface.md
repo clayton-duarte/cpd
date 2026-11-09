@@ -175,7 +175,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd preset show` | Print a preset and the current host model (§14.6) | Manager, Lead | |
 | `cpd preset apply` | Switch the machine to a preset's models (§14.6) | Manager | yes |
 | `cpd preset set` | Switch the machine to four model refs given as flags (§14.6a) | Manager | yes |
-| `cpd metrics` | The read-only aggregate of the machine's Ledger (commands.md §14.7) | Lead, Manager | |
+| `cpd metrics` | The read-only aggregate of the machine's Ledger, or of its refusals (`cpd metrics refusals`, commands.md §14.7) | Lead, Manager | |
+| `cpd metrics refusals` | The refusal rate per guard, role, model and day over the `guard` Events (commands.md §14.7) | Lead, Manager | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd desktop` | The Electron app of the installed checkout and the web preview (commands.md §14.4a) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |

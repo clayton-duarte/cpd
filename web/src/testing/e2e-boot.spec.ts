@@ -148,7 +148,7 @@ switch (command) {
   case "attempt": emit({ ok: true, attempts: [] }); break;
   case "incident": emit({ ok: true, on: false }); break;
   case "tui": tuiCommand(); break;
-  case "--version": emit({ ok: true, version: "0.0.0", protocol: 24 }); break;
+  case "--version": emit({ ok: true, version: "0.0.0", protocol: 25 }); break;
   default: emit({ ok: true });
 }
 `;

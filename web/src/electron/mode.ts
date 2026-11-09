@@ -1,9 +1,33 @@
 import * as path from "node:path";
 import type { UiMode } from "./channels.ts";
 import { buildMenuTemplate, type MenuTemplate } from "./menu.ts";
+import { readPreviewMode } from "./preview-mode.ts";
 
 /** The view `cpd desktop` always launches in (web/ELECTRON.md, air-d40). */
 export const LAUNCH_MODE: UiMode = "webui";
+
+/**
+ * The mode a process booted in and the build it loaded, recorded in the run-only marker so a CI
+ * failure can name them. `mode` is the process mode `boot.ts` resolves (air-d95); `build` names what
+ * the process loaded: the preview dev URL or the prod build from disk.
+ */
+export interface BootIdentity {
+  readonly mode: "production" | "preview";
+  readonly build: "preview" | "prod";
+}
+
+/**
+ * This process's boot identity, from the same source `boot.ts` reads: an explicit `--cpd-mode`
+ * argument (which a rollback relaunch appends, air-d95) beats `CPD_MODE`. The boot mode decides the
+ * build: preview loads the dev renderer, production loads the prod build from disk.
+ */
+export function bootIdentity(
+  env: Readonly<Record<string, string | undefined>>,
+  argv: readonly string[],
+): BootIdentity {
+  const mode = readPreviewMode(env, argv).mode;
+  return { mode, build: mode === "preview" ? "preview" : "prod" };
+}
 
 export function parseUiMode(raw: unknown): UiMode {
   if (raw === "tui" || raw === "webui" || raw === "webui-preview") return raw;
@@ -30,6 +54,11 @@ export interface ModeControllerDeps {
   viewFile: string;
   /** The pid written into the marker; the real adapter passes `process.pid`. */
   pid: number;
+  /**
+   * The boot mode and build recorded in the marker (air-n19). Defaults to this process's own
+   * identity; a caller may name it so a test does not read `process.env`/`process.argv`.
+   */
+  boot?: BootIdentity;
   menu: MenuHost;
   window: ModeWindow;
   platform: NodeJS.Platform;
@@ -56,10 +85,13 @@ function rendererMode(mode: UiMode): "tui" | "webui" {
 export function createModeController(deps: ModeControllerDeps): ModeController {
   const { fs, legacyFile, viewFile, pid } = deps;
   let current: UiMode = LAUNCH_MODE;
+  // The boot identity is fixed for the process's life: `view` changes on a View menu switch, the
+  // boot mode and build do not, so every marker write carries the same two boot fields.
+  const boot = deps.boot ?? bootIdentity(process.env, process.argv.slice(1));
 
-  const writeMarker = async (mode: UiMode): Promise<void> => {
+  const writeMarker = async (view: UiMode): Promise<void> => {
     await fs.mkdir(path.dirname(viewFile));
-    await fs.writeFile(viewFile, JSON.stringify({ view: mode, pid }) + "\n");
+    await fs.writeFile(viewFile, JSON.stringify({ view, pid, mode: boot.mode, build: boot.build }) + "\n");
   };
 
   const apply = async (mode: UiMode): Promise<void> => {

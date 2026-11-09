@@ -293,7 +293,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
-        Kind::Dialog | Kind::Unread | Kind::LoopGuard | Kind::Bug => item
+        Kind::Dialog | Kind::Unread | Kind::LoopGuard | Kind::Bug | Kind::RefusalAlert => item
             .session
             .as_ref()
             .map(|s| Jump::Run(open_or_history(tree, s))),
