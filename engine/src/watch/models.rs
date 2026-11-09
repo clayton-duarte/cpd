@@ -145,7 +145,7 @@ fn report(engine: &mut Engine, outcomes: &[Outcome], now: time::OffsetDateTime) 
                     .as_ref()
                     .map_or(0, |c| c.appeared.len() + c.went_away.len());
                 engine.log.line(&format!(
-                    "E15: cached {} id(s) of {} ({changed} changed)",
+                    "model-discovery: cached {} id(s) of {} ({changed} changed)",
                     w.count, w.provider
                 ));
             }
