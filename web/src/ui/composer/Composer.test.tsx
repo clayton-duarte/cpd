@@ -23,7 +23,7 @@ function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queue
   const onCancelQueued = vi.fn();
   const m = mount(
     <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
-      reader={reader} onSubmit={(i) => { submits.push(i); return () => ({ dispose() {} }); }} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
+      reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
   );
   return { m, submits, onAbort, onCancelQueued };
 }
@@ -187,7 +187,7 @@ it("without capabilities the textarea, attach button and send button are disable
 it("archived Composer is disabled with the archived placeholder", () => {
   const m = mount(
     <Composer sessionId="s1" capabilities={base} archived busy={false} queued={[]} reader={reader}
-      onSubmit={() => () => ({ dispose() {} })} onAbort={() => {}} onCancelQueued={() => {}} />,
+      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
   );
   const t = textarea(m.container);
   expect(t.disabled).toBe(true);
@@ -221,7 +221,7 @@ it("draft: switching session shows that session draft and keeps the other", () =
   const root = createRoot(container);
   const render = (id: string) => act(() => root.render(
     <Composer sessionId={id} capabilities={base} busy={false} queued={[]} reader={reader}
-      onSubmit={() => () => ({ dispose() {} })} onAbort={() => {}} onCancelQueued={() => {}} />,
+      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
   ));
   render("s1");
   typeText(textarea(container), "alpha");
