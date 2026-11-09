@@ -194,13 +194,17 @@ struct Fx {
 /// The engine on virtual time (E15 is due: no row is cached yet), a pi install, the helper `node` answering
 /// `first` and the fake tmux. `watch` is more `[watch]` keys.
 fn fx(watch: &str, first: &Value) -> Fx {
+    fx_on("m1", watch, first)
+}
+
+fn fx_on(machine: &str, watch: &str, first: &Value) -> Fx {
     let ip = Ip::with_ports();
     let adapter = ip.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     ip.env.write_models();
     ip.env.write_config(&format!(
-        "version = 1\nmachine = \"m1\"\npi_adapter = \"{}\"\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n{watch}\n",
+        "version = 1\nmachine = \"{machine}\"\npi_adapter = \"{}\"\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n{watch}\n",
         adapter.display()
     ));
     ip.engine_routes();
@@ -754,13 +758,131 @@ fn the_helper_runs_with_the_engines_environment_and_the_key_is_never_an_argument
     assert!(!fx.file("bifrost").unwrap().to_string().contains(KEY));
 }
 
-// air-d143: machine-scoped Bifrost discovery.
+// air-d143: even a configured Bifrost reported by the mocked helper is excluded on air. Other providers still
+// produce both successful catalogs and genuine errors. No real pi, provider, or credential is involved.
 #[test]
 fn e15_skips_bifrost_on_air_even_when_configured() {
-    todo!("air excludes configured Bifrost");
+    let fx = fx_on(
+        "air",
+        "error_repeat_seconds = 3600",
+        &answer(vec![
+            listed("bifrost", "custom", Some(BASE), &["vertex/new"]),
+            listed("github-copilot", "oauth", None, &["gpt-5"]),
+            failed("other", "models_unauthorized"),
+        ]),
+    );
+    fx.run_until(
+        |p| p.file("github-copilot").is_some() && !p.errors().is_empty(),
+        3,
+    );
+    assert_eq!(fx.helper_calls(), 1);
+    assert_eq!(fx.file("github-copilot").unwrap()["ids"], json!(["gpt-5"]));
+    let errors = fx.errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "other provider failure remains visible: {errors:?}"
+    );
+    assert_eq!(errors[0]["code"], "models_unauthorized");
+    assert_eq!(errors[0]["details"]["provider"], "other");
+    assert!(
+        fx.file("bifrost").is_none(),
+        "air must not cache configured Bifrost"
+    );
+
+    // A failed Bifrost entry must not be recorded or reported on air either.
+    let failed_fx = fx_on(
+        "air",
+        "error_repeat_seconds = 3600",
+        &answer(vec![
+            failed("bifrost", "models_key_unset"),
+            listed("github-copilot", "oauth", None, &["gpt-5"]),
+            failed("other", "models_unauthorized"),
+        ]),
+    );
+    failed_fx.run_until(
+        |p| p.file("github-copilot").is_some() && !p.errors().is_empty(),
+        3,
+    );
+    assert_eq!(failed_fx.helper_calls(), 1);
+    assert_eq!(
+        failed_fx.file("github-copilot").unwrap()["ids"],
+        json!(["gpt-5"])
+    );
+    assert!(failed_fx.file("bifrost").is_none());
+    assert_eq!(
+        failed_fx.query("SELECT count(*) FROM swr_models WHERE provider = 'bifrost'"),
+        0
+    );
+    let errors = failed_fx.errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "only the other provider's error: {errors:?}"
+    );
+    assert_eq!(errors[0]["code"], "models_unauthorized");
+    assert_eq!(errors[0]["details"]["provider"], "other");
 }
 
 #[test]
 fn e15_keeps_bifrost_behavior_on_non_air() {
-    todo!("non-air preserves Bifrost discovery");
+    // First pin air's exclusion: the test is red until the machine-scope rule exists, while the non-air checks below
+    // retain the existing behavior rather than imposing a different one merely to make this regression fail.
+    let air = fx_on(
+        "air",
+        "error_repeat_seconds = 3600",
+        &answer(vec![
+            failed("bifrost", "models_key_unset"),
+            listed("github-copilot", "oauth", None, &["gpt-5"]),
+        ]),
+    );
+    air.run_until(|p| p.file("github-copilot").is_some(), 3);
+
+    let other = fx_on(
+        "m1",
+        "error_repeat_seconds = 3600",
+        &answer(vec![
+            failed("bifrost", "models_key_unset"),
+            listed("github-copilot", "oauth", None, &["gpt-5"]),
+        ]),
+    );
+    other.run_until(
+        |p| p.file("github-copilot").is_some() && !p.errors().is_empty(),
+        3,
+    );
+    let errors = other.errors();
+    assert_eq!(errors.len(), 1, "non-air Bifrost failure: {errors:?}");
+    assert_eq!(errors[0]["code"], "models_key_unset");
+    assert_eq!(errors[0]["details"]["provider"], "bifrost");
+    assert_eq!(
+        other.file("github-copilot").unwrap()["ids"],
+        json!(["gpt-5"])
+    );
+
+    let listed_fx = fx_on(
+        "m1",
+        "",
+        &answer(vec![listed(
+            "bifrost",
+            "custom",
+            Some(BASE),
+            &["vertex/new"],
+        )]),
+    );
+    listed_fx.run_until(|p| p.file("bifrost").is_some(), 3);
+    assert_eq!(
+        listed_fx.file("bifrost").unwrap()["ids"],
+        json!(["vertex/new"])
+    );
+    assert!(listed_fx.errors().is_empty());
+
+    assert!(
+        air.errors().is_empty(),
+        "air must suppress only Bifrost's failure: {:?}",
+        air.errors()
+    );
+    assert_eq!(
+        air.query("SELECT count(*) FROM swr_models WHERE provider = 'bifrost'"),
+        0
+    );
 }
