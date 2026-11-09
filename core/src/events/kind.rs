@@ -368,7 +368,7 @@ impl Kind {
                 &[],
             ),
             Guard => spec(
-                [N, N, N, N, Y],
+                [Y, M, M, M, Y],
                 &["code", "role", "tier", "model", "tool", "excerpt"],
                 &[],
             ),

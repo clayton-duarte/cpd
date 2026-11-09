@@ -4830,6 +4830,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 1
             + 1
             + 1
+            + 1
             + RETIRED_OBJECT_KINDS as i64])]
     );
 }
