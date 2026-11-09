@@ -1992,7 +1992,7 @@ CREATE TABLE attempts (
                                          'aborted',  -- hs-a8, the User, 2026-10-31: attempt abort's cause (migration attempt-aborted)
                                          'cas_lost', 'dirty_target', 'tampered',
                                          'gate_failed', 'gate_error', 'provider_error',
-                                         'quota'))  -- pro-d465, air-d156: admitted by a new migration above `20261108T0600-refusal-alert-kind` (§4.5), named when it is written
+                                         'quota')),  -- pro-d465, air-d156: admitted by a new migration above `20261108T0600-refusal-alert-kind` (§4.5), named when it is written
   branch           TEXT NOT NULL CHECK (branch = 'cpd/' || plan || '--' || id
                                         OR substr(branch, 1, length(plan || '/')) = plan || '/'
                                         OR branch = 'cpd/' || plan
