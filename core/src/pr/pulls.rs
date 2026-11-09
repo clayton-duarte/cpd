@@ -144,6 +144,8 @@ impl PullRequest {
             // Not stored (`polled` yields none): a thread that closes without an `updatedAt` move is caught by `due_reads`
             // and by the read's feedback (`read_held`), not by the listing.
             open_threads: vec![],
+            // The head is stored by the poll's own early write, not by the row's upsert.
+            head_oid: None,
             ..listed.pr.clone()
         };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
@@ -197,6 +199,7 @@ impl PullRequest {
             default_branch: self.default_branch.clone(),
             open_threads: vec![],
             archived: self.archived,
+            head_oid: None,
         })
     }
 }
@@ -891,6 +894,7 @@ mod tests {
             default_branch: None,
             open_threads: vec![],
             archived: false,
+            head_oid: None,
         }
     }
 

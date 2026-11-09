@@ -642,7 +642,7 @@ macro_rules! pr_fields {
         pr_fields!(repo_node!())
     };
     ($repo:expr) => {
-        concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
+        concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision headRefOid latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
          reviewThreads(first: 100) { nodes { id isResolved } }")
     };
@@ -660,7 +660,7 @@ macro_rules! search_pr_fields {
 /// and the review threads, which nothing reads for a pull request the User neither owns nor authored (A7, pro-d392).
 macro_rules! slim_pr_fields {
     () => {
-        concat!(repo_node!(settings), " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+        concat!(repo_node!(settings), " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision headRefOid \
          mergeable mergeStateStatus")
     };
 }
@@ -705,6 +705,8 @@ pub struct PolledPr {
     pub open_threads: Vec<String>,
     /// GitHub's `isArchived` of the repository: the searches say `archived:false`, so only the direct read can find it true.
     pub archived: bool,
+    /// The fresh `headRefOid`, stored on every poll before any compare (pro-d470); `None` when the reply has none.
+    pub head_oid: Option<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -867,6 +869,8 @@ struct RawPr {
     base_ref: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(rename = "headRefOid", default)]
+    head_oid: Option<String>,
     /// `latestReviews` of the Light read (pro-d453); the legacy search still selects `latestOpinionatedReviews`, the same nodes.
     #[serde(rename = "latestReviews", alias = "latestOpinionatedReviews", default)]
     latest_reviews: RawReviews,
@@ -1052,6 +1056,7 @@ impl Reply<'_> {
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             merged_at: raw.merged_at,
+            head_oid: raw.head_oid,
             open_threads: raw
                 .review_threads
                 .nodes
@@ -2114,10 +2119,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
+             baseRefName reviewDecision headRefOid latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision mergeable mergeStateStatus } } } \
+             baseRefName reviewDecision headRefOid mergeable mergeStateStatus } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -2702,7 +2707,7 @@ pub struct PollPlan {
 
 const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
 
-const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } }";
+const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 50) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
 
 /// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
 /// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.

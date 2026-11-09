@@ -383,6 +383,41 @@ fn poll_pass(
         }
     }
 
+    // pro-d470: the fresh `headRefOid` of every open pull request read is stored before any compare, checks or Event logic
+    // below, so a replaced (force-pushed) head never makes a compare of a gone commit abort the poll. Written only when it differs.
+    let fresh: Vec<(String, i64, String)> = seen
+        .iter()
+        .filter(|l| l.pr.state == PrState::Open)
+        .filter_map(|l| Some((l.pr.repo.clone(), l.pr.number, l.pr.head_oid.clone()?)))
+        .collect();
+    let moved = env.store.read(|conn| {
+        let mut moved = Vec::new();
+        for (repo, number, head) in &fresh {
+            let stored: Option<Option<String>> = rusqlite::OptionalExtension::optional(
+                conn.query_row(
+                    "SELECT head_oid FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                    rusqlite::params![repo, number],
+                    |r| r.get(0),
+                ),
+            )?;
+            if stored.is_some_and(|s| s.as_deref() != Some(head.as_str())) {
+                moved.push((repo.clone(), *number, head.clone()));
+            }
+        }
+        Ok(moved)
+    })?;
+    if !moved.is_empty() {
+        env.store.write(COMMAND, |tx| {
+            for (repo, number, head) in &moved {
+                tx.execute(
+                    "UPDATE pull_requests SET head_oid = ?3 WHERE repo = ?1 AND number = ?2",
+                    rusqlite::params![repo, number, head],
+                )?;
+            }
+            Ok::<(), CpdError>(())
+        })?;
+    }
+
     // The armed pull requests (`pr merge` refused a head behind the default branch, commands.md §9.10): one fresh
     // compare read each, before the write transaction, so the write enqueues the merge of a head that now contains
     // the default branch.
@@ -1476,6 +1511,7 @@ mod due_reads_tests {
                 default_branch: None,
                 open_threads: vec![],
                 archived: false,
+                head_oid: None,
             },
             membership: Default::default(),
         }
