@@ -1266,7 +1266,7 @@ it("selected rows keep data-active true and aria-current true when onAction wrap
 });
 
 it("a row that is not selected has data-active false", () => {
-  const m = mount(<ContextTree {...props({ selectedSessionId: "s-mgr" })} />);
-  expect(q(m.container, rowSel["s-lead"])?.getAttribute("data-active")).toBe("false");
+  const m = mount(<ContextTree {...props({ selectedSessionId: "s-lead" })} />);
+  expect(q(m.container, rowSel["s-mgr"])?.getAttribute("data-active")).toBe("false");
   m.unmount();
 });
