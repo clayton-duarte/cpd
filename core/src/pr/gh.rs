@@ -2130,10 +2130,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision mergeable mergeStateStatus } } } \
+             baseRefName reviewDecision mergeable mergeStateStatus headRefOid } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
