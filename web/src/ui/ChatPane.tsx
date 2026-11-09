@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
 import type { Connection, SubmissionResult } from "../state/connection.ts";
+import type { Attachment } from "../protocol/domain.ts";
 import type { SessionView } from "../state/store.ts";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
 import { Transcript } from "./chat/Transcript.tsx";
@@ -38,6 +39,7 @@ const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? 
 export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary }): ReactElement {
   const { view, connection, reader } = props;
   const composer = useRef<ComposerHandle>(null);
+  const retained = useRef(new Map<string, { attachments: Attachment[]; submission: { type: "unknown" } }>());
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
@@ -76,6 +78,8 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           hidden={dialog !== null}
           sessionId={view.id}
           sessionKey={sessionKey}
+          {...(retained.current.has(view.id) ? { retained: retained.current.get(view.id)! } : {})}
+          onRetain={(draft) => { if (draft === null) retained.current.delete(view.id); else retained.current.set(view.id, draft); }}
           capabilities={view.capabilities}
           archived={view.archived ?? false}
           busy={isBusy}

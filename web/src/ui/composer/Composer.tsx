@@ -59,6 +59,8 @@ interface ComposerProps {
     archived?: boolean;
     sessionKey?: string;
     hidden?: boolean;
+    onRetain?(draft: { attachments: AttachmentItem[]; submission: { type: "unknown" } } | null): void;
+    retained?: { attachments: AttachmentItem[]; submission: { type: "unknown" } };
 }
 
 // Keyed by session so text and attachments never carry over to another session.
@@ -69,13 +71,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function SessionComposer(props, ref): ReactElement {
   const { capabilities, queued, reader, onSubmit, onCancelQueued } = props;
   const [text, setText] = useState(() => loadDraft(props.sessionId));
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>(() => props.retained?.attachments ?? []);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
   const [dropping, setDropping] = useState(false);
-  const [submission, setSubmission] = useState<{ type: "pending" | "receipt" | "unknown" | "error"; message?: string } | null>(null);
+  const [submission, setSubmission] = useState<{ type: "pending" | "receipt" | "unknown" | "error"; message?: string } | null>(() => props.retained?.submission ?? null);
   const submissionRef = useRef<Disposable | null>(null);
-  const locked = useRef(false);
-  useEffect(() => () => submissionRef.current?.dispose(), []);
+  const locked = useRef(submission !== null);
+  const retainRef = useRef({ attachments, submission, onRetain: props.onRetain });
+  retainRef.current = { attachments, submission, onRetain: props.onRetain };
+  useEffect(() => () => {
+    submissionRef.current?.dispose();
+    const current = retainRef.current;
+    current.onRetain?.(current.submission === null ? null : { attachments: current.attachments, submission: { type: "unknown" } });
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 

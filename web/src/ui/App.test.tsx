@@ -270,6 +270,28 @@ describe("App", () => {
     expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown|unconfirmed/i);
   });
 
+  it("keeps a pending submission and attachment when switching sessions and back", async () => {
+    const { transport, container } = start();
+    attach(transport, container);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [{ name: "pic.png", type: "image/png", size: 3 }], types: ["Files"] } });
+    await act(async () => { container.querySelector('[data-chat-dropzone]')!.dispatchEvent(drop); });
+    typeAndEnter(container, "keep on switch");
+    const otherRef = { ...ref, id: "s2", key: "ctx:other", title: "Other" };
+    const otherNode = { ...node, ref: otherRef, planId: "other" };
+    const otherPlan = { ...snapshot.tree.contexts[0]!.plans[0]!, id: "other", title: "Other", leadSessionId: "s2", sessions: [otherNode] };
+    const tree = { ...snapshot.tree, contexts: [{ ...snapshot.tree.contexts[0]!, plans: [...snapshot.tree.contexts[0]!.plans, otherPlan] }] };
+    act(() => transport.emitMessage({ ...snapshot, tree }));
+    act(() => { container.querySelector<HTMLButtonElement>('[data-plan="other"] button[data-select="plan"]')!.click(); });
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s2", capabilities, title: "Other", meta: { ref: otherRef, footer } }));
+    act(() => { container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click(); });
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref, footer } }));
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("keep on switch");
+    expect(container.querySelector('[aria-label="Staged attachments"] [data-attachment="image"]')).not.toBeNull();
+    expect(container.querySelector('[data-part="submission-feedback"]')?.textContent).toMatch(/unknown/i);
+    expect(transport.sent.filter((m) => (m as { type?: string }).type === "session.submit")).toHaveLength(1);
+  });
+
   it("selecting an archived session disables the Composer", () => {
     const transport = new FakeTransport();
     const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
