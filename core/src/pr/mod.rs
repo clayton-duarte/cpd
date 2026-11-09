@@ -20,6 +20,8 @@ mod closed_tests;
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod deploys_active_tests;
+#[cfg(test)]
 mod deploys_tests;
 #[cfg(test)]
 mod gh_runner_tests;
