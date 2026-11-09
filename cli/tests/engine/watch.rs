@@ -1116,7 +1116,7 @@ fn engine_on_tmux_with(config_extra: &str) -> Ip {
 fn workers_errors(fx: &Ip) -> Vec<String> {
     fx.texts("error")
         .into_iter()
-        .filter(|t| t.contains("@cpd_workers"))
+        .filter(|t| t.contains("failed at workers"))
         .collect()
 }
 
@@ -6574,7 +6574,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     let errors = fx.texts("error");
     let e9: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E9 (Context digests)"))
+        .filter(|text| text.contains("failed at curation for"))
         .collect();
     assert_eq!(
         e9.len(),
@@ -6584,7 +6584,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     assert!(
         errors
             .iter()
-            .all(|text| text.contains("E9 (Context digests)")),
+            .all(|text| text.contains("failed at curation for")),
         "only E9 may report the curate run's failure: {errors:?}"
     );
 }
@@ -6615,7 +6615,7 @@ fn the_e2_tick_skips_a_blank_list_panes_line() {
     let errors = fx.texts("error");
     let e2: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E2 (liveness)"))
+        .filter(|text| text.contains("failed at liveness for"))
         .collect();
     assert!(
         e2.is_empty(),
