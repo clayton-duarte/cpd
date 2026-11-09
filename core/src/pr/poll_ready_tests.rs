@@ -167,7 +167,7 @@ fn checks_reply() -> String {
 }
 
 /// A rig with the open Workflow `api` of Plan `pay` (pull request `acme/pay#801`) whose stored row is stale (so each
-/// pass writes), its base `base` and head `head`, `gh` as [`Gh`], `$CPD_HOME` the rig's.
+/// pass writes), its base `base` and head `head`, `gh` as [`Gh`], its home the rig's own temp home.
 fn rig(gh: Arc<Gh>, base: &str, head: &str) -> Rig {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
@@ -179,15 +179,15 @@ fn rig(gh: Arc<Gh>, base: &str, head: &str) -> Rig {
            VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');"
     ));
     let _ = (*rig.fakes.runner).clone().route("gh", gh);
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
     rig
 }
 
 /// One pass of `pr poll` on the rig's Ports.
 fn try_poll(rig: &Rig) -> Result<(), crate::error::CpdError> {
     Ports::scope(&rig.fakes.ports, || {
-        super::poll(
+        super::poll_in(
             &rig.fakes.ports,
+            &rig.home,
             PollArgs {
                 plan: PlanArg { plan: None },
             },

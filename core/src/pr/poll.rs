@@ -120,8 +120,14 @@ struct Outcome {
     done: Vec<PlanId>,
 }
 
+/// `pr poll`: resolves `$CPD_HOME` once, at the command's boundary, and hands it to [`poll_in`].
 pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open_with(ports)?;
+    poll_in(ports, &crate::home::CpdHome::from_env()?, args)
+}
+
+/// [`poll`] in `home`: the home is the caller's, never the process environment's, so a test's rig passes its own.
+fn poll_in(ports: &Ports, home: &crate::home::CpdHome, args: PollArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_home_with(ports, home.clone())?;
     let selected = args.plan.plan;
     if let Some(id) = &selected {
         env.plan(id)?;
