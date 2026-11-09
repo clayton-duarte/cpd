@@ -222,14 +222,14 @@ Every failed call of the endpoint `github` (the document, a REST call of §8, a 
 
 - **Transient:** a timeout of the call's own deadline; an HTTP 5xx as `gh` prints it (`HTTP 5\d\d`, or the nginx HTML page that GitHub returns with it); a reply cut off so that `gh` cannot parse it. It feeds `endpoint::record_failure(Kind::Transient)`.
 - **Permanent:** any other failure (a 4xx, a GraphQL `errors` array without `RATE_LIMITED`, an unparseable body that was not cut off, a missing field). It feeds `record_failure(Kind::Permanent)`.
-- **Rate limit:** a GraphQL `errors` entry with `type` `RATE_LIMITED`, or `rateLimit.remaining` under `RATE_FLOOR`. It is §7.2, not a failure.
+- **Rate limit:** a GraphQL `errors` entry with `type` `RATE_LIMITED`, or `rateLimit.remaining` under `RATE_FLOOR`. It is §7.2, not a failure: it is the transient-waiting class of contract §7.6 step 4 (`transient` true, `reason` `rate_limited`), it feeds no `record_failure`, and a merge's call waits in place to the reset (contract §7.4).
 
 ### 7.2 Rate limits: `swr_endpoints('github')`
 
 The two rules that were in the engine's memory move into the endpoint row, so every GitHub reader and writer respects them:
 
 - **The floor.** `RATE_FLOOR` is `100` (`engine/src/watch/pr.rs:35`, moved to `core/src/swr/source/github.rs`). After a pass, `endpoint::record_rate(remaining, reset_at)` stores `rate_remaining` and `rate_reset_at`, and when `remaining < RATE_FLOOR` it pauses the endpoint until `reset_at` (`pause_until`). This replaces the check at `engine/src/watch/pr.rs:337` (`if remaining >= RATE_FLOOR`). It corrects swr.md §7, which paused only at `remaining` 0; this is a newer decision and it wins (§14 records the superseding note).
-- **The hard pause.** A `RATE_LIMITED` reply pauses the endpoint until `reset_at` plus `RATE_GRACE` (3 s), or `RATE_FALLBACK` (60 s) when no reset is known (`engine/src/watch/pr.rs:130-143`, `37` and `39`). It is `endpoint::pause_until(reset_at + grace)`. It is not an error, and it raises no Event: it writes one `watch.log` line, as today. The fallback when the reset is unknown is kept as it is.
+- **The hard pause.** A `RATE_LIMITED` reply pauses the endpoint until `reset_at` plus `RATE_GRACE` (3 s), or `RATE_FALLBACK` (60 s) when no reset is known (`engine/src/watch/pr.rs:130-143`, `37` and `39`). It is `endpoint::pause_until(reset_at + grace)`. It is not an error, and it raises no Event: it writes one `watch.log` line, as today. The fallback when the reset is unknown is kept as it is. A merge's own `gh` calls (contract §7.4, steps 6b and 8b) are not readers or writers of this endpoint: a `RATE_LIMITED` reply to one waits in place to the same reset (plus 3 s, or 60 s with none), within the merge's bound of 3 600 s, and writes no endpoint pause; a wait past that bound ends the Attempt `crashed` with the detail `gh_failed: rate_limited: <message>`.
 
 A paused endpoint is skipped by the pass, by E24 for its own sources and by the outbox drain (§9). A success after the pause has passed clears the pause (`record_ok`, swr.md §7).
 
