@@ -505,17 +505,22 @@ impl Catalog {
         })
     }
 
-    /// The next ladder rung inside `range`, never effort 0 and never an `X` of a model with efforts; `None` at the ceiling.
+    /// The next valid rung inside `range`, never effort 0. Within a letter `X` is a rung; when entering a new
+    /// letter with efforts, enter at its lowest effort of at least 1 instead of its `X`.
     pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.ladder()
-            .into_iter()
-            .filter(|r| range.contains(*r) && *r > tier)
-            .find(|r| r.effort != Some(0))
+        self.rungs().into_iter().find(|r| {
+            range.contains(*r)
+                && *r > tier
+                && r.effort != Some(0)
+                && (r.letter == tier.letter
+                    || !r.is_x()
+                    || self.model(r.letter).efforts.is_empty())
+        })
     }
 
     /// The lowest valid rung of `range` at or above `tier`.
     pub fn step_up_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.ladder()
+        self.rungs()
             .into_iter()
             .find(|r| range.contains(*r) && *r >= tier)
     }
