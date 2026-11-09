@@ -2083,6 +2083,24 @@ CREATE TABLE job_addenda (
 ) STRICT;
 CREATE TRIGGER job_addenda_no_update BEFORE UPDATE ON job_addenda BEGIN SELECT RAISE(ABORT, 'append_only: job_addenda'); END;
 
+-- ---------- Test replacements (air-d144; migration 20261109T1200-test-replacement; `cpd job replace-test`) ----------
+-- A replacement intent fences the source before any external stop and records the starting commit without changing the original Job or its Attempt refs.
+CREATE TABLE test_replacements (
+  plan TEXT NOT NULL,
+  source TEXT NOT NULL,
+  new_key TEXT NOT NULL,
+  request TEXT NOT NULL CHECK (json_valid(request)),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'abandoned')),
+  start_sha TEXT,
+  created_txn INTEGER NOT NULL REFERENCES txns(id),
+  PRIMARY KEY (plan, source),
+  UNIQUE (plan, new_key),
+  FOREIGN KEY (plan, source) REFERENCES jobs(plan, key)
+) STRICT;
+CREATE TRIGGER test_replacements_no_delete BEFORE DELETE ON test_replacements
+WHEN (SELECT deleted_at FROM plans WHERE id = OLD.plan) IS NULL
+BEGIN SELECT RAISE(ABORT, 'append_only: test_replacements'); END;
+
 -- ---------- Escalations ----------
 CREATE TABLE escalations (
   plan        TEXT NOT NULL,
@@ -2308,6 +2326,8 @@ INSERT INTO history_tables (name, no_delete) VALUES
 INSERT INTO history_tables (name, no_delete) VALUES ('record_retirements', 1), ('record_curations', 1);
 -- what the named migration of Plan ctx-reads inserts (its name is its author's): telemetry, so no_delete 0 and no history triggers (the reconcile writes none for it). A Context delete removes its rows first, before its context_records; the delete exception of no_delete 1 tables (above) does not apply.
 INSERT INTO history_tables (name, no_delete) VALUES ('context_reads', 0);
+-- what the named migration `test-replacement` inserts (air-d144): no_delete 0 with a hand-written `test_replacements_no_delete` that has the Plan-delete exception only.
+INSERT INTO history_tables (name, no_delete) VALUES ('test_replacements', 0);
 ```
 
 Only lists that an older binary can ignore are lookup tables (hs-d178 D1): the Event kinds and the record kinds. State-machine columns (`plans.phase`, `jobs.status`, `workflows.status`, `attempts.status`, `attempts.cause`, `sessions.role` and `state`, …) stay `CHECK`s, with their transition triggers: a new state changes what old code must handle, so changing one is a breaking migration. No other column becomes a lookup table without an amendment of this paragraph. The other `CHECK`s of `context_records` stay, since they name specific kinds. The three lookup tables are themselves in `history_tables` with `no_delete` 1: a row cannot be deleted, every change is recorded in `history`, and an insert from the `sqlite3` shell fails on `cpd_txn()` like any other table (§4.3).
@@ -2399,6 +2419,7 @@ BEGIN SELECT RAISE(ABORT, 'append_only: pull_requests owned by a PR'); END;
 CREATE TRIGGER dependencies_no_delete BEFORE DELETE ON dependencies
 WHEN (SELECT status FROM jobs WHERE plan = OLD.plan AND key = OLD.job) <> 'draft'
  AND NOT ((SELECT deleted_at FROM plans WHERE id = OLD.plan) IS NOT NULL)   -- hs-d527
+ AND NOT ((SELECT command FROM txns WHERE id = cpd_txn()) = 'job replace-test' AND EXISTS (SELECT 1 FROM test_replacements r WHERE r.plan = OLD.plan AND r.source = OLD.needs AND r.state = 'pending' AND r.created_txn <> cpd_txn()))   -- air-d144: `job replace-test` moves the dependants of its pending source
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 CREATE TRIGGER dependencies_hist_del AFTER DELETE ON dependencies BEGIN
   INSERT INTO history(txn, tbl, pk, op, before, after) VALUES (cpd_txn(), 'dependencies',
@@ -2452,6 +2473,7 @@ BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;
 CREATE TRIGGER dependencies_locked BEFORE INSERT ON dependencies
 WHEN (SELECT status FROM jobs WHERE plan = NEW.plan AND key = NEW.job) <> 'draft'
  AND (SELECT created_txn FROM jobs WHERE plan = NEW.plan AND key = NEW.job) <> cpd_txn()
+ AND NOT ((SELECT command FROM txns WHERE id = cpd_txn()) = 'job replace-test' AND EXISTS (SELECT 1 FROM test_replacements r WHERE r.plan = NEW.plan AND r.new_key = NEW.needs AND r.state = 'pending' AND r.created_txn <> cpd_txn()))   -- air-d144
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 
 -- hs-d341: a kind's Spec fields, its approvals and the review flag agree with it. Triggers, not CHECKs: ALTER TABLE cannot add a check across columns (§4.5). The same rule on insert and on update.

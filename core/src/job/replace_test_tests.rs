@@ -215,11 +215,11 @@ impl Fixture {
         self.env.store.read(|c| {
             let mut out = serde_json::Map::new();
             for (name, query) in [
-                ("jobs", "SELECT json_group_array(json_object('key', key, 'status', status, 'tests', tests, 'files', test_files, 'fingerprint', fingerprint)) FROM (SELECT * FROM jobs ORDER BY key)"),
-                ("edges", "SELECT json_group_array(json_array(job, needs)) FROM (SELECT * FROM dependencies ORDER BY job, needs)"),
-                ("attempts", "SELECT json_group_array(json_object('id', id, 'status', status, 'branch', branch, 'base', base_sha, 'submitted', submitted_sha)) FROM (SELECT * FROM attempts ORDER BY id)"),
-                ("history", "SELECT json_group_array(json_array(id, txn, tbl, pk, op, before, after)) FROM (SELECT * FROM history ORDER BY id)"),
-                ("events", "SELECT json_group_array(json_array(id, txn, kind, job, text, data)) FROM (SELECT * FROM events ORDER BY id)"),
+                ("jobs", "SELECT json_group_array(json_object('key', key, 'status', status, 'tests', tests, 'files', test_files, 'fingerprint', fingerprint)) FROM (SELECT key, status, tests, test_files, fingerprint FROM jobs ORDER BY key)"),
+                ("edges", "SELECT json_group_array(json_array(job, needs)) FROM (SELECT job, needs FROM dependencies ORDER BY job, needs)"),
+                ("attempts", "SELECT json_group_array(json_object('id', id, 'status', status, 'branch', branch, 'base', base_sha, 'submitted', submitted_sha)) FROM (SELECT id, status, branch, base_sha, submitted_sha FROM attempts ORDER BY id)"),
+                ("history", "SELECT json_group_array(json_array(id, txn, tbl, pk, op, before, after)) FROM (SELECT id, txn, tbl, pk, op, before, after FROM history ORDER BY id)"),
+                ("events", "SELECT json_group_array(json_array(id, txn, kind, job, text, data)) FROM (SELECT id, txn, kind, job, text, data FROM events ORDER BY id)"),
             ] {
                 let text: String = c.query_row(query, [], |r| r.get(0))?;
                 out.insert(name.into(), serde_json::from_str(&text).unwrap());
