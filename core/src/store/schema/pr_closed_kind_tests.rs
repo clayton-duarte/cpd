@@ -26,3 +26,62 @@ fn the_inbox_kind_check_accepts_pr_closed() {
         "the migration pr-closed-kind is declared"
     );
 }
+
+#[test]
+fn upgrade_from_main_preserves_refusal_alert_and_bug_protocol() {
+    use crate::error::CpdError;
+
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let main: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|m| m.name != "20261108T0800-bug-record")
+        .collect();
+    assert_eq!(
+        main.last().unwrap().name,
+        "20261108T0600-refusal-alert-kind"
+    );
+    let mut store = crate::store::tests::open_named(&home, &main).unwrap();
+    store.write("fixture", |tx| {
+        tx.execute_batch("INSERT INTO inbox_items (id, kind, urgency, subject, label, opened_at, closed_at, dismissed_at)
+            VALUES (42, 'refusal-alert', 'red', 'refusal:1', 'Refusal', 't1', 't2', 't3');")?;
+        Ok::<(), CpdError>(())
+    }).unwrap();
+    let before: (String, i64) = store.read(|c| Ok((
+        c.query_row("SELECT json_object('id', id, 'kind', kind, 'urgency', urgency, 'subject', subject, 'label', label, 'opened_at', opened_at, 'closed_at', closed_at, 'dismissed_at', dismissed_at) FROM inbox_items WHERE id = 42", [], |r| r.get(0))?,
+        c.query_row("SELECT count(*) FROM history WHERE tbl = 'inbox_items'", [], |r| r.get(0))?,
+    ))).unwrap();
+    drop(store);
+
+    let mut store =
+        Store::open(&home, 5000).expect("upgrade a main store containing a refusal alert");
+    assert_eq!(store.schema_mismatch(), None);
+    let after: (String, i64) = store.read(|c| Ok((
+        c.query_row("SELECT json_object('id', id, 'kind', kind, 'urgency', urgency, 'subject', subject, 'label', label, 'opened_at', opened_at, 'closed_at', closed_at, 'dismissed_at', dismissed_at) FROM inbox_items WHERE id = 42", [], |r| r.get(0))?,
+        c.query_row("SELECT count(*) FROM history WHERE tbl = 'inbox_items'", [], |r| r.get(0))?,
+    ))).unwrap();
+    assert_eq!(
+        after, before,
+        "the existing row and its history survive unchanged"
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES
+            ('refusal-alert', 'red', 'refusal:2', 'Refusal', 't4'),
+            ('bug', 'red', 'bug:b1', 'Bug', 't4');",
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .expect("both inbox kinds remain writable");
+    let breach: i64 = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM event_kinds WHERE name = 'bug-breach'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(breach, 1);
+}

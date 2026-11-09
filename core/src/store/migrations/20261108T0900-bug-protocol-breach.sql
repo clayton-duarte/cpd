@@ -2,10 +2,10 @@
 -- The Inbox kind `bug` (the owner's wake and the User's breach indicator, contract §2.2 "Inbox item",
 -- "Bug record"; air-d104, air-d105, air-n120) and the Event kind `bug-breach` (contract §5.2, §3.7 E25).
 -- `inbox_items` is rebuilt with `bug` in its kind check, as `pr-closed-kind` rebuilt it, from the shape
--- `codereview-followup` left it (`head_oid`, `reviewed_oid`); SQLite cannot alter a CHECK constraint.
+-- `refusal-alert-kind` left it (`head_oid`, `reviewed_oid`, and `refusal-alert`); SQLite cannot alter a CHECK constraint.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'bug')),
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug')),
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),
