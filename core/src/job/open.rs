@@ -119,15 +119,16 @@ pub(crate) fn fixed_spec(workflow: &WorkflowRow, update: bool, cause: Option<Cau
 }
 
 /// [`fixed_spec`] with the base Workflow's remote ref resolved on `conn`: `origin/<head_ref>` of an adopted base, else
-/// `origin/<base>` (pro-d480). Stub: not resolved yet.
-#[allow(dead_code)]
+/// `origin/<base>` (pro-d480).
 pub(crate) fn fixed_spec_on(
-    _conn: &rusqlite::Connection,
+    conn: &rusqlite::Connection,
     workflow: &WorkflowRow,
     update: bool,
     cause: Option<Cause>,
 ) -> JobSpec {
-    fixed_spec(workflow, update, cause)
+    let mut resolved = workflow.clone();
+    resolved.base = crate::workflow::start::remote_branch(conn, &workflow.repo, &workflow.base);
+    fixed_spec(&resolved, update, cause)
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
@@ -352,7 +353,7 @@ fn insert(
         workflow: Some(workflow.key.as_str().to_owned()),
         title,
         tier: Some(tier.clone()),
-        spec: Some(fixed_spec(workflow, update, cause)),
+        spec: Some(fixed_spec_on(tx, workflow, update, cause)),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended: true,
         kind: kind.to_owned(),
