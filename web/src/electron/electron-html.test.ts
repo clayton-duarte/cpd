@@ -28,3 +28,11 @@ test("electron.html and index.html are titled CPD", () => {
     expect(html).toMatch(/<title>CPD<\/title>/);
   }
 });
+
+test("tab bar nav starts hidden in the served HTML", () => {
+  const html = readFileSync(new URL("../../electron.html", import.meta.url), "utf8");
+  // WebUI and Preview never show the host tab strip; the nav must be hidden before the renderer starts.
+  const nav = html.match(/<nav\b[^>]*\bid="tab-bar"[^>]*>/);
+  expect(nav).not.toBeNull();
+  expect(nav![0]).toMatch(/\shidden(?=[\s=>])/);
+});
