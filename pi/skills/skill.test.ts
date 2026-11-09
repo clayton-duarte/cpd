@@ -770,7 +770,7 @@ test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees
   assert.match(lead, /\*\*cpd opens the pull requests, you do not\.\*\*/);
   assert.match(lead, /never wait for anything to open a pull request/);
   assert.match(lead, /`cpd pr open` is the repair/);
-  assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 E4)");
+  assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 `open-jobs`)");
   assert.doesNotMatch(lead, /Open a PR as soon as its last Job merges/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Oversee all-merged Workflows/);
