@@ -328,6 +328,7 @@ fn decide(
         )
         .optional()?;
     let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
+    crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(
@@ -394,6 +395,7 @@ fn decide(
         _ => None,
     };
     let range = roles.job_range(catalog, &job.kind)?;
+    let mut clamp = matches!(job.kind.as_str(), "open" | "update");
     let (tier, origin) = match (retry, &previous) {
         (Some(tier), _) => (
             Tier::parse(tier).map_err(|_| bad(format!("retry_tier {tier:?} of Job {key}")))?,
@@ -411,6 +413,7 @@ fn decide(
             let same_tier = cause.is_some_and(|c| c.retries_same_tier() || c == Cause::GateFailed);
             let last = Tier::parse(tier)
                 .map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
+            clamp |= same_tier;
             if *never_started || same_tier || !catalog.is_valid(last) {
                 // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error, a crash or a conflict never raises the Tier, pro-d102, pro-d265; nor does a failed Gate, pro-d280).
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
@@ -430,6 +433,11 @@ fn decide(
         range
             .and_then(|r| catalog.step_up_in(r, tier))
             .unwrap_or(tier)
+    };
+    // pro-d484: an open/update Job, or a same-tier retry, below the current floor starts at the floor.
+    let tier = match range {
+        Some(r) if clamp && catalog.is_valid(tier) && tier < r.floor => r.floor,
+        _ => tier,
     };
     // pro-d328 to pro-d332: a Job stored on a Tier outside its range (the worker range, or inside the letter of an
     // explore kind) is never started (E3 raises one `error` per Job).
@@ -471,6 +479,12 @@ fn decide(
     // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
     // A requested Linear while another Attempt of the Workflow is live cannot take the Workflow's one Lead worktree: CasLost,
     // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
+    let replacement: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM test_replacements WHERE plan = ?1 AND new_key = ?2 AND state = 'complete')", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let allocation = if replacement {
+        Some(Allocation::Parallel)
+    } else {
+        allocation
+    };
     let linear = match allocation {
         Some(Allocation::Linear) if live > 0 => {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of Workflow {} is live.", job.workflow_str()))

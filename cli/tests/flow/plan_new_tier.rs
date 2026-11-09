@@ -10,14 +10,14 @@ use common::fx::Fx;
 use serde_json::Value;
 
 /// The config: the role tiers GX / H3 / `lead` / O3, and `extra` (top-level keys). On the catalog of [`seed_catalog`] the
-/// lead range is `lead` up to O2 (just below `manager_tier`).
+/// lead range is `lead` up to O3 (at or below `manager_tier`).
 fn config_with(fx: &Fx, lead: &str, extra: &str) {
     fx.env.write_tmux_config(&format!(
         "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n{extra}\n"
     ));
 }
 
-/// The default config: `lead_tier = "S4"`, so the lead range is S4..O2.
+/// The default config: `lead_tier = "S4"`, so the lead range is S4..O3.
 fn config(fx: &Fx, extra: &str) {
     config_with(fx, "S4", extra);
 }
@@ -172,7 +172,7 @@ fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
     let fx = Fx::with_ports();
     setup(&fx, "");
     let before = counts(&fx);
-    not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX", "S4", "O2");
+    not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX", "S4", "O3");
     assert_eq!(counts(&fx), before);
 }
 
@@ -232,29 +232,29 @@ fn a_rerun_without_tier_compares_no_tier() {
     assert_eq!(tier_of(&fx, &lead(&first)), "O2");
 }
 
-/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O2. A Tier outside it is
+/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O3. A Tier outside it is
 /// `tier_not_allowed` with the details of the range and nothing written; one inside is taken. Then `lead_tier = S2`
-/// moves the floor: the range is S2..O2.
+/// moves the floor: the range is S2..O3.
 #[test]
 fn plan_new_tier_flag_is_checked_against_the_lead_range() {
     let fx = Fx::with_ports();
     setup(&fx, "");
     let before = counts(&fx);
-    for tier in ["S3", "H3", "GX", "O3", "O4"] {
-        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S4", "O2");
+    for tier in ["S3", "H3", "GX", "O4"] {
+        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S4", "O3");
     }
     assert_eq!(counts(&fx), before);
     // `tier_invalid` first: O1 is no effort of O.
     common::refused(&plan_new(&fx, "pl", "ctx", Some("O1")), "tier_invalid", 2);
     assert_eq!(counts(&fx), before);
     // The ends and the middle of the range are taken.
-    for (id, tier) in [("pa", "S4"), ("pb", "O0"), ("pc", "O2")] {
+    for (id, tier) in [("pa", "S4"), ("pb", "O0"), ("pc", "O2"), ("pe", "O3")] {
         assert_eq!(lead_tier(&fx, id, "ctx", Some(tier)), tier);
     }
     // A second config moves the floor.
     config_with(&fx, "S2", "");
     for tier in ["S1", "H3"] {
-        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S2", "O2");
+        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S2", "O3");
     }
     assert_eq!(lead_tier(&fx, "pd", "ctx", Some("S3")), "S3");
 }

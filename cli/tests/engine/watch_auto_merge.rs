@@ -43,6 +43,8 @@ struct Script {
     refuse: Option<String>,
     /// `gh` itself fails (exit 1, this on stderr) on every auto-merge call.
     fail: Option<String>,
+    /// The `mergeStateStatus` the poll document reports for every pull request (default `CLEAN`).
+    merge_state: String,
 }
 
 /// The `gh` route: E5's in-process GitHub SWR poll ([`is_github_poll`]), the viewer lookup of E8, the auto-merge read
@@ -70,6 +72,10 @@ impl Handler for Gh {
         // answer it on its own, before the auto-merge reads below.
         if text.contains("/compare/") {
             return Reply::ok(r#"{"status":"ahead"}"#);
+        }
+        // The direct merge (`gh pr merge`, the `merge` op of `cpd pr merge`) succeeds.
+        if text.starts_with("pr merge ") {
+            return Reply::ok("");
         }
         let script = self.script.lock().unwrap();
         if text.contains("viewer") {
@@ -179,7 +185,7 @@ impl Gh {
         };
         json!({
             "number": number, "state": state, "isDraft": false, "mergeable": "MERGEABLE",
-            "mergeStateStatus": "CLEAN", "reviewDecision": null,
+            "mergeStateStatus": self.script.lock().unwrap().merge_state, "reviewDecision": null,
             "baseRefName": base, "headRefName": "feat", "headRefOid": head,
             "updatedAt": "U1", "title": title, "url": url,
             "createdAt": "2026-10-01T00:00:00.000Z", "mergedAt": merged_at,
@@ -255,6 +261,18 @@ impl Probe {
         self.calls()
             .into_iter()
             .filter(|c| c.contains("enablePullRequestAutoMerge"))
+            .collect()
+    }
+
+    /// The `gh pr merge` calls, argv joined.
+    fn merges(&self) -> Vec<String> {
+        self.gh
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.starts_with("pr merge "))
+            .cloned()
             .collect()
     }
 
@@ -361,6 +379,7 @@ fn merge(repeat: u32) -> Merge {
             methods: [true, false, false],
             refuse: None,
             fail: None,
+            merge_state: "CLEAN".to_owned(),
         }),
         seen: Mutex::new(Vec::new()),
         home: fx.env.cpd_home(),
@@ -666,7 +685,11 @@ fn a_gh_failure_keeps_the_row_pending_and_the_outbox_tries_again_after_its_backo
 #[test]
 fn a_github_refusal_marks_the_row_refused_raises_one_error_event_and_is_not_retried() {
     let t = merge(LONG);
-    t.script(|s| s.refuse = Some("Pull request is in clean status".to_owned()));
+    // The pull request is not clean (GitHub reports BLOCKED), so the refusal stays a refusal.
+    t.script(|s| {
+        s.merge_state = "BLOCKED".to_owned();
+        s.refuse = Some("Pull request is in clean status".to_owned());
+    });
     t.pending("repo", 7);
     t.run(then_ticks(5, |p| p.state("repo") == "refused"));
     let p = t.probe();
@@ -685,6 +708,32 @@ fn a_github_refusal_marks_the_row_refused_raises_one_error_event_and_is_not_retr
         "{message}"
     );
     assert_eq!(p.errors().len(), 1, "no other error: {:?}", p.errors());
+}
+
+#[test]
+fn auto_merge_clean_status_merges_directly() {
+    // The stored merge_state is `clean` (the poll read CLEAN): GitHub's refusal is not a failure, the drain falls back to
+    // the merge op (swr-github.md §9), decided from the stored state and not from the message text.
+    let t = merge(LONG);
+    t.script(|s| s.refuse = Some("Pull request is in clean status".to_owned()));
+    t.pending("repo", 7);
+    t.run(then_ticks(5, |p| !p.merges().is_empty()));
+    let p = t.probe();
+
+    let merges = p.merges();
+    assert_eq!(merges.len(), 1, "one direct merge: {:?}", p.calls());
+    assert!(
+        merges[0].contains("acme/pay") && merges[0].contains("--squash"),
+        "{}",
+        merges[0]
+    );
+    assert_eq!(
+        p.errors_of("swr_mutation_failed").len(),
+        0,
+        "no swr_mutation_failed Event: {:?}",
+        p.errors()
+    );
+    assert_ne!(p.state("repo"), "refused", "the row is not refused");
 }
 
 #[test]

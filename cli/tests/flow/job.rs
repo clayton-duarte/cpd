@@ -3021,7 +3021,7 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
 // ---------- Tier ranges (pro-d328 to pro-d332): a Job's Tier is in the worker range ----------
 
 /// The ranged config of these tests: roles GX / H3 / `lead` / O3 with `worker` as `worker_tier`, on the catalog
-/// H [0-4], S [0-4], O [0,2,3,4], G []. With `lead` = S4 the worker range is H3..S3, with S2 it is H3..S1.
+/// H [0-4], S [0-4], O [0,2,3,4], G []. With `lead` = S3 the worker range is H3..S3, with S1 it is H3..S1 (the ceiling is inclusive).
 fn ranged_with(env: &TestEnv, worker: &str, lead: &str) {
     fs::write(
         env.cpd_home().join("config.toml"),
@@ -3038,7 +3038,7 @@ fn ranged_with(env: &TestEnv, worker: &str, lead: &str) {
     );
 }
 
-/// [`ranged_with`] `worker_tier = H3`: the worker range is H3..`ceiling` where `lead` is the first Tier above it.
+/// [`ranged_with`] `worker_tier = H3`: the worker range is H3..`ceiling` where `lead` is the highest Tier it may reach.
 fn ranged(env: &TestEnv, lead: &str) {
     ranged_with(env, "H3", lead);
 }
@@ -3077,7 +3077,7 @@ fn add_refuses_a_tier_outside_the_worker_range_and_names_the_range() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     let (txns, evs, rows) = (
         count(&fx.env, "txns"),
         count(&fx.env, "events"),
@@ -3186,7 +3186,7 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
 fn edit_accepts_the_worker_range() {
     let fx = Fx::new();
     drafted(&fx);
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     for tier in ["H3", "H4", "S0", "S1", "S2", "S3"] {
         assert_eq!(
             job(&fx, &["edit", "b", "--tier", tier], "pl").ok()["fields"],
@@ -3203,7 +3203,7 @@ fn edit_accepts_the_worker_range() {
 fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_blocked() {
     let fx = Fx::new();
     drafted(&fx);
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     for stored in ["O3", "S4", "H2"] {
         fixture(
             &fx.env,
@@ -3242,7 +3242,7 @@ fn edit_and_retry_refuse_a_tier_outside_the_worker_range() {
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     let (txns, evs, rows) = (
         count(&fx.env, "txns"),
         count(&fx.env, "events"),
@@ -3267,7 +3267,7 @@ fn edit_and_retry_refuse_a_tier_outside_the_worker_range() {
     drop(fx);
     let fx = Fx::new();
     drafted(&fx);
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     for tier in OUTSIDE {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
@@ -3307,7 +3307,7 @@ fn retry_accepts_the_worker_range() {
         drafted(&fx);
         lock(&fx.env, "pl");
         engine(&fx.env, "pl", "a", "failed");
-        ranged(&fx.env, "S4");
+        ranged(&fx.env, "S3");
         let out = job(&fx, &["retry", "a", "--tier", tier], "pl").ok();
         assert_eq!(
             out,
@@ -3317,14 +3317,14 @@ fn retry_accepts_the_worker_range() {
     }
 }
 
-/// The range follows the config: `lead_tier = S2` cuts the worker range to H3..S1 and `worker_tier = S0` lifts its floor.
+/// The range follows the config: `lead_tier = S1` cuts the worker range to H3..S1 and `worker_tier = S0` lifts its floor.
 #[test]
 fn the_worker_range_follows_worker_tier_and_lead_tier_in_config() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    // lead_tier = S2: H3..S1, so S2 and S3 are out and H4 and S1 are in.
-    ranged(&fx.env, "S2");
+    // lead_tier = S1: H3..S1, so S2 and S3 are out and H4 and S1 are in.
+    ranged(&fx.env, "S1");
     for tier in ["H2", "S2", "S3", "O0"] {
         not_allowed_in(
             &job_add(&fx, "pl", "k", tier, &[]),
@@ -3337,8 +3337,8 @@ fn the_worker_range_follows_worker_tier_and_lead_tier_in_config() {
     for tier in ["H3", "H4", "S0", "S1"] {
         job_add(&fx, "pl", &format!("a-{}", tier.to_lowercase()), tier, &[]).ok();
     }
-    // worker_tier = S0, lead_tier = S4: S0..S3, so every H is below the floor.
-    ranged_with(&fx.env, "S0", "S4");
+    // worker_tier = S0, lead_tier = S3: S0..S3, so every H is below the floor.
+    ranged_with(&fx.env, "S0", "S3");
     for tier in ["H3", "H4"] {
         not_allowed_in(
             &job_add(&fx, "pl", "k", tier, &[]),
@@ -3366,7 +3366,7 @@ fn a_scout_and_a_research_job_keep_their_letter_and_the_worker_ceiling() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    ranged(&fx.env, "S4");
+    ranged(&fx.env, "S3");
     let spec = write_spec(
         &fx.env,
         "explore.json",
@@ -3400,8 +3400,8 @@ fn a_scout_and_a_research_job_keep_their_letter_and_the_worker_ceiling() {
     for tier in ["S1", "S2", "S3"] {
         add("research", &format!("r-{}", tier.to_lowercase()), tier).ok();
     }
-    // lead_tier = S2 cuts the worker ceiling to S1: a research Job is S1 only, a scout still H1..H4.
-    ranged(&fx.env, "S2");
+    // lead_tier = S1 cuts the worker ceiling to S1: a research Job is S1 only, a scout still H1..H4.
+    ranged(&fx.env, "S1");
     for tier in ["S2", "S3"] {
         refuse("research", tier);
     }

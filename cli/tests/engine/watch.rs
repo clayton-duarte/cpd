@@ -1116,7 +1116,7 @@ fn engine_on_tmux_with(config_extra: &str) -> Ip {
 fn workers_errors(fx: &Ip) -> Vec<String> {
     fx.texts("error")
         .into_iter()
-        .filter(|t| t.contains("@cpd_workers"))
+        .filter(|t| t.contains("failed at workers"))
         .collect()
 }
 
@@ -2266,7 +2266,7 @@ fn e3_starts_a_job_stored_on_a_tier_of_the_worker_range_at_that_tier() {
 }
 
 /// The roles GX / H3 / `lead` / O3 on the catalog H [0-4], S [0,1,3,4], O [0,2,3,4], G []: the worker range is H3..S3
-/// for `lead` = S4 and H3..S1 for S2. S has no effort 2, so `S2` is a Tier the catalog refuses.
+/// for `lead` = S3 and H3..SX for S2 (the ceiling is inclusive; X sits between 1 and 2). S has no effort 2, so `S2` is no Tier.
 fn ranged_roles(lead: &str) -> String {
     format!(
         "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n"
@@ -2298,7 +2298,7 @@ fn tier_not_allowed_errors(fx: &Ip) -> Vec<(String, i64)> {
 #[test]
 fn e3_never_starts_a_job_stored_outside_the_worker_range() {
     {
-        let fx = engine_scheduling(&ranged_roles("S4"));
+        let fx = engine_scheduling(&ranged_roles("S3"));
         ranged_catalog(&fx);
         // Outside H3..S3: below the floor, above the ceiling, another letter.
         fx.add_job_on("H2", "repo", "low", &[], "");
@@ -2333,7 +2333,7 @@ fn e3_never_starts_a_job_stored_outside_the_worker_range() {
         fx.watch_first_tick().unwrap();
     }
 
-    // A second config moves the ceiling: with lead_tier = S2 the range is H3..S1 and a Job on S3 is refused.
+    // A second config moves the ceiling: with lead_tier = S2 the range is H3..SX (inclusive; X is between 1 and 2) and a Job on S3 is refused.
     let fx = engine_scheduling(&ranged_roles("S2"));
     ranged_catalog(&fx);
     fx.add_job_on("S3", "repo", "high", &[], "");
@@ -2387,7 +2387,7 @@ fn e2_ladder_climbs_inside_the_worker_range_and_fails_at_its_ceiling() {
     assert_eq!(
         fx.job_status("api"),
         "failed",
-        "no rung of H3..S1 at or above S2"
+        "no rung of H3..SX at or above S2"
     );
     assert_eq!(
         fx.env
@@ -3057,7 +3057,7 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
 }
 
 /// The `update` Job runs at `worker_tier`, floored to a valid rung when it is not one: H4 is no rung (H offers 0-3 here), so the
-/// lowest valid rung at or above it is SX: S offers 1-5, no S0, and within a letter X sits between 0 and 1 (contract §9).
+/// lowest valid rung at or above it is S1: S offers 1-5, no S0, and within a letter X sits between 1 and 2, so S1 comes before SX (contract §9).
 #[test]
 fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     let (fx, says) = open_pr_with("worker_tier = \"H4\"\nlead_tier = \"S4\"");
@@ -3070,7 +3070,7 @@ fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     assert_eq!(
         fx.env
             .query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'up-repo'"),
-        "SX",
+        "S1",
         "worker_tier H4 floored to its rung"
     );
 }
@@ -6574,7 +6574,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     let errors = fx.texts("error");
     let e9: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E9 (Context digests)"))
+        .filter(|text| text.contains("failed at curation for"))
         .collect();
     assert_eq!(
         e9.len(),
@@ -6584,7 +6584,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     assert!(
         errors
             .iter()
-            .all(|text| text.contains("E9 (Context digests)")),
+            .all(|text| text.contains("failed at curation for")),
         "only E9 may report the curate run's failure: {errors:?}"
     );
 }
@@ -6615,7 +6615,7 @@ fn the_e2_tick_skips_a_blank_list_panes_line() {
     let errors = fx.texts("error");
     let e2: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E2 (liveness)"))
+        .filter(|text| text.contains("failed at liveness for"))
         .collect();
     assert!(
         e2.is_empty(),

@@ -324,6 +324,19 @@ fn envs_dir() -> PathBuf {
         )
 }
 
+/// The longest env parent directory whose host sockets (`<dir>/cpd-test-XXXXXX/cpd-home/run/host/<session>.sock`) still fit
+/// the 107 bytes of a unix socket path, for session ids of up to about 30 bytes.
+const ENVS_DIR_MAX: usize = 40;
+
+/// `dir`, or the short `/tmp` when `dir` (macOS `TMPDIR`s are long) would put a host socket over 107 bytes.
+fn short_envs_dir(dir: PathBuf) -> PathBuf {
+    if dir.as_os_str().len() > ENVS_DIR_MAX {
+        PathBuf::from("/tmp")
+    } else {
+        dir
+    }
+}
+
 /// A `TestEnv` root this process made, in the registry [`sweep_envs`] walks at process exit.
 struct EnvRoot {
     root: PathBuf,
@@ -533,6 +546,42 @@ pub fn output(cmd: &mut Command) -> io::Result<Output> {
             .stderr(Stdio::piped()),
     )?
     .wait_with_output()
+}
+
+/// [`output`] bounded by `deadline`: the child runs in its own process group, and when it outlives `deadline` the
+/// whole group is `killpg`'d (SIGKILL) and `io::ErrorKind::TimedOut` is returned. Only that group is killed: a
+/// detached process outside it (the shared sccache server) is never touched.
+pub fn output_within(cmd: &mut Command, deadline: Duration) -> io::Result<Output> {
+    use std::os::unix::process::CommandExt;
+    let child = spawn(
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0),
+    )?;
+    let group = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("a pid fits an i32"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let got = match rx.recv_timeout(deadline) {
+        Ok(out) => out,
+        Err(_) => {
+            let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
+            // The group is dead, so its pipes close and the waiter returns.
+            let _ = rx.recv();
+            // Return only once the group is gone (its killed members reaped), so none is seen alive as a zombie.
+            let _ = poll(WAIT, || {
+                nix::sys::signal::killpg(group, None).is_err().then_some(())
+            });
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the child did not exit before its deadline",
+            ))
+        }
+    };
+    let _ = waiter.join();
+    got
 }
 
 /// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
@@ -937,7 +986,7 @@ impl TestEnv {
     }
 
     fn build(reaped: bool) -> TestEnv {
-        let envs_dir = envs_dir();
+        let envs_dir = short_envs_dir(envs_dir());
         let dir = tempfile::Builder::new()
             .prefix("cpd-test-")
             .tempdir_in(&envs_dir)

@@ -19,7 +19,7 @@ const COMMAND: &str = "attempt abort";
 
 /// The Tiers of a no-ladder cause: `next_rung` returns `None` for `Cause::Aborted`
 /// before it reads the catalog, so no ladder decision is ever made here.
-fn no_catalog() -> Catalog {
+pub(crate) fn no_catalog() -> Catalog {
     let empty = || TierModel {
         model: String::new(),
         efforts: Vec::new(),
