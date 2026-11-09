@@ -356,3 +356,19 @@ fn five_role_ranges_ascend() {
         assert!(pair[0].ceiling < pair[1].ceiling);
     }
 }
+
+/// air-d138–air-d140: the worker range includes the lead default, and X lies between 1 and 2.
+#[test]
+fn worker_range_includes_sx_below_s2() {
+    let mut catalog = catalog();
+    catalog.s = model("sonnet", &[0, 1, 2, 3]);
+    let defaults = defaults5("JX", "GX", "HX", "SX", "O3");
+    let worker = defaults.range(&catalog, Role::Worker).unwrap();
+    assert_eq!((worker.floor, worker.ceiling), (t("HX"), t("SX")));
+    for tier in ["S1", "SX"] {
+        assert!(worker.contains(t(tier)), "worker range includes {tier}");
+        assert!(defaults.check_job(&catalog, "test", t(tier)).is_ok());
+    }
+    assert!(!worker.contains(t("S2")));
+    assert!(defaults.check_job(&catalog, "test", t("S2")).is_err());
+}
