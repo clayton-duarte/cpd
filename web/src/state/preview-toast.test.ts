@@ -63,15 +63,18 @@ describe("agent failures and action toasts", () => {
       status: "failed", result: { text: "spec_invalid: engine-defects /tmp/cpd-engine-defects/followup-cleanup.json $.touches", isError: true } },
     { kind: "tool", id: "tool:tier", callId: "tier", name: "bash", args: {},
       status: "failed", result: { text: "tier_not_allowed: worker SX rejected; allowed HX-S0, floor HX, ceiling S0, key worker_tier; next-role lead_tier ceiling", isError: true } },
+    // air-n209 reports the payload, not the calling tool or arguments; these are fixture placeholders.
+    { kind: "tool", id: "tool:host-not-found", callId: "host-not-found", name: "unknown", args: {},
+      status: "failed", result: { text: JSON.stringify({ code: "session_not_found", message: "No Session cpd:host", details: { session: "cpd:host" } }), isError: true } },
   ];
 
   it.each(reportedFailures)("keeps reported $id failures in the transcript without a toast", (failure) => {
     const running: ToolItem = { ...failure, status: "running", result: undefined };
     const before = run(attached(), tail([running]));
     const updated = run(before, server({ type: "session.update", sessionId: "s1", items: [failure] }));
-    expectNoToast(updated, [failure]);
     const appended = run(attached(), server({ type: "session.append", sessionId: "s1", items: [failure] }));
     expectNoToast(appended, [failure]);
+    expectNoToast(updated, [failure]);
     const replayed = run(updated, { type: "connection", status: "reconnecting" },
       { type: "connection", status: "open" }, tail([failure]));
     expectNoToast(replayed, [failure]);
