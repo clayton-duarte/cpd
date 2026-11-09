@@ -375,6 +375,10 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     },
     readLogs: () => need().logs(),
     readSettings: () => need().settings(),
-    saveSettings: (changes) => need().saveSettings(changes),
+    async saveSettings(changes) {
+      await need().saveSettings(changes);
+      // Concurrency lives in config.toml, not cpd.db: re-read the status so StatusBar shows it with a quiet db.
+      if (!stopped) await refreshStatus();
+    },
   };
 }

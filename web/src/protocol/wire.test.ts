@@ -12,13 +12,10 @@ describe("parseClientMessage", () => {
   });
 
   it("J is a valid tier letter", () => {
-    // The decide letter J (contract §9, air-d113, air-d115, air-d120): J3 and JX are Tiers,
-    // and an effort J's model does not offer (J5) is still refused.
-    const j3 = { type: "settings.save", changes: { tiers: { worker: "J3" } } };
-    expect(parseClientMessage(j3)).toEqual(j3);
-    const jx = { type: "settings.save", changes: { tiers: { auxiliar: "JX" } } };
+    // The decide letter J (contract §9): JX is a Tier; an effort J's model does not offer (J5) is refused.
+    const jx = { type: "settings.save", changes: { tiers: { auxiliar: { model: "J", effort: "X" } } } };
     expect(parseClientMessage(jx)).toEqual(jx);
-    expect(() => parseClientMessage({ type: "settings.save", changes: { tiers: { worker: "J5" } } })).toThrowError(
+    expect(() => parseClientMessage({ type: "settings.save", changes: { tiers: { worker: { model: "J", effort: "5" } } } })).toThrowError(
       expect.objectContaining({ code: "invalid_message" }),
     );
   });
