@@ -50,7 +50,7 @@ function breachBlocked(host: Host, protocol: string, source: string, tool: strin
 export function guardProtocolBreach(
   host: Host,
   event: { toolName: string; input: unknown; parentToolCallId?: string; toolCallId: string },
-  ctx: { cwd: string; sessionManager: { getBranch(): string | undefined } },
+  ctx: { cwd: string; sessionManager: { getBranch(): readonly unknown[] } },
 ): Verdict {
   const role = host.run?.info.role;
   const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
