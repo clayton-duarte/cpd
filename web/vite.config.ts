@@ -1,10 +1,9 @@
+import { Resvg } from "@resvg/resvg-js";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { cpdWebPlugin } from "./src/server/plugin.ts";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,24 +49,19 @@ function getFavicons(): { svgBytes: Buffer; icoBytes: Buffer } {
   }
   const svgBytes = fs.readFileSync(svgPath);
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cpd-favicon-"));
-  try {
-    const sizes = [16, 32, 48];
-    const images: Array<{ width: number; height: number; buffer: Buffer }> = [];
-    for (const s of sizes) {
-      const outPng = path.join(tmpDir, `${s}.png`);
-      execFileSync("sips", ["-s", "format", "png", "-z", String(s), String(s), svgPath, "--out", outPng], {
-        stdio: "pipe",
-      });
-      const buf = fs.readFileSync(outPng);
-      images.push({ width: s, height: s, buffer: buf });
-    }
-    const icoBytes = buildIco(images);
-    cachedFavicons = { svgBytes, icoBytes };
-    return cachedFavicons;
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  const sizes = [16, 32, 48];
+  const images: Array<{ width: number; height: number; buffer: Buffer }> = [];
+  for (const s of sizes) {
+    const resvg = new Resvg(svgBytes, {
+      fitTo: { mode: "width", value: s },
+    });
+    const pngData = resvg.render();
+    const pngBuffer = Buffer.from(pngData.asPng());
+    images.push({ width: s, height: s, buffer: pngBuffer });
   }
+  const icoBytes = buildIco(images);
+  cachedFavicons = { svgBytes, icoBytes };
+  return cachedFavicons;
 }
 
 export function cpdFavicon(): Plugin {
