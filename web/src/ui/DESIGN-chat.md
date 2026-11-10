@@ -222,7 +222,7 @@ Message[data-kind="assistant"][data-align="start"]
 
 #### 2.4.1 `Markdown.tsx` (`web/src/ui/chat/Markdown.tsx`)
 
-`splitMarkdown` and `Segment` are unchanged; `react-markdown` plus `remark-gfm` only. `Markdown` returns `null` for no segments (KEPT) and otherwise `<div className="typeset typeset-chat">` (DESIGN.md 2g). Preview change (pro-d55): a fenced code block is a shadcn `CodeBlock` (`size="sm"`, `not-prose`, `my-2`) with a `CodeBlockHeader` (the language as `CodeBlockTitle`, `font-mono`) and a `CodeBlockCopyButton` on the raw text, and a `CodeBlockContent` with `lineNumbers`. `Markdown.test` 1 to 5 test `splitMarkdown` and the segment memo and are unaffected by the block part.
+`splitMarkdown` and `Segment` are unchanged; `react-markdown` plus `remark-gfm` only. `Markdown` returns `null` for no segments (KEPT) and otherwise `<div className="typeset typeset-chat">` (DESIGN.md 2g). **Links (pro-d98, pro-d540; DESIGN.md 6).** `markdownComponents` overrides `a` with the shared `ExternalLink` (`web/src/ui/components/ExternalLink.tsx`). A link in assistant text or thinking that is external (`http:`, `https:`, `mailto:`) renders with `target="_blank"` and `rel="noopener noreferrer"`. An in-app link (an AgentKey route `#/a/...`, or a same-page `#<id>`) renders with neither attribute and stays in the same tab. Status: the override lands in Job `web-impl`; until then a Markdown link has neither attribute. Preview change (pro-d55): a fenced code block is a shadcn `CodeBlock` (`size="sm"`, `not-prose`, `my-2`) with a `CodeBlockHeader` (the language as `CodeBlockTitle`, `font-mono`) and a `CodeBlockCopyButton` on the raw text, and a `CodeBlockContent` with `lineNumbers`. `Markdown.test` 1 to 5 test `splitMarkdown` and the segment memo and are unaffected by the block part.
 
 #### 2.4.2 Chain of Thought (pro-d61): thinking and tool steps
 
@@ -618,7 +618,3 @@ Named in Job `web-tests`, `web/src/ui/chat/mentions.test.tsx`:
 
 No test is named for the exclusions of 7.3 (code, existing links, path adjacency). Adding one is the Lead's decision: web-tests's list is fixed by the Plan.
 
-
-### 2.4.3 Markdown links (pro-d98, pro-d540)
-
-Skeleton: content in progress (Job `web-docs`).

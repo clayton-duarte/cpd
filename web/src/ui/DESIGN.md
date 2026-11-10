@@ -1207,4 +1207,39 @@ The contract is stated before the code and the tests. The code on this branch do
 
 ## 6. External links: every external link opens in a new tab (pro-d98, pro-d540)
 
-Skeleton: content in progress (Job `web-docs`).
+Record: pro-d98 (User) and pro-d540 decide that every external link in the WebUI opens in a new tab. The rule is one shared component, `ExternalLink` (`web/src/ui/components/ExternalLink.tsx`), and one source-scan test that enforces it. Status: this section is the contract. The code lands in Job `web-impl`, and its tests in Job `web-tests`. Until then the code differs as 6.3 states.
+
+### 6.1 The rule
+
+- An **external** link has an absolute `href` whose scheme is `http:`, `https:` or `mailto:`. It renders with `target="_blank"` and `rel="noopener noreferrer"`, and it opens in a new tab.
+- An **in-app** link stays in the same tab and carries neither attribute. In-app links are AgentKey routes (`#/a/...`, `agentKey.ts`), same-page anchors (`#<id>`) and every other relative `href`.
+- A programmatic open of an external URL (`window.open`) uses the same policy: target `_blank` and features `noopener,noreferrer`.
+- The icon of an external link is the caller's choice. `ExternalLink` adds none.
+
+### 6.2 The shared component
+
+`ExternalLink` takes the props of an `<a>` (`React.ComponentProps<"a">`) except `target` and `rel`, which its props type omits, so a caller cannot set them. It decides external or in-app from `href` by 6.1, sets `target` and `rel` for an external link only, and passes every other prop through unchanged (`data-part`, `aria-label`, `onClick`, children).
+
+### 6.3 Where it is used
+
+| Site | Kind | Attributes | State |
+|---|---|---|---|
+| `web/src/ui/chat/Markdown.tsx`, `markdownComponents.a` | every link Markdown renders (DESIGN-chat 2.4.1) | external: new tab; in-app: same tab | web-impl. Today the Markdown link has neither attribute, so it opens in the app's own tab (source-read, unverified at runtime) |
+| `web/src/ui/cockpit/Inbox.tsx`, `InboxItemRow` item link (`aria-label="Open external link"`, air-d121 in 4) | external | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/cockpit/Inbox.tsx`, `openExternalUrl` (`window.open`) | programmatic external | new tab, `noopener,noreferrer` | unchanged; 6.1 is its policy |
+| `web/src/ui/cockpit/ManagerView.tsx`, `WorkflowChip` (`wf-pr-chip`) | external PR link | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard` and `ReviewPrCard` PR links | external PR link | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/chat/mentions.tsx`, `MentionLink` (`#/a/...`) | in-app AgentKey route | same tab | unchanged |
+| `web/src/ui/dialogs/PlanReviewCard.tsx` and the in-page outline anchor of `DESIGN-compose.md` | same-page `#<id>` | same tab | unchanged |
+
+### 6.4 Enforcement
+
+Prose is not enforcement, so the rule is pinned by a source-scan test, `web/src/ui/links-enforcement.test.ts` (Job `web-tests`). The test walks the production files under `web/src/ui` and fails on any raw `<a` element outside `components/ExternalLink.tsx` that could carry an external URL (6.1). `components/ExternalLink.tsx` is the only file allowed to write the attributes. The test's matching rules are the test Job's; this section fixes what it pins. Markdown links are pinned by `web/src/ui/chat/Markdown.test.tsx`, and the component by `web/src/ui/components/ExternalLink.test.tsx`.
+
+### 6.5 Electron
+
+Electron's main process already keeps external navigation out of the app: `setWindowOpenHandler` (`src/electron/main.ts`) and the `will-navigate` guard that opens a URL outside the app externally (`src/electron/main.ts`, `createExternalLinkHandler` in `src/electron/native.ts`). The attributes of 6.1 are the browser build's behaviour and the contract for every build. The Electron handlers stay as a second layer, and this section does not replace them. Unverified at runtime: the behaviour above is read from source.
+
+### 6.6 Open points
+
+- `mailto:` with `target="_blank"` may open an empty tab in some browsers. The scheme is in the rule because Job `web-impl`'s context lists it. Unverified in any browser.
