@@ -312,12 +312,21 @@ fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError
 
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(name_str) = name.to_str() else { continue };
-        let Some(pid_str) = name_str.strip_suffix(".token") else { continue };
-        let Ok(pid) = pid_str.parse::<i32>() else { continue };
-        if pid <= 0 { continue; }
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Some(pid_str) = name_str.strip_suffix(".token") else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<i32>() else {
+            continue;
+        };
+        if pid <= 0 {
+            continue;
+        }
 
-        let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH);
+        let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+            != Err(nix::errno::Errno::ESRCH);
         if !alive {
             continue;
         }
@@ -336,11 +345,7 @@ fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError
         }
     }
 
-    if any_valid {
-        Ok(())
-    } else {
-        Err(invalid())
-    }
+    if any_valid { Ok(()) } else { Err(invalid()) }
 }
 
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
