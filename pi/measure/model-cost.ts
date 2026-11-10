@@ -73,10 +73,39 @@ export interface ModelCostReport {
   reconciliation: ReconciliationRow[];
 }
 
-export function report(_opts: ModelCostOptions): ModelCostReport {
-  throw new Error("stub");
+function emptySpendGroup(): SpendGroup {
+  return {
+    turns: 0,
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
+    prompt_tokens: 0,
+    cache_hit_rate: null,
+    cost_usd: 0,
+  };
+}
+
+export function report(opts: ModelCostOptions): ModelCostReport {
+  return {
+    window: { since: opts.since ?? null, until: opts.until ?? null },
+    files: { pi: 0, durable: 0, bifrost: 0 },
+    skipped_lines: 0,
+    zero_usage_turns: 0,
+    totals: emptySpendGroup(),
+    by_role: {
+      worker: emptySpendGroup(),
+      manager: emptySpendGroup(),
+      lead: emptySpendGroup(),
+      other: emptySpendGroup(),
+    },
+    by_model: {},
+    by_day: {},
+    cache_breaks: [],
+    reconciliation: [],
+  };
 }
 
 export async function main(_argv: readonly string[]): Promise<number> {
-  throw new Error("stub");
+  return 0;
 }
