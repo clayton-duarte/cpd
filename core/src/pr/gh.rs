@@ -2891,24 +2891,30 @@ pub struct PollPlan {
 
 const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
 
-const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
+/// `Light` without `mergeable`, `mergeStateStatus`, `autoMergeRequest` and `reviewThreads`: the review-requested search reads
+/// a teammate's pull requests, whose merge state GitHub computes per node (the search cost ~9.0 s with it, ~3.5 s without).
+const PEER_LIGHT: &str = "fragment PeerLight on PullRequest { number state isDraft reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } }";
+
+const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
 
 /// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
 /// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.
 pub fn build_poll_query(plan: &PollPlan) -> String {
-    let search = |alias: &str, q: &str| {
+    let search = |alias: &str, q: &str, fragment: &str| {
         format!(
-            " {alias}: search(type: ISSUE, query: \"{q}\", first: 100) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ ...Light }} }} }}"
+            " {alias}: search(type: ISSUE, query: \"{q}\", first: 100) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ ...{fragment} }} }} }}"
         )
     };
     let mut query = String::from("query { viewer { login } rateLimit { remaining resetAt cost }");
     query.push_str(&search(
         "authored",
         "is:pr is:open author:@me archived:false sort:created-asc",
+        "Light",
     ));
     query.push_str(&search(
         "reviews",
         "is:pr is:open review-requested:@me archived:false sort:created-asc",
+        "PeerLight",
     ));
     let aliased = plan
         .heavy
@@ -2929,6 +2935,8 @@ pub fn build_poll_query(plan: &PollPlan) -> String {
     }
     query.push_str(" } ");
     query.push_str(LIGHT);
+    query.push(' ');
+    query.push_str(PEER_LIGHT);
     if !plan.heavy.is_empty() {
         query.push(' ');
         query.push_str(HEAVY);
@@ -3027,6 +3035,13 @@ fn poll_node(
             reply.fail("gh api graphql answered a pull request without headRefOid.".into())
         })?
         .to_owned();
+    // A `PeerLight` node (the review-requested search) selects neither `mergeable` nor `mergeStateStatus`: both read `UNKNOWN`.
+    let mut v = v;
+    for field in ["mergeable", "mergeStateStatus"] {
+        if v.get(field).is_none() {
+            v[field] = json!("UNKNOWN");
+        }
+    }
     let raw: RawPr = serde_json::from_value(v.clone()).map_err(|e| {
         reply.fail(format!(
             "gh api graphql answered a malformed pull request: {e}."
@@ -3094,11 +3109,11 @@ fn poll_node(
 
 fn parse_poll(
     reply: &Reply,
-    aliases: usize,
-    metas: usize,
+    plan: &PollPlan,
     bots: &[String],
     excused_labels: &[String],
 ) -> Result<PollRead, CpdError> {
+    let (aliases, metas) = (plan.heavy.len() + plan.absent.len(), plan.meta.len());
     let (data, errors): (Value, _) = reply.envelope()?;
     if let Some(other) = errors
         .iter()
@@ -3133,7 +3148,25 @@ fn parse_poll(
     let mut found = Vec::with_capacity(aliases);
     for i in 0..aliases {
         let alias = format!("p{i}");
-        let slot = data.get(&alias).ok_or_else(|| missing(&alias))?;
+        let Some(slot) = data.get(&alias) else {
+            // A repository whose metadata alias resolves to null has no pull requests to answer for: not found.
+            let (repo, _) = plan
+                .heavy
+                .iter()
+                .chain(&plan.absent)
+                .nth(i)
+                .expect("alias i");
+            let gone = plan
+                .meta
+                .iter()
+                .position(|m| m == repo)
+                .is_some_and(|j| data.get(format!("m{j}")).is_some_and(Value::is_null));
+            if gone {
+                found.push(None);
+                continue;
+            }
+            return Err(missing(&alias));
+        };
         found.push(match slot.get("pullRequest").filter(|p| !p.is_null()) {
             Some(p) => Some(poll_node(reply, p.clone(), bots, excused_labels)?),
             None => None,
@@ -3189,8 +3222,7 @@ pub fn poll_once(
                 args: &refs,
                 out: &out,
             },
-            plan.heavy.len() + plan.absent.len(),
-            plan.meta.len(),
+            plan,
             bots,
             excused_labels,
         )
