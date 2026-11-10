@@ -249,10 +249,6 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         NAMED.iter().next_back().map(|n| n.name),
         Some("20261109T2108-bug-protocol-breach")
     );
-    assert_eq!(
-        NAMED.iter().next_back().map(|n| n.name),
-        Some("20261109T1804-workflow-repair")
-    );
 }
 
 #[test]
