@@ -1,6 +1,15 @@
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import { readPreviewMode } from './preview-mode';
+import { DEFAULT_DEV_URL, readPreviewMode } from './preview-mode';
+
+it('defaults to port 33333 for preview devUrl', () => {
+  expect(DEFAULT_DEV_URL).toBe('http://localhost:33333/electron.html');
+  expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w' })).toEqual({
+    mode: 'preview',
+    checkout: '/w',
+    devUrl: 'http://localhost:33333/electron.html',
+  });
+});
 
 it('readPreviewMode defaults to production when CPD_MODE is unset', () => {
   expect(readPreviewMode({})).toEqual({ mode: 'production' });

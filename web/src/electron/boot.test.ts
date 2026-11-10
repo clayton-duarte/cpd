@@ -52,6 +52,12 @@ describe('boot', () => {
     await boot(s.deps);
     expect(s.titles).toEqual(['CPD']);
   });
+  it('loads http://localhost:3333 in production mode', async () => {
+    const s = setup({ env: { CPD_MODE: 'production' } });
+    await boot(s.deps);
+    expect(s.log).toContain('loadDevUrl:http://localhost:3333');
+    expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
+  });
   it('boot registers IPC and starts the update before loading the renderer', async () => {
     const s = setup();
     await boot(s.deps);
