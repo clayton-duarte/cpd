@@ -1,11 +1,15 @@
 //! The key of a Manager, a Lead or a Worker (pro-d345).
 
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
 use crate::ids::{ContextId, JobKey, PlanId};
 
 /// The key of a Manager, a Lead or a Worker (pro-d345): the only writer of their `sessions.name`.
 ///
 /// This type is the only writer of the `sessions.name` of a Manager, a Lead and a Worker; there is no SQL CHECK.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(type = "string")]
 pub enum AgentKey {
     Manager(ContextId),
     Lead(ContextId, PlanId),

@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 use std::fs::File;
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -110,7 +112,8 @@ impl Kind {
 
 /// How soon an item needs the User; the order is the rank of §2.2's "Order",
 /// last is first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum Urgency {
     White,
     /// A cpd notice that blocks nothing (hs-d570).

@@ -1,14 +1,60 @@
 //! The `plans` row as read (contract §2.2 Plan), and the phases of §3.1.
 
 use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use super::outline::Outline;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, SessionId};
 
+/// A Job's kind (contract §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Work,
+    Docs,
+    Test,
+    Impl,
+    Verify,
+    Open,
+    Update,
+    Scout,
+    Research,
+}
+
+/// A Job's status (contract §3.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Draft,
+    Queued,
+    Running,
+    Merged,
+    Failed,
+    Cancelled,
+}
+
 /// A Plan's phase (§3.1).
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    clap::ValueEnum,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    TS,
+)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum Phase {
     Shaping,
     Grounding,
@@ -17,6 +63,9 @@ pub enum Phase {
     Deploy,
     Done,
 }
+
+/// Alias for Phase.
+pub type PlanPhase = Phase;
 
 impl Phase {
     pub const ALL: [Phase; 6] = [
