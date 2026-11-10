@@ -49,6 +49,7 @@ pub mod plan;
 pub mod policy;
 pub mod ports;
 pub mod pr;
+pub mod protocol;
 pub mod prune;
 pub mod resource;
 pub mod secret;

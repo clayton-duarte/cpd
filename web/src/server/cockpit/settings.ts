@@ -1,15 +1,13 @@
 import { WebError } from "../../protocol/domain.ts";
 import { SETTINGS_ROLES, SETTINGS_SWITCHES, type SettingsChanges, type SettingsModel, type SettingsRole } from "../../protocol/cockpit.ts";
 import { toArgv, type TiersArgv } from "../cpd-argv.ts";
+import { formatTier, parseTier, type TierParts } from "../../protocol/tier.ts";
 import type { Cpd } from "./cli.ts";
 
 /** `cpd config` key of each role Tier (scout-settings). */
 const TIER_KEY: Readonly<Record<SettingsRole, string>> = {
   auxiliar: "context_distill_tier", worker: "worker_tier", lead: "lead_tier", manager: "manager_tier",
 };
-// The Tier letters in ladder order, J first (contract §9, air-d113, air-d115, air-d120): J's model
-// offers efforts 0-3, so `J4` (like `J5`) is refused while the other letters still take 0-4 or X.
-const TIER = /^(?:[GHSO](?:[0-4]|X)|J(?:[0-3]|X))$/;
 /** The decide role's config key (contract §9, air-d113, air-d115, air-d120). */
 const DECIDE_KEY = "decide_tier";
 /** The decide role's default, JX (contract §9): sent back when the read predates `decide_tier`. */
@@ -26,7 +24,7 @@ export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
   const experimental = obj((await cpd.json(toArgv({ kind: "config.experimental.read" })))["experimental"], "experimental");
   const tier = (key: string): string => {
     const v = config[key];
-    return typeof v === "string" && TIER.test(v) ? v : bad(key);
+    return typeof v === "string" && parseTier(v) !== null ? v : bad(key);
   };
   // The decide Tier rides along when `cpd config` carries its key, like every other role's Tier.
   const decide = config[DECIDE_KEY] === undefined ? undefined : tier(DECIDE_KEY);
@@ -57,18 +55,20 @@ export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
  * from the settings read, so no role is ever dropped. */
 export async function saveSettings(cpd: Cpd, changes: SettingsChanges): Promise<void> {
   // The decide role is not a `SETTINGS_ROLES` member, but the write path carries it like the other four.
-  const changed = changes.tiers as Readonly<Record<string, string | undefined>> | undefined;
-  const roles = TIERS_ROLES.filter((r) => changed?.[r] !== undefined);
+  const wireTiers = changes.tiers as unknown as Readonly<Record<string, TierParts | undefined>> | undefined;
+  const changed: Record<string, string | undefined> = Object.fromEntries(
+    Object.entries(wireTiers ?? {}).flatMap(([k, v]) => (v === undefined ? [] : [[k, formatTier(v)]])));
+  const roles = TIERS_ROLES.filter((r) => changed[r] !== undefined);
   if (roles.length > 0) {
     // `cpd config tiers set` requires all five role flags (air-n37): send the changed Tiers over the current ones.
     const current = await readSettings(cpd);
     const read = current.tiers as Readonly<Record<string, string | undefined>>;
     const tiers: TiersArgv = {
-      decide: changed?.["decide"] ?? read["decide"] ?? DECIDE_DEFAULT,
-      auxiliar: changed?.["auxiliar"] ?? current.tiers.auxiliar,
-      worker: changed?.["worker"] ?? current.tiers.worker,
-      lead: changed?.["lead"] ?? current.tiers.lead,
-      manager: changed?.["manager"] ?? current.tiers.manager,
+      decide: changed["decide"] ?? read["decide"] ?? DECIDE_DEFAULT,
+      auxiliar: changed["auxiliar"] ?? current.tiers.auxiliar,
+      worker: changed["worker"] ?? current.tiers.worker,
+      lead: changed["lead"] ?? current.tiers.lead,
+      manager: changed["manager"] ?? current.tiers.manager,
     };
     await cpd.json(toArgv({ kind: "config.tiers.set", tiers }));
   }

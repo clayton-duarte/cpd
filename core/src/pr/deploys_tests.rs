@@ -29,21 +29,27 @@ impl Handler for Gh {
             ["api", path] => {
                 let parts: Vec<&str> = path.split('/').collect();
                 match parts[..] {
-                    [
-                        "repos",
-                        owner,
-                        repo,
-                        "actions",
-                        "workflows",
-                        file,
-                        "runs?status=waiting&per_page=100",
-                    ] => match self.runs.get(&format!("{owner}/{repo}/{file}")) {
-                        Some(Some(runs)) => Reply::ok(
-                            &json!({"total_count": runs.len(), "workflow_runs": runs}).to_string(),
-                        ),
-                        Some(None) => Reply::exit(1, "", "gh: HTTP 500: Server Error\n"),
-                        None => Reply::exit(9, "", &format!("unscripted workflow: {path}\n")),
-                    },
+                    ["repos", owner, repo, "actions", "workflows", file, query]
+                        if query.starts_with("runs?status=")
+                            && query.ends_with("&per_page=100") =>
+                    {
+                        match self.runs.get(&format!("{owner}/{repo}/{file}")) {
+                            // The scripted runs wait; the active (`in_progress`, `queued`) reads of the same workflow list none.
+                            Some(Some(runs)) => {
+                                let runs = if query == "runs?status=waiting&per_page=100" {
+                                    runs.clone()
+                                } else {
+                                    Vec::new()
+                                };
+                                Reply::ok(
+                                    &json!({"total_count": runs.len(), "workflow_runs": runs})
+                                        .to_string(),
+                                )
+                            }
+                            Some(None) => Reply::exit(1, "", "gh: HTTP 500: Server Error\n"),
+                            None => Reply::exit(9, "", &format!("unscripted workflow: {path}\n")),
+                        }
+                    }
                     ["repos", _, _, "actions", "runs", id, "pending_deployments"] => {
                         match id.parse().ok().and_then(|id: u64| self.pending.get(&id)) {
                             Some(pending) => Reply::ok(&pending.to_string()),
@@ -375,17 +381,21 @@ fn one_runs_call_per_declared_workflow() {
 
     let mut runs_calls: Vec<String> = calls(&runner)
         .into_iter()
-        .filter(|c| c.contains("runs?status=waiting"))
+        .filter(|c| c.contains("runs?status="))
         .collect();
     runs_calls.sort();
-    assert_eq!(
-        runs_calls,
-        [
-            "api repos/acme/pay/actions/workflows/build.yaml/runs?status=waiting&per_page=100",
-            "api repos/acme/pay/actions/workflows/main.yml/runs?status=waiting&per_page=100",
-            "api repos/acme/web/actions/workflows/deploy.yml/runs?status=waiting&per_page=100",
-        ]
-    );
+    let expected: Vec<String> = [
+        "pay/actions/workflows/build.yaml",
+        "pay/actions/workflows/main.yml",
+        "web/actions/workflows/deploy.yml",
+    ]
+    .iter()
+    .flat_map(|w| {
+        ["in_progress", "queued", "waiting"]
+            .map(|s| format!("api repos/acme/{w}/runs?status={s}&per_page=100"))
+    })
+    .collect();
+    assert_eq!(runs_calls, expected);
     assert_eq!(cached(&home)["runs"].as_array().unwrap().len(), 1);
 
     // Nothing declared anywhere: no runs call, and the file holds no run.
@@ -404,9 +414,7 @@ fn one_runs_call_per_declared_workflow() {
     let runner = scripted(gh("clayton-duarte", &[], &[]));
     read(&runner, &empty, "clayton-duarte").unwrap();
     assert!(
-        !calls(&runner)
-            .iter()
-            .any(|c| c.contains("runs?status=waiting")),
+        !calls(&runner).iter().any(|c| c.contains("runs?status=")),
         "{:?}",
         calls(&runner)
     );

@@ -28,6 +28,9 @@ use crate::ports::Fakes;
 
 const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
 
+/// The built binary's hidden dry run: opens (and so migrates) the store of the `CPD_HOME` it is given, then exits.
+const DRY_RUN: [&str; 3] = ["watch", "--check", "--migrate-scratch"];
+
 const MIGRATIONS: &str = "core/src/store/migrations";
 
 /// What one run of the install left: its exit and its stderr.
@@ -384,9 +387,10 @@ fn a_build_whose_migrations_are_all_on_origin_main_installs() {
     // The script's assertion that cargo ran once: the build is the shell's now, and the built binary is asked once for
     // the store verdict, then once for the config migration and validation (both before it replaces the binary).
     let calls = rig.built_calls();
-    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls.len(), 3, "{calls:?}");
     assert_eq!(calls[0].args, ["--version"], "{calls:?}");
     assert_eq!(calls[1].args, ["config", "--migrate"], "{calls:?}");
+    assert_eq!(calls[2].args, DRY_RUN, "{calls:?}");
 }
 
 #[test]
@@ -638,4 +642,79 @@ fn the_migrations_the_build_applied_are_reported_on_stderr() {
         "{}",
         run.stderr
     );
+}
+
+// ---- The migration dry run on a scratch copy (before the binary is replaced) ----
+
+impl Rig {
+    /// What the built binary's dry run answers.
+    fn built_dry_run(&self, reply: Reply) {
+        let built = self.built();
+        (*self.fakes.runner).clone().on(
+            "cpd",
+            move |c| Path::new(&c.program) == built && c.args == DRY_RUN,
+            reply,
+        );
+    }
+
+    fn dry_runs(&self) -> Vec<Call> {
+        self.built_calls()
+            .into_iter()
+            .filter(|c| c.args == DRY_RUN)
+            .collect()
+    }
+}
+
+#[test]
+fn a_failing_migration_dry_run_refuses_before_the_binary_is_replaced() {
+    let rig = Rig::new(&[]);
+    fs::create_dir_all(rig.installed().parent().unwrap()).unwrap();
+    fs::write(rig.installed(), "old cpd\n").unwrap();
+    rig.built_says(&version("null"));
+    rig.built_dry_run(Reply::exit(
+        1,
+        r#"{"ok":false,"error":{"code":"store_failed","message":"migration failed"}}"#,
+        "",
+    ));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd install refused:"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(rig.dry_runs().len(), 1, "{:?}", rig.built_calls());
+    assert_eq!(
+        fs::read(rig.installed()).unwrap(),
+        b"old cpd\n",
+        "the binary was replaced"
+    );
+    assert_eq!(rig.dest_entries(), ["cpd"]);
+}
+
+#[test]
+fn a_passing_migration_dry_run_lets_the_install_proceed() {
+    let rig = Rig::new(&[]);
+    rig.built_says(&version("null"));
+    rig.built_dry_run(Reply::ok(r#"{"ok":true}"#));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    let dry = rig.dry_runs();
+    assert_eq!(dry.len(), 1, "{:?}", rig.built_calls());
+    let cpd_home = dry[0]
+        .envs
+        .iter()
+        .find(|(key, _)| key == "CPD_HOME")
+        .and_then(|(_, value)| value.clone());
+    assert!(cpd_home.is_some(), "the dry run has a CPD_HOME");
+    assert_ne!(
+        cpd_home.as_deref(),
+        rig.cpd_home().to_str(),
+        "the dry run opens a scratch copy, never the live store"
+    );
+    assert_eq!(fs::read(rig.installed()).unwrap(), b"built cpd\n");
 }

@@ -27,6 +27,9 @@ mod archive_leads_tests;
 #[cfg(test)]
 mod archive_tests;
 mod asks;
+mod bug_guard;
+#[cfg(test)]
+mod bug_protocol_tests;
 mod closed;
 #[cfg(test)]
 mod closed_tests;
@@ -165,6 +168,9 @@ pub struct Args {
     /// Check, read-only, what starting the engine depends on (config, store, tmux, its listing, the home) and print what was checked
     #[arg(long, conflicts_with_all = ["ensure", "restart_tmux"])]
     check: bool,
+    /// With `--check`: open (and so migrate) the store of `CPD_HOME`, then exit (internal: `cpd install` runs it on a scratch copy before the swap)
+    #[arg(long, hide = true, requires = "check")]
+    migrate_scratch: bool,
     /// Start the engine in cpd-work:watch when it is not running, and return at once
     #[arg(long)]
     ensure: bool,
@@ -179,9 +185,19 @@ pub struct Args {
     mark_restart: bool,
 }
 
+/// `watch --check --migrate-scratch`: opens the store of `CPD_HOME`, which migrates it. Only for a scratch copy.
+fn migrate_scratch() -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = cpd_core::config::Config::load(&home)?;
+    cpd_core::store::Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    Ok(Output::success(serde_json::json!({})))
+}
+
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
-    if args.check {
+    if args.check && args.migrate_scratch {
+        migrate_scratch()
+    } else if args.check {
         ensure::check()
     } else if args.ensure {
         ensure::ensure(args.wait)

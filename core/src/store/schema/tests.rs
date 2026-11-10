@@ -2941,14 +2941,15 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
             rows_after.remove("slack_reactions").map(|r| r.len()),
             Some(0)
         ); // `slack-reactions`: a new empty table
+        assert_eq!(rows_after.remove("bug_records").map(|r| r.len()), Some(0)); // `bug-record`: a new empty table
         assert_eq!(
             rows_after.remove("test_replacements").map(|r| r.len()),
             Some(0)
         ); // `test-replacement`: a new empty table
         assert_eq!(
             rows_after.remove("history_tables").map(|r| r.len()),
-            Some(28)
-        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda`, `context_reads`, `record_topics` and `test_replacements`
+            Some(29)
+        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools`, `job_addenda`, `context_reads`, `record_topics`, `bug_records` and `test_replacements`
         let (txns_before, txns_after) = (
             rows_before.remove("txns").unwrap(),
             rows_after.remove("txns").unwrap(),
@@ -4809,7 +4810,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
         ),
         vec![serde_json::json!(["pr-base-changed"])]
     );
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-ended-kind`, the one of `attempt-aborted-kind`, the one of `job-blocked-kind`, the one of `job-addenda`, the one of `workflow-reopen`, the one of `guard-event`, and the six of `workflow-event-kinds`: the later migrations that add Event kinds
+    // Later Event-kind migrations include guard-event and bug-protocol-breach.
     assert_eq!(
         rows(&mut store, "SELECT count(*) FROM event_kinds"),
         vec![serde_json::json!([before
@@ -4822,6 +4823,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 3
             + 1
             + 2
+            + 1
             + 1
             + 1
             + 1
