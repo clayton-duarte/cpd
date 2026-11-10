@@ -2481,7 +2481,7 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 
 ## 26. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
 
-Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI gets a favicon generated at build time from one source, `web/build/icon/cpd-icon.svg`, with an SVG favicon and an ICO fallback, both linked from `web/index.html`. Survey (`$CPD_HOME/run/webui-ext-links/explore/survey-favicon.md`): no favicon is served today. `web/public/` does not exist, and `web/index.html` has no icon link.
+Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI gets a favicon generated at build time from one source, `web/build/icon/cpd-icon.svg`, with an SVG favicon and an ICO fallback, both linked from `web/index.html`. Survey (the Plan's explore artefact `survey-favicon.md`): no favicon is served today. `web/public/` does not exist, and `web/index.html` has no icon link.
 
 ### 26.1 Source and outputs
 
