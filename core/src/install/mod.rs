@@ -153,11 +153,31 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
         );
         true
     };
+    if let Err(e) = check_shell_abi(&app.root) {
+        let _ = writeln!(err, "{e}");
+        return true;
+    }
+    // Remove legacy ~/.local/share/cpd/app copy on migration
+    let legacy_app = install.home.join(".local/share/cpd/app");
+    if legacy_app.exists() {
+        let _ = fs::remove_dir_all(&legacy_app);
+    }
     if let Err(e) = app::pnpm(ports, &app.root, &["install", "--frozen-lockfile"]) {
         return fail("a", e);
     }
     if let Err(e) = app::ensure(ports, &app, true) {
         return fail("b", e);
+    }
+    // Stage versioned payload directory
+    let payload_dir = app.root.join("web/dist-electron/payload");
+    if let Err(e) = fs::create_dir_all(&payload_dir) {
+        return fail(
+            "payload",
+            crate::error::CpdError::new(
+                crate::error::ErrorCode::InstallFailed,
+                format!("cannot create payload dir {}: {e}", payload_dir.display()),
+            ),
+        );
     }
     if let Err(e) = app::write_root(&app.home, &app.root) {
         return fail("c", e);
@@ -173,6 +193,29 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
         Ok(_) => false,
         Err(e) => fail("d", e),
     }
+}
+
+/// Checks that the payload's minimum shell ABI is supported by the current shell.
+fn check_shell_abi(root: &std::path::Path) -> Result<(), String> {
+    let version_file = root.join("web/src/electron/version.ts");
+    if let Ok(content) = fs::read_to_string(&version_file) {
+        for line in content.lines() {
+            if let Some(rest) = line.trim().strip_prefix("export const MIN_SHELL_ABI_VERSION =") {
+                let num_str = rest.trim().trim_end_matches(';').trim();
+                if let Ok(min_abi) = num_str.parse::<u32>() {
+                    // Shell ABI version is 1
+                    const SHELL_ABI_VERSION: u32 = 1;
+                    if SHELL_ABI_VERSION < min_abi {
+                        return Err(
+                            "cpd install refused: new CPD.app release needed (incompatible shell ABI)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The branch check (contract §3.7): refuses a build that carries a migration file that is not, byte for byte, on
