@@ -2418,3 +2418,7 @@ Normative for the target. **Status at this commit: not built.** There is no `ts-
 - The Gate fails when the checked-in `web/src/generated/types.ts` is not byte-identical to a fresh export. The check is a test that exports in memory and compares (research §1.4). Its failure names `pnpm generate:types` as the fix.
 - The check runs inside `pnpm run verify` (`verify:steps`), so a Rust type changed without regenerating fails before merge.
 - Limits, stated plainly: the byte-identical output across Linux and macOS is the research's claim (unverified here); the exact set of exported types is fixed by the Job that lands the generator, not here; no generator run has been made for this section (unverified).
+
+## 24. Client import contract and the duplicate-declaration prohibition (Plan `core-ts-types`; Job `web-adopt-docs`; decisions pro-d513 to pro-d516)
+
+Skeleton: the sections 24.1 to 24.4 are written in the next commit.
