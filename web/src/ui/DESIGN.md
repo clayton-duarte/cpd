@@ -800,7 +800,7 @@ Built: the double-click resets above, and `Reset layout` (3g, values from pro-d5
 
 ### 3d. Context Tree (sidebar, 20% panel)
 
-File `web/src/ui/cockpit/ContextTree.tsx`. pro-d48..pro-d61 name no change to the tree: the Sidebar below and its menus (3g) stand as written, and the approved preview's tree rework is not part of this contract (merge rule: main wins where no decision names the behaviour). The tree's only pro-d50 effect is its aside's `overflow-hidden` (3c). The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props **KEPT**, unchanged:
+File `web/src/ui/cockpit/ContextTree.tsx`. pro-d48..pro-d61 name no change to the tree: the Sidebar below and its menus (3g) stand as written, and the approved preview's tree rework is not part of this contract (merge rule: main wins where no decision names the behaviour). The tree's only pro-d50 effect is its aside's `overflow-hidden` (3c). The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props, with `onNewContext` replaced by `onAction` (New Manager, below):
 
 ```ts
 export function ContextTree(props: {
@@ -809,8 +809,8 @@ export function ContextTree(props: {
   selectedPlanId: string | null;
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
-  /** New context. The "+" button is rendered only when passed (Not built). */
-  onNewContext?: () => void;
+  /** Runs a tree menu action and the New Manager flow (below). Without it the header button and the row menus are not rendered. */
+  onAction?: (action: CockpitAction) => void;
 }): ReactElement;
 ```
 
@@ -837,7 +837,7 @@ div[aria-label="Context tree"]                                    Sidebar collap
    │   ├─ TopPaneHeader[data-part="tree-header"][hasOverlayControls=false]   the shared header (3i), h-11
    │   │   ├─ span[data-part="phi"][aria-hidden="true"]  "φ"   font-display text-[20px] font-bold text-fg-strong
    │   │   ├─ span.sr-only  "Contexts"
-   │   │   └─ actions: Button[type="button"][data-action="new-context"][aria-label="New context"]   ghost, icon-sm, 26px; PlusIcon 14; only when onNewContext
+   │   │   └─ actions: Button[type="button"][data-action="new-manager"][aria-label="New Manager"]   ghost, icon-xs; MessageCirclePlusIcon (lucide-react); only when onAction (New Manager, below)
    │   └─ ScrollArea > SidebarGroupContent
    │       ├─ p[data-part="loading"]  "Loading contexts…"           (tree === null)   px-2 text-fg-dim
    │       ├─ p[data-part="empty"]  "No contexts"                  (no live and no archived contexts)   px-2 text-fg-dim
