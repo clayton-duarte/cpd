@@ -102,5 +102,5 @@ export function cpdFavicon(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), cpdFavicon(), cpdWebPlugin()],
-  server: { port: 5173, strictPort: true },
+  server: { host: "0.0.0.0", port: 33333, strictPort: true },
 });

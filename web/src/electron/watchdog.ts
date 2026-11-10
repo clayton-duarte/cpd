@@ -46,7 +46,7 @@ export interface PreviewWatchdogPorts {
 
 export function createPreviewWatchdog(ports: PreviewWatchdogPorts, options: WatchdogOptions = {}): Watchdog {
   const crashDebounceMs = options.crashDebounceMs ?? 1000;
-  const loadingGraceMs = options.loadingGraceMs ?? 10000;
+  const loadingGraceMs = options.loadingGraceMs ?? 60000;
 
   let seenEpoch: number | null = null;
   let crashSeenAt: number | null = null;

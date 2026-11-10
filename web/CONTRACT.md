@@ -1455,7 +1455,7 @@ Behaviours (tested with a fake `ViteDevServer` and fake boundaries):
 - `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite. **Amended by 15.1:** the same `hub.handle(data)` call serves the WebSocket endpoint's incoming text frames, and the hub answers a `ping` client message with `pong` at once (15.2), with no cockpit, backend or parse error involved.
 - Closing: on `server.httpServer?.once("close")` (and the plugin's `closeBundle` hook, whose dev-server timing is unverified, O17) the plugin closes every connection, calls `cockpit.stop()`; idempotent. Plugin starts services on server start and closes them on server close.
 
-`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Amended by 26.2 (Plan `webui-ext-links`):** the plugin list also holds `cpdFavicon`, and the plugin serves `/favicon.svg` and `/favicon.ico` from memory, two static middlewares of its own.
+`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Superseded for the port by pro-d541** (§15.1 "Fixed ports"): the dev server binds `0.0.0.0:33333` with `strictPort`. **Amended by 27.2 (Plan `webui-ext-links`):** the plugin list also holds `cpdFavicon`, and the plugin serves `/favicon.svg` and `/favicon.ico` from memory, two static middlewares of its own.
 
 ### 6.7 ui-cockpit `web/src/ui/cockpit/`
 
@@ -2154,8 +2154,12 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 - **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
 - **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
-- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in.
+- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in. **Amended by pro-d543** for ports 3333 and 33333: the accepted set is widened to LAN hosts and narrowed to those two ports, as "LAN origins" below states.
 - **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
+
+- **Fixed ports (pro-d541).** The production WebUI server (built renderer and `/cpd-ws`) is a supervised engine service on `0.0.0.0:3333`. The preview Vite server is bound to `0.0.0.0:33333` with `strictPort`. Both are described in docs/ui-preview.md, "WebUI ports", and web/ELECTRON.md, "WebUI ports". The production page is served from `http://localhost:3333`, so its `/cpd-ws` connection is same-origin. The frames and the path do not change.
+- **LAN origins on the fixed ports (pro-d543; amends "The Origin check" above).** On ports 3333 and 33333, the endpoint accepts a connection whose `Origin` host is one of: `localhost`, a loopback address (`127.0.0.1`, `[::1]`); an RFC 1918 private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`); an IPv6 unique-local address (`fc00::/7`); or a `.local` mDNS hostname. The `Origin` port must be exactly 3333 or 33333, so an `Origin` with no explicit port is rejected. The scheme must be plain `http`; an `https` Origin is rejected. Absent, `null` and `file://` Origins are accepted as above. Every other Origin is rejected before any hub is created. Loopback on any other port, which the earlier rule accepted, is no longer accepted. There is no token and no TLS, by decision. This is not access control: the `Origin` header is set by a browser, and any non-browser client can send any `Origin`, so a LAN peer that is not a browser is not stopped by this rule. That risk is accepted by the decision and stated here. Status: decided; as of this amendment the code accepts loopback on any port and no LAN host (`web/src/server/ws.ts`, `acceptsOrigin`).
+- **Port in use fails loud (pro-d542).** A server that must bind 3333 or 33333 while another process holds that port exits non-zero and never falls back to another port. Before it exits, it names the holder by process name and PID. The holder is read with `lsof -nP -iTCP:<port> -sTCP:LISTEN`, and with `ss -H -ltnp 'sport = :<port>'` when `lsof` is not available. If neither names the holder, the exit still names the port. Status: decided; as of this amendment no such check exists in the code, and the message is the implementing change's to write.
 
 ### 15.2 The heartbeat and the stall watchdog (air-d46)
 
@@ -2479,11 +2483,41 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 - `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
 - Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
 
-## 26. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
+## 26. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+
+Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
+
+### 26.1 Who writes a token
+
+- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
+
+### 26.2 Lifecycle cases
+
+| Event | Effect on the files | Effect on the tokens |
+|---|---|---|
+| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
+| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `web/ELECTRON.md`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
+| The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
+| SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
+
+### 26.3 Verifiers
+
+The verifiers read the directory at each check, as docs/contract.md §6.16 says: the durable host (`pi/durable-host/run.ts`, `webuiVerified`, at each submit) and the cpd CLI (`core/src/session/send.rs`, for `cpd session send --origin webui`). Both accept a presented value when it matches a file of a live pid. The rule is written once, in §6.16; neither verifier keeps its own copy of it in a document.
+
+### 26.4 Status and limits
+
+- Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
+- Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
+- Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).
+
+## 27. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
 
 Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI gets a favicon generated at build time from one source, `web/build/icon/cpd-icon.svg`, with an SVG favicon and an ICO fallback, both linked from `web/index.html`. Survey (the Plan's explore artefact `survey-favicon.md`): no favicon is served today. `web/public/` does not exist, and `web/index.html` has no icon link.
 
-### 26.1 Source and outputs
+### 27.1 Source and outputs
 
 - The source is `web/build/icon/cpd-icon.svg`: a self-contained SVG with a 1024 by 1024 `viewBox`, the Electron app icon. It is the only favicon source. No copy of it is committed under `web/`, because a committed copy is the hand-kept copy that pro-d99 forbids.
 - The outputs are generated, never committed:
@@ -2491,7 +2525,7 @@ Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI
   - `favicon.ico`: the fallback. One ICO file with PNG-encoded entries at 16, 32 and 48 px, rasterised from the source. The sizes are a Phase choice of this section.
 - The ICO header is `00 00 01 00`, then a little-endian count of entries equal to the number of sizes.
 
-### 26.2 Generation
+### 27.2 Generation
 
 - It is wired in `web/vite.config.ts` only, as one Vite plugin (`cpdFavicon`). That file is the one the Job `web-impl` may touch for it.
 - One generator function produces both files. It runs once per process, so the dev server and `vite build` serve the same bytes.
@@ -2500,9 +2534,9 @@ Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI
 - No file is written into the source tree. Nothing generated is committed, so no `.gitignore` entry is needed.
 - The output is deterministic: the same source bytes give byte-identical outputs on every run (Idempotence).
 - It fails loud. A missing source, or a failed rasterisation, stops the build or the dev server with the error. No fallback icon is served.
-- The rasteriser and the ICO packer are new dependencies, and A2 and pro-d17 freeze `web/package.json`. This section does not choose them; 26.6 item 1 is the decision the Lead takes before `web-impl` adds one.
+- The rasteriser and the ICO packer are new dependencies, and A2 and pro-d17 freeze `web/package.json`. This section does not choose them; 27.6 item 1 is the decision the Lead takes before `web-impl` adds one.
 
-### 26.3 Links in `web/index.html`
+### 27.3 Links in `web/index.html`
 
 The `<head>` of `web/index.html` gets these two links after the `<title>`, in this order:
 
@@ -2515,23 +2549,23 @@ The SVG is the preferred icon. The ICO is the fallback for a browser that does n
 
 `web/electron.html` is the Electron renderer entry, not `web/index.html`, and it gets no icon link in this section. The Electron app icon comes from electron-builder (`web/electron-builder.yml`).
 
-### 26.4 Serving
+### 27.4 Serving
 
 - Dev (`vite`, port 5173, `strictPort`): `GET /favicon.svg` answers 200 with `image/svg+xml`, and `GET /favicon.ico` answers 200 with `image/x-icon`.
 - Build (`vite build`): `dist/favicon.svg` and `dist/favicon.ico` sit at the output root, so a static server of `dist/` answers the same paths with 200.
 - Tests (Job `web-tests`, `web/src/ui/favicon.test.ts`), each with no real server, socket or file watcher (A6):
-  - `index.html` has the two links of 26.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
-  - The generator's ICO has the header and the entry count of 26.1, and its SVG is the source bytes.
-  - The dev middleware answers the two paths with 200 and the content types of 26.4, against a fake `ViteDevServer`.
+  - `index.html` has the two links of 27.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
+  - The generator's ICO has the header and the entry count of 27.1, and its SVG is the source bytes.
+  - The dev middleware answers the two paths with 200 and the content types of 27.4, against a fake `ViteDevServer`.
   - The build emits both files, against a fake plugin context.
 
-### 26.5 Limits (stated plainly)
+### 27.5 Limits (stated plainly)
 
 - Unverified: how the icon renders at 16 and 32 px. The source has a 100 px margin and a blurred shadow, and the glyph may be illegible at 16 px. If it is, a favicon-specific SVG is a new decision for the Lead, not a silent variant of the source.
 - Unverified: whether Safari takes an `image/svg+xml` favicon.
 
-### 26.6 Open points (not decided here)
+### 27.6 Open points (not decided here)
 
 1. The rasteriser and ICO packer: which packages, at which exact versions. Adding them lifts the freeze of A2 and pro-d17 for those lines. Candidates named by the survey, unverified (no network): `@resvg/resvg-js` and `png-to-ico`. The Lead decides before `web-impl` runs.
 2. The preview servers on ports 3333 and 33333 are outside `web/` (`scripts/preview-web.sh`, not read). Unverified whether they serve the favicon paths. If they do not, `/favicon.ico` answers 404 there.
-3. The icon at 16 and 32 px (26.5).
+3. The icon at 16 and 32 px (27.5).

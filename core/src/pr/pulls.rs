@@ -6,6 +6,9 @@
 
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use time::OffsetDateTime;
 
 use super::comments::{Item, Read};
 use super::gh::{Listed, Membership, PolledPr};
@@ -1175,6 +1178,48 @@ mod tests {
             .collect();
         assert_eq!(open, [7, 8]);
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateDetection {
+    pub state_kind: String,
+    pub detected_at: OffsetDateTime,
+}
+
+type DetectionKey = (String, String, i64);
+type DetectionMap = HashMap<DetectionKey, StateDetection>;
+
+static DETECTIONS: LazyLock<Mutex<DetectionMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Records or retrieves the detection time for a pull request in a given Lead-addressable state (pro-d518).
+pub fn get_or_track_detection(
+    db_path: &str,
+    repo: &str,
+    number: i64,
+    state_kind: &str,
+    now: OffsetDateTime,
+) -> OffsetDateTime {
+    let mut map = DETECTIONS.lock().unwrap();
+    let key = (db_path.to_owned(), repo.to_owned(), number);
+    if let Some(entry) = map.get(&key)
+        && entry.state_kind == state_kind
+    {
+        return entry.detected_at;
+    }
+    map.insert(
+        key,
+        StateDetection {
+            state_kind: state_kind.to_owned(),
+            detected_at: now,
+        },
+    );
+    now
+}
+
+/// Clears detection tracking for a PR when it leaves Lead-addressable states.
+pub fn clear_detection(db_path: &str, repo: &str, number: i64) {
+    let mut map = DETECTIONS.lock().unwrap();
+    map.remove(&(db_path.to_owned(), repo.to_owned(), number));
 }
 
 #[cfg(test)]

@@ -148,6 +148,7 @@ mod wake;
 #[cfg(test)]
 mod worker_cleanup_tests;
 mod workers;
+pub mod ws;
 
 use std::fs;
 use std::io;
@@ -309,3 +310,5 @@ mod tests {
 }
 #[cfg(test)]
 mod wake_tests;
+#[cfg(test)]
+mod ws_tests;

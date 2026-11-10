@@ -141,9 +141,9 @@ describe("ws server", () => {
     const h = harness();
     createWsServer(h.deps);
 
-    // An absent Origin, "null" and every loopback host are accepted (the desktop renderer's own
+    // An absent Origin, "null" and every loopback host on ports 3333 and 33333 are accepted (the desktop renderer's own
     // `file://` Origin is pinned by the next test).
-    const accepted = [NO_ORIGIN, request("null"), request("http://127.0.0.1:5173"), request("http://localhost:5173"), request("http://[::1]:5173")];
+    const accepted = [NO_ORIGIN, request("null"), request("http://127.0.0.1:3333"), request("http://localhost:33333"), request("http://[::1]:3333")];
     for (const req of accepted) {
       const socket = new FakeSocket();
       h.server.connect(socket, req);
@@ -250,5 +250,45 @@ describe("ws server", () => {
     h.scheduler.advance(10_000);
     expect(answered.terminated).toBe(false);
     expect(h.hubs[1]!.closes).toBe(0);
+  });
+
+  it("accepts LAN origins on ports 3333 and 33333 and rejects foreign origins", () => {
+    // Valid origins on ports 3333 and 33333: localhost, loopback, RFC 1918 private IPv4, IPv6 ULA, and .local mDNS hostnames
+    const acceptedOrigins = [
+      "http://localhost:3333",
+      "http://localhost:33333",
+      "http://127.0.0.1:3333",
+      "http://127.0.0.1:33333",
+      "http://[::1]:3333",
+      "http://[::1]:33333",
+      "http://192.168.1.50:3333",
+      "http://10.0.0.5:33333",
+      "http://172.16.0.1:3333",
+      "http://my-host.local:3333",
+      "http://my-host.local:33333",
+    ];
+
+    for (const origin of acceptedOrigins) {
+      expect(acceptsOrigin(origin)).toBe(true);
+    }
+
+    // Rejected origins: foreign domains, wrong ports, no explicit port, https scheme, or non-LAN public IPs
+    const rejectedOrigins = [
+      "http://evil.example:3333",
+      "http://evil.example:33333",
+      "http://localhost:5173",
+      "http://127.0.0.1:8080",
+      "http://192.168.1.50:5173",
+      "http://localhost", // no explicit port
+      "http://127.0.0.1", // no explicit port
+      "https://localhost:3333", // https rejected
+      "https://192.168.1.50:3333", // https rejected
+      "http://8.8.8.8:3333", // public IPv4
+      "http://evil.local.example:3333", // not a .local mDNS host
+    ];
+
+    for (const origin of rejectedOrigins) {
+      expect(acceptsOrigin(origin)).toBe(false);
+    }
   });
 });

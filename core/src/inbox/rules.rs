@@ -1936,11 +1936,7 @@ mod tests {
                 set(&mut f, 6, "merge_state = 'blocked'"); // a required check failed (hs-d481)
             }
             own(&mut f, 6);
-            assert_eq!(
-                pr_kinds(&mut f),
-                [Kind::PrReady],
-                "{checks} {mergeable} {review}"
-            );
+            assert!(pr_kinds(&mut f).is_empty(), "{checks} {mergeable} {review}");
         }
     }
 
