@@ -132,6 +132,8 @@ struct Facts<'a> {
     posted: bool,
     /// `pulls::ready_to_merge_sql` holds.
     clean: bool,
+    /// Whether the head contains the default branch (pro-d518 row 5a).
+    base_contained: Option<i64>,
 }
 
 /// The STATUS table, first match wins: draft; broken; checks running; ready for user review (also when stacked); ready to
@@ -164,11 +166,14 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     if judged && unready(r).is_empty() && ask() {
         return Status::ReadyForReview;
     }
+    let stacked = matches!((&r.base_ref, &r.default_branch), (Some(b), Some(d)) if b != d);
+    if !stacked && f.base_contained == Some(0) {
+        return Status::BehindMain;
+    }
     let approved = r.review_decision == "approved";
     if f.clean && (approved || r.review_decision == "none") && (!judged || approved || !ask()) {
         return Status::ReadyToMerge;
     }
-    let stacked = matches!((&r.base_ref, &r.default_branch), (Some(b), Some(d)) if b != d);
     if stacked && (approved || !f.posted) {
         Status::Stacked
     } else if f.posted && !approved {
@@ -200,7 +205,15 @@ pub fn conditions(
                             AND json_extract(t.data, '$.to') IN ('idle', 'blocked', 'stopped')), 0)),
                 EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key),
                 {},
-                {live}
+                {live},
+                r.base_contained,
+                COALESCE(s.state = 'blocked' AND COALESCE(s.state_label, '') NOT IN ('φ: plan review', 'loop guard'), 0),
+                EXISTS (SELECT 1 FROM events e WHERE e.plan = o.plan
+                    AND e.kind IN ('pr-feedback', 'job-failed')
+                    AND e.id > COALESCE((SELECT max(t.id) FROM events t
+                        WHERE t.session = p.lead_session AND t.kind = 'session-state'
+                        AND json_extract(t.data, '$.to') IN ('idle', 'blocked', 'stopped')), 0)),
+                COALESCE(s.state = 'idle', 0)
            FROM pull_requests r
            LEFT JOIN workflows o ON o.rowid = (SELECT n.rowid FROM workflows n JOIN plans np ON np.id = n.plan
                                           WHERE n.pull_request = r.id
@@ -234,6 +247,10 @@ pub fn conditions(
             row.get(width + 7)?,
         );
         let live: bool = row.get(width + 8)?;
+        let base_contained: Option<i64> = row.get(width + 9)?;
+        let escalated: bool = row.get(width + 10)?;
+        let wake_handled: bool = row.get(width + 11)?;
+        let lead_idle: bool = row.get(width + 12)?;
         let plan = plan
             .as_deref()
             .map(|p| id("Plan id", p, PlanId::parse))
@@ -250,13 +267,106 @@ pub fn conditions(
             owned: owner.is_some(),
             posted,
             clean,
+            base_contained,
         };
-        let status = classify(&facts, || {
+        let mut status = classify(&facts, || {
             owner.is_some_and(|(plan, key)| {
                 crate::pr::policy_of_workflow(conn, home, plan, key)
                     .is_ok_and(|p| p.pr.post.enabled)
             })
         });
+
+        let conflicting = pull.mergeable == "conflicting";
+        let broken =
+            conflicting || pull.checks == "failed" || pull.review_decision == "changes_requested";
+        let stacked =
+            matches!((&pull.base_ref, &pull.default_branch), (Some(b), Some(d)) if b != d);
+        let behind_main = !stacked && base_contained == Some(0);
+        let is_lead_addressable = owner.is_some() && (broken || behind_main);
+
+        if is_lead_addressable {
+            if escalated {
+                // The Lead escalated it (e.g. Lead is blocked with dialog, pro-d518): shown as Red.
+                status = if conflicting {
+                    Status::Conflict
+                } else if pull.checks == "failed" {
+                    Status::Failing
+                } else if pull.review_decision == "changes_requested" {
+                    Status::ChangesRequested
+                } else {
+                    Status::BehindMain
+                };
+            } else {
+                let state_kind = if conflicting {
+                    "conflict"
+                } else if pull.checks == "failed" {
+                    "failing"
+                } else if pull.review_decision == "changes_requested" {
+                    "changes_requested"
+                } else {
+                    "behind_main"
+                };
+                let db_path = conn.path().unwrap_or("");
+                let detected_at = pulls::get_or_track_detection(
+                    db_path,
+                    &pull.repo,
+                    pull.number,
+                    state_kind,
+                    now,
+                );
+                let elapsed = now - detected_at;
+                let in_grace = !wake_handled && !lead_idle && elapsed < time::Duration::seconds(60);
+                if in_grace {
+                    // Filter out Lead-actionable PR items during the 1-minute grace period from detection (pro-d518).
+                    continue;
+                }
+                if elapsed >= time::Duration::seconds(60) && !wake_handled {
+                    let has_lead_turn: bool = lead.as_deref().is_some_and(|lead_id| {
+                        conn.query_row(
+                            "SELECT EXISTS (SELECT 1 FROM events e WHERE e.session = ?1
+                                AND e.kind = 'session-state'
+                                AND json_extract(e.data, '$.to') = 'working'
+                                AND e.at >= ?2)",
+                            rusqlite::params![lead_id, crate::clock::timestamp(detected_at)],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(false)
+                    });
+                    let has_job_added: bool =
+                        plan.as_ref().zip(key.as_ref()).is_some_and(|(p, k)| {
+                            conn.query_row(
+                                "SELECT EXISTS (SELECT 1 FROM events e WHERE e.plan = ?1
+                                AND e.workflow = ?2
+                                AND e.kind = 'job-added'
+                                AND e.at >= ?3)",
+                                rusqlite::params![
+                                    p.as_str(),
+                                    k.as_str(),
+                                    crate::clock::timestamp(detected_at)
+                                ],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(false)
+                        });
+                    let responded = live || has_lead_turn || has_job_added;
+                    if !responded {
+                        // Unresponsive for >= 60s: shown as Red.
+                        status = if conflicting {
+                            Status::Conflict
+                        } else if pull.checks == "failed" {
+                            Status::Failing
+                        } else if pull.review_decision == "changes_requested" {
+                            Status::ChangesRequested
+                        } else {
+                            Status::BehindMain
+                        };
+                    }
+                }
+            }
+        } else {
+            let db_path = conn.path().unwrap_or("");
+            pulls::clear_detection(db_path, &pull.repo, pull.number);
+        }
         let (urgency, text) = self::row(status, overdue);
         let name = pull
             .repo
