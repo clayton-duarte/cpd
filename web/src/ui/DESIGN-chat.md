@@ -618,3 +618,7 @@ Named in Job `web-tests`, `web/src/ui/chat/mentions.test.tsx`:
 
 No test is named for the exclusions of 7.3 (code, existing links, path adjacency). Adding one is the Lead's decision: web-tests's list is fixed by the Plan.
 
+
+### 2.4.3 Markdown links (pro-d98, pro-d540)
+
+Skeleton: content in progress (Job `web-docs`).

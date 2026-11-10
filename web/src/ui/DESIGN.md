@@ -1204,3 +1204,7 @@ The contract is stated before the code and the tests. The code on this branch do
 - **Tool rows and tool groups.** `TraceLine` and `span[data-part="name"]` take the default `text-sm font-sans`. `TraceTitle[data-part="detail"]` (`ToolRow`) and `TraceTitle[data-part="summary"]` (`ToolGroup`) are `font-mono text-xs text-muted-foreground/70`. The `TraceDescription` elements of these rows (`delta`, `status`, `totals`) are `font-mono text-xs text-muted-foreground/70`.
 - **Description width (`web/src/ui/components/trace.tsx`).** `max-w-[45%]` is removed from `TraceDescription`. Its base class is `min-w-0 shrink-0 truncate text-muted-foreground/70 tabular-nums`, and a `className` is merged after it.
 - **Not changed.** The chevron and collapsible animations (5.1), the Chain of Thought (5.2), and the `Trace`, `TraceCollapsible` and `TraceCollapsibleTrigger` parts.
+
+## 6. External links: every external link opens in a new tab (pro-d98, pro-d540)
+
+Skeleton: content in progress (Job `web-docs`).
