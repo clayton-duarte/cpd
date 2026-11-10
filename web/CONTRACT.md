@@ -2478,3 +2478,33 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 - `web/src/protocol/tier.ts` exports no tier grammar constants (`MODEL_LETTERS`, `EFFORTS`, `TIER_COUNT`) or ladder math (`parseTier`, `tierIndex`, `tierAt`).
 - `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
 - Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
+
+## 26. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+
+Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
+
+### 26.1 Who writes a token
+
+- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
+
+### 26.2 Lifecycle cases
+
+| Event | Effect on the files | Effect on the tokens |
+|---|---|---|
+| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
+| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `web/ELECTRON.md`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
+| The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
+| SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
+
+### 26.3 Verifiers
+
+The verifiers read the directory at each check, as docs/contract.md §6.16 says: the durable host (`pi/durable-host/run.ts`, `webuiVerified`, at each submit) and the cpd CLI (`core/src/session/send.rs`, for `cpd session send --origin webui`). Both accept a presented value when it matches a file of a live pid. The rule is written once, in §6.16; neither verifier keeps its own copy of it in a document.
+
+### 26.4 Status and limits
+
+- Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
+- Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
+- Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).

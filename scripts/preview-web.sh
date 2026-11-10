@@ -62,6 +62,10 @@ serve() {
     set -- env CPD_MODE=production env -u CPD_CHECKOUT
   fi
   if tmux_cmd list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx web; then
+    cur=$(tmux_cmd display-message -p -t "=$work:web" '#{pane_current_path}' 2>/dev/null || true)
+    if [ -n "$cur" ] && [ "$cur" = "$checkout" ]; then
+      return 0
+    fi
     tmux_cmd respawn-pane -k -t "=$work:web" -c "$checkout" -- "$@" \
       env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host localhost
   else
