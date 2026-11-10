@@ -301,7 +301,7 @@ fn on_sets_the_preview_option_and_writes_the_state_file() {
     );
     assert!(
         out.text.contains(&format!(
-            "CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html pnpm --dir {wt}/web run electron"
+            "CPD_ELECTRON_DEV_URL=http://localhost:33333/electron.html pnpm --dir {wt}/web run electron"
         )),
         "{}",
         out.text
@@ -622,7 +622,7 @@ fn on_starts_the_watchdog_with_the_dev_url_in_its_environment() {
         .find(|l| l.starts_with("node "))
         .unwrap_or_else(|| panic!("watchdog not started: {order:?}"));
     assert!(
-        node.ends_with("CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html"),
+        node.ends_with("CPD_ELECTRON_DEV_URL=http://localhost:33333/electron.html"),
         "{node}"
     );
 }

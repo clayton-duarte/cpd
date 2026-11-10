@@ -1,6 +1,6 @@
 #!/bin/sh
 # Previews a worktree's web UI: the Vite dev server of the worktree runs in the
-# `web` window of the work session (localhost:5173, strictPort). Nothing is
+# `web` window of the work session (0.0.0.0:33333, strictPort). Nothing is
 # installed. Electron is never started or killed here; only the preview watchdog
 # (scripts/preview-watchdog.mjs, a frozen copy outside the worktree) is started and stopped.
 #
@@ -28,7 +28,7 @@ state="$dir/web-state"
 cpd_home="${CPD_HOME:-${HOME:?HOME is not set}/.cpd}"
 wd_dir="$dir/watchdog"
 wd_pid="$dir/watchdog.pid"
-dev_url="http://localhost:5173/electron.html"
+dev_url="http://localhost:33333/electron.html"
 
 usage() {
   echo "usage: sh $0 on [<worktree>] | off | status | reload [<worktree>] | serve [<worktree>] | unserve" >&2
@@ -67,10 +67,10 @@ serve() {
       return 0
     fi
     tmux_cmd respawn-pane -k -t "=$work:web" -c "$checkout" -- "$@" \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host localhost
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host 0.0.0.0
   else
     tmux_cmd new-window -d -n web -c "$checkout" -t "=$work:" -- "$@" \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host localhost
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host 0.0.0.0
   fi
 }
 
@@ -139,7 +139,7 @@ on() {
   mkdir -p "$dir"
   printf '%s\n%s\n' "$worktree" "$sha" >"$state"
   start_watchdog "$worktree"
-  echo "previewing $worktree @ $sha at http://localhost:5173; revert with: sh $0 off" >&2
+  echo "previewing $worktree @ $sha at http://localhost:33333; revert with: sh $0 off" >&2
   echo "Electron on it: CPD_MODE=preview CPD_CHECKOUT=$worktree CPD_ELECTRON_DEV_URL=$dev_url pnpm --dir $worktree/web run electron" >&2
 }
 

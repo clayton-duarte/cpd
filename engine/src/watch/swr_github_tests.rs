@@ -169,6 +169,8 @@ fn gh_inbox_ci_state_does_not_flicker_across_a_poll_race() {
         |_| Ok(()),
     )
     .unwrap();
+    label(&mut fx);
+    fakes.clock.advance(Duration::from_secs(61));
     seen.push(label(&mut fx));
 
     assert_eq!(

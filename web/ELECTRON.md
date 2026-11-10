@@ -332,6 +332,7 @@ At runtime `native.ts` reads only the two tray images. In dev they come from `ap
 - `web/electron-builder.yml` is the electron-builder config. `appId` is `com.cpd.desktop`; `productName` is `CPD` (a correction: the file's value is `CPD`, not `cpd` as an earlier edition of this list said).
 - `electron-builder` is a pinned devDependency of `web/` (pro-d24).
 - `files` ships the main process output (`dist-electron/**/*`) and `package.json`. `extraResources` copies `build/tray` into `Contents/Resources/tray`.
+- **Bundle version.** The bundle's version is `web/package.json` `version`, which is `0.1.0`, the same value as `SHELL_VERSION` in `web/src/electron/version.ts`. electron-builder sets `CFBundleShortVersionString` from it, so CPD.app reports `0.1.0`, not `0.0.0`. Status: decided; as of this amendment `web/package.json` still reads `0.0.0`, and the bump is part of the implementing change.
 - The macOS target is arm64: a DMG and a zip. The build uses the hardened runtime and notarizes, and reads the Apple credentials from the environment.
 - `dist:mac` (`pnpm --filter cpd-web-client run dist:mac`) builds the Electron bundle and runs electron-builder for macOS. The output goes to `web/dist/`.
 - The install packages the app and puts it in place: `cpd install --root <checkout>` (commands.md §14.4, step 7a) runs the packaging with this config and installs the built bundle into the app dir `<home>/.local/share/cpd/app` (air-d89 point 1); `cpd desktop` launches it (§Run).
@@ -371,6 +372,8 @@ Status: decided; as of this amendment the check exists only as a function. `chec
 
 Status: decided; as of this amendment the launcher already spawns `/Applications/CPD.app/Contents/MacOS/CPD` on macOS (`core/src/app/mod.rs`, `launch`), and the test `app_retired_local_share_copy_path` pins that. Nothing under `core/src/install/` removes the legacy copy, so the removal is not in the code yet. The implementing change brings the code in line.
 
+**The health file records the shell's ABI and version.** Every Electron launch writes `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`) with `pid`, the process id; `shell_abi`, the integer `2`; and `shell_version`, the string `0.1.0`, the value of `SHELL_VERSION` in `web/src/electron/version.ts`. `app::reload` sends SIGUSR1 only when `shell_abi` is 2 or more (commands.md §14.4a, "The `shell_abi` guard"), so a shell that does not write the field, or writes a lower value, is not signalled. Status: decided; as of this amendment the shell does not write `shell_abi` or `shell_version`, and `SHELL_ABI_VERSION` is `1` in `version.ts`; the implementing change sets both.
+
 ## Native shell
 
 The native shell is `web/src/electron/native.ts` and `web/src/electron/attention.ts`. The main process calls `setupNativeShell` once the app is ready. The Dock and Tray parts run on macOS only. Linux and Windows have no Dock and no Tray, so nothing in this section runs there.
@@ -391,13 +394,30 @@ On macOS only:
 - Bounce: the Dock bounces once (`informational`) when blocking rises above the previous count and the window is not focused. The first count after startup is the baseline and never bounces. A rise in decisions alone does not bounce, and neither does a fall in blocking, or any rise while the window has focus.
 - Dispose: the shell's `dispose` destroys the Tray. It is idempotent.
 
+## WebUI ports (3333 production, 33333 preview)
+
+Decided by pro-d541 (production server), pro-d542 (port in use) and pro-d543 (origin rule); Plan `webui-ports`. The port table and the reasons are in docs/ui-preview.md, "WebUI ports: production 3333, preview 33333"; the origin and port-in-use rules are web/CONTRACT.md §15.1.
+
+Status: decided; as of this amendment the code does not do this. The production window loads a file, the WebSocket endpoint binds port 0 on `127.0.0.1` in the main process, and no engine service listens on 3333. The implementing change brings the code in line.
+
+- **Production window (CPD.app).** The production window loads `http://localhost:3333` directly. The Electron main process hosts no WebUI server in production: no static server and no WebSocket endpoint of its own. The renderer's `/cpd-ws` connection is same-origin, `ws://localhost:3333/cpd-ws`. The window's `Origin` is `http://localhost:3333`, which the rule of web/CONTRACT.md §15.1 accepts on port 3333.
+- **Engine service on 3333.** The engine runs the production WebUI server as a supervised Node.js service on `0.0.0.0:3333`. It serves the built renderer static files and `/cpd-ws`. It runs on every machine, headless included, so a headless machine serves the WebUI to the LAN. `cpd install` sets up its permanent supervision on every machine.
+- **Preview window.** The preview window loads the dev renderer at `CPD_ELECTRON_DEV_URL`, which defaults to `http://localhost:33333/electron.html`. The Vite dev server binds `0.0.0.0:33333` with `strictPort` and is supervised by `cpd install` when the preview worktree exists (docs/ui-preview.md). This section does not change the preview window's transport.
+- **Port in use.** A window or service that finds 3333 or 33333 held by another process fails loud and names the holder, as web/CONTRACT.md §15.1 states. It never falls back to another port.
+
+Open items, not decided here (a Lead decision is needed before the implementing change):
+
+1. What CPD.app shows when nothing listens on 3333. The preview's rule (a failed dev-URL load falls back to the built renderer, see "Crash safety" in docs/ui-preview.md) is not decided for 3333.
+2. Whether the main process's own loopback WebSocket endpoint (port 0, below) is removed or kept. The production window no longer uses it.
+3. How the 3333 service takes a new payload. "Shell and payload" swaps the payload inside CPD.app by restarting the server in place; the engine-supervised service has no decided equivalent.
+
 ## WebSocket transport
 
 The WebUI reaches the cockpit over one WebSocket (ADR 0015, option B, air-d46), shared by the desktop and the browser build. The frames are the existing wire frames of `web/src/protocol/wire.ts`, unchanged. They pass through `createWebSocketTransport` in the renderer and the WS server of `web/src/server/ws.ts` in the main process; the `cpd:c2s`/`cpd:s2c` IPC pair, `createElectronTransport` and `registerWebuiIpc` are gone. The full transport contract, the heartbeat and the watchdog are in docs/contract.md §5.5 and web/CONTRACT.md §15.
 
-- Main process: the server binds `ws://127.0.0.1:<port>/cpd-ws` — loopback only, on a port the OS chooses (bind port 0). It creates one hub connection per accepted socket, through `services.newConnection(send)`; `send` writes one JSON text frame to the socket. A closed socket closes its hub. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
-- Renderer learns the URL through the preload `contextBridge`, not over a data channel: the main process exposes the resulting `ws://127.0.0.1:<port>/cpd-ws` to the renderer as one read-only member of `window.cpdElectron` (`webSocketUrl`), and `createWebSocketTransport` connects to it. No `cpd:c2s`/`cpd:s2c` channel exists; the bridge carries only this URL and the non-data members it already had (pty, mode, wasm, health).
-- Authorisation: no token. The check is the Origin alone, at connect, before any hub is created: an absent or `null` Origin (the desktop renderer runs from `file://` in production) and a loopback Origin (`localhost`, `127.0.0.1`, `[::1]`) are accepted; every other Origin is rejected. A remote thin client reaches the same endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
+- Main process: the server binds `ws://127.0.0.1:<port>/cpd-ws` — loopback only, on a port the OS chooses (bind port 0). **Superseded for production** by "WebUI ports" above: the production window loads `http://localhost:3333` and this endpoint is not used there (open item 2). It creates one hub connection per accepted socket, through `services.newConnection(send)`; `send` writes one JSON text frame to the socket. A closed socket closes its hub. Each frame waits for the cockpit to start, then goes to its hub. A rejection goes to the error handler.
+- Renderer learns the URL through the preload `contextBridge`, not over a data channel: the main process exposes the resulting `ws://127.0.0.1:<port>/cpd-ws` to the renderer as one read-only member of `window.cpdElectron` (`webSocketUrl`), and `createWebSocketTransport` connects to it. No `cpd:c2s`/`cpd:s2c` channel exists; the bridge carries only this URL and the non-data members it already had (pty, mode, wasm, health). **Superseded for production** by "WebUI ports": the window is served from `localhost:3333`, so its `/cpd-ws` URL is its own origin and needs no bridge.
+- Authorisation: no token. The check is the Origin alone, at connect, before any hub is created: an absent or `null` Origin (the desktop renderer runs from `file://` in production) and a loopback Origin (`localhost`, `127.0.0.1`, `[::1]`) are accepted; every other Origin is rejected. **Amended by pro-d543** (web/CONTRACT.md §15.1): the accepted set also includes RFC 1918 IPv4, IPv6 ULA and `.local` mDNS hosts, and loopback is accepted on ports 3333 and 33333 only. A remote thin client reaches the same endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
 - Heartbeat: the server protocol-pings every socket every `WS_PING_MS` and terminates a socket that does not pong within `WS_PONG_TIMEOUT_MS`, so a stalled transport is seen loud, never silent. The client sends its own wire `ping` every `WS_CLIENT_PING_MS` and closes the socket when the server's `pong` misses `WS_CLIENT_PONG_TIMEOUT_MS`, so a hung server is seen too (the browser `WebSocket` cannot send protocol ping frames, so the client's ping rides the wire).
 - Renderer: `createWebSocketTransport` has the semantics of the `Transport` interface unchanged (web/src/protocol/runtime.ts:10-15): it opens with status `open`, `send` throws before open or after close, and `close` is final. A closed socket — a terminate, an error or a heartbeat failure — is a real `closed` status, so the renderer backs off, reconnects and re-subscribes for a fresh full snapshot (web/src/state/connection.ts:205-224).
 - Both views stay mounted, so a switch is instant and keeps the session state. The WebUI keeps its connection and selection, and the TUI keeps its pty.
@@ -492,7 +512,7 @@ export type SyncResult = { kind: 'current'; sha: string } | { kind: 'updated'; f
 export function syncCheckout(exec: UpdateExec, root: string, opts: { readonly rebase: boolean }): Promise<SyncResult>
 ```
 
-The root is `env.CPD_CHECKOUT`, else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns the root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`.
+The root is `env.CPD_CHECKOUT`; else, when the shell is packaged, the checkout named by `<home>/.local/share/cpd/app-root` (the file install step 8a writes and `cpd desktop` reads); else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns a candidate root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`. A packaged shell's `bundleDir` is inside `CPD.app`, which is not a checkout. Status: decided; as of this amendment the code reads only `CPD_CHECKOUT` and `bundleDir`, so `app-root` is not read.
 
 `syncCheckout` syncs a checkout to `origin/main` on any branch (A7). The steps run in this order; each returns once it has decided:
 

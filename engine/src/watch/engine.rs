@@ -738,6 +738,19 @@ fn serve(
     )));
     let mut engine = Engine::assemble(home.clone(), config, store, tmux, log, report, ports);
 
+    // Bind WebSocket listener (/cpd-ws) and Unix domain socket (run/core.sock) per contract §5.8
+    let mut ws_server = match super::ws::WsServer::bind(&engine.home, &engine.store) {
+        Ok(server) => Some(server),
+        Err(e) => {
+            engine.log.line(&format!(
+                "cannot bind core.sock / ws server: {} ({})",
+                e.message(),
+                e.code().as_str()
+            ));
+            None
+        }
+    };
+
     let tick = engine.config.watch.tick_seconds.duration();
     let mut failing = false;
     while !until.load(Ordering::SeqCst) && !engine.outgrown() {
@@ -752,6 +765,9 @@ fn serve(
         // Read after the tick's steps: the commits of the children it started count as another's.
         let seen = engine.store.data_version();
         let mut committed = false;
+        if let Some(ws) = &ws_server {
+            ws.wake();
+        }
         // The next tick comes at the earliest of a tick from its start, E5's due time and, when another process
         // committed, half a second from its start (§3.7). A finished poll is applied at the next nap.
         while !until.load(Ordering::SeqCst) && !engine.outgrown() {
@@ -761,6 +777,9 @@ fn serve(
                     (Ok(before), Ok(now)) => {
                         failing = false;
                         committed = *before != now;
+                        if let (true, Some(ws)) = (committed, &ws_server) {
+                            ws.wake();
+                        }
                     }
                     (_, Err(e)) => {
                         committed = true;
@@ -811,5 +830,6 @@ fn serve(
             e.code().as_str()
         ));
     }
+    drop(ws_server.take());
     Ok(Output::success(json!({"stopped": true})))
 }
