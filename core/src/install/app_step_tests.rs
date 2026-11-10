@@ -362,3 +362,16 @@ fn electron_binary_install_failure_stops_before_plutil() {
     assert_eq!(rig.argv("node").len(), 1);
     assert_eq!(rig.argv("plutil"), Vec::<Vec<String>>::new());
 }
+
+#[test]
+fn preview_sync_preserves_wip_and_resets_to_main() {
+    // Red test skeleton
+    panic!("preview sync not implemented");
+}
+
+#[test]
+fn preview_sync_conflict_leaves_main_and_reports_error() {
+    // Red test skeleton
+    panic!("preview sync not implemented");
+}
+
