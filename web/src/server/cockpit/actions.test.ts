@@ -199,13 +199,6 @@ describe("tree menu actions", () => {
     expect(post.calls.at(-1)).toEqual(["pr", "post", "--workflow", "w1", "--plan", "p7"]);
     expect(repost.calls.at(-1)).toEqual(["pr", "repost", "--workflow", "w1", "--plan", "p7"]);
   });
-  it("maps context.new to context new", async () => {
-    const { cpd, calls } = fakeCpd(async () => ({ ok: true }));
-    const out = await runAction(cpd, { kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" });
-    expect(calls).toEqual([["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]]);
-    expect(out).toEqual({ ok: true });
-  });
-
   it("context.new runs context new then context manager sequentially and returns manager session", async () => {
     const managerReply = { manager: { session: "ctx-1:manager" }, started: true };
     const { cpd, calls } = fakeCpd(async (args) => {
