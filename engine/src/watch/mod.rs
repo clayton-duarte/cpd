@@ -309,3 +309,5 @@ mod tests {
 }
 #[cfg(test)]
 mod wake_tests;
+#[cfg(test)]
+mod ws_tests;
