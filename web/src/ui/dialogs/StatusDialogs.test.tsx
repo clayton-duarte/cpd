@@ -83,9 +83,9 @@ it("the logs dialog follows the bottom for new rows", () => {
 });
 
 const read: SettingsRead = {
-  tiers: { auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
+  tiers: { decide: "JX", auxiliar: "GX", worker: "H1", lead: "S1", manager: "O2" },
   experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true },
-};
+} as unknown as SettingsRead;
 
 it("the settings dialog is titled Agent Tiers with both sections and its buttons", () => {
   show(<SettingsDialog open read={read} onSave={vi.fn()} onCancel={vi.fn()} />);
@@ -180,22 +180,22 @@ it("the Agent Tiers Save shows a refused concurrency as the error toast with the
   expect(body.querySelector('[data-part="agent-tiers-dialog"]')).not.toBeNull();
 });
 
-it("the settings dialog accepts a decide tier of JX", () => {
-  // The decide role's default is JX (contract §9, air-d113, air-d115, air-d120): the dialog shows it,
-  // keeps Save enabled, and still locks Save on a letter that is not a Tier letter.
-  const readWithDecide = {
-    tiers: { decide: "JX", auxiliar: "GX", worker: "H3", lead: "S3", manager: "O3" },
-    experimental: { durable_workers: false, write_curation: true, failure_triage: true, turn_question_guard: true },
-  } as unknown as SettingsRead;
-  show(<SettingsDialog open read={readWithDecide} onSave={vi.fn()} onCancel={vi.fn()} />);
-  const decide = body.querySelector('[aria-label="decide tier"]') as HTMLInputElement | null;
-  expect(decide).not.toBeNull();
-  expect(decide?.value).toBe("JX");
-  expect(decide?.getAttribute("aria-invalid")).toBe("false");
+it("the settings dialog lets the decide tier be edited by model and effort", () => {
+  // The decide role's default is JX (contract §9): the dialog shows it as model J + effort X, keeps Save enabled,
+  // and a changed effort is saved (model and effort are separate selectors; efforts are 0, X, 1, 2).
+  const onSave = vi.fn();
+  show(<SettingsDialog open read={read} onSave={onSave} onCancel={vi.fn()} />);
+  const model = body.querySelector('select[aria-label="decide model"]') as HTMLSelectElement | null;
+  const effort = body.querySelector('select[aria-label="decide effort"]') as HTMLSelectElement | null;
+  if (model === null || effort === null) throw new Error("the Agent Tiers dialog must show a decide model and effort");
+  expect(model.value).toBe("J");
+  expect(effort.value).toBe("X");
   const saveButton = (): HTMLButtonElement | undefined =>
     Array.from(body.querySelectorAll("button")).find((b) => b.textContent === "Save") as HTMLButtonElement | undefined;
   expect(saveButton()?.disabled).toBe(false);
-  if (decide === null) throw new Error("the Agent Tiers dialog must show a decide tier");
-  act(() => { decide.value = "Z9"; decide.dispatchEvent(new Event("input", { bubbles: true })); });
-  expect(saveButton()?.disabled).toBe(true);
+  expect(Array.from(effort.options).map((o) => o.value).sort()).toEqual(["0", "1", "2", "X"]);
+  act(() => { effort.value = "2"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(saveButton()?.disabled).toBe(false);
+  click(saveButton() ?? null);
+  expect(onSave).toHaveBeenCalledExactlyOnceWith({ tiers: { decide: { model: "J", effort: "2" } } });
 });

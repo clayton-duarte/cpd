@@ -74,6 +74,8 @@ enum Reason {
     Running,
     Spawn,
     Exit,
+    /// B07: pi failed with an authentication error (401 / `token_expired` in its stderr; unverified that pi exits non-zero).
+    Auth,
     Empty,
     /// hs-d356: no single `TITLE:` line, or one that does not pass step 4.
     Malformed,
@@ -85,6 +87,7 @@ impl Reason {
             Reason::Running => "running",
             Reason::Spawn => "spawn",
             Reason::Exit => "exit",
+            Reason::Auth => "auth",
             Reason::Empty => "empty",
             Reason::Malformed => "malformed",
         }
@@ -333,12 +336,27 @@ pub(crate) fn run_pi_with(
             || format!("was ended by {}", out.status),
             |c| format!("exited with status {c}"),
         );
-        return Err(title_failed(id, Reason::Exit, format_args!("pi {how}"))
+        let reason = if is_auth_failure(&String::from_utf8_lossy(&out.stderr)) {
+            Reason::Auth
+        } else {
+            Reason::Exit
+        };
+        return Err(title_failed(id, reason, format_args!("pi {how}"))
             .with("exit", out.status.code())
             .with("tail", tail));
     }
     sanitise(&String::from_utf8_lossy(&out.stdout), limit)
         .map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
+}
+
+/// Whether pi's output reports an authentication failure: a `401` or `token_expired` in its text (no secret is read).
+/// pi's exact stderr on a 401 is unverified, so this matches the text only. (E10 matches the same text in
+/// `engine/src/watch/titles.rs`: this module is not exported to the engine.)
+fn is_auth_failure(text: &str) -> bool {
+    text.contains("token_expired")
+        || text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w == "401")
 }
 
 /// Step 4: the title is the text after the marker of the only line that starts with `TITLE:` (leading

@@ -139,7 +139,7 @@ fn merge_conflict_retries_at_the_same_tier() {
 
 #[test]
 fn no_submit_still_climbs() {
-    retried_at_next(Cause::NoSubmit, "S1", "S2");
+    retried_at_next(Cause::NoSubmit, "S1", "SX");
 }
 
 fn retried_at_next(cause: Cause, tier: &str, next: &str) {
@@ -216,7 +216,7 @@ fn explore_job(f: &mut Fixture, kind: &str) {
 fn explore_kinds_stay_in_their_letter() {
     let gappy = gappy_catalog();
 
-    // A `scout` at H1 with `no_submit` retries at H3: H2 is not a valid effort, and S1 is outside H.
+    // A `scout` at H1 with `no_submit` retries at HX: HX lies between H1 and H2/H3.
     let mut f = fixture();
     explore_job(&mut f, "scout");
     add(&mut f, "b", 1, "H1", None);
@@ -224,8 +224,8 @@ fn explore_kinds_stay_in_their_letter() {
     assert_eq!(status, "queued", "a scout's no_submit climbs within H");
     assert_eq!(
         next_tiers(&mut f),
-        ["H3"],
-        "the scout's ladder skips the invalid H2 and stays in H"
+        ["HX"],
+        "the scout's ladder climbs to HX and stays in H"
     );
 
     // A `scout` at H3 has no rung above it in H (H5 is not a Worker's Tier): the Job fails.
@@ -240,7 +240,7 @@ fn explore_kinds_stay_in_their_letter() {
         "no attempt-retry when the scout's ladder runs out"
     );
 
-    // A `research` at S1 with `no_submit` retries at S3: S2 is not a valid effort, and S is its last letter.
+    // A `research` at S1 with `no_submit` retries at SX: SX lies between S1 and S2/S3.
     let mut f = fixture();
     explore_job(&mut f, "research");
     add(&mut f, "b", 1, "S1", None);
@@ -248,8 +248,8 @@ fn explore_kinds_stay_in_their_letter() {
     assert_eq!(status, "queued", "a research's no_submit climbs within S");
     assert_eq!(
         next_tiers(&mut f),
-        ["S3"],
-        "the research's ladder skips the invalid S2 and stays in S"
+        ["SX"],
+        "the research's ladder climbs to SX and stays in S"
     );
 }
 

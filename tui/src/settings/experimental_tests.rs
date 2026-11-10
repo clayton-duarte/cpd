@@ -28,6 +28,8 @@ fn scroll_to_the_buttons() -> Act {
     Act::Wheel(MouseEventKind::ScrollDown)
 }
 
+/// The first screen of the Agent Tiers popup (from the menu) shows the experimental rows below the Tier rows,
+/// which show inclusive ranges under the role defaults.
 #[test]
 fn settings_first_screen_shows_the_experimental_rows_below_tiers() {
     let run = popup(

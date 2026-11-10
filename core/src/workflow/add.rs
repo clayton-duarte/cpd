@@ -20,7 +20,6 @@ use crate::git::run::{branch_exists, has_origin, run};
 use crate::git::worktree::list as worktrees;
 use crate::home::CpdHome;
 use crate::ids::{JobKey, OwnerLogin, PlanId, RepoName, WorkflowKey};
-use crate::job::open;
 use crate::job::spec::{Spec, parse as parse_spec};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -49,8 +48,8 @@ struct Stub {
 }
 
 /// The stub drafts a Workflow of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
-/// implementation (needs the tests); `docs` its docs; `config` one `work` Job. Every shape ends with the Workflow's opener stub
-/// (`open-<pr>`, kind `open`, no needs): its Ready rule is derived (contract §2.2 "Job kinds", §3.2, hs-d573).
+/// implementation (needs the tests); `docs` its docs; `config` one `work` Job. The opener is no stub: `workflow start` creates the
+/// `open` Job queued, so a waiting Workflow has none.
 fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &'static str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
         key: format!("{workflow}-{suffix}"),
@@ -59,7 +58,7 @@ fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
         title: format!("{prefix}: {title}"),
         needs: needs.map(|n| format!("{workflow}-{n}")),
     };
-    let mut stubs = match shape {
+    match shape {
         "tdd" => vec![
             stub("docs", "docs", "Docs", None),
             stub("tests", "test", "Red tests", Some("docs")),
@@ -67,15 +66,7 @@ fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
         ],
         "docs" => vec![stub("docs", "docs", "Docs", None)],
         _ => vec![stub("config", "work", "Config", None)],
-    };
-    stubs.push(Stub {
-        key: format!("open-{workflow}"),
-        suffix: "open",
-        kind: "open",
-        title: format!("Open the pull request: {title}"),
-        needs: None,
-    });
-    stubs
+    }
 }
 
 /// The flags given, resolved.
@@ -618,7 +609,6 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
-    let worker_tier = env.config.worker_tier;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
@@ -719,7 +709,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         )?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
-                    let stubs = insert_stubs(tx, &home, &plan, &wanted, appended, worker_tier)?;
+                    let stubs = insert_stubs(tx, &home, &plan, &wanted, appended)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
                         "Workflow {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
@@ -742,9 +732,6 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         let event = if let Some((tier, _)) = wanted.jobs.as_ref().and_then(|j| j.get(stub.suffix)) {
                             let text = format!("Job {} added to Plan {plan} as queued (the {} template of Workflow {key}, from --jobs). Next: cpd job show {} --plan {plan}", stub.key, wanted.shape, stub.key);
                             NewEvent::job_added(text, key, stub.kind, "queued", appended, Some(&tier.to_string()), needs, false)
-                        } else if stub.kind == "open" {
-                            let text = format!("Job {} added to Plan {plan} as draft (the {} template of Workflow {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
-                            NewEvent::job_added_by_cpd(text, key, stub.kind, "draft", &worker_tier.to_string(), open::BY_TEMPLATE, None)
                         } else {
                             let text = format!("Job {} added to Plan {plan} as draft (the {} template of Workflow {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
                             NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false)
@@ -1181,25 +1168,14 @@ fn insert(
 
 /// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
 /// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template. The opener stub is
-/// the exception: it carries the fixed Spec of [`open::spec`] and the config's `worker_tier`, and no Dependency rows.
 fn insert_stubs(
     tx: &Connection,
     home: &CpdHome,
     plan: &PlanId,
     wanted: &Wanted,
     appended: bool,
-    worker_tier: Tier,
 ) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
-    let workflow = load_workflows(tx, plan)?
-        .into_iter()
-        .find(|p| p.key == wanted.key)
-        .ok_or_else(|| {
-            CpdError::bad_row(format!(
-                "Workflow {} of Plan {plan} vanished while its template was being written",
-                wanted.key
-            ))
-        })?;
     // After the lock every Workflow lays its template out as decided work, never as unscoped stubs (pro-d404): without `--jobs`
     // it is refused, waiting ones included; the error rolls the transaction back, nothing stays written.
     if appended && wanted.jobs.is_none() {
@@ -1296,28 +1272,6 @@ fn insert_stubs(
                     [plan.as_str(), stub.key.as_str(), need.as_str()],
                 )?;
             }
-            continue;
-        }
-        if stub.kind == "open" {
-            let spec = open::spec(&workflow);
-            tx.execute(
-                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, kind, created_txn, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'draft', ?11, 'open', cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
-                rusqlite::params![
-                    plan.as_str(),
-                    wanted.key.as_str(),
-                    stub.key,
-                    stub.title,
-                    worker_tier.to_string(),
-                    spec.goal,
-                    spec.context,
-                    spec.touches.to_string(),
-                    spec.acceptance.to_string(),
-                    spec.out_of_scope.to_string(),
-                    appended,
-                ],
-            )?;
             continue;
         }
         tx.execute(
