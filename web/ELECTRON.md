@@ -332,6 +332,7 @@ At runtime `native.ts` reads only the two tray images. In dev they come from `ap
 - `web/electron-builder.yml` is the electron-builder config. `appId` is `com.cpd.desktop`; `productName` is `CPD` (a correction: the file's value is `CPD`, not `cpd` as an earlier edition of this list said).
 - `electron-builder` is a pinned devDependency of `web/` (pro-d24).
 - `files` ships the main process output (`dist-electron/**/*`) and `package.json`. `extraResources` copies `build/tray` into `Contents/Resources/tray`.
+- **Bundle version.** The bundle's version is `web/package.json` `version`, which is `0.1.0`, the same value as `SHELL_VERSION` in `web/src/electron/version.ts`. electron-builder sets `CFBundleShortVersionString` from it, so CPD.app reports `0.1.0`, not `0.0.0`. Status: decided; as of this amendment `web/package.json` still reads `0.0.0`, and the bump is part of the implementing change.
 - The macOS target is arm64: a DMG and a zip. The build uses the hardened runtime and notarizes, and reads the Apple credentials from the environment.
 - `dist:mac` (`pnpm --filter cpd-web-client run dist:mac`) builds the Electron bundle and runs electron-builder for macOS. The output goes to `web/dist/`.
 - The install packages the app and puts it in place: `cpd install --root <checkout>` (commands.md §14.4, step 7a) runs the packaging with this config and installs the built bundle into the app dir `<home>/.local/share/cpd/app` (air-d89 point 1); `cpd desktop` launches it (§Run).
@@ -370,6 +371,8 @@ Status: decided; as of this amendment the check exists only as a function. `chec
 **The legacy copy is removed; `/Applications/CPD.app` is the one shell.** `~/.local/share/cpd/app` is retired. Nothing writes to it, nothing launches from it, and `cpd install` removes it when it is present (the legacy `CPD.app` copy in that directory, once). `cpd desktop` launches `/Applications/CPD.app`. `~/.local/share/cpd/app-root` is still written, but it names the checkout that holds the payload; it is not a shell path.
 
 Status: decided; as of this amendment the launcher already spawns `/Applications/CPD.app/Contents/MacOS/CPD` on macOS (`core/src/app/mod.rs`, `launch`), and the test `app_retired_local_share_copy_path` pins that. Nothing under `core/src/install/` removes the legacy copy, so the removal is not in the code yet. The implementing change brings the code in line.
+
+**The health file records the shell's ABI and version.** Every Electron launch writes `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`) with `pid`, the process id; `shell_abi`, the integer `2`; and `shell_version`, the string `0.1.0`, the value of `SHELL_VERSION` in `web/src/electron/version.ts`. `app::reload` sends SIGUSR1 only when `shell_abi` is 2 or more (commands.md §14.4a, "The `shell_abi` guard"), so a shell that does not write the field, or writes a lower value, is not signalled. Status: decided; as of this amendment the shell does not write `shell_abi` or `shell_version`, and `SHELL_ABI_VERSION` is `1` in `version.ts`; the implementing change sets both.
 
 ## Native shell
 
@@ -492,7 +495,7 @@ export type SyncResult = { kind: 'current'; sha: string } | { kind: 'updated'; f
 export function syncCheckout(exec: UpdateExec, root: string, opts: { readonly rebase: boolean }): Promise<SyncResult>
 ```
 
-The root is `env.CPD_CHECKOUT`, else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns the root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`.
+The root is `env.CPD_CHECKOUT`; else, when the shell is packaged, the checkout named by `<home>/.local/share/cpd/app-root` (the file install step 8a writes and `cpd desktop` reads); else `path.resolve(bundleDir, '..', '..')` (A3). `resolveCheckout` returns a candidate root only when `fs.exists(<root>/scripts/install-cpd.sh)` and `fs.exists(<root>/.git)` are both true, else `null`. A packaged shell's `bundleDir` is inside `CPD.app`, which is not a checkout. Status: decided; as of this amendment the code reads only `CPD_CHECKOUT` and `bundleDir`, so `app-root` is not read.
 
 `syncCheckout` syncs a checkout to `origin/main` on any branch (A7). The steps run in this order; each returns once it has decided:
 
