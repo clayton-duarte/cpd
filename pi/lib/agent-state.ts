@@ -48,9 +48,13 @@ export function registerAgentState(host: Host): void {
   });
 
   // §15.10: the time-zone line, every role, with or without a policy, built each turn. `policyHandler` reports a missing `sections`.
+  let cachedZoneLine: string | undefined;
   pi.on("before_agent_start", function timeZoneHandler(event) {
     const sections = event?.systemPromptOptions?.sections;
-    if (isObject(sections)) sections[TIME_ZONE_SECTION] = zoneLine(new Date());
+    if (isObject(sections)) {
+      if (cachedZoneLine === undefined) cachedZoneLine = zoneLine(new Date());
+      sections[TIME_ZONE_SECTION] = cachedZoneLine;
+    }
   });
 
   pi.on("input", (event) => {
