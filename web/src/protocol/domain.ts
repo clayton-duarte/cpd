@@ -228,6 +228,8 @@ export type Attachment =
   | { readonly kind: "image"; readonly name: string; readonly mimeType: ImageMime; readonly dataBase64: string }
   | { readonly kind: "text"; readonly name: string; readonly text: string };
 export interface WireImage { readonly mimeType: ImageMime; readonly dataBase64: string } // carried on `session.submit`; text attachments are inlined into `text` before sending (6.9)
+export interface WireFile { readonly name: string; readonly text: string } // carried on `session.submit.files` (b15)
+
 
 export type ErrorCode =
   | "protocol_error" // a frame/line/JSON did not match its schema (host frame, wire message from the server)

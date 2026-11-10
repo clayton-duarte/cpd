@@ -40,13 +40,14 @@ it("total base64 beyond 786432 characters is rejected", async () => {
     expect(r.rejected.map((x) => [x.name, x.reason])).toEqual([["b.png", "images_too_large"]]);
   });
 
-it("text files are inlined into the prompt", async () => {
-    const r = await addFiles([file("notes.md", "text/markdown")], [], caps, reader({}, { "notes.md": "hello" }));
-    expect(r.accepted).toEqual([{ kind: "text", name: "notes.md", text: "hello" }]);
-    const built = buildPrompt("see", r.accepted as Attachment[]);
-    expect(built.text).toBe('see\n\n<file name="notes.md">\nhello\n</file>');
-    expect(built.images).toEqual([]);
-  });
+it("text files are not inlined into the prompt and returned as files", async () => {
+  const r = await addFiles([file("notes.md", "text/markdown")], [], caps, reader({}, { "notes.md": "hello" }));
+  expect(r.accepted).toEqual([{ kind: "text", name: "notes.md", text: "hello" }]);
+  const built = buildPrompt("see", r.accepted as Attachment[]);
+  expect(built.text).toBe("see");
+  expect(built.images).toEqual([]);
+  expect(built.files).toEqual([{ name: "notes.md", text: "hello" }]);
+});
 
 it("binary non-image files are rejected with a reason", async () => {
     const r = await addFiles([file("a.zip", "application/zip")], [], caps, reader());

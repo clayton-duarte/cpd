@@ -18,7 +18,7 @@ What ChatPane passes (source field → prop):
 |---|---|---|
 | `Composer.busy` | `view.busy \|\| view.pending.some((p) => p.state === "sending")` (DESIGN-chat 2.4 and DESIGN.md 2h) | `view.busy`, `view.pending` |
 | `Composer.settings` | `<TierSelector capabilities footer models busy onConfigure onRequestModels />` | `view.capabilities`, `view.footer`, `view.models`, `view.busy`, `connection.configure`, `connection.listModels` |
-| `Composer.onSubmit` | `({ text, attachments, whenBusy }) => { const { text: prompt, images } = buildPrompt(text, attachments); connection.submit({ text: prompt, images, whenBusy }) }` | `attachments.ts` |
+| `Composer.onSubmit` | `({ text, attachments, whenBusy }) => { const { text: prompt, images, files } = buildPrompt(text, attachments); connection.submit({ text: prompt, images, files, whenBusy }) }` | `attachments.ts` |
 | `Composer.onCancelQueued` | `(id) => connection.abortSubmission(id)` | `connection` |
 | `Footer.footer` | `view.footer` | `SessionView.footer` (the Footer is mounted, 3) |
 | `AskCard.onRespond`, `PlanReviewCard.onRespond` | `(r) => connection.respond(dialog.id, r)` | `connection` |
@@ -49,7 +49,7 @@ export function Composer(props: {
 
 `whenBusy` is always `"followUp"` from this component (1.4). Removed: `label`, `onEditQueued` (no caller; 1.6).
 
-Data mapping: queued chips come from `props.queued` (`QueuedSubmission { clientSubmissionId, submissionId?, text, whenBusy }`). Attachments are local state, built by `addFiles()` of `attachments.ts`, unchanged: images png, jpeg, gif and webp up to `IMAGE_MAX_COUNT` and `IMAGE_MAX_TOTAL_BASE64`; text files inline up to `TEXT_INLINE_MAX_BYTES`; binary rejected with the reasons of `RejectionReason`. `attachments.ts` and `attachments.test.ts` are not changed.
+Data mapping: queued chips come from `props.queued` (`QueuedSubmission { clientSubmissionId, submissionId?, text, whenBusy }`). Attachments are local state, built by `addFiles()` of `attachments.ts`, unchanged: images png, jpeg, gif and webp up to `IMAGE_MAX_COUNT` and `IMAGE_MAX_TOTAL_BASE64`; text files up to `TEXT_INLINE_MAX_BYTES`; binary rejected with the reasons of `RejectionReason`. A text file stays in the Composer's state (and its draft) as its text until send. At send, `buildPrompt` returns it as a `WireFile` and it is never inlined into the message text: the pi backend writes it to the attachments directory and sends an `[Attached file: <path>]` line (CONTRACT 11.3, b15). `attachments.ts` changes only in `buildPrompt`'s return shape (CONTRACT 6.9); `addFiles` and its rules are unchanged.
 
 ### 1.2 DOM outline
 
@@ -148,7 +148,8 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 | `InputGroup` with `prompt-border-pulse` while `busy`, not while idle | `Composer.test` (new) |
 | `[data-drop="over"]` and `span[data-part="drop-cue"]` `Drop to attach` | `Composer.test` "dragging files over the composer shows a drop state" (updated) |
 | `[data-chat-dropzone]` on the ChatPane root; one add per drop | `App.test` "dropping an image sends it as an attachment" |
-| attachment rules (types, limits, reasons, `buildPrompt`) | `attachments.test.ts` (unchanged) |
+| attachment rules (types, limits, reasons) | `attachments.test.ts` (unchanged) |
+| `buildPrompt` returns `{text, images, files}`; text is not inlined (b15) | `attachments.test.ts` (updated with the change) |
 
 ---
 

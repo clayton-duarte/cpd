@@ -101,7 +101,7 @@ const emptySession = (id: string, completion: Completion | null = null): Session
 function normalizeUserText(text: string): string {
   return text
     .replace(/^Message from [^\n:]+:\s*/, "")
-    .replace(/(?:\n+\[Attached image: [^\]]+\])+\s*$/, "")
+    .replace(/(?:\n+\[Attached (?:image|file): [^\]]+\])+\s*$/, "")
     .trim();
 }
 
