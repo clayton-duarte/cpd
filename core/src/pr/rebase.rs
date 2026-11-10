@@ -42,9 +42,77 @@ const NO_EDITOR: [&str; 4] = ["-c", "core.editor=true", "-c", "sequence.editor=t
 
 pub(super) fn rebase(args: RebaseArgs) -> Result<Output, CpdError> {
     match (args.resume, args.abort) {
-        (true, _) => resume(args.args),
-        (_, true) => abort(args.args),
-        _ => onto_base(args.args),
+        (true, _) => repaired("pr rebase --continue", args.args, resume),
+        (_, true) => repaired("pr rebase --abort", args.args, abort),
+        _ => repaired(COMMAND, args.args, onto_base),
+    }
+}
+
+/// Runs a repair (`pr rebase` in each form, `pr push`) under the repair marker (contract §7.6 "The repair marker", pro-d465):
+/// `workflows.repair` is set in one write transaction before anything else and cleared on every exit, so update Job dispatch of
+/// the Workflow does not start meanwhile. A Workflow that cannot be selected runs `run` unmarked, which refuses as it always did.
+pub(super) fn repaired(
+    command: &str,
+    args: Args,
+    run: impl FnOnce(Args) -> Result<Output, CpdError>,
+) -> Result<Output, CpdError> {
+    let Some(held) = take_repair(command, &args) else {
+        return run(args);
+    };
+    let out = run(args);
+    let cleared = held.clear();
+    let out = out?;
+    cleared?;
+    Ok(out)
+}
+
+/// A taken repair marker: the Workflow and the store it is cleared in.
+struct Held {
+    env: Env,
+    plan: PlanId,
+    key: WorkflowKey,
+}
+
+fn take_repair(command: &str, args: &Args) -> Option<Held> {
+    let plan = args.plan.require().ok()?.clone();
+    let mut env = Env::open().ok()?;
+    let key = env
+        .plan(&plan)
+        .ok()?
+        .select(&args.workflow)
+        .ok()?
+        .key
+        .clone();
+    let marker = json!({
+        "pid": std::process::id(),
+        "start": crate::clock::now(),
+        "command": command,
+    })
+    .to_string();
+    env.store
+        .write(command, |tx| {
+            tx.execute(
+                "UPDATE workflows SET repair = ?3 WHERE plan = ?1 AND key = ?2",
+                rusqlite::params![plan.as_str(), key.as_str(), marker],
+            )?;
+            Ok(())
+        })
+        .ok()?;
+    Some(Held { env, plan, key })
+}
+
+impl Held {
+    /// Sets `repair` to null where its pid is this process's.
+    fn clear(mut self) -> Result<(), CpdError> {
+        let (plan, key) = (self.plan, self.key);
+        self.env.store.write(COMMAND, |tx| {
+            tx.execute(
+                "UPDATE workflows SET repair = NULL
+                  WHERE plan = ?1 AND key = ?2 AND json_extract(repair, '$.pid') = ?3",
+                rusqlite::params![plan.as_str(), key.as_str(), std::process::id()],
+            )?;
+            Ok(())
+        })
     }
 }
 
