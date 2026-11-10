@@ -200,7 +200,10 @@ fn check_shell_abi(root: &std::path::Path) -> Result<(), String> {
     let version_file = root.join("web/src/electron/version.ts");
     if let Ok(content) = fs::read_to_string(&version_file) {
         for line in content.lines() {
-            if let Some(rest) = line.trim().strip_prefix("export const MIN_SHELL_ABI_VERSION =") {
+            if let Some(rest) = line
+                .trim()
+                .strip_prefix("export const MIN_SHELL_ABI_VERSION =")
+            {
                 let num_str = rest.trim().trim_end_matches(';').trim();
                 if let Ok(min_abi) = num_str.parse::<u32>() {
                     // Shell ABI version is 1
