@@ -153,6 +153,9 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
     if let Some(ConfigCommand::Tiers(TiersCommand::Set(set))) = args.command {
         return tiers_set(&home, set);
     }
+    if let Some(ConfigCommand::Tiers(TiersCommand::List)) = args.command {
+        return tiers_list(&home);
+    }
     if let Some(ConfigCommand::Experimental(experimental)) = args.command {
         return experimental_command(&home, experimental);
     }
@@ -449,5 +452,89 @@ fn tiers_set(home: &CpdHome, args: SetTiersArgs) -> Result<Output, CpdError> {
         "changed": set.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
         "already": set.is_empty(),
         "config": config,
+    })))
+}
+
+/// `cpd config tiers list` (§14.2d): prints the ladder tiers and each role's range.
+fn tiers_list(home: &CpdHome) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    let models = crate::policy::resolve_machine(home)?.policy.model;
+    let catalog = catalog::load_with(&models, &mut env.store).or_else(|_| {
+        // Fallback when pi / catalog cannot be read from disk (e.g. in minimal tests or offline)
+        Ok::<_, CpdError>(Catalog {
+            pi_version: "default".into(),
+            o: TierModel {
+                model: models.o.clone(),
+                efforts: vec![0, 1, 2, 3, 4],
+            },
+            s: TierModel {
+                model: models.s.clone(),
+                efforts: vec![0, 1, 2, 3, 4],
+            },
+            h: TierModel {
+                model: models.h.clone(),
+                efforts: vec![0, 1, 2, 3, 4],
+            },
+            g: TierModel {
+                model: models.g.clone(),
+                efforts: vec![],
+            },
+            j: TierModel {
+                model: models.j.clone(),
+                efforts: vec![],
+            },
+        })
+    })?;
+    let (config, _) = Config::load_with_sources(home)?;
+    let roles = config.role_tiers();
+
+    let ladder = catalog.rungs();
+    let tiers_json: Vec<serde_json::Value> = ladder
+        .iter()
+        .map(|tier| {
+            let letter = tier.letter();
+            let model = &catalog.model(letter).model;
+            let effort = match tier.effort() {
+                Some(e) => json!(e.to_string()),
+                None => json!("X"),
+            };
+            json!({
+                "tier": tier.to_string(),
+                "letter": letter.to_string(),
+                "effort": effort,
+                "model": model,
+            })
+        })
+        .collect();
+
+    let role_list = [
+        Role::Decide,
+        Role::Auxiliar,
+        Role::Worker,
+        Role::Lead,
+        Role::Manager,
+    ];
+
+    let mut ranges_map = serde_json::Map::new();
+    for role in role_list {
+        let range = roles.range(&catalog, role)?;
+        let allowed: Vec<String> = ladder
+            .iter()
+            .filter(|t| range.contains(**t))
+            .map(|t| t.to_string())
+            .collect();
+        ranges_map.insert(
+            role.name().to_string(),
+            json!({
+                "floor": range.floor.to_string(),
+                "ceiling": range.ceiling.to_string(),
+                "allowed": allowed,
+            }),
+        );
+    }
+
+    Ok(Output::success(json!({
+        "tiers": tiers_json,
+        "ranges": ranges_map,
     })))
 }

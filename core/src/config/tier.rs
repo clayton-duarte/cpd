@@ -435,9 +435,9 @@ impl Catalog {
     }
 
     /// Every rung a range is made of: the ladder plus the `X` of every letter, ascending.
-    fn rungs(&self) -> Vec<Tier> {
+    pub fn rungs(&self) -> Vec<Tier> {
         let mut rungs = self.ladder();
-        rungs.extend([Letter::G, Letter::H, Letter::S, Letter::O].map(Tier::x));
+        rungs.extend([Letter::J, Letter::G, Letter::H, Letter::S, Letter::O].map(Tier::x));
         rungs.sort();
         rungs.dedup();
         rungs
@@ -445,7 +445,7 @@ impl Catalog {
 
     /// Every valid rung, ascending (effort-0 rungs included; `X` is the one rung of a model without levels).
     pub fn ladder(&self) -> Vec<Tier> {
-        [Letter::G, Letter::H, Letter::S, Letter::O]
+        [Letter::J, Letter::G, Letter::H, Letter::S, Letter::O]
             .into_iter()
             .flat_map(|letter| {
                 let efforts = &self.model(letter).efforts;
