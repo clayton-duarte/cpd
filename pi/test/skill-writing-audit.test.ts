@@ -472,12 +472,33 @@ test("waiting work is queued with needs and missing information is a scout or re
 });
 
 test("Manager owns product decisions and Lead clarifies implementation with User", () => {
-  // Skeleton
-  assert.fail("red test pending implementation");
+  const qRef = files("cpd-lead").find((f) => f.name.endsWith("references/questions.md"))!.text;
+
+  // cpd-manager/SKILL.md
+  assert.match(manager, /product decision/i, "Manager must settle product decisions");
+  assert.match(manager, /what and why/i, "Manager must define what and why (requirements, behaviour, scope, product trade-offs)");
+  assert.match(manager, /PRD/i, "Manager must deliver them as the PRD (product decisions only, no implementation)");
+  assert.match(manager, /product gap/i, "Manager settles product gaps reported by Leads");
+  assert.match(manager, /never answers? a Worker('s)? [eE]scalation|never answers? [eE]scalations? from Workers?/i, "Manager never answers a Worker's Escalation");
+  assert.doesNotMatch(manager, /Leave the User's answers to the User\. Leads ask the User directly/i, "Manager must remove 'Leave the User's answers to the User. Leads ask the User directly'");
+  assert.doesNotMatch(manager, /relay between them/i, "Manager must remove 'relay between them'");
+
+  // cpd-lead/SKILL.md
+  assert.match(lead, /clarif(y|ies) implementation and operational details with the User/i, "Lead clarifies implementation and operational details with the User");
+  assert.match(lead, /interview until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess/i, "Lead keeps the interview completion criteria");
+  assert.match(lead, /product gap[^\n]*Manager|session send[^\n]*Manager/i, "Lead sends product gaps to Manager via session send, not to the User");
+  assert.match(lead, /answers? Workers?('s)? [eE]scalations?|Worker('s)? [eE]scalation/i, "Lead answers Workers' Escalations");
+
+  // cpd-lead/references/questions.md
+  assert.match(qRef, /implementation and operational (details|choices)/i, "questions.md states Lead asks implementation and operational choices");
+  assert.match(qRef, /product decisions? (are )?settled by (the )?Manager/i, "questions.md states product decisions settled by Manager");
 });
 
 test("cpd-lead and cpd-manager link CONTEXT.md for the three layers table", () => {
-  // Skeleton
-  assert.fail("red test pending implementation");
+  for (const [name, text] of [["cpd-lead", lead], ["cpd-manager", manager]] as const) {
+    assert.match(text, /CONTEXT\.md[^\n]*(three layers|layers table)|(three layers|layers table)[^\n]*CONTEXT\.md/i, `${name} must link CONTEXT.md for the three layers table`);
+    // Neither skill should restate the levels table (| Level | cpd object | Role |)
+    assert.doesNotMatch(text, /\|\s*Level\s*\|\s*cpd object\s*\|\s*Role\s*\|/, `${name} must not restate the levels table`);
+  }
 });
 
