@@ -441,8 +441,8 @@ fn history_rows(store: &mut Store) -> Vec<Value> {
     rows(
         store,
         "SELECT id, tbl, pk, op, before, after FROM history
-          WHERE NOT (tbl = 'event_kinds' AND (after LIKE '%workflow-reopened%' OR after LIKE '%bug-breach%' OR after LIKE '%guard%'))
-            AND NOT (tbl = 'history_tables' AND (after LIKE '%context_reads%' OR after LIKE '%record_topics%' OR after LIKE '%bug_records%' OR after LIKE '%test_replacements%')) ORDER BY id",
+           WHERE NOT (tbl = 'event_kinds' AND (after LIKE '%workflow-reopened%' OR after LIKE '%bug-breach%' OR after LIKE '%protocol-breach%' OR after LIKE '%guard%'))
+             AND NOT (tbl = 'history_tables' AND (after LIKE '%context_reads%' OR after LIKE '%record_topics%' OR after LIKE '%bug_records%' OR after LIKE '%test_replacements%')) ORDER BY id",
     )
 }
 

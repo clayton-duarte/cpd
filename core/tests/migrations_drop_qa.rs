@@ -105,6 +105,10 @@ const LATER: &[(&str, &str)] = &[
         "event_kinds",
         "DELETE FROM event_kinds WHERE name = 'bug-breach'",
     ),
+    (
+        "event_kinds",
+        "DELETE FROM event_kinds WHERE name = 'protocol-breach'",
+    ),
 ];
 
 /// Makes the store as it was before the migration: it and the later ones are not recorded as applied.

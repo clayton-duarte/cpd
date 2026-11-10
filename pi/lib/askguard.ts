@@ -1,5 +1,8 @@
 /** commands.md §15.13: which `ask_user_question` calls are refused (G2 a long question; G4 for a Lead or Manager: labels stated nowhere). Pure: the adapter (`adapter.ts`) applies it to a `tool_call`. */
 
+/** The breached protocol's name (contract §5.2), the `protocol` of a `protocol-breach` Event (§10.18). */
+export const PROTOCOL_NAME = "questions stay short";
+
 /** The most characters one `ask_user_question` call may carry, summed over its text. */
 export const LIMIT = 1500;
 

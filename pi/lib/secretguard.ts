@@ -1,6 +1,9 @@
 /** commands.md §15.17: the raw-`op` guard. Pure: the adapter (`adapter.ts`) applies it to every `bash` call of every role. */
 import { PREFIXES, simpleCommands } from "./shell.ts";
 
+/** The breached protocol's name (contract §5.2), the `protocol` of a `protocol-breach` Event (§10.18). */
+export const PROTOCOL_NAME = "secrets";
+
 /** The refused command as the reason shows it, or undefined when it may run. */
 export function secretBypass(command: string): string | undefined {
   for (const line of simpleCommands(command)) {

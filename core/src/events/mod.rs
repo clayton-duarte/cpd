@@ -10,6 +10,8 @@ mod bug_tests;
 mod guard_tests;
 mod kind;
 mod notify;
+#[cfg(test)]
+mod protocol_breach_tests;
 pub mod repeat;
 mod select;
 mod stale;

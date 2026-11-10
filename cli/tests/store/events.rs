@@ -549,11 +549,13 @@ const SPEC: &[SpecRow] = &[
     ),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
     (
-        "bug-breach",
+        "protocol-breach",
         "",
-        "cp",
-        &["bug", "reason", "symptom", "bound"],
-        &[],
+        "cps",
+        &["protocol", "source"],
+        &[
+            "role", "model", "tier", "tool", "command", "bug", "reason", "symptom", "bound",
+        ],
     ),
     (
         "guard",
@@ -612,6 +614,8 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     // The retired `pr-*` object kinds stay in `event_kinds` as history (rename map R7a): past Events hold those
     // kinds, so the store keeps the rows and reads the new ones only.
     expected.extend([
+        // `bug-breach` was replaced by `protocol-breach` (migration `protocol-breach`); Events are append-only, so its row stays.
+        "bug-breach",
         "pr-added",
         "pr-base-changed",
         "pr-cancelled",
