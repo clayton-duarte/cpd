@@ -3713,6 +3713,11 @@ The **refusal miner** is the read-only TypeScript tool that mines guard refusals
   One example refused call per role, and the row it lands in: a Manager's `bash` with `timeout 60` → `φ: a Manager never blocks: …; refused: bash timeout 60` (`φ: noblock_manager`); a Lead's `cpd job add` with a bad Spec → the envelope `code` `spec_invalid` (`cli: spec_invalid`); a Worker's 13th consecutive read-only call → `φ: loop guard: … more than 12 consecutive read-only tool calls in one turn.` (`φ: loop_guard_read_streak (>12)`); a scout's `git fetch` → `φ: explore network write: scout has no network: git fetch` (`φ: explore_network_write`).
 - **The tests.** `pi/test/refusal-miner.test.ts` over fixtures under `pi/test/refusal-miner/fixtures/` — synthetic session files, never a real session file (scout-test-names §1 names the pi test id form; §7.7 names the run).
 
+### 5.8 The core engine's sockets and live event stream (Plan `core-ws-engine`)
+
+*Skeleton: to be completed in this Job.*
+
+
 ## 6. The tmux host
 
 ### 6.1 The server
