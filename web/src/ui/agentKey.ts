@@ -1,3 +1,6 @@
+import type { AgentKey } from "../generated/types.ts";
+
+export type { AgentKey };
 export type AgentRole = "manager" | "lead" | "worker";
 
 export interface ParsedAgentKey {
@@ -56,11 +59,11 @@ export function parseAgentKey(raw: string): ParsedAgentKey | null {
   return null;
 }
 
-export function isValidAgentKey(raw: string): boolean {
+export function isValidAgentKey(raw: string): raw is AgentKey {
   return parseAgentKey(raw) !== null;
 }
 
-export function agentKeyToPath(raw: string): string | null {
+export function agentKeyToPath(raw: AgentKey): string | null {
   const parsed = parseAgentKey(raw);
   if (!parsed) return null;
   if (parsed.kind === "manager") {
@@ -72,7 +75,7 @@ export function agentKeyToPath(raw: string): string | null {
   return `/a/${parsed.context}/${parsed.plan}/${parsed.job}`;
 }
 
-export function pathToAgentKey(path: string): string | null {
+export function pathToAgentKey(path: string): AgentKey | null {
   if (!path.startsWith("/a/")) return null;
   const parts = path.slice(3).split("/").filter(Boolean);
   if (parts.length === 1) {
