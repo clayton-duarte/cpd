@@ -354,26 +354,30 @@ fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
             .unwrap();
     };
     own("shop");
-    assert!(
-        failing(env).is_empty(),
-        "an owned row opens no pr-failing (hs-d302)"
-    );
-    assert_eq!(
-        ready(env),
-        ["pr:acme/shop#5"],
-        "ready by merge state and review, whatever its checks (hs-d481)"
-    );
+    fx.scoped(|| {
+        let _ = ready(env);
+        fx.fakes.clock.advance(std::time::Duration::from_secs(61));
+        assert!(
+            failing(env).is_empty(),
+            "an owned row opens no pr-failing (hs-d302)"
+        );
+        assert_eq!(
+            ready(env),
+            ["pr:acme/shop#5"],
+            "ready by merge state and review, whatever its checks (hs-d481)"
+        );
 
-    policy_file(env, "acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
-    assert_eq!(
-        ready(env),
-        ["pr:acme/shop#5"],
-        "its repo says any: failed checks no longer keep it from ready (hs-d481)"
-    );
-    assert!(
-        failing(env).is_empty(),
-        "and still no pr-failing for an owned row (hs-d302)"
-    );
+        policy_file(env, "acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
+        assert_eq!(
+            ready(env),
+            ["pr:acme/shop#5"],
+            "its repo says any: failed checks no longer keep it from ready (hs-d481)"
+        );
+        assert!(
+            failing(env).is_empty(),
+            "and still no pr-failing for an owned row (hs-d302)"
+        );
+    });
 }
 
 /// Makes Plan `pay`'s PR `shop` point to the pull request `n` of `acme/shop`.
