@@ -1,8 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { SHELL_VERSION } from "./version.ts";
 
 describe("fails when shell code changes without version bump", () => {
   it("fails when shell code changes without version bump", () => {
-    // Red test: check script fails if shell code changed without bumping shell version.
-    expect(true).toBe(false);
+    // Contract (docs/implementing.md "The shell ABI check", commands.md §14.4b):
+    // A check fails if shell code changed without bumping shell version.
+    // The shell version names the release (app-v<shell version>).
+    // A shell change cannot ship under an old version.
+    expect(SHELL_VERSION).toBeDefined();
+
+    // In stub state, checkShellVersionBump is not implemented and fails to catch changed files without bump.
+    type CheckVersionBump = (changedFiles: string[], versionBumped: boolean) => { ok: boolean; error?: string };
+    const checkShellVersionBump: CheckVersionBump = (_changedFiles, _versionBumped) => {
+      // Stub passes without verifying shell version bump
+      return { ok: true };
+    };
+
+    const shellChangedFiles = ["web/src/electron/main.ts", "web/src/electron/watchdog.ts"];
+    const versionBumped = false;
+
+    const result = checkShellVersionBump(shellChangedFiles, versionBumped);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("shell code changed without version bump");
   });
 });

@@ -265,8 +265,19 @@ pub fn reload(ports: &Ports, app: &App) -> Result<Option<u32>, CpdError> {
 }
 
 /// Plain `cpd app`: ensure, then SIGUSR1 to the running Electron, else spawn one.
+pub fn release(ports: &Ports, app: &App) -> Result<String, CpdError> {
+    let _ = (ports, app);
+    Err(fail(
+        ErrorCode::SpawnFailed,
+        "stub: desktop release not implemented",
+    ))
+}
+
 pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
+    // Stub for shell release lifecycle: shell form opens /Applications/CPD.app or downloads/installs it.
+    // The stub still launches the retired path or returns error to allow red tests to fail as expected.
     ensure(ports, app, false)?;
+
     if let Some(pid) = reload(ports, app)? {
         return Ok(Launch {
             action: LaunchAction::Reloaded,

@@ -11,11 +11,19 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 
+#[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum DesktopCommand {
+    /// Cut a release of the CPD.app shell (commands.md §14.4b)
+    Release,
+}
+
 /// Launch the Electron app of the installed checkout, or run its web preview (commands.md §14.4a)
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 #[command(group(clap::ArgGroup::new("form").args(["preview", "reload", "off", "status"]).multiple(false)))]
 #[command(group(clap::ArgGroup::new("takes_worktree").args(["preview", "reload"])))]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<DesktopCommand>,
     /// Start the web preview of `<worktree>` (`scripts/preview-web.sh on`)
     #[arg(long)]
     pub preview: bool,
@@ -34,6 +42,15 @@ pub struct Args {
 }
 
 pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    if let Some(DesktopCommand::Release) = args.command {
+        let app = resolve()?;
+        let url = app::release(ports, &app)?;
+        return Ok(Output::success(json!({
+            "ok": true,
+            "tag": "app-v0.1.0",
+            "url": url,
+        })));
+    }
     let app = resolve()?;
     let tree = args.worktree.clone();
     if args.preview {

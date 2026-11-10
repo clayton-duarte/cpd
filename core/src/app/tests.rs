@@ -277,6 +277,32 @@ fn desktop_spawns_installed_app() {
     );
 }
 
+/// The local share app copy path (~/.local/share/cpd/app) is retired (commands.md §14.4, §14.4a).
+/// Launch and install must no longer copy shell to or launch from ~/.local/share/cpd/app.
+#[test]
+fn app_retired_local_share_copy_path() {
+    let mut rig = Rig::new();
+    rig.app.macos = true;
+    let launched = launch(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(launched.action, LaunchAction::Launched);
+    let launches = rig.fakes.spawn.launches();
+    assert_eq!(launches.len(), 1, "{launches:?}");
+    let retired = rig
+        .app
+        .home
+        .join(".local/share/cpd/app/CPD.app/Contents/MacOS/CPD");
+    assert_ne!(
+        Path::new(&launches[0].program),
+        retired,
+        "the launcher must NOT spawn from retired ~/.local/share/cpd/app"
+    );
+    assert_eq!(
+        Path::new(&launches[0].program),
+        Path::new("/Applications/CPD.app/Contents/MacOS/CPD"),
+        "the launcher must spawn from /Applications/CPD.app"
+    );
+}
+
 #[test]
 fn app_launch_ignores_a_stale_health_pid() {
     let rig = Rig::new();
