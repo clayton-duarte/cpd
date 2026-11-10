@@ -1058,6 +1058,20 @@ The gateway counts every request through it, so a local cost above the Bifrost c
 
 **What it cannot measure.** The system prompt of a pi session (not stored there), so a pi `prefix_changed` of `false` does not prove the system prompt was unchanged. Provider-side cache state (the TTL and any eviction are inferred from gaps). Latency: each durable assistant record holds `durationMs`, but this contract does not report it. Bifrost's own prices and whether it bills reasoning tokens separately. The `cost_usd` values are estimates.
 
-## Prompt prefix byte-stability (prefix-stability-docs)
+## Prompt prefix byte-stability
 
-Skeleton: the rules follow.
+A model's prompt cache matches an exact prefix of the request: the system prompt first, then the messages. Anthropic's prompt cache (5-minute default TTL, 1-hour option) and Vertex implicit caching both work this way (provider behaviour as the Plan's Spec states it; unverified in this change). One changed byte in the system prompt therefore invalidates the cache from that byte on, and every later message is paid for again. The rules below keep the cache alive across the turns of one Session.
+
+**The rules.**
+
+1. **Byte-identical between consecutive turns.** Every system prompt section of a Session is strictly byte-identical to the one sent on the previous turn: the same keys, the same order, the same bytes. The sections are pi's `systemPromptOptions.sections` for the pi adapter, and the sections of the `pi.system` record for a durable Session.
+2. **A section changes only for a real change.** A real change is one a person or a cpd action made: a policy edit, a skill change found by the skills check, a reload that changes a prompt source, a retier. Time passing is never a real change.
+3. **No volatile values in a system prompt section.** A section never holds a clock time, a minute, an elapsed duration, a counter, a random id or any other value that moves between turns, at any granularity. A timestamp goes in a message (a `session-message` or a turn's user content), where it costs only the new suffix and the prefix stays cached.
+4. **The time-zone section is static.** `cpd-time-zone` (`TIME_ZONE_SECTION`, `zoneLine` in `pi/lib/time.ts`) names the zone and nothing else that moves: `Time zone: <IANA name> (<ZZZ>). State every time to a person in this zone with the zone named, never in UTC.` It carries no clock time. Its `<ZZZ>` changes only at a daylight saving change, the one time-driven change the section is allowed. Rebuilding it every turn is fine only because the bytes stay the same; it must never be rebuilt with a new clock reading.
+5. **Fixed section order.** Sections are added in the same code order every turn. A section that appears or disappears mid-Session is a real change under rule 2, not a side effect.
+
+**What this means for a change.** Before you add text to a system prompt section, ask whether its bytes differ between two turns of one Session. If they can, the text belongs in a message. A change that is real under rule 2 is allowed to break the cache once; it must not break it on every turn.
+
+**How to check.** For a durable Session, `pi/measure/model-cost.ts --diff-prefix` compares each cache break's prompt with the previous turn's and reports `prefix_changed` (the `system+messages` scope includes the `pi.system` sections). For a pi Session the system prompt is not in the session file, so that diff cannot see it (docs `Measuring model spend`, "What it cannot measure"); a pi system prompt change shows up only as a cache break with no other cause.
+
+**Known gap (open, 2026-11-10 18:39 EST).** The code does not yet meet rules 3 and 4. `pi/lib/agent-state.ts` rebuilds the zone section each turn with `zoneLine(new Date())`, so the pi system prompt changes every minute. The durable Worker and host build it once at start from `zoneLine(deps.now())`, which still puts the start minute into the prompt. [contract.md](contract.md) §1.3 gives the zone section's exact text with a current local time ("as 2026-10-25 23:03 EDT"); that is the volatile part rule 4 bars. Fixing the code and amending that contract text are not part of this document: they are for the Lead to schedule.
