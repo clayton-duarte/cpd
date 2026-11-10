@@ -120,7 +120,10 @@ impl Rig {
     /// A running Electron: a live pid of the fake spawn, named by the health file.
     fn running_electron(&self) -> Pid {
         let pid = self.fakes.spawn.add_process(Pid(1), "electron .");
-        self.health(&format!(r#"{{"status":"ok","pid":{}}}"#, pid.0));
+        self.health(&format!(
+            r#"{{"status":"ok","pid":{},"shell_abi":2}}"#,
+            pid.0
+        ));
         pid
     }
 }

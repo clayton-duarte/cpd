@@ -71,6 +71,32 @@ it('recorder begin continues the epoch of the previous file', async () => {
   expect(s.rec()).toMatchObject({ status: 'loading', reloadEpoch: 5, pid: 42 })
 })
 
+it('recorder includes shell_abi and shell_version when provided', async () => {
+  const t = new Date('2026-01-01T00:00:00.000Z')
+  const files = new Map<string, string>()
+  const fs = {
+    async readFile(f: string) { return files.get(f) ?? '' },
+    async writeFile(f: string, d: string) { files.set(f, d) },
+    async rename(a: string, b: string) { files.set(b, files.get(a)!); files.delete(a) },
+    async appendFile() {},
+    async mkdir() {},
+  }
+  const recorder = createHealthRecorder({
+    file: FILE,
+    crashLog: LOG,
+    pid: 99,
+    shellAbi: 2,
+    shellVersion: '0.1.0',
+    now: () => t,
+    fs,
+  })
+  await recorder.init()
+  await recorder.begin()
+  const rec = JSON.parse(files.get(FILE) ?? 'null')
+  expect(rec.shell_abi).toBe(2)
+  expect(rec.shell_version).toBe('0.1.0')
+})
+
 it('recorder begin while loading is a no-op', async () => {
   const s = setup()
   await s.recorder.init()
