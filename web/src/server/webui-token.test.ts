@@ -11,28 +11,33 @@ describe("writeWebuiToken", () => {
   });
   afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-  it("writes 32 random bytes as hex to run/webui-token at mode 0600, new on every boot", () => {
+  it("writes 32 random bytes as hex to run/webui-tokens/<pid>.token at mode 0600, new on every boot", () => {
     const first = writeWebuiToken(home);
-    const file = join(home, "run", "webui-token");
+    const tokensDir = join(home, "run", "webui-tokens");
+    const file = join(tokensDir, `${first.pid}.token`);
     expect(first.token).toMatch(/^[0-9a-f]{64}$/);
     expect(readFileSync(file, "utf8")).toBe(first.token);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     const second = writeWebuiToken(home);
     expect(second.token).not.toBe(first.token);
-    expect(readFileSync(file, "utf8")).toBe(second.token);
+    expect(readFileSync(join(tokensDir, `${second.pid}.token`), "utf8")).toBe(second.token);
   });
 
-  it("replaces a file of an earlier start, whatever its mode", () => {
-    mkdirSync(join(home, "run"));
-    writeFileSync(join(home, "run", "webui-token"), "old", { mode: 0o644 });
-    writeWebuiToken(home);
-    expect(statSync(join(home, "run", "webui-token")).mode & 0o777).toBe(0o600);
+  it("replaces a file of an earlier start of the same pid, whatever its mode", () => {
+    const tokensDir = join(home, "run", "webui-tokens");
+    mkdirSync(tokensDir, { recursive: true });
+    writeFileSync(join(tokensDir, "12345.token"), "old", { mode: 0o644 });
+    writeWebuiToken(home, 12345);
+    expect(statSync(join(tokensDir, "12345.token")).mode & 0o777).toBe(0o600);
   });
 
   it("removes the file when it stops", () => {
     const issued = writeWebuiToken(home);
+    const tokensDir = join(home, "run", "webui-tokens");
+    const file = join(tokensDir, `${issued.pid}.token`);
+    expect(existsSync(file)).toBe(true);
     issued.remove();
-    expect(existsSync(join(home, "run", "webui-token"))).toBe(false);
+    expect(existsSync(file)).toBe(false);
     issued.remove();
   });
 
@@ -52,6 +57,9 @@ describe("writeWebuiToken", () => {
     // s1's removal must not remove s2's file, and s2's token must still exist.
     const tokensDir = join(home, "run", "webui-tokens");
     expect(existsSync(tokensDir)).toBe(true);
+    expect(existsSync(join(tokensDir, `${s2.pid}.token`))).toBe(true);
+    expect(readFileSync(join(tokensDir, `${s2.pid}.token`), "utf8")).toBe(s2.token);
+    s2.remove();
   });
 
   it("webui-token per-server file isolation", () => {
