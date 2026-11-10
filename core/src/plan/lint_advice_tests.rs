@@ -311,6 +311,7 @@ fn advice_recommends_per_kind_from_first_attempts() {
     let dir = tempfile::tempdir().unwrap();
     let mut env = env(&dir, catalog(&[0, 1, 2, 3]));
     history(&mut env, "a", "impl", "S1", 40, 38, 0.20);
+    history(&mut env, "x", "impl", "SX", 10, 10, 0.35);
     history(&mut env, "b", "impl", "S2", 20, 20, 0.50);
     let got = advice(&mut env, "ctx").unwrap();
     assert_eq!(got.len(), 1, "{got:?}");
