@@ -1,5 +1,5 @@
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, TEXT_INLINE_MAX_BYTES } from "../../protocol/domain.ts";
-import type { Attachment, Capabilities, ImageMime, WireImage } from "../../protocol/domain.ts";
+import type { Attachment, Capabilities, ImageMime, WireFile, WireImage } from "../../protocol/domain.ts";
 
 export interface FileLike { readonly name: string; readonly type: string; readonly size: number }
 export interface FileReaderBoundary { readBase64(file: FileLike): Promise<string>; readText(file: FileLike): Promise<string> }
@@ -54,7 +54,7 @@ export function filesFromDrop(data: { files: ArrayLike<FileLike> } | null): File
   return data === null ? [] : Array.from(data.files);
 }
 
-export function buildPrompt(text: string, attachments: readonly Attachment[]): { text: string; images: WireImage[] } {
+export function buildPrompt(text: string, attachments: readonly Attachment[]): { text: string; images: WireImage[]; files?: WireFile[] } {
   let out = text;
   const images: WireImage[] = [];
   for (const a of attachments) {
