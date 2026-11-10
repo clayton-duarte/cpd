@@ -4,14 +4,20 @@
 
 CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there, except **Workflow**, which returns with a new meaning (pro-d136).
 
-The levels, the cpd objects and their roles. The levels are Jira's words, used as an analogy:
+The three layers: one agent, one deliverable and one scope each (pro-d536, pro-d537, pro-d538). This table is the definition:
 
-| Level (Jira analogy) | cpd object | Role |
-|---|---|---|
-| Epic | Context | Manager |
-| Ticket | Plan | Lead |
-| (none) | Workflow | Lead |
-| Task | Job | Worker |
+| Layer | Agent | Deliverable | Scope | Jira analogy |
+|---|---|---|---|---|
+| Context | Manager | Context, PRD | Decision (product) | Epic |
+| Plan | Lead | Workflows, pull requests | Orchestration (incl. clarifying implementation with the User) | Ticket |
+| Dispatch | Worker | Job, commit | Execution | Task |
+
+The Jira words are shorthand for scale and ownership; the table is the definition. Four breaks from Jira:
+
+1. A Context outlives an Epic and may span many Epics.
+2. A Workflow (one repo's share of a Plan, one pull request) has no Jira equivalent.
+3. The PRD holds product decisions only; Jira tickets often carry implementation, which in cpd the Lead settles (pro-d537).
+4. A Job is small and fully specified (one Spec, one commit), nearer a checklist item than a Jira Task.
 
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
@@ -167,11 +173,15 @@ _Avoid_: edit (an edit changes the Spec: `job edit --spec`)
 Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step `workflow-start`" (contract §3.7).
 _Avoid_: stage for a phase, step for a Job
 
-**Context stage** (stage, pro-d145):
-The first stage: Grounding and Grilling, in phase `grounding`; it ends with `plan phase plan`. The Manager does it for the Context, each Lead for its Plan.
+**PRD** (entity, pro-d536, pro-d537, pro-d538):
+The Manager's deliverable: the requirements and product decisions of a Plan, carried by the brief as record ids (pro-d532), leaving nothing open to interpretation. Product decisions only, no implementation: the Lead settles implementation (pro-d537).
+_Avoid_: spec, requirements doc (a Spec describes a Job)
 
-**Plan stage** (stage, pro-d145):
-The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`.
+**Context stage** (stage, pro-d145, pro-d536, pro-d537, pro-d538):
+The first stage: Grounding and Grilling, in phase `grounding`; it ends with `plan phase plan`. The Manager does it for the Context (it settles the product decisions with the User). A Lead's grounding reads its brief and the records it cites; Grilling the User about design or requirements is the Manager's.
+
+**Plan stage** (stage, pro-d145, pro-d536, pro-d537, pro-d538):
+The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`. Clarifying receives requirements and assumptions settled from the brief and confirms only implementation and operational details with the User.
 
 **Dispatch stage** (stage, pro-d145, pro-d146):
 The third stage: Documenting, Red testing, Implementing, Verifying and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`.
@@ -179,11 +189,11 @@ The third stage: Documenting, Red testing, Implementing, Verifying and Deploying
 **Grounding** (step, pro-d146):
 Reading the Context's records and the User's material (`context show`, `context note`).
 
-**Grilling** (step, pro-d146):
-The interview with the User, with `ask_user_question`, until unknowns are minimised (`context decide`).
+**Grilling** (step, pro-d146, pro-d536, pro-d537, pro-d538):
+The Manager's interview with the User, with `ask_user_question`, until every requirement, product decision and assumption is settled and accepted (`context decide`).
 
-**Clarifying** (step, pro-d146):
-Restating the Requirements, writing the records, and listing the assumptions the User accepts (`context decide`, `context note`).
+**Clarifying** (step, pro-d146, pro-d536, pro-d537, pro-d538):
+Restating the Requirements, receiving them settled, and confirming only implementation and operational details with the User (`context decide`, `context note`).
 
 **Scoping** (step, pro-d146):
 Choosing the repositories and cutting the deliverable into Workflows (`pr add`).
