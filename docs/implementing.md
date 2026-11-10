@@ -550,6 +550,10 @@ hs-d463 (incident: mac-pro's first sync install after #169 killed `cpd-work:watc
 - Shell: one function per script holds the only `tmux -u` line: `tmux_cmd` in `preview-tui.sh` (`install-cpd.sh` calls no tmux: `cpd install` does, through `host::tmux::client`).
 - **The guards:** `scripts/check-portable.sh` refuses a bare `tmux` ("The portability check", the row below); a Rust test refuses a tmux spawn outside `core/src/host/tmux.rs`; a Rust test with a fake `tmux` that records its argv requires `-u` first in the call of every `Tmux` method, of `installed_version`, of `doctor` and of `exec_attach`, under `LANG=C`, `LC_ALL=C` and an empty locale; a Rust test runs `list-panes -a -F` through `Tmux` against a real tmux with `env_clear` plus `PATH` (and with `LC_ALL=C`), and requires the panes to parse. The last is the defect itself: it fails today on tmux 3.8, where a client without a UTF-8 locale prints the formats' tabs as `_`, and passes with `-u`.
 
+## The shell release and the payload
+
+<!-- skeleton: filled in by shell-release-docs-a1 -->
+
 ## `cpd desktop`
 
 Plan cpd-app-launch, decision pro-d431. `cpd desktop` (commands.md §14.4a) and install's Electron step (step 8a above) share one area, `core/src/app/`, and the CLI handler `cli/src/app.rs` (the `Args` struct and `run`, as `cli/src/install.rs`; a root `Command::App` variant, its dispatch arm and its `cli/src/interface.rs` row). The area uses `Ports` and std only; it depends on no other area.

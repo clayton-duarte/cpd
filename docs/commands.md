@@ -5113,6 +5113,10 @@ Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missin
 
 Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again; `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
 
+### 14.4b `desktop release`
+
+<!-- skeleton: filled in by shell-release-docs-a1 -->
+
 ### 14.5 `models`
 
 ```
