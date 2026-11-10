@@ -169,6 +169,8 @@ MessageScrollerProvider  threshold 160 px, scrollToEndOnMount            (2.8.1)
 
 ### 2.3 User message
 
+> **Mentions (Plan `webui-router`):** the text of a user message is linkified as DESIGN-chat 7 says; the plain-text rule below still holds, and a mention is the only element it adds.
+
 Component: `Item`, case `user`. A `Message[align="end"][data-kind="user"]` (shadcn `Message`, `components/message.tsx`) holding a `MessageContent`:
 
 ```
@@ -195,6 +197,8 @@ The same component renders the **optimistic** user message (a pending submission
 **2.3.2 Copy action.** `CopyTurnButton`: `TooltipProvider` > `Tooltip` > `TooltipTrigger asChild` > `Button[type="button"][variant="ghost"][size="icon-xs"][data-action="copy-turn"]` (`size-5 text-muted-foreground`), `aria-label` `Copy message` (`Copied` for 1500 ms after a click); the icon is `CopyIcon` (`CheckIcon` while copied); `TooltipContent side="bottom"` text `Copy` (`Copied` while copied). A click writes the text to the clipboard and sets the copied state.
 
 ### 2.4 Assistant text
+
+> **Mentions (Plan `webui-router`):** text nodes of the paragraphs are linkified as DESIGN-chat 7 says; code and existing links are not.
 
 Component: `Item`, case `assistant`. The row holds only the text blocks of the item (`groupRows` splits the thinking blocks into a chain, 2.4.2). Each text block is a muted `Bubble`:
 
@@ -557,3 +561,60 @@ Data absent from `web/src/protocol/**` and the store; each element is omitted (o
 | air-d79 | the Reasoning block and the tool calls render through one shared Trace vendored from shadcn AI Elements (`web/src/ui/components/trace.tsx`); part classes live once in `trace.tsx`, callers set `data-kind`/`data-part`; `web/src/ui/app.css`'s `@theme` is the single token source; tool rows keep their semantic colours while their chrome matches the Reasoning block | header, 2.4.2, 3.2, 3.4, 3.5 |
 
 ---
+
+---
+
+## 7. Chat mention linkification (Plan `webui-router`; CONTRACT 22.8)
+
+Files: `web/src/ui/chat/mentions.tsx` (planned, Job `web-tests`), which uses the parser of `web/src/ui/agentKey.ts`. Hooks: `Transcript.tsx` (user rows), `Markdown.tsx` (assistant and thinking text), `Folds.tsx` (cpd event rows) and `ToolRow.tsx` (tool prose). The grammar is not restated here; it is CONTRACT 22.2.
+
+### 7.1 What counts as a mention
+
+A mention is a maximal run of `[A-Za-z0-9:-]` in a text node, and it is linkified only when all three hold:
+
+1. the character before and the character after the run are neither `/`, `\` nor `@` (a path or an address is not a mention);
+2. the agent-key parser accepts the run (CONTRACT 22.2). The grammar is lowercase, so `CPD:plan` is text;
+3. the cockpit read model names a live agent with that key (CONTRACT 22.3). A run that parses but names no agent stays text. This rule is what keeps ordinary lowercase words from linking: the Manager grammar matches any lowercase word, and only real Contexts are agents.
+
+The scan is one left-to-right pass over the text node. Anything not a mention is text, byte for byte.
+
+### 7.2 Where it applies, by message role
+
+| Message role or row | How it is drawn today | Mentions |
+|---|---|---|
+| user message | plain text in `BubbleContent` (2.3) | linkified |
+| assistant text | paragraphs of typeset Markdown (2.4, `Segment`) | linkified in text nodes |
+| assistant thinking | `ReasoningBlock`, Markdown (3.x) | linkified as assistant text |
+| cpd event and fold rows: `FoldRow`, `CompactionRow`, `OrphanRow` | plain text (3.1) | linkified |
+| tool row | the prose of the title and the argument summary (3.2) | linkified |
+| tool output body, fenced code, inline code | `CodeBlock` or `PlainOutput` (3.2, 3.6) | not linkified: literal code |
+
+### 7.3 Not linkified
+
+- Code: fenced blocks, inline code and the tool output bodies.
+- Existing links: GFM autolinks and any `scheme://` span. The tokenizer skips them.
+- Nothing nests: a mention is never inside another link.
+
+### 7.4 DOM
+
+`<a data-part="agent-mention" data-agent-key="cpd:plan-x" href="#/a/cpd/plan-x">cpd:plan-x</a>`. The anchor is TanStack's `Link` (its hash href is CONTRACT 22.1). The text is the key as written. It takes the typeset link style of DESIGN 2g and no new colour (DESIGN 1.2 tokens).
+
+### 7.5 Performance budget
+
+The transcript is not virtualised (2.9), and `virtual.ts` is unused. The render cache it relies on is what the budget is measured against, and linkification keeps all of it:
+
+- Tokenizing runs once per text segment. User rows tokenize inside the `Item` memo (2.3). Assistant and thinking text tokenizes inside the `Segment` memo, per paragraph, so a stream re-tokenizes only the paragraph that changed (as Markdown already does).
+- The known-agent set of 7.1 rule 3 is built once per cockpit tree snapshot, as one map from key to route. The App memoizes it and passes it down by a stable reference. It is not rebuilt per row or per delta.
+- A delta never re-tokenizes an unchanged item: `applyDelta` keeps unchanged items' references (10.4).
+- The only node added per row is one `<a>` per mention.
+- The docs name no numeric budget (none exists in CONTRACT or DESIGN; verified by search). This section defines none. The implementation's proof is the render tests of 7.6, not a benchmark.
+
+### 7.6 Tests
+
+Named in Job `web-tests`, `web/src/ui/chat/mentions.test.tsx`:
+
+- `renders agent keys in user assistant event and tool messages as router links` (7.2).
+- `leaves non-agent keys and invalid syntax as plain text` (7.1 rules 2 and 3).
+
+No test is named for the exclusions of 7.3 (code, existing links, path adjacency). Adding one is the Lead's decision: web-tests's list is fixed by the Plan.
+
