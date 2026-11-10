@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use super::{DEFAULT_LOCK_WAIT, Install, run};
 use crate::home::CpdHome;
 use crate::host::runner::{Call, Handler, Reply};
-use crate::host::spawn::{Pid, Signal};
+use crate::host::spawn::{Pid, Signal, Spawn};
 use crate::ports::Fakes;
 
 const NO_VERDICT: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
@@ -141,6 +141,7 @@ impl Rig {
     /// A running Electron: a live pid of the fake spawn, named by the health file.
     fn running_electron(&self) -> Pid {
         let pid = self.fakes.spawn.add_process(Pid(1), "electron .");
+        self.fakes.spawn.survive(pid, Signal::Usr1);
         fs::write(
             self.install.cpd_home.root().join("run/preview-health.json"),
             format!(r#"{{"pid":{}}}"#, pid.0),
@@ -195,14 +196,47 @@ fn install_builds_electron_and_writes_app_root() {
 }
 
 #[test]
-fn install_signals_running_electron_when_no_preview() {
+fn install_stages_payload_without_electron_relaunch() {
     let rig = Rig::new(false);
     let pid = rig.running_electron();
     let (exit, stderr) = rig.run();
     assert_eq!(exit, 0, "{stderr}");
+    // Stages payload and notifies running Electron with SIGUSR1 for in-place swap
     assert_eq!(rig.fakes.spawn.signals(), vec![(pid, Signal::Usr1)]);
-    // With no live Electron nothing is started.
+    // Running shell is never killed or relaunched (no launches, pid stays alive)
     assert_eq!(rig.fakes.spawn.launches(), vec![]);
+    assert!(rig.fakes.spawn.alive(pid));
+
+    // Staged payload directory exists and app-root is written
+    let payload_dir = rig.install.root.join("web/dist-electron/payload");
+    assert!(
+        payload_dir.is_dir(),
+        "expected versioned payload dir at {}",
+        payload_dir.display()
+    );
+}
+
+#[test]
+fn install_refuses_payload_needing_newer_shell() {
+    let rig = Rig::new(false);
+    let _pid = rig.running_electron();
+    // Simulate checkout payload requiring newer shell ABI (e.g. ABI 99)
+    let version_file = rig.install.root.join("web/src/electron/version.ts");
+    fs::create_dir_all(version_file.parent().unwrap()).unwrap();
+    fs::write(
+        &version_file,
+        "export const MIN_SHELL_ABI_VERSION = 99;\n",
+    )
+    .unwrap();
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 1, "incompatible payload should refuse install");
+    assert!(
+        stderr.contains("new CPD.app release needed"),
+        "expected error message 'new CPD.app release needed', got: {stderr}"
+    );
+    // When refused, Electron is not signalled and app_root is not written
+    assert_eq!(rig.fakes.spawn.signals(), vec![]);
+    assert!(!rig.app_root().exists());
 }
 
 #[test]
