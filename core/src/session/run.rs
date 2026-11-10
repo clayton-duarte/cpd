@@ -44,6 +44,47 @@ const RETRY_FIRST: Duration = Duration::from_millis(500);
 /// The longest wait between two tries of a store access that met a transient error.
 const RETRY_MAX: Duration = Duration::from_secs(5);
 
+fn pi_lock_path(home: &crate::home::CpdHome, session: &SessionId) -> PathBuf {
+    home.locks_dir().join(format!("pi-{session}.lock"))
+}
+
+fn take_pi_lock(
+    home: &crate::home::CpdHome,
+    session: &SessionId,
+) -> Result<std::fs::File, CpdError> {
+    let path = pi_lock_path(home, session);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot open pi lock {}: {e}.", path.display()),
+            )
+            .with("lock", path.display().to_string())
+        })?;
+    match crate::lock::try_lock(&file) {
+        Ok(true) => Ok(file),
+        Ok(false) => Err(CpdError::new(
+            ErrorCode::SessionRunning,
+            format!("Another session run holds the pi lock for Session {session}."),
+        )
+        .with("session", session.as_str())
+        .with("lock", path.display().to_string())),
+        Err(e) => Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot lock {}: {e}.", path.display()),
+        )
+        .with("lock", path.display().to_string())),
+    }
+}
+
 pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let mut env = patiently("opening the store", Env::open)?;
     let ports = env.ports.clone();
@@ -55,6 +96,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&ports, &env.tmux(), &row.id)?;
+    let _pi_lock = take_pi_lock(&env.home, &row.id)?;
     // The path `spawn` recorded at start (the real one: `current_exe` at process start, which an install does not
     // change under it).
     let exe = Exe::at(ports.spawn.self_exe()?)?;
