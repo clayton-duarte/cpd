@@ -91,7 +91,10 @@ fn config_tiers_list_returns_ladder_and_role_ranges() {
             .as_array()
             .or_else(|| r["rungs"].as_array())
             .expect("allowed rungs array");
-        assert!(!allowed.is_empty(), "allowed rungs must not be empty for {role}");
+        assert!(
+            !allowed.is_empty(),
+            "allowed rungs must not be empty for {role}"
+        );
         assert!(
             allowed.iter().any(|v| v.as_str() == Some(floor)),
             "floor {floor} must be in allowed rungs for {role}"
