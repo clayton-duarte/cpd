@@ -90,7 +90,7 @@ test("the pi MCP port lists the tools with pi's model-facing name, the server's 
     { name: "a.b", description: "", inputSchema: { type: "object" } },
   ];
   const c2 = await piMcpPort(e2, "/w").connect("docs", { url: "https://x" });
-  assert.deepEqual(c2.tools.map((x) => x.name), ["mcp__docs__a_b", "mcp__docs__a_b_h4sh"]);
+  assert.deepEqual(c2.tools.map((x) => x.name), ["mcp__docs__a_b", "mcp__docs__a_b_e04bd6ad"]);
 });
 
 test("calling a tool passes the server's tool name, the arguments and a signal, and returns the joined text blocks and isError", { timeout: 10_000 }, async (t) => {
