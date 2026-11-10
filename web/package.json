@@ -10,6 +10,7 @@
     "pi-package"
   ],
   "scripts": {
+    "generate:types": "pnpm --filter cpd run generate:types",
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",

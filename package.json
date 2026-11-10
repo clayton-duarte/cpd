@@ -10,6 +10,7 @@
   "scripts": {
     "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/test/durable-worker/*.test.ts pi/test/durable-host/*.test.ts pi/skills/skill.test.ts; fi; node --test \"$@\"; }; t",
     "refusals": "node pi/tools/refusal-miner.ts",
+    "generate:types": "scripts/cargo.sh test -p cpd-core --test contract_types",
     "pretypecheck": "scripts/pnpm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/pnpm-fresh.sh",
@@ -24,7 +25,7 @@
     "verify:clippy": "scripts/cargo.sh clippy --workspace --all-targets -- -D warnings",
     "verify:web": "pnpm --filter cpd-web-client run typecheck && pnpm --filter cpd-web-client run build && pnpm --filter cpd-web-client run test",
     "verify:e2e": "pnpm --filter cpd-web-client run build:electron && pnpm --filter cpd-web-client run e2e",
-    "verify:steps": "pnpm run verify:migrations && pnpm run verify:portable && pnpm run typecheck && pnpm run verify:pi && pnpm run verify:fmt && pnpm run verify:build && pnpm run verify:clippy && pnpm run verify:web && pnpm run verify:node && pnpm run verify:rust"
+    "verify:steps": "pnpm run verify:migrations && pnpm run verify:portable && pnpm run typecheck && pnpm run verify:pi && pnpm run verify:fmt && pnpm run verify:build && pnpm run verify:clippy && pnpm run verify:web && pnpm run verify:node && pnpm run verify:rust && git diff --exit-code web/src/generated/types.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.0",
