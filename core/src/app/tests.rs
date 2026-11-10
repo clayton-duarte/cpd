@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::{App, Electron, LaunchAction, Preview, ensure, launch, preview, read_root, status};
+use super::{
+    App, Electron, LaunchAction, Preview, ensure, launch, preview, read_root, reload, status,
+};
 use crate::host::runner::{Call, Handler, Reply};
 use crate::host::spawn::{Pid, Signal};
 use crate::ports::Fakes;
@@ -238,6 +240,40 @@ fn app_launch_strips_session_env() {
         !removed.iter().any(|k| k == "CPD_HOME"),
         "CPD_HOME must be kept: {removed:?}"
     );
+}
+
+#[test]
+fn app_reload_skips_sigusr1_when_shell_abi_is_missing_or_below_2() {
+    let rig = Rig::new();
+    let pid = rig.fakes.spawn.add_process(Pid(1), "electron .");
+
+    // Case 1: preview-health.json lacks shell_abi
+    rig.health(&format!(r#"{{"status":"ok","pid":{}}}"#, pid.0));
+    let reloaded = reload(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(reloaded, None);
+    assert_eq!(rig.fakes.spawn.signals(), vec![]);
+
+    // Case 2: preview-health.json has shell_abi < 2 (e.g. 1)
+    rig.health(&format!(
+        r#"{{"status":"ok","pid":{},"shell_abi":1}}"#,
+        pid.0
+    ));
+    let reloaded = reload(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(reloaded, None);
+    assert_eq!(rig.fakes.spawn.signals(), vec![]);
+}
+
+#[test]
+fn app_reload_sends_sigusr1_when_shell_abi_is_2_or_higher() {
+    let rig = Rig::new();
+    let pid = rig.fakes.spawn.add_process(Pid(1), "electron .");
+    rig.health(&format!(
+        r#"{{"status":"ok","pid":{},"shell_abi":2}}"#,
+        pid.0
+    ));
+    let reloaded = reload(&rig.fakes.ports, &rig.app).unwrap();
+    assert_eq!(reloaded, Some(pid.0));
+    assert_eq!(rig.fakes.spawn.signals(), vec![(pid, Signal::Usr1)]);
 }
 
 #[test]
