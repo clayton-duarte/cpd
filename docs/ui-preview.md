@@ -32,13 +32,28 @@ A prototype is a quick way to preview a visual change in the live cockpit before
 
 (pro-d541, pro-d542, pro-d543; Plan `webui-ports`)
 
-_Skeleton: the section is filled in by Attempt web-docs-a1._
+Status: decided (pro-d541, pro-d542, pro-d543). As of this amendment the code does not do this: the Vite server still binds `localhost:5173` (`web/vite.config.ts`, `scripts/preview-web.sh`), no process serves port 3333, and no port-in-use check exists. The implementing change brings the code in line. The origin rule and the port-in-use message are normative in web/CONTRACT.md §15.1; the window and the service are in web/ELECTRON.md, "WebUI ports".
+
+Two WebUI servers, two fixed ports, both on all interfaces:
+
+| Port | Serves | Bind | Run by | Opened by |
+| --- | --- | --- | --- | --- |
+| `3333` | production: the built renderer and the `/cpd-ws` WebSocket | `0.0.0.0:3333` | a supervised engine service, on every machine, headless included | the CPD.app window (`http://localhost:3333`) and LAN browsers |
+| `33333` | preview: the Vite dev server of the preview worktree, `strictPort` | `0.0.0.0:33333` | the preview's window `web` (`preview-web.sh`), supervised by `cpd install` when the preview worktree exists | the preview window (`CPD_ELECTRON_DEV_URL`) and LAN browsers |
+
+- **Production on 3333.** The engine serves the built renderer and `/cpd-ws` on `0.0.0.0:3333`. `cpd install` sets up permanent service supervision for 3333 on every machine. The CPD.app window in production loads `http://localhost:3333` directly and hosts no server of its own.
+- **Preview on 33333.** The Vite dev server binds `0.0.0.0:33333` with `strictPort: true`: when the port is taken it fails, and it never moves to another port. `cpd install` sets up permanent service supervision for 33333 when the preview worktree exists.
+- **Preview window default.** The watchdog's `CPD_ELECTRON_DEV_URL` defaults to `http://localhost:33333/electron.html`. An explicit value still wins.
+- **Origin rule.** The `/cpd-ws` endpoint on both ports accepts a connection from `localhost`, an RFC 1918 private IPv4 address, an IPv6 ULA address or a `.local` mDNS hostname, on port 3333 or 33333 only. Every other origin is rejected before any hub is created. The transport is plain HTTP with no auth. Full rule: web/CONTRACT.md §15.1.
+- **Port in use fails loud.** Starting a server on 3333 or 33333 while another process holds that port exits non-zero without a fallback port. The error names the holder by process name and PID. The holder is read with `lsof -nP -iTCP:<port> -sTCP:LISTEN`, and with `ss -H -ltnp 'sport = :<port>'` when `lsof` is not available. Full rule: web/CONTRACT.md §15.1.
+
+The preview sections below use port 33333. Their `preview-web.sh` steps describe the target until the implementing change lands.
 
 ## Previewing the web UI
 
 (pro-d34)
 
-`scripts/preview-web.sh` is the sibling of `scripts/preview-tui.sh`. Where the TUI preview swaps the cockpit's views, the web preview runs the Vite dev server of a preview worktree, so the WebUI can be seen on `localhost:5173` while the installed cpd keeps the engine and the Leads.
+`scripts/preview-web.sh` is the sibling of `scripts/preview-tui.sh`. Where the TUI preview swaps the cockpit's views, the web preview runs the Vite dev server of a preview worktree, so the WebUI can be seen on `localhost:33333` while the installed cpd keeps the engine and the Leads.
 
 ```
 sh scripts/preview-web.sh on [<worktree>] | off | status | reload [<worktree>]
@@ -46,7 +61,7 @@ sh scripts/preview-web.sh on [<worktree>] | off | status | reload [<worktree>]
 
 The same four subcommands are run by `cpd desktop --preview`, `cpd desktop --reload`, `cpd desktop --off` and `cpd desktop --status` (commands.md §14.4a).
 
-- **`on [<worktree>]`** creates the git worktree on branch `preview/web` from `origin/main` when it is missing. The default path is `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`. It links `node_modules` and `web/node_modules` from the repo when they are absent. It starts the Vite dev server, or respawns it when it is running, with `pnpm --dir <worktree> --filter cpd-web-client run dev --host` on port 5173, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It builds Electron (`build:electron`) when `<worktree>/web/dist-electron/main.js` is missing, and leaves an existing bundle alone (`reload` always builds). It sets the tmux option `@cpd_web_preview` to `<worktree name> <sha>` and writes `web-state` in `${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}`. It prints the command that points Electron at the server: `CPD_MODE=preview CPD_CHECKOUT=<worktree> CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html pnpm --dir <worktree>/web run electron`. The URL ends in `/electron.html`: bare `http://localhost:5173` is the browser UI (`index.html`), not the Electron renderer. UI/CSS edits hot-reload through Vite React Fast Refresh with no rebuild. Main, preload and server changes still need `preview-web.sh reload` (SIGUSR1). It also starts the watchdog that rolls back a crashing build (see [Crash safety](#crash-safety-pro-d64)). The watchdog runs with `CPD_MODE=preview`, `CPD_CHECKOUT=<worktree>` and `CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html`; its relaunch runs in production mode with no dev URL (`productionEnv`, item 8), so a relaunch loads the built renderer. It never starts or kills Electron.
+- **`on [<worktree>]`** creates the git worktree on branch `preview/web` from `origin/main` when it is missing. The default path is `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`. It links `node_modules` and `web/node_modules` from the repo when they are absent. It starts the Vite dev server, or respawns it when it is running, with `pnpm --dir <worktree> --filter cpd-web-client run dev --host 0.0.0.0` on port 33333, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It builds Electron (`build:electron`) when `<worktree>/web/dist-electron/main.js` is missing, and leaves an existing bundle alone (`reload` always builds). It sets the tmux option `@cpd_web_preview` to `<worktree name> <sha>` and writes `web-state` in `${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}`. It prints the command that points Electron at the server: `CPD_MODE=preview CPD_CHECKOUT=<worktree> CPD_ELECTRON_DEV_URL=http://localhost:33333/electron.html pnpm --dir <worktree>/web run electron`. The URL ends in `/electron.html`: bare `http://localhost:33333` is the browser UI (`index.html`), not the Electron renderer. UI/CSS edits hot-reload through Vite React Fast Refresh with no rebuild. Main, preload and server changes still need `preview-web.sh reload` (SIGUSR1). It also starts the watchdog that rolls back a crashing build (see [Crash safety](#crash-safety-pro-d64)). The watchdog runs with `CPD_MODE=preview`, `CPD_CHECKOUT=<worktree>` and `CPD_ELECTRON_DEV_URL=http://localhost:33333/electron.html`; its relaunch runs in production mode with no dev URL (`productionEnv`, item 8), so a relaunch loads the built renderer. It never starts or kills Electron.
 - **`off`** respawns the window `web` on the primary checkout with `CPD_MODE=production` and `CPD_CHECKOUT` removed, unsets the option `@cpd_web_preview`, removes `web-state` and stops the watchdog.
 - **`reload [<worktree>]`** typechecks and builds the worktree's Electron output, then sends SIGUSR1 to the running Electron main process. It exits 1 without building or signalling when the typecheck fails. Details are in [Crash safety](#crash-safety-pro-d64).
 - **`status`** prints the worktree and the sha, or `no web preview`.
@@ -66,7 +81,7 @@ sh scripts/preview-web.sh serve [<worktree>]
 sh scripts/preview-web.sh unserve
 ```
 
-- **`serve [<worktree>]`** ensures the preview worktree exactly as `on` does (create on branch `preview/web` from `origin/main` when missing, default path `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`, install and link `node_modules` when created) and starts, or respawns, the Vite dev server of the worktree on port 5173, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It starts no watchdog, writes no `web-state`, sets no `@cpd_web_preview` and prints no Electron command.
+- **`serve [<worktree>]`** ensures the preview worktree exactly as `on` does (create on branch `preview/web` from `origin/main` when missing, default path `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`, install and link `node_modules` when created) and starts, or respawns, the Vite dev server of the worktree on port 33333, in the window `web` of the cockpit's work session, without the session identity variables and with `CPD_MODE=preview` and `CPD_CHECKOUT=<worktree>` (see [Production and preview modes](#production-and-preview-modes), item 9). It starts no watchdog, writes no `web-state`, sets no `@cpd_web_preview` and prints no Electron command.
 - **`unserve`** stops only that dev server (the `web` window). It does not touch the watchdog, `web-state` or `@cpd_web_preview`.
 - **`on [<worktree>]`**, **`off`** and **`status`** keep exactly the behaviour documented above; they are the subcommands of `cpd desktop --preview`, `--off` and `--status` and are unchanged.
 
@@ -76,10 +91,10 @@ Selecting **WebUI Preview** in the View menu of `cpd desktop`:
 
 1. runs `serve [<worktree>]` for the preview worktree (default path as for `on`),
 2. shows a built-in loading page in the window,
-3. once the client health is healthy, loads the dev renderer at `CPD_ELECTRON_DEV_URL` (default `http://localhost:5173/electron.html`),
+3. once the client health is healthy, loads the dev renderer at `CPD_ELECTRON_DEV_URL` (default `http://localhost:33333/electron.html`),
 4. keeps the server until quit and stops it on quit (`unserve`).
 
-The same Electron-main backend serves the preview renderer: the dev renderer talks IPC (`cpd:c2s` / `cpd:s2c`, see `web/ELECTRON.md`) to the services of the running main process, not to the Vite server's WebSocket backend, which serves only a plain browser tab at `http://localhost:5173`.
+The same Electron-main backend serves the preview renderer: the dev renderer talks IPC (`cpd:c2s` / `cpd:s2c`, see `web/ELECTRON.md`) to the services of the running main process, not to the Vite server's WebSocket backend, which serves only a plain browser tab at `http://localhost:33333`.
 
 A start or load failure shows a native error dialog and the previous view returns. There is never a silent fallback to another view.
 
@@ -163,7 +178,7 @@ A crashing WebUI build must not leave the preview dead. The main process records
 
 `health:ok` is sent only after the renderer's startup IPC resolves: the boot calls in `web/src/electron/renderer.ts` (`readWasm`, `listHosts`, `getMode`). A renderer that mounts React but whose startup IPC rejects reports `health:crash`, so the epoch records `crashed` and the watchdog rollback runs.
 
-With a dev URL (`CPD_ELECTRON_DEV_URL=http://localhost:5173/electron.html`, honoured in preview mode only), the first launch loads it. The watchdog's relaunch runs in production mode with no dev URL (item 8), so it loads the built renderer. A failed dev-URL load is recorded as a `did-fail-load` crash, and boot then loads `renderer/electron.html` from the built output, which starts a new epoch. The crash clears before `crashDebounceMs` when that load starts in time, so the watchdog does nothing.
+With a dev URL (`CPD_ELECTRON_DEV_URL=http://localhost:33333/electron.html`, honoured in preview mode only), the first launch loads it. The watchdog's relaunch runs in production mode with no dev URL (item 8), so it loads the built renderer. A failed dev-URL load is recorded as a `did-fail-load` crash, and boot then loads `renderer/electron.html` from the built output, which starts a new epoch. The crash clears before `crashDebounceMs` when that load starts in time, so the watchdog does nothing.
 
 ### Health file and crash log
 
