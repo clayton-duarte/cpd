@@ -80,31 +80,29 @@ async function setup(opts: { text: string; attachmentsDir?: string; now?: number
 
 const send = (c: Array<readonly string[]>) => c.filter((x) => x[1] === "send");
 
-describe("pi backend files", () => {
-  it("a 35 KB text attachment sends and the message holds its path, not its content", async () => {
-    const s = await setup({ text: "", now: 42 });
-    const content = "A".repeat(35 * 1024);
-    const textFile: WireFile = { name: "large.txt", text: content };
+it("a 35 KB text attachment sends and the message holds its path, not its content", async () => {
+  const s = await setup({ text: "", now: 42 });
+  const content = "A".repeat(35 * 1024);
+  const textFile: WireFile = { name: "large.txt", text: content };
 
-    await (s.handle as unknown as { submit: (input: { clientSubmissionId: string; text: string; images: never[]; files?: WireFile[]; whenBusy: string }) => Promise<void> }).submit({
-      clientSubmissionId: "c1",
-      text: "please review",
-      images: [],
-      files: [textFile],
-      whenBusy: "followUp",
-    });
-
-    expect(s.fs.writes.map((w) => w.path)).toContain("/att/s1-42-0-large.txt");
-    const written = s.fs.writes.find((w) => w.path === "/att/s1-42-0-large.txt");
-    expect(written).toBeDefined();
-    expect(new TextDecoder().decode(written?.bytes)).toBe(content);
-
-    const calls = send(s.cpd.calls);
-    expect(calls).toHaveLength(1);
-    const sentText = calls[0]?.at(-1);
-    expect(sentText).toBeDefined();
-    expect(sentText?.length).toBeLessThan(PI_SEND_TEXT_MAX);
-    expect(sentText).toContain("[Attached file: /att/s1-42-0-large.txt]");
-    expect(sentText).not.toContain(content);
+  await (s.handle as unknown as { submit: (input: { clientSubmissionId: string; text: string; images: never[]; files?: WireFile[]; whenBusy: string }) => Promise<void> }).submit({
+    clientSubmissionId: "c1",
+    text: "please review",
+    images: [],
+    files: [textFile],
+    whenBusy: "followUp",
   });
+
+  expect(s.fs.writes.map((w) => w.path)).toContain("/att/s1-42-0-large.txt");
+  const written = s.fs.writes.find((w) => w.path === "/att/s1-42-0-large.txt");
+  expect(written).toBeDefined();
+  expect(new TextDecoder().decode(written?.bytes)).toBe(content);
+
+  const calls = send(s.cpd.calls);
+  expect(calls).toHaveLength(1);
+  const sentText = calls[0]?.at(-1);
+  expect(sentText).toBeDefined();
+  expect(sentText?.length).toBeLessThan(PI_SEND_TEXT_MAX);
+  expect(sentText).toContain("[Attached file: /att/s1-42-0-large.txt]");
+  expect(sentText).not.toContain(content);
 });

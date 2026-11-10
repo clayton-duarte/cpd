@@ -1,6 +1,6 @@
 import { parseTierParts, type TierParts } from "./tier.ts";
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
-import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type CompletionScore, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
+import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type CompletionScore, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireFile, type WireImage } from "./domain.ts";
 import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
 
 
@@ -12,7 +12,7 @@ export type ClientMessage =
   | { type: "session.attach"; sessionId: string } // attaches this connection to that session; an already attached session is detached first
   | { type: "session.detach" } // idempotent
   | { type: "session.loadEarlier"; sessionId: string; before: Cursor }
-  | { type: "session.submit"; sessionId: string; clientSubmissionId: string; text: string; images: WireImage[]; whenBusy: WhenBusy }
+  | { type: "session.submit"; sessionId: string; clientSubmissionId: string; text: string; images: WireImage[]; files?: WireFile[]; whenBusy: WhenBusy }
   | { type: "session.abort"; sessionId: string }
   | { type: "session.abortSubmission"; sessionId: string; clientSubmissionId: string }
   | { type: "session.compact"; sessionId: string; instructions?: string }
