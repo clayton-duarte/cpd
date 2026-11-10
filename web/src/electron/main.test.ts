@@ -35,3 +35,7 @@ function destroyedWindow(): SendTarget {
 test("send does not throw after the window is destroyed", () => {
   expect(() => sendToWindow(destroyedWindow(), "pty:data", "chunk")).not.toThrow();
 });
+
+test("packaged Electron boot path issues and passes webuiToken to createServices", () => {
+  throw new Error("not implemented");
+});
