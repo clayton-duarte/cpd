@@ -1,6 +1,15 @@
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import { readPreviewMode } from './preview-mode';
+import { DEFAULT_DEV_URL, readPreviewMode } from './preview-mode';
+
+it('defaults to port 33333 for preview devUrl', () => {
+  expect(DEFAULT_DEV_URL).toBe('http://localhost:33333/electron.html');
+  expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w' })).toEqual({
+    mode: 'preview',
+    checkout: '/w',
+    devUrl: 'http://localhost:33333/electron.html',
+  });
+});
 
 it('readPreviewMode defaults to production when CPD_MODE is unset', () => {
   expect(readPreviewMode({})).toEqual({ mode: 'production' });
@@ -22,7 +31,7 @@ it('readPreviewMode returns the checkout and dev URL in preview', () => {
   expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: '' })).toEqual({
     mode: 'preview',
     checkout: '/w',
-    devUrl: 'http://localhost:5173/electron.html',
+    devUrl: 'http://localhost:33333/electron.html',
   });
 });
 
@@ -52,12 +61,12 @@ it('resolves the dev URL from CPD_ELECTRON_DEV_URL with the electron.html defaul
   expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w' })).toEqual({
     mode: 'preview',
     checkout: '/w',
-    devUrl: 'http://localhost:5173/electron.html',
+    devUrl: 'http://localhost:33333/electron.html',
   });
   expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: '' })).toEqual({
     mode: 'preview',
     checkout: '/w',
-    devUrl: 'http://localhost:5173/electron.html',
+    devUrl: 'http://localhost:33333/electron.html',
   });
   expect(readPreviewMode({ CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: 'http://127.0.0.1:5173/electron.html' })).toEqual({
     mode: 'preview',

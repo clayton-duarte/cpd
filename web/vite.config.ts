@@ -5,5 +5,5 @@ import { cpdWebPlugin } from "./src/server/plugin.ts";
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), cpdWebPlugin()],
-  server: { port: 5173, strictPort: true },
+  server: { host: "0.0.0.0", port: 33333, strictPort: true },
 });
