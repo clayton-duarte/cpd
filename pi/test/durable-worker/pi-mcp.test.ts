@@ -130,3 +130,8 @@ test("closing the connection closes pi's connection", { timeout: 10_000 }, async
   await c.close();
   assert.equal(fake.constructed[0].closed, 1);
 });
+
+test("durable worker MCP creates tool names using pi-mcp module", { timeout: 10_000 }, async (t) => {
+  // Skeleton
+});
+
