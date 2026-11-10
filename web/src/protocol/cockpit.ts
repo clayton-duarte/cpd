@@ -1,13 +1,15 @@
 // Cockpit read models and actions (web/CONTRACT.md section 5). Types, plus the action parser (parseCockpitAction).
+import type { Urgency as CoreUrgency } from "../generated/types.ts";
 import { WebError, type SessionRef, type SessionState } from "./domain.ts";
 
-export type Urgency = "red" | "yellow" | "magenta" | "blue" | "cyan" | "white"; // seen live: red, magenta; the rest from docs/commands.md:3910 (unverified, O15)
+type UrgencyValue = Lowercase<CoreUrgency>;
+export type { UrgencyValue as Urgency };
 
 export interface PlanCounts { draft: number; queued: number; running: number; merged: number; failed: number; cancelled: number; merging?: number }
 
 export interface SessionDot {
   readonly state: SessionState;
-  readonly attention: Urgency | null; // the most urgent open inbox item that fills this row's dot; always null while state === "working"
+  readonly attention: UrgencyValue | null; // the most urgent open inbox item that fills this row's dot; always null while state === "working"
 }
 
 export interface SessionNode {
@@ -93,7 +95,7 @@ export interface InboxRow {
   readonly id: number;
   readonly kind: string; // seen: pr-ready, dialog, unread, curate-retire; documented: plan-review, loop-guard, drafts-parked, pr-closed, review-requested, deploy, engine-down (scout-cockpit §1.3)
   readonly label: string; // may contain "\n"
-  readonly urgency: Urgency;
+  readonly urgency: UrgencyValue;
   readonly contextId: string | null; readonly planId: string | null; readonly jobKey: string | null;
   readonly sessionId: string | null; // `session`, the chat target when set
   readonly url: string | null;

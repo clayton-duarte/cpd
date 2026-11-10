@@ -2418,3 +2418,43 @@ Normative for the target. **Status at this commit: not built.** There is no `ts-
 - The Gate fails when the checked-in `web/src/generated/types.ts` is not byte-identical to a fresh export. The check is a test that exports in memory and compares (research §1.4). Its failure names `pnpm generate:types` as the fix.
 - The check runs inside `pnpm run verify` (`verify:steps`), so a Rust type changed without regenerating fails before merge.
 - Limits, stated plainly: the byte-identical output across Linux and macOS is the research's claim (unverified here); the exact set of exported types is fixed by the Job that lands the generator, not here; no generator run has been made for this section (unverified).
+
+## 24. Client import contract and the duplicate-declaration prohibition (Plan `core-ts-types`; Job `web-adopt-docs`; decisions pro-d513 to pro-d516)
+
+Normative. The status line of §23 ("not built") is superseded: the generator exists at `main` (commit `43e8ff634`, "Implement core TypeScript contract generator and emit web types"), and `web/src/generated/types.ts` exists and exports `AgentKey`, `Phase`, `PlanPhase`, `Urgency`, `JobKind` and `JobStatus` (verified by reading the file). The rest of §23 stands.
+
+### 24.1 Import contract (pro-d513)
+
+- Every core contract that `web/src/generated/types.ts` exports (`AgentKey`, `Phase`, `PlanPhase`, `Urgency`, `JobKind`, `JobStatus`) is imported from that file, with `import type` and a relative path (§2.1). Nothing under `web/src` imports these names from another module, and nothing re-declares them.
+- `Tier` and `Effort` are not exported by the generated file yet. The in-flight Plan `webui-tier-efforts` (its §22 on branch `webui-tier-efforts/web`, as read in `scout-web-audit` §4.1, not re-read here) replaces `web/src/protocol/tier.ts` with the generated `Tier` and `Effort` types; that replacement needs the generator to export them first. Until then no module declares `Tier` or `Effort` by hand (§24.3).
+- CLI and wire shapes (the `Raw*` read-model types of `web/src/server/cockpit/readmodel.ts` and the enum sets restated beside them) are imported from the generated file once the generator exports them. Until then the hand-written shapes stand. A hand copy of a name the generator already exports is a violation, not a stand-in (§24.3).
+
+### 24.2 `web/src/ui/agentKey.ts` and Plan `webui-router` (pro-d514)
+
+- `web/src/ui/agentKey.ts` uses the generated `AgentKey` type (or re-exports it). It must not declare its own `AgentKey`.
+- The grammar the parser enforces (the context, plan and job regexes, and the 98-character limit) is a copy of core's grammar (`core/src/agent_key.rs` `MAX_LEN = 98`; the id regexes in `core/src/ids.rs`). The generated file exports only the `AgentKey` alias (`string`), not the grammar. Until the generator, or a core read command, exports the grammar, the copy is the drift risk; it is not generated.
+- Current state, verified by reading at this commit: `agentKey.ts` declares `AgentRole` and `ParsedAgentKey`, does not declare `AgentKey`, and does not import from the generated file. It does not yet satisfy this section.
+- Coordination: Plan `webui-router` (§22.2) owns the route shape. `web/src/ui/router.tsx` imports `parseAgentKey` from `agentKey.ts`. A change to an exported name of `agentKey.ts` is made with that plan, not alone.
+
+### 24.3 Duplicate-declaration prohibition (pro-d515)
+
+- **Strictly forbidden:** a `type`, `interface`, `enum` or `class` declaration under `web/src`, outside `web/src/generated/types.ts`, whose name is the name of a type or enum that the generated file exports. The rule is on the name. A local type with the same name but a different shape is a violation too: rename the local type; do not keep both. (A decision of this section; the name-based test below enforces the same rule.)
+- **Pinned by `web/src/types-unique.test.ts`.** The test scans the non-test `.ts`/`.tsx` files under `web/src` for `^(export )?(interface|type) NAME\b` and fails unless each name in its `NAMES` list is declared exactly once. Limits, stated plainly:
+  - The test checks the `NAMES` list, not the generated set. A generated name that is missing from `NAMES` is not pinned. The Job that exports a name adds it to `NAMES` (§23.1). At this commit `NAMES` lists 11 names and none of `AgentKey`, `Phase`, `PlanPhase`, `Urgency`, `JobKind` or `JobStatus`, so the test passes while the duplicates in §24.3 below exist (verified: the test passes at this commit).
+  - The regex matches `interface` and `type` only, not `enum` or `class`.
+  - Test files (`*.test.ts(x)`) are not scanned.
+- **Known violations at this commit** (verified by `grep` of `web/src`, not yet covered by the test). This section grants them no exemption; each is removed or renamed by the Job that owns it:
+  - `Urgency`: `web/src/protocol/cockpit.ts:4` declares its own `Urgency` with lowercase values; the generated `Urgency` has capitalised values.
+  - `JobStatus`: `web/src/ui/dango-status.ts:41` declares its own `JobStatus` (9 values); the generated `JobStatus` has 6.
+  - `Phase`: `web/src/ui/dango-status.ts:118` declares a Dango deploy `Phase` (5 values); the generated `Phase` is core's `Phase` (`core/src/phase.rs`, 6 values, which `PlanPhase` aliases). §23.1 leaves the resolution to the Job that lands the generator; that Job is not named.
+- `web/src/ui/DESIGN.md` (lines 303 and 323) restates the two `dango-status.ts` declarations in Markdown. It is not compiled and the test does not scan it; it is still a restatement and is removed with the code it describes.
+
+### 24.4 Drift check (limits)
+
+- The Gate's drift check is the last step of `verify:steps` (`git diff --exit-code web/src/generated/types.ts`, `package.json:28`). The `generated_types_match_core_contracts` test in `core/tests/contract_types.rs` rewrites the file during `verify:rust`, so a Rust contract changed without `pnpm generate:types` leaves a diff that the last step fails on. That is a write-then-diff. It is verified by reading, not run in this section.
+- The export list is explicit: a core type appears in the file only if `core/tests/contract_types.rs` names it. A new contract type is absent until it is added there (verified by reading).
+
+### 24.5 Open items
+
+- Name clash, live: the three known violations of §24.3 are in the code now. Owner and order are a Lead decision.
+- `Tier` and `Effort` are not generated. Plan `webui-tier-efforts` cannot satisfy §24.1 until the generator exports them. Lead decision: which Job exports them.
