@@ -178,6 +178,16 @@
     },
     "required": []
   },
+  "config tiers list": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "config tiers set": {
     "flags": {
       "--auxiliar": true,
