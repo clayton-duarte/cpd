@@ -2294,3 +2294,28 @@ Grounding: `$CPD_HOME/run/status-workers/explore/scout-tui-status.md`, `scout-we
 - **Click on the Workers segment opens the Settings dialog.** The TUI's Workers pill is non-interactive (scout-tui-status §e), so this is a deliberate WebUI deviation (the User's request). The click runs the App `onSettings` handler exactly as the Settings button does (6.11, DESIGN 3b): `connection.readSettings()`, then the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`).
 - **Click on the incident pill opens the incident Plan's Lead.** When `incident.lead` is a session id, a click calls `connection.selectSession(lead)` (6.11's wiring; `web/src/state/connection.ts:21`), attaching the Lead in the chat slot — the same effect as opening it from the tree. With `lead` null (no Lead resolves, §20.1) the pill draws but a click does nothing: never a fallback to another session.
 - **Not built:** the TUI's short form (above), and no click on any other pill: runner, preview, drift and version stay non-interactive (DESIGN 3b, Not wired).
+
+## 22. WebUI navigation on TanStack Router: every agent is a route (Plan `webui-router`)
+
+Normative. Skeleton; sections below are filled in by Job `web-docs` (attempt `web-docs-a1`).
+
+### 22.1 Router and history
+TBD.
+
+### 22.2 Agent routes
+TBD.
+
+### 22.3 Root layout and the middle-column outlet
+TBD.
+
+### 22.4 Selection navigates through the router
+TBD.
+
+### 22.5 Not-found recovery
+TBD.
+
+### 22.6 Electron and dev/preview
+TBD.
+
+### 22.7 Chat mention linkification
+TBD.
