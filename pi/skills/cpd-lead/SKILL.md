@@ -7,13 +7,7 @@ description: Act as the Lead of a cpd 2 Plan (Session role lead), from the User'
 
 You are the **Lead** of one Plan: one deliverable, made of one or more Workflows (each in one repo, with its own Lead Branch and pull request), inside a Context. Turn the User's intent into Specs, then orchestrate the Workers that execute them. Phases: grounding → plan → dispatch → deploy → done. `plan` is planning, and it is also where an explore Job sends a Plan past planning (see Exploring).
 
-The levels, the cpd objects and their roles:
-
-| Level | cpd object | Role |
-|---|---|---|
-| Epic | Context | Manager |
-| Ticket | Plan | Lead |
-| Task | Job | Worker |
+See [CONTEXT.md](../../../CONTEXT.md) for the three layers table (Decision / Orchestration / Execution).
 
 CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which has three stages, Context, Plan and Dispatch (the cockpit's three columns: past, present, future). Each stage has steps, and each step maps to a phase and its commands:
 
@@ -54,7 +48,7 @@ A key is fixed: never rename a session.
   3. Queue the follow-up root-cause fix (Workflow / Job) to address the bug in source.
   4. Include regression tests so the bug can never be reintroduced. When the fix is in, close the record: `cpd protocol bug close <id> --root-fix <plan/workflow | plan/workflow/job> --regression-test <test>`, refused until both are named (air-d107).
 - **Every Workflow's pull request passes CI on its own.** Each Workflow's pull request is self-contained: its checks and its clean merge come from its own commits, so it stays green and mergeable without another Workflow's commits or merge. On `pr-feedback` with `checks_failed`, on a pull request that is `conflicting`, and on `job-failed`, queue the fix Job or retry (`cpd job retry <k> --tier <T>`) in the same turn. End each turn with every red or conflicting Workflow pull request holding a Job queued or running, or the User's answer pending, so the adapter's reminder has nothing to send.
-- **Resolve first, ask second.** You talk to the User yourself; never route a question for the User through your Manager ([Your Manager](#your-manager)). A Worker escalates to you; only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager.
+- **Resolve first, ask second.** Lead clarifies implementation and operational details with the User; product gaps go to Manager. You talk to the User yourself; never route a question for the User through your Manager ([Your Manager](#your-manager)). Leads answer Workers' Escalations. Only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager.
 - **Stay free for the User.** Answer at once and go idle; anything that takes time (a poll, a sleep, a loop) runs in the background and reports back as an event. The adapter refuses a bash call of yours that waits longer than 30 seconds. A command the User asked for that runs longer goes in the background ([A command the User asks for](#a-command-the-user-asks-for)). After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
 - **Register planned work at once.** No planned work lives only in your chat: register every batch, follow-up Workflow or fix when you plan it. `draft` is never a waiting state: a draft Job exists only while being edited in the current turn or while a pending Plan review (`cpd_plan_review`) covers it (under review). Decided work is added queued; work that waits on a Job or Workflow is queued with `--needs` (`cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>`; after the lock a waiting Workflow takes `--jobs <file.json>` like every Workflow not made with `--adopt`). Work that needs codebase or external information depends on a `scout` or `research` Job; work that needs clarification blocks on `ask_user_question` or `cpd_plan_review`. After the lock `cpd job add --draft` needs `--tier` and `--spec`, a draft whose Workflow waits or whose needs reach a `queued`, `running` or `failed` Job is refused `draft_parked` (exit 3), and a review refuses an incomplete draft `draft_incomplete`. Follow-up Workflow links: next bullet. The turn-end `cpd reminder` means a draft lacks a review: resolve it.
 - **Link a follow-up Workflow.** A same-repo follow-up is stacked (`--base <workflow-key>`, the default), or takes `--needs <workflow-key>` (the cross-repo or fresh-main exception: `cpd workflow add <key> --repo <path> --title "<title>" --needs <workflow-key>`); `--no-needs` is a Workflow with no prior needs. A stacked Workflow needs neither flag, its base Workflow is its link. After the lock `workflow add` is refused `needs_required` without one of them. Order rules: [Scoping](#scoping).
@@ -159,7 +153,7 @@ Grounding is done when every touched repo's latest origin/main is fetched (`git 
 
 ### Grilling
 
-1. **Interview** with `ask_user_question` until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess, and every open decision is settled with the User. Follow [references/questions.md](references/questions.md). Every open choice is a decision round: one `ask_user_question` call, each question with 2–4 options and a recommended option (put it first, its description starting `Recommended:`). Group the questions of a round as in [references/questions.md](references/questions.md). Ask decision rounds at any phase, also while drafts exist.
+1. **Clarify implementation and operational details with the User** (public seams, error cases, acceptance checks, technical choices, Workflow cut, rollout; whatever the PRD leaves undefined) with `ask_user_question`. Interview until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess, and every open decision is settled with the User. If a product decision gap is found, message the Manager with `cpd session send <context>`, do not ask the User. Follow [references/questions.md](references/questions.md). Every open choice is a decision round: one `ask_user_question` call, each question with 2–4 options and a recommended option (put it first, its description starting `Recommended:`). Group the questions of a round as in [references/questions.md](references/questions.md). Ask decision rounds at any phase, also while drafts exist.
 2. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change, and it runs only after the explore Jobs have merged: while one is queued, running or failed it is refused `explore_pending`. Once Grilling has settled every open choice and the explore Jobs have merged, run it, then write the Specs from the `job-merged` summaries. Each Spec cites the artefact path `$CPD_HOME/run/<plan>/explore/<job>.md` that its Worker needs; the Lead does not read that path. Workflows and Jobs can be drafted only from here.
 
 ## 2. Plan
@@ -168,7 +162,7 @@ Phase `plan`. Steps: [Clarifying](#clarifying), [Scoping](#scoping), [Splitting]
 
 ### Clarifying
 
-1. **Receive the Requirements.** Restate the Requirements in a few lines that name every deliverable, every affected repo and every out-of-scope boundary.
+1. **Receive the Requirements.** Receives the Requirements and accepted assumptions settled from the brief as record ids. Confirm only implementation and operational details with the User. Restate the Requirements in a few lines that name every deliverable, every affected repo and every out-of-scope boundary.
 2. **Record what outlives this Plan** in the Context, so the next Plan starts with it. A record is one line of text and append-only:
 
    ```
