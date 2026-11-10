@@ -36,6 +36,19 @@ The Electron boot sequence ensures the mode is applied only after the window exi
 
 The boot strips the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the same five the `cpd desktop` launch removes (commands.md §14.4a; contract §6.6) — from `process.env`, before any cpd child is spawned (every `cpd` call of the updater inherits the app's environment); `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable stay, so the app still finds the home.
 
+## WebUI token
+
+The WebUI token is the per-boot secret that `cpd session send --origin webui` checks (contract §6.16 "The WebUI token"; `core/src/session/send.rs`). Decided by bug report b3. `writeWebuiToken(cpdHome)` in `web/src/server/webui-token.ts` creates it: 32 random bytes as hex, written to `<cpdHome>/run/webui-token` at mode 0600, replacing the file of any earlier start. The Electron main process (`web/src/electron/main.ts`) owns its lifecycle:
+
+- **Issue at boot.** At boot, in `prepare()`, the main process calls `writeWebuiToken(cpdHome)` and passes the returned `webuiToken` into `createServices(boundaries)`.
+- **Reuse on SIGUSR1 reload.** `reloadServer()` passes the same boot token into the fresh `createServices(boundaries)`. A reload writes no new file, so the token stays the one issued at boot (the decision names only the boot issue; this reading is an assumption).
+- **Clean up on quit.** The `app.on('before-quit')` handler removes `<cpdHome>/run/webui-token`.
+- **Not here.** The Vite dev server issues and removes its own token in `web/src/server/plugin.ts` (`configureServer`). That path is unchanged.
+
+A quit that ends with `app.exit(0)` never emits `before-quit` (the watchdog's rollback relaunch, `web/src/electron/watchdog.ts`), so the file stays until the next boot. The next boot replaces it, since `writeWebuiToken` removes the old file first.
+
+Status: decided by bug report b3, root fix pending in Plan install-and-app-reload; as of this amendment the code does not do this. `main.ts` never imports or calls `writeWebuiToken`. `prepare()` calls `createServices(realBoundaries(env))` with no `webuiToken`, `reloadServer()` does the same, and the `before-quit` handler removes no file. So the packaged app never writes `run/webui-token`, and `cpd session send --origin webui` refuses with `webui_token_invalid`. The b3 mitigation patched the installed `CPD.app` outside this repository.
+
 ## Module contract
 
 ### Module contract (web/src/electron/)

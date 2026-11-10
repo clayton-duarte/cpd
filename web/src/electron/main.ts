@@ -18,6 +18,7 @@ import type { ServerMessage } from "../protocol/wire.ts";
 import { DEFAULT_DEV_URL, MODE_ARG, readPreviewMode } from "./preview-mode.ts";
 import * as nodePty from "node-pty";
 import { createServices, realBoundaries } from "../server/plugin.ts";
+import { writeWebuiToken, type IssuedToken } from "../server/webui-token.ts";
 import { watchAttention } from "./attention.ts";
 import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode } from "./channels.ts";
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
@@ -140,6 +141,7 @@ async function main(): Promise<void> {
   const emitViewChange = (): void => {
     for (const handler of [...viewChangeHandlers]) handler();
   };
+  let issuedToken: IssuedToken | undefined;
   let services!: ReturnType<typeof createServices>;
   let started!: Promise<void>;
   let markStarted: () => void = () => {};
@@ -217,7 +219,8 @@ async function main(): Promise<void> {
   // The one WebSocket endpoint (web/CONTRACT.md §15.1): bound here, before the window, so the
   // renderer receives ws://127.0.0.1:<port>/cpd-ws as a plain preload value, not over an IPC
   // data channel. `services` and `started` stay module-scoped so reloadServer can swap them.
-  const boundaries = realBoundaries(env);
+  issuedToken = writeWebuiToken(cpdHome);
+  const boundaries = { ...realBoundaries(env), webuiToken: issuedToken.token };
   services = createServices(boundaries);
   started = new Promise<void>((resolve, reject) => {
     markStarted = resolve;
@@ -558,7 +561,7 @@ async function main(): Promise<void> {
       realBoundaries: typeof realBoundaries;
     };
     const old = services;
-    services = fresh.createServices(fresh.realBoundaries(env));
+    services = fresh.createServices({ ...fresh.realBoundaries(env), ...(issuedToken ? { webuiToken: issuedToken.token } : {}) });
     await Promise.resolve(old.cockpit.stop());
     // Re-arm the start gate: the fresh services' `start()` must gate frames until it lands, or a
     // subscribe racing this reload reaches the still-empty hub and is refused 'cockpit not ready'
@@ -575,6 +578,7 @@ async function main(): Promise<void> {
   let quitting = false;
   app.on("before-quit", (event) => {
     stopUpdate();
+    issuedToken?.remove();
     controllerRef?.dispose().catch((error: unknown) => console.error(error));
     for (const dispose of disposers) dispose();
     nativeShell.dispose();
