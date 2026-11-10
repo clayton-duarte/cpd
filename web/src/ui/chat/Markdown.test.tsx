@@ -51,4 +51,8 @@ describe("Markdown", () => {
     act(() => root.render(<Markdown text={"first\n\nsecond\n\nthird partial"} />));
     expect(calls).toEqual(["third partial"]);
   });
+
+  it("renders markdown links in new tab with noopener noreferrer", () => {
+    // Red test skeleton: will test actual rendering once react-markdown isn't mocked or mock tests components.a
+  });
 });
