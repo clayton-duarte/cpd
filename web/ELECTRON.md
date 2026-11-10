@@ -36,6 +36,10 @@ The Electron boot sequence ensures the mode is applied only after the window exi
 
 The boot strips the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the same five the `cpd desktop` launch removes (commands.md §14.4a; contract §6.6) — from `process.env`, before any cpd child is spawned (every `cpd` call of the updater inherits the app's environment); `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable stay, so the app still finds the home.
 
+## WebUI token
+
+(skeleton, b3)
+
 ## Module contract
 
 ### Module contract (web/src/electron/)
