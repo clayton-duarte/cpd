@@ -2135,6 +2135,7 @@
       "--ensure": false,
       "--help": false,
       "--mark-restart": false,
+      "--migrate-scratch": false,
       "--restart-tmux": false,
       "--wait": false
     },

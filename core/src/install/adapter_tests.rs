@@ -167,7 +167,8 @@ impl Rig {
         let says = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
         let migrated = r#"{"ok":true,"migrated":[]}"#;
         let version = built.clone();
-        let migrate = built;
+        let migrate = built.clone();
+        let dry_run = built;
         (*self.fakes.runner)
             .clone()
             .on(
@@ -179,6 +180,14 @@ impl Rig {
                 "cpd",
                 move |c| Path::new(&c.program) == migrate && c.args == ["config", "--migrate"],
                 Reply::ok(migrated),
+            )
+            .on(
+                "cpd",
+                move |c| {
+                    Path::new(&c.program) == dry_run
+                        && c.args == ["watch", "--check", "--migrate-scratch"]
+                },
+                Reply::ok(r#"{"ok":true}"#),
             );
     }
 
