@@ -2729,7 +2729,8 @@ const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 1\n";
 /// A connection that is not cpd's holding the write lock until it is dropped.
 fn hold_write_lock(db: &Path) -> Connection {
     let conn = Connection::open(db).unwrap();
-    conn.busy_timeout(Duration::ZERO).unwrap();
+    // The engine may itself be mid-write when the lock is taken: wait for it (SQLite's own wait, no sleep here).
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     conn
 }

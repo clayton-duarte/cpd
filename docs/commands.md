@@ -43,6 +43,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 29. [`janitor`](#29-janitor)
 30. [`resource`](#30-resource)
 32. [`swr`](#32-swr)
+33. [`protocol`](#33-protocol)
 
 ## 1. Conventions
 
@@ -223,7 +224,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `open_job_live` | 3 | `pr open` (§9.1) found the Workflow's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
 | `not_an_impl_job`, `path_not_guarded` | 3 | `job approve-tests` (§5.9): the Job is not of kind `impl`; `details.paths` lists the paths no `test_files` entry of its test Jobs guards |
 | `host_approval_required`, `not_a_manager` | 3 | `cpd host repair` (§9.17): needs an approval of the calling Session (`host_approval_required`); Manager role only (`not_a_manager`, commands.md §9.17) |
-| `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors` and a lookup with no `data` (contract §7.6, hs-d96) |
+| `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. A merge's `gh_failed` (contract §7.4) has the detail `gh_failed: <message>` and that same stderr tail, so stderr is always recorded. A RATE_LIMITED reply inside a merge is waited out in place to the reset and uses no try: it ends no Attempt, unless the merge's wait bound is exceeded (contract §7.4). `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors` and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine `pr-poll` (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine `host-alert` (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
@@ -303,6 +304,11 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
 | `cpd desktop` (§14.4a) | none | no | no |
+| `cpd protocol bug report` (§33.1) | Lead, Manager | no | no |
+| `cpd protocol bug mitigate` (§33.2) | Lead, Manager | no | no |
+| `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
+| `cpd protocol bug list` (§33.4) | Manager, Lead, Worker | no | no |
+| `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -2509,13 +2515,13 @@ The pull request poller (hs-d96, D8; contract §7.6): one poll of **all of the U
 |---|---|---|
 | the lock `locks/pr-poll.lock` within 60 s | `lock_timeout` | 5 |
 | `--plan` names no Plan | `plan_not_found` | 4 |
-| a `gh` call fails, times out (15 s each), prints an empty or non-JSON body, answers the search with `errors`, or answers the lookup with no `data`; `details` is `{argv, exit, stderr, call, transient, reason, rate_limited}`: `call` is `search` or `lookup`, `transient` is true for an HTTP 5xx (`gh`'s `HTTP 5xx` in its message), a 15 s timeout, or a cut response (`gh` exited non-zero with `unexpected end of JSON input` in its stderr and no complete stdout, hs-d354), false for everything else and `reason` is `HTTP <status>`, `timeout`, `unexpected end of JSON input` or null (contract §7.6 step 4, hs-d354); `rate_limited` is true for a RATE_LIMITED reply, which `pr-poll` handles as a pause and not as an error (contract §3.7 `pr-poll`, pro-d394) | `gh_failed` | 1 |
+| a `gh` call fails, times out (15 s each), prints an empty or non-JSON body, answers the search with `errors`, or answers the lookup with no `data`; `details` is `{argv, exit, stderr, call, transient, reason, rate_limited}`: `call` is `search` or `lookup`, `transient` is true for an HTTP 5xx (`gh`'s `HTTP 5xx` in its message), a 15 s timeout, a cut response (`gh` exited non-zero with `unexpected end of JSON input` in its stderr and no complete stdout, hs-d354), or a RATE_LIMITED reply (the transient-waiting class), false for everything else and `reason` is `HTTP <status>`, `timeout`, `unexpected end of JSON input`, `rate_limited` or null (contract §7.6 step 4, hs-d354); `rate_limited` is true for a RATE_LIMITED reply, which `pr-poll` handles as a pause to the reset and not as an error (contract §3.7 `pr-poll`, pro-d394) | `gh_failed` | 1 |
 
 There is no precondition on the phase: a Plan in any phase gets the poll.
 
 **Superseded for the github Workflow (`swr-github.md`).** A pass is **one** `gh api graphql` read document (its §3): the searches, the absent-pull-request reads, the checks and feedback reads and the rate limit are selections of that one document, and the rows it writes are those of its §2 and §4. Its `gh` failures are `swr_endpoints('github')` failures (its §7). While the endpoint is paused the pass makes no call and the command answers `{"ok": true, "paused_until": <time>}`, exit 0, polling nothing. The output keys of step 7 are kept; `rate_limit` is the pass's own `rateLimit`. Steps 1, 3, 3a, 3b, 4, 5 and 8 of contract §7.6 are superseded as its §1 says.
 
-**A transient `gh_failed`** (`details.transient` true) is still exit 1 and writes nothing (a failed deploy read, which comes after the rows, leaves them): the command never retries, waits or keeps state, so a Lead's `pr poll` by hand fails at once. The tolerance is engine `pr-poll`'s (contract §3.7): it logs a `watch.log` line, polls again at the next due time and raises an `error` Event only after `watch.pr_poll_transient_minutes` (default 10) of the same call failing (the cut response counts, with `reason` `unexpected end of JSON input`), keeping the first failure's time in `run/pr-poll-failing.json`. A RATE_LIMITED reply is no `error` Event: `pr-poll` pauses the polls instead (contract §3.7 `pr-poll`). Every other `gh_failed` is an `error` Event at once.
+**A transient `gh_failed`** (`details.transient` true) is still exit 1 and writes nothing (a failed deploy read, which comes after the rows, leaves them): the command never retries, waits or keeps state, so a Lead's `pr poll` by hand fails at once. The tolerance is engine `pr-poll`'s (contract §3.7): it logs a `watch.log` line, polls again at the next due time and raises an `error` Event only after `watch.pr_poll_transient_minutes` (default 10) of the same call failing (the cut response counts, with `reason` `unexpected end of JSON input`), keeping the first failure's time in `run/pr-poll-failing.json`. A RATE_LIMITED reply (`reason` `rate_limited`) is never counted by that rule and is no `error` Event: `pr-poll` pauses the polls to the reset instead (contract §3.7 `pr-poll`); a merge's call waits in place to the same reset and consumes no try, and its `gh_failed` detail carries the stderr tail (contract §7.4). Every other `gh_failed` is an `error` Event at once.
 
 **A gh call with cwd `$CPD_HOME`:** `$CPD_HOME` is not a git repository, so a gh call cpd makes there names its repo itself: in the endpoint (`repos/<owner>/<repo>/...`), in GraphQL (`repository(owner:, name:)`) or with `--repo`. A bare `gh pr ...` and the `{owner}/{repo}` placeholders (which gh fills from the cwd's git repository) fail there. The calls this covers are the poll's, the deploy read's, `workflow edit --title`'s, `workflow describe`'s (§9.5a, which takes its repo from the Workflow's row) and the team review lookup's. Calls made in a Lead worktree or a repo checkout resolve through its `origin` and may rely on it.
 
@@ -4117,9 +4123,9 @@ cpd watch [--ensure | --check]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs the `@cpd_workers` step (below), then `escalations` to `pr-poll`, `workflow-start`, `parked-drafts`, `closed-pr-wake` and `inbox` to `archive-asleep` (`host-alert` is removed; `open-jobs` is the `open` Jobs since hs-d340, no longer the completion step; `workflow-start`, the Workflow start, since R34; `parked-drafts`, the parked drafts, after `workflow-start` and before `inbox` (hs-d731, contract §3.7 "Parked drafts"); `closed-pr-wake`, the closed-pull-request wake, right after `parked-drafts` (contract §3.7); `inbox`, the Inbox, §21; `curation`, the Context curation, since hs-d194 (hs-d549, hs-d551); `session-titles`, the Session titles, since hs-d257; `team-review`, the team review read, §21.5; `worker-archive`, the Worker archive, since hs-d516; `sleep`, the Sleep, since hs-d515; `archive-asleep`, archive asleep Sessions and their Plans, hs-d630, pro-d391) (`overdue-bump` is retired, pro-d388, contract §3.7; no Step sends a Slack message by itself) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
-**The idle clock** (A37; contract §3.7 `sleep`): a Lead or Manager Session is put to sleep once `timeouts.sleep_seconds` have passed since its idle clock. The clock is the time of its latest `session-state` Event whose `from` is `working`, `blocked` or `waiting` (the end of a turn or of a wait). No other state write moves it: not a state refresh, a label change, the crash-loop latch, or the `stopped` → `idle` reload of a Session. So a turn that a reloaded Session starts itself counts from its own end, never from the reload.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then `escalations` to `pr-poll`, `workflow-start`, `parked-drafts`, `closed-pr-wake` and `inbox` to `archive-asleep` (`host-alert` is removed; `open-jobs` is the `open` Jobs since hs-d340, no longer the completion step; `workflow-start`, the Workflow start, since R34; `parked-drafts`, the parked drafts, after `workflow-start` and before `inbox` (hs-d731, contract §3.7 "Parked drafts"); `closed-pr-wake`, the closed-pull-request wake, right after `parked-drafts` (contract §3.7); `bug-protocol`, the bug protocol, right after `closed-pr-wake` (contract §3.7, air-d105); `inbox`, the Inbox, §21; `curation`, the Context curation, since hs-d194 (hs-d549, hs-d551); `session-titles`, the Session titles, since hs-d257; `team-review`, the team review read, §21.5; `worker-archive`, the Worker archive, since hs-d516; `sleep`, the Sleep, since hs-d515; `archive-asleep`, archive asleep Sessions and their Plans, hs-d630, pro-d391) (`overdue-bump` is retired, pro-d388, contract §3.7; no Step sends a Slack message by itself) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
+**The idle clock** (A37; contract §3.7 `sleep`): a Lead or Manager Session is put to sleep once `timeouts.sleep_seconds` have passed since its idle clock. The clock is the time of its latest `session-state` Event whose `from` is `working`, `blocked` or `waiting` (the end of a turn or of a wait). No other state write moves it: not a state refresh, a label change, the crash-loop latch, or the `stopped` → `idle` reload of a Session. So a turn that a reloaded Session starts itself counts from its own end, never from the reload.
 
 `pr-poll` (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and `pr-poll`'s due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
@@ -8045,3 +8051,106 @@ Effects: one write transaction on the row of `<endpoint>` in `swr_endpoints`. `o
 ```
 
 Idempotent: `ok` yes; `error` no, each call counts one failure.
+
+## 33. `protocol`
+
+The bug record (air-d104; contract §2.2 "Bug record"): the bug report protocol (pro-d204) as commands, not prose. One row per bug in the `bug_records` table. The commands append no Event and add no Event kind: the engine tick's breach check (contract §3.7 E25) owns the protocol's events — the owner wake, the `bug-breach` Event (contract §5.2) and the User's Inbox item (contract §2.2 "Inbox item", kind `bug`) — and the adapter ignores the kind, so the protocol number does not change (contract §5.2). **Callers:** `report`, `mitigate` and `close` are the Lead's and the Manager's; a Worker that finds or is handed a bug reports it to its Lead, and the commands refuse it `not_a_lead` (exit 3, nothing written) when `CPD_ATTEMPT` is set and non-empty, as `job addendum` is. `list` and `show` are every agent's, read-only. **'Mitigation'** (air-d103): an agent-applied stopgap that removes or contains the User's symptom now; handing the User manual steps is not a mitigation unless the User chooses it. **Ownership** (air-d104): the Manager owns a cross-Plan bug (`plan` null), a Plan's Lead owns a bug of its Plan. The bug id is `b<k>`, the highest `<k>` in the table plus one, starting at 1, never reused.
+
+### 33.1 `protocol bug report`
+
+```
+cpd protocol bug report --title <text> --symptom <text> [--cause <text>] [--plan <id>]
+```
+
+Records a bug and opens its protocol state. `--title` is the one-line name (1 to 200 characters with no NUL), `--symptom` what was seen (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is known at report time, `--plan` the Plan the bug belongs to; without `--plan` the bug is cross-Plan and the Manager owns it. Every text flag is required to be non-empty (`usage`, exit 2); `--plan` must name a Plan that exists and is not deleted (`plan_not_found`, exit 4).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--title` and `--symptom` present, 1 to 200 and 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `--plan`, if present, names a Plan that exists and is not deleted | `plan_not_found` | 4 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction, one insert into `bug_records` (contract §2.2 "Bug record"): `id` the next `b<k>`, `status` `open`, `reported_by` the caller's Session id (`CPD_SESSION`; null when unset), `reported_at` the transaction's time, `cause` from `--cause`, every other field null. **No Event is appended.** **The wake** (air-n120; contract §3.7 E25, §2.2 "Bug record", "The wake and the breach check"): at the first tick that sees the new record the engine wakes its owner — the bug's `bug` Inbox item (contract §2.2 "Inbox item") and one waking `session-message` to the owner (the Plan's Lead when `--plan` names one, else the live Manager of Context `cpd`), with a session resume when the owner is asleep or idle — so the 15-minute bound (air-d105) can be met; the command itself writes nothing beyond the row.
+
+**Output:**
+
+```json
+{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
+```
+
+**Not idempotent:** every call reports a new bug.
+
+### 33.2 `protocol bug mitigate`
+
+```
+cpd protocol bug mitigate <id> --mitigation <text> [--cause <text>]
+```
+
+Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--mitigation` present, 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `<id>` names a `bug_records` row | `bug_not_found` | 4 |
+| the bug's `status` is `open` | `illegal_transition` | 3 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
+
+**Output:** the `bug` object of §33.1, with the new values.
+
+**Idempotent:** the same `--mitigation` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
+
+### 33.3 `protocol bug close`
+
+```
+cpd protocol bug close <id> --root-fix <ref> --regression-test <text>
+```
+
+Closes a bug whose root fix is in and its regression test recorded (air-d107). `--root-fix` is the root-fix Work as a reference: a Plan id, a Workflow `<plan>/<key>` ("A Workflow reference", contract §2.2) or a Job `<plan>/<workflow>/<key>`; cpd stores it and does not resolve it. `--regression-test` names the test that pins the fix, as the repo names its tests (a test function, file or filter). Both flags are required and non-empty: a missing or empty one is refused `root_fix_required` (exit 3, nothing written, `details` `{"missing": ["root-fix" | "regression-test"]}`), the refusal air-d107 names — a close without a root-fix link and a regression test does not happen. Malformed text (over 200 characters, a NUL) is `usage` (exit 2).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--root-fix` and `--regression-test` present, 1 to 200 characters each, no NUL (`details` `{"missing": [...]}`) | `root_fix_required` | 3 |
+| `<id>` names a `bug_records` row | `bug_not_found` | 4 |
+| the bug's `status` is `open` | `illegal_transition` | 3 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** one transaction: `root_fix` and `regression_test` set from the flags, `status` `closed`, `closed_at` the transaction's time, `closed_by` the caller's Session id (`CPD_SESSION`; null when unset). **No Event is appended.** Nothing else changes: the root-fix Job or Workflow is queued and merged by the Plan's own machinery, never by this command.
+
+**Output:** the `bug` object of §33.1, `status` `closed`.
+
+**Idempotent:** a close of a bug whose `status` is already `closed` is `{"ok": true, "already": true}` with the `bug` object, nothing written, whatever the flags say.
+
+### 33.4 `protocol bug list`
+
+```
+cpd protocol bug list [--plan <id>] [--status open|closed] [--mitigated yes|no]
+```
+
+Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <id>` the bugs of one Plan (`--plan` is validated as §33.1 validates it, `plan_not_found` exit 4, and then filters: a Plan no bug names lists the empty array), `--status` open or closed bugs, `--mitigated yes` the bugs with a mitigation recorded, `--mitigated no` the bugs with **mitigation applied: no** (air-d104: the state is queryable). Read-only; no Worker check.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--status`, if present, is `open` or `closed`; `--mitigated`, if present, is `yes` or `no` | `usage` | 2 |
+| `--plan`, if present, names a Plan that exists and is not deleted | `plan_not_found` | 4 |
+
+**Output:**
+
+```json
+{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
+```
+
+**Idempotent:** a read; the same store gives the same list.
+
+### 33.5 `protocol bug show`
+
+```
+cpd protocol bug show <id>
+```
+
+One bug record, every field (contract §2.2 "Bug record"), so **mitigation applied: no** is visible (`mitigation`, `mitigated_by` and `mitigated_at` null). `<id>` that no row holds is `bug_not_found` (exit 4). Read-only; no Worker check.
+
+**Output:** the `bug` object of §33.1.
+
+**Idempotent:** a read.
