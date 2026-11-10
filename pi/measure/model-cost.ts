@@ -1,8 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 
 export interface ModelCostOptions {
   json?: boolean;
@@ -813,9 +812,6 @@ export async function main(argv: readonly string[]): Promise<number> {
   return 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const code = await main(process.argv.slice(2));
-  if (code !== 0) {
-    process.exitCode = code;
-  }
+if (import.meta.main) {
+  void main(process.argv.slice(2));
 }
