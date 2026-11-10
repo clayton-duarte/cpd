@@ -16,14 +16,27 @@ function idle(host: Host, r: Run): boolean {
   return host.run === r && ctx !== undefined && ctx.isIdle() && !ctx.hasPendingMessages() && r.facts.wanted().state === "idle";
 }
 
-/** Switches pi to the row's model and thinking level when one is due and the Session is idle: once per change, never while it works. Called by the Event and by every `agent_settled`. */
-export async function switchModel(host: Host, r: Run): Promise<void> {
+/** Whether the Session is in a safe state to switch: idle, or ready before the next request (commands.md §10.16). Never while waiting or blocked. */
+function canSwitch(host: Host, r: Run, beforeRequest = false): boolean {
+  if (host.run !== r) return false;
+  if (beforeRequest) {
+    const state = r.facts.wanted().state;
+    return state !== "waiting" && state !== "blocked";
+  }
+  return idle(host, r);
+}
+
+/** Switches pi to the row's model and thinking level when one is due:
+ * 1. at idle (never while working, waiting or blocked)
+ * 2. before the next provider request or retry (commands.md §10.16, never while waiting or blocked)
+ * Called by the Event, every `agent_settled`, and on `agent_start` (or before_agent_start). */
+export async function switchModel(host: Host, r: Run, beforeRequest = false): Promise<void> {
   if (r.retiering) return;
   r.retiering = true;
   try {
-    while (r.retierDue && idle(host, r)) {
+    while (r.retierDue && canSwitch(host, r, beforeRequest)) {
       r.retierDue = false;
-      await apply(host, r);
+      await apply(host, r, beforeRequest);
     }
   } finally {
     r.retiering = false;
@@ -31,7 +44,7 @@ export async function switchModel(host: Host, r: Run): Promise<void> {
 }
 
 /** The `model` and `thinking` of `cpd session show`: the mapping from the Tier is cpd's (commands.md §10.2), the adapter reads no config. */
-async function apply(host: Host, r: Run): Promise<void> {
+async function apply(host: Host, r: Run, beforeRequest = false): Promise<void> {
   let model: string;
   let thinking: string | null;
   try {
@@ -42,8 +55,8 @@ async function apply(host: Host, r: Run): Promise<void> {
     if (host.run === r) host.deliver("model switch", e);
     return;
   }
-  if (host.run !== r || !idle(host, r)) {
-    r.retierDue = true; // the Session started working while the row was read: the switch is still owed, at its next idle
+  if (!canSwitch(host, r, beforeRequest)) {
+    r.retierDue = true; // the Session moved out of a safe switch state while the row was read: the switch is still owed
     return;
   }
   const unavailable = async (why: string) => {

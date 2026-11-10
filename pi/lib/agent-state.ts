@@ -61,6 +61,7 @@ export function registerAgentState(host: Host): void {
   pi.on("agent_start", () => {
     const r = host.run;
     if (!r) return;
+    if (r.retierDue) void switchModel(host, r, true);
     r.facts.active = true;
     host.refresh(r);
   });
