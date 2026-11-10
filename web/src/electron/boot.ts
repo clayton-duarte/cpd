@@ -77,14 +77,18 @@ export async function boot(deps: BootDeps): Promise<void> {
     mark('startUpdate-done');
     if (update.bootstrap.state === 'ready') deps.startServices();
     mark('services-started');
-    const devUrl = preview.mode === 'preview' ? preview.devUrl : null;
+    const devUrl = preview.mode === 'preview' ? preview.devUrl : 'http://localhost:3333';
     if (devUrl) {
       mark('loadDevUrl-start');
       try {
         await deps.loadDevUrl(win, devUrl);
       } catch (error) {
-        console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
-        await deps.loadFile(win, 'renderer/electron.html');
+        if (preview.mode === 'preview') {
+          console.error(`dev URL ${devUrl} failed to load; loading the built renderer`, error);
+          await deps.loadFile(win, 'renderer/electron.html');
+        } else {
+          throw error;
+        }
       }
     } else {
       mark('loadFile-start');

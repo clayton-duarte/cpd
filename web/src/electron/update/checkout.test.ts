@@ -10,6 +10,24 @@ describe('resolveCheckout', () => {
   it('resolveCheckout prefers CPD_CHECKOUT', () => {
     expect(resolveCheckout({ env: { CPD_CHECKOUT: '/env/root' }, bundleDir: '/repo/web/dist-electron', fs: fsOf('/env/root') })).toBe('/env/root');
   });
+  it('packaged app resolves checkout via app-root', () => {
+    const homedir = '/Users/alice';
+    const appRoot = `${homedir}/.local/share/cpd/app-root`;
+    const fs = fakeFs({
+      ...Object.fromEntries([`${ROOT}/scripts/install-cpd.sh`, `${ROOT}/.git/HEAD`].map((p) => [p, ''])),
+      [appRoot]: `${ROOT}\n`,
+    });
+    // In a packaged app, bundleDir is CPD.app/Contents/Resources/app.asar/dist-electron.
+    // Resolving two levels up gives CPD.app/Contents/Resources, which lacks install-cpd.sh and .git.
+    // resolveCheckout should fall back to resolving via ~/.local/share/cpd/app-root.
+    expect(
+      resolveCheckout({
+        env: { HOME: homedir },
+        bundleDir: '/Applications/CPD.app/Contents/Resources/app.asar/dist-electron',
+        fs,
+      }),
+    ).toBe(ROOT);
+  });
   it('resolveCheckout falls back to two levels above the bundle dir', () => {
     expect(resolveCheckout({ env: {}, bundleDir: '/repo/web/dist-electron', fs: fsOf('/repo') })).toBe('/repo');
   });

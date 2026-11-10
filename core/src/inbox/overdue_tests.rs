@@ -110,7 +110,7 @@ fn a_reviewed_draft_or_closed_pr_is_never_overdue() {
         (
             "changes requested",
             "review_decision = 'changes_requested'",
-            None,
+            Some(()),
         ),
         ("draft", "draft = 1, merge_state = 'draft'", None),
         ("closed", "state = 'closed'", Some(())),

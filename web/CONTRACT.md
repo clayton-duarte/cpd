@@ -1455,7 +1455,7 @@ Behaviours (tested with a fake `ViteDevServer` and fake boundaries):
 - `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite. **Amended by 15.1:** the same `hub.handle(data)` call serves the WebSocket endpoint's incoming text frames, and the hub answers a `ping` client message with `pong` at once (15.2), with no cockpit, backend or parse error involved.
 - Closing: on `server.httpServer?.once("close")` (and the plugin's `closeBundle` hook, whose dev-server timing is unverified, O17) the plugin closes every connection, calls `cockpit.stop()`; idempotent. Plugin starts services on server start and closes them on server close.
 
-`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code.
+`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Superseded for the port by pro-d541** (§15.1 "Fixed ports"): the dev server binds `0.0.0.0:33333` with `strictPort`.
 
 ### 6.7 ui-cockpit `web/src/ui/cockpit/`
 
@@ -2154,8 +2154,12 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 - **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
 - **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
-- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in.
+- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in. **Amended by pro-d543** for ports 3333 and 33333: the accepted set is widened to LAN hosts and narrowed to those two ports, as "LAN origins" below states.
 - **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
+
+- **Fixed ports (pro-d541).** The production WebUI server (built renderer and `/cpd-ws`) is a supervised engine service on `0.0.0.0:3333`. The preview Vite server is bound to `0.0.0.0:33333` with `strictPort`. Both are described in docs/ui-preview.md, "WebUI ports", and web/ELECTRON.md, "WebUI ports". The production page is served from `http://localhost:3333`, so its `/cpd-ws` connection is same-origin. The frames and the path do not change.
+- **LAN origins on the fixed ports (pro-d543; amends "The Origin check" above).** On ports 3333 and 33333, the endpoint accepts a connection whose `Origin` host is one of: `localhost`, a loopback address (`127.0.0.1`, `[::1]`); an RFC 1918 private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`); an IPv6 unique-local address (`fc00::/7`); or a `.local` mDNS hostname. The `Origin` port must be exactly 3333 or 33333, so an `Origin` with no explicit port is rejected. The scheme must be plain `http`; an `https` Origin is rejected. Absent, `null` and `file://` Origins are accepted as above. Every other Origin is rejected before any hub is created. Loopback on any other port, which the earlier rule accepted, is no longer accepted. There is no token and no TLS, by decision. This is not access control: the `Origin` header is set by a browser, and any non-browser client can send any `Origin`, so a LAN peer that is not a browser is not stopped by this rule. That risk is accepted by the decision and stated here. Status: decided; as of this amendment the code accepts loopback on any port and no LAN host (`web/src/server/ws.ts`, `acceptsOrigin`).
+- **Port in use fails loud (pro-d542).** A server that must bind 3333 or 33333 while another process holds that port exits non-zero and never falls back to another port. Before it exits, it names the holder by process name and PID. The holder is read with `lsof -nP -iTCP:<port> -sTCP:LISTEN`, and with `ss -H -ltnp 'sport = :<port>'` when `lsof` is not available. If neither names the holder, the exit still names the port. Status: decided; as of this amendment no such check exists in the code, and the message is the implementing change's to write.
 
 ### 15.2 The heartbeat and the stall watchdog (air-d46)
 
@@ -2518,3 +2522,33 @@ The implementation Job (`webui-core-ws-impl`) deletes these. This section names 
 - **Superseded, not edited:** §13 (cockpit stream), §18 (argv contract), §15.2 (the stall watchdog), docs/contract.md §5.5 and §5.6 for the web. Each carries its own history, so none is rewritten.
 
 **Open, flagged:** pi-native-core §2.6 also lists git (`plugin.ts:361`), tmux (`status.ts:38`) and the classifier (`completion-classify.ts:91`) as shell-outs from the web. Plan 4's removal list names only the cpd-argv layer and `cockpit/stream.ts`. Whether the other three leave the web in this Plan is not stated; this section does not remove them.
+
+## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+
+Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
+
+### 27.1 Who writes a token
+
+- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
+
+### 27.2 Lifecycle cases
+
+| Event | Effect on the files | Effect on the tokens |
+|---|---|---|
+| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
+| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `web/ELECTRON.md`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
+| The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
+| SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
+
+### 27.3 Verifiers
+
+The verifiers read the directory at each check, as docs/contract.md §6.16 says: the durable host (`pi/durable-host/run.ts`, `webuiVerified`, at each submit) and the cpd CLI (`core/src/session/send.rs`, for `cpd session send --origin webui`). Both accept a presented value when it matches a file of a live pid. The rule is written once, in §6.16; neither verifier keeps its own copy of it in a document.
+
+### 27.4 Status and limits
+
+- Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
+- Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
+- Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).

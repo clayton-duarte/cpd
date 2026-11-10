@@ -788,6 +788,36 @@ fn apply(
                 crate::incident::end_if_until_workflow_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
             } else if let Some(resolved) = checks_of(checks, plan, key) {
+                let db_path = tx.path().unwrap_or("");
+                let conflicting = after.mergeable == "conflicting";
+                let checks_failed = after.checks == "failed";
+                let changes_requested = after.review_decision == "changes_requested";
+                let stacked = matches!((&after.base_ref, &after.default_branch), (Some(b), Some(d)) if b != d);
+                let behind_main = !stacked
+                    && contained.iter().any(|c| {
+                        c.repo == after.repo && c.number == after.number && c.value == Some(0)
+                    });
+                if let Some(state_kind) = if conflicting {
+                    Some("conflict")
+                } else if checks_failed {
+                    Some("failing")
+                } else if changes_requested {
+                    Some("changes_requested")
+                } else if behind_main {
+                    Some("behind_main")
+                } else {
+                    None
+                } {
+                    pulls::get_or_track_detection(
+                        db_path,
+                        &after.repo,
+                        after.number,
+                        state_kind,
+                        now,
+                    );
+                } else {
+                    pulls::clear_detection(db_path, &after.repo, after.number);
+                }
                 if tell(tx, plan, key, resolved, &change)? {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
