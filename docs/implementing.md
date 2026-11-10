@@ -426,7 +426,7 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui` (history); crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
 | `notify` 8.2 | `default-features = false`, `macos_fsevent` | the commit watcher of the views (`tui/src/read/watch.rs`): one watcher on the store's directory, so a view wakes on a commit instead of polling |
 | `tui-tree-widget` 0.24 | | `TreeState`, the open and selected store for the `tree` view (`opened`, `selected`, `open`, `close`, `toggle`, `select`); the view paints rows from its own flat list |
-| `ts-rs` 12.0.1 | `uuid-impl` | TypeScript contract generation for the desktop web client: `#[derive(TS)]` on the core contracts exports `web/src/generated/types.ts` directly from the Rust types, using Serde derive semantics (`rename`, `tag`, `untagged`, `flatten`), without external CLI tooling. `uuid-impl` maps `uuid::Uuid` to `string`. Planned (Plan `core-ts-types`, decisions pro-d513 to pro-d516): not yet declared in the root `Cargo.toml` at this commit, and the contract is documented in `web/CONTRACT.md` §22 |
+| `ts-rs` 12.0.1 | `uuid-impl` | TypeScript contract generation for the desktop web client: `#[derive(TS)]` on the core contracts exports `web/src/generated/types.ts` directly from the Rust types, using Serde derive semantics (`rename`, `tag`, `untagged`, `flatten`), without external CLI tooling. `uuid-impl` maps `uuid::Uuid` to `string`. Planned (Plan `core-ts-types`, decisions pro-d513 to pro-d516): not yet declared in the root `Cargo.toml` at this commit, and the contract is documented in `web/CONTRACT.md` §23 |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
 
 Removed: `sha1` 0.10, which named the per-repo lock `repo-<sha1>.lock`; hs-d243 removed the lock (contract §1.4, §7), and with it `CpdHome::repo_lock` and the dependency (the one exception to the rule above, decided with the lock's removal). `ts-rs` is the next one planned (Plan `core-ts-types`, decisions pro-d513 to pro-d516): the Job that lands the generator declares it once in the root `Cargo.toml`, by the same rule. `notify` is the one dependency added after the TUI Job, by decision of the User in Plan sync (hs-d595 part 3), added by that Plan's Job sync-tests-watch so the tests build; the rule stands for everything else.
@@ -551,7 +551,40 @@ hs-d463 (incident: mac-pro's first sync install after #169 killed `cpd-work:watc
 - Shell: one function per script holds the only `tmux -u` line: `tmux_cmd` in `preview-tui.sh` (`install-cpd.sh` calls no tmux: `cpd install` does, through `host::tmux::client`).
 - **The guards:** `scripts/check-portable.sh` refuses a bare `tmux` ("The portability check", the row below); a Rust test refuses a tmux spawn outside `core/src/host/tmux.rs`; a Rust test with a fake `tmux` that records its argv requires `-u` first in the call of every `Tmux` method, of `installed_version`, of `doctor` and of `exec_attach`, under `LANG=C`, `LC_ALL=C` and an empty locale; a Rust test runs `list-panes -a -F` through `Tmux` against a real tmux with `env_clear` plus `PATH` (and with `LC_ALL=C`), and requires the panes to parse. The last is the defect itself: it fails today on tmux 3.8, where a client without a UTF-8 locale prints the formats' tabs as `_`, and passes with `-u`.
 
+## The shell release and the payload
+
+Plan app-shell-release, decided by pro-d90 (the split and the release), pro-d91 (local build, ad-hoc signing, CLI first), pro-d504 and pro-d505 (the architecture and the commands). The commands are commands.md §14.4 (`cpd install`), §14.4a (`cpd desktop`) and §14.4b (`cpd desktop release`).
+
+Status for the whole section: decided; as of this amendment the code has only the updater's leg (`web/src/electron/update/`, web/ELECTRON.md "Auto-update and CLI bootstrap"). The shell is still packaged by `scripts/install-cpd.sh` and copied to `~/.local/share/cpd/app`, there is no shell version, no ABI check, no release command and no release. The implementing change (Job shell-release-impl) brings the code in line; the tests that pin it come first (Job shell-release-tests).
+
+**Two artefacts, two lifecycles.**
+
+- **The shell** is the immutable CPD.app: the Electron main process, the watchdog and the updater (`web/src/electron/main.ts`, `watchdog.ts`, `update/`). It changes only when the shell or watchdog code changes. Its one channel is a GitHub Release, cut by `cpd desktop release` (commands.md §14.4b) with the tag `app-v<shell version>`, and its install is `/Applications/CPD.app` (commands.md §14.4a).
+- **The payload** is the WebUI renderer and the server bundle that the shell loads. It changes on every merge to main. It is not part of the shell: each build is a versioned directory, and the shell loads the one that is current. `cpd install` refreshes it from the checkout (commands.md §14.4, step 7a), and the watchdog builds and updates it from main (below). Neither touches the shell.
+
+The split reuses the existing code. The shell and the payload share `web/src/electron/`; the watchdog and the updater are not forked for the release. The line is the build output and the load path.
+
+**The shell ABI check.** The shell declares its ABI version: an integer for the shell's side of its interface with the payload (for example the IPC channels and the health records the watchdog reads). Its version constant is `web/src/electron/version.ts`, added by the implementing change. Each payload build declares the minimum shell ABI it needs. The shell loads a payload only when its own ABI is at least that minimum. Otherwise it refuses the payload, keeps the current one, and reports an `error` Event with the message `new CPD.app release needed`, shown to the User (air-d81 pattern, commands.md §11). The ABI is bumped when that interface changes. The shell version (the semver in the shell's version constant, `web/src/electron/version.ts`) names the release; a check fails when shell code changed without a version bump, so a shell change cannot ship under an old version.
+
+Status: decided by pro-d90 and pro-d504; the ABI, the manifest field and the check are not in the code.
+
+**The watchdog update lifecycle.** The payload updates silently and safely, rolls back on failure and reports (pro-d90). In order:
+
+1. **Trigger.** A `pr-merged` Event on the cpd Event stream, or the catch-up check at launch (`update/follow.ts`). This is the signal the CLI's own update uses.
+2. **Build beside.** The updater syncs the checkout to `origin/main` and builds the payload into a new versioned directory. The live payload is not touched (the build and the lockfile step of web/ELECTRON.md, "Auto-update and CLI bootstrap").
+3. **Check.** The new payload's minimum shell ABI is compared with the running shell's. A refusal reports `new CPD.app release needed`, stops the update and leaves the current payload in place.
+4. **Swap.** The new versioned directory becomes current in one atomic step, as the updater's swap does today.
+5. **Reload and health.** The renderer reloads onto the new payload. It counts as healthy only after its first `cockpit.snapshot` (web/CONTRACT.md §15.2); the watchdog reads the health records within its window.
+6. **Roll back on failure.** A detected break (empty data, `cockpit not ready`, a dead socket, a renderer crash, a hang: web/ELECTRON.md, "What it detects") reverts along the ladder preview > prod > HEAD-1 > HEAD-2, over the payloads kept on disk (web/ELECTRON.md, "The revert ladder").
+7. **Report.** Each update, refusal, detection and recovery is a structured cpd Event (air-d81) and is shown to the User. A silent revert is not possible.
+
+Status, checked against the code (`web/src/electron/`, as of this amendment): steps 1, 2 and 4 are in the updater (`update/follow.ts` listens for `pr-merged`; `update/start.ts` and `update/bundle.ts` build beside and swap). Step 5's health gate is in the renderer (`renderer.ts`, `health:ok` only after the first snapshot). Step 6's ladder is in `main.ts` (`startHealthWatchdog`, the revert over `dist-electron`, `.head-1` and `.head-2`), but the watchdog reads `$CPD_HOME/run/cockpit-health.json`, and no code in the repository writes that file (the recorder writes `preview-health.json`), so in production it sees no break. Step 7 writes `run/watchdog-events.jsonl`, not cpd Events. Step 3 is not in the code: there is no shell version, no ABI and no check. The implementing change brings the code in line.
+
+**What the release does not cover.** The payload and the CLI never need a release. A Linux or Windows shell is out of scope (pro-d91: the shell is built locally on mac-pro, with macOS arm64 as the target). Developer ID signing and notarization are out of scope (pro-d91 b).
+
 ## `cpd desktop`
+
+Status: the plain form of `cpd desktop` changes to the shell form (commands.md §14.4a; "The shell release and the payload" above, decided by pro-d505). The text below describes the checkout form, which the code has today.
 
 Plan cpd-app-launch, decision pro-d431. `cpd desktop` (commands.md §14.4a) and install's Electron step (step 8a above) share one area, `core/src/app/`, and the CLI handler `cli/src/app.rs` (the `Args` struct and `run`, as `cli/src/install.rs`; a root `Command::App` variant, its dispatch arm and its `cli/src/interface.rs` row). The area uses `Ports` and std only; it depends on no other area.
 

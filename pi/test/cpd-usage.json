@@ -480,6 +480,16 @@
     },
     "required": []
   },
+  "desktop release": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "doctor": {
     "flags": {
       "--help": false

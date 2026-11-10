@@ -731,3 +731,54 @@ fn a_reload_does_not_restart_the_sleep_clock() {
         "a finished Lead with no event at all sleeps: the fixture's conditions hold"
     );
 }
+
+#[test]
+fn a_second_session_run_for_the_same_id_is_refused_and_starts_no_pi() {
+    let f = start("working");
+    assert_eq!(f.pis(), 1);
+
+    // Create a second pane for the same session id in the cockpit.
+    let pane2 = Pane::new(&f.fx, LEAD, &f.installed);
+    let mut w2 = pane2.run(&["session", "run", LEAD]);
+
+    match w2.finish() {
+        Ended::Returned { code, stdout } => {
+            assert_eq!(
+                *code, 3,
+                "second session run must exit 3 (refused): {stdout}"
+            );
+            let error: serde_json::Value = serde_json::from_str(stdout).unwrap();
+            assert_eq!(
+                error["error"]["code"], "session_running",
+                "exit code should be session_running: {stdout}"
+            );
+        }
+        other => panic!("expected second session run to return error, got {other:?}"),
+    }
+
+    assert_eq!(f.pis(), 1, "pis() remains 1");
+}
+
+#[test]
+fn adopt_is_refused_while_the_session_pi_lock_is_held() {
+    let f = start("working");
+    let pi = f.pi();
+    assert_eq!(f.pis(), 1);
+
+    let pane2 = Pane::new(&f.fx, LEAD, &f.installed);
+    let mut w2 = pane2.run(&["session", "run", LEAD, "--adopt", &pi.0.to_string()]);
+
+    match w2.finish() {
+        Ended::Returned { code, stdout } => {
+            assert_eq!(*code, 3, "adopt must exit 3 (refused): {stdout}");
+            let error: serde_json::Value = serde_json::from_str(stdout).unwrap();
+            assert_eq!(
+                error["error"]["code"], "session_running",
+                "exit code should be session_running: {stdout}"
+            );
+        }
+        other => panic!("expected adopt to return error, got {other:?}"),
+    }
+
+    assert_eq!(f.pis(), 1, "pis() remains 1");
+}

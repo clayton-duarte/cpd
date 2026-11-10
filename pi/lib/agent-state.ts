@@ -58,9 +58,10 @@ export function registerAgentState(host: Host): void {
     if (r && r.facts.active && isTyped(event)) r.facts.reply = true; // typing during a run (steer or follow-up) makes it a reply run
   });
 
-  pi.on("agent_start", () => {
+  pi.on("agent_start", async () => {
     const r = host.run;
     if (!r) return;
+    if (r.retierDue) await switchModel(host, r, true);
     r.facts.active = true;
     host.refresh(r);
   });
