@@ -21,7 +21,7 @@ import { start, stop } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 import { blocked, registerRefusalReports } from "./refusal-report.ts";
-import { guardProtocolBreach } from "./protocol-breach.ts";
+import { guardExternalBreach, guardMainAndSecretBreach } from "./protocol-breach.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
@@ -74,14 +74,15 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     noteQuestionTool(host, event.toolName);
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return blocked(host, event.toolName, looped, event.input);
-    const breached = guardProtocolBreach(host, event, ctx);
-    if (breached !== undefined) return breached;
-    if (host.run && event.toolName === "ask_user_question") return undefined; // held by guardProtocolBreach
+    const external = guardExternalBreach(host, event);
+    if (external !== undefined) return external;
     const role = host.run?.info.role;
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return blocked(host, event.toolName, explored.block, event.input);
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
     if (led !== undefined) return blocked(host, event.toolName, led.block, event.input);
+    const breach = guardMainAndSecretBreach(host, event, ctx);
+    if (breach !== undefined) return breach === "held" ? undefined : breach;
     const bashCommand = (event.input as { command?: unknown }).command;
     if (host.run && event.toolName === "bash" && typeof bashCommand === "string") {
       const electron = electronBypass(bashCommand); if (electron !== undefined) return blocked(host, event.toolName, electronReasonText(electron), event.input);

@@ -43,14 +43,10 @@ function breachBlocked(host: Host, protocol: string, source: string, tool: strin
   return blocked(host, tool, reason, input);
 }
 
-/**
- * Evaluates the guards whose refusals report a `protocol-breach` Event (externalguard, mainguard, secretguard, askguard).
- * Returns the blocked Verdict if any guard refuses, or undefined if none refused.
- */
-export function guardProtocolBreach(
+/** Pre-explore protocol breach guards: externalBlock */
+export function guardExternalBreach(
   host: Host,
-  event: { toolName: string; input: unknown; parentToolCallId?: string; toolCallId: string },
-  ctx: { cwd: string; sessionManager: { getBranch(): readonly unknown[] } },
+  event: { toolName: string; input: unknown },
 ): Verdict {
   const role = host.run?.info.role;
   const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
@@ -58,6 +54,16 @@ export function guardProtocolBreach(
     const command = typeof (event.input as { command?: unknown }).command === "string" ? (event.input as { command: string }).command : undefined;
     return breachBlocked(host, EXTERNAL_PROTOCOL, "externalguard", event.toolName, external, event.input, command);
   }
+  return undefined;
+}
+
+/** Post-explore protocol breach guards: mainguard, secretguard, askguard */
+export function guardMainAndSecretBreach(
+  host: Host,
+  event: { toolName: string; input: unknown; parentToolCallId?: string; toolCallId: string },
+  ctx: { cwd: string; sessionManager: { getBranch(): readonly unknown[] } },
+): Verdict | "held" {
+  const role = host.run?.info.role;
   const home = homedir();
   if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
     const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, home);
@@ -76,6 +82,7 @@ export function guardProtocolBreach(
     const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.parentToolCallId ?? event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
     if (unseenReason !== undefined) return breachBlocked(host, ASK_PROTOCOL, "askguard", "ask_user_question", unseenReason, event.input);
     host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
+    return "held";
   }
   return undefined;
 }
