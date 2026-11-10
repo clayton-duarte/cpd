@@ -98,6 +98,23 @@ test("an Event for another Session changes nothing, and the Session's own then d
   assert.deepEqual([f.pi.modelsSet.length, f.pi.thinkingSet], [1, ["medium"]]);
 });
 
+test("a busy session with retier due switches before next request rather than staying on old model", async (t) => {
+  const f = await started(t);
+  await f.pi.busy();
+  f.emit(retiered(200));
+  await f.drain();
+  await f.quiet();
+  assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[], []], "still on old model before the next request starts");
+
+  // The next request or retry begins (e.g. before_agent_start / agent_start while still working/busy):
+  // Point 2 of commands.md §10.16 applies the switch before the provider request runs.
+  await f.pi.fire("before_agent_start");
+  await f.pi.fire("agent_start");
+  await waitFor("setModel before next request", () => f.pi.modelsSet.length > 0, WAIT);
+  assert.deepEqual(f.pi.modelsSet, [{ provider: "p", id: "opus" }]);
+  assert.deepEqual(f.pi.thinkingSet, ["medium"]);
+});
+
 test("a Manager switches too", async (t) => {
   const f = await started(t, { role: "manager", plan: null, plan_lead: false, name: "ctx-manager" });
   f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false, tier: "O4", model: "p/opus", thinking: "xhigh" }));
