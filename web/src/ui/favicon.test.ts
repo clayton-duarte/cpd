@@ -36,9 +36,10 @@ describe("favicon", () => {
 
     // Also verify Vite config or plugin export exists and serves both endpoints
     // Import vite config or plugin
-    const configModule = await import("../../vite.config.ts");
+    const configModule: any = await import("../../vite.config.ts");
     const config = configModule.default;
-    const plugins = (typeof config === "function" ? await config({ command: "serve", mode: "development" }) : await config).plugins;
+    const resolvedConfig = typeof config === "function" ? await config({ command: "serve", mode: "development" }) : await config;
+    const plugins = resolvedConfig?.plugins;
     const faviconPlugin = (plugins ?? []).flat().find((p: any) => p && p.name === "cpd-favicon");
 
     expect(faviconPlugin, "cpdFavicon plugin must be registered in vite.config.ts").toBeDefined();
