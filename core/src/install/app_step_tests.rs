@@ -80,7 +80,6 @@ impl Rig {
         };
         let _ = (*fakes.runner)
             .clone()
-            .on("git", |_| true, Reply::ok(""))
             .on("cpd", on_built(&["--version"]), Reply::ok(NO_VERDICT))
             .on(
                 "cpd",
@@ -98,6 +97,7 @@ impl Rig {
                 move |c| Path::new(&c.program) == tag,
                 Reply::ok(""),
             )
+            .route("git", Arc::new(Always(Reply::ok(""))))
             .route("pnpm", Arc::new(Always(Reply::ok(""))))
             .route("plutil", Arc::new(Always(Reply::ok(""))))
             .route("node", Arc::new(Always(Reply::ok(""))));
