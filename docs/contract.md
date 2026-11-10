@@ -3715,7 +3715,73 @@ The **refusal miner** is the read-only TypeScript tool that mines guard refusals
 
 ### 5.8 The core engine's sockets and live event stream (Plan `core-ws-engine`)
 
-*Skeleton: to be completed in this Job.*
+**Status.** Design. Plan `core-ws-engine` (Plan 1 of [pi-native-core.md §7](architecture/pi-native-core.md)) builds this section; at the commit that adds it the engine has no listener (`core.sock` and `/cpd-ws` appear in no `core/` source). The rules below are what the implementation Job must build. Where this section is silent, the Plan does not define the behaviour.
+
+**Sources.** pro-d526 (the pi extension and the WebUI reach the engine over a Unix domain socket at `$CPD_HOME/run/core.sock`; NAPI rejected for process isolation and live reload), pro-d527 (the WebUI connects to the core over WebSocket directly, replacing the Node `cpd-argv` shell-outs and the cockpit NDJSON stream), and the Lead's answer to escalation `core-ws-engine-docs-a1-q1` on the writer path (rule 3 below).
+
+**Who listens.** The engine (`cpd watch`, §3.7) is the only process that binds these listeners. It takes `locks/watch.lock` (§1.4) before it binds anything, so one engine per `$CPD_HOME` binds them. It closes both when it stops.
+
+#### The two endpoints
+
+- **The Unix socket** is `$CPD_HOME/run/core.sock`. Its file mode is `0600`. Its path must fit the socket path limit of §6.14 (`SOCKET_PATH_MAX`, 107 bytes); a longer path is refused at start with `socket_path_too_long` (exit 2, as §6.13). At start, after taking the lock, the engine removes a file already at that path: no live engine can hold the lock, so the file is stale.
+- **The WebSocket** is path `/cpd-ws` on `127.0.0.1` only. The Origin rule of [ADR 0015](adr/0015-webui-data-transport.md) (its settled point 1, air-d46) applies unchanged: an absent, `null` or loopback Origin is accepted, any other Origin is refused before a connection's state is created. The port is chosen by the OS. How a client learns it is open (below).
+
+**Framing.** A WebSocket message is one JSON text frame. Framing on `core.sock` is **open**: [pi-native-core.md §3.1](architecture/pi-native-core.md) names both "JSON-RPC 2.0" and "length-delimited NDJSON". Both endpoints carry the same messages, whatever framing is chosen.
+
+#### Messages
+
+A request is `{"id": <n>, "method": "<domain.verb>", "params": {…}}`. A reply is `{"id": <n>, "result": {…}, "error": null}`, or `{"id": <n>, "result": null, "error": {"code": "<code>", "message": "<text>"}}`. Two methods:
+
+- **`snapshot`** returns the state a client renders (active Contexts, Plans and Jobs; the content is Plan 4's and is not fixed here) and `cursor`, the highest Event id. The snapshot and `cursor` are read in **one read transaction** (§4.2), so the snapshot is consistent with the cursor.
+- **`events.subscribe`** takes `cursor` and an optional `filter`, and replies `{}`. After the reply the server sends one notification per Event: `{"method": "event", "params": {"event": <Event>}}`, where `<Event>` is the object one line of `cpd events follow` prints (§5.2).
+
+**The filter** has the meaning of §5.4: `plan`, `context`, `session`, and `kind` (an array). Without a filter every Event is sent. A `session` filter applies the rule of §5.3, and the stale-Event rule of §5.4 applies to it and to nothing else, as §5.4 says.
+
+**The cursor** is exclusive, as `--since` is (§5.4): the first Event sent has an id greater than `cursor`. `cursor` 0 replays every Event.
+
+#### The handshake, the replay and the live stream
+
+1. A client sends `snapshot`, renders the state, and keeps `cursor`.
+2. It sends `events.subscribe` with that `cursor`. Events are never lost between the two steps: the subscription replays from the store, not from memory.
+3. A subscription does, in this order: subscribe to the live channel (below); read the Events with id greater than the cursor from the store, and send them in id order; then send each live Event whose id is greater than the last one sent, dropping any it already sent.
+
+On reconnect a client subscribes with the id of the last Event it processed (or the `cursor` of its last snapshot). It misses nothing committed while it was away.
+
+#### How Events reach the live channel
+
+Rules 1 to 3 are the Lead's answer (escalation `core-ws-engine-docs-a1-q1`) with the ordering this section adds to it.
+
+1. **One channel.** The engine holds one `tokio::sync::broadcast` channel. Each subscriber has its own receiver. The channel's capacity is a constant of the code, not configuration.
+2. **Every cpd process that commits Events tells the engine.** After its own write transaction commits, a writer (a command, an Attempt driver, `ask`, the engine itself) sends `events.committed` to `run/core.sock`. The send is best effort: the write has already committed, and the command's result does not depend on the send. If the socket is unreachable (no engine running), nothing is retried. The engine's own commits wake it in process, without the socket.
+3. **The store is the source; the message is a wake-up.** On a wake-up the engine reads, in one read transaction, every Event with an id greater than its high-water mark, and broadcasts them in id order; the high-water mark then moves to the highest id sent. The message carries no Event rows. Two writers can commit close together and send out of id order (§4.2 orders the commits, not the messages), so the rows come from the store, in order. A wake-up also covers an Event whose own message never arrived: the next wake-up sends it.
+4. **Lag never drops an Event.** A slow subscriber's receiver can lag behind the channel. Then the subscriber reads the store for the Events after the last id it sent and continues from there (the database is the buffer, as §5.4 says of back-pressure). The engine never waits for a subscriber.
+
+**Known gap, accepted.** If a writer's `events.committed` does not reach a running engine, a connected subscriber does not see that Event until the next wake-up or its own reconnect. The engine does not poll to cover it. The Event is in the store, so nothing is lost.
+
+#### Restarts
+
+When the engine stops, or re-execs after an install (§5.4, §3.7 "The engine is supervised"), every connection closes. The client reconnects and subscribes with its last cursor (above).
+
+#### Errors
+
+- A malformed frame, or a request missing a field its method needs, gets one `error` reply (`bad_request`) and the connection stays open (as §5.5 says of `cockpit serve`).
+- An unknown method gets `unknown_method`, and the connection stays open.
+- A store error that ends `cpd events follow` (§5.4) ends the subscription: the server sends `{"method": "error", "params": {"code": "<code>", "message": "<text>"}}` with the §1.2 code and closes the connection. A `store_too_new` that comes from a replaced executable restarts the engine, as §5.4 and §3.7 say.
+
+#### What this section does not change
+
+`cpd events follow` keeps its polling of §5.4, and `cpd cockpit serve` keeps §5.5, until a later Job moves them. Plan 1 deprecates `cockpit serve`; this section does not state when it is removed. The replacement of `PRAGMA data_version` polling that this section specifies is for the subscribers of `/cpd-ws` and `core.sock`. Whether `events follow` moves onto the socket is **open**.
+
+#### Tests the implementation Job must pin
+
+Each is one behaviour, with the contract as its assertion: the WebSocket connects and the Origin rule refuses a foreign Origin; `snapshot` returns the cursor of its own read transaction; a subscription with cursor C sends exactly the Events with id greater than C, in id order, and no Event twice; a committed Event reaches a live subscriber in id order after a wake-up; a lagging subscriber recovers from the store with no gap; a stale socket file is removed at start and a live engine's socket is not; a path over 107 bytes is refused with `socket_path_too_long`. The tests use no real tmux, no real pi and no real model (only authored code is tested).
+
+#### Open points
+
+1. **Framing on `core.sock`** (JSON-RPC 2.0 or length-delimited NDJSON; §3.1 names both). Decide before the Plan 2 client is written.
+2. **How a client learns the WebSocket port**, since the OS chooses it.
+3. **The snapshot's content**, which Plan 4 fixes.
+4. **Whether `cpd events follow` moves onto the socket.**
 
 
 ## 6. The tmux host
