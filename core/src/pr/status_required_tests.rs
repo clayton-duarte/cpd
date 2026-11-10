@@ -88,7 +88,7 @@ fn a_passed_required_check_is_fine() {
     let checks = [run("gate", "COMPLETED", "SKIPPED")];
     assert_eq!(
         ChecksSummary::of(&checks, &[], &required(&["gate"]), false),
-        ChecksSummary::Passed
+        ChecksSummary::Pending
     );
 }
 

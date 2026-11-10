@@ -55,7 +55,7 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
     format!(
         "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
          AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch \
-         AND {alias}.base_contained = 1, 0)"
+         AND {alias}.base_contained = 1 AND {alias}.head_oid IS NOT NULL, 0)"
     )
 }
 
@@ -144,6 +144,8 @@ impl PullRequest {
             // Not stored (`polled` yields none): a thread that closes without an `updatedAt` move is caught by `due_reads`
             // and by the read's feedback (`read_held`), not by the listing.
             open_threads: vec![],
+            // The head is stored by the poll's own early write, not by the row's upsert.
+            head_oid: None,
             ..listed.pr.clone()
         };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
@@ -197,6 +199,7 @@ impl PullRequest {
             default_branch: self.default_branch.clone(),
             open_threads: vec![],
             archived: self.archived,
+            head_oid: None,
         })
     }
 }
@@ -321,6 +324,13 @@ pub(super) fn upsert(
             after: insert(tx, polled, *membership, read)?,
         }));
     };
+    // A listing that carries a head stores it at once (never erases it), whether or not anything else changed.
+    if let Some(head) = &polled.head_oid {
+        tx.execute(
+            "UPDATE pull_requests SET head_oid = ?1 WHERE id = ?2 AND head_oid IS NOT ?1",
+            rusqlite::params![head, before.id],
+        )?;
+    }
     if before.holds(listed, read)? {
         return Ok(None);
     }
@@ -405,8 +415,8 @@ fn insert(
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch, archived)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch, archived, head_oid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -427,7 +437,8 @@ fn insert(
             read.map(|r| feedback_text(&r.items)),
             polled.base_ref,
             polled.default_branch,
-            polled.archived
+            polled.archived,
+            polled.head_oid
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -891,6 +902,7 @@ mod tests {
             default_branch: None,
             open_threads: vec![],
             archived: false,
+            head_oid: None,
         }
     }
 

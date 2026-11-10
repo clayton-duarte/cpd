@@ -34,8 +34,8 @@ export type { Disposable };
 
 // The chat argv builders of cockpit/actions.ts (CONTRACT 6.3), through the shared builder (docs/contract.md §5.6).
 const WEB_UNBLOCKS = "User message from the web chat";
-const sessionSendArgs = (id: string, text: string): readonly string[] =>
-  toArgv({ kind: "session.send", sessionId: id, text, unblocks: WEB_UNBLOCKS, origin: "webui" });
+const sessionSendArgs = (id: string, text: string, webuiToken?: string): readonly string[] =>
+  toArgv({ kind: "session.send", sessionId: id, text, unblocks: WEB_UNBLOCKS, origin: "webui", ...(webuiToken === undefined ? {} : { webuiToken }) });
 const sessionRetierArgs = (id: string, tier: string): readonly string[] =>
   toArgv({ kind: "session.retier", sessionId: id, tier });
 
@@ -74,6 +74,8 @@ export function createPiBackend(deps: {
   watch: WatchBoundary;
   git: GitBoundary;
   cpdHome: string;
+  /** This boot's WebUI token (contract §6.16): sent to `cpd session send --origin webui`. */
+  webuiToken?: string;
   attachmentsDir: string;
   now(): number;
   scheduler: Scheduler;
@@ -305,7 +307,7 @@ export function createPiBackend(deps: {
         for (const [i, im] of input.images.entries()) {
           await deps.fs.write(paths[i] as string, Uint8Array.from(Buffer.from(im.dataBase64, "base64")));
         }
-        await deps.cpd.json(sessionSendArgs(sessionId, text));
+        await deps.cpd.json(sessionSendArgs(sessionId, text, deps.webuiToken));
         out({ type: "session.submitAck", sessionId, clientSubmissionId: input.clientSubmissionId, queued: false });
         if (currentFile === undefined && poll === undefined) startPoll();
       },
@@ -375,7 +377,7 @@ export function createPiBackend(deps: {
                   })
                   .join("\n");
                 if (summary.trim() !== "") {
-                  await deps.cpd.json(sessionSendArgs(sessionId, summary));
+                  await deps.cpd.json(sessionSendArgs(sessionId, summary, deps.webuiToken));
                 }
               }
             } catch {

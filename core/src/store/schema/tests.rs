@@ -4815,7 +4815,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
         ),
         vec![serde_json::json!(["pr-base-changed"])]
     );
-    // Later Event-kind migrations include guard-event, bug-protocol-breach and protocol-breach.
+    // Later Event-kind migrations include guard-event, loop-guard-trip, bug-protocol-breach and protocol-breach.
     assert_eq!(
         rows(&mut store, "SELECT count(*) FROM event_kinds"),
         vec![serde_json::json!([before
@@ -4828,6 +4828,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 3
             + 1
             + 2
+            + 1
             + 1
             + 1
             + 1

@@ -1,5 +1,5 @@
 import { compactionPolicy, type CompactionSettings } from "./compaction.ts";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ConversationBusy, GenerationTask, hook, section, type Extension } from "@earendil-works/pi-durable";
@@ -19,7 +19,7 @@ import { createRetier } from "./retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
-import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
+import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, reportTrip, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession, type Run } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
@@ -73,6 +73,19 @@ type TurnRuntime = LoopRuntime & { info: { role: "lead" | "manager" }; readStrea
 export function loopGate(r: LoopRuntime, now: number): boolean {
   r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
   return r.turnStarts.length > r.info.loopGuardTurns;
+}
+
+/** The WebUI token (contract §6.16): the presented value against `$CPD_HOME/run/webui-token`, read at each check and compared in constant time; no file or no match is unverified. */
+async function webuiVerified(home: string, presented: string | undefined): Promise<boolean> {
+  if (presented === undefined) return false;
+  let actual: Buffer;
+  try {
+    actual = await readFile(join(home, "run", "webui-token"));
+  } catch {
+    return false;
+  }
+  const given = Buffer.from(presented);
+  return given.length === actual.length && timingSafeEqual(given, actual);
 }
 
 /** One model of `list_models` and of the `configure` validation (contract §6.17). */
@@ -206,6 +219,9 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const loopHost = {
       run: loop,
       options: { now: () => deps.now().getTime() },
+      env: { CPD_SESSION: config.session },
+      call: (args: string[]) => deps.cpd(args),
+      deliver: (what: string, e: unknown) => failed(what, e),
       pi: { appendEntry: (type: string, data: unknown) => void conversation.write({ type: "write", entry: { kind: type, data: data as Record<string, unknown>, model: [] } }).catch((e) => failed("writing a loop-guard entry", e)) },
       refresh: () => report(),
     } as unknown as Host;
@@ -397,8 +413,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       // §6.16 the loop gate: every input that reaches the conversation — a client `submit` or a follower Event — is a
       // submission the host makes, so it counts here, at the one gate. A cpd-chat User prompt (`reply: true`)
       // that finds the breaker tripped does not count: it empties the window and clears the trip, as the adapter's `messageType === "user"` does; a sender-less session-message does not.
-      const selfUser = loop.tripped && input.reply === true && input.entry.kind === "cpd-chat";
-      if (selfUser) {
+      // Only verified human input (contract §6.16 "The clear and its evidence") is the User's: it is not counted, empties the window and clears the trip.
+      if (input.verified === true) {
         if (clearTrip(loopHost, loop as unknown as Run)) report();
       } else if (!loop.tripped) {
         const at = deps.now().getTime();
@@ -407,6 +423,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           conversation
             .write({ type: "write", entry: { kind: ENTRY_TYPE, data: { tripped: true, at, turns: loop.turnStarts.length }, model: [] } })
             .catch((e) => failed("writing the loop-guard entry", e));
+          reportTrip(loopHost, loop as unknown as Run, "inter-turn", session.loopGuardTurns + 1);
           report();
         }
       }
@@ -501,7 +518,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       piDurable: PI_DURABLE,
       epoch,
       ring,
-      submit: async ({ text, whenBusy, requestId, images }, client) => {
+      submit: async ({ text, whenBusy, requestId, images }, client, webuiToken) => {
+        const verified = await webuiVerified(config.home, webuiToken);
         const id = requestId ?? randomUUID();
         // §15.3: a socket submit from the WebUI client is the WebUI surface, so its content carries the tag.
         const said = client === WEB_CLIENT ? tag("webui", readView(config.home)) + text : text;
@@ -510,7 +528,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
             ? said
             : [{ type: "text" as const, text: said }, ...images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))];
         try {
-          const s = await submit({ content, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true });
+          const s = await submit({ content, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true, ...(verified ? { verified: true as const } : {}) });
           return { submissionId: s.id, status: await s.status() };
         } catch (e) {
           if (e instanceof ConversationBusy) throw new ProtocolError("busy", e.message);

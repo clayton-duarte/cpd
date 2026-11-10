@@ -409,9 +409,9 @@ fn an_open_job_stuck_item_closes_and_none_opens() {
 fn polled_2385(fx: &mut Fx, review_decision: &str, merge_state: &str) {
     fx.fixture(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, created_at, changed_at,
-                                        base_ref, default_branch, base_contained)
+                                        base_ref, default_branch, base_contained, head_oid)
          VALUES ('missionlane/cc-api-orc-apollo', 2385, 'https://github.com/missionlane/cc-api-orc-apollo/pull/2385', 'T2385', 0,
-                 'open', '{review_decision}', 'passed', '{merge_state}', 't', 't', 'main', 'main', 1);"
+                 'open', '{review_decision}', 'passed', '{merge_state}', 't', 't', 'main', 'main', 1, 'h1');"
     ));
 }
 
@@ -533,6 +533,32 @@ fn e8_opens_a_red_loop_guard_item_for_a_blocked_lead_with_the_label() {
     );
     assert!(item(&mut fx, "dialog").is_none());
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
+}
+
+/// The item's text is the newest `loop-guard-trip` Event's (its kind and count), never recomputed from `loop_guard_turns`.
+#[test]
+fn e8_loop_guard_item_text_comes_from_the_newest_trip_event() {
+    let mut fx = guard_fx("dispatch", "");
+    for (at, kind, count) in [
+        ("2026-01-01T00:00:01Z", "inter-turn", 21),
+        ("2026-01-01T00:00:02Z", "turn-refusals", 3),
+    ] {
+        fx.fixture(&format!(
+            "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+             VALUES (cpd_txn(), '{at}', 'loop-guard-trip', 'ctx', 'pay', 'lead1', 't', '{{\"kind\":\"{kind}\",\"count\":{count}}}');"
+        ));
+    }
+    guard(&mut fx, "lead1");
+    tick(&mut fx);
+    assert_eq!(
+        open_sessions(&mut fx),
+        [(
+            "loop-guard".into(),
+            "red".into(),
+            Some("lead1".into()),
+            "pay: loop guard, 3 refused calls in one turn".into()
+        )]
+    );
 }
 
 /// The item is red in `grounding` and in `dispatch` (a dialog is magenta in `grounding`), and is never a dialog.

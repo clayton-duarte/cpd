@@ -1678,7 +1678,8 @@
       "--file": true,
       "--help": false,
       "--origin": true,
-      "--unblocks": true
+      "--unblocks": true,
+      "--webui-token": true
     },
     "positionals": {
       "max": 2,

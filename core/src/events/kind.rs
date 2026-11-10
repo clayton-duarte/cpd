@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 26;
+pub const PROTOCOL: u32 = 27;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -155,6 +155,7 @@ kinds! {
     // generalizes the bug-only `bug-breach` the Workflow `bug-guard` first named.
     ProtocolBreach = "protocol-breach",
     Guard = "guard",
+    LoopGuardTrip = "loop-guard-trip",
 }
 
 impl Kind {
@@ -380,6 +381,7 @@ impl Kind {
                 &["code", "role", "tier", "model", "tool", "excerpt"],
                 &[],
             ),
+            LoopGuardTrip => spec([Y, M, N, N, Y], &["kind", "count"], &[]),
         }
     }
 }
@@ -426,12 +428,12 @@ mod tests {
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
     /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`),
     /// and 22 (`workflow-reopened`) and 23 (the Lead-less `shaping` phase), 24 (`session-message`'s optional
-    /// `data.origin`, Plan ui-origin) 25 (the `guard` Event kind, Plan `agent-refusals`) and 26 (`protocol-breach`,
-    /// Plan `protocol-enforce`, D14, air-d119: it replaces `bug-breach`, and the Ledger leg runs `session report`
-    /// with new flags, commands.md §10.18).
+    /// `data.origin`, Plan ui-origin) 25 (the `guard` Event kind, Plan `agent-refusals`), 26 (the `loop-guard-trip` Event
+    /// kind) and 27 (`protocol-breach`, Plan `protocol-enforce`, D14, air-d119: it replaces `bug-breach`, and the Ledger leg
+    /// runs `session report` with new flags, commands.md §10.18).
     #[test]
-    fn the_protocol_is_26_with_protocol_breach() {
-        assert_eq!(PROTOCOL, 26);
+    fn the_protocol_is_27_with_loop_guard_trip_and_protocol_breach() {
+        assert_eq!(PROTOCOL, 27);
     }
 
     #[test]

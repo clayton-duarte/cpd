@@ -132,3 +132,11 @@ test("inputOf gives every input an entry of kind cpd-event", () => {
   const user = event(60, "session-message", { data: { text: "x", from: null } });
   assert.deepEqual(inputOf(user, "s1", LEAD), { ...inputOf(user, "s1", LEAD), entry: entry(user), reply: true }, "the entry is kept beside the reply flag");
 });
+
+test("inputOf marks only a from-null origin:webui session-message verified (the CLI refuses that origin without the token)", () => {
+  const verified = (data: Record<string, unknown>) => inputOf(event(9, "session-message", { data: { text: "t", ...data } }), "s1", LEAD)?.verified;
+  assert.equal(verified({ from: null, origin: "webui" }), true);
+  assert.equal(verified({ from: null }), undefined);
+  assert.equal(verified({ from: null, origin: "tui" }), undefined);
+  assert.equal(verified({ from: "s9", origin: "webui" }), undefined);
+});

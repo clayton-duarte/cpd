@@ -25,6 +25,7 @@ import { createCompletionClassifier, type CompletionClassifier } from "./complet
 import { createCompletionService } from "./completion-service.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
 import { createUpgradeFactory, createWsServer, WS_PATH, type WebSocketUpgradeServer } from "./ws.ts";
+import { writeWebuiToken, type IssuedToken } from "./webui-token.ts";
 import { createRegistry, type Registry } from "./hub/registry.ts";
 import { createPiBackend } from "./pi/backend.ts";
 import { createLiveSource, type LiveConnection } from "./pi/live.ts";
@@ -70,6 +71,8 @@ export interface PluginBoundaries {
   git: GitBoundary;
   scheduler: Scheduler;
   cpdHome: string;
+  /** This boot's WebUI token (contract §6.16 "The WebUI token"); absent, no token is sent. */
+  webuiToken?: string;
   /** Classifies a Lead session's completion; absent, no badge is computed. */
   classify?: CompletionClassifier;
   /** Runs `tmux <args>`; rejects on a non-zero exit. */
@@ -139,10 +142,10 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
     return { attach: (session, emit) => (backend ??= build()).attach(session, emit) };
   };
   const backends: Record<Runner, SessionBackend> = {
-    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler, live: () => createLiveSource({ connect: connectLive, scheduler: b.scheduler, cpdHome: b.cpdHome }) })),
+    pi: lazy(() => createPiBackend({ cpd, fs: b.fs, watch: b.watch, git: b.git, cpdHome: b.cpdHome, ...(b.webuiToken === undefined ? {} : { webuiToken: b.webuiToken }), attachmentsDir: join(tmpdir(), "cpd-webui-attachments"), now: Date.now, scheduler: b.scheduler, live: () => createLiveSource({ connect: connectLive, scheduler: b.scheduler, cpdHome: b.cpdHome }) })),
     durable: lazy(() =>
       createDurableBackend({
-        connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler }),
+        connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler, ...(b.webuiToken === undefined ? {} : { webuiToken: b.webuiToken }) }),
         cpd,
         git: b.git,
         scheduler: b.scheduler,
@@ -383,7 +386,13 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
     name: "cpd-web",
     apply: "serve",
     async configureServer(server: ViteDevServer) {
-      const boundaries = options?.boundaries ?? realBoundaries(process.env);
+      // The real boot creates this boot's WebUI token; a test hands its own boundaries in (with or without one).
+      let issued: IssuedToken | undefined;
+      const boundaries = options?.boundaries ?? ((): PluginBoundaries => {
+        const real = realBoundaries(process.env);
+        issued = writeWebuiToken(real.cpdHome);
+        return { ...real, webuiToken: issued.token };
+      })();
       const services = createServices(boundaries);
       let closed = false;
       const started = services.cockpit.start();
@@ -411,6 +420,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
         closed = true;
         endpoint?.dispose();
         services.cockpit.stop();
+        issued?.remove();
       };
       server.httpServer?.once("close", () => { void closeAll?.(); });
       await logged;

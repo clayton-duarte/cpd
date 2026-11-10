@@ -423,6 +423,7 @@ fn opened_row(
         default_branch,
         open_threads: vec![],
         archived: false,
+        head_oid: None,
     })
 }
 
@@ -1010,6 +1011,7 @@ mod tests {
             default_branch: None,
             open_threads: vec![],
             archived: false,
+            head_oid: None,
         }
     }
 
