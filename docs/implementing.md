@@ -1010,3 +1010,50 @@ Nothing real runs: no subprocess, no store, no timer. Sources for the shape of t
 **What it cannot measure.** What a codemode script read and filtered away (nested results are never stored), so the saving shows only as a change in `result_chars`, `turns` and `cost_usd` between two windows of comparable work; sessions differ, so compare medians over many sessions, not one pair.
 
 **How to use it for the experiment.** The baseline is `--until <time the project setting reached the machine>`, the comparison `--since` that time.
+
+## Measuring model spend, cache breaks and reconciliation (model-cost)
+
+**Status.** This section is the contract of `pi/measure/model-cost.ts`, which does not exist yet: the Job `measure-tests` pins these rules in `pi/test/model-cost.test.ts` and the Job `measure-impl` implements them. Until then nothing here is measured. The script follows the `Measuring tool-result bloat` section (hs-d737) in its shape, exit codes and role rule, and is read-only.
+
+**Command.** `node pi/measure/model-cost.ts [--json] [--root <dir>] [--durable-root <dir>] [--bifrost-csv <file>] [--since <ISO time>] [--until <ISO time>] [--diff-prefix]`. Every flag is optional. Sources and their defaults:
+- pi sessions: `--root`, default `~/.pi/agent/sessions`; every `*.jsonl` one directory below it, as in hs-d737.
+- durable Worker sessions: `--durable-root`, default `~/.cpd/run`; every `<root>/*/durable/*.sqlite` (the `-wal` and `-shm` sidecars are not read as databases). Opened read-only; each `conversationId` is one session.
+- Bifrost dashboard export: `--bifrost-csv <file>`, one file, optional. Only its `# overview-cost` section (`Total Cost` and one column per model) and `# overview-tokens` section (`Cached Read Tokens`) are read. A UTF-8 BOM is accepted.
+
+The script never writes or changes a file. A bad option, a bad time, a root or CSV that cannot be read, a CSV without an `# overview-cost` section, or a non-numeric cell exits 2 with one line on stderr. Otherwise it exits 0 with a report. Non-JSON lines in a pi file are skipped and counted in `skipped_lines`, never hidden.
+
+**Window.** `--since` (inclusive) and `--until` (exclusive) apply to each assistant turn's own `timestamp`, not to the session header. A session that spans the boundary is split by turn; this differs from hs-d737, which uses the header.
+
+**Role** is the rule of hs-d737 for pi sessions (`worker`, `manager`, `lead`, `other`). Every durable session is `worker`.
+
+**Turns.** A turn is an assistant message with a `usage` object. A turn whose four token counts (`input`, `output`, `cacheRead`, `cacheWrite`) are all 0 (an error or an abort) is counted in `zero_usage_turns` and used nowhere else. `reasoning` is reported as its own count and is in no total.
+
+**Groups** (`by_role`, `by_model`, `by_day`, `totals`). Each holds:
+- `turns`, and the sums `input`, `output`, `cache_read`, `cache_write` (the `usage` fields as written).
+- `prompt_tokens` = `input` + `cache_read` + `cache_write`.
+- `cache_hit_rate` = `cache_read` / `prompt_tokens`, `null` when `prompt_tokens` is 0.
+- `cost_usd`: the sum of `usage.cost.total`. This is pi's estimate from the rates in `~/.pi/agent/models.json`, not an invoice.
+
+`by_model` keys are `<provider>/<model>` as the message names them. `by_day` keys are calendar days `YYYY-MM-DD` in America/Toronto (the project time zone), from the turn timestamp.
+
+**Cache break detection.** The series is the turns of one session (one pi file, or one durable `conversationId`) with the same `<provider>/<model>`, in timestamp order; a turn is compared with the one before it in that series. A turn is a **break** when both hold:
+1. the previous turn has `cache_read` >= 5000 (`MIN_PREV_CACHE_READ`), so a small prompt never counts;
+2. the turn has `cache_read` < 50% of the previous turn's `cache_read` (`BREAK_RATIO` = 0.5).
+
+A first turn after a model switch is not compared, so it is not a break. Each break is classed `to_zero` (`cache_read` = 0) or `partial` (otherwise). `gap_s` is the seconds since the previous turn, and `idle_gap` is `gap_s` > 300: the 5-minute cache TTL is the hypothesis this flag tests (an inference, not checked against Anthropic's docs). `cause` is, for pi sessions, the first logged event between the two turns of kind `compaction`, `context_edit`, `model_change` or `thinking_level_change`, else `none_logged`; durable records hold no events, so `cause` is `null` there.
+
+**Prefix diff (`--diff-prefix`).** Without the flag a break carries no `diff`. With it, each break's prompt is compared with the previous turn's prompt in the same series. The prompt of a turn is the ordered list of messages stored before that turn's assistant message, each serialized as JSON; for a durable session the `pi.system` record's sections come first. The diff holds:
+- `scope`: `messages` (pi: the system prompt is not in the session file, so changes to it are invisible) or `system+messages` (durable).
+- `prefix_changed`: `false` when the previous prompt is a prefix of this one. Then the cache should have hit: the cause is outside the prompt (TTL, eviction, provider side).
+- `index` and `char`: the first message and the first character where the two differ.
+- `tokens_from` = ceil(`char` / 4), with `prev_tokens_to` and `cur_tokens_to` the same estimate at each prompt's end. The changed range is `tokens_from` to those ends. The estimate is pi's `chars / 4`, not the provider's count.
+
+**Reconciliation.** Bifrost's buckets are UTC midnight, so reconciliation uses the UTC day, and only turns whose provider is `bifrost` (the gateway sees no other provider; `github-copilot` turns are excluded). A model matches a Bifrost column when the provider prefix is stripped (`bifrost/vertex/claude-opus-5-5` matches `claude-opus-5-5`). Per UTC day and matched model, the report gives:
+- `local_cost_usd`, `bifrost_cost_usd` (the column cell), `delta_usd` = bifrost - local, and `ratio` = local / bifrost (`null` when bifrost is 0).
+- For the day, the total `cache_read` of the local turns against `Cached Read Tokens` of `# overview-tokens`.
+
+The gateway counts every request through it, so a local cost above the Bifrost cost is a discrepancy to report, not a rounding. Bifrost's prices are not verified (the models.json costs come from models.dev).
+
+**Report.** With `--json` one object: `{window: {since, until}, files: {pi, durable, bifrost}, skipped_lines, zero_usage_turns, totals, by_role: {worker, manager, lead, other}, by_model, by_day, cache_breaks: [{source, session, time, model, role, class, prev_cache_read, cache_read, gap_s, idle_gap, cause, diff?}], reconciliation: [{utc_day, model, local_cost_usd, bifrost_cost_usd, delta_usd, ratio, local_cache_read, bifrost_cached_read}]}`. `since` and `until` are `null` when not given; a role or day with no turn is present with zeros, and empty lists are `[]`. Without `--json` the same numbers as plain text, one line per row: `role <name> turns=<n> prompt=<n> cache_read=<n> cache_write=<n> output=<n> hit_rate=<x> cost_usd=<x>`, the same shape for `model` and `day`, `break <time> <session> <model> class=<c> prev=<n> cur=<n> gap_s=<n> idle_gap=<bool> cause=<c>` (with `prefix_changed=<bool> tokens_from=<n>` under `--diff-prefix`), and `recon <utc_day> <model> local=<x> bifrost=<x> delta=<x> ratio=<x>`.
+
+**What it cannot measure.** The system prompt of a pi session (not stored there), so a pi `prefix_changed` of `false` does not prove the system prompt was unchanged. Provider-side cache state (the TTL and any eviction are inferred from gaps). Latency: each durable assistant record holds `durationMs`, but this contract does not report it. Bifrost's own prices and whether it bills reasoning tokens separately. The `cost_usd` values are estimates.
