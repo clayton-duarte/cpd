@@ -1,4 +1,4 @@
-import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type SessionRef, type WhenBusy, type WireImage } from "../../protocol/domain.ts";
+import { toWireError, WebError, type Capabilities, type ConfigureChange, type Cursor, type DialogResponse, type Runner, type SessionRef, type WhenBusy, type WireFile, type WireImage } from "../../protocol/domain.ts";
 import { parseClientMessage } from "../../protocol/wire.ts";
 import type { ActionOutput, CockpitAction, LogRow, SettingsChanges, SettingsModel } from "../../protocol/cockpit.ts";
 import type { ClientMessage, ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
