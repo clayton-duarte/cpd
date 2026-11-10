@@ -104,6 +104,7 @@ mod policy_post;
 mod policy_resources;
 mod policy_scopes;
 mod preset;
+mod protocol_bug;
 mod repo_cmds;
 mod repo_config;
 mod resource;
