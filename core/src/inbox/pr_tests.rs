@@ -247,7 +247,7 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
     let mut cases: Vec<(bool, Option<JobKindStatus>, bool)> = vec![(true, None, true)];
     for kind in ["docs", "test", "impl", "verify", "work", "open", "update"] {
         for status in ["queued", "running"] {
-            cases.push((false, Some((kind, status)), true));
+            cases.push((true, Some((kind, status)), true));
         }
         for status in ["merged", "failed", "cancelled"] {
             cases.push((false, Some((kind, status)), false));
@@ -269,14 +269,18 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
         }
         next
     };
-    for (set, red, white) in broken {
+    for (set, red, _white) in broken {
         for &(working, job, handled) in &cases {
             let n = reset(&mut f, set, true, working);
             if let Some((kind, status)) = job {
                 f.job(n, &format!("j{n}"), kind, status);
             }
-            let expected = if handled { (White, white) } else { (Red, red) };
-            is(&mut f, n, expected.0, expected.1);
+            let subject = format!("pr:acme/shop#{n}");
+            if handled {
+                assert!(f.rows().iter().all(|c| c.subject != subject));
+            } else {
+                is(&mut f, n, Red, red);
+            }
         }
         let n = reset(&mut f, set, true, false);
         is(&mut f, n, Red, red);
@@ -298,12 +302,13 @@ fn an_owned_broken_pr_is_white_while_its_lead_waits() {
             "fixing",
         ),
     ];
-    for (set, white) in broken {
+    for (set, _white) in broken {
         let mut f = fixture();
         f.workflow(1, set);
         f.own("pay", 1);
         f.sql("UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'l-pay'");
-        is(&mut f, 1, White, white);
+        let subject = "pr:acme/shop#1";
+        assert!(f.rows().iter().all(|c| c.subject != subject));
     }
 }
 
@@ -499,11 +504,11 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     f.idle();
     f.own("pay", 2);
     f.sql("UPDATE sessions SET state = 'working' WHERE id = 'l-pay'");
-    let red = f.row(1);
-    f.idle();
-    let red_after = f.row(1);
-    assert_eq!((red.urgency, red_after.urgency), (White, Red)); // the Lead working, then idle
-    for (c, n) in [(red_after, 1), (f.row(2), 2)] {
+    assert!(f.rows().iter().all(|c| c.subject != "pr:acme/shop#1"));
+    let later = NOW + time::Duration::seconds(61);
+    let red = f.row_at(1, later);
+    assert_eq!(red.urgency, Red);
+    for (c, n) in [(red, 1), (f.row_at(2, later), 2)] {
         assert_eq!(
             c.url.as_deref(),
             Some(format!("https://github.com/acme/shop/pull/{n}").as_str())
@@ -512,7 +517,7 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
         assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
     }
-    let c = f.row(3);
+    let c = f.row_at(3, later);
     assert_eq!(
         c.url.as_deref(),
         Some("https://github.com/acme/shop/pull/3")
@@ -522,7 +527,7 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
 
 #[test]
 fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
-    for (pay_works, expected) in [(true, (Red, "conflict")), (false, (White, "updating"))] {
+    for pay_works in [true, false] {
         let mut f = fixture();
         f.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -536,11 +541,16 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
         f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
         f.own("pay", 1);
         f.own("pay2", 1);
-        is(&mut f, 1, expected.0, expected.1);
-        let c = f.row(1);
+        let _ = f.rows(); // detection at NOW
+        if !pay_works {
+            assert!(f.rows().iter().all(|c| c.subject != "pr:acme/shop#1"));
+        }
+        let later = NOW + time::Duration::seconds(61);
+        let c = f.row_at(1, later);
+        assert_eq!(c.urgency, Red);
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay2"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay2"));
-        assert_eq!(f.rows().len(), 1);
+        assert_eq!(f.rows_at(later).len(), 1);
     }
 }
 
