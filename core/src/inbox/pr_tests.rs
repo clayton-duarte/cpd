@@ -118,7 +118,11 @@ impl Fx {
     }
 
     fn rows(&mut self) -> Vec<Condition> {
-        let all = conditions_with(&mut self.store, &self.home, NOW, 20, 1, None).unwrap();
+        self.rows_at(NOW)
+    }
+
+    fn rows_at(&mut self, now: OffsetDateTime) -> Vec<Condition> {
+        let all = conditions_with(&mut self.store, &self.home, now, 20, 1, None).unwrap();
         all.into_iter()
             .filter(|c| c.kind == Kind::PrReady)
             .collect()
@@ -126,9 +130,13 @@ impl Fx {
 
     /// The one row of pull request `n`.
     fn row(&mut self, n: i64) -> Condition {
+        self.row_at(n, NOW)
+    }
+
+    fn row_at(&mut self, n: i64, now: OffsetDateTime) -> Condition {
         let subject = format!("pr:acme/shop#{n}");
         let mut found: Vec<Condition> = self
-            .rows()
+            .rows_at(now)
             .into_iter()
             .filter(|c| c.subject == subject)
             .collect();
@@ -784,5 +792,87 @@ fn a_wake_of_another_plan_or_another_kind_leaves_a_broken_pr_red() {
         f.event("job-merged", "pay", None, None, "{}");
         f.idle();
         is(&mut f, 1, Red, red);
+    }
+}
+
+// ---- pro-d518 & pro-d519 tests -------------------------------------------------------------
+
+#[test]
+fn a_broken_pr_the_lead_can_fix_is_no_inbox_row_until_a_human_is_needed() {
+    for (set, _, _) in BROKEN {
+        let mut f = fixture();
+        // An owned broken PR while handled (e.g. Lead working or waiting, or Job running, or within grace)
+        // must not appear in the Inbox at all.
+        f.workflow(1, set);
+        f.own("pay", 1);
+        let subjects: Vec<_> = f.rows().into_iter().map(|c| c.subject).collect();
+        assert!(
+            !subjects.iter().any(|s| s == "pr:acme/shop#1"),
+            "broken PR appeared in inbox: {subjects:?}"
+        );
+    }
+}
+
+#[test]
+fn a_broken_pr_is_shown_inbox_row_when_unresponsive_after_one_minute() {
+    for (set, red, _) in BROKEN {
+        let mut f = fixture();
+        f.workflow(1, set);
+        f.own("pay", 1);
+        // The Lead was woken / detection occurred at T. After 1 minute has elapsed without response
+        // (no Lead turn, no Job, no fix), the PR appears in the Inbox as a Red row named by its cause.
+        // During the first minute (at NOW), it must not be shown as a red row (it is hidden / in grace).
+        // After 1 minute (NOW + 61s), it must appear as Red.
+        let at_start: Vec<_> = f.rows_at(NOW).into_iter().map(|c| c.subject).collect();
+        assert!(
+            !at_start.iter().any(|s| s == "pr:acme/shop#1"),
+            "must not show in inbox during 1m grace period"
+        );
+        let later = NOW + time::Duration::seconds(61);
+        let c = f.row_at(1, later);
+        assert_eq!(c.urgency, Red);
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_eq!(status, red);
+    }
+}
+
+#[test]
+fn a_broken_pr_is_shown_inbox_row_when_lead_escalates() {
+    for (set, red, _) in BROKEN {
+        let mut f = fixture();
+        f.workflow(1, set);
+        f.own("pay", 1);
+        // At detection / before escalation, it is hidden:
+        let before: Vec<_> = f.rows().into_iter().map(|c| c.subject).collect();
+        assert!(
+            !before.iter().any(|s| s == "pr:acme/shop#1"),
+            "must not show in inbox before escalation"
+        );
+        // The owning Lead escalated (e.g. Lead is blocked with dialog).
+        f.sql("UPDATE sessions SET state = 'blocked', state_label = 'verdict: Ask human' WHERE id = 'l-pay'");
+        let c = f.row(1);
+        assert_eq!(c.urgency, Red);
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_eq!(status, red);
+    }
+}
+
+#[test]
+fn a_clean_unposted_pr_behind_base_never_shows_waiting_with_no_reason() {
+    let mut f = fixture();
+    // A clean unposted PR that is behind base (base_contained = 0, clean, not stacked)
+    f.workflow(1, "base_contained = 0, merge_state = 'clean'");
+    f.own("pay", 1);
+    // Under pro-d518 STATUS table row 9, waiting with no reason never shows in the Inbox.
+    // Under row 5a, if behind main it is "behind main" row (not waiting).
+    if let Some(c) = f.rows().into_iter().find(|c| c.subject == "pr:acme/shop#1") {
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_ne!(
+            status, "waiting",
+            "must never show 'waiting' with no reason"
+        );
     }
 }
