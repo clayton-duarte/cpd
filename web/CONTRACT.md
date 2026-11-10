@@ -2418,3 +2418,68 @@ Normative for the target. **Status at this commit: not built.** There is no `ts-
 - The Gate fails when the checked-in `web/src/generated/types.ts` is not byte-identical to a fresh export. The check is a test that exports in memory and compares (research §1.4). Its failure names `pnpm generate:types` as the fix.
 - The check runs inside `pnpm run verify` (`verify:steps`), so a Rust type changed without regenerating fails before merge.
 - Limits, stated plainly: the byte-identical output across Linux and macOS is the research's claim (unverified here); the exact set of exported types is fixed by the Job that lands the generator, not here; no generator run has been made for this section (unverified).
+
+## 24. Tier grammar, model letters, effort ladder and role defaults (Plan `webui-tier-efforts`; bug b6)
+
+Normative. Decision pro-d512 decides the points below: the web's model letters match core's `J G H S O`, and its efforts are `0 1 X 2 3 4` in core's ladder order. Bug b6 (`cpd protocol bug show b6`) is the defect this section fixes. The source is core, `core/src/config/tier.rs` and `core/src/config/file.rs`. The explore findings are `$CPD_HOME/run/webui-tier-efforts/explore/scout-tier.md`, cited as `scout-tier §n`. Where this section and any earlier statement of this file give a different grammar, letter set, effort set or order, this section wins.
+
+### 24.1 The Tier grammar
+
+- A Tier is the string `^[JGHSO]([0-4]|X)$`: one model letter, then one effort, which is a digit `0` to `4` or `X`. Examples: `S3`, `GX`, `JX`, `H3`, `O4`. This is core's grammar (`Tier::parse`, tier.rs:91, 122-140; `scout-tier §2`).
+- A Tier is two parts: the letter and the effort. The web's Tier parser (`web/src/protocol/tier.ts`) must accept exactly this grammar (24.5: it does not yet). Any other string is refused, including effort `5` (never valid for any letter) and any letter outside `J G H S O`.
+- The grammar checks syntax only. Whether a model offers a given digit is decided by pi's catalog on the cpd side (docs/contract.md §9, "Valid efforts per model"); the web does not hold that table. A digit the catalog does not offer comes back from cpd as `tier_invalid` or `tier_not_allowed` and is shown as any refusal is (11.7).
+
+### 24.2 Model letters
+
+| Letter | Rank on the letter ladder (core, tier.rs:44-53) |
+|---|---|
+| `J` | 0 (lowest) |
+| `G` | 1 |
+| `H` | 2 |
+| `S` | 3 |
+| `O` | 4 (highest) |
+
+- The web's `MODEL_LETTERS` must be exactly these five letters, in this rank order. No other letter exists in the web: `M`, `K`, `L`, `P` and `A` are not letters of core and are not accepted.
+- `J` is accepted by core's parser and ranks lowest. docs/contract.md records `J` as not activated for routing (air-d130, contract L1716 and L3054; `scout-tier §2`). This section does not change that routing rule; it fixes the grammar and rank only.
+
+### 24.3 Effort ladder
+
+- The efforts are `0 1 X 2 3 4`: digits `0` to `4` and `X`. The web's `EFFORTS` must be exactly this set, in this order.
+- Ladder order: **0 < 1 < X < 2 < 3 < 4** (core `effort_rank`, tier.rs:156-159, `scout-tier §2`). `X` sits between `1` and `2`, not at the start.
+- Effort to pi level: `0` off, `1` low, `2` medium, `3` high, `4` xhigh. `X` sends no level, so the model or pi's default applies (docs/contract.md §9).
+- A Tier's place in the ladder is its letter's rank first, then its effort's rank (core `Ord for Tier`, tier.rs:162-167). Example within the letter `S`: `S0 < S1 < SX < S2 < S3 < S4`; across letters, `JX < G0 < ... < O4`.
+
+### 24.4 Role defaults
+
+Core's defaults (file.rs:347-354), each a Tier of 24.1:
+
+| Role | Config key | Default | Notes |
+|---|---|---|---|
+| decide | `decide_tier` | `JX` | core only; docs/contract.md §9's role list and defaults omit it (`scout-tier §2`) |
+| auxiliar | `context_distill_tier` | `GX` | the distiller (docs/contract.md §9) |
+| worker | `worker_tier` | `H3` | the `open` and `update` Jobs (docs/contract.md §9) |
+| lead | `lead_tier` | `O2` | |
+| manager | `manager_tier` | `O4` | |
+
+- The defaults must strictly ascend on the ladder of 24.2 and 24.3: `decide_tier` < `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`. Core refuses a config that does not, as `config_invalid` naming the key (file.rs:358-375). The web does not re-check the order; it reads what core reports.
+- A role default is never checked by the web's grammar alone: a default that is not a valid rung of the catalog is refused where it is checked or saved, as docs/contract.md §9 states.
+- Read by the web: `readSettings` (`web/src/server/cockpit/settings.ts`) reads `auxiliar`, `worker`, `lead`, `manager` and, when present, `decide`, each through the grammar of 24.1 (settings.ts:25-44). With this grammar `worker_tier` `H3` and `manager_tier` `O4` are accepted.
+
+### 24.5 The web code does not yet match this section
+
+Stated plainly, as of this section (verified by reading `web/src/protocol/tier.ts` lines 3 and 5):
+
+- `MODEL_LETTERS` lists `M K L P A` beyond the five letters of 24.2. (Lines 3.)
+- `EFFORTS` is `0 X 1 2`: it omits `3` and `4` and orders `X` before `1`. (Line 5.) So `parseTier("H3")` and `parseTier("O4")` return `null`, and `readSettings` refuses the contract's own worker and manager defaults (`scout-tier §3`).
+- The tests that pin the old grammar are: `web/src/server/cockpit/settings.test.ts` (the test `settings.read accepts catalog letters and efforts and rejects others`, which accepts `M2 K1 L0 P2 A1` and rejects `H3 S4`) and `web/src/ui/dialogs/SettingsDialog.test.tsx` (letters `M K L P A`, and efforts exactly `0 1 2 X`). `scout-tier §4`.
+- Changing the code and those tests is a separate code Job. This file's scope is the contract (Files you may touch: `web/CONTRACT.md` only); it changes no code.
+
+### 24.6 Conflict with docs/contract.md §9 (for the Lead; not resolved here)
+
+core and docs/contract.md §9 disagree on the letters (`scout-tier §2`):
+
+- Syntax: contract `^(G|H|S|O)([0-4]|X)$` (L6751); core `^[JGHSO]([0-4]|X)$`.
+- Letter ladder: contract `G < H < S < O` (L6762), with no `J`; core `J < G < H < S < O`.
+- Roles: contract lists four roles and no decide default; core has `decide_tier` `JX`.
+
+This section follows core, as pro-d512 decides. docs/contract.md §9 is not edited here. The two documents disagree until docs/contract.md is amended, which is a Lead decision.
