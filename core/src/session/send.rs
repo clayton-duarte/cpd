@@ -280,8 +280,9 @@ pub(crate) fn deliver_with_origin(
     Ok((event, target.id, pane))
 }
 
-/// Contract §6.16 "The WebUI token": `presented` against the content of `$CPD_HOME/run/webui-token`, read now and
-/// compared in constant time. No file, no token or no match is `webui_token_invalid` (the token is never echoed).
+/// Contract §6.16 "The WebUI token, per server (b13)": `presented` against the content of each file of a live
+/// pid in `$CPD_HOME/run/webui-tokens/`, read now and compared in constant time. No file, no live pid, no token
+/// or no match is `webui_token_invalid` (the token is never echoed).
 fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError> {
     let invalid = || {
         CpdError::new(
@@ -290,14 +291,52 @@ fn verify_webui_token(env: &Env, presented: Option<&str>) -> Result<(), CpdError
         )
     };
     let presented = presented.ok_or_else(invalid)?.as_bytes();
-    let actual = std::fs::read(env.home.run_dir().join("webui-token")).map_err(|_| invalid())?;
-    let same = presented.len() == actual.len()
-        && presented
-            .iter()
-            .zip(&actual)
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0;
-    if same && !actual.is_empty() {
+    let tokens_dir = env.home.run_dir().join("webui-tokens");
+
+    // Also support legacy run/webui-token file if present
+    let legacy_file = env.home.run_dir().join("webui-token");
+    if let Ok(actual) = std::fs::read(&legacy_file) {
+        let same = presented.len() == actual.len()
+            && presented
+                .iter()
+                .zip(&actual)
+                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                == 0;
+        if same && !actual.is_empty() {
+            return Ok(());
+        }
+    }
+
+    let entries = std::fs::read_dir(&tokens_dir).map_err(|_| invalid())?;
+    let mut any_valid = false;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else { continue };
+        let Some(pid_str) = name_str.strip_suffix(".token") else { continue };
+        let Ok(pid) = pid_str.parse::<i32>() else { continue };
+        if pid <= 0 { continue; }
+
+        let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH);
+        if !alive {
+            continue;
+        }
+
+        if let Ok(actual) = std::fs::read(entry.path()) {
+            let same = presented.len() == actual.len()
+                && presented
+                    .iter()
+                    .zip(&actual)
+                    .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                    == 0;
+            if same && !actual.is_empty() {
+                any_valid = true;
+                break;
+            }
+        }
+    }
+
+    if any_valid {
         Ok(())
     } else {
         Err(invalid())

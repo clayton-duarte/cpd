@@ -297,21 +297,24 @@ async function main(): Promise<void> {
       }
     };
     const setMode = (mode: UiMode): Promise<void> => controller.setMode(mode);
-    const watchdog = createPreviewWatchdog({
-      now: () => Date.now(),
-      readHealth,
-      pidAlive: (pid) => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch (error) {
-          return (error as NodeJS.ErrnoException).code === "EPERM";
-        }
+    const watchdog = createPreviewWatchdog(
+      {
+        now: () => Date.now(),
+        readHealth,
+        pidAlive: (pid) => {
+          try {
+            process.kill(pid, 0);
+            return true;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === "EPERM";
+          }
+        },
+        setMode,
+        showErrorBox,
+        log: async (entry) => console.log(`preview-watchdog ${JSON.stringify(entry)}`),
       },
-      setMode,
-      showErrorBox,
-      log: async (entry) => console.log(`preview-watchdog ${JSON.stringify(entry)}`),
-    });
+      { loadingGraceMs: 60_000 },
+    );
     const client = createPreviewClient({
       root,
       worktree,
