@@ -2478,3 +2478,13 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 - `web/src/protocol/tier.ts` exports no tier grammar constants (`MODEL_LETTERS`, `EFFORTS`, `TIER_COUNT`) or ladder math (`parseTier`, `tierIndex`, `tierAt`).
 - `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
 - Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
+
+## 26. Direct WebSocket connection to core and the pi session stream (Plan `webui-core-ws`; Job `webui-core-ws-docs`)
+
+Status: skeleton. Normative once the sections below are filled. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527, pro-d541; docs/contract.md §5.8.
+
+### 26.1 Endpoint to core `/cpd-ws` (TBD)
+
+### 26.2 pi session transcript stream into the WebUI reactive store (TBD)
+
+### 26.3 Removal of `cpd-argv` and the cockpit stream (TBD)
