@@ -60,11 +60,6 @@ export async function boot(deps: BootDeps): Promise<void> {
     await deps.initMode(win);
     mark('initMode-done');
     deps.process.on('SIGUSR1', async () => {
-      if (deps.app.isPackaged === true) {
-        deps.app.relaunch?.();
-        deps.app.exit?.(0);
-        return;
-      }
       try {
         await deps.reloadServer();
       } catch (error) {
