@@ -483,9 +483,10 @@ fn pr_push_pushes_to_the_head_branch() {
         "no cpd/* branch on origin"
     );
 
-    // A head that moved is refused, and nothing is forced.
+    // A head that moved and conflicts is refused, and nothing is forced.
     let moved = fx.move_remote();
-    let mine = fx.commit("mine.txt");
+    // The commit conflicts with the moved head's, so the reconcile cannot merge it.
+    let mine = fx.commit("remote.txt");
     let run = fx.pr("push");
     assert_eq!(
         (run.error()["code"].as_str(), run.exit),
