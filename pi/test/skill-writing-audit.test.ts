@@ -470,3 +470,14 @@ test("waiting work is queued with needs and missing information is a scout or re
   const b = bulletOf(lead, "- **Register planned work at once.**");
   for (const t of ["--needs", "scout", "research", "ask_user_question", "cpd_plan_review"]) assert.ok(b.includes(t), `the Register rule lacks ${t}`);
 });
+
+test("Manager owns product decisions and Lead clarifies implementation with User", () => {
+  // Skeleton
+  assert.fail("red test pending implementation");
+});
+
+test("cpd-lead and cpd-manager link CONTEXT.md for the three layers table", () => {
+  // Skeleton
+  assert.fail("red test pending implementation");
+});
+
