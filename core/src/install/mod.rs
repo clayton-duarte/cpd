@@ -164,7 +164,7 @@ fn sync_preview_worktree(ports: &Ports, install: &Install, err: &mut dyn Write) 
 
     let patch_file = preview_worktree.join(".cpd-preview-wip.patch");
     if !patch_content.is_empty() {
-        let _ = fs::write(&patch_file, &patch_content);
+        let _ = crate::atomic::write_atomic(&patch_file, &patch_content);
     }
 
     // Step 2: Reset preview worktree to origin/main
