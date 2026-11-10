@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { createMemoryHistory, createHashHistory } from "@tanstack/react-router";
-import { mount, act } from "../testing/render.tsx";
+import { act } from "react";
+import { mount } from "../testing/render.tsx";
 import { createAppRouter, AppRouterView } from "./router.tsx";
 
 describe("router", () => {
