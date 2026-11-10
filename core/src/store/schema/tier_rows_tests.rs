@@ -363,7 +363,7 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
     assert_eq!(
         count(&mut store, "SELECT count(*) FROM history"),
         // `workflow-reopened`, `guard`, `bug-breach` and `protocol-breach` event_kinds rows, plus context_reads,
-        // record_topics and bug_records history_tables rows.
+        // record_topics, bug_records and test_replacements history_tables rows.
         history + 7,
         "the copy writes no history row"
     );

@@ -33,7 +33,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(found) => found,
         Err(e) => {
             engine.log.line(&format!(
-                "E25: cannot count the guard Events: {} ({})",
+                "refusal-threshold: cannot count the guard Events: {} ({})",
                 e.message(),
                 e.code().as_str()
             ));
@@ -64,12 +64,12 @@ pub(super) fn run(engine: &mut Engine) {
         });
         match written {
             Ok(true) => engine.log.line(&format!(
-                "E25: Session {} was refused {} times in the last {} min",
+                "refusal-threshold: Session {} was refused {} times in the last {} min",
                 crossing.session, crossing.count, minutes
             )),
             Ok(false) => {}
             Err(e) => engine.log.line(&format!(
-                "E25: cannot append the refusal alert for {}: {} ({})",
+                "refusal-threshold: cannot append the refusal alert for {}: {} ({})",
                 crossing.session,
                 e.message(),
                 e.code().as_str()

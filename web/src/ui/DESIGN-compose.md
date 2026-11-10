@@ -195,6 +195,7 @@ div[data-part="tier-selector"]   flex flex-wrap items-center gap-1
 
 - Choosing a radio item calls `onConfigure` with `{ kind: "tier", tier }`, `{ kind: "model", model }` or `{ kind: "thinking", level }` (KEPT). The menu closes on choice (dropdown default).
 - The current value is shown on the trigger from `footer` (`known` values only). After `onConfigure` the store updates `footer` and the trigger follows: no optimistic text.
+- **The Model trigger shows the Session's model (pro-d465, Bug report protocol).** The trigger's text is `footer.model` when known. For a durable Session that footer model is the host's model, or else the Session's recorded model (CONTRACT 6.4 Footer). The literal `Model` is shown only when `footer.model` is unknown, which for a durable Session is only when the recorded model is also unknown.
 - The current value is always an option: if it is not in the list it is added to it (`withCurrent`).
 - `Model` lists the `models` (name as text, id as value); with no models, only the current model. The first open calls `onRequestModels()` once.
 - When `busy` and the model or thinking capability is not allowed while busy, the trigger is disabled with the reason `A run is pending: the model changes when the session is idle` as its `title`.

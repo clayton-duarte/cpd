@@ -95,7 +95,7 @@ fn pass(
     now: time::OffsetDateTime,
 ) -> Result<(), CpdError> {
     if incident_holds(engine, Step::E24) {
-        engine.log.line("E24: holding: incident mode is on");
+        engine.log.line("swr: holding: incident mode is on");
         return Ok(());
     }
     for name in source.endpoints() {

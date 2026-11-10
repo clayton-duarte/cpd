@@ -133,3 +133,44 @@ fn a_differing_g_is_refused_naming_the_keys_and_providers() {
         assert!(message.contains(word), "{message}");
     }
 }
+
+/// Resolves the repo `acme/cpd` whose owner file is `owner` (the repo file is empty).
+fn resolve_owner(owner: &str) -> Result<super::Resolved, crate::error::CpdError> {
+    use super::{PolicyKey, resolve};
+    use crate::home::CpdHome;
+    let dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    let acme = home.root().join("policy").join("acme");
+    std::fs::create_dir_all(&acme).unwrap();
+    std::fs::write(acme.join("owner.toml"), owner).unwrap();
+    std::fs::write(acme.join("cpd.toml"), "").unwrap();
+    let key = PolicyKey::Repo(
+        crate::ids::OwnerLogin::parse("acme").unwrap(),
+        crate::ids::RepoName::parse("cpd").unwrap(),
+    );
+    resolve(&home, &key)
+}
+
+/// J is taken from the highest layer that sets it; with none, J is the resolved G.
+#[test]
+fn a_partial_table_without_j_inherits_g() {
+    let r = resolve_owner(
+        "[model]\nO = \"bifrost/o\"\nS = \"bifrost/s\"\nH = \"bifrost/h\"\nG = \"bifrost/g\"\n",
+    )
+    .expect("a table without J passes the one-provider check");
+    assert_eq!(r.policy.model.j, "bifrost/g", "J inherits G");
+}
+
+/// An explicit J wins over G; one on another provider is still refused.
+#[test]
+fn an_explicit_j_still_wins_over_g() {
+    let base =
+        "[model]\nO = \"bifrost/o\"\nS = \"bifrost/s\"\nH = \"bifrost/h\"\nG = \"bifrost/g\"\n";
+    let r = resolve_owner(&format!("{base}J = \"bifrost/j\"\n")).expect("same provider");
+    assert_eq!(r.policy.model.j, "bifrost/j");
+    let err = resolve_owner(&format!("{base}J = \"gc/j\"\n")).expect_err("two providers");
+    assert!(
+        err.to_string().contains("a model table has one provider"),
+        "{err}"
+    );
+}

@@ -1116,7 +1116,7 @@ fn engine_on_tmux_with(config_extra: &str) -> Ip {
 fn workers_errors(fx: &Ip) -> Vec<String> {
     fx.texts("error")
         .into_iter()
-        .filter(|t| t.contains("@cpd_workers"))
+        .filter(|t| t.contains("failed at workers"))
         .collect()
 }
 
@@ -1763,7 +1763,11 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
         fx.events("job-merged")[0].3,
         json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false})
     );
-    assert!(!made.path.exists());
+    assert!(
+        made.path.exists(),
+        "R preserves the recovered Attempt worktree"
+    );
+    assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), tip);
 }
 
 /// A window `pay--api-a1` in the work session, with another to keep the session alive.
@@ -1869,7 +1873,7 @@ fn r3_kills_the_window_of_a_merge_that_did_not_happen_though_the_first_kill_wind
 }
 
 #[test]
-fn r2_removes_the_worktree_though_every_kill_window_fails() {
+fn r2_preserves_the_worktree_though_every_kill_window_fails() {
     let (fx, repo, lead) = engine_on_git();
     let (made, _) = merging_api(&fx, &repo, &lead, true);
     worker_window(&fx);
@@ -1882,8 +1886,8 @@ fn r2_removes_the_worktree_though_every_kill_window_fails() {
         "the fake tmux never failed a kill-window"
     );
     assert!(
-        fx.attempt("api-a1").0 == "ended" && !made.path.exists(),
-        "the merge recorded and its worktree removed"
+        fx.attempt("api-a1").0 == "ended" && made.path.exists(),
+        "the merge recorded and its worktree preserved"
     );
     assert_eq!(fx.attempt("api-a1").1.as_deref(), Some("merged"));
 }
@@ -2725,7 +2729,8 @@ const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 1\n";
 /// A connection that is not cpd's holding the write lock until it is dropped.
 fn hold_write_lock(db: &Path) -> Connection {
     let conn = Connection::open(db).unwrap();
-    conn.busy_timeout(Duration::ZERO).unwrap();
+    // The engine may itself be mid-write when the lock is taken: wait for it (SQLite's own wait, no sleep here).
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     conn
 }
@@ -6170,6 +6175,26 @@ fn distilling(config_extra: &str, fits: u32) -> (Ip, Arc<Mutex<Vec<u32>>>) {
     (fx, sizes)
 }
 
+/// Pi's observed permanent quota refusal (air-d141), on fake runner and spawn ports.
+fn quota_distilling() -> (Ip, Arc<Mutex<Vec<u32>>>) {
+    let fx = engine("");
+    let sizes = Arc::new(Mutex::new(Vec::new()));
+    let seen = sizes.clone();
+    fx.route_fn("pi", move |call| {
+        let batch = fs::read_to_string(call.cwd.as_ref().unwrap().join("batch.md")).unwrap();
+        let n = u32::try_from(batch.lines().filter(|line| line.starts_with('[')).count()).unwrap();
+        seen.lock().unwrap().push(n);
+        let stream = json!({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}},
+            "stopReason": "error",
+            "errorMessage": "The ChatGPT user has reached their Subscription Sharing usage limit."
+        }});
+        Reply::ok(&format!("{stream}\n"))
+    });
+    (fx, sizes)
+}
+
 /// The batch sizes pi saw, in order, a run of equal ones (the ladder's steps of one run) counted once.
 fn batch_sizes(sizes: &Mutex<Vec<u32>>) -> Vec<u32> {
     let mut sizes = sizes.lock().unwrap().clone();
@@ -6403,6 +6428,63 @@ fn e9_starts_again_at_60_when_the_state_changes() {
     assert_eq!(batch_sizes(&sizes)[..6], [60, 30, 15, 5, 1, 60]);
 }
 
+/// Exhaust the quota-failed batch ladder and let the batch-1 child finish before restarting the engine.
+fn exhaust_quota(fx: &Ip, sizes: &Arc<Mutex<Vec<u32>>>) {
+    let seen = sizes.clone();
+    drive_until(fx, move || seen.lock().unwrap().contains(&1), 5 * SECOND);
+    assert_eq!(batch_sizes(sizes), [60, 30, 15, 5, 1]);
+    assert!(
+        fx.events("error").iter().any(|(_, _, _, data)| {
+            data["source"] == "context distill"
+                && data["code"] == "distill_failed"
+                && data["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("Subscription Sharing usage limit"))
+        }),
+        "the quota failure is visible"
+    );
+}
+
+#[test]
+fn e9_permanent_quota_failure_is_not_retried_until_input_changes() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // A fresh engine must not forget the exhausted permanent failure (air-d141).
+    drive_for(&fx, 15 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must not be retried after an engine restart"
+    );
+}
+
+#[test]
+fn e9_changed_input_after_quota_failure_starts_at_full_batch() {
+    let (fx, sizes) = quota_distilling();
+    old_notes(&fx, 1, 70);
+    exhaust_quota(&fx, &sizes);
+    let before = sizes.lock().unwrap().len();
+
+    // First verify the same input remains parked across restart; otherwise a full-batch
+    // call after adding a record would not prove that the changed key enabled it.
+    drive_for(&fx, 5 * SECOND);
+    assert_eq!(
+        sizes.lock().unwrap().len(),
+        before,
+        "unchanged quota-failed input must remain parked before it changes"
+    );
+    old_notes(&fx, 71, 1);
+    drive_for(&fx, SECOND);
+    assert_eq!(
+        sizes.lock().unwrap()[before],
+        60,
+        "changed input starts at full batch"
+    );
+}
+
 // ---- E9 and the curation floor (hs-d592 R2, R5) ----
 
 #[test]
@@ -6570,7 +6652,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     let errors = fx.texts("error");
     let e9: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E9 (Context digests)"))
+        .filter(|text| text.contains("failed at curation for"))
         .collect();
     assert_eq!(
         e9.len(),
@@ -6580,7 +6662,7 @@ fn a_failed_curate_run_raises_an_error_event() {
     assert!(
         errors
             .iter()
-            .all(|text| text.contains("E9 (Context digests)")),
+            .all(|text| text.contains("failed at curation for")),
         "only E9 may report the curate run's failure: {errors:?}"
     );
 }
@@ -6611,7 +6693,7 @@ fn the_e2_tick_skips_a_blank_list_panes_line() {
     let errors = fx.texts("error");
     let e2: Vec<&String> = errors
         .iter()
-        .filter(|text| text.contains("E2 (liveness)"))
+        .filter(|text| text.contains("failed at liveness for"))
         .collect();
     assert!(
         e2.is_empty(),

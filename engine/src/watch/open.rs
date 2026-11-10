@@ -79,11 +79,11 @@ pub(super) fn run(engine: &mut Engine) {
         Ok((added, promoted)) => {
             for (plan, workflow, key) in added {
                 engine.log.line(&format!(
-                    "E4: added the open Job {key} to Workflow {workflow} of Plan {plan}"
+                    "open-jobs: added the open Job {key} to Workflow {workflow} of Plan {plan}"
                 ));
             }
             for (plan, key) in promoted {
-                engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its Workflow remains"));
+                engine.log.line(&format!("open-jobs: queued the draft open Job {key} of Plan {plan}: no draft of its Workflow remains"));
             }
             engine.clear(Step::E4, &About::Machine);
         }

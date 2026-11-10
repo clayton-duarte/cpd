@@ -23,6 +23,8 @@ mod schedule_tests;
 pub(crate) mod stall;
 mod start;
 #[cfg(test)]
+mod start_clamp_tests;
+#[cfg(test)]
 mod start_replan_tests;
 pub mod worker;
 

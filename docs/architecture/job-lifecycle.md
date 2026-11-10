@@ -19,7 +19,7 @@ stateDiagram-v2
     [*] --> draft: job add (phase plan)
     [*] --> queued: job add (after plan)
     draft --> queued: plan lock / approved review
-    queued --> running: engine E3 starts an Attempt
+    queued --> running: engine scheduling starts an Attempt
     running --> submitted: attempt submit
     submitted --> merged: the merge (A8)
     running --> failed: timed_out / no_submit / crashed / provider_error / setup_failed
@@ -42,7 +42,7 @@ stateDiagram-v2
 | (none) → `draft` | `job add` in phase `plan`, or `job add --draft` later; an appended draft | [contract §3.2](../contract.md) |
 | (none) → `queued` | `job add` after plan with no `--draft`, or an explore Job | [contract §3.2](../contract.md) |
 | `draft` → `queued` | `plan lock`, or the approval of a review of the drafts | [contract §3.2](../contract.md) |
-| `queued` → `running` | engine E3 (or `job dispatch`) starts an Attempt | [contract §3.2](../contract.md), [contract §3.7](../contract.md) |
+| `queued` → `running` | engine `scheduling` (or `job dispatch`) starts an Attempt | [contract §3.2](../contract.md), [contract §3.7](../contract.md) |
 | `running` → `submitted` | `attempt submit` passes its preconditions; the Attempt becomes `merging` | [contract §3.4](../contract.md), [contract §7.7](../contract.md) |
 | `submitted` → `merged` | the merge, driver A8; an `open` Job's merge also opens the pull request and moves its PR to `open` | [contract §3.4](../contract.md), [contract §7.4](../contract.md), [contract §3.8](../contract.md) |
 | `running` → `failed` | an Attempt ends `failed` with a cause that is not retried: `timed_out`, `no_submit` at the top rung, `crashed`, `provider_error`, `setup_failed` | [contract §3.2](../contract.md), [contract §3.4](../contract.md) |

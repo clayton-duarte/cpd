@@ -58,7 +58,7 @@ Because the index is built from the records on every call, nothing is lost by it
 Curation is the plane's maintenance, done by an **auxiliary** one-shot agent — the **distiller** — not by a Lead or a Manager ([CONTEXT — Distilled Context](../CONTEXT.md)). For each uncurated record in force the distiller classifies a `topic`, compresses a `short` form for machines, and may propose a `retirement` (duplicate, superseded or documented) ([contract §4.6](../contract.md), "The distiller curates"). The distiller flags no documentation candidates: that feature is removed (pro-d327). The proposals are written by the core function `propose`, checked structurally by cpd, and applied **only by the User** through the Inbox item `curate-retire` ([contract §4.6](../contract.md) "Retirement", [commands §3.13](../commands.md)).
 
 - `cpd context distill` curates **one batch** of at most 60 uncurated records, one batch per run ([commands §3.13](../commands.md)).
-- The engine starts it detached as **engine step E9**, when a Context has uncurated records in force and the newest is 10 minutes old, or 20 or more exist; a non-curable Context (archived, deleted or under the floor) is skipped with no run and no Event ([contract §3.7](../contract.md); [commands §3.13](../commands.md)).
+- The engine starts it detached as **engine step `curation`**, when a Context has uncurated records in force and the newest is 10 minutes old, or 20 or more exist; a non-curable Context (archived, deleted or under the floor) is skipped with no run and no Event ([contract §3.7](../contract.md); [commands §3.13](../commands.md)).
 - The records stay the truth; the distillation is checkable output, not a replacement for them ([CONTEXT — Distilled Context](../CONTEXT.md)).
 
 ## What the plane is not
@@ -68,13 +68,13 @@ The plane is not the state: a Context record is knowledge that outlives the Jobs
 ## Related notes
 
 - [[sdk]] — the crates and the one store the plane lives in.
-- [[clocks]] — the engine loop whose E9 runs the distiller, and the poll it is separate from.
+- [[clocks]] — the engine loop whose `curation` runs the distiller, and the poll it is separate from.
 - [[message-board]] — how a Session passes a message to another without touching the registry.
 - [[attention-inbox]] — how curation proposals reach the User.
 
 ## Sources
 
-- [contract.md](../contract.md) — §2.2 "Context record" and "Event", §3.7 (engine, E9), §4.1 (the database), §4.6 (the Context store, retirement, the search rail, the distiller), §5 (Events).
+- [contract.md](../contract.md) — §2.2 "Context record" and "Event", §3.7 (engine, `curation`), §4.1 (the database), §4.6 (the Context store, retirement, the search rail, the distiller), §5 (Events).
 - [commands.md](../commands.md) — §3.5 (`context decide`, `note`), §3.13 (`context distill`).
 - [CONTEXT.md](../CONTEXT.md) — Context record, Context store, Distilled Context, Event.
 - [architecture-verification.md](../research/architecture-verification.md) — §8 (the knowledge plane), §11 (the boundaries).

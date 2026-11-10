@@ -12,7 +12,13 @@ export const newReporter = (host: Host, id: string, facts: Facts) =>
     // No signal: the `stopped` of `session_shutdown` is sent after the abort, and `stop()` bounds its wait.
     async (w: Wanted) => {
       if (w.state === "idle" && w.reply) facts.reply = false; // sent once, with this call
-      await callCpd(host.exec, stateArgs(w, id), { timeoutMs: host.timing.callTimeoutMs });
+      const call = (argv: string[]) => callCpd(host.exec, argv, { timeoutMs: host.timing.callTimeoutMs });
+      // `stopped -> working` is refused (contract §3.6): a live pi under a `stopped` Ledger reports `idle` first.
+      if (w.state === "working") {
+        const session = (await call(["session", "show", id])).session as { state?: unknown } | undefined;
+        if (session?.state === "stopped") await call(stateArgs({ state: "idle" }, id));
+      }
+      await call(stateArgs(w, id));
     },
     (e) => host.deliver("session state", e),
   );

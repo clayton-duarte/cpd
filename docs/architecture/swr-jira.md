@@ -173,20 +173,20 @@ When the pull request is already merged, `record` enqueues `in_review` and then 
 
 **J6. Command outputs do not change.** The enqueues above are side effects of their steps and commands, not the commands' own writes. A6's `{queued, mutation_id}` applies to a command's own external write (`cpd pr post` posts to Slack and returns its own output). The Jira transition is queued, and its output is not added to the command.
 
-## 8. Running a transition (the `jira` source in E24)
+## 8. Running a transition (the `jira` source in `swr`)
 
 Today's code, which this replaces (origin/main): `engine/src/watch/jira.rs` `run` (115-182), `collect` (185-263), `fail_row` (86-113) and `start` (302-337); `core/src/pr/jira_sync.rs` `queue` (106-118) and `refuse` (145-181).
 
-E24 ([swr.md §12](swr.md)) runs the `jira` source. For each claimed mutation:
+`swr` ([swr.md §12](swr.md)) runs the `jira` source. For each claimed mutation:
 
 1. `claim_next(system = jira)` takes the oldest `pending` row whose `target_key` is not NULL and whose `next_attempt_at` is due.
 2. The Workflow of `context_json` is looked up. If it is `cancelled` or gone: `skip`.
-3. The target name and `later_names` are read from the policy now, when the row runs, as E19 reads them today. An empty target name: `skip`.
+3. The target name and `later_names` are read from the policy now, when the row runs, as `jira-transitions` reads them today. An empty target name: `skip`.
 4. The cache test of §5. Behind or no row: continue.
 5. The helper runs, detached (see below), with the request of §3.1.
 6. The answer maps as the table below.
 
-**Detached.** The helper runs on its own thread, one run at a time for the `jira` system, and its answer is collected at a later tick. This is E19's rule, kept: an engine tick never waits on Atlassian. `ExecOutcome` (§11 of swr.md) is delivered on the tick that collects the answer.
+**Detached.** The helper runs on its own thread, one run at a time for the `jira` system, and its answer is collected at a later tick. This is `jira-transitions`'s rule, kept: an engine tick never waits on Atlassian. `ExecOutcome` (§11 of swr.md) is delivered on the tick that collects the answer.
 
 | Answer | Outbox | Cache and endpoint | Event |
 |---|---|---|---|
@@ -204,12 +204,12 @@ The `jira_refused` row is parked: it is `failed`, and §9 decides when it comes 
 
 ## 9. Parked transitions and the reopen
 
-`refused_with` lives in `context_json`. Each E24 pass, for each `failed` transition that has `refused_with`, oldest first:
+`refused_with` lives in `context_json`. Each `swr` pass, for each `failed` transition that has `refused_with`, oldest first:
 
 1. Read the Workflow's current `jira` and the policy name for the row's target.
 2. If the name is non-empty and `<ticket>|<name>` differs from `refused_with`, and no `pending` or `in_flight` transition of the new `target_key` has rank ≥ the row's rank, enqueue the same op again under the current ticket.
 
-This is the old E19 reopen, as an enqueue. Step 2's guard makes it idempotent: the new row is `pending`, so the next pass finds it and enqueues nothing. A refusal that repeats with the same key is not reopened.
+This is the old `jira-transitions` reopen, as an enqueue. Step 2's guard makes it idempotent: the new row is `pending`, so the next pass finds it and enqueues nothing. A refusal that repeats with the same key is not reopened.
 
 The `failed` row stays as it is. It is a record, not a state that comes back.
 
@@ -223,7 +223,7 @@ The `failed` row stays as it is. It is a record, not a state that comes back.
 
 The read before a transition is committed with `poll_started_at` = the time before that read. It cannot settle anything, because the mutation that runs is `in_flight` and not yet `revalidating`.
 
-**gc.** A `swr_jira_issues` row's `inactive_at` is set by E24's `jira` source when no Workflow with that ticket is `waiting`, `dispatch` or `open` and no `pending`, `in_flight` or `revalidating` transition has its key. It is cleared (`touch`) when one is. `gc::sweep` deletes the row after `swr.gc_days` ([swr.md §4](swr.md)). `swr_atlassian` is a single row with no `inactive_at` and is never swept.
+**gc.** A `swr_jira_issues` row's `inactive_at` is set by `swr`'s `jira` source when no Workflow with that ticket is `waiting`, `dispatch` or `open` and no `pending`, `in_flight` or `revalidating` transition has its key. It is cleared (`touch`) when one is. `gc::sweep` deletes the row after `swr.gc_days` ([swr.md §4](swr.md)). `swr_atlassian` is a single row with no `inactive_at` and is never swept.
 
 ## 11. What is retired
 
@@ -234,8 +234,8 @@ Each item goes in the same PR as the cutover ([swr.md §16](swr.md): cutover is 
 | table `jira_transitions` | `core/src/store/schema.rs`, its DDL in [contract §4.4](../contract.md) | `swr_mutations` rows of system `jira` (§2), dropped by §12's migration |
 | `jira_sync` queue module: `queue`, `next_due`, `mark_settled`, `refuse`, `parked`, `reopen`, `Due`, `Parked`, `Refusal`, `Outcome` | `core/src/pr/jira_sync.rs` | `enqueue` (§7), `claim_next`, `skip`, `fail` (§8), §9 |
 | `Target` enum | `core/src/pr/jira_sync.rs`, used by `core/src/jira.rs` and `engine/src/watch/report.rs` | the rank table of §4, in `core/src/swr/source/jira.rs` |
-| engine step E19: `run`, `collect`, `fail_row`, `reopen_parked`, `start`, `State` | `engine/src/watch/jira.rs` and `engine.jira` | the `jira` source of E24 (§8) |
-| per-row Report key (E19, Plan, Workflow, target) and the per-row failure Events R1 to R3 | `engine/src/watch/report.rs`, [commands §21.11](../commands.md) | endpoint outage Events (§8, A3) |
+| engine step `jira-transitions`: `run`, `collect`, `fail_row`, `reopen_parked`, `start`, `State` | `engine/src/watch/jira.rs` and `engine.jira` | the `jira` source of `swr` (§8) |
+| per-row Report key (`jira-transitions`, Plan, Workflow, target) and the per-row failure Events R1 to R3 | `engine/src/watch/report.rs`, [commands §21.11](../commands.md) | endpoint outage Events (§8, A3) |
 | the helper's decision logic reading `names` for all three targets, and its second `getJiraIssue` | `pi/lib/jira-transition.ts` | §3 |
 | the `names`-based request | `core/src/jira.rs` (`Request`, `stdin`) | §3.1 |
 | plan-delete of `jira_transitions` rows | `core/src/plan/delete.rs`, [contract §4.14](../contract.md) | a delete of the Plan's `swr_mutations` rows of system `jira`, `json_extract(context_json, '$.plan')` |
@@ -319,4 +319,4 @@ Each test uses `FakeRunner` for the helper, `ManualClock` for time, and no real 
 None block this page. Two are for the code Jobs:
 
 - The exact `<n>` of the breaking migration's header and the `<UTC minute>` name (the code Job counts them, as `pr-restack` did).
-- The order of the `jira` source against the other sources in E24 ([swr.md §18](swr.md)).
+- The order of the `jira` source against the other sources in `swr` ([swr.md §18](swr.md)).

@@ -34,7 +34,7 @@ pub(super) fn run(engine: &mut Engine) {
         }
         match wake(engine, &row, &lead) {
             Ok(true) => engine.log.line(&format!(
-                "E20: woke the Lead of Plan {}: Workflow {} has a closed pull request",
+                "parked-drafts: woke the Lead of Plan {}: Workflow {} has a closed pull request",
                 row.plan, row.workflow
             )),
             Ok(false) => {}

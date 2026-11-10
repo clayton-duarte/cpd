@@ -14,7 +14,7 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use super::archive::archive_on_quit;
-use super::fork_wait::wait_for_source_with;
+use super::fork_wait::wait_for_source;
 use super::moves::first_message;
 use super::reload::{adapter_missing_with, may_exec, reload_due_with, reload_with, stop_pi_with};
 use super::row::{self, Role, Row, State};
@@ -510,7 +510,8 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
     let message = first_message(&env.home, row)?;
     match &row.forked_from {
         Some(source) => {
-            let Some(source_file) = wait_for_source_with(&ports, env, dirs, source, &row.name)?
+            let Some(source_file) =
+                wait_for_source(&ports, env, dirs, source, &row.name, Some(row))?
             else {
                 return Ok(None);
             };

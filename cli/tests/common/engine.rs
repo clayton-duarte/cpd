@@ -755,14 +755,13 @@ impl Handler for GhPoll {
 }
 
 /// Whether `query` is the one document `swr::source::github` sends (`build_poll_query`): the viewer and rate limit, the
-/// two searches, and the Light and Heavy fragments. A source change that alters the document makes this refuse the call,
+/// two searches, and the Light fragment (the Heavy fragment is present only when the poll has heavy pull requests). A source change that alters the document makes this refuse the call,
 /// so the fixture is not silently answering a document it no longer recognizes.
 fn is_github_poll(query: &str) -> bool {
     query.starts_with("query { viewer { login } rateLimit { remaining resetAt cost }")
         && query.contains("authored: search(type: ISSUE")
         && query.contains("reviews: search(type: ISSUE")
         && query.contains("fragment Light on PullRequest {")
-        && query.contains("fragment Heavy on PullRequest {")
 }
 
 type Reply1 = Box<dyn Fn(&Call) -> Reply + Send + Sync>;

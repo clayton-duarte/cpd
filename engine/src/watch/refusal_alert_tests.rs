@@ -263,3 +263,20 @@ fn e8_closes_the_refusal_alert_item_when_the_session_is_archived() {
     );
     assert_eq!(closed_alerts(&mut fx), 1);
 }
+
+#[test]
+fn refusal_alert_log_uses_slug() {
+    let mut fx = fx(3, 60);
+    for m in [30, 20, 10] {
+        refusal(&mut fx, &ago(m), "usage", "p/opus");
+    }
+
+    refusal_alert::run(&mut fx.engine);
+
+    let log = std::fs::read_to_string(fx.engine.home.watch_log()).unwrap();
+    assert!(
+        log.contains("cpd watch: refusal-threshold: Session lead1 was refused 3 times"),
+        "{log}"
+    );
+    assert!(!log.contains("E25"), "{log}");
+}

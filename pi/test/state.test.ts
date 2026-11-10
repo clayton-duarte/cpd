@@ -30,6 +30,21 @@ test("agent_start reports working; agent_settled reports idle only when pi is id
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "idle", "--session", ID], "idle takes no --label");
 });
 
+test("reports idle before working when the shown state is stopped", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  // The Ledger says `stopped` (E2 stopped the row) while this pi is live: `stopped -> working` is refused (contract §3.6).
+  f.respond("session-show", shown({ state: "stopped" }));
+
+  await f.pi.fire("agent_start");
+  await waitFor("a report", () => stateCalls(f).length >= 2);
+  await f.quiet();
+
+  // `started` reported `idle`; the turn then reports `idle` first and `working` after it: two reports, in that order.
+  assert.deepEqual(stateCalls(f).slice(1), ["idle", "working"], "idle, then working, never stopped to working");
+});
+
 test("calls are serialised: one in flight, only the latest wanted state is sent next", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());

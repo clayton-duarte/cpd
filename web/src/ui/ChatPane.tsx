@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
-import type { Connection, SubmissionResult } from "../state/connection.ts";
-import type { Attachment } from "../protocol/domain.ts";
+import type { Connection } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
 import { Transcript } from "./chat/Transcript.tsx";
@@ -39,7 +38,6 @@ const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? 
 export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary }): ReactElement {
   const { view, connection, reader } = props;
   const composer = useRef<ComposerHandle>(null);
-  const retained = useRef(new Map<string, { attachments: Attachment[]; submission: { type: "unknown" } }>());
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
@@ -73,13 +71,10 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         thinking={toggles.thinking}
         tools={toggles.tools}
       />
+      {dialog === null ? (
         <Composer
           ref={composer}
-          hidden={dialog !== null}
           sessionId={view.id}
-          sessionKey={sessionKey}
-          {...(retained.current.has(view.id) ? { retained: retained.current.get(view.id)! } : {})}
-          onRetain={(draft) => { if (draft === null) retained.current.delete(view.id); else retained.current.set(view.id, draft); }}
           capabilities={view.capabilities}
           archived={view.archived ?? false}
           busy={isBusy}
@@ -97,13 +92,12 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           }
           onSubmit={({ text, attachments, whenBusy }) => {
             const { text: prompt, images } = buildPrompt(text, attachments);
-            const id = connection.submit({ text: prompt, images, whenBusy });
-            return (settle: (result: SubmissionResult) => void) => connection.observeSubmission(view.id, id, settle);
+            connection.submit({ text: prompt, images, whenBusy });
           }}
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}
         />
-      {dialog === null ? null : dialog.method === "ask_user_question" ? (
+      ) : dialog.method === "ask_user_question" ? (
         <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (
         <PlanReviewCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />

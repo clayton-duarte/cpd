@@ -676,6 +676,15 @@ it("the action button runs the primary action and never an owner link or externa
   m.unmount();
 });
 
+it("waiting for peer review row primary action is RePost", () => {
+  const m = render([row(1, "pr-ready", "acme/api#3 waiting for peer review", { planId: "p1", subject: "pr:acme/api#3" })]);
+  const button = items(m.container)[0]?.querySelector<HTMLButtonElement>('button[data-part="item-action"]');
+  expect(button?.textContent).toBe("RePost");
+  click(button);
+  expect(m.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "pr.repost", planId: "p1", pull: "acme/api#3" });
+  m.unmount();
+});
+
 it("the action button falls back to Curate then Dismiss", () => {
   const curation = [{ id: "r1", text: "first record", detail: "stale a.md" }];
   const m = render([

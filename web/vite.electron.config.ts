@@ -21,6 +21,8 @@ export default defineConfig(
   target === "renderer"
     ? {
         base: "./",
+        // Renderer build id: the sha buildBundle stamps; "dev" outside an update build.
+        define: { __CPD_WEB_SHA__: JSON.stringify(process.env["CPD_WEB_SHA"] ?? "dev") },
         plugins: [react(), tailwindcss()],
         build: {
           outDir: `${out}/renderer`,

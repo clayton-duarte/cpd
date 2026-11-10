@@ -8,6 +8,7 @@
 //! takes the slot. So at most one placeholder exists, and only in the slot.
 
 use std::collections::BTreeMap;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -31,15 +32,21 @@ use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 
-/// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
-/// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
+/// What `tmux new-window` runs for Lead `id`: `<exe> session run <id>` in its
+/// cwd (the engine's own executable, `ports.spawn.self_exe()`, never a `cpd` found on PATH; the bare `cpd` only when the
+/// ports have no record of their own path), with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
 /// Context's Manager has no Plan, so no `CPD_PLAN` (§3.10).
 pub(crate) fn lead_spawn(
     home: &CpdHome,
+    ports: &Ports,
     id: &SessionId,
     plan: Option<&PlanId>,
     cwd: &Path,
 ) -> Spawn {
+    let exe = ports
+        .spawn
+        .self_exe()
+        .unwrap_or_else(|_| PathBuf::from(PROGRAM));
     let mut env = BTreeMap::from([
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), id.to_string()),
@@ -50,9 +57,12 @@ pub(crate) fn lead_spawn(
     Spawn {
         cwd: Some(cwd.to_path_buf()),
         env,
-        argv: [PROGRAM, "session", "run", id.as_str()]
-            .map(str::to_owned)
-            .into(),
+        argv: vec![
+            exe.display().to_string(),
+            "session".to_owned(),
+            "run".to_owned(),
+            id.as_str().to_owned(),
+        ],
     }
 }
 
@@ -217,7 +227,13 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         Ok(row)
     })?;
 
-    let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
+    let spawn = lead_spawn(
+        &env.home,
+        &env.ports,
+        &id,
+        Some(&plan),
+        Path::new(&source.cwd),
+    );
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
         crate::session::row::set_pill(&tmux, &pane, None, &name, true)?;
@@ -317,6 +333,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         None => {
             let spawn = lead_spawn(
                 &env.home,
+                &env.ports,
                 &lead.id,
                 lead.plan.as_ref(),
                 Path::new(&lead.cwd),
@@ -385,8 +402,22 @@ const SOCKET_NAP_MAX: Duration = Duration::from_secs(1);
 const SOCKET_DEADLINE: Duration = Duration::from_secs(30);
 
 /// `$CPD_HOME/run/host/<session>.sock` (contract §6.14).
-fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
-    home.run_dir().join("host").join(format!("{session}.sock"))
+/// Refused as `socket_path_too_long` over 107 bytes (`sun_path[108]` minus the NUL), as `session tail` refuses it.
+fn socket_path(home: &CpdHome, session: &SessionId) -> Result<PathBuf, CpdError> {
+    let path = home.run_dir().join("host").join(format!("{session}.sock"));
+    let length = path.as_os_str().as_bytes().len();
+    if length > super::tail::SOCKET_PATH_MAX {
+        let max = super::tail::SOCKET_PATH_MAX;
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("The host socket path for Session {session} is {length} bytes, over the {max}-byte limit: socket_path_too_long."),
+        )
+        .with("session", session.as_str())
+        .with("socket", path.display().to_string())
+        .with("length", length)
+        .with("max", max));
+    }
+    Ok(path)
 }
 
 /// Wakes a durable Session in the caller's transaction: clears `asleep_at` and the `host crash loop` label (only that
@@ -406,9 +437,9 @@ pub(super) fn wake_durable(tx: &WriteTxn<'_>, id: &SessionId) -> Result<(), CpdE
 /// label) and wait for its host's socket through the port. No pane, and never the chat slot.
 fn open_durable(env: &mut Env, lead: &Row) -> Result<Output, CpdError> {
     let id = lead.id.clone();
+    let path = socket_path(&env.home, &id)?;
     env.store
         .write("session open", |tx| wake_durable(tx, &id))?;
-    let path = socket_path(&env.home, &id);
     wait_for_socket(&path, &id)?;
     Ok(Output::success(json!({"session": id, "pane": Value::Null})))
 }
@@ -667,7 +698,13 @@ pub(crate) fn start_parked(
     {
         tmux.kill_pane(&dead.pane)?;
     }
-    let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
+    let spawn = lead_spawn(
+        &env.home,
+        &env.ports,
+        &row.id,
+        row.plan.as_ref(),
+        Path::new(&row.cwd),
+    );
     let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
     let started = kill_window_on_error(&tmux, &window, || {
         row.set_pill(&tmux, &pane)?;

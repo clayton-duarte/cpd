@@ -97,7 +97,7 @@ pub(super) fn run(engine: &mut Engine) {
                     Ok(true) => {
                         engine
                             .log
-                            .line(&format!("E13: put Session {} to sleep", r.session));
+                            .line(&format!("sleep: put Session {} to sleep", r.session));
                         engine.clear(Step::E13, &about);
                     }
                     Ok(false) => {}

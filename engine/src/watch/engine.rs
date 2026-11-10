@@ -203,7 +203,7 @@ impl Engine {
         if self.outgrown() {
             let failure = failure.into();
             self.log.line(&format!(
-                "{step:?}: {} ({}); not reported: the store outgrew this binary",
+                "{step}: {} ({}); not reported: the store outgrew this binary",
                 failure.message, failure.code
             ));
             return;
@@ -412,7 +412,7 @@ fn start_prs(engine: &mut Engine) {
         ) {
             Ok(started) => {
                 engine.log.line(&format!(
-                    "E7: started Workflow {key} of Plan {plan} ({})",
+                    "workflow-start: started Workflow {key} of Plan {plan} ({})",
                     started.to_json()["lead_branch"]
                 ));
                 engine.clear(Step::E7, &about);
@@ -428,7 +428,7 @@ fn start_prs(engine: &mut Engine) {
                 ) {
                     Ok(true) => {
                         engine.log.line(&format!(
-                            "E7: Workflow {key} of Plan {plan} could not be started ({}): {}",
+                            "workflow-start: Workflow {key} of Plan {plan} could not be started ({}): {}",
                             step.as_str(),
                             error.message()
                         ));
@@ -441,7 +441,7 @@ fn start_prs(engine: &mut Engine) {
             // The Workflow changed since it was read (`workflow start` got there first): decided again next tick.
             Err(Failed::Other(e)) if e.code() == ErrorCode::CasLost => {
                 engine.log.line(&format!(
-                    "E7: skipped Workflow {key} of Plan {plan}: {}",
+                    "workflow-start: skipped Workflow {key} of Plan {plan}: {}",
                     e.message()
                 ));
             }

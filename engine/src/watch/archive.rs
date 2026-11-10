@@ -9,9 +9,10 @@ pub(super) fn run(engine: &mut Engine) {
     match archive_ended_workers(&mut engine.store) {
         Ok(done) => {
             if !done.is_empty() {
-                engine
-                    .log
-                    .line(&format!("E12: archived {} Worker Session(s)", done.len()));
+                engine.log.line(&format!(
+                    "worker-archive: archived {} Worker Session(s)",
+                    done.len()
+                ));
             }
             engine.clear(Step::E12, &About::Machine);
         }

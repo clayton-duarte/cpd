@@ -221,6 +221,7 @@ fn decide(
     shape: Shape,
 ) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
+    crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
     match job.status.as_str() {

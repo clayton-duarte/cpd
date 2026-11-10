@@ -120,23 +120,12 @@ fn recover_one(
     match check {
         // R2: the merge happened.
         Ok(Some(tip)) => {
-            // R2: rule S, its stop reported as step 9's is.
-            let stale = git::sync_lead(&attempt.lead_worktree, &attempt.lead_branch).err();
+            // Recovery cannot establish ownership of either worktree's index or files.
+            // Leave them as found, even when the merge itself already landed.
             let end = End::Merged { sha: tip.clone() };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| {
-                ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
-                if let Some(e) = &stale {
-                    ledger::append_error(
-                        tx,
-                        attempt,
-                        ctx.source,
-                        e,
-                        stale_text(attempt, e),
-                        ctx.config.watch.error_repeat(),
-                    )?;
-                }
-                Ok(())
+                ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)
             })?;
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does, by rule P with `tip`; a failure does not undo the merge.
@@ -152,7 +141,7 @@ fn recover_one(
                     )
                 })?;
             }
-            rest_of_a9(store, ctx, attempt)?;
+            kill_worker(store, ctx, attempt)?;
             Ok(Some(end))
         }
         // R3: no merge.
@@ -237,20 +226,6 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
         attempt.id,
         attempt.plan
     )
-}
-
-/// The rest of A9 after R2: kill the Attempt's tmux window, remove its
-/// worktree and branch (§3.4, §7.2).
-fn rest_of_a9(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
-    // Best effort per item: a window that cannot be killed does not keep the worktree.
-    let killed = kill_worker(store, ctx, attempt);
-    // A linear Attempt is the Lead worktree and the Lead Branch: keep both (hs-d680).
-    if git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) {
-        return killed;
-    }
-    let removed =
-        git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch);
-    killed.and(removed)
 }
 
 /// A9's stop of the Attempt's Worker, by its stored runner (the seam's [`runner::kill_orphan`]: R's driver is dead).

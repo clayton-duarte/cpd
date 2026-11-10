@@ -123,7 +123,7 @@ fn apply(engine: &mut Engine, finished: Finished) {
         // A busy store is not a failure (contract §3.7): the poll did not happen, so it is not counted as one; it runs again at the next tick.
         Err(failure) if is_store_busy(&failure) => {
             engine.log.line(&format!(
-                "E5: the store is busy, the poll is tried again at the next tick: {}: {}",
+                "pr-poll: the store is busy, the poll is tried again at the next tick: {}: {}",
                 failure.code, failure.message
             ));
             return;
@@ -143,7 +143,7 @@ fn apply(engine: &mut Engine, finished: Finished) {
                 });
                 engine.paused_until = Some(clock.now() + wait);
                 engine.log.line(&format!(
-                    "E5: GitHub's rate limit is spent: polling pauses {} s.",
+                    "pr-poll: GitHub's rate limit is spent: polling pauses {} s.",
                     wait.as_secs()
                 ));
                 return;
@@ -163,7 +163,7 @@ fn apply(engine: &mut Engine, finished: Finished) {
     );
     if changed + feedback + merged + done > 0 {
         engine.log.line(&format!(
-            "E5: polled {} pull request(s): {changed} changed, {feedback} feedback, {merged} merged, {done} plan(s) done",
+            "pr-poll: polled {} pull request(s): {changed} changed, {feedback} feedback, {merged} merged, {done} plan(s) done",
             out["polled"]
         ));
     }

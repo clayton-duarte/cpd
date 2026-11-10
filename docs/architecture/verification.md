@@ -40,15 +40,15 @@ raises `pr-feedback`; Gate, Quick check, Mechanical checks and CI are four disti
 
 **The GitHub round-trip.** `pr open` pushes the Lead Branch (rule P, plain, never forced —
 [contract §7.4](../contract.md)), creates the pull request ready, never a draft ([contract
-§7.6](../contract.md)), and the pull request gets GitHub's own CI checks. Engine E5 (`cpd
+§7.6](../contract.md)), and the pull request gets GitHub's own CI checks. Engine `pr-poll` (`cpd
 pr poll`, every `pr_poll_seconds`) reads each open pull request's rollup, review decision
-and mergeability ([contract §3.7](../contract.md) E5, [contract §7.6](../contract.md),
+and mergeability ([contract §3.7](../contract.md) `pr-poll`, [contract §7.6](../contract.md),
 [commands §9.2](../commands.md)); a Lead reads the detail with `cpd pr view` ([commands
 §9.8](../commands.md)). When the checks become `failed` and `pr.feedback.checks` is `any`,
 the poll raises `pr-feedback` and wakes the Lead ([contract §7.6](../contract.md), [commands
 §9.2](../commands.md)). When `mergeable` becomes `conflicting`, the poll queues an `update`
 Job; its Worker merges the base and cpd runs the Gate and pushes ([contract
-§3.7](../contract.md) E5, [contract §7.4](../contract.md) "An `open` or `update` Job's
+§3.7](../contract.md) `pr-poll`, [contract §7.4](../contract.md) "An `open` or `update` Job's
 merge", [contract §7.7](../contract.md)).
 
 ```mermaid
@@ -64,9 +64,9 @@ flowchart TD
   H -->|"fail"| F["gate_failed / gate_error<br/>no push · Lead appends fix Jobs"]
   P --> O["open Job: gh pr create<br/>(ready, never a draft)"]
   O --> CI["GitHub CI checks on the pull request"]
-  CI --> E5["Engine E5: cpd pr poll<br/>reads statusCheckRollup, reviews, mergeable"]
-  E5 -->|"checks failed + pr.feedback.checks = any"| PF["pr-feedback — wakes the Lead"]
-  E5 -->|"mergeable = conflicting"| UJ["update Job<br/>merges the base, then Gate + push"]
+  CI --> PRPOLL["Engine pr-poll: cpd pr poll<br/>reads statusCheckRollup, reviews, mergeable"]
+  PRPOLL -->|"checks failed + pr.feedback.checks = any"| PF["pr-feedback — wakes the Lead"]
+  PRPOLL -->|"mergeable = conflicting"| UJ["update Job<br/>merges the base, then Gate + push"]
 ```
 
 ## The deprecation path
@@ -106,7 +106,7 @@ flowchart LR
 ## The GitHub round-trip (diagram e)
 
 The full loop — push the Lead Branch, the Gate or CI checks, the pull-request review, the
-engine's poll (E5), and the `update` Job that merges the base and pushes:
+engine's poll (`pr-poll`), and the `update` Job that merges the base and pushes:
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +123,7 @@ sequenceDiagram
   C->>GB: gh pr create — ready, never a draft (open Job)
   GB->>GB: CI checks on the pull request
   L->>GB: pull-request review (approve / request changes)
-  C->>GB: E5 cpd pr poll, every pr_poll_seconds (never overlapping)
+  C->>GB: pr-poll step cpd pr poll, every pr_poll_seconds (never overlapping)
   GB-->>C: statusCheckRollup, reviews, mergeable
   C->>L: pr-feedback (checks failed / changes_requested / comments)
   GB-->>C: mergeable = conflicting
@@ -137,15 +137,15 @@ sequenceDiagram
 Every arrow above is a documented claim: push by rule P and the merge at [contract
 §7.4](../contract.md); the ready-not-draft pull request and the Gate on a snapshot at
 [contract §7.6](../contract.md); the poll's read and its reactions at [contract
-§7.6](../contract.md) steps 1–3 and 6, [contract §3.7](../contract.md) E5 and [commands
+§7.6](../contract.md) steps 1–3 and 6, [contract §3.7](../contract.md) `pr-poll` and [commands
 §9.2](../commands.md); the review decision at [contract §7.6](../contract.md) step 2 and
 `cpd pr view` ([commands §9.8](../commands.md)); the `update` Job on a conflict at
-[contract §3.7](../contract.md) E5 and its Worker's merge at [contract
+[contract §3.7](../contract.md) `pr-poll` and its Worker's merge at [contract
 §7.4](../contract.md) and [contract §7.7](../contract.md).
 
 ## Sources
 
-- [contract §3.7](../contract.md) — the engine, E5
+- [contract §3.7](../contract.md) — the engine, `pr-poll`
 - [contract §7.3](../contract.md) — the hooks from the repo policy file
 - [contract §7.4](../contract.md) — the merge and the Gate at it
 - [contract §7.5](../contract.md) — the tamper check

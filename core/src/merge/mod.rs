@@ -195,6 +195,14 @@ pub fn merge(
         if target.kind == "update" && matches!(end, End::Merged { .. }) {
             crate::pr::pulls::reset_after_push(tx, plan, &workflow)?;
         }
+        // The Lead Branch moved: refresh the Workflows stacked on it (pro-d466).
+        if matches!(end, End::Merged { .. })
+            && let Some(lead) = crate::plan::fingerprint::load_workflows(tx, plan)?
+                .into_iter()
+                .find(|w| w.key == workflow)
+        {
+            queue_stacked_updates(tx, plan, &lead.lead_branch, target.tier)?;
+        }
         if let Some(e) = &stale {
             ledger::append_error(
                 tx,
@@ -943,10 +951,22 @@ fn crash_end(e: CpdError, stale: Option<CpdError>) -> Result<Stepped, CpdError> 
     })
 }
 
+/// Test seam: the detail of the `crashed` End that `crash_end` gives `e`; `None` when it ends any other way.
+#[cfg(test)]
+pub(crate) fn crashed_detail(e: CpdError) -> Option<String> {
+    match crash_end(e, None).ok()?.end {
+        End::Failed {
+            cause: Failure::Crashed,
+            detail,
+        } => Some(detail),
+        _ => None,
+    }
+}
+
 /// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let workflow = workflow_row(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, &workflow)
+    crate::pr::in_merge(|| crate::pr::is_merged_on_github(&target.lead_worktree, &workflow))
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
@@ -956,13 +976,15 @@ fn open_pull_request(
     target: &Attempt,
 ) -> Result<crate::pr::Pulled, CpdError> {
     let (workflow, title, description) = workflow_of_job(store, target)?;
-    crate::pr::pull_request(
-        &target.lead_worktree,
-        &workflow,
-        &title,
-        description.as_deref(),
-        &config.inbox.bot_reviewers,
-    )
+    crate::pr::in_merge(|| {
+        crate::pr::pull_request(
+            &target.lead_worktree,
+            &workflow,
+            &title,
+            description.as_deref(),
+            &config.inbox.bot_reviewers,
+        )
+    })
 }
 
 /// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or
@@ -1099,6 +1121,31 @@ pub(crate) fn rebase_with(
         .with("stderr", git::tail(&abort.stderr, git::TAIL_LINES)));
     }
     Ok(Some(files))
+}
+
+/// Queues the `update` Job (cause `base-moved`, pro-d466) of every open stacked Workflow whose `base` is
+/// `base_lead_branch`, in the Job-merge transaction `tx` that moved that Lead Branch. A Workflow with a live `update`
+/// Job queues none (`queue_update`).
+pub(crate) fn queue_stacked_updates(
+    tx: &crate::store::WriteTxn<'_>,
+    plan: &PlanId,
+    base_lead_branch: &str,
+    tier: crate::config::Tier,
+) -> Result<Vec<crate::ids::JobKey>, crate::error::CpdError> {
+    let mut queued = Vec::new();
+    for workflow in crate::plan::fingerprint::load_workflows(tx, plan)? {
+        if workflow.status == "open" && workflow.base == base_lead_branch {
+            queued.extend(crate::job::open::queue_update(
+                tx,
+                plan,
+                &workflow,
+                tier,
+                "job merge",
+                crate::job::open::Cause::BaseMoved,
+            )?);
+        }
+    }
+    Ok(queued)
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ use cpd_core::janitor::{log_path, running};
 pub(super) fn run(engine: &mut Engine) {
     sweep_detached(engine);
     if incident_holds(engine, Step::E16) {
-        engine.log.line("E16: holding: incident mode is on");
+        engine.log.line("janitor: holding: incident mode is on");
         return;
     }
     match due(engine).and_then(|due| if due { start(engine) } else { Ok(()) }) {
@@ -59,8 +59,9 @@ fn start(engine: &mut Engine) -> Result<(), CpdError> {
             pid_path.display()
         ))
     })?;
-    engine
-        .log
-        .line(&format!("E16: started the janitor pass (pid {})", pid.0));
+    engine.log.line(&format!(
+        "janitor: started the janitor pass (pid {})",
+        pid.0
+    ));
     Ok(())
 }

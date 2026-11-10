@@ -433,7 +433,7 @@ Item[role=button][variant=outline][size=sm]   (the preview renders a role=button
 - `first` = `row.label.split("\n")[0]`; the description is the rest, joined by a space, trimmed, shown only when non-empty.
 - The row's `Item` is wrapped in the context menu (2.3), except `engine-down`, which has no menu.
 
-**Primary action** (`primaryActionOf`): the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start`. Without one, the UI derives it, in this order: `engine-down` → `Start` (`engine.start`); `deploy` → `Approve` (`inbox.approve`, `itemId: row.id`); `review-requested` → `Claim` (`inbox.claim`); `pr-ready` whose label's status reads `ready to merge` → `Merge` (`pr.merge` with `planId`, `workflow`, `pull`), `ready for user review` → `Post` (`pr.post`), `review overdue` → `RePost` (`pr.repost`), each when the Plan or pull is known. When there is no primary action: a `curate-retire` row with a `contextId` shows `Curate` (opens 2.6); any other row with `id >= 0` shows `Dismiss` (`inbox.dismiss`); otherwise no button. The button runs the item's primary action and never an owner-link or an external link (air-d121): navigation lives on the card click and the top-right slot.
+**Primary action** (`primaryActionOf`): the first `row.actions` entry whose kind is `pr.merge`, `pr.post`, `pr.repost`, `inbox.approve`, `inbox.claim` or `engine.start`. Without one, the UI derives it, in this order: `engine-down` → `Start` (`engine.start`); `deploy` → `Approve` (`inbox.approve`, `itemId: row.id`); `review-requested` → `Claim` (`inbox.claim`); `pr-ready` whose label's status reads `ready to merge` → `Merge` (`pr.merge` with `planId`, `workflow`, `pull`), `ready for user review` → `Post` (`pr.post`), `review overdue` or `waiting for peer review` → `RePost` (`pr.repost`), each when the Plan or pull is known. When there is no primary action: a `curate-retire` row with a `contextId` shows `Curate` (opens 2.6); any other row with `id >= 0` shows `Dismiss` (`inbox.dismiss`); otherwise no button. The button runs the item's primary action and never an owner-link or an external link (air-d121): navigation lives on the card click and the top-right slot.
 
 ### 2.6. Selection, links and the curate dialog (pro-d53; the card click amended by air-d121)
 
@@ -577,6 +577,8 @@ div[data-part="cockpit-error-toast"]   fixed right-4 bottom-8 z-50 w-full max-w-
     └─ Button[type="button"][variant="ghost"][size="icon-sm"][aria-label="Dismiss error"]   absolute top-2 right-2; XIcon size-3.5
 ```
 
-The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dismissError`, which clears both. The toast is dismissible and nothing else closes it.
+The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dismissError`, which clears both. The toast is dismissible and nothing else closes it, except a successful report (below).
+
+**The report toast (pro-d465, Bug report protocol; CONTRACT 11.7).** The toast's `Send to <target>` button sends an `error.report`. The toast closes when that send succeeds (`action.result` `ok: true`). While the send is in flight the Report and Dismiss buttons are disabled. When the send fails, the toast stays open and shows the failure, with Report and Dismiss enabled again, so the User can retry or dismiss it.
 
 ---

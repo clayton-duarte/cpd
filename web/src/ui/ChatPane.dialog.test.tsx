@@ -38,7 +38,6 @@ class FakeConnection implements Connection {
   selectPlan(): void {}
   loadEarlier(): void {}
   submit(input: SubmitInput): string { this.submits.push(input); return "c1"; }
-  observeSubmission(): { dispose(): void } { return { dispose() {} }; }
   abort(): void {}
   abortSubmission(): void {}
   compact(): void {}
@@ -68,7 +67,6 @@ const connection = new (class implements Connection {
   selectPlan(): void {}
   loadEarlier(): void {}
   submit(_input: SubmitInput): string { return "c1"; }
-  observeSubmission(): { dispose(): void } { return { dispose() {} }; }
   abort(): void {}
   abortSubmission(): void {}
   compact(): void {}
@@ -90,7 +88,7 @@ function setup(dialog: Dialog | null) {
   mounted = m;
   return m.container;
 }
-const composerOf = (c: HTMLElement) => c.querySelector('[data-part="composer"]:not([hidden])');
+const composerOf = (c: HTMLElement) => c.querySelector('[data-part="composer"]');
 const askOf = (c: HTMLElement) => c.querySelector("[data-question]");
 const planOf = (c: HTMLElement) => c.querySelector('[data-part="decision-bar"]');
 
@@ -105,14 +103,14 @@ it("ChatPane replaces the Composer with the AskCard while an ask_user_question d
   const c = setup(ask());
   expect(askOf(c)).not.toBeNull();
   expect(composerOf(c)).toBeNull();
-  expect(c.querySelector('textarea[aria-label="Message"]')?.closest('[hidden]')).not.toBeNull();
+  expect(c.querySelector('textarea[aria-label="Message"]')).toBeNull();
 });
 
 it("ChatPane replaces the Composer with the PlanReviewCard while a plan review dialog is open", () => {
   const c = setup(plan);
   expect(planOf(c)).not.toBeNull();
   expect(composerOf(c)).toBeNull();
-  expect(c.querySelector('textarea[aria-label="Message"]')?.closest('[hidden]')).not.toBeNull();
+  expect(c.querySelector('textarea[aria-label="Message"]')).toBeNull();
 });
 
 it("ChatPane replaces the Composer with a read-only dialog card too", () => {

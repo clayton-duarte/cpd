@@ -46,6 +46,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job add` | Add a Job (§5.1) | Lead, Manager | |
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |
 | `cpd job cancel` | Cancel a Job (§5.3) | Lead, Manager | |
+| `cpd job replace-test` | Replace an attempted locked test Job with corrected selectors | Lead | |
+| `cpd job abandon-test-replacement` | Abandon a pending test replacement after the source is quiescent | Lead | |
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead, Manager | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
@@ -84,6 +86,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr post` | Post the Workflow's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr repost` | Repeat the Workflow's post in its Slack thread (§9.8b2) | Lead | |
 | `cpd pr merge` | Merge a clean pull request on GitHub with a method the repo allows (§9.10) | Lead | yes |
+| `cpd pr merge-green` | Update the branch, wait for green checks on the new head, then squash-merge (§9.10a) | Manager | |
 | `cpd pr approve` | Record the User's approval for one agent reply, post or repost (adapter) | internal | |
 | `cpd review` | The GitHub review (commands.md §31.1) | | |
 | `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
