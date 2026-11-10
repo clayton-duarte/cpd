@@ -12,6 +12,8 @@ Source for every field: `web/src/protocol/cockpit.ts` (`PlanViewModel`, `Workflo
 
 ### 1a. Props
 
+> **Selection (Plan `webui-router`, CONTRACT 22.5):** `onSelectManager` and every other selecting callback of these panes navigate to the agent's route; the pane does not select. The props' names and shapes are unchanged.
+
 ```ts
 import type { CockpitAction, PlanViewModel } from "../../protocol/cockpit.ts";
 
@@ -437,6 +439,8 @@ Item[role=button][variant=outline][size=sm]   (the preview renders a role=button
 
 ### 2.6. Selection, links and the curate dialog (pro-d53; the card click amended by air-d121)
 
+> **Superseded by 5 and CONTRACT 22.5 (Plan `webui-router`) for the click:** `selectRowSession` navigates to the owner session's route instead of calling `onSelectPlan` and `onSelectSession`. The owner rule (below) is unchanged: it picks which route.
+
 **Clicking the card (air-d121).** A click anywhere on the card (and `Enter` / `Space` on the focused card) opens its owner, by one rule for every kind (the per-kind click table of pro-d53 is superseded):
 
 - the row has an owner (`row.planId !== null` or `row.sessionId !== null`) → `selectRowSession` (below): `onSelectPlan(row.planId)` when non-null, then `onSelectSession(row.sessionId)` when non-null;
@@ -582,3 +586,53 @@ The toast shows `lastError ?? cockpit.error`. Its Dismiss button dispatches `dis
 **The report toast (pro-d465, Bug report protocol; CONTRACT 11.7).** The toast's `Send to <target>` button sends an `error.report`. The toast closes when that send succeeds (`action.result` `ok: true`). While the send is in flight the Report and Dismiss buttons are disabled. When the send fails, the toast stays open and shows the failure, with Report and Dismiss enabled again, so the User can retry or dismiss it.
 
 ---
+
+---
+
+## 5. Middle column: route outlet and not-found recovery (Plan `webui-router`; CONTRACT 22.3, 22.7)
+
+File: `web/src/ui/App.tsx` (the outlet's content) and `web/src/ui/router.tsx` (the not-found components, planned). The middle column is the route `Outlet` of DESIGN 3j; the tree and the Inbox are never inside it.
+
+### 5a. What the middle column shows
+
+| Route | Content | `data-route-state` |
+|---|---|---|
+| `/` | the empty prompt (5b) | `index` |
+| `/a/$context` (Manager) | the plan/chat split of 3j: ManagerView (1j) for the Context, above the Manager's chat | `agent` |
+| `/a/$context/$plan` (Lead) | the same split: PlanView (1a) of the Plan, above the Lead's chat | `agent` |
+| `/a/$context/$plan/$job` (Worker) | the same split: PlanView of the Worker's Plan, above the Worker's chat | `agent` |
+| an agent route before the first `cockpit.snapshot` | empty (no card) | `pending` |
+| a malformed key, a key that resolves to no live agent, or an unmatched path | the not-found card (5c) | `not-found` |
+
+- The outlet wrapper is `<div data-part="middle-column" data-route-state="...">`, so the state is one attribute on one element.
+- A Worker route shows the Plan pane of its Plan, the Worker being the chat's session (CONTRACT 22.2).
+- No route redirects. A route is either shown, pending, or not found.
+
+### 5b. The root empty state (A2)
+
+`<section data-part="route-empty">` with `<p>Select an agent in the tree or the Inbox.</p>`, styled `grid h-full place-items-center text-muted-foreground` (the restyle of the old `Select a session` empty state, DESIGN 3e). It is the only content at `/`.
+
+### 5c. The not-found card (D3)
+
+```
+<section data-part="route-not-found" aria-labelledby="route-not-found-title">
+  <h2 id="route-not-found-title" data-part="title">Agent not found</h2>
+  <p data-part="route-key">{the key as typed, or the unmatched path}</p>
+  <p data-part="reason">{reason}</p>
+  <Button data-action="route-recover">{recovery label}</Button>
+</section>
+```
+
+- `reason`, by case: a malformed key: `This is not an agent key.`; a key with no live agent: `No live agent has this key.`; an unmatched path: `No page matches this path.`
+- The recovery button navigates to the parent key (CONTRACT 22.7). Its label: a Worker: `Go to the Lead of <plan>`; a Lead: `Go to the Manager of <context>`; a Manager, or an unmatched path: `Go to start`, which is `/`.
+- `Button` is the shadcn part on Base UI (DESIGN 2f): no Radix.
+- The card is not `role="alert"` and is not an error toast. It is the state of a page, and it does not replace the cockpit error toast of 16.1 (that toast is for the User's own actions).
+- The card sits in the middle column, so the ContextTree and the Inbox stay mounted and usable while it shows.
+
+### 5d. Tests (named in Job `web-tests`, `web/src/ui/router.test.tsx`)
+
+- `renders empty prompt on root route` (5b).
+- `matches agent routes and renders corresponding view in middle column` (5a).
+- `renders not-found card with recovery button on unknown route without crashing` (5c): the recovery button navigates to the parent route.
+- `preserves mounted context tree and inbox across route transitions` (DESIGN 3j).
+
