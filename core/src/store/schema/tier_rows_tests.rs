@@ -364,7 +364,7 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
         count(&mut store, "SELECT count(*) FROM history"),
         // `workflow-reopened`, `guard`, `bug-breach` and `protocol-breach` event_kinds rows, plus context_reads,
         // record_topics, bug_records and test_replacements history_tables rows.
-        history + 7,
+        history + 8,
         "the copy writes no history row"
     );
 }
