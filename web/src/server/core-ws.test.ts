@@ -1,47 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { FakeScheduler } from "../testing/scheduler.ts";
 import type { Disposable } from "../protocol/runtime.ts";
-
-/**
- * Contract:
- * - web/CONTRACT.md §26.1 Direct WebSocket connection to core /cpd-ws
- * - docs/contract.md §5.8 The WebSocket listener on loopback `/cpd-ws`
- *
- * Requirements:
- * 1. WebUI client connects to core ws endpoint `ws://127.0.0.1:<port>/cpd-ws`.
- * 2. Handshake: client sends `snapshot` request (`{"id": 1, "method": "snapshot", "params": {}}`).
- * 3. Server responds with `{"id": 1, "result": {"contexts": [...], "plans": [...], "jobs": [...], "cursor": <cursor>}, "error": null}`.
- * 4. Client records snapshot into state, keeps returned cursor, and subscribes to events:
- *    `{"id": 2, "method": "events.subscribe", "params": {"cursor": <cursor>}}`.
- * 5. Server replies `{"id": 2, "result": {}, "error": null}`, and pushes live events:
- *    `{"method": "event", "params": {"event": <Event>}}`.
- */
-
-export interface CoreWsClientOptions {
-  url: string;
-  connectWs: (url: string) => FakeCoreWsSocket;
-  onSnapshot?: (snapshot: CoreSnapshot) => void;
-  onEvent?: (event: unknown) => void;
-}
-
-export interface CoreSnapshot {
-  contexts: Array<{ id: string; title: string }>;
-  plans: Array<{ id: string; title: string; phase: string }>;
-  jobs: Array<{ plan: string; key: string; status: string }>;
-  cursor: number;
-}
-
-export interface FakeCoreWsSocket {
-  sent: string[];
-  send(data: string): void;
-  close(): void;
-  on(event: "message", cb: (data: string) => void): void;
-  on(event: "open", cb: () => void): void;
-  on(event: "close", cb: () => void): void;
-  emitOpen(): void;
-  emitMessage(data: string): void;
-  emitClose(): void;
-}
+import {
+  CoreWsClient,
+  type CoreWsClientOptions,
+  type CoreSnapshot,
+  type FakeCoreWsSocket,
+} from "./core-ws.ts";
 
 class MockCoreWsSocket implements FakeCoreWsSocket {
   sent: string[] = [];
@@ -68,26 +33,6 @@ class MockCoreWsSocket implements FakeCoreWsSocket {
   }
   emitClose(): void {
     for (const h of [...this.closeHandlers]) h();
-  }
-}
-
-/** Stub for CoreWsClient to be implemented in webui-core-ws-impl */
-export class CoreWsClient {
-  private readonly options: CoreWsClientOptions;
-  constructor(options: CoreWsClientOptions) {
-    this.options = options;
-  }
-
-  connect(): void {
-    // Stub: not yet implemented
-  }
-
-  get snapshot(): CoreSnapshot | null {
-    return null;
-  }
-
-  get cursor(): number {
-    return -1;
   }
 }
 

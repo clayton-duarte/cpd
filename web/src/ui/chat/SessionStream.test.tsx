@@ -3,29 +3,7 @@ import { act } from "react";
 import { describe, expect, it } from "vitest";
 import type { TranscriptItem } from "../../protocol/domain.ts";
 import { mount } from "../../testing/render.tsx";
-
-/**
- * Contract:
- * - web/CONTRACT.md §26.2 pi session transcript streaming into the WebUI reactive store
- * - docs/architecture/pi-native-core.md §5.2 pi Session Streaming
- *
- * Requirements:
- * 1. SessionStream component connects to session stream (live socket / durable socket feed).
- * 2. Incoming streamed transcript frames (user/assistant/tool messages, deltas) are rendered into the transcript UI.
- */
-
-export interface SessionStreamProps {
-  sessionId: string;
-  source?: {
-    subscribe: (cb: (item: TranscriptItem) => void) => () => void;
-  };
-}
-
-/** Stub component to be implemented in webui-core-ws-impl */
-export function SessionStream(_props: SessionStreamProps) {
-  // Stub: not yet implemented
-  return <div data-part="session-stream-stub" />;
-}
+import { SessionStream, type SessionStreamProps } from "./SessionStream.tsx";
 
 describe("SessionStream", () => {
   it("renders streamed session transcript", () => {
