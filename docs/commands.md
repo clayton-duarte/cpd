@@ -305,6 +305,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
 | `cpd cockpit serve` (§11a) | none | no | no |
 | `cpd desktop` (§14.4a) | none | no | no |
+| `cpd desktop release` (§14.4b) | none | no | no |
 | `cpd protocol bug report` (§33.1) | Lead, Manager | no | no |
 | `cpd protocol bug mitigate` (§33.2) | Lead, Manager | no | no |
 | `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
@@ -5041,7 +5042,11 @@ The `efforts` above are an illustration, not verified values. `G` reads like the
 cpd install --root <checkout> [--no-follow-up]
 ```
 
-Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary, then builds the checkout's Electron app and signals the running one (step 7a). With `--no-follow-up`, step 7 is skipped: no follow-up runs (steps 7a and 8 are unchanged), so the binary and the adapter are installed and nothing that runs them is disturbed. The Electron app uses it to install at once while attempts run, and runs the follow-ups later by a second install without the flag, when no attempt runs (web/ELECTRON.md, "Auto-update and CLI bootstrap"). The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short=7 HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
+Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary, then refreshes the WebUI payload from the checkout and signals the running app (step 7a). With `--no-follow-up`, step 7 is skipped: no follow-up runs (steps 7a and 8 are unchanged), so the binary and the adapter are installed and nothing that runs them is disturbed. The Electron app uses it to install at once while attempts run, and runs the follow-ups later by a second install without the flag, when no attempt runs (web/ELECTRON.md, "Auto-update and CLI bootstrap"). The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short=7 HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
+
+**CPD.app is not packaged or copied by `cpd install`** (decided by pro-d90, pro-d91, pro-d504 and pro-d505). The desktop app has two parts (docs/implementing.md, "The shell release and the payload"). The *shell* is the immutable CPD.app: the Electron main process, the watchdog and the updater. It is released on GitHub (`cpd desktop release`, §14.4b) and installed into `/Applications` by `cpd desktop` (§14.4a). The *payload* is the WebUI renderer and server bundle: `cpd install` refreshes it from the checkout (step 7a), and the running app's watchdog applies later payload updates from main by itself. Neither `cpd install` nor its bootstrap `scripts/install-cpd.sh` packages, copies or repackages CPD.app, and nothing is written to `~/.local/share/cpd/app`, which is retired.
+
+Status: decided by pro-d504 and pro-d505; as of this amendment the code still does the old thing. `scripts/install-cpd.sh` runs, on macOS, `electron-builder --dir` and copies the bundle to `~/.local/share/cpd/app` (its last block), and step 7a builds the checkout's `web/dist-electron` and signals the running Electron. The implementing change (Plan app-shell-release, Job shell-release-impl) removes the packaging and the copy and brings step 7a in line with the payload.
 
 Steps, in order (implementing.md "`cpd install`" has each with its message; contract §3.7 "The adapter swap" and "The install's engine order" fix the rules):
 
@@ -5085,11 +5090,19 @@ cpd desktop --off
 cpd desktop --status
 ```
 
-The Electron app of the installed checkout and the web preview, from the User's shell. Plain `cpd desktop` launches the Electron app (`web/`, `web/ELECTRON.md`), or reloads the one that runs. The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
+CPD.app, the desktop app, and the web preview, from the User's shell. Plain `cpd desktop` opens the installed shell, or installs it first (the shell form below). The four flags run the web preview of `scripts/preview-web.sh` (docs/ui-preview.md, "Previewing the web UI"). The User's command: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). The flags are mutually exclusive (clap: `usage`, exit 2). `--preview` and `--reload` take an optional `<worktree>`; `--off` and `--status` take none.
 
-**The checkout.** Every form reads `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used.
+**The checkout.** The flags and the checkout form of plain `cpd desktop` read `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`): one line, the absolute path of the checkout that `cpd install --root <checkout>` built (§14.4, step 7a). A missing file is `desktop_not_installed`. Nothing else is read: `~/.local/share/cpd/web` is not used. The shell form reads no checkout and never reads `~/.local/share/cpd/app`, which is retired.
 
-**Plain `cpd desktop`.** Ensure, then reload or launch:
+**Plain `cpd desktop`: the shell form.** Decided by pro-d505 and pro-d91, CLI first: `cpd` is installed from source first, as today (§14.4), and `cpd desktop` assumes it. The shell is `/Applications/CPD.app` (docs/implementing.md, "The shell release and the payload"). In order:
+1. **Installed.** When `/Applications/CPD.app` exists, `cpd desktop` opens it. When the app is already running, it reloads it instead (action `reloaded`, the running pid).
+2. **Missing.** When it does not exist, `cpd desktop` downloads the latest shell release with `gh` (the newest `app-v<shell version>` release of `clayton-duarte/cpd`, its archive), installs `CPD.app` into `/Applications`, clears the quarantine attribute (`xattr -dr com.apple.quarantine /Applications/CPD.app`, the step the release notes give by hand) and opens it (action `installed`).
+
+Output: `{"ok": true, "action": "launched" | "reloaded" | "installed", "pid": <N>}`; `installed` means the release was downloaded and installed, then opened; `pid` is the new process or the signalled one. A failed `gh`, `xattr` or `open` is `spawn_failed` (the table below).
+
+Status: decided by pro-d505 and pro-d91; as of this amendment the code has no shell form. The code's plain `cpd desktop` is the checkout form below. The implementing change (Plan app-shell-release, Job shell-release-impl) brings the code in line.
+
+**Plain `cpd desktop`: the checkout form (current code).** Ensure, then reload or launch:
 1. **Ensure** (idempotent). `pnpm --dir <root> --filter cpd-web-client run build:electron` runs only when `<root>/web/dist-electron/main.js` is missing (install always builds, §14.4 step 7a). Then, always: when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before the remaining steps; when the binary is present, no extra install command runs. Always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`. These are the steps of the `electron` script of `web/package.json`. The build is bounded at 10 minutes.
 2. **Reload or launch.** The running Electron is the pid in `<cpd_home>/run/preview-health.json` (`<cpd_home>` = `$CPD_HOME`, else `~/.cpd`; field `pid`; every Electron launch writes it), when that pid is alive. Alive: SIGUSR1 to it, action `reloaded`. Otherwise: spawn `<root>/web/node_modules/.bin/electron .` with cwd `<root>/web`, in its own session (`setsid`), stdout and stderr to `<cpd_home>/run/app.log`, without waiting; action `launched`. The spawned Electron inherits the environment of `cpd desktop` minus the five per-session cpd variables — `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `CPD_QUIT_MARKER` and `CPD_JOB_KIND`, the one canonical per-session list of contract §6.6 — which are removed from the child; `CPD_HOME`, `PI_SKIP_VERSION_CHECK` and every other variable are kept (so a run from inside an agent Session hands no agent identity to the app). The app strips the same five again at its own boot (web/ELECTRON.md, "Boot order").
 
@@ -5106,15 +5119,48 @@ Output:
 | Error | Exit | When |
 |---|---|---|
 | `usage` | 2 | clap: two of the four flags at once, a `<worktree>` after `--off` or `--status`, an unknown flag |
-| `desktop_not_installed` | 1 | `app-root` is missing (every form); the message says to run `scripts/install-cpd.sh` |
-| `spawn_failed` | 1 | a child could not be started or exited non-zero: `pnpm` or `plutil` (ensure), `sh preview-web.sh` (the preview forms), the Electron launch; `details` is `{argv, exit, stdout, stderr}` as in §21.6, `exit` `null` when it did not start. A refused SIGUSR1: `details` is `{pid, error}` |
+| `desktop_not_installed` | 1 | `app-root` is missing (the checkout form and the four flags); the message says to run `scripts/install-cpd.sh` |
+| `spawn_failed` | 1 | a child could not be started or exited non-zero: `pnpm` or `plutil` (ensure), `sh preview-web.sh` (the preview forms), the Electron launch, and the shell form's `gh`, `xattr` or `open`; `details` is `{argv, exit, stdout, stderr}` as in §21.6, `exit` `null` when it did not start. A refused SIGUSR1: `details` is `{pid, error}` |
 | `tool_timeout` | 5 | the ensure's build passes 10 minutes, or a preview script passes 15 minutes; `details.argv` names the child |
 
 A failed ensure or a failed script exits with its error and runs nothing after it.
 
-Effects: plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
+Effects: the checkout form of plain `cpd desktop` writes `<root>/web/dist-electron` when it is missing, sets the mode bits and `Info.plist` of `<root>/web/node_modules` (ensure), then launches an Electron process, writing its output to `<cpd_home>/run/app.log`, or sends SIGUSR1 to the running one. The shell form writes `/Applications/CPD.app` when it installs the release, and nothing else. The preview forms write what `preview-web.sh` writes (docs/ui-preview.md). No row, no Event.
 
-Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again; `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
+Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again (the checkout form) or reopens the installed app and downloads nothing (the shell form); `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
+
+### 14.4b `desktop release`
+
+```
+cpd desktop release
+```
+
+Cuts a release of the CPD.app shell: builds it, ad-hoc signs it, zips it and creates a GitHub Release with `gh` on `clayton-duarte/cpd` (decided by pro-d90, pro-d91, pro-d504 and pro-d505). The shell is the immutable part of the desktop app: the Electron main process, the watchdog and the updater (docs/implementing.md, "The shell release and the payload"). The User's command, run on mac-pro: no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). It takes no flags. It runs on macOS only, because the signature and the quarantine attribute are macOS tools. CI does not build the shell: its runners are Linux-only (pro-d91 a).
+
+A new release is cut only when the shell or the watchdog code changes (pro-d90). WebUI and CLI changes reach the User through the watchdog without a release.
+
+Steps, in order. A failing step stops the run, and nothing after it runs:
+
+1. **Build.** The shell is packaged as `CPD.app` in a temporary output directory, never in `/Applications`. Its version is the shell's version constant (`web/src/electron/version.ts`, the one source; the file is added by the implementing change). The release tag is `app-v<shell version>`.
+2. **Ad-hoc sign.** `CPD.app` gets an ad-hoc signature. No Developer ID certificate is used and the app is not notarized (pro-d91 b).
+3. **Zip.** The signed bundle is zipped into one archive named for the version.
+4. **Publish.** `gh release create app-v<shell version>` on `clayton-duarte/cpd`, with the archive attached and the notes below.
+
+The release notes are fixed text, with the version filled in:
+
+> CPD.app `<shell version>`, ad-hoc signed, not notarized by Apple. macOS quarantines an app downloaded from the internet and refuses to open it. After you move CPD.app into /Applications, clear the quarantine once:
+>
+> `xattr -dr com.apple.quarantine /Applications/CPD.app`
+>
+> `cpd desktop` does this for you when it installs the app (§14.4a).
+
+A shell change that does not bump the shell version is caught before the release: a check fails when shell code changed without a version bump (docs/implementing.md, "The shell release and the payload").
+
+Output: `{"ok": true, "tag": "app-v<shell version>", "url": "<release url>"}`, the URL that `gh` prints for the new release. A failed build, signature, zip or `gh` step is `spawn_failed` (exit 1) with `details` `{argv, exit, stdout, stderr}` (§21.6), `exit` `null` when the child did not start.
+
+Effects: writes the temporary output directory (removed when the run ends) and one GitHub Release with its tag and archive on `clayton-duarte/cpd`. Nothing is written under `/Applications` or the cpd home. No row, no Event.
+
+Idempotence: no. A second run for the same shell version fails at the publish step, because the release exists, and publishes nothing new (expected `gh` behaviour for an existing tag; unverified, the command is not in the code yet). A new release needs a bumped shell version.
 
 ### 14.5 `models`
 

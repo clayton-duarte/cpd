@@ -145,6 +145,7 @@ pub const TABLE: &[Entry] = &[
     ("metrics refusals", &[Lead, Manager], false),
     ("install", &[], false),
     ("desktop", &[], false),
+    ("desktop release", &[], false),
     ("secret get", &[Lead, Manager, Worker], false),
     ("secret list", &[Lead, Manager], false),
     ("secret create", &[Lead, Manager], false),
