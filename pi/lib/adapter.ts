@@ -1,4 +1,3 @@
-import { PROTOCOL_NAME as ASK_PROTOCOL, tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
@@ -6,19 +5,15 @@ import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
 import { noteQuestionTool, registerQuestionGuard } from "./question-guard.ts";
 import { dirname, join } from "node:path";
 import { registerLiveStream } from "./live-stream.ts";
-import { homedir } from "node:os";
 import { exploreGuard, leadExploreGuard } from "./explore.ts";
 import { fileURLToPath } from "node:url";
 import { pinAdapter } from "./adapter-pin.ts";
-import { PROTOCOL_NAME as MAIN_PROTOCOL, primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
 import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
 import { installQuitMarker } from "./quit.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
-import { PROTOCOL_NAME as SECRET_PROTOCOL, reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
 import { electronBypass, reasonText as electronReasonText } from "./electronguard.ts";
-import { PROTOCOL_NAME as EXTERNAL_PROTOCOL, externalBlock } from "./externalguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -26,7 +21,7 @@ import { start, stop } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 import { blocked, registerRefusalReports } from "./refusal-report.ts";
-import { breachBlocked } from "./protocol-breach.ts";
+import { guardProtocolBreach } from "./protocol-breach.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
@@ -79,36 +74,18 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     noteQuestionTool(host, event.toolName);
     const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
     if (looped !== undefined) return blocked(host, event.toolName, looped, event.input);
+    const breached = guardProtocolBreach(host, event, ctx);
+    if (breached !== undefined) return breached;
+    if (host.run && event.toolName === "ask_user_question") return undefined; // held by guardProtocolBreach
     const role = host.run?.info.role;
-    const external = host.run && externalBlock(event.toolName, event.input as Record<string, unknown>, { grantable: role !== "worker" });
-    if (external) {
-      const command = typeof (event.input as { command?: unknown }).command === "string" ? (event.input as { command: string }).command : undefined;
-      return breachBlocked(host, EXTERNAL_PROTOCOL, "externalguard", event.toolName, external, event.input, command);
-    }
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return blocked(host, event.toolName, explored.block, event.input);
     const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
     if (led !== undefined) return blocked(host, event.toolName, led.block, event.input);
-    if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
-      const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
-      if (written !== undefined) return breachBlocked(host, MAIN_PROTOCOL, "mainguard", event.toolName, mainReasonText(written), event.input);
-    }
     const bashCommand = (event.input as { command?: unknown }).command;
     if (host.run && event.toolName === "bash" && typeof bashCommand === "string") {
-      const moved = primaryCheckoutMove(bashCommand, ctx.cwd, homedir());
-      if (moved !== undefined) return breachBlocked(host, MAIN_PROTOCOL, "mainguard", "bash", mainReasonText(moved), event.input, bashCommand);
-      const secret = secretBypass(bashCommand);
-      if (secret !== undefined) return breachBlocked(host, SECRET_PROTOCOL, "secretguard", "bash", secretReasonText(secret), event.input, bashCommand);
       const electron = electronBypass(bashCommand); if (electron !== undefined) return blocked(host, event.toolName, electronReasonText(electron), event.input);
       const hostApprove = hostApproveBypass(bashCommand); if (hostApprove !== undefined) return blocked(host, event.toolName, hostApproveReasonText(hostApprove), event.input);
-    }
-    if (host.run && event.toolName === "ask_user_question") {
-      const long = tooLong(event.input);
-      if (long !== undefined) return breachBlocked(host, ASK_PROTOCOL, "askguard", "ask_user_question", long, event.input);
-      const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.parentToolCallId ?? event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
-      if (unseenReason !== undefined) return breachBlocked(host, ASK_PROTOCOL, "askguard", "ask_user_question", unseenReason, event.input);
-      host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
-      return undefined;
     }
     if ((role !== "manager" && role !== "lead" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
