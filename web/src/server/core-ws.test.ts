@@ -73,7 +73,10 @@ class MockCoreWsSocket implements FakeCoreWsSocket {
 
 /** Stub for CoreWsClient to be implemented in webui-core-ws-impl */
 export class CoreWsClient {
-  constructor(private readonly options: CoreWsClientOptions) {}
+  private readonly options: CoreWsClientOptions;
+  constructor(options: CoreWsClientOptions) {
+    this.options = options;
+  }
 
   connect(): void {
     // Stub: not yet implemented
@@ -118,7 +121,7 @@ describe("core-ws", () => {
 
     // 1. Client must send `snapshot` request immediately on connect
     expect(socket.sent.length).toBeGreaterThanOrEqual(1);
-    const snapReq = JSON.parse(socket.sent[0]);
+    const snapReq = JSON.parse(socket.sent[0]!);
     expect(snapReq.method).toBe("snapshot");
     expect(snapReq.id).toBeDefined();
 
@@ -145,7 +148,7 @@ describe("core-ws", () => {
 
     // 3. Client must subscribe to live events with returned cursor
     expect(socket.sent.length).toBeGreaterThanOrEqual(2);
-    const subReq = JSON.parse(socket.sent[1]);
+    const subReq = JSON.parse(socket.sent[1]!);
     expect(subReq.method).toBe("events.subscribe");
     expect(subReq.params?.cursor).toBe(42);
 
