@@ -1,3 +1,4 @@
+import type { JobStatus as CoreJobStatus, Phase as CorePhase } from "../generated/types.ts";
 import type { SessionDot, Urgency } from "../protocol/cockpit.ts";
 import type { SessionState } from "../protocol/domain.ts";
 
@@ -38,8 +39,9 @@ export type Resolved<T> =
 export const UNKNOWN_DISPLAY: { readonly tone: "neutral"; readonly glyph: "idle" } = { tone: "neutral", glyph: "idle" };
 
 // jobs
-export type JobStatus = "draft" | "queued" | "running" | "landing" | "checking" | "merging" | "merged" | "failed" | "cancelled";
-export const jobStatus: Readonly<Record<JobStatus, Display>> = {
+export type DangoJobStatus = "draft" | "queued" | "running" | "landing" | "checking" | "merging" | "merged" | "failed" | "cancelled";
+export type { DangoJobStatus as JobStatus };
+export const jobStatus: Readonly<Record<DangoJobStatus, Display>> = {
   draft: { tone: "decision", glyph: "draft", label: "draft" },
   queued: { tone: "neutral", glyph: "queued", label: "queued" },
   running: { tone: "active", glyph: "active", label: "running" },
@@ -50,9 +52,10 @@ export const jobStatus: Readonly<Record<JobStatus, Display>> = {
   failed: { tone: "blocked", glyph: "blocked", label: "failed" },
   cancelled: { tone: "neutral", glyph: "idle", label: "cancelled" },
 };
-const jobStatuses: readonly JobStatus[] = ["draft", "queued", "running", "landing", "checking", "merging", "merged", "failed", "cancelled"];
-export function parseJobStatus(raw: string): Resolved<JobStatus> {
-  const value = jobStatuses.find((s) => s === raw);
+const jobStatuses: readonly DangoJobStatus[] = ["draft", "queued", "running", "landing", "checking", "merging", "merged", "failed", "cancelled"];
+export function parseJobStatus(raw: string): Resolved<DangoJobStatus> {
+  const norm = raw.toLowerCase();
+  const value = jobStatuses.find((s) => s === norm);
   return value === undefined ? { kind: "unknown", raw } : { kind: "known", value };
 }
 export function jobDisplay(raw: string): Display {
@@ -115,15 +118,17 @@ export const knownInboxKinds: readonly string[] = [
 ];
 
 // plan phases
-export type Phase = "grounding" | "plan" | "dispatch" | "deploy" | "done";
-export const phaseTone: Readonly<Record<Phase, Tone>> = {
+export type DangoPhase = "grounding" | "plan" | "dispatch" | "deploy" | "done";
+export type { DangoPhase as Phase };
+export const phaseTone: Readonly<Record<DangoPhase, Tone>> = {
   grounding: "active", plan: "decision", dispatch: "active", deploy: "landing", done: "done",
 };
-export const phaseLabel: Readonly<Record<Phase, string>> = {
+export const phaseLabel: Readonly<Record<DangoPhase, string>> = {
   grounding: "grounding", plan: "planning", dispatch: "dispatch", deploy: "deploy", done: "done",
 };
-const phases: readonly Phase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
-export function parsePhase(raw: string): Resolved<Phase> {
-  const value = phases.find((p) => p === raw);
+const phases: readonly DangoPhase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
+export function parsePhase(raw: string): Resolved<DangoPhase> {
+  const norm = raw.toLowerCase();
+  const value = phases.find((p) => p === norm);
   return value === undefined ? { kind: "unknown", raw } : { kind: "known", value };
 }
