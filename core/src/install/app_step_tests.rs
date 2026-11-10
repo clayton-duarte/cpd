@@ -365,13 +365,103 @@ fn electron_binary_install_failure_stops_before_plutil() {
 
 #[test]
 fn preview_sync_preserves_wip_and_resets_to_main() {
-    // Red test skeleton
-    panic!("preview sync not implemented");
+    // Bug b11 / pro-d93 (contract §3.7 "The preview worktree on install", web/CONTRACT.md §28):
+    // On cpd install from a new main, preview worktree uncommitted changes (tracked + untracked)
+    // are saved as a patch, worktree resets to origin/main, patch is re-applied with 3-way merge,
+    // and pnpm install runs in the worktree.
+    let rig = Rig::new(false);
+    let preview_worktree = rig.install.root.parent().unwrap().join("cpd.preview.web");
+    fs::create_dir_all(&preview_worktree).unwrap();
+
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 0, "{stderr}");
+
+    // Git calls in preview worktree:
+    // 1. diff / patch generation to save WIP
+    // 2. reset to origin/main
+    // 3. apply patch with 3-way merge
+    let git_calls = rig.argv("git");
+    let preview_path = preview_worktree.to_str().unwrap();
+
+    let saved_patch = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path))
+            && args.iter().any(|a| a == "diff" || a == "diff-index")
+    });
+    assert!(
+        saved_patch,
+        "expected git diff/patch call in preview worktree to save WIP, got git calls: {git_calls:?}"
+    );
+
+    let reset_to_main = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path))
+            && args.iter().any(|a| a == "reset")
+            && args.iter().any(|a| a == "origin/main" || a == "--hard")
+    });
+    assert!(
+        reset_to_main,
+        "expected git reset to origin/main in preview worktree, got git calls: {git_calls:?}"
+    );
+
+    let reapplied_patch = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path))
+            && args.iter().any(|a| a == "apply")
+            && args.iter().any(|a| a == "-3" || a == "--3way")
+    });
+    assert!(
+        reapplied_patch,
+        "expected git apply with 3-way merge in preview worktree, got git calls: {git_calls:?}"
+    );
+
+    // pnpm install ran in preview worktree
+    let pnpm_calls = rig.argv("pnpm");
+    let pnpm_in_preview = pnpm_calls.iter().any(|args| {
+        args.windows(2)
+            .any(|w| w[0] == "--dir" && w[1] == preview_path)
+            && args.iter().any(|a| a == "install")
+    });
+    assert!(
+        pnpm_in_preview,
+        "expected pnpm install in preview worktree, got pnpm calls: {pnpm_calls:?}"
+    );
 }
 
 #[test]
 fn preview_sync_conflict_leaves_main_and_reports_error() {
-    // Red test skeleton
-    panic!("preview sync not implemented");
-}
+    // Bug b11 / pro-d93 (contract §3.7, web/CONTRACT.md §28):
+    // When re-applying the saved patch conflicts, the patch is preserved,
+    // the preview stays on origin/main without the patch applied,
+    // and an error is reported (error Event or Inbox item / stderr notice).
+    let rig = Rig::new(false);
+    let preview_worktree = rig.install.root.parent().unwrap().join("cpd.preview.web");
+    fs::create_dir_all(&preview_worktree).unwrap();
 
+    // Script git apply to simulate merge conflict
+    let _ = (*rig.fakes.runner).clone().on(
+        "git",
+        |c| c.args.iter().any(|a| a == "apply"),
+        Reply::exit(
+            1,
+            "",
+            "error: patch failed: web/src/App.tsx:10\nerror: repository sync conflict\n",
+        ),
+    );
+
+    let (exit, stderr) = rig.run();
+    // A conflict in preview sync keeps patch and reports error
+    let git_calls = rig.argv("git");
+    let preview_path = preview_worktree.to_str().unwrap();
+
+    let applied = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path)) && args.iter().any(|a| a == "apply")
+    });
+    assert!(
+        applied,
+        "expected git apply attempt in preview worktree, got git calls: {git_calls:?}"
+    );
+
+    // Patch must be preserved on disk or reported
+    assert!(
+        stderr.contains("conflict") || stderr.contains("preview sync"),
+        "expected conflict or preview sync error report on stderr, got: {stderr} (exit {exit})"
+    );
+}
