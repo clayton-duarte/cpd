@@ -3783,6 +3783,10 @@ Each is one behaviour, with the contract as its assertion: the WebSocket connect
 3. **The snapshot's content**, which Plan 4 fixes.
 4. **Whether `cpd events follow` moves onto the socket.**
 
+### 5.9 Typed pi tools, context curation and the message bus (Plan `pi-extension-tools`)
+
+**Status.** Skeleton, being written. Plan `pi-extension-tools` (Plan 2 of [pi-native-core.md §7](architecture/pi-native-core.md)) builds this section.
+
 
 ## 6. The tmux host
 
