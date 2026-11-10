@@ -335,7 +335,7 @@ fn tiers_retried(fx: &mut Fx) -> Vec<String> {
 
 #[test]
 fn explore_ladder_stays_inside_the_kind_range() {
-    // A scout climbs (only `no_submit` climbs) H1 > H2 > H3, then fails: after H3 the ladder would leave H for S1, and an explore Job never does.
+    // A scout climbs (only `no_submit` climbs) H1 > HX > H2 > H3, then fails: after H3 the ladder would leave H for S1, and an explore Job never does.
     let (mut fx, _fakes) = fx_with_fakes("dispatch", "");
     add_explore(&mut fx, "scout", "H1", "look", &[], &running("look"));
     assert!(
@@ -346,12 +346,22 @@ fn explore_ladder_stays_inside_the_kind_range() {
     assert!(
         tiers_retried(&mut fx)
             .last()
+            .is_some_and(|d| d.contains("HX")),
+        "{:?}",
+        tiers_retried(&mut fx)
+    );
+    fx.fixture(&running("look"));
+    assert!(fail_attempt(&mut fx, "look", 2, "HX", Cause::NoSubmit, 5));
+    assert_eq!(fx.job_status("look"), "queued");
+    assert!(
+        tiers_retried(&mut fx)
+            .last()
             .is_some_and(|d| d.contains("H2")),
         "{:?}",
         tiers_retried(&mut fx)
     );
     fx.fixture(&running("look"));
-    assert!(fail_attempt(&mut fx, "look", 2, "H2", Cause::NoSubmit, 5));
+    assert!(fail_attempt(&mut fx, "look", 3, "H2", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("look"), "queued");
     assert!(
         tiers_retried(&mut fx)
@@ -361,7 +371,7 @@ fn explore_ladder_stays_inside_the_kind_range() {
         tiers_retried(&mut fx)
     );
     fx.fixture(&running("look"));
-    assert!(fail_attempt(&mut fx, "look", 3, "H3", Cause::NoSubmit, 5));
+    assert!(fail_attempt(&mut fx, "look", 4, "H3", Cause::NoSubmit, 5));
     assert_eq!(
         fx.job_status("look"),
         "failed",
@@ -374,27 +384,54 @@ fn explore_ladder_stays_inside_the_kind_range() {
         1
     );
 
-    // A research Job climbs S1 > S2 > S3, then fails: it never leaves S.
+    // A research Job climbs S1 > SX > S2 > S3 > S4, then fails: with lead_tier S4 (inclusive ceiling), S4 is the worker ceiling, and it never leaves S.
     add_explore(&mut fx, "research", "S1", "web", &[], &running("web"));
     assert!(fail_attempt(&mut fx, "web", 1, "S1", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "queued");
+    assert!(
+        tiers_retried(&mut fx)
+            .last()
+            .is_some_and(|d| d.contains("SX")),
+        "{:?}",
+        tiers_retried(&mut fx)
+    );
     fx.fixture(&running("web"));
-    assert!(fail_attempt(&mut fx, "web", 2, "S2", Cause::NoSubmit, 5));
+    assert!(fail_attempt(&mut fx, "web", 2, "SX", Cause::NoSubmit, 5));
+    assert_eq!(fx.job_status("web"), "queued");
+    assert!(
+        tiers_retried(&mut fx)
+            .last()
+            .is_some_and(|d| d.contains("S2")),
+        "{:?}",
+        tiers_retried(&mut fx)
+    );
+    fx.fixture(&running("web"));
+    assert!(fail_attempt(&mut fx, "web", 3, "S2", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "queued");
     fx.fixture(&running("web"));
-    assert!(fail_attempt(&mut fx, "web", 3, "S3", Cause::NoSubmit, 5));
+    assert!(fail_attempt(&mut fx, "web", 4, "S3", Cause::NoSubmit, 5));
+    assert_eq!(fx.job_status("web"), "queued");
+    assert!(
+        tiers_retried(&mut fx)
+            .last()
+            .is_some_and(|d| d.contains("S4")),
+        "{:?}",
+        tiers_retried(&mut fx)
+    );
+    fx.fixture(&running("web"));
+    assert!(fail_attempt(&mut fx, "web", 5, "S4", Cause::NoSubmit, 5));
     assert_eq!(
         fx.job_status("web"),
         "failed",
-        "after S3 the research Job fails: S4 is not a Worker Tier"
+        "after S4 the research Job fails: S5 is above the worker ceiling S4"
     );
 
-    // retry_cap is unchanged: with retry_cap 1 a scout fails at its second Attempt, though H3 is left on the ladder.
+    // retry_cap is unchanged: with retry_cap 1 a scout fails at its second Attempt, though HX/H2/H3 are left on the ladder.
     add_explore(&mut fx, "scout", "H1", "capped", &[], &running("capped"));
     assert!(fail_attempt(&mut fx, "capped", 1, "H1", Cause::NoSubmit, 1));
     assert_eq!(fx.job_status("capped"), "queued");
     fx.fixture(&running("capped"));
-    assert!(fail_attempt(&mut fx, "capped", 2, "H2", Cause::NoSubmit, 1));
+    assert!(fail_attempt(&mut fx, "capped", 2, "HX", Cause::NoSubmit, 1));
     assert_eq!(
         fx.job_status("capped"),
         "failed",

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { SETTINGS_ROLES, SETTINGS_SWITCHES } from "../../protocol/cockpit.ts";
 import type { SettingsChanges, SettingsModel, SettingsRole, SettingsSwitch } from "../../protocol/cockpit.ts";
+import { EFFORTS, MODEL_LETTERS, TIER_COUNT, parseTier, tierAt, tierIndex } from "../../protocol/tier.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
@@ -12,9 +13,6 @@ export type SwitchName = SettingsSwitch;
 /** The read of `cpd config` / `cpd config experimental` the dialog shows. */
 export type SettingsRead = SettingsModel;
 
-// The Tier letters in ladder order, J first (contract §9, air-d113, air-d115, air-d120): J's model
-// offers efforts 0-3, so `J4` (like `J5`) is refused while the other letters still take 0-4 or X.
-const TIER = /^(?:[GHSO](?:[0-4]|X)|J(?:[0-3]|X))$/;
 /** The dialog's Tier rows: the decide role (contract §9, air-d113) above the four role Tiers. */
 const TIER_ROLES = ["decide", ...SETTINGS_ROLES] as const;
 type TierRole = (typeof TIER_ROLES)[number];
@@ -30,24 +28,53 @@ const readTiers = (read: SettingsRead): Record<TierRole, string> =>
     return [r, t ?? (r === "decide" ? DECIDE_DEFAULT : "")];
   })) as Record<TierRole, string>;
 
+/** Applies one role's new Tier and moves the linked boundaries so worker < lead < manager still holds; null when no coherent set exists. */
+function link(tiers: Record<TierRole, string>, role: TierRole, value: string): Record<TierRole, string> | null {
+  const next = { ...tiers, [role]: value };
+  const idx = (r: TierRole): number | null => tierIndex(next[r]);
+  const set = (r: TierRole, i: number): boolean => {
+    if (i < 0 || i >= TIER_COUNT) return false;
+    next[r] = tierAt(i);
+    return true;
+  };
+  if (role !== "worker" && role !== "lead" && role !== "manager") return next;
+  if (idx("worker") === null || idx("lead") === null || idx("manager") === null) return next;
+  const at = (r: TierRole): number => idx(r) as number;
+  if (role === "worker") {
+    if (at("lead") <= at("worker") && !set("lead", at("worker") + 1)) return null;
+    if (at("manager") <= at("lead") && !set("manager", at("lead") + 1)) return null;
+  } else if (role === "lead") {
+    if (at("worker") >= at("lead") && !set("worker", at("lead") - 1)) return null;
+    if (at("manager") <= at("lead") && !set("manager", at("lead") + 1)) return null;
+  } else {
+    if (at("lead") >= at("manager") && !set("lead", at("manager") - 1)) return null;
+    if (at("worker") >= at("lead") && !set("worker", at("lead") - 1)) return null;
+  }
+  return next;
+}
+const coherent = (t: Record<TierRole, string>): boolean => {
+  const i = (["worker", "lead", "manager"] as const).map((r) => tierIndex(t[r]));
+  return TIER_ROLES.every((r) => parseTier(t[r]) !== null) && i[0]! < i[1]! && i[1]! < i[2]!;
+};
+
 function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): void; onCancel(): void }): ReactElement {
   const { read } = props;
   const [tiers, setTiers] = useState<Record<TierRole, string>>(() => readTiers(read));
   const [flags, setFlags] = useState<Record<SettingsSwitch, boolean>>({ ...read.experimental });
   const [concurrency, setConcurrency] = useState<string>(read.concurrency === undefined ? "" : String(read.concurrency));
   const concurrencyRef = useRef<HTMLInputElement>(null);
-  const valid = TIER_ROLES.every((r) => TIER.test(tiers[r]));
+  const valid = coherent(tiers);
   const save = (): void => {
-    const changedTiers = SETTINGS_ROLES.filter((r) => tiers[r] !== read.tiers[r]);
+    const changedTiers = TIER_ROLES.filter((r) => tiers[r] !== readTiers(read)[r]);
     const changedFlags = SETTINGS_SWITCHES.filter((k) => flags[k] !== read.experimental[k]);
     // The count is read from the field itself: a bad value is refused by the CLI, never clamped or dropped here (air-d70).
     const raw = concurrencyRef.current?.value ?? concurrency;
     const count = Number(raw);
     props.onSave({
-      ...(changedTiers.length === 0 ? {} : { tiers: Object.fromEntries(changedTiers.map((r) => [r, tiers[r]])) }),
+      ...(changedTiers.length === 0 ? {} : { tiers: Object.fromEntries(changedTiers.map((r) => [r, parseTier(tiers[r])])) }),
       ...(changedFlags.length === 0 ? {} : { experimental: Object.fromEntries(changedFlags.map((k) => [k, flags[k]])) }),
       ...(raw === "" || !Number.isInteger(count) || count === read.concurrency ? {} : { concurrency: count }),
-    });
+    } as unknown as SettingsChanges);
   };
   return (
     <>
@@ -63,13 +90,23 @@ function Form(props: { read: SettingsRead; onSave(changes: SettingsChanges): voi
         {TIER_ROLES.map((r) => (
           <label key={r} className="flex items-center gap-2">
             <span className="w-24 font-mono text-meta">{TIER_ROLE_LABEL[r]}</span>
-            <input
-              aria-label={`${r} tier`}
-              value={tiers[r]}
-              onInput={(e) => setTiers({ ...tiers, [r]: e.currentTarget.value.toUpperCase() })}
-              aria-invalid={!TIER.test(tiers[r])}
-              className="h-7 w-16 rounded-md border border-border bg-background px-2 font-mono text-meta"
-            />
+            {(["model", "effort"] as const).map((part) => (
+              <select
+                key={part}
+                aria-label={`${r} ${part}`}
+                value={parseTier(tiers[r])?.[part] ?? ""}
+                onChange={(e) => {
+                  const cur = parseTier(tiers[r]) ?? { model: "J", effort: "X" };
+                  const next = link(tiers, r, `${part === "model" ? e.currentTarget.value : cur.model}${part === "effort" ? e.currentTarget.value : cur.effort}`);
+                  if (next !== null) setTiers(next);
+                }}
+                aria-invalid={parseTier(tiers[r]) === null}
+                className="h-7 rounded-md border border-border bg-background px-2 font-mono text-meta"
+              >
+                {parseTier(tiers[r]) === null ? <option value="" disabled /> : null}
+                {(part === "model" ? MODEL_LETTERS : EFFORTS).map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ))}
           </label>
         ))}
         <label className="flex items-center gap-2">

@@ -39,18 +39,17 @@ fn world(fx: &Fx) {
         "pay",
     ])
     .ok();
-    for key in ["api-config", "open-api"] {
-        fx.cpd(&[
-            "job",
-            "cancel",
-            key,
-            "--reason",
-            "a stub of the template",
-            "--plan",
-            "pay",
-        ])
-        .ok();
-    }
+    // The template's stub (the `open` Job is queued only at the Workflow's start, so none exists while it waits).
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "api-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx.env.sql(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');
@@ -156,5 +155,45 @@ fn plan_cancel_still_cancels_drafts() {
         fx.env
             .query::<String>("SELECT status FROM jobs WHERE key = 'd'"),
         "cancelled"
+    );
+}
+
+#[test]
+fn a_new_workflow_leaves_no_open_job_to_cancel_before_archive() {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cpd(&[
+        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
+    ])
+    .ok();
+    fx.cpd(&[
+        "plan",
+        "new",
+        "pay",
+        "--context",
+        "ctx",
+        "--title",
+        "Plan pay",
+    ])
+    .ok();
+    let repo = fx.keyed_repo("api");
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'open-api'"),
+        0
     );
 }

@@ -153,13 +153,13 @@ impl Tier {
         self.effort.map(|e| LEVELS[e as usize])
     }
 
-    /// The place within the letter: 0 < X < 1 < 2 < 3 < 4.
+    /// The place within the letter: 0 < 1 < X < 2 < 3 < 4.
     fn effort_rank(self) -> u8 {
-        self.effort.map_or(1, |e| if e == 0 { 0 } else { e + 1 })
+        self.effort.map_or(2, |e| if e < 2 { e } else { e + 1 })
     }
 }
 
-/// The ladder's order (Tier model v2): letters J < G < H < S < O, then effort ascending, `X` between 0 and 1.
+/// The ladder's order: letters J < G < H < S < O, then effort ascending, `X` between 1 and 2.
 impl Ord for Tier {
     fn cmp(&self, other: &Tier) -> std::cmp::Ordering {
         (self.letter.rank(), self.effort_rank()).cmp(&(other.letter.rank(), other.effort_rank()))
@@ -460,7 +460,7 @@ impl Catalog {
     }
 
     /// The range of `role` under the role defaults; `None` when no valid rung lies in its span.
-    /// Floor: the lowest rung at or above the role's default; ceiling: the highest rung strictly below the
+    /// Floor: the lowest rung at or above the role's default; ceiling: the highest rung at or below the
     /// next role's default (the Manager: the top rung). The decide and the auxiliar are their default only
     /// (one rung, no ladder).
     pub fn range(&self, role: Role, defaults: &RoleTiers) -> Option<Range> {
@@ -487,7 +487,7 @@ impl Catalog {
         let ceiling = ladder
             .iter()
             .copied()
-            .rfind(|r| above.is_none_or(|a| *r < a))?;
+            .rfind(|r| above.is_none_or(|a| *r <= a))?;
         (floor <= ceiling).then_some(Range { floor, ceiling })
     }
 
@@ -505,17 +505,20 @@ impl Catalog {
         })
     }
 
-    /// The next ladder rung inside `range`, never effort 0 and never an `X` of a model with efforts; `None` at the ceiling.
+    /// The next valid rung inside `range`, never effort 0. Within a letter `X` is a rung; when entering a new
+    /// letter with efforts, enter at its lowest effort of at least 1 instead of its `X`.
     pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.ladder()
-            .into_iter()
-            .filter(|r| range.contains(*r) && *r > tier)
-            .find(|r| r.effort != Some(0))
+        self.rungs().into_iter().find(|r| {
+            range.contains(*r)
+                && *r > tier
+                && r.effort != Some(0)
+                && (r.letter == tier.letter || !r.is_x() || self.model(r.letter).efforts.is_empty())
+        })
     }
 
     /// The lowest valid rung of `range` at or above `tier`.
     pub fn step_up_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.ladder()
+        self.rungs()
             .into_iter()
             .find(|r| range.contains(*r) && *r >= tier)
     }

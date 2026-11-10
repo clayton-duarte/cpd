@@ -175,6 +175,55 @@ pub(super) fn merge_tree(c: &mut Ctx, args: &[String]) -> Run {
     })
 }
 
+/// `commit-tree <tree> [-p <parent>]... -m <message>`: the new commit's id; it moves no ref.
+pub(super) fn commit_tree_cmd(c: &mut Ctx, args: &[String]) -> Run {
+    let (mut tree, mut parents, mut message) = (None, Vec::new(), None);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-p" => parents.push(it.next().ok_or("commit-tree -p")?.clone()),
+            "-m" => message = Some(it.next().ok_or("commit-tree -m")?.clone()),
+            flag if flag.starts_with('-') => return Err(format!("commit-tree {flag}")),
+            _ if tree.is_none() => tree = Some(arg.clone()),
+            _ => return Err("commit-tree (arguments)".to_owned()),
+        }
+    }
+    let (Some(tree), Some(message)) = (tree, message) else {
+        return Err("commit-tree (arguments)".to_owned());
+    };
+    let Some(repo) = c.repo() else {
+        return Ok(Out::fail(128, NOT_A_REPO));
+    };
+    let Ok(tree) = c.parse(&format!("{tree}^{{tree}}")) else {
+        return Ok(Out::fail(
+            128,
+            format!("fatal: not a valid object name {tree}\n"),
+        ));
+    };
+    let mut oids = Vec::new();
+    for parent in &parents {
+        match c.parse(&format!("{parent}^{{commit}}")) {
+            Ok(oid) => oids.push(oid),
+            Err(_) => {
+                return Ok(Out::fail(
+                    128,
+                    format!("fatal: not a valid object name {parent}\n"),
+                ));
+            }
+        }
+    }
+    if c.u.config_values(repo, "user.name").is_empty()
+        || c.u.config_values(repo, "user.email").is_empty()
+    {
+        return Ok(Out::fail(
+            128,
+            "fatal: unable to auto-detect email address\n",
+        ));
+    }
+    let oid = c.u.commit(repo, &tree, &oids, &message);
+    Ok(Out::ok(format!("{oid}\n")))
+}
+
 pub(super) fn tree_of(u: &mut Universe, repo: RepoId, entries: &BTreeMap<String, Oid>) -> Oid {
     let refs: Vec<(&str, &Oid)> = entries.iter().map(|(p, o)| (p.as_str(), o)).collect();
     u.tree(repo, &refs)

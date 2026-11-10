@@ -88,6 +88,7 @@ fn explanation(cause: Stored, evidence: &Evidence) -> String {
                 };
                 format!("{said} The provider was down or unreachable; the Job was retried at the same Tier.")
             }
+            Cause::Quota => "pi stopped on a provider usage limit or quota; the Job was not retried.".to_owned(),
             Cause::CasLost => "The Lead Branch kept moving, so the merge could not be completed.".to_owned(),
             Cause::DirtyTarget => "The Lead worktree was not clean when the merge ran.".to_owned(),
             Cause::Tampered => "Its diff touched a protected path.".to_owned(),
