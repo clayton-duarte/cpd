@@ -34,6 +34,9 @@ mod ladder_tests;
 pub(crate) mod explore_tests;
 
 #[cfg(test)]
+mod quota_tests;
+
+#[cfg(test)]
 mod submit_tests;
 
 #[cfg(test)]

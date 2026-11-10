@@ -24,7 +24,7 @@ fn store(fx: &Crud) -> Store {
     .unwrap()
 }
 
-/// `pr add <key> --repo <repo> --shape config …`: the draft opener `open-<key>` and its Spec stay.
+/// `pr add <key> --repo <repo> --shape config …`, and the opener `open-<key>` the start would insert (see `open_job`).
 fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
     let title = format!("Change {key}");
     let mut args = vec![
@@ -41,6 +41,30 @@ fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
     args.extend(extra);
     args.extend(["--plan", "pay-1"]);
     fx.cpd(&args).ok();
+    open_job(fx, key);
+}
+
+/// The opener the start inserts, queued (contract §3.8 "Opening"): `workflow add` lays none out, and these tests need the row
+/// whose stored Spec is the one written at insert. Written by `open::add`, the code `workflow start` calls.
+fn open_job(fx: &Crud, key: &str) {
+    let mut s = store(fx);
+    s.write("test", |tx| {
+        let workflows = cpd_core::plan::fingerprint::load_workflows(tx, &plan())?;
+        let pr = workflows
+            .iter()
+            .find(|p| p.key.as_str() == key)
+            .unwrap()
+            .clone();
+        cpd_core::job::open::add(
+            tx,
+            &plan(),
+            &pr,
+            Tier::parse("S3")?,
+            false,
+            cpd_core::job::open::BY_ENGINE,
+        )
+    })
+    .unwrap();
 }
 
 fn branch(fx: &Crud, repo: &std::path::Path, name: &str) {

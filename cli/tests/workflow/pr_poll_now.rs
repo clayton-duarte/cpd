@@ -80,7 +80,8 @@ fn pr_commands_write_no_poll_now_file_after_a_failed_push() {
     fx.git(&clone, &["checkout", "-q", "cpd/pay"]);
     fx.commit_file(&clone, "theirs.txt", "theirs\n", "theirs");
     fx.git(&clone, &["push", "-q", "origin", "cpd/pay"]);
-    fx.commit_file(&fx.lead, "mine.txt", "mine\n", "mine");
+    // The Lead Branch's commit conflicts with the remote's: the reconcile cannot merge it.
+    fx.commit_file(&fx.lead, "theirs.txt", "mine\n", "mine");
 
     let run = fx.pr("push");
 

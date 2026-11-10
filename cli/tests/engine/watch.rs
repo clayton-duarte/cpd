@@ -2266,7 +2266,7 @@ fn e3_starts_a_job_stored_on_a_tier_of_the_worker_range_at_that_tier() {
 }
 
 /// The roles GX / H3 / `lead` / O3 on the catalog H [0-4], S [0,1,3,4], O [0,2,3,4], G []: the worker range is H3..S3
-/// for `lead` = S4 and H3..S1 for S2. S has no effort 2, so `S2` is a Tier the catalog refuses.
+/// for `lead` = S3 and H3..SX for S2 (the ceiling is inclusive; X sits between 1 and 2). S has no effort 2, so `S2` is no Tier.
 fn ranged_roles(lead: &str) -> String {
     format!(
         "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n"
@@ -2298,7 +2298,7 @@ fn tier_not_allowed_errors(fx: &Ip) -> Vec<(String, i64)> {
 #[test]
 fn e3_never_starts_a_job_stored_outside_the_worker_range() {
     {
-        let fx = engine_scheduling(&ranged_roles("S4"));
+        let fx = engine_scheduling(&ranged_roles("S3"));
         ranged_catalog(&fx);
         // Outside H3..S3: below the floor, above the ceiling, another letter.
         fx.add_job_on("H2", "repo", "low", &[], "");
@@ -2333,7 +2333,7 @@ fn e3_never_starts_a_job_stored_outside_the_worker_range() {
         fx.watch_first_tick().unwrap();
     }
 
-    // A second config moves the ceiling: with lead_tier = S2 the range is H3..S1 and a Job on S3 is refused.
+    // A second config moves the ceiling: with lead_tier = S2 the range is H3..SX (inclusive; X is between 1 and 2) and a Job on S3 is refused.
     let fx = engine_scheduling(&ranged_roles("S2"));
     ranged_catalog(&fx);
     fx.add_job_on("S3", "repo", "high", &[], "");
@@ -2387,7 +2387,7 @@ fn e2_ladder_climbs_inside_the_worker_range_and_fails_at_its_ceiling() {
     assert_eq!(
         fx.job_status("api"),
         "failed",
-        "no rung of H3..S1 at or above S2"
+        "no rung of H3..SX at or above S2"
     );
     assert_eq!(
         fx.env
@@ -3058,7 +3058,7 @@ fn open_pr_with(config_extra: &str) -> (Ip, Says) {
 }
 
 /// The `update` Job runs at `worker_tier`, floored to a valid rung when it is not one: H4 is no rung (H offers 0-3 here), so the
-/// lowest valid rung at or above it is SX: S offers 1-5, no S0, and within a letter X sits between 0 and 1 (contract §9).
+/// lowest valid rung at or above it is S1: S offers 1-5, no S0, and within a letter X sits between 1 and 2, so S1 comes before SX (contract §9).
 #[test]
 fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     let (fx, says) = open_pr_with("worker_tier = \"H4\"\nlead_tier = \"S4\"");
@@ -3071,7 +3071,7 @@ fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
     assert_eq!(
         fx.env
             .query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'up-repo'"),
-        "SX",
+        "S1",
         "worker_tier H4 floored to its rung"
     );
 }
@@ -4919,6 +4919,53 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
     );
 }
 
+/// B07: a retitle run that fails with auth (pi's stderr says 401 / `token_expired`) is not retried at every tick: E10 pauses that
+/// Session, raises one `title_auth` error (the inbox error for the User) and stays paused, however much time passes (no timer).
+#[test]
+fn e10_auth_failure_pauses_retitle_and_raises_inbox_error() {
+    let t = Titles::new(
+        1,
+        Reply::exit(
+            1,
+            "",
+            "Error: 401 {\"error\":\"token_expired\"} authentication failed\n",
+        ),
+    );
+    t.session("due", "lead", "idle", 0, Some(1), Some(20));
+    let (db, runner, clock) = (t.db(), t.fx.fakes.runner.clone(), t.fx.fakes.clock.clone());
+    let mut advanced = None;
+    let calls = Arc::new(Mutex::new(0));
+    let seen = calls.clone();
+
+    t.run_steps(move |nap| match advanced {
+        None if pi_calls(&runner) >= 1 => {
+            clock.advance(Duration::from_secs(60 * 60));
+            advanced = Some(nap);
+            false
+        }
+        Some(at) if nap >= at + 100 => {
+            *seen.lock().unwrap() = pi_calls(&runner);
+            let _ = &db;
+            true
+        }
+        _ => false,
+    });
+
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "a paused Session is not respawned"
+    );
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "one inbox error: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!(
+        (data["source"].as_str(), data["code"].as_str()),
+        (Some("watch"), Some("title_auth"))
+    );
+    assert_eq!(data["details"]["session"], "due");
+}
+
 /// pi's answer to E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, which the old code wrote as the title.
 const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
 
@@ -5230,8 +5277,13 @@ impl InstallRig {
             )
             .on(
                 "cpd",
-                at(built, &["config", "--migrate"]),
+                at(built.clone(), &["config", "--migrate"]),
                 Reply::ok(r#"{"ok":true,"migrated":[]}"#),
+            )
+            .on(
+                "cpd",
+                at(built, &["watch", "--check", "--migrate-scratch"]),
+                Reply::ok(r#"{"ok":true}"#),
             )
             .on(
                 "cpd",
@@ -5344,6 +5396,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
         [
             vec!["--version"],
             vec!["config", "--migrate"],
+            vec!["watch", "--check", "--migrate-scratch"],
             vec!["config"],
             vec!["watch", "--check"]
         ]

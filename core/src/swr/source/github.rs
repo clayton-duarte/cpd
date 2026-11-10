@@ -475,6 +475,8 @@ impl GithubSource {
             .expect("listed memory")
             .get_or_insert_with(HashMap::new)
             .insert(cx.store.path().display().to_string(), listed);
+        // pro-d469: every pass fills `swr_deploys`, so E8 opens deploy items without a manual `cpd pr poll`.
+        crate::pr::deploys::read_into_store(&*cx.ports.runner, cx.store, cx.home, now)?;
         Ok(effects)
     }
 }

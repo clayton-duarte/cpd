@@ -29,13 +29,16 @@ fn history_job(fx: &Fx, key: &str, tier: &str, merged: bool, cost: &str) {
     ));
 }
 
-/// A merged Plan `old` with 40 first Attempts at S1 (38 merged, 2 failed, $0.20) and 20 at S2 (all merged, $0.50):
-/// the advice for `impl` is S1.
+/// A merged Plan `old` with 40 first Attempts at S1 (38 merged, 2 failed, $0.20), 10 at SX ($0.35),
+/// and 20 at S2 (all merged, $0.50): the advice for `impl` is S1.
 fn history(fx: &Fx) {
     plan(fx, "old", "done", false);
     pr(fx, "old", "old", "/r/old", "merged");
     for n in 0..40 {
         history_job(fx, &format!("s1-{n}"), "S1", n >= 2, "0.20");
+    }
+    for n in 0..10 {
+        history_job(fx, &format!("sx-{n}"), "SX", true, "0.35");
     }
     for n in 0..20 {
         history_job(fx, &format!("s2-{n}"), "S2", true, "0.50");

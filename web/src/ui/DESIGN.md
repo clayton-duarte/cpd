@@ -633,23 +633,33 @@ The sections scroll through `ScrollArea` (`components/scroll-area.tsx`, pro-d69;
 | 3 | Models + Tiers | `S  sonnet` | select | as row 2 | `.tiers.S.model` |
 | 4 | Models + Tiers | `H  haiku` | select | as row 2 | `.tiers.H.model` |
 | 5 | Models + Tiers | `G  gemini` | select | as row 2 | `.tiers.G.model` |
-| 6 | Models + Tiers | auxiliar | select of Tiers | a Tier, e.g. `GX`; range `default only` | `cpd config` → `.config.context_distill_tier` |
-| 7 | Models + Tiers | worker | select of Tiers | a Tier; range `<floor>..<ceiling>` or `no rung` | `cpd config` → `.config.worker_tier` |
-| 8 | Models + Tiers | lead | select of Tiers | as row 7 | `cpd config` → `.config.lead_tier` |
-| 9 | Models + Tiers | manager | select of Tiers | as row 7 | `cpd config` → `.config.manager_tier` |
+| 6 | Models + Tiers | auxiliar | a letter select and an effort select (Role controls below) | a Tier, e.g. `GX`; range `default only` | `cpd config` → `.config.context_distill_tier` |
+| 7 | Models + Tiers | worker | a letter select and an effort select (Role controls below) | a Tier, e.g. `H3`; range `<floor>..<ceiling>` or `no rung` | `cpd config` → `.config.worker_tier` |
+| 8 | Models + Tiers | lead | as row 7 | as row 7 | `cpd config` → `.config.lead_tier` |
+| 9 | Models + Tiers | manager | as row 7 | as row 7 | `cpd config` → `.config.manager_tier` |
 | 10 | Experimental | durable_workers | on/off | `on` or `off` | `cpd config experimental` → `.experimental.durable_workers` |
 | 11 | Experimental | write_curation | on/off | `on` or `off` | `cpd config experimental` → `.experimental.write_curation` |
 | 12 | Experimental | failure_triage | on/off | `on` or `off` | `cpd config experimental` → `.experimental.failure_triage` |
 | 13 | Experimental | turn_question_guard | on/off | `on` or `off` | `cpd config experimental` → `.experimental.turn_question_guard` |
 
-A range is computed from the rungs (`.tiers.<role>.efforts`) of the chosen model, as the TUI draws it.
+**Role controls** (rows 6 to 9). A role's Tier is two controls, a model letter and an effort, never one combined select. The letter select offers the letters `cpd tiers` lists (`G`, `H`, `S`, `O`; `J` is deactivated, contract §9). The effort select offers `X` (no effort, valid for every letter) and the efforts of the chosen letter, `.tiers.<letter>.efforts`, ascending; a letter with `efforts` `[]` offers `X` only. Choosing a letter reoffers its efforts and keeps the current effort when the new letter offers it. Otherwise the Tier is invalid (red, `!`) and Save is blocked until an effort is picked.
+
+**Ranges** follow contract §9 ("Roles and ranges"). The floor is the lowest valid rung at or above the role's Tier. The ceiling is the highest valid rung strictly below the next role's Tier; for the manager it is the top rung, and for the auxiliar the range is its Tier only. A span with no valid rung shows `no rung`.
+
+**Linked boundaries.** The Tier of `lead` and the Tier of `manager` are each a boundary shared by two roles. Editing one recomputes both ends it links, in the same render:
+
+- `lead_tier`: the lead's floor, and the worker's ceiling (the highest rung strictly below the lead's Tier).
+- `manager_tier`: the manager's floor, and the lead's ceiling (the highest rung strictly below the manager's Tier).
+- `worker_tier` moves only the worker's floor. The auxiliar is independent of every boundary.
+
+The dialog never changes a Tier by itself. A role whose Tier falls outside its recomputed range shows red with `!`, and the footer names the row and the boundary that moved it. A set is coherent only when every role's Tier is a valid rung, every range holds a rung, and the defaults strictly ascend: `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (contract §9). Save writes only a coherent set.
 
 - **Save** runs the writes below in order, as the TUI does (`tui/src/settings/model.rs:681-733`, `tui/src/settings/mod.rs:115-181`). Each step runs only when its value changed.
   1. `cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>` when a model or the Provider changed.
   2. `cpd config tiers set --decide <T> --auxiliar <T> --worker <T> --lead <T> --manager <T>`, with the changed Tiers (all five roles, the decide role included, contract §9).
   3. `cpd config experimental <feature> on|off`, once per changed switch.
   4. `cpd session retier --all`, only when step 1 or 2 changed something. It re-tiers every live Lead and Manager.
-- Save is blocked, and the reason is shown in red: a model is unset, a re-read failed, or a Tier is not a rung of the model it runs on. Save with nothing changed closes the dialog. A failed step stops the run and shows its error; the next Save runs only the steps that did not succeed.
+- Save is blocked, and the reason is shown in red: a model is unset, a re-read failed, a Tier is not a rung of the model it runs on, or the set is not coherent (see Linked boundaries). Save with nothing changed closes the dialog. A failed step stops the run and shows its error; the next Save runs only the steps that did not succeed. Core refuses the same sets (`tier_not_allowed` with `details`, `config_invalid` with `details.key`), so this check mirrors core and does not replace it.
 - **Cancel** closes the dialog and writes nothing.
 - **Load** copies the preset's Provider and four model refs into rows 1 to 5, then re-reads the rungs with `cpd tiers --model O=… --model S=… --model H=… --model G=…`. It writes nothing until Save.
 

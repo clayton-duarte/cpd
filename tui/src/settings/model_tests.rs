@@ -191,8 +191,8 @@ fn the_range_column_is_default_only_for_the_decide_and_auxiliar_and_floor_dots_c
             "",
             "default only",
             "default only",
-            "H3..S3",
-            "S4..O2",
+            "H3..S4",
+            "S4..O3",
             "O3..O4"
         ]
     );
@@ -210,8 +210,8 @@ fn the_range_column_is_default_only_for_the_decide_and_auxiliar_and_floor_dots_c
             "",
             "default only",
             "default only",
-            "H3..S1",
-            "S2..O2",
+            "H3..S2",
+            "S2..O3",
             "O3..O4"
         ]
     );
