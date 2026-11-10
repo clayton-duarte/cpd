@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { SETTINGS_ROLES, SETTINGS_SWITCHES } from "../../protocol/cockpit.ts";
-import type { SettingsChanges, SettingsModel, SettingsRole, SettingsSwitch, TierCatalog } from "../../protocol/cockpit.ts";
+import type { SettingsChanges, SettingsModel, SettingsRole, SettingsSwitch } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/dialog.tsx";
@@ -9,6 +9,25 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 export type { SettingsChanges, SettingsRole, SettingsSwitch };
 export const SWITCHES = SETTINGS_SWITCHES;
 export type SwitchName = SettingsSwitch;
+
+export interface TierCatalogItem {
+  readonly tier: string;
+  readonly letter: string;
+  readonly effort: string | number | null;
+  readonly model: string;
+}
+
+export interface RoleRange {
+  readonly floor: string;
+  readonly ceiling: string;
+  readonly allowed: readonly string[];
+}
+
+export interface TierCatalog {
+  readonly tiers: readonly TierCatalogItem[];
+  readonly ranges: Readonly<Record<string, RoleRange>>;
+}
+
 /** The read of `cpd config` / `cpd config experimental` the dialog shows. */
 export type SettingsRead = SettingsModel & { catalog?: TierCatalog };
 
@@ -48,7 +67,7 @@ const DEFAULT_LADDER = [
 
 function getLadder(catalog?: TierCatalog): string[] {
   if (catalog?.tiers && Array.isArray(catalog.tiers) && catalog.tiers.length > 0) {
-    return catalog.tiers.map((t) => t.tier);
+    return catalog.tiers.map((t: TierCatalogItem) => t.tier);
   }
   return DEFAULT_LADDER;
 }
