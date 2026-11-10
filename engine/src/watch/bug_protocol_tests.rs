@@ -111,7 +111,11 @@ fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
     let sent = messages_starting(&mut fx, "Bug b1 breached");
     assert_eq!(sent.len(), 1, "{:?}", messages(&mut fx));
     assert_eq!(sent[0].0, "lead1");
-    assert_eq!(sent[0].1, None, "the engine is the sender");
+    assert_eq!(
+        sent[0].1.as_deref(),
+        Some("cpd"),
+        "the engine is the sender"
+    );
     assert!(sent[0].2, "the alert wakes the owner");
 
     // The User's alert: the bug's Inbox item, opened by E8's rule.
@@ -184,7 +188,11 @@ fn wakes_a_sleeping_owner_on_a_new_bug_record() {
     let sent = messages_starting(&mut fx, "Bug b1 is open");
     assert_eq!(sent.len(), 1, "{:?}", messages(&mut fx));
     assert_eq!(sent[0].0, "lead1");
-    assert_eq!(sent[0].1, None, "the engine is the sender");
+    assert_eq!(
+        sent[0].1.as_deref(),
+        Some("cpd"),
+        "the engine is the sender"
+    );
     assert!(sent[0].2, "a new bug record wakes its owner");
 
     // The wake's visible part: E8 opens the bug's Inbox item, linked to the owner.
