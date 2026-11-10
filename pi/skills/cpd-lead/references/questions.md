@@ -7,8 +7,8 @@ Rules for every `ask_user_question` call. The tool opens a dialog in the editor 
 - **Every option has a `description`**: one line stating the trade-off. Never author the labels `Other`, `Type something.` or `Next` (reserved). The tool always adds a `Type something.` row, so the User can answer freely.
 - **`multiSelect: true` only when the picks are independent.** A `preview` goes on single-select options only, and stays to a few lines (the box is capped at 20 rows and does not scroll). It is not a place to read a table or a Plan; the Plan goes through `cpd_plan_review`.
 - **Ask the whole frontier at once.** Put every question whose answer does not depend on another open question into the same round. A dependent question waits for the next round.
-- **Do not ask what you can look up.** Read the repo and the User's material first. Ask for decisions, not facts.
-- **Every open decision is a round.** Ask it at any phase, also while the Plan has draft Jobs. Put the recommended option first, its description starting `Recommended:`.
+- **Do not ask what you can look up.** Read the repo and the User's material first. You ask implementation and operational choices; product decisions are settled by the Manager.
+- **Every open decision is a round.** Ask implementation and operational choices at any phase, also while the Plan has draft Jobs. Put the recommended option first, its description starting `Recommended:`.
 - **Never approve a Plan with this tool.** Plan approval is `cpd_plan_review`: it shows the summary in chat and the User decides in its dialog.
 
 ## Reading the result
