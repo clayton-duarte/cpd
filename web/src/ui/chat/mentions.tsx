@@ -6,6 +6,10 @@ export interface MentionLinkProps {
   readonly children: ReactNode;
 }
 
+export function MentionLink(props: MentionLinkProps): ReactNode {
+  throw new Error("stub: MentionLink not implemented");
+}
+
 export function linkifyMentions(
   text: string,
   liveAgentKeys: ReadonlySet<string>,

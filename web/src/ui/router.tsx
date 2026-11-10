@@ -7,6 +7,10 @@ import {
   createMemoryHistory,
 } from "@tanstack/react-router";
 
+export interface RouterContext {
+  readonly contextTree?: unknown;
+}
+
 export function createAppRouter(options?: {
   readonly history?: ReturnType<typeof createMemoryHistory> | ReturnType<typeof createHashHistory>;
   readonly contextTree?: unknown;
@@ -28,7 +32,36 @@ export function createAppRouter(options?: {
     },
   });
 
-  const routeTree = rootRoute.addChildren([indexRoute]);
+  const managerRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/a/$context",
+    component: () => {
+      throw new Error("stub: ManagerRouteComponent not implemented");
+    },
+  });
+
+  const leadRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/a/$context/$plan",
+    component: () => {
+      throw new Error("stub: LeadRouteComponent not implemented");
+    },
+  });
+
+  const workerRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/a/$context/$plan/$job",
+    component: () => {
+      throw new Error("stub: WorkerRouteComponent not implemented");
+    },
+  });
+
+  const routeTree = rootRoute.addChildren([
+    indexRoute,
+    managerRoute,
+    leadRoute,
+    workerRoute,
+  ]);
 
   return createRouter({
     routeTree,
@@ -36,6 +69,11 @@ export function createAppRouter(options?: {
   });
 }
 
-export function AppRouterView(props: { readonly router: ReturnType<typeof createAppRouter> }): ReactNode {
+export interface AppRouterViewProps {
+  readonly router: ReturnType<typeof createAppRouter>;
+  readonly contextTree?: unknown;
+}
+
+export function AppRouterView(props: AppRouterViewProps): ReactNode {
   throw new Error("stub: AppRouterView not implemented");
 }

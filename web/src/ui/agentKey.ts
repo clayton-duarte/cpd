@@ -18,3 +18,7 @@ export function isValidAgentKey(raw: string): boolean {
 export function agentKeyToPath(raw: string): string | null {
   throw new Error("stub: agentKeyToPath not implemented");
 }
+
+export function pathToAgentKey(path: string): string | null {
+  throw new Error("stub: pathToAgentKey not implemented");
+}
