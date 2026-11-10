@@ -2508,3 +2508,25 @@ The verifiers read the directory at each check, as docs/contract.md §6.16 says:
 - Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
 - Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
 - Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).
+
+---
+
+## 27. cpd notices are attributed to cpd, never to the User (bug b12)
+
+Normative. Bug b12 decides the points below. Where this section and §10.1 differ, this section stands: its rule for §10.1(a) (a `session-message` with `data.from` null is a `UserItem`) holds only for a message the User sent. The attribution rule and its open point are docs/contract.md §2.2 "Attribution of cpd's notices"; where the two differ, docs/contract.md wins.
+
+### 27.1 No cpd notice renders as "You"
+
+- A `session-message` that cpd wrote itself (the bug wake `Bug <id> is open`, the breach alert `Bug <id> breached`, and every other message of docs/contract.md §2.2 "Attribution of cpd's notices") is a cpd fold row, never a `UserItem`: it has no `You` label and does not set `facts.lastRole` to `"user"`.
+- Only a message the User sent is a `UserItem`, with its `You · HH:MM` row (6.8). The running code does not meet this yet: until the wire marker of docs/contract.md §2.2 is decided, a from-null message cannot be told apart from the User's, and §10.1(a) maps every one of them to a `UserItem`.
+
+### 27.2 The cpd row
+
+- The row is the fold of §10.1(b): `FoldItem` with `foldKind` `"cpd"`, `defaultOpen` false, `body` the message text, and `title` its first line cut to `FOLD_TITLE_MAX`. Its DOM is the `FoldRow` of 6.8 with `data-fold="cpd"`.
+- No text in the row says the User sent it.
+
+### 27.3 Limits
+
+- Stated plainly: the running code is unchanged by this section. The claim that it maps a cpd notice to the User is read from the source (`web/src/server/pi/jsonl.ts:301`, `pi/lib/render.ts:62`), not seen in a running browser (unverified).
+- The marker is not decided here (docs/contract.md §2.2, open point). Until it is, the rule of 27.1 cannot be implemented, and the stated limitation of §10.1 stands.
+
