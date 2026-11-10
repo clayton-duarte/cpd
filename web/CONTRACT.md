@@ -2530,3 +2530,21 @@ Normative. Bug b12 decides the points below. Where this section and §10.1 diffe
 - Stated plainly: the running code is unchanged by this section. The claim that it maps a cpd notice to the User is read from the source (`web/src/server/pi/jsonl.ts:301`, `pi/lib/render.ts:62`), not seen in a running browser (unverified).
 - The marker is not decided here (docs/contract.md §2.2, open point). Until it is, the rule of 27.1 cannot be implemented, and the stated limitation of §10.1 stands.
 
+## 28. The preview worktree's sync to origin/main, as the WebUI shows it (bug b11)
+
+Normative. docs/contract.md §3.7 "The preview worktree on install" (bug b11, pro-d93) states the rule; this section states what the WebUI shows of it. Where they differ, docs/contract.md wins.
+
+### 28.1 The sync
+
+- On every `cpd install` from a new `main`, and on the engine's main-moved hook, the WebUI Preview worktree (`${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}`) is synced to `origin/main`: its uncommitted changes are saved as a patch, the worktree is reset to `origin/main`, the patch is re-applied with a 3-way merge, `pnpm install` runs, and Vite hot-reloads or restarts.
+- The preview's dev server (the WebUI Preview view, `web/src/server/plugin.ts`) follows the synced worktree: a hot reload when Vite can apply the change, a restart otherwise. A restart is a new process and writes a new WebUI token file (§26.2 "The preview Vite server restarts").
+
+### 28.2 A conflict
+
+- A conflict in the re-apply keeps the saved patch whole, leaves the preview on `origin/main` without it, and reports an error (docs/contract.md §3.7: an `error` Event or an Inbox item). The WebUI shows that error as a cpd notice, attributed to cpd (§27), never to the User.
+- The preview's content is then `origin/main`, not the User's edits. The patch stays on disk until the User applies or removes it; nothing is discarded.
+
+### 28.3 Status and limits
+
+- The running code does not do this yet. `web/src/electron/update/checkout.ts` fast-forwards or rebases and removes only the dirty paths that `origin/main` supersedes (docs/ui-preview.md, "Live sync"), and `web/src/electron/drift.ts` stashes edits only on `reject`. Neither saves a patch, resets, or re-applies one. This is read from the source; no install was run to see it (unverified).
+- The Inbox kind and the patch's location are not decided here (open point, docs/contract.md §3.7).
