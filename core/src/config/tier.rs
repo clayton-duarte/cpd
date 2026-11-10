@@ -70,6 +70,11 @@ impl fmt::Display for Letter {
     }
 }
 
+/// The letters of the ladder, ascending: the roles' ranges run over them (contract §9).
+const LADDER_LETTERS: [Letter; 4] = [Letter::G, Letter::H, Letter::S, Letter::O];
+/// Every Tier letter, ascending: the decide letter `J` below the ladder.
+const ALL_LETTERS: [Letter; 5] = [Letter::J, Letter::G, Letter::H, Letter::S, Letter::O];
+
 /// pi's thinking levels by effort digit; `minimal` and `max` have no digit (contract §9).
 const LEVELS: [&str; 5] = ["off", "low", "medium", "high", "xhigh"];
 
@@ -434,27 +439,44 @@ impl Catalog {
         Ok(with_level(&self.model(tier.letter).model, tier.thinking()))
     }
 
-    /// Every rung a range is made of: the ladder plus the `X` of every letter, ascending.
+    /// Every rung `cpd config tiers list` shows: the ladder's rungs and the decide letter `J`'s, ascending.
     pub fn rungs(&self) -> Vec<Tier> {
-        let mut rungs = self.ladder();
-        rungs.extend([Letter::J, Letter::G, Letter::H, Letter::S, Letter::O].map(Tier::x));
+        self.rungs_of(&ALL_LETTERS)
+    }
+
+    /// Every rung a range is made of: the ladder plus the `X` of every ladder letter, ascending. `J` has no range
+    /// (the decide role is its default only, contract §9), so it is not one of them.
+    fn range_rungs(&self) -> Vec<Tier> {
+        self.rungs_of(&LADDER_LETTERS)
+    }
+
+    /// Every valid rung of the ladder letters G, H, S, O, ascending (effort-0 rungs included; `X` is the one rung of a
+    /// model without levels).
+    pub fn ladder(&self) -> Vec<Tier> {
+        self.valid_rungs_of(&LADDER_LETTERS)
+    }
+
+    /// The valid rungs of `letters` and the `X` of each of them, ascending.
+    fn rungs_of(&self, letters: &[Letter]) -> Vec<Tier> {
+        let mut rungs = self.valid_rungs_of(letters);
+        rungs.extend(letters.iter().copied().map(Tier::x));
         rungs.sort();
         rungs.dedup();
         rungs
     }
 
-    /// Every valid rung, ascending (effort-0 rungs included; `X` is the one rung of a model without levels).
-    pub fn ladder(&self) -> Vec<Tier> {
-        [Letter::J, Letter::G, Letter::H, Letter::S, Letter::O]
-            .into_iter()
+    /// The valid rungs of `letters`, in the order of `letters`, each letter's efforts ascending.
+    fn valid_rungs_of(&self, letters: &[Letter]) -> Vec<Tier> {
+        letters
+            .iter()
             .flat_map(|letter| {
-                let efforts = &self.model(letter).efforts;
+                let efforts = &self.model(*letter).efforts;
                 if efforts.is_empty() {
-                    vec![Tier::x(letter)]
+                    vec![Tier::x(*letter)]
                 } else {
                     let mut tiers: Vec<Tier> = efforts
                         .iter()
-                        .filter_map(|e| Tier::new(letter, *e))
+                        .filter_map(|e| Tier::new(*letter, *e))
                         .collect();
                     tiers.sort();
                     tiers.dedup();
@@ -487,7 +509,7 @@ impl Catalog {
             Role::Lead => (defaults.lead, Some(defaults.manager)),
             Role::Manager => (defaults.manager, None),
         };
-        let ladder = self.rungs();
+        let ladder = self.range_rungs();
         let floor = ladder.iter().copied().find(|r| *r >= own)?;
         let ceiling = ladder
             .iter()
@@ -500,7 +522,7 @@ impl Catalog {
     /// (or `X`) up to the worker ceiling (or the letter's top rung); `None` when no rung is left.
     pub fn explore_range(&self, letter: Letter, worker: Range) -> Option<Range> {
         let rungs: Vec<Tier> = self
-            .rungs()
+            .range_rungs()
             .into_iter()
             .filter(|r| r.letter == letter && r.effort != Some(0) && *r <= worker.ceiling)
             .collect();
@@ -513,7 +535,7 @@ impl Catalog {
     /// The next valid rung inside `range`, never effort 0. Within a letter `X` is a rung; when entering a new
     /// letter with efforts, enter at its lowest effort of at least 1 instead of its `X`.
     pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.rungs().into_iter().find(|r| {
+        self.range_rungs().into_iter().find(|r| {
             range.contains(*r)
                 && *r > tier
                 && r.effort != Some(0)
@@ -523,7 +545,7 @@ impl Catalog {
 
     /// The lowest valid rung of `range` at or above `tier`.
     pub fn step_up_in(&self, range: Range, tier: Tier) -> Option<Tier> {
-        self.rungs()
+        self.range_rungs()
             .into_iter()
             .find(|r| range.contains(*r) && *r >= tier)
     }
