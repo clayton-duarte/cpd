@@ -2481,10 +2481,40 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 
 ## 26. Direct WebSocket connection to core and the pi session stream (Plan `webui-core-ws`; Job `webui-core-ws-docs`)
 
-Status: skeleton. Normative once the sections below are filled. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527, pro-d541; docs/contract.md §5.8.
+Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527 (WebUI connects to core directly), pro-d528, pro-d541 (port 3333); docs/contract.md §5.8 (core's `/cpd-ws` and `run/core.sock`) and §6.21 (the pi live-stream socket). The Lead's answer to escalation `webui-core-ws-docs-a1-q1` decides §26.1. Where this section and §5, §13, §18 of this file, or docs/contract.md §5.5 and §5.6 disagree, this section wins (recency; those sections are superseded at §26.3 and their text is not edited).
 
-### 26.1 Endpoint to core `/cpd-ws` (TBD)
+### 26.1 The data connection: direct to core `/cpd-ws`
 
-### 26.2 pi session transcript stream into the WebUI reactive store (TBD)
+- **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
+- **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
+- **Port 3333.** Port 3333 is the WebUI production HTTP and static server only (pro-d541: a supervised Node service under the engine, bound on `0.0.0.0:3333`, serving the renderer). Under the Lead's answer it does **not** carry `/cpd-ws`: pro-d541's clause that it serves `/cpd-ws` is superseded by that answer (recency).
+- **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
+- **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
+- **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
+- **The handshake and the reconnect** are §5.8's: the client sends `snapshot`, renders it, keeps the returned `cursor`, and sends `events.subscribe` with that cursor. On every reconnect it does the same with the last cursor it processed. This replaces §15.1's "every reconnect resyncs by full `cockpit.snapshot`" for the core connection, because §5.8 is the later record (pro-d527). The transport still carries no reconnect logic of its own (§15.1); the renderer's existing backoff runs.
+- **Events into the store.** Each `event` notification is an Event row (the shape of `cpd events follow`, docs/contract.md §5.2). The renderer's store applies it through the reducer, as it applies a `cockpit.patch` today (§4).
 
-### 26.3 Removal of `cpd-argv` and the cockpit stream (TBD)
+**Open, not fixed by this section:**
+1. The content of `snapshot` (docs/contract.md §5.8 leaves it to this Plan).
+2. The mapping of core's `snapshot` and `event` messages onto the renderer's `cockpit.snapshot` and `cockpit.patch` wire messages (§4). Until the implementation Job fixes it, the store's shapes are unchanged.
+3. Whether core's `/cpd-ws` answers the `ping` and `pong` heartbeat of §15.2. docs/contract.md §5.8 defines no heartbeat.
+
+### 26.2 pi session transcript streaming into the WebUI reactive store
+
+- **Two sources, one per Session kind.** A tmux pi Session streams from its live socket, `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (docs/contract.md §6.21, protocol 1). A durable Session streams from the durable host's socket, `run/host/<id>.sock` (docs/contract.md §6.14, protocol 2). A durable Session has no `run/pi/` socket (§6.21).
+- **Who connects.** A browser cannot open a Unix socket, so the Node side of the WebUI (the process of §26.1 that serves the page) connects to the Session's socket, and forwards its frames to the renderer over the one WebSocket of §15. Pi-native-core §5.2 names the WebUI as the reader; read literally, that cannot run in a browser. **Assumption, decided and stated (reversible, doc-only):** the Node side is the reader. The alternative, core relaying pi's frames over `/cpd-ws`, would add a core method that docs/contract.md §5.8 does not define.
+- **Frames.** The renderer receives the frames of §6.21 unchanged in content (`hello`, `inflight`, `agent_start`, `message_start`, `delta`, `message_end`, `tool_start`, `tool_update`, `tool_end`, `agent_end`). Their handling is §12 of this file (L1 to L6, A6), which is not restated here: a live item is ephemeral and the committed `.jsonl` line replaces it.
+- **The committed record.** The Session's `.jsonl` remains the record and is tailed as today (§12.4). Live frames never write the transcript.
+- **Store.** Frames become items in the reactive store by the reducers of §12.3 (`web/src/state/{transcript,store,connection}.ts`). `connection.ts` coalesces transcript messages as it does today, unchanged.
+- **Lifecycle.** The socket is listened to from `session_start` to `session_shutdown` (§6.21). The Node side retries while the socket is absent (§12, L2, every 1 s) and stops on detach. The socket is not an Event and not a core method.
+
+### 26.3 Removal of the `cpd` argv shell-outs and the cockpit stream
+
+The implementation Job (`webui-core-ws-impl`) deletes these. This section names them; the Job makes the deletion.
+
+- **`web/src/server/cpd-argv.ts`** (`toArgv`, `CpdCommand`) and every call site that builds a `cpd` argv: the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, the Electron paths `web/src/electron/update/`, `pty.ts` and `pty-tabs.ts`, and the call-site modules `web/src/server/cockpit/`, `web/src/server/pi/backend.ts` and `web/src/server/durable/backend.ts`, as far as they spawn `cpd`. The reads and actions they carried move to the core `/cpd-ws` messages of §26.1; each action's replacement is the Job's, and the Lead decides any that core does not yet define.
+- **`web/src/server/cockpit/stream.ts`** and the `cpd cockpit serve` child process, with its `hello`, `snapshot`, `event` and `error` frames. `cockpit serve` is deprecated by Plan 1 (docs/contract.md §5.5, §5.8); the stall watchdog of §15.2 and the `cpd:c2s`/`cpd:s2c` hot route are deleted with it.
+- **The argv contract**: §18 of this file and docs/contract.md §5.6, with the Gate test `web/src/server/cockpit/argv-contract.test.ts` and `cpd argv-check` (its interface, docs/contract.md §5.6).
+- **Superseded, not edited:** §13 (cockpit stream), §18 (argv contract), §15.2 (the stall watchdog), docs/contract.md §5.5 and §5.6 for the web. Each carries its own history, so none is rewritten.
+
+**Open, flagged:** pi-native-core §2.6 also lists git (`plugin.ts:361`), tmux (`status.ts:38`) and the classifier (`completion-classify.ts:91`) as shell-outs from the web. Plan 4's removal list names only the cpd-argv layer and `cockpit/stream.ts`. Whether the other three leave the web in this Plan is not stated; this section does not remove them.
