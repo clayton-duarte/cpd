@@ -1,5 +1,5 @@
 /** The dev renderer URL the in-place preview loads when `CPD_ELECTRON_DEV_URL` is unset. */
-export const DEFAULT_DEV_URL = 'http://localhost:5173/electron.html';
+export const DEFAULT_DEV_URL = 'http://localhost:33333/electron.html';
 
 /**
  * The explicit mode request a relaunch carries as an argument. Electron's `app.relaunch()`

@@ -15,8 +15,8 @@ export interface CrashReport {
 }
 
 export type HealthRecord =
-  | { status: "loading"; reloadEpoch: number; pid: number; startedAt: string }
-  | { status: "healthy"; reloadEpoch: number; pid: number; startedAt: string; healthyAt: string }
+  | { status: "loading"; reloadEpoch: number; pid: number; startedAt: string; shell_abi?: number; shell_version?: string }
+  | { status: "healthy"; reloadEpoch: number; pid: number; startedAt: string; healthyAt: string; shell_abi?: number; shell_version?: string }
   | {
       status: "crashed";
       reloadEpoch: number;
@@ -26,8 +26,10 @@ export type HealthRecord =
       source: CrashSource;
       error: string;
       stack?: string;
+      shell_abi?: number;
+      shell_version?: string;
     }
-  | { status: "exited"; reloadEpoch: number; pid: number; startedAt: string; exitedAt: string };
+  | { status: "exited"; reloadEpoch: number; pid: number; startedAt: string; exitedAt: string; shell_abi?: number; shell_version?: string };
 
 export class HealthParseError extends Error {}
 
@@ -43,6 +45,8 @@ export interface HealthRecorderDeps {
   file: string;
   crashLog: string;
   pid: number;
+  shellAbi?: number;
+  shellVersion?: string;
   now(): Date;
   fs: HealthFs;
 }
@@ -84,7 +88,13 @@ export function parseHealth(text: string): HealthRecord {
     if (typeof v !== "string") throw new HealthParseError(`bad field ${k}`);
     return v;
   };
-  const base = { reloadEpoch: int("reloadEpoch"), pid: int("pid"), startedAt: str("startedAt") };
+  const shell_abi = typeof o["shell_abi"] === "number" && Number.isInteger(o["shell_abi"]) ? (o["shell_abi"] as number) : undefined;
+  const shell_version = typeof o["shell_version"] === "string" ? (o["shell_version"] as string) : undefined;
+  const shellFields = {
+    ...(shell_abi !== undefined ? { shell_abi } : {}),
+    ...(shell_version !== undefined ? { shell_version } : {}),
+  };
+  const base = { reloadEpoch: int("reloadEpoch"), pid: int("pid"), startedAt: str("startedAt"), ...shellFields };
   switch (o["status"]) {
     case "loading":
       return { status: "loading", ...base };
@@ -112,7 +122,11 @@ export function parseHealth(text: string): HealthRecord {
 }
 
 export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
-  const { file, crashLog, pid, fs } = deps;
+  const { file, crashLog, pid, shellAbi, shellVersion, fs } = deps;
+  const shellFields = {
+    ...(shellAbi !== undefined ? { shell_abi: shellAbi } : {}),
+    ...(shellVersion !== undefined ? { shell_version: shellVersion } : {}),
+  };
   let epoch = 0;
   let current: HealthRecord | undefined;
   let chain: Promise<void> = Promise.resolve();
@@ -147,7 +161,7 @@ export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
       serial(async () => {
         if (current?.status === "loading") return;
         epoch += 1;
-        await write({ status: "loading", reloadEpoch: epoch, pid, startedAt: deps.now().toISOString() });
+        await write({ status: "loading", reloadEpoch: epoch, pid, startedAt: deps.now().toISOString(), ...shellFields });
       }),
     healthy: () =>
       serial(async () => {
@@ -158,6 +172,7 @@ export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
           pid,
           startedAt: startedAt(),
           healthyAt: deps.now().toISOString(),
+          ...shellFields,
         });
       }),
     crashed: (source, error, stack) =>
@@ -172,6 +187,7 @@ export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
           source,
           error,
           ...(stack === undefined ? {} : { stack }),
+          ...shellFields,
         };
         await write(record);
         await fs.appendFile(
@@ -187,6 +203,7 @@ export function createHealthRecorder(deps: HealthRecorderDeps): HealthRecorder {
           pid,
           startedAt: startedAt(),
           exitedAt: deps.now().toISOString(),
+          ...shellFields,
         });
       }),
   };

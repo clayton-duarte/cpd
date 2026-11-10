@@ -1132,6 +1132,21 @@ it("ContextTree header is a TopPaneHeader with a phi on the left and the New con
   m.unmount();
 });
 
+it("ContextTree header has New Manager button with MessageCirclePlusIcon and ghost icon-xs", () => {
+  const onAction = vi.fn();
+  const m = mount(<ContextTree {...props({ onAction })} />);
+  const h = treeHeader(m.container);
+  expect(h?.tagName).toBe("HEADER");
+  const btn = q(h ?? m.container, 'button[data-action="new-manager"][aria-label="New Manager"]');
+  expect(btn, "header renders button with data-action='new-manager' and aria-label='New Manager'").not.toBeNull();
+  // variant ghost and size icon-xs (size-6 p-0 with ghost styling)
+  expect(btn?.classList.contains("size-6"), "size icon-xs").toBe(true);
+  expect(btn?.classList.contains("hover:bg-accent"), "variant ghost").toBe(true);
+  const icon = btn?.querySelector("svg.lucide-message-circle-plus");
+  expect(icon, "renders MessageCirclePlusIcon").not.toBeNull();
+  m.unmount();
+});
+
 it("ContextTree header has no New context button without onNewContext", () => {
   const m = mount(<ContextTree {...props()} />);
   const h = treeHeader(m.container);

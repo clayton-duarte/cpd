@@ -1,9 +1,26 @@
 import path from 'node:path';
 import type { UpdateExec, UpdateFs } from './types';
 
-export function resolveCheckout(deps: { env: Record<string, string | undefined>; bundleDir: string; fs: Pick<UpdateFs, 'exists'> }): string | null {
-  const root = deps.env['CPD_CHECKOUT'] ?? path.resolve(deps.bundleDir, '..', '..');
-  return deps.fs.exists(`${root}/scripts/install-cpd.sh`) && deps.fs.exists(`${root}/.git`) ? root : null;
+export function resolveCheckout(deps: { env: Record<string, string | undefined>; bundleDir: string; fs: Pick<UpdateFs, 'exists' | 'readText'> }): string | null {
+  const explicit = deps.env['CPD_CHECKOUT'];
+  if (explicit && deps.fs.exists(`${explicit}/scripts/install-cpd.sh`) && deps.fs.exists(`${explicit}/.git`)) {
+    return explicit;
+  }
+  const homedir = deps.env['HOME'];
+  if (homedir) {
+    const appRootFile = `${homedir}/.local/share/cpd/app-root`;
+    if (deps.fs.exists(appRootFile)) {
+      const line = deps.fs.readText(appRootFile)?.trim();
+      if (line && deps.fs.exists(`${line}/scripts/install-cpd.sh`) && deps.fs.exists(`${line}/.git`)) {
+        return line;
+      }
+    }
+  }
+  const relative = path.resolve(deps.bundleDir, '..', '..');
+  if (deps.fs.exists(`${relative}/scripts/install-cpd.sh`) && deps.fs.exists(`${relative}/.git`)) {
+    return relative;
+  }
+  return null;
 }
 export type SyncResult =
   | { kind: 'current'; sha: string }

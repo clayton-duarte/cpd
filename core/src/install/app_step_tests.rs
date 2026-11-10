@@ -144,7 +144,7 @@ impl Rig {
         self.fakes.spawn.survive(pid, Signal::Usr1);
         fs::write(
             self.install.cpd_home.root().join("run/preview-health.json"),
-            format!(r#"{{"pid":{}}}"#, pid.0),
+            format!(r#"{{"pid":{},"shell_abi":2}}"#, pid.0),
         )
         .unwrap();
         pid
