@@ -206,8 +206,8 @@ fn check_shell_abi(root: &std::path::Path) -> Result<(), String> {
             {
                 let num_str = rest.trim().trim_end_matches(';').trim();
                 if let Ok(min_abi) = num_str.parse::<u32>() {
-                    // Shell ABI version is 1
-                    const SHELL_ABI_VERSION: u32 = 1;
+                    // Shell ABI version is 2
+                    const SHELL_ABI_VERSION: u32 = 2;
                     if SHELL_ABI_VERSION < min_abi {
                         return Err(
                             "cpd install refused: new CPD.app release needed (incompatible shell ABI)"

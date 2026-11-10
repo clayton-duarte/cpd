@@ -24,6 +24,7 @@ import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode }
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
 import { resolveLoginPath, stripSessionEnv } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
+import { SHELL_ABI_VERSION, SHELL_VERSION } from "./version.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController } from "./mode.ts";
@@ -622,6 +623,8 @@ async function main(): Promise<void> {
       file: path.join(cpdHome, "run", "preview-health.json"),
       crashLog: path.join(cpdHome, "run", "preview-crash.log"),
       pid: process.pid,
+      shellAbi: SHELL_ABI_VERSION,
+      shellVersion: SHELL_VERSION,
       now: () => new Date(),
       fs: {
         readFile: (f) => fs.readFile(f, "utf8"),
