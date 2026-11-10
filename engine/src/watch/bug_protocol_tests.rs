@@ -203,3 +203,35 @@ fn wakes_a_sleeping_owner_on_a_new_bug_record() {
         "the item closes when the bug is mitigated"
     );
 }
+
+/// Bug b12: bug_guard wake and breach messages are attributed to cpd, not null / the User.
+#[test]
+fn bug_guard_delivers_with_cpd_attribution() {
+    let mut fx = fx();
+    bug(&mut fx, "b1", Some("pay"), "Payment fails at checkout", 16);
+
+    bug_guard::run(&mut fx.engine);
+
+    // Both the open wake and the breach alert must be attributed to cpd, not null / the User.
+    // Under docs/contract.md §2.2 (bug b12): messages written by cpd itself are attributed to cpd,
+    // not null / the User (which would format as "Message from the User").
+    let all_messages = messages(&mut fx);
+    assert!(!all_messages.is_empty(), "bug_guard must produce messages");
+    for (session, from, _wake, text) in &all_messages {
+        assert_eq!(session, "lead1");
+        assert_ne!(
+            from.as_deref(),
+            None,
+            "session-message from cpd must not have null sender: {text}"
+        );
+        assert_eq!(
+            from.as_deref(),
+            Some("cpd"),
+            "session-message from cpd must be attributed to cpd: {text}"
+        );
+        assert!(
+            !text.starts_with("Message from the User"),
+            "event text must not say 'Message from the User': {text}"
+        );
+    }
+}
