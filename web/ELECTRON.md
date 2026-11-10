@@ -338,6 +338,38 @@ At runtime `native.ts` reads only the two tray images. In dev they come from `ap
 - **Relaunch on SIGUSR1 in the packaged app (pro-d502).** `scripts/install-cpd.sh` signals the running Electron app to relaunch after it copies the newly packaged `CPD.app` to `~/.local/share/cpd/app/CPD.app`. For a packaged app (`app.isPackaged === true`), receiving `SIGUSR1` runs `app.relaunch(); app.exit(0);`, not an in-place reload. Why: the macOS Electron runtime keeps open file descriptors to the unlinked `app.asar` across in-process reloads, so a reload would keep running the replaced build; a new process loads the new one. Non-packaged Electron development instances (`app.isPackaged === false`) keep the in-memory hot reload, `reloadServer()` and `reloadIgnoringCache()` (`docs/ui-preview.md`, "Reload on SIGUSR1"), unchanged. Status: decided by pro-d502 (bug reports b1 and b2); as of this amendment neither exists in the code: `web/src/electron/boot.ts` has no `app.isPackaged` branch, and `scripts/install-cpd.sh` copies the bundle and sends no signal.
 - Run `scripts/prepare-macos-assets.sh` once on a Mac before `dist:mac`. The DMG background is `build/dmg/background.tiff`, and the script creates it.
 
+## Shell and payload (install, in-place swap, bugs b10 and b2)
+
+Decided by pro-d90, pro-d91, pro-d504 and pro-d505 (docs/implementing.md, "The shell release and the payload"; docs/commands.md §14.4, §14.4a and §14.4b). This section is the install and swap contract of bug b10 (an install relaunched the shell, so the WebUI payload swap lost the session) and bug b2 (a stale, unlinked `app.asar` kept running after an update). It supersedes the earlier text marked against it in §Run, §Packaging and §Auto-update and CLI bootstrap.
+
+**Two parts, two load paths.** The *shell* is CPD.app: the Electron main process, the preload, the watchdog and the updater (`web/src/electron/`). It changes only with a new CPD.app release, installed into `/Applications/CPD.app`. The *payload* is the WebUI renderer and the server bundle. It changes on every merge to main, and each build is a versioned payload directory. The shell loads the payload only from that directory and never loads updatable code from `app.asar`, so a stale or unlinked `app.asar` cannot run after an update. This rule, not a check, is what prevents b2.
+
+**`cpd install` stages the payload and never relaunches the shell.** Step 7a of `cpd install` (commands.md §14.4) builds the WebUI payload from the checkout into a new versioned payload directory; the live payload is not touched until the swap. It then writes `app-root` and notifies CPD.app with SIGUSR1 to the pid in `<cpd_home>/run/preview-health.json` when that process is alive (the notify that step 7a(d) already sends). The notify asks for a swap and never a relaunch: CPD.app stages the new payload in place (next paragraph) and does not call `app.relaunch()` or `app.exit()`. Install never starts, quits or relaunches the shell. With no live CPD.app, nothing is signalled and nothing is started; `cpd desktop` (commands.md §14.4a) is the only command that starts the shell.
+
+Status: decided; as of this amendment the code does not do this. `core/src/install/mod.rs` (`electron_step`) builds the checkout's `web/dist-electron` in place through `app::ensure`, and the packaged app's SIGUSR1 handler runs `app.relaunch(); app.exit(0)` (`web/src/electron/boot.ts`, the `isPackaged` branch). That relaunch is the behaviour bug b10 reports. The implementing change brings the code in line.
+
+**In-place watchdog swap (renderer reload) and rollback.** When CPD.app is notified of a new payload, its watchdog (main process) does this, in order:
+
+1. Checks the payload's minimum shell ABI (the next paragraphs). A refusal stops here, and the current payload keeps running.
+2. Swaps the payload in place: the server is restarted from the new versioned payload directory, and the renderer is reloaded onto it. The window, the menu, the tray and every pty keep running. No `app.relaunch()` and no `app.exit()` run.
+3. Counts the new payload as healthy only after its first `cockpit.snapshot` (web/CONTRACT.md §15.2), within the watchdog's window.
+4. On a detected break (the five breaks of §Watchdog, "What it detects"), rolls back in place along the revert ladder preview > prod > HEAD-1 > HEAD-2 (air-d95, §Watchdog, "The revert ladder"): the previous versioned payload becomes current again, the server restarts from it and the renderer reloads. A rollback is an in-place swap too, with no relaunch.
+5. Reports every swap, refusal, detection and rollback as a structured cpd Event and shows it to the User (air-d81, §Watchdog, "Events"). A silent swap or rollback is not possible.
+
+Status: decided; as of this amendment the code still relaunches. `web/src/electron/watchdog.ts` calls `ports.relaunch("production")` after a ladder step, and `web/src/electron/main.ts` (`relaunchInProduction`) relaunches the app to load the production renderer (air-d95). The in-place swap of the server and the renderer is not in the code. The implementing change brings the code in line.
+
+**Shell version mismatch: refuse the swap and report.** Each payload build declares the minimum shell ABI it needs. The shell's own ABI is `SHELL_ABI_VERSION` in `web/src/electron/version.ts`, and `checkAbi(shellAbi, payloadMinAbi)` in the same file compares the two. The shell loads a payload only when its ABI is at least the payload's minimum. Otherwise the shell:
+
+- refuses the swap and keeps the current payload in place and running;
+- reports an `error` Event with the message `new CPD.app release needed`, and shows it to the User in an error box (the air-d81 pattern, `showErrorBox`);
+- waits for a new CPD.app release. The release is cut by `cpd desktop release` (commands.md §14.4b) and installed into `/Applications/CPD.app` by `cpd desktop` (§14.4a). No relaunch tries again; the next payload notify runs the check again.
+
+Status: decided; as of this amendment the check exists only as a function. `checkAbi` returns `new CPD.app release needed`, and no code path calls it outside its tests, so a payload that needs a newer shell is swapped in without any refusal or report.
+
+**The legacy copy is removed; `/Applications/CPD.app` is the one shell.** `~/.local/share/cpd/app` is retired. Nothing writes to it, nothing launches from it, and `cpd install` removes it when it is present (the legacy `CPD.app` copy in that directory, once). `cpd desktop` launches `/Applications/CPD.app`. `~/.local/share/cpd/app-root` is still written, but it names the checkout that holds the payload; it is not a shell path.
+
+Status: decided; as of this amendment the launcher already spawns `/Applications/CPD.app/Contents/MacOS/CPD` on macOS (`core/src/app/mod.rs`, `launch`), and the test `app_retired_local_share_copy_path` pins that. Nothing under `core/src/install/` removes the legacy copy, so the removal is not in the code yet. The implementing change brings the code in line.
+
 ## Native shell
 
 The native shell is `web/src/electron/native.ts` and `web/src/electron/attention.ts`. The main process calls `setupNativeShell` once the app is ready. The Dock and Tray parts run on macOS only. Linux and Windows have no Dock and no Tray, so nothing in this section runs there.
