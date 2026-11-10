@@ -36,10 +36,33 @@ export function clearTrip(host: Host, r: Run): boolean {
   return true;
 }
 
+/** The kinds of a trip (contract §6.16 "The trip's cause and its report"). */
+export type TripKind = "inter-turn" | "read-streak" | "turn-tools" | "turn-refusals";
+
+/** The trip text of a kind and its count (contract §6.16 table). */
+export function tripText(kind: TripKind, count: number): string {
+  switch (kind) {
+    case "inter-turn": return `loop guard, ${count} turns in 10 min`;
+    case "read-streak": return `loop guard, more than ${count} consecutive read-only calls in one turn`;
+    case "turn-tools": return `loop guard, more than ${count} read-only calls in one turn`;
+    case "turn-refusals": return `loop guard, ${count} refused calls in one turn`;
+  }
+}
+
+/** Reports a trip with its kind and count (`cpd session report`: one `loop-guard-trip` Event, and for a Lead the Manager's wake, in one transaction). */
+export function reportTrip(host: Host, r: Run, kind: TripKind, count: number): void {
+  const id = r.id ?? host.env.CPD_SESSION;
+  if (id === undefined) return;
+  const message = `Session ${id} tripped: ${tripText(kind, count)}. It waits for the User's message or for cpd session resume ${id}.`;
+  const args = ["session", "report", "--what", "loop guard", "--code", "loop_guard_trip", "--message", message, "--details", JSON.stringify({ kind, count }), "--session", id];
+  host.call(args).catch((e) => host.deliver("reporting the loop-guard trip", e));
+}
+
 /** L4: the breaker trips. */
-function trip(host: Host, r: Run, at: number): void {
+function trip(host: Host, r: Run, at: number, kind: TripKind, count: number): void {
   holdTrip(r);
   host.pi.appendEntry(ENTRY_TYPE, { tripped: true, at, turns: r.turnStarts.length });
+  reportTrip(host, r, kind, count);
   host.refresh(r);
 }
 
@@ -102,7 +125,7 @@ export function toolCallGuard(host: Host, call: { toolName: string; input: unkno
   const reason = r.totalCalls > TURN_TOOL_LIMIT ? TOTAL_CALLS_REASON : r.readStreak > READ_STREAK_LIMIT ? READ_STREAK_REASON : undefined;
   if (reason === undefined) return undefined;
   r.turnRefusals += 1;
-  if (r.turnRefusals >= TURN_REFUSAL_TRIP && !r.tripped) trip(host, r, (host.options.now ?? Date.now)());
+  if (r.turnRefusals >= TURN_REFUSAL_TRIP && !r.tripped) trip(host, r, (host.options.now ?? Date.now)(), "turn-refusals", TURN_REFUSAL_TRIP);
   return reason;
 }
 
@@ -125,7 +148,7 @@ export function registerLoopGuard(host: Host): void {
     }
     const now = (host.options.now ?? Date.now)();
     r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
-    if (!r.tripped && r.turnStarts.length > r.info.loopGuardTurns) trip(host, r, now);
+    if (!r.tripped && r.turnStarts.length > r.info.loopGuardTurns) trip(host, r, now, "inter-turn", r.info.loopGuardTurns + 1);
   });
   host.pi.on("agent_end", function loopGuardAgentEnd() {
     const r = host.run;

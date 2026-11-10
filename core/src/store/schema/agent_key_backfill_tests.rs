@@ -242,6 +242,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261108T0800-bug-record",
             "20261109T1200-test-replacement",
             "20261109T1804-workflow-repair",
+            "20261109T1900-loop-guard-trip",
             "20261109T2108-bug-protocol-breach",
             "20261110T0121-quota-cause",
         ]

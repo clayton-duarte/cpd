@@ -35,6 +35,7 @@ mod phi_label_tests;
 mod ports_tests;
 mod reload;
 mod report;
+pub(crate) use report::loop_guard_trip_text;
 mod resolve;
 #[cfg(test)]
 mod resolve_tests;
@@ -241,6 +242,9 @@ pub struct SendArgs {
     /// The surface the message was submitted from: `tui` or `webui` (Plan ui-origin)
     #[arg(long, value_name = "origin")]
     origin: Option<String>,
+    /// The per-boot WebUI token (`$CPD_HOME/run/webui-token`): required with `--origin webui`, checked before any write
+    #[arg(long, value_name = "token")]
+    webui_token: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
