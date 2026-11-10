@@ -64,7 +64,7 @@ describe('boot', () => {
     const order = s.log.filter((l) => !l.startsWith('setName') && l !== 'whenReady' && l !== 'window' && l !== 'initMode');
     expect(order).toHaveLength(5);
     expect(order.slice(0, 4)).toEqual(['registerIpc', 'registerWebuiIpc', 'startAutoUpdate', 'startServices']);
-    expect(order[4]).toMatch(/^loadFile:/);
+    expect(order[4]).toMatch(/^loadDevUrl:http:\/\/localhost:3333$/);
   });
   it('boot starts services only when the bootstrap is ready', async () => {
     const s = setup({ state: 'failed' });
@@ -78,11 +78,11 @@ describe('boot', () => {
     expect(s.log).toContain('loadDevUrl:http://localhost:5173/electron.html');
     expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
   });
-  it('boot loads the built renderer in production even when a dev URL is set', async () => {
+  it('boot loads http://localhost:3333 in production even when a dev URL is set', async () => {
     const s = setup({ env: { CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
     await boot(s.deps);
-    expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
-    expect(s.log.some((l) => l.startsWith('loadDevUrl:'))).toBe(false);
+    expect(s.log.filter((l) => l.startsWith('loadDevUrl:'))).toEqual(['loadDevUrl:http://localhost:3333']);
+    expect(s.log.some((l) => l.startsWith('loadFile:'))).toBe(false);
   });
   it('boot loads the dev URL in preview mode', async () => {
     const s = setup({ env: { CPD_MODE: 'preview', CPD_CHECKOUT: '/w', CPD_ELECTRON_DEV_URL: 'http://localhost:5173/electron.html' } });
@@ -203,13 +203,13 @@ describe('boot', () => {
     await boot(s.deps);
     expect(s.log.filter((l) => l === 'initMode')).toHaveLength(1);
     expect(s.log.indexOf('initMode')).toBeGreaterThan(s.log.indexOf('window'));
-    expect(s.log.indexOf('initMode')).toBeLessThan(s.log.findIndex((l) => l.startsWith('loadFile:')));
+    expect(s.log.indexOf('initMode')).toBeLessThan(s.log.findIndex((l) => l.startsWith('loadDevUrl:')));
   });
   it('boot does not apply the mode when whenReady resolves', async () => {
     const s = setup();
     await boot(s.deps);
-    const order = s.log.filter((l) => ['whenReady', 'window', 'initMode'].includes(l) || l.startsWith('loadFile:'));
-    expect(order).toEqual(['whenReady', 'window', 'initMode', 'loadFile:renderer/electron.html']);
+    const order = s.log.filter((l) => ['whenReady', 'window', 'initMode'].includes(l) || l.startsWith('loadDevUrl:'));
+    expect(order).toEqual(['whenReady', 'window', 'initMode', 'loadDevUrl:http://localhost:3333']);
   });
   it('always boots the production WebUI renderer', async () => {
     let created: BootWindow | undefined;
@@ -243,7 +243,7 @@ describe('boot', () => {
     const s = setup({ onWindow: (w) => (created = w), initMode: () => controller.init() });
     await expect(boot(s.deps)).resolves.toBeUndefined();
     expect(sent).toEqual(['webui']);
-    expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
+    expect(s.log.filter((l) => l.startsWith('loadDevUrl:'))).toEqual(['loadDevUrl:http://localhost:3333']);
     expect(removed).toEqual(['/h/run/ui-mode.json']);
   });
   it('packaged app handles SIGUSR1 by reloading without relaunch', async () => {
