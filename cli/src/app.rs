@@ -43,13 +43,16 @@ pub struct Args {
 
 pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if let Some(DesktopCommand::Release) = args.command {
-        let app = resolve()?;
+        let app = resolve_for_release()?;
         let url = app::release(ports, &app)?;
         return Ok(Output::success(json!({
-            "ok": true,
             "tag": "app-v0.1.0",
             "url": url,
         })));
+    }
+    if !args.preview && !args.reload && !args.off && !args.status {
+        let app = resolve_for_launch()?;
+        return run_plain_desktop(ports, &app);
     }
     let app = resolve()?;
     let tree = args.worktree.clone();
@@ -88,6 +91,71 @@ pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"action": action, "pid": launched.pid}),
     ))
+}
+
+fn run_plain_desktop(ports: &Ports, app: &App) -> Result<Output, CpdError> {
+    let applications_dir = std::env::var_os("CPD_APPLICATIONS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/Applications"));
+    let app_bundle = applications_dir.join("CPD.app");
+
+    if app_bundle.exists() {
+        if let Some(pid) = app::reload(ports, app)? {
+            return Ok(Output::success(json!({
+                "action": "reloaded",
+                "pid": pid,
+            })));
+        }
+        let launched = app::launch_installed(ports, app, &app_bundle)?;
+        let action = match launched.action {
+            LaunchAction::Launched => "launched",
+            LaunchAction::Reloaded => "reloaded",
+        };
+        return Ok(Output::success(json!({
+            "action": action,
+            "pid": launched.pid,
+        })));
+    }
+
+    // When missing from /Applications, download and install with gh, clear quarantine, and open
+    app::install_and_open_release(ports, &applications_dir)?;
+    Ok(Output::success(json!({
+        "action": "installed",
+    })))
+}
+
+fn resolve_for_launch() -> Result<App, CpdError> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| CpdError::new(ErrorCode::Internal, "HOME is not set."))?;
+    let root = app::read_root(&home).unwrap_or_else(|_| PathBuf::from("."));
+    let preview_dir = std::env::var_os("CPD_PREVIEW_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/cpd-preview"));
+    Ok(App {
+        root,
+        cpd_home: CpdHome::from_env()?.root().to_path_buf(),
+        preview_dir,
+        macos: cfg!(target_os = "macos"),
+        home,
+    })
+}
+
+fn resolve_for_release() -> Result<App, CpdError> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| CpdError::new(ErrorCode::Internal, "HOME is not set."))?;
+    let root = app::read_root(&home).unwrap_or_else(|_| PathBuf::from("."));
+    let preview_dir = std::env::var_os("CPD_PREVIEW_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/cpd-preview"));
+    Ok(App {
+        root,
+        cpd_home: CpdHome::from_env()?.root().to_path_buf(),
+        preview_dir,
+        macos: cfg!(target_os = "macos"),
+        home,
+    })
 }
 
 /// The `App` of `app-root` and the environment, read once at this edge.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SHELL_VERSION } from "./version.ts";
+import { SHELL_VERSION, checkShellVersionBump } from "./version.ts";
 
 describe("fails when shell code changes without version bump", () => {
   it("fails when shell code changes without version bump", () => {
@@ -9,13 +9,6 @@ describe("fails when shell code changes without version bump", () => {
     // A shell change cannot ship under an old version.
     expect(SHELL_VERSION).toBeDefined();
 
-    // In stub state, checkShellVersionBump is not implemented and fails to catch changed files without bump.
-    type CheckVersionBump = (changedFiles: string[], versionBumped: boolean) => { ok: boolean; error?: string };
-    const checkShellVersionBump: CheckVersionBump = (_changedFiles, _versionBumped) => {
-      // Stub passes without verifying shell version bump
-      return { ok: true };
-    };
-
     const shellChangedFiles = ["web/src/electron/main.ts", "web/src/electron/watchdog.ts"];
     const versionBumped = false;
 
@@ -24,3 +17,4 @@ describe("fails when shell code changes without version bump", () => {
     expect(result.error).toContain("shell code changed without version bump");
   });
 });
+

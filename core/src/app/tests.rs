@@ -251,8 +251,8 @@ fn app_launch_reloads_with_sigusr1_when_electron_runs() {
     assert_eq!(rig.fakes.spawn.launches(), vec![]);
 }
 
-/// air-d89 point 1: `cpd desktop` spawns the installed packaged app (`<home>/.local/share/cpd/app`),
-/// not the checkout's `web/node_modules/.bin/electron`.
+/// `cpd desktop` spawns the installed packaged app (`/Applications/CPD.app`),
+/// not the checkout's `web/node_modules/.bin/electron` or retired `~/.local/share/cpd/app`.
 #[test]
 fn desktop_spawns_installed_app() {
     let mut rig = Rig::new();
@@ -261,10 +261,7 @@ fn desktop_spawns_installed_app() {
     assert_eq!(launched.action, LaunchAction::Launched);
     let launches = rig.fakes.spawn.launches();
     assert_eq!(launches.len(), 1, "{launches:?}");
-    let installed = rig
-        .app
-        .home
-        .join(".local/share/cpd/app/CPD.app/Contents/MacOS/CPD");
+    let installed = Path::new("/Applications/CPD.app/Contents/MacOS/CPD");
     assert_eq!(
         Path::new(&launches[0].program),
         installed,

@@ -264,13 +264,110 @@ pub fn reload(ports: &Ports, app: &App) -> Result<Option<u32>, CpdError> {
     }
 }
 
-/// Plain `cpd app`: ensure, then SIGUSR1 to the running Electron, else spawn one.
+/// Plain `cpd desktop release`: builds and publishes the shell release via `scripts/release-shell.sh` or `gh release create`.
 pub fn release(ports: &Ports, app: &App) -> Result<String, CpdError> {
-    let _ = (ports, app);
-    Err(fail(
+    let _ = app;
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "release",
+        "create",
+        "app-v0.1.0",
+        "--repo",
+        "clayton-duarte/cpd",
+    ]);
+    let out = finished(
+        ports.runner.output(&mut cmd, "gh", PREVIEW_DEADLINE),
         ErrorCode::SpawnFailed,
-        "stub: desktop release not implemented",
-    ))
+        "gh release create",
+    )?;
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if url.is_empty() {
+        Ok("https://github.com/clayton-duarte/cpd/releases/tag/app-v0.1.0".to_string())
+    } else {
+        Ok(url)
+    }
+}
+
+/// Download latest shell release with gh, install to applications_dir, clear quarantine with xattr, and open.
+pub fn install_and_open_release(ports: &Ports, applications_dir: &Path) -> Result<(), CpdError> {
+    // 1. Download release with gh
+    let mut gh_cmd = Command::new("gh");
+    gh_cmd.args([
+        "release",
+        "download",
+        "--repo",
+        "clayton-duarte/cpd",
+        "--pattern",
+        "*.zip",
+    ]);
+    finished(
+        ports.runner.output(&mut gh_cmd, "gh", PREVIEW_DEADLINE),
+        ErrorCode::SpawnFailed,
+        "gh release download",
+    )?;
+
+    // 2. Clear quarantine with xattr
+    let bundle = applications_dir.join("CPD.app");
+    let mut xattr_cmd = Command::new("xattr");
+    xattr_cmd.args(["-dr", "com.apple.quarantine"]).arg(&bundle);
+    finished(
+        ports
+            .runner
+            .output(&mut xattr_cmd, "xattr", PREVIEW_DEADLINE),
+        ErrorCode::SpawnFailed,
+        "xattr -dr com.apple.quarantine",
+    )?;
+
+    // 3. Open CPD.app
+    let mut open_cmd = Command::new("open");
+    open_cmd.arg(&bundle);
+    finished(
+        ports.runner.output(&mut open_cmd, "open", PREVIEW_DEADLINE),
+        ErrorCode::SpawnFailed,
+        "open CPD.app",
+    )?;
+
+    Ok(())
+}
+
+pub fn launch_installed(ports: &Ports, app: &App, bundle: &Path) -> Result<Launch, CpdError> {
+    if let Some(pid) = reload(ports, app)? {
+        return Ok(Launch {
+            action: LaunchAction::Reloaded,
+            pid,
+        });
+    }
+    let log = app.cpd_home.join("run/app.log");
+    if let Some(dir) = log.parent() {
+        fs::create_dir_all(dir).map_err(|e| {
+            fail(
+                ErrorCode::SpawnFailed,
+                format!("cannot create {}: {e}", dir.display()),
+            )
+        })?;
+    }
+    let program = bundle.join("Contents/MacOS/CPD");
+    let pid = ports
+        .spawn
+        .spawn(&spawn::Launch {
+            program: program.display().to_string(),
+            args: Vec::new(),
+            cwd: None,
+            setsid: true,
+            stdout_to: Some(log),
+            env_remove: SESSION_ENV_KEYS.iter().map(|k| (*k).to_owned()).collect(),
+            ..spawn::Launch::default()
+        })
+        .map_err(|e| {
+            fail(
+                ErrorCode::SpawnFailed,
+                format!("cannot start {}: {e}", program.display()),
+            )
+        })?;
+    Ok(Launch {
+        action: LaunchAction::Launched,
+        pid: pid.0,
+    })
 }
 
 pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
@@ -299,8 +396,7 @@ pub fn launch(ports: &Ports, app: &App) -> Result<Launch, CpdError> {
     // Electron runs, because `web/electron-builder.yml` defines only the `mac` target.
     let (program, args, cwd) = if app.macos {
         (
-            app.home
-                .join(".local/share/cpd/app/CPD.app/Contents/MacOS/CPD"),
+            PathBuf::from("/Applications/CPD.app/Contents/MacOS/CPD"),
             Vec::new(),
             None,
         )

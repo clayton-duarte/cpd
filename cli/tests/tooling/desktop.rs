@@ -127,7 +127,13 @@ fn desktop_opens_installed_app_in_applications() {
     // When /Applications/CPD.app exists, plain `cpd desktop` opens it or reloads it if running.
     // In shell form, it does not require app-root and opens /Applications/CPD.app (commands.md §14.4a).
     let fx = Fx::with_ports();
-    let run = fx.cpd(&["desktop"]);
+    let app_dir = fx.env.root().join("Applications");
+    std::fs::create_dir_all(app_dir.join("CPD.app")).unwrap();
+    let run = fx.cpd_with(
+        fx.env.root(),
+        &["desktop"],
+        &[("CPD_APPLICATIONS_DIR", app_dir.to_str().unwrap())],
+    );
     assert_eq!(run.exit, 0, "{run:?}");
     let json = run.json();
     assert!(
@@ -144,7 +150,13 @@ fn desktop_downloads_and_installs_shell_release_when_missing() {
     fx.fake_gh(Reply::ok("downloaded"));
     fx.fake("xattr", Reply::ok(""));
     fx.fake("open", Reply::ok(""));
-    let run = fx.cpd(&["desktop"]);
+    let empty_apps = fx.env.root().join("EmptyApplications");
+    std::fs::create_dir_all(&empty_apps).unwrap();
+    let run = fx.cpd_with(
+        fx.env.root(),
+        &["desktop"],
+        &[("CPD_APPLICATIONS_DIR", empty_apps.to_str().unwrap())],
+    );
     assert_eq!(run.exit, 0, "{run:?}");
     let json = run.json();
     assert_eq!(

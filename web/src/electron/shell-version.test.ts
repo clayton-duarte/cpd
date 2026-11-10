@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_SHELL_ABI_VERSION, SHELL_ABI_VERSION, SHELL_VERSION } from "./version.ts";
+import { MIN_SHELL_ABI_VERSION, SHELL_ABI_VERSION, SHELL_VERSION, checkAbi } from "./version.ts";
 
 describe("payload refuses incompatible shell version", () => {
   it("payload refuses incompatible shell version", () => {
@@ -18,15 +18,9 @@ describe("payload refuses incompatible shell version", () => {
     // Verify ABI compatibility logic:
     // When running shell ABI is lower than payload required ABI, load must be refused
     // and 'new CPD.app release needed' reported.
-    // In stub state, checkAbi function or compatibility gate is not implemented yet.
-    type CheckAbi = (shellAbi: number, payloadMinAbi: number) => { compatible: boolean; error?: string };
-    const checkAbi: CheckAbi = (_shell, _payloadMin) => {
-      // Stub returns compatible: true without error
-      return { compatible: true };
-    };
-
     const result = checkAbi(1, 2);
     expect(result.compatible).toBe(false);
     expect(result.error).toBe("new CPD.app release needed");
   });
 });
+
