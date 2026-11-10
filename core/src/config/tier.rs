@@ -12,7 +12,7 @@ use serde::{Serialize, Serializer};
 use crate::error::{CpdError, ErrorCode};
 
 /// A model letter: `J`ev-router, `G`, `H`aiku, `S`onnet, `O`pus (the `[model]` of a policy key).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum Letter {
     O,
     S,
@@ -117,6 +117,11 @@ impl Tier {
     /// Whether this is an `X` Tier (no effort).
     pub fn is_x(self) -> bool {
         self.effort.is_none()
+    }
+
+    /// The effort digit, or None for X.
+    pub fn effort(self) -> Option<u8> {
+        self.effort
     }
 
     /// `tier_invalid` (exit 2) when `s` is not `^[JGHSO]([0-4]|X)$`.
@@ -285,7 +290,7 @@ impl RoleTiers {
 }
 
 /// The Tiers a role may have: `floor` to `ceiling`, both valid rungs of the ladder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Range {
     pub floor: Tier,
     pub ceiling: Tier,

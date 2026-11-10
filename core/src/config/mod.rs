@@ -113,6 +113,8 @@ pub struct ExperimentalArgs {
 pub enum TiersCommand {
     /// Set the five Tier keys of config.toml (§14.2a)
     Set(SetTiersArgs),
+    /// List valid Tiers and role ranges (§14.2d)
+    List,
 }
 
 /// `cpd config tiers set` (§14.2a): the five Tiers.
