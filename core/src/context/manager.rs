@@ -186,7 +186,27 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let mut started = registered;
     let mut pane = manager.pane.clone();
     let mut window = None;
-    if needs_pane {
+    let live_pane = if needs_pane {
+        tmux.list_panes()?
+            .into_iter()
+            .find(|p| !p.dead && p.cpd_session.as_ref() == Some(&manager.id))
+    } else {
+        None
+    };
+    if let Some(p) = live_pane {
+        // A live pane for the Manager already exists in tmux; ensure store matches and do not start another window.
+        if manager.pane.as_deref() != Some(p.pane.as_str()) {
+            store.write("context manager", |tx| {
+                tx.execute(
+                    "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+                    [p.pane.as_str(), manager.id.as_str()],
+                )?;
+                Ok(())
+            })?;
+        }
+        pane = Some(p.pane.as_str().to_owned());
+        window = Some(p.window.as_str().to_owned());
+    } else if needs_pane {
         let spawn = lead_spawn(
             &home,
             &Ports::current(),

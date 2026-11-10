@@ -478,6 +478,22 @@ fn sessions(engine: &mut Engine) {
         if session.runner == "durable" && matches!(session.role.as_str(), "lead" | "manager") {
             continue;
         }
+        let live_session_pane = panes
+            .iter()
+            .find(|pane| !pane.dead && pane.cpd_session.as_ref() == Some(&session.id));
+        if let Some(live_pane) = live_session_pane {
+            // Tmux has a live pane carrying this Session's id. If the store had no pane or a different pane, update it and do not stop.
+            if session.pane.as_deref() != Some(live_pane.pane.as_str()) {
+                let _ = engine.store.write(SOURCE, |tx| {
+                    tx.execute(
+                        "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+                        [live_pane.pane.as_str(), session.id.as_str()],
+                    )?;
+                    Ok(())
+                });
+            }
+            continue;
+        }
         let found = session
             .pane
             .as_deref()
