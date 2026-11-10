@@ -110,7 +110,6 @@ test("a busy session with retier due switches before next request rather than st
   // Point 2 of commands.md §10.16 applies the switch before the provider request runs.
   await f.pi.fire("before_agent_start");
   await f.pi.fire("agent_start");
-  await waitFor("setModel before next request", () => f.pi.modelsSet.length > 0, WAIT);
   assert.deepEqual(f.pi.modelsSet, [{ provider: "p", id: "opus" }]);
   assert.deepEqual(f.pi.thinkingSet, ["medium"]);
 });
