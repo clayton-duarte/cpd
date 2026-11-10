@@ -91,12 +91,10 @@ pub(super) fn moved(
     window: &WindowId,
     place: &str,
 ) -> Result<(), CpdError> {
-    if row.tmux_pane.as_deref() != Some(pane.as_str()) {
-        tx.execute(
-            "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
-            [pane.as_str(), row.id.as_str()],
-        )?;
-    }
+    tx.execute(
+        "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+        [pane.as_str(), row.id.as_str()],
+    )?;
     let kind = if row.role == Role::Manager {
         "Manager"
     } else {
@@ -360,14 +358,18 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     env.store.write("session open", |tx| {
         if let (Some(other), true) = (&displaced, slot.dead) {
             // Its pane is gone: what E2 writes for it (§3.6), before the Lead's new pane is recorded.
-            let why = format!("its pane {} is dead", slot.pane);
-            pane_gone(
-                tx,
-                &other.id,
-                other.state.as_str(),
-                other.tmux_pane.as_deref(),
-                &why,
-            )?;
+            // If the displaced Session is the same Session being opened (e.g. its dead pane was in the slot
+            // and it was resumed in a new window), do not clear its pane.
+            if other.id != lead.id {
+                let why = format!("its pane {} is dead", slot.pane);
+                pane_gone(
+                    tx,
+                    &other.id,
+                    other.state.as_str(),
+                    other.tmux_pane.as_deref(),
+                    &why,
+                )?;
+            }
         }
         moved(tx, &lead, &pane, &slot.window, "chat")?;
         tx.execute(
@@ -691,8 +693,14 @@ pub(crate) fn start_parked(
 ) -> Result<Option<PaneId>, CpdError> {
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    for dead in tmux
-        .list_panes()?
+    let panes = tmux.list_panes()?;
+    if panes
+        .iter()
+        .any(|p| !p.dead && p.cpd_session.as_ref() == Some(&row.id))
+    {
+        return Ok(None);
+    }
+    for dead in panes
         .iter()
         .filter(|p| p.dead && p.cpd_session.as_ref() == Some(&row.id))
     {
