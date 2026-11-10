@@ -223,11 +223,7 @@ fn install_refuses_payload_needing_newer_shell() {
     // Simulate checkout payload requiring newer shell ABI (e.g. ABI 99)
     let version_file = rig.install.root.join("web/src/electron/version.ts");
     fs::create_dir_all(version_file.parent().unwrap()).unwrap();
-    fs::write(
-        &version_file,
-        "export const MIN_SHELL_ABI_VERSION = 99;\n",
-    )
-    .unwrap();
+    fs::write(&version_file, "export const MIN_SHELL_ABI_VERSION = 99;\n").unwrap();
     let (exit, stderr) = rig.run();
     assert_eq!(exit, 1, "incompatible payload should refuse install");
     assert!(
