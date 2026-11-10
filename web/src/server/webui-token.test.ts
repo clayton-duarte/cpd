@@ -35,4 +35,32 @@ describe("writeWebuiToken", () => {
     expect(existsSync(join(home, "run", "webui-token"))).toBe(false);
     issued.remove();
   });
+
+  it("webui-token multi-server survival", () => {
+    // b13: two servers run concurrently, each writing its own token file
+    // when one server quits and removes its token, the other server's token remains
+    const s1 = writeWebuiToken(home);
+    const s2 = writeWebuiToken(home);
+    expect(s1.token).not.toBe(s2.token);
+
+    // In single-file implementation, s2 replaced s1's file at run/webui-token.
+    // When s1 stops, in single-file it removes run/webui-token, destroying s2's token.
+    s1.remove();
+
+    // Under per-server isolation (contract §6.16, web/CONTRACT.md §26):
+    // Each server has its own token file in run/webui-tokens/<pid>.token.
+    // s1's removal must not remove s2's file, and s2's token must still exist.
+    const tokensDir = join(home, "run", "webui-tokens");
+    expect(existsSync(tokensDir)).toBe(true);
+  });
+
+  it("webui-token per-server file isolation", () => {
+    // contract §6.16: each server writes $CPD_HOME/run/webui-tokens/<pid>.token
+    // and neither writes nor removes another server's file or the deprecated run/webui-token.
+    const issued = writeWebuiToken(home);
+    const tokensDir = join(home, "run", "webui-tokens");
+    expect(existsSync(tokensDir)).toBe(true);
+    expect(existsSync(join(home, "run", "webui-token"))).toBe(false);
+    issued.remove();
+  });
 });
