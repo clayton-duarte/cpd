@@ -240,4 +240,18 @@ describe('boot', () => {
     expect(s.log.filter((l) => l.startsWith('loadFile:'))).toEqual(['loadFile:renderer/electron.html']);
     expect(removed).toEqual(['/h/run/ui-mode.json']);
   });
+  it('packaged Electron app relaunches and exits on SIGUSR1', async () => {
+    const s = setup();
+    const relaunch = vi.fn();
+    const exit = vi.fn();
+    (s.deps.app as Record<string, unknown>)['isPackaged'] = true;
+    (s.deps.app as Record<string, unknown>)['relaunch'] = relaunch;
+    (s.deps.app as Record<string, unknown>)['exit'] = exit;
+    await boot(s.deps);
+    await Promise.resolve(s.handlers['SIGUSR1']?.());
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(s.log).not.toContain('reloadServer');
+  });
 });
+
