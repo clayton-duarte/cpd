@@ -673,7 +673,15 @@ async function main(): Promise<void> {
   };
 
   await boot({
-    app: { setName: (name) => app.setName(name), whenReady: () => app.whenReady().then(prepare) },
+    app: {
+      setName: (name) => app.setName(name),
+      whenReady: () => app.whenReady().then(prepare),
+      get isPackaged() {
+        return app.isPackaged;
+      },
+      relaunch: () => app.relaunch(),
+      exit: (code) => app.exit(code),
+    },
     initMode,
     BrowserWindow: CpdWindow,
     powerMonitor,

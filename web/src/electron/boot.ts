@@ -8,7 +8,13 @@ export interface BootWindow {
   webContents: { isDestroyed(): boolean; reloadIgnoringCache(): void };
 }
 export interface BootDeps {
-  app: { setName(name: string): void; whenReady(): Promise<unknown> };
+  app: {
+    setName(name: string): void;
+    whenReady(): Promise<unknown>;
+    isPackaged?: boolean;
+    relaunch?(): void;
+    exit?(code?: number): void;
+  };
   BrowserWindow: new (options: { title: string; [key: string]: unknown }) => BootWindow;
   powerMonitor: unknown;
   process: { on(signal: string, handler: () => void): unknown };
@@ -54,6 +60,11 @@ export async function boot(deps: BootDeps): Promise<void> {
     await deps.initMode(win);
     mark('initMode-done');
     deps.process.on('SIGUSR1', async () => {
+      if (deps.app.isPackaged === true) {
+        deps.app.relaunch?.();
+        deps.app.exit?.(0);
+        return;
+      }
       try {
         await deps.reloadServer();
       } catch (error) {
