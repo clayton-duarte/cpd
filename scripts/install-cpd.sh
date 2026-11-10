@@ -27,5 +27,12 @@ if [ "$(uname -s)" = "Darwin" ] && [ -f "$root/web/electron-builder.yml" ]; then
   rm -rf "$app_dir"
   mkdir -p "$app_dir"
   cp -R "$bundle" "$app_dir/"
+  health="${CPD_HOME:-$HOME/.cpd}/run/preview-health.json"
+  if [ -f "$health" ]; then
+    rpid=$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$health" | sed -n '1p')
+    if [ -n "$rpid" ] && env kill -0 "$rpid" 2>/dev/null; then
+      env kill -USR1 "$rpid" 2>/dev/null || true
+    fi
+  fi
 fi
 

@@ -461,6 +461,22 @@ fn watch_stops_on_sighup_with_one_watch_stopped() {
 }
 
 #[test]
+fn migrate_scratch_succeeds_without_config() {
+    let env = TestEnv::new();
+    let cpd_home = env.cpd_home();
+    let config = cpd_home.join("config.toml");
+    if config.exists() {
+        fs::remove_file(config).unwrap();
+    }
+    let policy = cpd_home.join("policy");
+    if policy.exists() {
+        fs::remove_dir_all(policy).unwrap();
+    }
+    let run = env.cpd(&["watch", "--check", "--migrate-scratch"]);
+    assert_eq!(run.exit, 0, "run failed: {:?}", run);
+}
+
+#[test]
 fn watch_refuses_unknown_flags_and_needs_its_config() {
     let fx = engine("");
     let run = fx.cpd(&["watch", "--bogus"]);

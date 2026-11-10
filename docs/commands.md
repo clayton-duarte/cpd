@@ -4177,6 +4177,9 @@ Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it p
 ```
 
 `"server"` is `"running"` or `"none"`. `cpd install` runs it with the new binary before it stops anything (§14.4, contract §3.7).
+
+**`--check --migrate-scratch` (internal; pro-d502, bugs b1 and b2).** Exclusively for migrating scratch database copies: the migration dry run of `cpd install` (§14.4, step 4b) is its only caller. It is not an interface of the User or an agent. It needs no `config.toml` and no `policy/host.toml` in the home it is given: it opens the store of `CPD_HOME` with `Store::open` and the default store busy timeout (`timeouts.store_busy_ms`, default 5000), so a scratch home holding only the copied `cpd.db` migrates without a `config_missing` refusal. It writes nothing else. Status: decided by pro-d502; as of this amendment `migrate_scratch` (`engine/src/watch/mod.rs`) still calls `Config::load` first, so a home without `config.toml` fails `config_missing` until the code change lands.
+
 **`--mark-restart` (internal; hs-d471).** What `cpd install` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
 
 | Precondition | Code | Exit |

@@ -185,11 +185,13 @@ pub struct Args {
     mark_restart: bool,
 }
 
+/// The default SQLite busy timeout in milliseconds (commands.md §12 `--check --migrate-scratch`, contract §4.2).
+const DEFAULT_STORE_BUSY_MS: u64 = 5000;
+
 /// `watch --check --migrate-scratch`: opens the store of `CPD_HOME`, which migrates it. Only for a scratch copy.
 fn migrate_scratch() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
-    let config = cpd_core::config::Config::load(&home)?;
-    cpd_core::store::Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    cpd_core::store::Store::open(&home, DEFAULT_STORE_BUSY_MS)?;
     Ok(Output::success(serde_json::json!({})))
 }
 
