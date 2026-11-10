@@ -8,6 +8,11 @@ describe("toArgv", () => {
       .toEqual(["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]);
   });
 
+  it("context.manager builds the context manager argv with --context and --by-user", () => {
+    expect(toArgv({ kind: "context.manager", contextId: "ctx-1" }))
+      .toEqual(["context", "manager", "--context=ctx-1", "--by-user"]);
+  });
+
   it("session.send carries --webui-token only when it has one (contract §6.16)", () => {
     const send = { kind: "session.send", sessionId: "s1", text: "hi", unblocks: "u", origin: "webui" } as const;
     expect(toArgv(send)).toEqual(["session", "send", "s1", "--origin", "webui", "--unblocks", "u", "--", "hi"]);

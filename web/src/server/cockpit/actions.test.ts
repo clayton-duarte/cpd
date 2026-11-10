@@ -3,9 +3,9 @@ import type { Cpd } from "./cli.ts";
 import { runAction } from "./actions.ts";
 import { WebError } from "../../protocol/domain.ts";
 
-function fakeCpd(reply: () => Promise<Record<string, unknown>> = async () => ({ ok: true, done: true })): { cpd: Cpd; calls: (readonly string[])[] } {
+function fakeCpd(reply: (args: readonly string[]) => Promise<Record<string, unknown>> = async () => ({ ok: true, done: true })): { cpd: Cpd; calls: (readonly string[])[] } {
   const calls: (readonly string[])[] = [];
-  return { calls, cpd: { json: async (args) => { calls.push(args); return reply(); } } };
+  return { calls, cpd: { json: async (args) => { calls.push(args); return reply(args); } } };
 }
 
 // strict fake: `plan show` answers workflows[]; `pr poll` (a GitHub GraphQL poll) is a failure
@@ -204,6 +204,21 @@ describe("tree menu actions", () => {
     const out = await runAction(cpd, { kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" });
     expect(calls).toEqual([["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]]);
     expect(out).toEqual({ ok: true });
+  });
+
+  it("context.new runs context new then context manager sequentially and returns manager session", async () => {
+    const managerReply = { manager: { session: "ctx-1:manager" }, started: true };
+    const { cpd, calls } = fakeCpd(async (args) => {
+      if (args[0] === "context" && args[1] === "new") return { context: { id: "ctx-1" } };
+      if (args[0] === "context" && args[1] === "manager") return managerReply;
+      return { ok: true };
+    });
+    const out = await runAction(cpd, { kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" });
+    expect(calls).toEqual([
+      ["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"],
+      ["context", "manager", "--context=ctx-1", "--by-user"],
+    ]);
+    expect(out).toEqual(managerReply);
   });
 
   it("error.report sends the report to the bare Context id with unblocks", async () => {
