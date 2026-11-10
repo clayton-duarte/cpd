@@ -28,6 +28,12 @@ A prototype is a quick way to preview a visual change in the live cockpit before
 
 5. **Real implementation.** An approved change is built through the TDD template on main's code: docs, red tests that pin the exact rows, implementation, then open (hs-d341).
 
+## WebUI ports: production 3333, preview 33333
+
+(pro-d541, pro-d542, pro-d543; Plan `webui-ports`)
+
+_Skeleton: the section is filled in by Attempt web-docs-a1._
+
 ## Previewing the web UI
 
 (pro-d34)
