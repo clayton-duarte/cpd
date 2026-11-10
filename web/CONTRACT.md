@@ -1629,6 +1629,8 @@ export function PlanReviewCard(props: { dialog: Extract<Dialog, { method: "cpd_p
 
 ### 6.11 app `web/src/ui/App.tsx`, `ChatPane.tsx`, `web/src/main.tsx`
 
+> **Superseded by 22 (Plan `webui-router`) for selection:** the Wiring below that calls `connection.selectSession` or `connection.selectPlan` from a UI component, the sessionStorage restore and save, and the follow-the-Lead effect are replaced by the route (22.3 to 22.5). Each agent is a route; the middle column is the route `Outlet`.
+>
 > **Superseded by 10.5 and 10.7:** `app.css` is no longer only "the Shell grid, side-by-side preview, diff colours, disabled styling": it also carries the structural scroll CSS of 10.5; `App` subscribes with separate selectors and wraps `ContextTree`, `PlanView` and `Inbox` in `memo` (10.7).
 
 ```ts
@@ -2297,25 +2299,99 @@ Grounding: `$CPD_HOME/run/status-workers/explore/scout-tui-status.md`, `scout-we
 
 ## 22. WebUI navigation on TanStack Router: every agent is a route (Plan `webui-router`)
 
-Normative. Skeleton; sections below are filled in by Job `web-docs` (attempt `web-docs-a1`).
+Normative. Decided by Plan `webui-router` (decisions D1 to D3; assumptions A1 to A6; Context records pro-d92, pro-d345, pro-d506, pro-d508, pro-d509, pro-d510, pro-d511). Grounding: `run/webui-router/explore/` (`research-tanstack-router.md`, `scout-agent-key.md`, `scout-web-layout.md`, `scout-chat-mentions.md`, `scout-electron-load.md`, `scout-web-tests.md`).
 
-### 22.1 Router and history
-TBD.
+State at HEAD `c0178ee5f`, verified by grep: no router is imported in `web/src`; `react-router-dom` 7.18.5 is declared in `web/package.json` and imported nowhere; `core/src/agent_key.rs` holds the Rust `AgentKey` (Manager, Lead, Worker; `MAX_LEN` 98); `web/src` has no TypeScript agent-key parser.
+
+This section supersedes 6.2 (selection as store state written by `connection.selectSession` and `selectPlan`), the Wiring of 6.11 and DESIGN 3e, where they differ (22.5).
+
+### 22.1 Dependency and history
+
+- `@tanstack/react-router` is pinned to exactly `1.170.46` in `web/package.json`, with no range (A1; `npm view` confirms it is the latest). It is the only router dependency: the declared, unused `react-router-dom` is removed when the pin is added.
+- The router uses `createHashHistory()` (D2, A6). Agent URLs are `#/a/...`. The `file://` entry, the asar path, the Vite dev server and the preview server all serve the same entry; a fragment is not a file path, so no server rewrite rule is needed.
+- Not chosen. Memory history: its route is lost on every reload, and SIGUSR1 reloads the renderer. Browser history: on `file://` the `pathname` is an absolute filesystem path, so `pushState('/x')` resolves to `file:///x`, which does not exist. A plain `<a href>` would also reach the will-navigate guard of `src/electron/main.ts:633-637`; that Chromium behaviour is unverified in this repo.
+- The router is created in `web/src/ui/router.tsx` (planned, Job `web-tests`) with `createRouter({ routeTree, history: createHashHistory() })`, and it is registered through `declare module '@tanstack/react-router'`.
 
 ### 22.2 Agent routes
-TBD.
 
-### 22.3 Root layout and the middle-column outlet
-TBD.
+| Agent | Agent key (docs/contract.md "Agent key") | Route | Route id |
+|---|---|---|---|
+| Manager | `<context>` | `/a/$context` | `agent-manager` |
+| Lead | `<context>:<plan>` | `/a/$context/$plan` | `agent-lead` |
+| Worker | `<context>:<plan>:<job>` | `/a/$context/$plan/$job` | `agent-worker` |
+| (none) | | `/` | `index` |
 
-### 22.4 Selection navigates through the router
-TBD.
+- The path after `/a` is the agent key with each `:` written as `/`. The three path parameters are the three parts of the key.
+- The grammar is the one of docs/contract.md, with no second definition (A5): Context `^[a-z][a-z0-9-]{1,39}$`, Plan `^[a-z][a-z0-9-]{1,23}$`, Job `^[a-z][a-z0-9-]{0,31}$`, separator `:`, at most 98 characters. The colon count gives the role: 0 is a Manager, 1 a Lead, 2 a Worker (A5). The route id names the role; no route carries a role parameter.
+- One web parser: `web/src/ui/agentKey.ts` (planned, Job `web-tests`). It parses a key string into `{kind, context, plan?, job?}` or fails. The route `params.parse` of each agent route uses it, and so does the chat mention tokenizer (22.8). The Rust `AgentKey` is the server's parser; the contract is the one place both are defined.
+- A parameter that fails the parser is a not-found (22.7), never an exception.
+- Matching is by grammar only. Whether the key names a live agent is a separate step (22.3).
+- The route tree is flat: each agent route is a direct child of the root route. The URL is hierarchical; the tree is not nested, so that a switch from one agent to another never remounts a parent route component (22.3).
 
-### 22.5 Not-found recovery
-TBD.
+### 22.3 Resolution, the root layout and the middle-column outlet
+
+- **Resolution.** An agent route resolves to a session id by its key, looked up in the cockpit read model (`ContextTreeModel`, 5.1): a Manager is the Context's live Manager session; a Lead is the Plan's `leadSessionId` session; a Worker is the live Worker session of that Job (every Attempt is the Job's Worker, one live at a time). The session view (6.2) is derived from the resolved id; it is not stored as a selection.
+- **Pending.** Before the first `cockpit.snapshot`, the tree is `null` and a route is pending: the middle column draws nothing for it, and it is not a not-found.
+- **Archive.** When the resolved session is archived, the archive navigation of 6.2 (`archiveNav.ts`) applies: a replace navigation to the archive target's route.
+- **Root layout.** The root route's component renders the Shell (DESIGN 3c, unchanged in DOM): the ContextTree on the left, the middle column as the route `Outlet`, the Inbox on the right, and the Status Bar.
+- **Permanent mount (A3).** The ContextTree and the Inbox are rendered by the root component, never by a child route. A route change re-renders the root but does not remount it, so the tree and the Inbox stay mounted across all navigation, not-found included. They receive the resolved ids as props, and their memo wrappers (6.11) keep streaming updates from re-rendering them.
+- **Middle column.** The `Outlet` renders the leaf route's middle-column content: the `/` prompt, a not-found card, or, for an agent route, the Plan pane (the Manager's `ManagerView` of its Context; a Lead's or a Worker's `PlanView` of its Plan) and the chat slot of the resolved session.
+- **Root empty state (A2).** `/` renders the prompt `Select an agent in the tree or the Inbox.` in the middle column. It is not a redirect and not an error.
+
+### 22.4 Chat state and transcript cache per session (A4)
+
+- The chat slot is keyed by the session id, so each session has its own chat instance.
+- The store keeps a per-session view (transcript window, `tailEpoch`, queue, pending rows, dialog, error, completion) for every session visited in the running app, and drops an entry when its session leaves the cockpit tree. Returning to a session shows its cached view at once; the server's tail window on attach then replaces it and re-pins the viewport (10.4).
+- The cache holds the view as it was at detach. A detached session receives no deltas (the connection applies only the attached session's messages, 6.2), so the cache is not live. This is a change: today `store.ts` drops the transcript on every selection and keeps only `completions` (6.2 `selectSession`). Job `web-impl` makes it.
+- "Virtual transcript caching" in A4 means this per-session state. The transcript is not virtualised (DESIGN-chat 2.9; `virtual.ts` is unused by `Transcript`), so no DOM is cached and the rows are rebuilt on switch.
+
+### 22.5 Selection navigates through the router
+
+- **One source of truth: the URL.** The route decides the selected agent. No component keeps its own selected-agent state. UI code does not call `connection.selectSession` or `connection.selectPlan` to select; the connection attaches and detaches the session that the route resolves to (22.4, 6.2 reconnect).
+- Every entry point navigates, through `navigate({ to, params })` or a `<Link>`:
+
+| Entry point (today) | Navigation |
+|---|---|
+| ContextTree, Context row (Manager) | `/a/$context` |
+| ContextTree, Plan row (Lead) | `/a/$context/$plan` |
+| ContextTree, Fork row | open: fork routes are undecided (22.9) |
+| Plan pane, select-manager button | `/a/$context` |
+| ManagerView, Plan card | `/a/$context/$plan` of the Plan's Lead |
+| Inbox row, click, Enter or Space (`selectRowSession`) | the route of the row's resolved owner session (its `SessionRef.key`); a row with no owner opens its URL, as today |
+| Inbox row menu, Go to Lead | the Lead's route |
+| Status Bar incident pill (6.11, 21) | the route of `incident.lead`; no Lead, no navigation |
+| Create actions (`selectCreated`, 6.2) | push the created session's route |
+| Archive navigation (6.2) | replace with the archive target's route |
+| Restore on load (`sessionStorage` `cpd.selection`) | removed: a fresh launch opens `/`; a reload keeps the fragment |
+| Save to `sessionStorage` | removed, as above |
+| Follow the active Lead's Plan (`App.tsx` effect) | removed: the Plan is part of the route |
+| Reconnect and `session_not_found` retry (6.2) | the connection re-attaches the route's resolved session; no navigation |
+
+- Toasts select nothing: the error toast's actions are `Send to …` and Dismiss (16.1). The breadcrumb is not a selection path: `web/src/ui/components/breadcrumb.tsx` is imported only by tests, and the header is removed (DESIGN 3a). No breadcrumb is migrated.
+- Enforcement is a test, not prose: web-tests `router.test.tsx` ("navigates route when selecting agent from tree inbox and manager view") drives each entry point and asserts the resulting route.
 
 ### 22.6 Electron and dev/preview
-TBD.
 
-### 22.7 Chat mention linkification
-TBD.
+- Production loads `renderer/electron.html` with `loadFile` (`src/electron/boot.ts:94-97`, `main.ts:708`), so the window opens at `#/` and the route is set by the app. Dev and preview load the Vite URL with `loadURL`; the hash works there unchanged. No main-process change is part of this section.
+- **SIGUSR1, unpackaged.** `reloadIgnoringCache()` (`boot.ts:76`) keeps the fragment, so the agent is restored after the reload.
+- **SIGUSR1, packaged.** `app.relaunch(); app.exit(0)` (`boot.ts:63-67`) starts from the entry with no fragment, so the route is lost and the app opens `/`. This is a known limit. Restoring it needs the fragment passed through `loadFile` options, which `BootDeps.loadFile` does not take today; that is not part of this section.
+- Unverified in this repo: that Electron's `will-navigate` does not fire for in-page hash changes. The claim comes from the Electron typings (`node_modules/electron/electron.d.ts:18605`). Job `web-impl` checks it with the Electron e2e harness before the change merges.
+
+### 22.7 Not-found recovery (D3)
+
+- **When.** (a) A parameter fails the agent-key parser (22.2). (b) After the first snapshot, the key resolves to no live agent (22.3). (c) No route matches the path: the root's `notFoundComponent` renders.
+- **Where.** In the middle column, through the `notFoundComponent` of the route that raises it, or of the root for case (c). The ContextTree and the Inbox stay mounted (22.3). It is a value rendered by the boundary, so it never reaches the app error boundary (`Root.tsx`, `ErrorBoundary name="App"`), and it is not an error toast.
+- **Recovery.** The card shows the key as it was typed and one button, `Go to <parent>`, that navigates to the parent key: a Worker goes to its Plan's Lead, a Lead to its Context's Manager, a Manager or an unmatched path to `/`. The parent's own resolution applies, so a parent that is also missing shows its own card with its own button.
+- The card's DOM is in DESIGN-panes 5 and the mention DOM in DESIGN-chat 7.
+
+### 22.8 Chat mention linkification
+
+- An agent mention in chat text renders as a TanStack `<Link>` to the agent's route, in every message role: user text, assistant text and thinking, cpd event and fold rows, and the prose of tool rows.
+- A mention is a maximal run of `[A-Za-z0-9:-]` in the text that (a) the agent-key parser accepts (22.2), and (b) names a live agent in the cockpit read model (22.3). A run that parses but names nothing stays plain text, so the Manager grammar, which matches every lowercase word, links only real Contexts.
+- Code (inline and fenced), tool output bodies, existing links and URLs are never linkified. A run next to `/`, `\` or `@` is not a mention.
+- The transcript's performance rests on the mechanisms of DESIGN-chat 2.9 and 10.4 (memoised segments and items, structural sharing, the 16 ms delta batch). The mention work adds no mounted node except one `<a>` per mention, and it runs once per text segment. This contract names no numeric budget; none exists in the docs, and this section does not invent one.
+
+### 22.9 Open points (not decided here)
+
+- **Fork agents.** A fork's name is free text and has no agent key (docs/contract.md "Agent key"), so no route addresses it. Options: a session-id route such as `/f/$sessionId`, or no route. Until the Lead decides, web-impl adds no fork route and the fork row's click does nothing new.
+- **Unverified:** the will-navigate behaviour (22.6), and the Chromium `file://` rules behind 22.1. Both are verified by the implementation Job, not here.
