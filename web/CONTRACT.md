@@ -2335,7 +2335,7 @@ This section supersedes 6.2 (selection as store state written by `connection.sel
 - **Archive.** When the resolved session is archived, the archive navigation of 6.2 (`archiveNav.ts`) applies: a replace navigation to the archive target's route.
 - **Root layout.** The root route's component renders the Shell (DESIGN 3c, unchanged in DOM): the ContextTree on the left, the middle column as the route `Outlet`, the Inbox on the right, and the Status Bar.
 - **Permanent mount (A3).** The ContextTree and the Inbox are rendered by the root component, never by a child route. A route change re-renders the root but does not remount it, so the tree and the Inbox stay mounted across all navigation, not-found included. They receive the resolved ids as props, and their memo wrappers (6.11) keep streaming updates from re-rendering them.
-- **Middle column.** The `Outlet` renders the leaf route's middle-column content: the `/` prompt, a not-found card, or, for an agent route, the Plan pane (the Manager's `ManagerView` of its Context; a Lead's or a Worker's `PlanView` of its Plan) and the chat slot of the resolved session.
+- **Middle column.** The Shell's `center` slot is the `Outlet`, which replaces the `plan` and `chat` props of 6.7. The leaf route renders the middle column's content: the `/` prompt, a not-found card, or, for an agent route, the plan/chat split (the Plan pane of the Manager's `ManagerView` of its Context, or a Lead's or a Worker's `PlanView` of its Plan, above the chat slot of the resolved session). The split's sizes must survive an agent switch (DESIGN 3j): the split is not persisted today, and whether TanStack remounts a leaf on a param change is unverified here.
 - **Root empty state (A2).** `/` renders the prompt `Select an agent in the tree or the Inbox.` in the middle column. It is not a redirect and not an error.
 
 ### 22.4 Chat state and transcript cache per session (A4)
@@ -2393,5 +2393,5 @@ This section supersedes 6.2 (selection as store state written by `connection.sel
 
 ### 22.9 Open points (not decided here)
 
-- **Fork agents.** A fork's name is free text and has no agent key (docs/contract.md "Agent key"), so no route addresses it. Options: a session-id route such as `/f/$sessionId`, or no route. Until the Lead decides, web-impl adds no fork route and the fork row's click does nothing new.
+- **Fork agents.** A fork's name is free text and has no agent key (docs/contract.md "Agent key"), so no route addresses it. Options: a session-id route such as `/f/$sessionId`, or no route. Until the Lead decides, a fork row has no route, so its click is an open point, not a settled behaviour: web-impl does not ship the fork row's navigation without that decision.
 - **Unverified:** the will-navigate behaviour (22.6), and the Chromium `file://` rules behind 22.1. Both are verified by the implementation Job, not here.
