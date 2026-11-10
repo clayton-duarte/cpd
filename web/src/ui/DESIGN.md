@@ -902,6 +902,8 @@ Not built: the Active section, `▾ N more` overflow rows (all rows render), agg
 
 ### 3e. `App.tsx` wiring
 
+> **Superseded in part by 3j (Plan `webui-router`):** the `onSelectSession`, `onSelectPlan` and sessionStorage wiring below is replaced by route navigation (CONTRACT 22.5). The memo wrappers and the `live` gating stay.
+
 File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newId?`), the store and connection creation, the `memo()` wrapping of `ContextTree`, `PlanView`, `Inbox`, the `live = cockpit.tree !== null` gating and `useCallback` handlers are **KEPT** (`AppMemo.test`: streaming deltas must not re-render those three panes).
 
 ```tsx
@@ -1101,6 +1103,18 @@ header[data-part=dataPart]   flex h-11 shrink-0 items-center gap-2.5 border-b bo
 | Inbox | `inbox-header` | false | `INBOX` heading | tier filters | DESIGN-panes 2 |
 
 - Collapsed Plan pane (pro-d84, A6; `app.css`): when `section[aria-label="Plan pane"][data-state="collapsed"]`, `[data-part="plan-body"]` (PlanView) and `[data-part="manager-body"]` (ManagerView) are hidden, and the bottom border of `title-row` and `manager-header` is transparent. Only the header shows, at the 44 px collapsed size (3c).
+
+### 3j. Root layout and the route outlet (Plan `webui-router`; CONTRACT 22)
+
+Files: `web/src/ui/router.tsx` (the route tree, planned), `web/src/ui/App.tsx` (the router wiring) and `web/src/ui/cockpit/Shell.tsx`. Decided, not built: the implementation is Job `web-impl`, the red tests are Job `web-tests`.
+
+- **Root route component.** It renders the Shell of 3c with the slots `tree` (the ContextTree), `inbox` (the Inbox) and `status` (the Status Bar) as today, and one new slot `center` (the route `<Outlet/>`), which replaces the `plan` and `chat` props. The three resizable columns, their 20/50/30 defaults and the double-click reset of 3c are unchanged.
+- **Permanent mount (A3).** The ContextTree and the Inbox are rendered by the root component, never by a child route. A navigation re-renders the root, so both panes keep their DOM nodes and their state across every route change, including not-found. Test: `router.test.tsx`, "preserves mounted context tree and inbox across route transitions", holds the DOM node of each pane across three navigations and asserts it is the same node.
+- **Middle column is the outlet.** The `center` panel holds `<Outlet/>`. The leaf route renders the content of 22.3: the `/` prompt (DESIGN-panes 5), the not-found card (DESIGN-panes 5), or for an agent route the plan/chat split of 3c (`Shell.tsx` lines 85-131, moved out of the Shell into the leaf's content): the Plan pane (the Manager's ManagerView, or a Lead's or a Worker's PlanView) above the chat slot.
+- **The split's sizes survive an agent switch.** Today they survive because the Shell never remounts (the sizes are not persisted; `Shell.tsx` only sets `defaultSize`). A switch of agent must not reset the 40/60 split. The rule is this paragraph. No test of Job `web-tests` names it, so the Lead decides whether to add one (suggested name: "keeps the plan and chat split size across an agent switch"). The mechanism is for `web-impl` to choose. Unverified: whether TanStack's `Outlet` remounts a leaf route when only its params change. The test decides, not this text.
+- **Selection is a URL.** No pane keeps its own selected agent. The tree's highlight (`selectedSessionId`, `selectedPlanId` props) and the middle column are read from the resolved route (CONTRACT 22.3 and 22.5). Every click that selected an agent today navigates instead (CONTRACT 22.5 table).
+- **Pending and resolution.** Before the first snapshot the middle column is empty for an agent route (no not-found card). After it, an unresolved key shows the not-found card (CONTRACT 22.7).
+- **Memo wrappers.** `ContextTree`, `PlanView` and `Inbox` keep their `memo()` wrappers (3e). The handlers passed to them are stable: they call `navigate` from a `useCallback`, so a route change re-renders a pane only when its own props change.
 
 ## 4. Amendments pro-d48..pro-d66: where each decision is contracted
 
