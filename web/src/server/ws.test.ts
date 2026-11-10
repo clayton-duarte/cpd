@@ -141,9 +141,9 @@ describe("ws server", () => {
     const h = harness();
     createWsServer(h.deps);
 
-    // An absent Origin, "null" and every loopback host are accepted (the desktop renderer's own
+    // An absent Origin, "null" and every loopback host on ports 3333 and 33333 are accepted (the desktop renderer's own
     // `file://` Origin is pinned by the next test).
-    const accepted = [NO_ORIGIN, request("null"), request("http://127.0.0.1:5173"), request("http://localhost:5173"), request("http://[::1]:5173")];
+    const accepted = [NO_ORIGIN, request("null"), request("http://127.0.0.1:3333"), request("http://localhost:33333"), request("http://[::1]:3333")];
     for (const req of accepted) {
       const socket = new FakeSocket();
       h.server.connect(socket, req);
