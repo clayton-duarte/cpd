@@ -6798,6 +6798,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read. The Tier model
   **No migration rewrites a stored Job or Attempt** whose Tier falls outside its range.
 - **Superseded** (not rewritten; they stay in §10): pro-d84 (the fixed Worker list), pro-d82 and hs-d554 (the fixed Worker range H0–H3, S0–S3 and its ladder), pro-d53 and pro-d83 (earlier Worker ranges), hs-d506 (the fixed Lead and Manager list), hs-d562 (every auxiliary `GX` only), pro-d139 and pro-d140 (the review Lead Tier `review_lead_tier`). Their ladder rule (hs-d791) carries over as the next rung above. The `open_tier` key is renamed `worker_tier`, and the Lead-of-review key is dropped (§8.1, §8.2).
 - `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …, G: {model, efforts: [..]}}}`, with `efforts` `[]` for a model with no efforts (for example `G` on a model whose levels are only `off`); `GX` is then the one valid Tier of `G`.
+- `cpd config tiers list` (commands.md §14.2a): prints the valid ladder Tiers (`tiers`) with their letter, effort and model, and each role's allowed range (`ranges`) with floor, ceiling and allowed rungs. Core is the single source of truth for the tier catalog, ladder order and role ranges; the WebUI queries this command and maintains no local copy of tier grammar or ladder constants (pro-d513, pro-d514).
 
 ## 10. Traceability
 

@@ -112,12 +112,44 @@ describe("settings", () => {
     ]);
   });
 
-  it("settings.read accepts catalog letters and efforts and rejects others", async () => {
-    const withTier = (key: string, value: string) => fake({ config: { ok: true, config: { ...config.config, [key]: value } }, "config experimental": experimental }).cpd;
-    for (const ok of ["M2", "K1", "L0", "P2", "A1", "JX", "OX"]) {
+  it("settings.read accepts catalog tiers from core and rejects unknown", async () => {
+    // Regression test and catalog validation:
+    // readSettings accepts worker_tier H3, manager_tier O3, and S4 when present in the catalog.
+    // readSettings rejects tiers not present in the catalog.
+    const catalog = {
+      ok: true,
+      tiers: [
+        { tier: "JX", letter: "J", effort: "X", model: "decide-model" },
+        { tier: "GX", letter: "G", effort: "X", model: "gemini" },
+        { tier: "H1", letter: "H", effort: "1", model: "haiku" },
+        { tier: "H3", letter: "H", effort: "3", model: "haiku" },
+        { tier: "S1", letter: "S", effort: "1", model: "sonnet" },
+        { tier: "S4", letter: "S", effort: "4", model: "sonnet" },
+        { tier: "O2", letter: "O", effort: "2", model: "opus" },
+        { tier: "O3", letter: "O", effort: "3", model: "opus" },
+      ],
+      ranges: {
+        decide: { floor: "JX", ceiling: "JX", allowed: ["JX"] },
+        auxiliar: { floor: "GX", ceiling: "GX", allowed: ["GX"] },
+        worker: { floor: "H1", ceiling: "S4", allowed: ["H1", "H3", "S1", "S4"] },
+        lead: { floor: "S1", ceiling: "O3", allowed: ["S1", "S4", "O2", "O3"] },
+        manager: { floor: "O2", ceiling: "O3", allowed: ["O2", "O3"] },
+      },
+    };
+    const withTier = (key: string, value: string) => fake({
+      config: { ok: true, config: { ...config.config, [key]: value } },
+      "config experimental": experimental,
+      "config tiers list": catalog,
+    }).cpd;
+
+    // Accepted because they are in the catalog (including H3, S4, O3)
+    for (const ok of ["H1", "H3", "S4"]) {
       expect((await readSettings(withTier("worker_tier", ok))).tiers.worker).toBe(ok);
     }
-    for (const bad of ["H3", "S4", "Z1", "H5", "h1", "H"]) {
+    expect((await readSettings(withTier("manager_tier", "O3"))).tiers.manager).toBe("O3");
+
+    // Rejected because they are not in the catalog (e.g. unknown letters M2, K1 or invalid efforts H5, Z1)
+    for (const bad of ["M2", "K1", "L0", "P2", "A1", "H5", "Z1", "H9", "foo"]) {
       await expect(readSettings(withTier("worker_tier", bad))).rejects.toMatchObject({ code: "cpd_malformed_json" });
     }
   });

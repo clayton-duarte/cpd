@@ -2458,3 +2458,21 @@ Normative. The status line of §23 ("not built") is superseded: the generator ex
 
 - Name clash, live: the three known violations of §24.3 are in the code now. Owner and order are a Lead decision.
 - `Tier` and `Effort` are not generated. Plan `webui-tier-efforts` cannot satisfy §24.1 until the generator exports them. Lead decision: which Job exports them.
+
+## 25. Core is single source of truth for tier catalog and grammar (Plan `webui-tier-efforts`; directives pro-d513, pro-d514; bug b6)
+
+Normative. Directives pro-d513 and pro-d514 decide the points below: core is the single source of truth for the tier catalog, valid rungs, ladder order, and role ranges. Web maintains no copy of tier grammar constants or local ladder math.
+
+### 24.1 Tier catalog read from core
+
+- Core provides `cpd config tiers list` (docs/commands.md §14.2a), outputting JSON with:
+  - `tiers`: array of valid Tier objects in ladder order with `tier`, `letter`, `effort`, `model`
+  - `ranges`: object mapping roles (decide, auxiliar, worker, lead, manager) to `{floor, ceiling, allowed: [tier, ...]}`
+- The web server (`web/src/server/cockpit/settings.ts`) queries the tier catalog from core and includes it in settings/wire data passed to WebUI.
+- `readSettings` validates configured role tiers solely by membership in the catalog returned by core, failing loud with `cpd_malformed_json` for unknown tiers.
+
+### 24.2 Deletion of local tier constants and ladder math in web
+
+- `web/src/protocol/tier.ts` exports no tier grammar constants (`MODEL_LETTERS`, `EFFORTS`, `TIER_COUNT`) or ladder math (`parseTier`, `tierIndex`, `tierAt`).
+- `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
+- Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.

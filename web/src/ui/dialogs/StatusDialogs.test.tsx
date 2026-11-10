@@ -193,7 +193,7 @@ it("the settings dialog lets the decide tier be edited by model and effort", () 
   const saveButton = (): HTMLButtonElement | undefined =>
     Array.from(body.querySelectorAll("button")).find((b) => b.textContent === "Save") as HTMLButtonElement | undefined;
   expect(saveButton()?.disabled).toBe(false);
-  expect(Array.from(effort.options).map((o) => o.value).sort()).toEqual(["0", "1", "2", "X"]);
+  expect(Array.from(effort.options).map((o) => o.value).sort()).toEqual(["0", "1", "2", "3", "4", "X"]);
   act(() => { effort.value = "2"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(saveButton()?.disabled).toBe(false);
   click(saveButton() ?? null);

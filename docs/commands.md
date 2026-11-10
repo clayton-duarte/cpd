@@ -4888,13 +4888,14 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 ```
 cpd config [--migrate]
 cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
+cpd config tiers list
 cpd config experimental [<feature> <on|off>]
 cpd config concurrency set <n>
 ```
 
 Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"`, and an unknown key or a non-bool value in `[experimental]` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-`config tiers set` (§14.2a) writes the four Tier keys; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
+`config tiers set` (§14.2a) writes the four Tier keys; `cpd config tiers list` (§14.2a) prints the valid Tiers in ladder order and the role ranges; `config experimental` (§14.2b) prints and sets the Experimental Features; `config concurrency set` (§14.2c) writes the machine-wide Attempt limit (`concurrency`, contract §8.2).
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive), then `worker-runner-to-experimental` (Plan `experimental-config`: the top-level `worker_runner = "durable"` becomes `durable_workers = true` in `[experimental]`, and `worker_runner = "pi"` is only dropped)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -4949,6 +4950,33 @@ The file is written atomically (a temporary file in the same directory, then a r
 ```
 
 `changed` lists the keys whose effective value changed, in the order `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`. When no value changes, `changed` is `[]` and `already` is `true`, and nothing is written (the file is not touched and its comment dates stay). `config` is the effective configuration after the write, as plain `cpd config` prints it (§14.2). Idempotence: yes, a rerun with the same four values writes nothing (`already`).
+
+#### `config tiers list`
+
+```
+cpd config tiers list
+```
+
+Lists all valid Tiers in ladder order and each role's range (contract §9 "Roles and ranges"). It reads the effective configuration and resolves the machine's models against pi's catalog.
+
+```json
+{"ok": true,
+ "tiers": [
+   {"tier": "JX", "letter": "J", "effort": "X", "model": "bifrost/vertex/gemini-3.8-flash"},
+   {"tier": "G0", "letter": "G", "effort": "0", "model": "bifrost/vertex/gemini-3.8-flash"},
+   {"tier": "GX", "letter": "G", "effort": "X", "model": "bifrost/vertex/gemini-3.8-flash"},
+   {"tier": "H1", "letter": "H", "effort": "1", "model": "bifrost/vertex/claude-haiku-5-5"}
+ ],
+ "ranges": {
+   "decide": {"floor": "JX", "ceiling": "JX", "allowed": ["JX"]},
+   "auxiliar": {"floor": "GX", "ceiling": "GX", "allowed": ["GX"]},
+   "worker": {"floor": "H3", "ceiling": "S3", "allowed": ["H3", "H4", "S0", "S1", "S2", "S3"]},
+   "lead": {"floor": "S3", "ceiling": "O3", "allowed": ["S3", "S4", "O0", "O1", "O2", "O3"]},
+   "manager": {"floor": "O3", "ceiling": "O4", "allowed": ["O3", "O4"]}
+ }}
+```
+
+Idempotence: yes; read-only. Callers: none, the User at a shell (§2); cockpit: yes (§2).
 
 ### 14.2b `config experimental`
 

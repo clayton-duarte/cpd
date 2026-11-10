@@ -1,7 +1,7 @@
 import { WebError } from "../../protocol/domain.ts";
 import { SETTINGS_ROLES, SETTINGS_SWITCHES, type SettingsChanges, type SettingsModel, type SettingsRole } from "../../protocol/cockpit.ts";
 import { toArgv, type TiersArgv } from "../cpd-argv.ts";
-import { formatTier, parseTier, type TierParts } from "../../protocol/tier.ts";
+import { formatTier, type TierParts } from "../../protocol/tier.ts";
 import type { Cpd } from "./cli.ts";
 
 /** `cpd config` key of each role Tier (scout-settings). */
@@ -19,12 +19,37 @@ const bad = (field: string): never => { throw new WebError("cpd_malformed_json",
 const obj = (v: unknown, field: string): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : bad(field);
 
-export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
+export async function readSettings(cpd: Cpd, options?: { loadCatalog?: boolean }): Promise<SettingsModel & { catalog?: unknown }> {
   const config = obj((await cpd.json(toArgv({ kind: "config.read" })))["config"], "config");
   const experimental = obj((await cpd.json(toArgv({ kind: "config.experimental.read" })))["experimental"], "experimental");
+
+  let catalog: Record<string, unknown> | null = null;
+  let catalogTiers: Set<string> | null = null;
+  if (options?.loadCatalog ?? true) {
+    try {
+      const rawCatalog = await cpd.json(["config", "tiers", "list"]);
+      if (rawCatalog && typeof rawCatalog === "object" && Array.isArray((rawCatalog as Record<string, unknown>)["tiers"])) {
+        catalog = rawCatalog as Record<string, unknown>;
+        catalogTiers = new Set(
+          ((rawCatalog as Record<string, unknown>)["tiers"] as Array<{ tier?: unknown }>).map((t) =>
+            typeof t?.tier === "string" ? t.tier : ""
+          )
+        );
+      }
+    } catch {
+      // not supported or absent
+    }
+  }
+
   const tier = (key: string): string => {
     const v = config[key];
-    return typeof v === "string" && parseTier(v) !== null ? v : bad(key);
+    if (typeof v !== "string" || v === "") return bad(key);
+    if (catalogTiers !== null) {
+      if (!catalogTiers.has(v)) return bad(key);
+    } else {
+      if (!/^[JGHSO]([0-4]|X)$/.test(v)) return bad(key);
+    }
+    return v;
   };
   // The decide Tier rides along when `cpd config` carries its key, like every other role's Tier.
   const decide = config[DECIDE_KEY] === undefined ? undefined : tier(DECIDE_KEY);
@@ -47,6 +72,7 @@ export async function readSettings(cpd: Cpd): Promise<SettingsModel> {
       failure_triage: flag("failure_triage"), turn_question_guard: flag("turn_question_guard"),
     },
     ...concurrency,
+    ...(catalog === null ? {} : { catalog }),
   };
 }
 
@@ -61,7 +87,7 @@ export async function saveSettings(cpd: Cpd, changes: SettingsChanges): Promise<
   const roles = TIERS_ROLES.filter((r) => changed[r] !== undefined);
   if (roles.length > 0) {
     // `cpd config tiers set` requires all five role flags (air-n37): send the changed Tiers over the current ones.
-    const current = await readSettings(cpd);
+    const current = await readSettings(cpd, { loadCatalog: false });
     const read = current.tiers as Readonly<Record<string, string | undefined>>;
     const tiers: TiersArgv = {
       decide: changed["decide"] ?? read["decide"] ?? DECIDE_DEFAULT,

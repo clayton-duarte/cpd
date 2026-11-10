@@ -153,6 +153,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd config tiers` | Set the five Tier keys of config.toml (§14.2a) | | |
 | `cpd config tiers set` | Set the five Tier keys of config.toml (§14.2a) | | yes |
+| `cpd config tiers list` | List valid Tiers and role ranges (§14.2d) | | yes |
 | `cpd config experimental` | Print or set the Experimental Features (§14.2b) | | yes |
 | `cpd config concurrency` | Set the machine-wide Attempt limit, `concurrency` (§14.2c) | | |
 | `cpd config concurrency set` | Set `concurrency` in config.toml (§14.2c) | | |
