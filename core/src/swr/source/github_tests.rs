@@ -181,6 +181,14 @@ impl Handler for World {
         for (i, repo, number) in pr_aliases(query) {
             let found = st.world.get(&(repo, number)).map(|p| {
                 let mut node = p.node();
+                if st.light_only {
+                    // An alias without `...Heavy` carries no heavy fields (real GitHub sends none unless selected).
+                    let at = query.find(&format!("p{i}: repository(")).unwrap();
+                    let selection = &query[at..][..query[at..].find("viewerDidAuthor").unwrap()];
+                    if !selection.contains("...Heavy") {
+                        node.as_object_mut().unwrap().remove("comments");
+                    }
+                }
                 node["viewerDidAuthor"] = json!(false);
                 node["viewerLatestReviewRequest"] = Value::Null;
                 node
@@ -345,17 +353,22 @@ fn gh_poll_makes_one_graphql_call_per_pass() {
     }
     rig.pass(0).unwrap();
     let queries = rig.graphql();
-    assert_eq!(queries.len(), 1, "one graphql call for twenty absent PRs");
+    assert_eq!(
+        queries.len(),
+        1,
+        "one graphql call for the absent PRs (at most ten aliases per pass)"
+    );
     let q = &queries[0];
     for part in [
         "viewer",
         "rateLimit",
         "authored: search",
         "reviews: search",
-        "p19: repository",
+        "p9: repository",
     ] {
         assert!(q.contains(part), "the document has `{part}`: {q}");
     }
+    assert!(!q.contains("p10: repository"), "ten aliases at most: {q}");
     assert_eq!(rig.fakes.runner.calls().len(), 1, "and no other gh call");
 }
 
@@ -397,10 +410,14 @@ fn gh_poll_selects_heavy_fields_only_for_moved_or_unhydrated_prs() {
     let queries = rig.graphql();
     assert_eq!(queries.len(), 1);
     let q = &queries[0];
-    assert!(
-        !mentions(q, 1),
+    // The cold pass (nothing known as listed) reads the unchanged PR 1 as absent: an alias, but never `...Heavy`.
+    assert_eq!(
+        q.matches("...Heavy").count(),
+        3,
         "an unchanged hydrated PR costs no heavy fields: {q}"
     );
+    let (_, one) = q.split_once("pullRequest(number: 1)").unwrap();
+    assert!(!one.split(" p").next().unwrap().contains("...Heavy"), "{q}");
     for n in [2, 3, 4] {
         assert!(mentions(q, n), "PR {n} is heavy-selected: {q}");
     }
@@ -419,7 +436,11 @@ fn gh_poll_hydrates_a_moved_pr_on_the_next_pass() {
     rig.state().world.insert(("acme/pay".into(), 1), moved);
 
     rig.pass(0).unwrap();
-    assert!(!mentions(&rig.graphql()[0], 1), "pass 1 sends no heavy");
+    // Cold: PR 1 is read as absent (an alias without `...Heavy`).
+    assert!(
+        !rig.graphql()[0].contains("...Heavy"),
+        "pass 1 sends no heavy"
+    );
     assert_eq!(
         rig.text("SELECT head_oid FROM pull_requests WHERE number = 1"),
         Some("b2".into()),
