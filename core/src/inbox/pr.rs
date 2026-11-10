@@ -30,10 +30,11 @@ pub enum Status {
     ReadyToMerge,
     InReview,
     Waiting,
+    BehindMain,
 }
 
 impl Status {
-    pub const ALL: [Status; 12] = [
+    pub const ALL: [Status; 13] = [
         Status::Draft,
         Status::Conflict,
         Status::Failing,
@@ -46,6 +47,7 @@ impl Status {
         Status::ReadyToMerge,
         Status::InReview,
         Status::Waiting,
+        Status::BehindMain,
     ];
 
     #[must_use]
@@ -63,6 +65,7 @@ impl Status {
             Status::ReadyToMerge => "ready to merge",
             Status::InReview => "waiting for peer review",
             Status::Waiting => "waiting",
+            Status::BehindMain => "behind main",
         }
     }
 
@@ -70,7 +73,9 @@ impl Status {
     pub fn urgency(self) -> Urgency {
         match self {
             Status::Draft | Status::Stacked => Urgency::Cyan,
-            Status::Conflict | Status::Failing | Status::ChangesRequested => Urgency::Red,
+            Status::Conflict | Status::Failing | Status::ChangesRequested | Status::BehindMain => {
+                Urgency::Red
+            }
             Status::Updating
             | Status::Fixing
             | Status::ChecksRunning
@@ -333,7 +338,8 @@ mod tests {
                 "ready for user review",
                 "ready to merge",
                 "waiting for peer review",
-                "waiting"
+                "waiting",
+                "behind main"
             ]
         );
         assert_eq!(Status::Stacked.urgency(), Urgency::Cyan);
