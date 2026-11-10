@@ -121,8 +121,18 @@ struct Outcome {
     done: Vec<PlanId>,
 }
 
+/// `pr poll`: resolves `$CPD_HOME` once, at the command's boundary, and hands it to [`poll_in`].
 pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open_with(ports)?;
+    poll_in(ports, &crate::home::CpdHome::from_env()?, args)
+}
+
+/// [`poll`] in `home`: the home is the caller's, never the process environment's, so a test's rig passes its own.
+pub(super) fn poll_in(
+    ports: &Ports,
+    home: &crate::home::CpdHome,
+    args: PollArgs,
+) -> Result<Output, CpdError> {
+    let mut env = Env::open_home_with(ports, home.clone())?;
     let polled = poll_prs(&mut env, args);
     if polled.is_err() {
         // pro-d468: a failed PR read never skips the deploy read; the PR error is the one reported.
@@ -1619,6 +1629,7 @@ mod due_reads_tests {
                 default_branch: None,
                 open_threads: vec![],
                 archived: false,
+                head_oid: None,
             },
             membership: Default::default(),
         }

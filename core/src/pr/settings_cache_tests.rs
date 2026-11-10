@@ -21,7 +21,7 @@ use crate::store::Store;
 
 use super::PollArgs;
 use super::merge::MergeArgs;
-use super::poll::poll;
+use super::poll::poll_in;
 
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -108,9 +108,6 @@ fn cold_rig() -> Rig {
         "UPDATE pull_requests SET mergeable = 'mergeable', merge_state = 'clean', checks = 'passed',
                 head_oid = '{HEAD}' WHERE number = 801;"
     ));
-    // `CpdHome::from_env` and `Env::open_with` read `$CPD_HOME`: the one variable these tests set, to the rig's temp
-    // dir (as `merge_uptodate_tests.rs`, `poll_tests.rs`).
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
     rig
 }
 
@@ -125,7 +122,7 @@ fn pause_github(rig: &Rig) {
 /// Runs `pr merge` on the rig's ports.
 fn merge(rig: &Rig) -> Result<Output, crate::error::CpdError> {
     Ports::scope(&rig.fakes.ports, || {
-        super::merge::merge(&rig.fakes.ports, merge_args())
+        super::merge::merge_in(&rig.fakes.ports, &rig.home, merge_args())
     })
 }
 
@@ -264,11 +261,11 @@ fn the_poll_fills_the_repo_settings_cache() {
     // poll cycle that fills the settings cache is a normal one.
     rig.sql("UPDATE pull_requests SET updated_at = NULL WHERE number = 801;");
     let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(PollGh));
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
 
     Ports::scope(&rig.fakes.ports, || {
-        poll(
+        poll_in(
             &rig.fakes.ports,
+            &rig.home,
             PollArgs {
                 plan: PlanArg { plan: None },
             },

@@ -2042,7 +2042,7 @@ fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
     sql(
         &mut store,
-        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', base_contained = 1 WHERE number = 7",
+        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', base_contained = 1, head_oid = 'h1' WHERE number = 7",
     );
     for (merge_state, want) in [
         ("clean", true),

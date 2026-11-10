@@ -875,6 +875,8 @@ pub struct PolledPr {
     pub open_threads: Vec<String>,
     /// GitHub's `isArchived` of the repository: the searches say `archived:false`, so only the direct read can find it true.
     pub archived: bool,
+    /// The fresh `headRefOid`, stored on every poll before any compare (pro-d470); `None` when the reply has none.
+    pub head_oid: Option<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -1228,6 +1230,7 @@ impl Reply<'_> {
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             merged_at: raw.merged_at,
+            head_oid: raw.head_ref_oid,
             open_threads: raw
                 .review_threads
                 .nodes
@@ -1647,7 +1650,7 @@ pub fn lookup(
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    let found = lookup_call(runner, cwd, prs, false, bots).map_err(|e| polled_call("lookup", e))?;
+    let found = lookup_call(runner, cwd, prs, true, bots).map_err(|e| polled_call("lookup", e))?;
     Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
@@ -2892,7 +2895,7 @@ const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergea
 /// a teammate's pull requests, whose merge state GitHub computes per node (the search cost ~9.0 s with it, ~3.5 s without).
 const PEER_LIGHT: &str = "fragment PeerLight on PullRequest { number state isDraft reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } }";
 
-const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } }";
+const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
 
 /// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
 /// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.

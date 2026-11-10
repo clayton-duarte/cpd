@@ -21,9 +21,9 @@ fn insert(store: &mut Store, number: i64, base: &str, default: &str, contained: 
             tx.execute(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks,
                                             created_at, changed_at, mergeable, merge_state, authored, review_requested,
-                                            base_ref, default_branch, archived, base_contained)
+                                            base_ref, default_branch, archived, base_contained, head_oid)
                  VALUES ('acme/pay', ?1, 'https://github.com/acme/pay/pull/' || ?1, 'T', 0, 'open', 'none', 'passed',
-                         'c', 'c', 'mergeable', 'clean', 1, 0, ?2, ?3, 0, ?4)",
+                         'c', 'c', 'mergeable', 'clean', 1, 0, ?2, ?3, 0, ?4, 'abc')",
                 rusqlite::params![number, base, default, contained],
             )?;
             Ok(())
