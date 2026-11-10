@@ -452,8 +452,8 @@ pub(super) fn first_screen() -> Vec<String> {
         " Tiers  the default of each role; its range follows",
         "     decide    JX ▾  default only",
         "     auxiliar  GX ▾  default only",
-        "     worker    H3 ▾  H3..S3",
-        "     lead      S4 ▾  S4..O2",
+        "     worker    H3 ▾  H3..S4",
+        "     lead      S4 ▾  S4..O3",
         "     manager   O3 ▾  O3..O4",
         "",
         " Experimental",
@@ -618,8 +618,8 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
             " Tiers  the default of each role; its range follows",
             "     decide    JX ▾  default only",
             "     auxiliar  GX ▾  default only",
-            "     worker    H3 ▾  H3..S3",
-            "   ▸ lead      S4 ▴  S4..O2",
+            "     worker    H3 ▾  H3..S4",
+            "   ▸ lead      S4 ▴  S4..O3",
             "               filter:",
             "               ( ) H4",
             "               ( ) S0",
@@ -635,7 +635,7 @@ fn an_open_list_is_drawn_inline_under_its_row_with_the_filter_line() {
         ])
     );
     // Esc closed the list only: the view is still open and the first screen is back, the focus on the lead row.
-    assert_eq!(run.snaps[1].rows()[13], "   ▸ lead      S4 ▾  S4..O2");
+    assert_eq!(run.snaps[1].rows()[13], "   ▸ lead      S4 ▾  S4..O3");
     assert!(run.snaps[1].rows()[11].starts_with("     auxiliar"));
 }
 

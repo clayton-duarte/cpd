@@ -94,6 +94,7 @@ fn picks_the_lowest_expected_cost_not_the_lowest_tier() {
     let rows = [
         row("docs", "H3", 40, 38, Some(0.48)),
         row("docs", "S1", 40, 40, Some(0.31)),
+        row("docs", "SX", 5, 5, Some(1.00)),
         row("docs", "S2", 5, 5, Some(1.00)),
     ];
     let got = recommend(&rows, 30, ladder());
@@ -259,6 +260,7 @@ fn query_counts_first_attempts_only() {
 fn expected_cost_adds_the_next_rungs_cost_scaled_by_the_failure_rate() {
     let rows = [
         row("impl", "S1", 310, 304, Some(0.2249)),
+        row("impl", "SX", 10, 10, Some(0.6605)),
         row("impl", "S2", 64, 63, Some(0.6605)),
         row("impl", "S3", 35, 35, Some(0.8365)),
     ];
@@ -283,11 +285,11 @@ fn a_tier_whose_next_rung_has_no_cost_is_not_advised() {
     assert!(qualifying(std::slice::from_ref(&s1), 30, ladder()).is_empty());
     assert!(recommend(std::slice::from_ref(&s1), 30, ladder()).is_empty());
 
-    let no_cost = [s1.clone(), row("test", "S2", 3, 3, None)];
+    let no_cost = [s1.clone(), row("test", "SX", 3, 3, None)];
     assert!(qualifying(&no_cost, 30, ladder()).is_empty());
     assert!(recommend(&no_cost, 30, ladder()).is_empty());
 
-    let with_cost = [s1, row("test", "S2", 3, 3, Some(0.5))];
+    let with_cost = [s1, row("test", "SX", 3, 3, Some(0.5))];
     let got = qualifying(&with_cost, 30, ladder());
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].tier, t("S1"));
@@ -332,12 +334,11 @@ fn roles(lead: &str) -> RoleTiers {
 fn advice_stays_inside_the_worker_range() {
     let catalog = worker_catalog();
     let range = catalog.range(Role::Worker, &roles("S4")).unwrap();
-    assert_eq!((range.floor, range.ceiling), (t("H3"), t("S3")));
+    assert_eq!((range.floor, range.ceiling), (t("H3"), t("S4")));
     let next = |tier| catalog.next_in(range, tier);
-    // Cheap and sure cells outside H3..S3 (below the floor, above the ceiling, another letter) are never advised.
+    // Cheap and sure cells outside H3..S4 (below the floor, above the ceiling, another letter) are never advised.
     let rows = [
         row("work", "H1", 100, 100, Some(0.01)),
-        row("work", "S4", 100, 100, Some(0.02)),
         row("work", "O2", 100, 100, Some(0.03)),
         row("work", "S2", 40, 40, Some(0.3)),
         row("work", "S3", 3, 3, Some(0.5)),
@@ -345,8 +346,8 @@ fn advice_stays_inside_the_worker_range() {
     let got = recommend_in(&rows, 30, range, next);
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].tier, t("S2"));
-    // The ceiling follows lead_tier: with lead_tier = S2 the range is H3..S1 and S2 is out.
-    let low = catalog.range(Role::Worker, &roles("S2")).unwrap();
+    // The ceiling follows lead_tier: with lead_tier = S1 the range is H3..S1 and S2 is out.
+    let low = catalog.range(Role::Worker, &roles("S1")).unwrap();
     assert_eq!((low.floor, low.ceiling), (t("H3"), t("S1")));
     let rows = [
         row("work", "S1", 40, 40, Some(0.3)),

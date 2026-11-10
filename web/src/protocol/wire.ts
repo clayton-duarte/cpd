@@ -1,3 +1,4 @@
+import { parseTierParts, type TierParts } from "./tier.ts";
 // Browser/server wire types (web/CONTRACT.md section 4). Types, plus the client-message parser (parseClientMessage).
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, IMAGE_MIME_TYPES, WebError, type Capabilities, type Completion, type CompletionScore, type ImageMime, type ConfigureChange, type Cursor, type Dialog, type DialogOutcome, type DialogResponse, type FooterStats, type ModelChoice, type QueuedSubmission, type SessionRef, type TranscriptItem, type WhenBusy, type Window, type WireError, type WireImage } from "./domain.ts";
 import { parseCockpitAction, type ActionOutput, type CockpitAction, type ContextTreeModel, type CostModel, type InboxModel, type LogRow, type PlanViewModel, type SettingsChanges, type SettingsModel, type StatusModel, SETTINGS_ROLES, SETTINGS_SWITCHES } from "./cockpit.ts";
@@ -137,20 +138,19 @@ function parseResponse(o: Obj): DialogResponse {
   throw bad("response method/outcome pair is not valid", "response");
 }
 
-// The Tier letters in ladder order, J first (contract §9, air-d113, air-d115, air-d120): J's model
-// offers efforts 0-3, so `J4` (like `J5`) is refused while the other letters still take 0-4 or X.
-const TIER = /^(?:[GHSO](?:[0-4]|X)|J(?:[0-3]|X))$/;
 function parseChanges(o: Obj): SettingsChanges {
   const c = objOf(o, "changes");
-  const tiers: Record<string, string> = {};
+  const tiers: Record<string, TierParts> = {};
   const experimental: Record<string, boolean> = {};
   if (c["tiers"] !== undefined) {
     const t = objOf(c, "tiers");
     for (const [k, v] of Object.entries(t)) {
-      if (!(SETTINGS_ROLES as readonly string[]).includes(k) || typeof v !== "string" || !TIER.test(v)) throw bad(`tiers.${k} is not a Tier`, "changes");
-      tiers[k] = v;
+      const parts = parseTierParts(v);
+      if (!(k === "decide" || (SETTINGS_ROLES as readonly string[]).includes(k)) || parts === null) throw bad(`tiers.${k} is not a {model, effort} Tier`, "changes");
+      tiers[k] = parts;
     }
   }
+  if (c["concurrency"] !== undefined && !(typeof c["concurrency"] === "number" && Number.isInteger(c["concurrency"]))) throw bad("concurrency is not an integer", "changes");
   if (c["experimental"] !== undefined) {
     const e = objOf(c, "experimental");
     for (const [k, v] of Object.entries(e)) {
@@ -158,7 +158,11 @@ function parseChanges(o: Obj): SettingsChanges {
       experimental[k] = v;
     }
   }
-  return { ...(Object.keys(tiers).length > 0 ? { tiers } : {}), ...(Object.keys(experimental).length > 0 ? { experimental } : {}) };
+  return {
+    ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
+    ...(Object.keys(experimental).length > 0 ? { experimental } : {}),
+    ...(c["concurrency"] === undefined ? {} : { concurrency: c["concurrency"] as number }),
+  } as unknown as SettingsChanges;
 }
 
 const COMPLETION_LABELS: readonly string[] = ["safe_to_archive", "unanswered_ask", "open_work", "unrecorded_decision", "unescalated_issue"];

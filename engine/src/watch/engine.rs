@@ -18,9 +18,9 @@ use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
-    SOURCE, archive, archive_leads, closed, distill, escalations, host_alert, hosts, inbox,
-    janitor, liveness, models, open, parked, permanent, pr, refusal_alert, restart, schedule,
-    sleep, swr, titles, wake, workers,
+    SOURCE, archive, archive_leads, bug_guard, closed, distill, escalations, host_alert, hosts,
+    inbox, janitor, liveness, models, open, parked, permanent, pr, refusal_alert, restart,
+    schedule, sleep, swr, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
@@ -276,7 +276,7 @@ impl Engine {
     /// E12–E16 and E25 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 24] = [
+        let steps: [fn(&mut Engine); 25] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -290,8 +290,9 @@ impl Engine {
             start_prs,
             parked::run,
             closed::run,
-            inbox::run,
+            bug_guard::run,
             refusal_alert::run,
+            inbox::run,
             distill::run,
             titles::run,
             models::run,

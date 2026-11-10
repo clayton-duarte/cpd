@@ -137,6 +137,18 @@ pub(super) fn fetch(c: &mut Ctx, args: &[String]) -> Run {
     } else {
         let mut tips = Vec::new();
         for branch in branches {
+            if let Some((src, dst)) = branch.trim_start_matches('+').split_once(':') {
+                // A refspec `[+]<src>:<dst>`: the remote's `src` lands on the local `dst`, whatever its name.
+                let Some(oid) = c.u.ref_oid(remote.repo, src) else {
+                    return Ok(Out::fail(
+                        128,
+                        format!("fatal: couldn't find remote ref {src}\n"),
+                    ));
+                };
+                c.u.copy(remote.repo, repo, &oid);
+                c.u.set_ref(repo, dst, &oid, "fetch");
+                continue;
+            }
             let reference = full_ref(branch);
             match c.u.ref_oid(remote.repo, &reference) {
                 Some(oid) => tips.push((reference, oid)),
