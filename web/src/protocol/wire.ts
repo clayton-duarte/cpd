@@ -102,6 +102,18 @@ function parseImages(o: Obj): WireImage[] {
   return images;
 }
 
+function parseFiles(o: Obj): WireFile[] | undefined {
+  const v = o["files"];
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v)) throw bad("files must be an array", "files");
+  return v.map((f: unknown): WireFile => {
+    if (!isObj(f)) throw bad("file must be an object", "files");
+    const name = str(f, "name");
+    const text = str(f, "text");
+    return { name, text };
+  });
+}
+
 function parseChange(o: Obj): ConfigureChange {
   const c = objOf(o, "change");
   switch (c["kind"]) {
@@ -220,7 +232,8 @@ export function parseClientMessage(raw: unknown): ClientMessage {
     case "session.submit": {
       const whenBusy = str(o, "whenBusy");
       if (whenBusy !== "followUp" && whenBusy !== "steer") throw bad("whenBusy must be followUp or steer", "whenBusy");
-      return { type: "session.submit", sessionId: sessionId(), clientSubmissionId: nonEmpty(o, "clientSubmissionId"), text: str(o, "text"), images: parseImages(o), whenBusy };
+      const files = parseFiles(o);
+      return { type: "session.submit", sessionId: sessionId(), clientSubmissionId: nonEmpty(o, "clientSubmissionId"), text: str(o, "text"), images: parseImages(o), ...(files === undefined ? {} : { files }), whenBusy };
     }
     case "session.abort": return { type: "session.abort", sessionId: sessionId() };
     case "session.abortSubmission": return { type: "session.abortSubmission", sessionId: sessionId(), clientSubmissionId: nonEmpty(o, "clientSubmissionId") };

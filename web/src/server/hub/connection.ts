@@ -22,7 +22,7 @@ export type SessionEmit = (message: SessionServerMessage) => void;
 export interface SessionHandle {
   readonly capabilities: Capabilities;
   loadEarlier(before: Cursor): Promise<void>;
-  submit(input: { clientSubmissionId: string; text: string; images: WireImage[]; whenBusy: WhenBusy }): Promise<void>;
+  submit(input: { clientSubmissionId: string; text: string; images: WireImage[]; files?: WireFile[]; whenBusy: WhenBusy }): Promise<void>;
   abort(): Promise<void>;
   abortSubmission(clientSubmissionId: string): Promise<void>;
   compact(instructions?: string): Promise<void>;
@@ -187,7 +187,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.detach": return detach();
       case "session.loadEarlier": return onSession(m.sessionId, undefined, (h) => h.loadEarlier(m.before));
       case "session.submit":
-        return onSession(m.sessionId, m.clientSubmissionId, (h) => isQuit(m.text) ? quit(m.sessionId) : h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, whenBusy: m.whenBusy }));
+        return onSession(m.sessionId, m.clientSubmissionId, (h) => isQuit(m.text) ? quit(m.sessionId) : h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
       case "session.abort": return onSession(m.sessionId, undefined, (h) => h.abort());
       case "session.abortSubmission": return onSession(m.sessionId, undefined, (h) => h.abortSubmission(m.clientSubmissionId));
       case "session.compact": return onSession(m.sessionId, undefined, (h) => h.compact(m.instructions));

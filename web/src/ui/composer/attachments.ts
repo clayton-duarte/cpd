@@ -54,12 +54,12 @@ export function filesFromDrop(data: { files: ArrayLike<FileLike> } | null): File
   return data === null ? [] : Array.from(data.files);
 }
 
-export function buildPrompt(text: string, attachments: readonly Attachment[]): { text: string; images: WireImage[]; files?: WireFile[] } {
-  let out = text;
+export function buildPrompt(text: string, attachments: readonly Attachment[]): { text: string; images: WireImage[]; files: WireFile[] } {
   const images: WireImage[] = [];
+  const files: WireFile[] = [];
   for (const a of attachments) {
-    if (a.kind === "text") out += `\n\n<file name="${a.name.replaceAll('"', "&quot;")}">\n${a.text}\n</file>`;
+    if (a.kind === "text") files.push({ name: a.name, text: a.text });
     else images.push({ mimeType: a.mimeType, dataBase64: a.dataBase64 });
   }
-  return { text: out, images };
+  return { text, images, files };
 }

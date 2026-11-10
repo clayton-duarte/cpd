@@ -91,8 +91,8 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
             />
           }
           onSubmit={({ text, attachments, whenBusy }) => {
-            const { text: prompt, images } = buildPrompt(text, attachments);
-            connection.submit({ text: prompt, images, whenBusy });
+            const { text: prompt, images, files } = buildPrompt(text, attachments);
+            connection.submit({ text: prompt, images, ...(files.length > 0 ? { files } : {}), whenBusy });
           }}
           onAbort={() => connection.abort()}
           onCancelQueued={(id) => connection.abortSubmission(id)}

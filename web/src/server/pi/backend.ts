@@ -49,6 +49,9 @@ const REASON = {
   dialogs: "a question of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
 } as const;
 const IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as const;
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]/g, "_");
+}
 const no = (reason: string): { supported: false; reason: string } => ({ supported: false, reason });
 const unsupported = (reason: string): WebError => new WebError("unsupported_capability", reason);
 
@@ -296,16 +299,24 @@ export function createPiBackend(deps: {
       },
       async submit(input) {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
-        if (input.text.trim() === "" && input.images.length === 0) throw new WebError("invalid_submission", "the message is empty");
+        const files = input.files ?? [];
+        if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
         const stamp = deps.now();
-        const paths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
-        const attached = paths.map((p) => `[Attached image: ${p}]`).join("\n");
-        const text = paths.length === 0 ? input.text : input.text.trim() === "" ? attached : `${input.text}\n\n${attached}`;
+        const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
+        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
+        const markers: string[] = [];
+        for (const p of imagePaths) markers.push(`[Attached image: ${p}]`);
+        for (const p of filePaths) markers.push(`[Attached file: ${p}]`);
+        const attached = markers.join("\n");
+        const text = markers.length === 0 ? input.text : input.text.trim() === "" ? attached : `${input.text}\n\n${attached}`;
         if (text.length > PI_SEND_TEXT_MAX) {
           throw new WebError("invalid_submission", `the message is longer than ${PI_SEND_TEXT_MAX} characters`);
         }
         for (const [i, im] of input.images.entries()) {
-          await deps.fs.write(paths[i] as string, Uint8Array.from(Buffer.from(im.dataBase64, "base64")));
+          await deps.fs.write(imagePaths[i] as string, Uint8Array.from(Buffer.from(im.dataBase64, "base64")));
+        }
+        for (const [i, f] of files.entries()) {
+          await deps.fs.write(filePaths[i] as string, new TextEncoder().encode(f.text));
         }
         await deps.cpd.json(sessionSendArgs(sessionId, text, deps.webuiToken));
         out({ type: "session.submitAck", sessionId, clientSubmissionId: input.clientSubmissionId, queued: false });
