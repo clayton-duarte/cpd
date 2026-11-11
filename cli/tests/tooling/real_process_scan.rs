@@ -55,8 +55,6 @@ pub const DEBT: &[(&str, &str, usize)] = &[
     ("cli/tests/workflow/pr_open.rs", "git", 4),
     // a store test starts the real sh through TestEnv
     ("cli/tests/store/store.rs", "sh", 1),
-    // a tui test runs the real env to read its environment
-    ("cli/tests/tui/tui.rs", "env", 1),
 ];
 
 const PROGRAMS: [&str; 7] = ["tmux", "sh", "python3", "node", "ps", "kill", "env"];
@@ -69,7 +67,7 @@ fn scanned_part<'a>(path: &str, text: &'a str) -> Option<&'a str> {
     if path.starts_with("cli/tests/") || path.starts_with("core/tests/") {
         return Some(text);
     }
-    let in_src = ["core", "cli", "engine", "tui"]
+    let in_src = ["core", "cli", "engine"]
         .iter()
         .any(|c| path.starts_with(&format!("{c}/src/")));
     if !in_src {

@@ -47,16 +47,7 @@ fn a_config_migration_replaces_config_toml_by_rename() {
 }
 
 /// Test files that a `#[cfg(test)] #[path = ...]` declares and that carry no `_tests` suffix.
-const BY_HAND: &[(&str, &str)] = &[
-    (
-        "tui/src/merge/action_d550.rs",
-        "test module declared with #[cfg(test)] #[path]",
-    ),
-    (
-        "tui/src/merge/marker_d550.rs",
-        "test module declared with #[cfg(test)] #[path]",
-    ),
-];
+const BY_HAND: &[(&str, &str)] = &[];
 fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -99,7 +90,7 @@ fn non_test_text(text: &str) -> &str {
 fn no_source_file_writes_config_toml_with_fs_write() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut files = Vec::new();
-    for krate in ["core", "engine", "cli", "tui"] {
+    for krate in ["core", "engine", "cli"] {
         walk(&root.join(krate).join("src"), root, &mut files);
     }
     let mut offenders: Vec<String> = files
@@ -125,7 +116,7 @@ fn no_source_file_writes_config_toml_with_fs_write() {
 fn no_source_file_writes_host_toml_with_fs_write() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut files = Vec::new();
-    for krate in ["core", "engine", "cli", "tui"] {
+    for krate in ["core", "engine", "cli"] {
         walk(&root.join(krate).join("src"), root, &mut files);
     }
     let mut offenders: Vec<String> = files

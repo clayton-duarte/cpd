@@ -346,9 +346,10 @@ fn fake_node_answers_a_call_of_node() {
 fn cpd_silent_passes_for_a_command_that_writes_nothing_and_refuses_one_that_does() {
     let fx = fx();
 
-    // `tui action` prints nothing and exits 0 whatever happens (commands.md §13.2): here no tmux server answers.
     fx.allow_unscripted();
-    fx.cpd_silent(&["tui", "action", "logs", "--client", "c1"]);
+    fx.cpd(&["context", "new", "ctx", "--title", "T", "--owner", "acme"])
+        .ok();
+    fx.cpd_silent(&["context", "pending", "--context", "ctx", "--markdown"]);
 
     let text = panics(|| fx.cpd_silent(&["events", "list"]));
     assert!(

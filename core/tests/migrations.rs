@@ -1188,7 +1188,7 @@ fn the_scanner_finds_what_it_is_for() {
 fn no_code_selects_star_or_inserts_without_a_column_list() {
     let root = repo_root();
     let mut files = Vec::new();
-    for krate in ["core", "cli", "tui"] {
+    for krate in ["core", "cli"] {
         rust_files(&root.join(krate).join("src"), &mut files);
     }
     assert!(
