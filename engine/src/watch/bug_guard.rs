@@ -23,7 +23,6 @@ use super::engine::Engine;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{PlanId, SessionId};
-use cpd_core::session::tell;
 use cpd_core::store::{Store, WriteTxn};
 
 /// The mitigation bound of contract §2.2: 900 s (15 minutes), a code constant.
@@ -202,7 +201,9 @@ fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
     for action in actions {
         match action {
             Action::Wake { id, owner, title } => {
-                tell(tx, owner, &wake_text(id, title))?;
+                let text = wake_text(id, title);
+                let message = NewEvent::session_message(&text, "cpd", &text, true, None)?;
+                events::append(tx, message.session(owner.clone()))?;
                 n += 1;
             }
             Action::Breach {
@@ -221,7 +222,8 @@ fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
                 }
                 events::append(tx, event)?;
                 if let Some(owner) = owner {
-                    tell(tx, owner, &text)?;
+                    let message = NewEvent::session_message(&text, "cpd", &text, true, None)?;
+                    events::append(tx, message.session(owner.clone()))?;
                 }
                 n += 1;
             }
