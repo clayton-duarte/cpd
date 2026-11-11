@@ -2692,3 +2692,22 @@ Normative for the target. **Status at this commit: not built.** `WorkflowView` (
 ### 28.6 Where it is drawn
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
+
+## 30. ContextTreeModel.owners comes from core (Job `owners-docs`)
+
+Normative. Job `owners-docs` decides the points below from decisions pro-d513 and pro-d558 (core is the single source of truth for domain data) and assumptions A1 to A3. Where another section of this file, or docs/contract.md, says or implies that the web server reads the policy owners itself, this section wins.
+
+### 30.1 The source
+
+- `ContextTreeModel.owners` is `string[]`: the owner logins that core's `known_owners()` returns, sorted (docs/contract.md §5.5 for the cockpit serve panes, §5.8 for the `/cpd-ws` snapshot). Core is the only computer of this list (A1).
+- It is `[]` exactly when no `<owner>/owner.toml` exists under `$CPD_HOME/policy` (A3). An empty list is therefore a fact about the policy directory, never a read failure.
+
+### 30.2 The transports pass it through (A2)
+
+- **The cockpit stream** (§13): the serve snapshot's `owners` value is copied into `ContextTreeModel.owners` as it is received, on every tree the service builds.
+- **The core WebSocket** (§26.1): the `owners` of core's `snapshot` result is copied into `ContextTreeModel.owners` as it is received.
+- Neither transport makes a web server read of the policy directory to fill `owners`: no `$CPD_HOME/policy` listing, no `owner.toml` `stat`, in `web/src/server/`. The web-side `knownOwners` of `web/src/server/plugin.ts` is the duplicate this section removes; its removal is the implementation Job's, not this docs Job's.
+
+### 30.3 Status and limits
+
+- Design. Read from the source at this commit (unverified at run time): core has the function (`core/src/policy/known.rs`); the cockpit serve snapshot and the `/cpd-ws` listener do not yet carry `owners` (`core/src/cockpit/mod.rs` has no such pane; no `core/` source names `cpd-ws`); the web still reads the directory itself (`web/src/server/plugin.ts`, `knownOwners`).
