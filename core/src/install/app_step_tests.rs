@@ -165,6 +165,15 @@ fn install_builds_electron_and_writes_app_root() {
     let (exit, stderr) = rig.run();
     assert_eq!(exit, 0, "{stderr}");
     let root = rig.root_arg();
+    let preview_worktree = rig
+        .install
+        .root
+        .parent()
+        .unwrap()
+        .join("cpd.preview.web")
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         rig.argv("pnpm"),
         vec![
@@ -177,6 +186,8 @@ fn install_builds_electron_and_writes_app_root() {
                 "run",
                 "build:electron"
             ]),
+            strings(&["--dir", &root, "--filter", "cpd-web-client", "run", "build"]),
+            strings(&["--dir", &preview_worktree, "install", "--frozen-lockfile"]),
         ]
     );
     let plist = rig
