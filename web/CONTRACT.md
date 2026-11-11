@@ -2693,3 +2693,5 @@ Normative for the target. **Status at this commit: not built.** `WorkflowView` (
 ### 28.6 Where it is drawn
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
+
+<!-- install-converge-docs-a1 skeleton: cpd install convergence contract, pending the Lead's answer. -->
