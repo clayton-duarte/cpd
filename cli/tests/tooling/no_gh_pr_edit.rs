@@ -35,7 +35,7 @@ fn no_product_code_runs_gh_pr_edit() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    for dir in ["core/src", "engine/src", "cli/src", "tui/src"] {
+    for dir in ["core/src", "engine/src", "cli/src"] {
         rust_files(&root.join(dir), &mut files);
     }
     assert!(files.len() > 100, "scanned only {} files", files.len());

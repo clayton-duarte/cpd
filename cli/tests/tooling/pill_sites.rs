@@ -3,8 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-const DIRS: [&str; 7] = [
-    "tui/src",
+const DIRS: [&str; 6] = [
     "core/src",
     "engine/src",
     "cli/src",
@@ -111,8 +110,6 @@ fn no_pill_cap_glyph_in_non_test_source_outside_the_spec_and_the_adapters() {
     // `core/src/host/tmux/pill.rs`, `pi/lib/pill.ts`) read the caps from it and spell none. No other exception.
     let allowed = [
         // Test-only modules (declared under `#[cfg(test)]`) whose names do not say so: they spell the caps to assert them.
-        "tui/src/widgets/inbox_indent.rs",
-        "tui/src/tree/look.rs",
         "core/src/host/tmux/no_inbox.rs",
         "core/src/host/tmux/palette.rs",
     ];
@@ -128,7 +125,6 @@ fn no_pill_cap_glyph_in_non_test_source_outside_the_spec_and_the_adapters() {
 fn no_reverse_video_pill_outside_the_three_adapters() {
     let forbidden = ["\x1b[7m", "#[reverse]", "\\x1b[7m", "\\u001b[7m"];
     let allowed = [
-        "tui/src/palette.rs",
         "core/src/host/tmux/pill.rs",
         "pi/lib/pill.ts",
         // A text cursor, not a pill: the character under the cursor is drawn in reverse video.
