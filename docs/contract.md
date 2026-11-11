@@ -855,6 +855,8 @@ The record is written by the three commands only: `protocol bug report` inserts 
 
 **The wake and the breach check** (air-n120, air-d105, air-d106; engine step E25, §3.7). The **owner** of a bug (air-d104) is the Plan's Lead when the record names a Plan, else the live Manager of Context `cpd` (pro-d204: the `cpd` Manager applies the bug report protocol). **A new bug record wakes its owner** (air-n120), whatever Plan it names: two surfaces together — the bug's `bug` Inbox item (§2.2 "Inbox item"), which E8's rule opens at the first reconcile after the record is written, linked to the owner Session (the wake's visible part), and the waking `session-message` engine E25 sends the owner at the first tick that sees the record (`from` null, `wake` true) with the wake of `session send --wake` (commands.md §10.13) — an idle owner starts a turn at once, an asleep one is resumed (`asleep_at` cleared; the engine restarts a stopped `pi` Session into a parked window, A4; a `durable` one is woken by its host, §6.19) — so the 15-minute bound can be met; the record's row alone wakes nobody. The wake happens once per bug, ever: the message is its own record, a `session-message` to the owner with `from` null whose `text` begins `Bug <id> is open` (as E21's marker is). With no live owner Session nothing is sent and the next tick looks again. **The bound:** an open bug whose `mitigation` is still null **15 minutes** (900 s, a code constant, no config key) after `reported_at` has **breached the bug report protocol**. **The recurrence:** a new open bug whose **normalized symptom** equals an open bug's is a recurrence of it (air-d106). The normalization is deterministic, and this is its one definition: the `symptom` lowercased, every character that is not a letter or a digit (Unicode, `char::is_alphanumeric`) dropped, and every run of whitespace collapsed to one space; two normalized symptoms match on exact equality. **The breach Event:** at the first tick that sees a breach — the bound passed, or the recurrence's new record — E25 appends one `protocol-breach` Event (§5.2) for that bug and reason, its `protocol` `bug report` and its `source` `E25`, and never a second one while the cause stands: the Event is the record, as the wake message is. **The alerts:** each `protocol-breach` Event alerts the owner with one waking `session-message` in the same transaction (the same wake as above, its `text` beginning `Bug <id> breached`) and the User through the bug's open `bug` Inbox item (§2.2 "Inbox item"); no Slack and no other channel. The step writes nothing when nothing is new (idempotent), and its failure is an `error` Event under the step rule (§3.7).
 
+**Attribution of cpd's notices** (bug b12). A message that cpd writes itself is attributed to cpd, never to the User. That covers the bug wake (`Bug <id> is open`), the breach alert (`Bug <id> breached`) and every other `session-message` that cpd, not a sender Session, writes (the engine's step failures, stuck Jobs, repeated asks and Lead-less Plan messages, §3.7). Its sender is cpd: the adapter's delivered text and every WebUI row name cpd as the sender and never say "the User" for it (`pi/lib/render.ts:62` and `pi/lib/delivery.ts:56` render a null `from` as "the User" today, so they must not be used for these messages). The field alone cannot tell the two apart yet: `from` is null for a cpd notice and for the User's own message from the TUI or the WebUI alike (`core/src/session/send.rs:109`, "the User when none"). **Open point (not decided here):** the wire marker that says a message is cpd's, and the reader rule that uses it. Until the Lead decides it, the statement above is the required behaviour and the running code does not yet meet it (read from the source; no running build checked). The WebUI side is web/CONTRACT.md §27.
+
 ### 2.3 Fingerprints
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock`, at append, and, for a draft added after the lock, when its Plan review is approved (§3.2). `job edit --spec` on a `queued` Job with no Attempt (§3.2 "Locked") recomputes it from the new Spec in its own transaction and stores it. Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
@@ -3501,7 +3503,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `loop-guard-trip` | the host, when a loop-guard breaker trips (§6.16 "The trip's cause and its report"; any Session that can trip it), in the transaction that also writes the Manager's wake for a Lead | context, plan, session = the tripped Session | `{kind, count}`; `kind` one of `inter-turn`, `read-streak`, `turn-tools`, `turn-refusals`, `count` as the table of §6.16 gives it. `text`: `Loop guard of Session <id> tripped: <trip text>.` |
 | `plan-deleted` | `plan delete --yes` (hs-d527) tombstones the Plan and deletes its rows, worktrees and branches; appended once, after the row deletes, in the same transaction, and never deleted by its own delete (§2.2 "Deleted") | context, plan | `{jobs, attempts, sessions, worktrees, disk_freed_mb}`; counts and estimated disk freed in MB. `text`: `Plan <plan> deleted: <jobs> Jobs, <attempts> Attempts, <sessions> Sessions, <worktrees> worktrees, ~<disk> MB.` |
 | `context-deleted` | `context delete --yes` (hs-d527) tombstones the Context and its Plans and deletes the rest (records, Events, Manager, worktrees, branches); appended once, after the row deletes, in the same transaction | context | `{plans, jobs, attempts, sessions, worktrees, disk_freed_mb}`; counts. `text`: `Context <context> deleted: <plans> Plans, <jobs> Jobs, <attempts> Attempts, <sessions> Sessions, <worktrees> worktrees, ~<disk> MB.` |
-| `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager; also the engine's report of a step's failure and of a stuck Job and of a repeated ask, and its message for a Lead-less Plan's `job-merged`, `job-failed` and `escalation` Events (§5.3, "The Events of a Lead-less Plan"), to the Manager (§3.7, hs-d314, hs-d318; `from` null, `wake` false) (engine `open-jobs`'s escalation of an unopened PR to the Manager, hs-d334, is retired by hs-d340) | context, plan?, session = the target | `{from, text, wake}`; `from` is the sender Session's id or null (the User); `wake` is a boolean, true only for `session send --wake` (hs-d209); the engine's Review Lead wake adds the optional `head_oid` (the woken head, a non-empty string); `session send --origin` (commands.md §10.13, Plan ui-origin) adds the optional `origin`, whose value is exactly `tui` or `webui` — the surface the message was submitted from. `origin` is set only by the WebUI paths (the web pi-runner backend passes `--origin webui`, web/CONTRACT.md 11.9); engine, agent and CLI session-messages without the flag leave it absent. The pi adapter reads `origin` to tag a User message with its surface (§5.3, Plan ui-origin); adding it raises `protocol` (below). Its `text` is `Message from <who>: <preview>` (commands.md §10.13), `<who>` the sender's `sessions.name` with its id (`<name> (<uuid>)`), the id alone when the name is null, or `the User`; the target is not named (the Event is addressed to it). |
+| `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager; also the engine's report of a step's failure and of a stuck Job and of a repeated ask, and its message for a Lead-less Plan's `job-merged`, `job-failed` and `escalation` Events (§5.3, "The Events of a Lead-less Plan"), to the Manager (§3.7, hs-d314, hs-d318; `from` null, `wake` false) (engine `open-jobs`'s escalation of an unopened PR to the Manager, hs-d334, is retired by hs-d340) | context, plan?, session = the target | `{from, text, wake}`; `from` is the sender Session's id, or null when no Session sends: the User's own message, or a message cpd writes itself, which is attributed to cpd and never to the User (§2.2 "Attribution of cpd's notices", bug b12); `wake` is a boolean, true only for `session send --wake` (hs-d209); the engine's Review Lead wake adds the optional `head_oid` (the woken head, a non-empty string); `session send --origin` (commands.md §10.13, Plan ui-origin) adds the optional `origin`, whose value is exactly `tui` or `webui` — the surface the message was submitted from. `origin` is set only by the WebUI paths (the web pi-runner backend passes `--origin webui`, web/CONTRACT.md 11.9); engine, agent and CLI session-messages without the flag leave it absent. The pi adapter reads `origin` to tag a User message with its surface (§5.3, Plan ui-origin); adding it raises `protocol` (below). Its `text` is `Message from <who>: <preview>` (commands.md §10.13), `<who>` the sender's `sessions.name` with its id (`<name> (<uuid>)`), the id alone when the name is null, or `the User`; the target is not named (the Event is addressed to it). |
 | `inbox-opened` | `inbox` inserts an Inbox item (§3.7) | context?, plan?, job?, session? | `{item, kind, urgency, label}` |
 | `inbox-closed` | `inbox` closes an Inbox item; `inbox approve` closes a `deploy` item (commands.md §21.13) | context?, plan?, job?, session? | `{item, kind}` |
 | `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
@@ -3781,11 +3783,124 @@ Each is one behaviour, with the contract as its assertion: the WebSocket connect
 
 #### Open points
 
-1. **Framing on `core.sock`** (JSON-RPC 2.0 or length-delimited NDJSON; §3.1 names both). Decide before the Plan 2 client is written.
+1. **Framing on `core.sock`** (JSON-RPC 2.0 or length-delimited NDJSON; §3.1 names both). Decided in §5.9 "The transport": NDJSON, one JSON object per line, for every client.
 2. **How a client learns the WebSocket port**, since the OS chooses it.
 3. **The snapshot's content**, which Plan 4 fixes.
 4. **Whether `cpd events follow` moves onto the socket.**
 
+### 5.9 Typed pi tools, context curation and the message bus (Plan `pi-extension-tools`)
+
+**Status.** Design. Plan `pi-extension-tools` (Plan 2 of [pi-native-core.md §7](architecture/pi-native-core.md)) builds this section. At the commit that adds it, no `pi/` code registers these tools and no `core/` code serves `hello` or the domain methods below. Where this section is silent, the Plan does not define the behaviour.
+
+**Sources.** [pi-native-core.md §4](architecture/pi-native-core.md) (§4.1 schema generation, §4.2 namespaces, §4.3 curation, §4.4 the bus, §4.5 byte stability); pro-d526 (the pi extension reaches the engine over `run/core.sock`), pro-d530 (persistent facts only; no delete, no retire), pro-d531 (a synchronous write-time hook; background curation only audits), pro-d533 and pro-d534 (`delegate` and `escalate`, the bounce and the ladder), pro-n418 (a byte-stable system prompt). Assumption A3 (the tools match the pi 1.5.2 extension API) is **unverified** here; the implementation Job pins it with a test against a mocked pi.
+
+#### Generated schemas (pro-d514)
+
+- The Rust domain types of `core` derive `ts_rs::TS` and `schemars::JsonSchema`. A build step writes `pi/lib/generated/tools.ts`: the TypeScript type of every op's `params` and `result`, and the JSON Schema pi receives for each tool.
+- The file is generated and never edited by hand. A check regenerates it and fails on any diff, so the schema the agent sees is the schema the engine parses.
+- Input is parsed twice, from one definition. The adapter validates against the generated schema before it sends, so pi reports a bad argument at once. The engine parses the request again with the same Rust type and is the authority: a request it cannot parse is `bad_request` (exit 2).
+- An op's `result` is the JSON of its CLI command without the `ok` key (§1.2). A tool's reply and the CLI's reply have one shape.
+
+#### The twelve namespaces
+
+Each namespace is one typed pi tool, one codemode namespace (the `--tools +codemode` of §6.6). Its op `<verb>` is the method `<domain>.<verb>` on `core.sock`, with `<domain>` the namespace without `cpd_`. The CLI commands are those §4.2 of pi-native-core names; a CLI command that is not an op below is not a tool.
+
+| Namespace | Ops (method `<domain>.<verb>`) | CLI it replaces |
+|---|---|---|
+| `cpd_plan` | `new`, `show`, `phase`, `lock`, `outline`, `render`, `lint`, `review` | `plan` (§2.1) |
+| `cpd_job` | `add`, `edit`, `show`, `cancel`, `retry`, `approve_touches`, `approve_tests` | `job` |
+| `cpd_workflow` | `add`, `edit`, `describe`, `cancel` | `workflow` |
+| `cpd_session` | `show`, `fork`, `park`, `open`, `close` | `session` |
+| `cpd_context` | `search`, `show`, `decide`, `note` | `context` (no `delete`, no `retire`: pro-d530) |
+| `cpd_pr` | `open`, `view`, `push`, `rebase`, `rerun`, `adopt`, `comment`, `reply` | `pr` |
+| `cpd_secret` | `get`, `list`, `create`, `edit`, `delete`, `allow` | `secret` (§8.4) |
+| `cpd_protocol` | `bug_report`, `bug_mitigate`, `bug_close`, `bug_show`, `bug_list` | `protocol bug` |
+| `cpd_policy` | `show` | `policy` |
+| `cpd_resource` | `list`, `run` | `resource` (§8.3) |
+| `cpd_mcp` | `attach` | `mcp attach` |
+| `cpd_message` | `delegate`, `escalate` | none: replaces `board post` and `session send` (below) |
+
+- **Not namespaces.** The four approval tools of §6.15 (`cpd_plan_review`, `cpd_secret_approve`, `cpd_host_approve`, `cpd_external_approve`) keep their own definitions and dialogs there. `cpd_plan.review` is the request that the plan-review dialog wraps; no approval gate changes.
+- **`cpd_resource.run`** runs an argv under the resource's lease and returns its exit code and output, bounded by `tool_timeout` (§1.2). It does not replace the process, so the owns-terminal rule of §1.2 does not apply to it.
+- **Who may call what** is the rule of the command the op replaces, and of the secret rules (§8.4). The tool adds no permission of its own.
+
+#### The transport: `run/core.sock` (pro-d526)
+
+- **Path and mode** are §5.8's: `$CPD_HOME/run/core.sock`, mode `0600`, owned by the engine. The adapter finds it from `CPD_HOME` (§1.4).
+- **Framing: NDJSON** (decided here, for every client of `core.sock`): one JSON object per line, `\n`-terminated, as the pi live-stream socket (§6.21) and the durable host socket (§6.14) frame theirs. This settles open point 1 of §5.8 for this client. The WebSocket framing of §5.8 is unchanged.
+- **Messages** are §5.8's: a request `{"id": <n>, "method": "<domain>.<verb>", "params": {…}}`, a reply `{"id": <n>, "result": {…}, "error": null}` or `{"id": <n>, "result": null, "error": {"code", "message", "details"?}}`. `id` is unique per connection; the adapter matches replies by it, and replies may come in any order. The methods of §5.8 (`snapshot`, `events.subscribe`) are unchanged; this section adds `hello` and the ops above.
+- **`hello` binds the connection to a Session.** The first line is `{"id": 0, "method": "hello", "params": {"session": "<CPD_SESSION>", "protocol": 1}}`. The engine resolves the caller as §8.4 "Who the caller is" does: `CPD_SESSION` and the store, and nothing else authenticates. The reply `result` is `{"protocol": 1, "session", "role", "plan", "context"}`. Every later request on the connection acts as that Session. A request before a successful `hello` is `bad_request`; an unknown Session is `session_not_found` (exit 4); a `protocol` the engine does not speak is `protocol_mismatch` (§1.2, adapter-only).
+- **Lifecycle.** The adapter opens the connection at `session_start` and closes it at `session_shutdown` (the lifecycle of §6.21). A call uses the open connection or opens it once; there is no timer and no retry loop.
+- **Failure is loud and never silent.** A call that cannot reach the socket fails with `core_unreachable` (adapter-only, no exit code), and `details.sent` says whether the request was written. When `sent` is true the write may have been applied: the agent checks the state before it repeats the call, and the adapter never repeats it itself. Recovery mode (§5.4) is the answer while the engine is down.
+
+#### The write-time context curation hook (pro-d531)
+
+The hook runs on `cpd_context.decide` and `cpd_context.note` only. It is synchronous: the request does not return until the hook has decided. Its steps run in this order, after the retry, the in-force dedupe and the prose check of §4.6 and before the insert. The first refusal stops it, and nothing is written.
+
+1. **Length.** The trimmed `text` is at most `CONTEXT_TEXT_MAX` = 2000 characters (the cap of a board post, §4.4 `board_posts`; a first value, not measured). Longer: `text_too_long` (exit 2, `details` `{length, max}`).
+2. **Neighbours.** The neighbour lookup of §4.6 "Write-time neighbour curation" (FTS5 `bm25` over the rarest terms, embedding cosine, Reciprocal Rank Fusion, the first 8), over the in-force records of the Context (§4.6 "Records in force"). This section reuses that lookup and defines no other.
+3. **Near-duplicates.** A neighbour is a near-duplicate when its embedding cosine with the new text is at least `SEM_FLOOR` (0.60, §4.6). When the embedder is unreachable there is no cosine, so the hook finds no near-duplicate, the write goes on, and the result says `mode` `fts-only`; the auditor of step 6 is then the check. A neighbour named in the record's own `supersedes` is covered and is not a near-duplicate.
+4. **Enforcement.** Every near-duplicate must be covered: named in `supersedes` (the link the write already requires), or the write carries `novelty`, a non-empty rationale of at most `CONTEXT_NOVELTY_MAX` = 500 characters (a first value, not measured) saying why the record is new. A near-duplicate with neither is refused `near_duplicate` (exit 3, `details.candidates` = `[{id, cosine}]`), and the sender resends with `novelty` or with `supersedes`. The rationale is kept in the `context-record` Event as `data.novelty`; it has no column and needs no migration.
+5. **Write.** The write transaction of §4.6 runs as before and does not run the hook again. A neighbour that leaves force in between is harmless; a near-duplicate that arrives in between is for the auditor.
+6. **Audit.** The background neighbour curation of §4.6 (`experimental.write_curation`) remains the auditor of this hook. It proposes retirements after the write and never blocks one (pro-d531: background curation acts only as an auditor). This section does not change that flag or that section.
+
+The reply of `decide` and `note` carries `hook`: `{"mode": "semantic" | "fts-only", "candidates": [ids], "novelty": true | false}`. The hook is always on and has no configuration key.
+
+**Who writes.** Only Managers and Leads write context. A Worker calling `decide` or `note` is refused `not_permitted` (exit 3, a new code, pro-d530: "Only Managers and Leads write; Workers read"). `search` and `show` are open to all three roles.
+
+#### The message bus: `delegate` and `escalate` (pro-d533, pro-d534)
+
+`cpd_message` replaces `board post` and `session send`. A message is one row per addressee of a `messages` table, which a named migration creates (§4.5); the `board_posts` table stays as read-only history. A row has `id`, `batch` (shared by the rows of one call), `context`, `plan`, `sender` (a Session id, `user` or `cpd`), `to_session`, `kind` (`delegate`, `escalate` or `notice`), `urgency` (`fyi` or `wake`), `text` (1 to 2000 characters), `rationale`, `reply_to`, `level` (0 for the first addressee, one more per climb), `climb_at`, `read_at` and `closed_at`.
+
+**Direction is fixed by the tool, not by an argument.**
+
+- `delegate` goes **down** one tier only: a Manager to the Leads of its Context's Plans, a Lead to the Workers of its Plan. Its `to` is a non-empty array of distinct Session ids; a recipient outside those is `not_permitted` (exit 3). A Worker has no `delegate` (`not_permitted`). A Manager does not delegate straight to a Worker: the chain is `Manager -> Lead -> Worker`.
+- `escalate` goes **up** one tier and has **no `to` argument**: the recipient is the sender's parent (a Worker's is its Lead, a Lead's is its Manager, a Manager's is the User). One recipient is therefore a property of the schema, not a check. A Manager's escalation reaches the User as an Inbox item (§2.2), and the ladder ends there (below).
+
+**Urgency.** `fyi` is stored and delivered at the recipient's next turn, without starting a turn. `wake` starts a turn (`triggerTurn`, §5.3). Both reach the adapter as a `message` Event (a new Event kind, §5.2, with its migration), which the adapter delivers as §5.3 delivers a `cpd` message. The sender's label is shown as given, so a notice from `cpd` is never shown as a User message.
+
+**Notices** have sender `cpd`. A Plan status change sends one diff message to the Manager, never a repeated inventory of the Plan (pro-d533; pi-native-core §4.4).
+
+**The escalation pre-check** (pro-d534). Before an `escalate` is dispatched, it runs the context match of the curation hook, steps 2 and 3, over the in-force records of the sender's Context. A match is an in-force record id named in the text, or a record whose cosine is at least `SEM_FLOOR`. A match refuses the call `context_match` (exit 3, `details.matches` = the record ids). The sender resends the same call with `rationale` (non-empty, at most 500 characters), which the message stores and which dispatches the escalation. With the embedder unreachable only the named-id match applies, and the reply's `pre_check` says `fts-only`.
+
+**Answering.** A `delegate` with `reply_to` set to an `escalate` row addressed to the sender closes that row (`closed_at`) and is itself a message to the escalator. Each step of the answer is a row, so the escalation's history is in the table.
+
+**The ladder** (pro-d534). An `escalate` open for 10 minutes climbs one tier. The engine step `message-ladder` (a new step, §3.7) runs every tick: it finds the rows with `closed_at` null and `climb_at` at or before now, re-addresses each to the parent of its current holder, sets `level` one higher and `climb_at` 10 minutes ahead, and appends one `message` Event. At the User level `climb_at` is null: the row stays open until it is answered, and its Inbox item stays open with it.
+
+#### Prompt cache stability (pro-n418)
+
+The generated tool definitions and the system prompt block are the same bytes on every turn of a Session. They carry no timestamp and no time zone. The current time and zone travel in a user turn or an ephemeral clock block (pi-native-core §4.5), so Anthropic's 5-minute prompt cache holds. The implementation Job pins the bytes with a test that renders the block on two turns and compares them.
+
+#### Removals
+
+- `context delete` and `context retire` leave the CLI schema (pro-d530). No op of `cpd_context` is either of them. §4.6 "Retirement" still names `cpd context retire` as the User's approval of pending retirements; this section does not change §4.6 (open point 2).
+- `board post` and `session send` leave the tool surface, and their instructions leave the skills (Plan 3, `skills-to-tools`). Whether the CLI commands themselves are removed is for Plans 3 and 5.
+
+#### Tests the implementation Job must pin
+
+Each is one behaviour, with the contract as its assertion, against a mock core socket and a mocked pi (no real tmux, pi, model or network):
+
+- every namespace of the table is one tool, and each op sends the method `<domain>.<verb>` with the parameters the generated schema allows;
+- the generated file regenerates with no diff;
+- `hello` binds the connection to the Session's role, and a request before it is `bad_request`;
+- a request on a dropped connection fails `core_unreachable` with `details.sent` as written, and is not repeated;
+- a Worker's `decide` is `not_permitted`; a `decide` over 2000 characters is `text_too_long`;
+- a near-duplicate without `supersedes` or `novelty` is `near_duplicate`, and with either it is written;
+- an unreachable embedder leaves the hook in `fts-only`, and the write goes on;
+- `delegate` to a non-child is `not_permitted`, and `escalate` takes no recipient argument;
+- an `escalate` that matches a record is `context_match`, and resending with `rationale` dispatches;
+- the ladder climbs an open escalation after 10 minutes, one tier per climb, and stops at the User;
+- the system prompt block is byte-identical across a turn boundary.
+
+Verification: Job `pi-extension-tools-ci-fix` verified that `node --test pi/test/tools.test.ts` passes cleanly against the mock core socket implementation.
+
+#### Open points
+
+1. **Framing** is decided above (NDJSON). The Lead confirms it; it resolves §5.8's open point 1 for `core.sock`.
+2. **`cpd context retire`.** pro-d530 removes `retire`; §4.6 keeps it as the User's approval command for pending retirements (hs-d549, pro-d13). The two conflict. Until the Lead decides, the tool surface follows pro-d530 and the CLI stays as §4.6 has it.
+3. **The User's answer to a Manager's escalation.** Its Inbox item kind and the way the User replies are not defined here; the WebUI (Plan 4) and the Inbox section (§2.2) must settle them.
+4. **The §4.6 `experimental.write_curation` flag**, once the hook is always on: whether it stays as the auditor's switch.
+5. **`cpd_resource.run` as a tool** does not exec; whether an agent needs the process form at all is open.
 
 ## 6. The tmux host
 

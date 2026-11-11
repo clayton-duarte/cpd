@@ -39,6 +39,8 @@ pub mod curate_verdict;
 mod curate_verdict_tests;
 pub mod curated;
 pub mod curation;
+#[cfg(test)]
+mod curation_tests;
 mod delete;
 pub mod distill;
 #[cfg(test)]

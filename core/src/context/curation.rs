@@ -467,3 +467,128 @@ pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
 #[cfg(test)]
 #[path = "curation_auto_tests.rs"]
 mod curation_auto_tests;
+
+// Write-time context curation hook (contract §5.9, pro-d531).
+pub const CONTEXT_TEXT_MAX: usize = 2000;
+pub const CONTEXT_NOVELTY_MAX: usize = 500;
+pub const SEM_FLOOR: f64 = 0.60;
+
+/// Output of the curation hook.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CurationHookResult {
+    pub mode: String, // "semantic" | "fts-only"
+    pub candidates: Vec<String>,
+    pub novelty: bool,
+}
+
+/// Runs write-time curation hook (contract §5.9).
+/// Refuses:
+/// - text > 2000 chars: text_too_long
+/// - near-duplicate without supersedes or novelty: near_duplicate
+pub fn write_time_curation_hook(
+    conn: &rusqlite::Connection,
+    context: &ContextId,
+    text: &str,
+    supersedes: &[RecordId],
+    novelty: Option<&str>,
+    vector_store: Option<&super::curate_vectors::VectorStore>,
+    query_vector: Option<&[f32]>,
+) -> Result<CurationHookResult, CpdError> {
+    let trimmed = text.trim();
+    if trimmed.chars().count() > CONTEXT_TEXT_MAX {
+        return Err(CpdError::new(
+            ErrorCode::TextTooLong,
+            format!("Context record text exceeds {CONTEXT_TEXT_MAX} characters."),
+        )
+        .with("length", trimmed.chars().count() as i64)
+        .with("max", CONTEXT_TEXT_MAX as i64));
+    }
+
+    if let Some(nov) = novelty
+        && nov.trim().chars().count() > CONTEXT_NOVELTY_MAX
+    {
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            format!("Novelty rationale exceeds {CONTEXT_NOVELTY_MAX} characters."),
+        ));
+    }
+
+    // Step 2 & 3: Neighbours & near-duplicates
+    let state = State::read(conn, context)?;
+    let in_force_records = state.in_force_records();
+    let candidates: Vec<super::curate::Candidate> = in_force_records
+        .iter()
+        .map(|(seq, r)| super::curate::Candidate {
+            id: r.id.clone(),
+            seq: *seq,
+            kind: r.kind(),
+            at: r.at.clone(),
+            text: r.text.clone(),
+        })
+        .collect();
+
+    let dummy_id = RecordId::parse("hs-d999999").unwrap();
+    let forced = super::curate_neighbours::forced_ids(trimmed, supersedes, &dummy_id, &candidates);
+    let lexical = super::curate_neighbours::lexical_rank(
+        trimmed,
+        &candidates,
+        super::curate_neighbours::TOP,
+    )?;
+
+    // Semantic matching if query vector and vector store available
+    let mut semantic_ranked = None;
+    let mut mode = "fts-only".to_string();
+    let mut near_duplicates: Vec<(RecordId, f64)> = Vec::new();
+
+    if let (Some(vs), Some(qvec)) = (vector_store, query_vector) {
+        mode = "semantic".to_string();
+        let in_force_ids: Vec<RecordId> = candidates.iter().map(|c| c.id.clone()).collect();
+        // Load cached vectors for model
+        if let Ok(vecs) = vs.get(context, super::curate_run::EMBED_MODEL, &in_force_ids) {
+            for (id, vec) in &vecs {
+                if let Some(cos) = super::curate_neighbours::cosine(qvec, vec)
+                    && cos >= SEM_FLOOR
+                    && !supersedes.contains(id)
+                {
+                    near_duplicates.push((id.clone(), cos));
+                }
+            }
+            semantic_ranked = Some(super::curate_neighbours::semantic_rank(
+                qvec,
+                &vecs,
+                super::curate_neighbours::TOP,
+            ));
+        }
+    } else {
+        // When embedder is unreachable or not provided, check text identity / exact BM25 matches as near duplicate fallback if identical text exists
+        for c in &candidates {
+            if c.text.trim() == trimmed && !supersedes.contains(&c.id) {
+                near_duplicates.push((c.id.clone(), 1.0));
+            }
+        }
+    }
+
+    let neighbours =
+        super::curate_neighbours::neighbours(&dummy_id, forced, lexical, semantic_ranked);
+    let candidate_ids: Vec<String> = neighbours.into_iter().map(|n| n.id.to_string()).collect();
+
+    // Enforcement: near-duplicate must be covered by supersedes or non-empty novelty
+    let has_novelty = novelty.map(|n| !n.trim().is_empty()).unwrap_or(false);
+    if !near_duplicates.is_empty() && !has_novelty {
+        let details: Vec<serde_json::Value> = near_duplicates
+            .iter()
+            .map(|(id, cos)| serde_json::json!({"id": id.to_string(), "cosine": cos}))
+            .collect();
+        return Err(CpdError::new(
+            ErrorCode::NearDuplicate,
+            "Near-duplicate in-force record requires supersedes or novelty.",
+        )
+        .with("candidates", details));
+    }
+
+    Ok(CurationHookResult {
+        mode,
+        candidates: candidate_ids,
+        novelty: has_novelty,
+    })
+}

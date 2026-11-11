@@ -111,7 +111,11 @@ fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
     let sent = messages_starting(&mut fx, "Bug b1 breached");
     assert_eq!(sent.len(), 1, "{:?}", messages(&mut fx));
     assert_eq!(sent[0].0, "lead1");
-    assert_eq!(sent[0].1, None, "the engine is the sender");
+    assert_eq!(
+        sent[0].1.as_deref(),
+        Some("cpd"),
+        "the engine is the sender"
+    );
     assert!(sent[0].2, "the alert wakes the owner");
 
     // The User's alert: the bug's Inbox item, opened by E8's rule.
@@ -184,7 +188,11 @@ fn wakes_a_sleeping_owner_on_a_new_bug_record() {
     let sent = messages_starting(&mut fx, "Bug b1 is open");
     assert_eq!(sent.len(), 1, "{:?}", messages(&mut fx));
     assert_eq!(sent[0].0, "lead1");
-    assert_eq!(sent[0].1, None, "the engine is the sender");
+    assert_eq!(
+        sent[0].1.as_deref(),
+        Some("cpd"),
+        "the engine is the sender"
+    );
     assert!(sent[0].2, "a new bug record wakes its owner");
 
     // The wake's visible part: E8 opens the bug's Inbox item, linked to the owner.
@@ -202,4 +210,36 @@ fn wakes_a_sleeping_owner_on_a_new_bug_record() {
         bug_item(&mut fx).is_none(),
         "the item closes when the bug is mitigated"
     );
+}
+
+/// Bug b12: bug_guard wake and breach messages are attributed to cpd, not null / the User.
+#[test]
+fn bug_guard_delivers_with_cpd_attribution() {
+    let mut fx = fx();
+    bug(&mut fx, "b1", Some("pay"), "Payment fails at checkout", 16);
+
+    bug_guard::run(&mut fx.engine);
+
+    // Both the open wake and the breach alert must be attributed to cpd, not null / the User.
+    // Under docs/contract.md §2.2 (bug b12): messages written by cpd itself are attributed to cpd,
+    // not null / the User (which would format as "Message from the User").
+    let all_messages = messages(&mut fx);
+    assert!(!all_messages.is_empty(), "bug_guard must produce messages");
+    for (session, from, _wake, text) in &all_messages {
+        assert_eq!(session, "lead1");
+        assert_ne!(
+            from.as_deref(),
+            None,
+            "session-message from cpd must not have null sender: {text}"
+        );
+        assert_eq!(
+            from.as_deref(),
+            Some("cpd"),
+            "session-message from cpd must be attributed to cpd: {text}"
+        );
+        assert!(
+            !text.starts_with("Message from the User"),
+            "event text must not say 'Message from the User': {text}"
+        );
+    }
 }
