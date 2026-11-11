@@ -12,6 +12,82 @@ export interface DagNode { readonly job: JobView; readonly col: number; readonly
 export interface DagEdge { readonly id: string; readonly d: string; readonly state: "done" | "pending" }
 export interface DagLayout { readonly width: number; readonly height: number; readonly nodes: readonly DagNode[]; readonly edges: readonly DagEdge[] }
 
+export interface WorkflowEdge {
+  readonly fromKey: string;
+  readonly toKey: string;
+  readonly kind: "base" | "needs";
+}
+
+export function computeWorkflowEdges(planId: string, workflows: readonly WorkflowView[]): WorkflowEdge[] {
+  const byKey = new Map(workflows.map((w) => [w.key, w]));
+  const edges: WorkflowEdge[] = [];
+
+  for (const d of workflows) {
+    if (d.base_workflow != null) {
+      const prefix = `${planId}/`;
+      if (d.base_workflow.startsWith(prefix)) {
+        const upstreamKey = d.base_workflow.slice(prefix.length);
+        if (byKey.has(upstreamKey)) {
+          edges.push({
+            fromKey: upstreamKey,
+            toKey: d.key,
+            kind: "base",
+          });
+        }
+      }
+    }
+    for (const needKey of d.needs) {
+      if (byKey.has(needKey)) {
+        edges.push({
+          fromKey: needKey,
+          toKey: d.key,
+          kind: "needs",
+        });
+      }
+    }
+  }
+
+  return edges;
+}
+
+export function topoOrder(workflows: readonly WorkflowView[], edges: readonly WorkflowEdge[], planId: string): WorkflowView[] {
+  // Upstream must precede dependant.
+  // At each step, emit the earliest card in workflows order whose upstreams are all emitted.
+  // Upstreams of d are fromKey of edges where toKey === d.key.
+  const upstreamsByTarget = new Map<string, Set<string>>();
+  for (const w of workflows) {
+    upstreamsByTarget.set(w.key, new Set());
+  }
+  for (const e of edges) {
+    upstreamsByTarget.get(e.toKey)?.add(e.fromKey);
+  }
+
+  const emitted = new Set<string>();
+  const remaining = [...workflows];
+  const result: WorkflowView[] = [];
+
+  while (remaining.length > 0) {
+    const readyIdx = remaining.findIndex((w) => {
+      const deps = upstreamsByTarget.get(w.key)!;
+      for (const u of deps) {
+        if (!emitted.has(u)) return false;
+      }
+      return true;
+    });
+
+    if (readyIdx === -1) {
+      // Cycle detected
+      throw new Error(`plan ${planId} has a workflow dependency cycle at ${remaining[0]!.key}`);
+    }
+
+    const readyWf = remaining.splice(readyIdx, 1)[0]!;
+    emitted.add(readyWf.key);
+    result.push(readyWf);
+  }
+
+  return result;
+}
+
 export function layoutDag(wf: WorkflowView, jobs: readonly JobView[]): DagLayout {
   const members = wf.jobKeys.map((key) => {
     const job = jobs.find((j) => j.key === key);

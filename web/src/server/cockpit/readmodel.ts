@@ -56,6 +56,11 @@ function strN(o: Obj, f: string, c: string): StrOrNull {
   const v = o[f];
   return v === null ? null : typeof v === "string" ? v : bad(c, f);
 }
+function optStr(o: Obj, f: string, c: string): StrOrNull {
+  const v = o[f];
+  if (v === undefined || v === null) return null;
+  return typeof v === "string" ? v : bad(c, f);
+}
 function num(o: Obj, f: string, c: string): number {
   const v = o[f];
   return typeof v === "number" && Number.isFinite(v) ? v : bad(c, f);
@@ -302,7 +307,9 @@ export function buildPlanView(raw: RawPlanShow): PlanViewModel {
     const pullObj = pull === null || pull === undefined ? null : obj(pull, c, "pull_request");
     const opt = (o: Obj | null, f: string): StrOrNull => (o !== null && typeof o[f] === "string" ? (o[f] as string) : null);
     return {
-      key: str(w, "key", c), title: str(w, "title", c), repo: strN(w, "repo", c) ?? "", base: strN(w, "base", c) ?? "", status: str(w, "status", c),
+      key: str(w, "key", c), title: str(w, "title", c), repo: strN(w, "repo", c) ?? "", base: strN(w, "base", c) ?? "",
+      base_workflow: optStr(w, "base_workflow", c),
+      status: str(w, "status", c),
       needs: strList(w, "needs"), jobKeys: strList(w, "jobs"),
       pr: prObj === null ? null : { number: num(prObj, "number", c), url: typeof prObj["url"] === "string" ? prObj["url"] : "", state: opt(pullObj, "state"), checks: opt(pullObj, "checks"), mergeable: opt(pullObj, "mergeable"), ...(typeof prObj["posted"] === "boolean" ? { posted: prObj["posted"] } : {}) },
     };
