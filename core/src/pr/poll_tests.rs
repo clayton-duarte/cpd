@@ -999,6 +999,50 @@ fn stacked_on_adopted_base_resolves_head_ref_on_origin() {
 }
 
 #[test]
+fn an_open_workflow_whose_pull_request_is_already_stored_merged_is_merged() {
+    let rig = open_rig(&["api"]);
+    // Simulate PR #801 being already stored with state = 'merged' (absorbing state bug b26).
+    // The poll's upsert will see no change because pulls.rs holds() treats it as final,
+    // returning None.
+    rig.sql(
+        "UPDATE pull_requests SET state = 'merged', merged_at = '2026-10-14T10:00:00Z' WHERE number = 801;",
+    );
+
+    // GitHub's search lists no open PRs; direct PR lookup confirms it is merged.
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(Gh { merged: vec![801] }));
+
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let initial_status: String = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status FROM workflows WHERE plan = 'pay' AND key = 'api'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(initial_status, "open", "workflow initially open");
+
+    run_poll(&rig);
+
+    let status: String = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status FROM workflows WHERE plan = 'pay' AND key = 'api'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        status, "merged",
+        "an open workflow whose pull request is already stored merged must transition to merged on poll"
+    );
+}
+
+#[test]
 fn conflicting_pr_level_triggers_update_job_when_not_queued() {
     let rig = open_rig(&["api"]);
     let dir = rig.home.root().join("policy/acme");
