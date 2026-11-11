@@ -181,9 +181,7 @@ pub fn changed(
 /// In nextest, such tests have ID `cpd::<area> <module>::<test>`, so filtering by `engine::...`
 /// fails to match unless stripped or adapted.
 fn rust_filter(name: &str) -> String {
-    const AREAS: &[&str] = &[
-        "engine", "workflow", "flow", "session", "store", "tooling",
-    ];
+    const AREAS: &[&str] = &["engine", "workflow", "flow", "session", "store", "tooling"];
     for &area in AREAS {
         let prefix = format!("{area}::");
         if let Some(rest) = name.strip_prefix(&prefix) {
