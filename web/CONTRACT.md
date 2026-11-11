@@ -2692,3 +2692,7 @@ Normative for the target. **Status at this commit: not built.** `WorkflowView` (
 ### 28.6 Where it is drawn
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
+
+## 30. ContextTreeModel.owners comes from core (Job `owners-docs`)
+
+Skeleton: sections 30.1 to 30.3 to follow in this Job.
