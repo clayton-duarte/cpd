@@ -11,9 +11,10 @@ const pkg = JSON.parse(
 };
 
 test("package.json pins the earendil-works packages at 1.5.0", () => {
-  for (const name of ["chord", "pi-coding-agent", "pi-ai", "pi-codemode", "pi-durable"]) {
+  for (const name of ["chord", "pi-ai", "pi-codemode", "pi-durable"]) {
     assert.equal(pkg.dependencies[`@earendil-works/${name}`], "1.5.0", name);
   }
+  assert.equal(pkg.dependencies["@earendil-works/pi-coding-agent"], "1.5.2");
   assert.equal(pkg.dependencies["@earendil-works/pi-tui"], "^1.5.0");
 });
 

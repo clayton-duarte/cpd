@@ -90,7 +90,7 @@ test("the pi MCP port lists the tools with pi's model-facing name, the server's 
     { name: "a.b", description: "", inputSchema: { type: "object" } },
   ];
   const c2 = await piMcpPort(e2, "/w").connect("docs", { url: "https://x" });
-  assert.deepEqual(c2.tools.map((x) => x.name), ["mcp__docs__a_b", "mcp__docs__a_b_h4sh"]);
+  assert.deepEqual(c2.tools.map((x) => x.name), ["mcp__docs__a_b", "mcp__docs__a_b_e04bd6ad"]);
 });
 
 test("calling a tool passes the server's tool name, the arguments and a signal, and returns the joined text blocks and isError", { timeout: 10_000 }, async (t) => {
@@ -130,3 +130,27 @@ test("closing the connection closes pi's connection", { timeout: 10_000 }, async
   await c.close();
   assert.equal(fake.constructed[0].closed, 1);
 });
+
+test("durable worker MCP creates tool names using pi-mcp module", { timeout: 10_000 }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cpd-pi-mcp-152-"));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+    delete (globalThis as any).__fakeMcp;
+  });
+  const dist = join(root, "dist");
+  mkdirSync(join(dist, "extensions/mcp"), { recursive: true });
+  writeFileSync(join(dist, "index.js"), "");
+  writeFileSync(join(dist, "extensions/mcp/config.js"), FAKE_CONFIG);
+  writeFileSync(join(dist, "extensions/mcp/runtime.js"), FAKE_RUNTIME);
+  // pi 1.5.2 layout: extensions/mcp/tools.js no longer exports createMcpToolName
+  writeFileSync(join(dist, "extensions/mcp/tools.js"), "export function createMcpToolDefinition() {}");
+
+  const fake: Fake = { constructed: [] };
+  (globalThis as any).__fakeMcp = fake;
+  fake.tools = [{ name: "search", description: "search tool", inputSchema: { type: "object" } }];
+
+  const port = piMcpPort(join(dist, "index.js"), "/work/dir");
+  const connection = await port.connect("srv", { url: "https://example.com" });
+  assert.deepEqual(connection.tools.map((x) => x.name), ["mcp__srv__search"]);
+});
+

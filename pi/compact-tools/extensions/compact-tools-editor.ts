@@ -146,21 +146,28 @@ export function hookEditor(): void {
 		if (args[0] !== FOCUS_IN && args[0] !== FOCUS_OUT) focusSetter?.(true);
 		return original.apply(self, args);
 	};
-	hookMethod(Editor.prototype, "handleInput", "editor.box.input", (self, args, original) =>
-		self instanceof CustomEditor ? original.apply(self, args) : focusOnKey(self, args, original));
+	const editorProtos = [Editor.prototype];
+	const customEditorSuper = Object.getPrototypeOf(CustomEditor.prototype);
+	if (customEditorSuper && customEditorSuper !== Editor.prototype && !editorProtos.includes(customEditorSuper)) {
+		editorProtos.push(customEditorSuper);
+	}
+	for (const proto of editorProtos) {
+		hookMethod(proto, "handleInput", "editor.box.input", (self, args, original) =>
+			self instanceof CustomEditor ? original.apply(self, args) : focusOnKey(self, args, original));
+		hookMethod(proto, "render", "editor.box.render", (self, args, original) =>
+			boxRows(self, args[0], (width) => original.call(self, width)));
+		// A click's column is counted from the text column, in the text area's width.
+		hookMethod(proto, "handleMouse", "editor.box.mouse", (self: EditorLike, args, original) => {
+			const event = args[0];
+			const SIDE = sideOf(state().margins());
+			if (event.width < SIDE * 2 + 2) return original.call(self, event);
+			const { paddingX } = self;
+			self.paddingX = 0;
+			try { return original.call(self, { ...event, x: event.x - SIDE, width: event.width - SIDE * 2 }); }
+			finally { self.paddingX = paddingX; }
+		});
+	}
 	hookMethod(CustomEditor.prototype, "handleInput", "custom-editor.box.input", focusOnKey);
-	hookMethod(Editor.prototype, "render", "editor.box.render", (self, args, original) =>
-		boxRows(self, args[0], (width) => original.call(self, width)));
-	// A click's column is counted from the text column, in the text area's width.
-	hookMethod(Editor.prototype, "handleMouse", "editor.box.mouse", (self: EditorLike, args, original) => {
-		const event = args[0];
-		const SIDE = sideOf(state().margins());
-		if (event.width < SIDE * 2 + 2) return original.call(self, event);
-		const { paddingX } = self;
-		self.paddingX = 0;
-		try { return original.call(self, { ...event, x: event.x - SIDE, width: event.width - SIDE * 2 }); }
-		finally { self.paddingX = paddingX; }
-	});
 }
 
 /** Tracks the terminal's focus report for the pane the editor lives in, and patches the Editor. */
