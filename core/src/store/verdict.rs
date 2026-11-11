@@ -277,12 +277,7 @@ fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
 }
 
 /// `migration_order` (§4.5 O3): `name` cannot be applied to this store; nothing is written.
-fn order(
-    name: &str,
-    applied_after: &[&str],
-    unknown: &[String],
-    on_origin_main: bool,
-) -> CpdError {
+fn order(name: &str, applied_after: &[&str], unknown: &[String], on_origin_main: bool) -> CpdError {
     let fix = if on_origin_main {
         "A breaking migration already on origin/main cannot be renamed; upgrade cpd or restore the store."
     } else {

@@ -18,6 +18,8 @@ export interface StatusModel {
   readonly hostAlert: boolean;
   readonly mode: "production" | "preview";
   readonly drift: { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean } | null;
+  readonly versionMismatch?: boolean;
+  readonly alert?: string;
 }
 
 /** `5m`, `2h 5m`, `3d`: the elapsed time since `startedAt`. */
@@ -37,9 +39,11 @@ export function barStatus(s: WireStatus, nowMs: number): StatusModel {
     incident: s.incident === null ? null : { elapsed: elapsed(s.incident.startedAt, nowMs), lead: s.incident.lead },
     workers: s.workers === null ? null : { queued: s.workers.queued, ready: s.workers.waiting, tenants: s.workers.tenants, concurrency: s.workers.limit },
     version: s.version,
-    hostAlert: s.hostAlert,
+    hostAlert: s.hostAlert || s.versionMismatch === true,
     mode: s.mode,
     drift: s.drift,
+    versionMismatch: s.versionMismatch,
+    alert: s.alert,
   };
 }
 
@@ -97,8 +101,8 @@ function Pills({ status, onSettings, onSelectSession }: { status: StatusModel; o
         <Badge
           data-part="version"
           variant="ghost"
-          {...(status.hostAlert ? { "data-alert": "true" } : {})}
-          className={cn(PILL, status.hostAlert ? "text-status-blocked" : "text-fg-dim")}
+          {...(status.hostAlert || status.versionMismatch ? { "data-alert": "true" } : {})}
+          className={cn(PILL, (status.hostAlert || status.versionMismatch) ? "text-status-blocked" : "text-fg-dim")}
         >{status.version}</Badge>
       )}
       {status.mode === "preview" ? <Badge data-part="mode" variant="outline" className={cn(PILL, "border-sakura text-sakura")}>preview</Badge> : null}

@@ -84,7 +84,25 @@ export function App(props: AppProps): ReactElement {
       setReport({ id: "", error, failure: { code: "cpd_failed", message: e instanceof Error ? e.message : "the report could not be sent" } });
     }
   }, [onAction]);
-  const activeError = lastError ?? cockpit.error;
+  const activeError = useMemo(() => {
+    const err = lastError ?? cockpit.error;
+    if (err !== null) {
+      const msg = err.message ?? "";
+      if (err.code === "webui_token_invalid" || msg.includes("--webui-token") || msg.includes("webui-token")) {
+        return {
+          code: "version_skew",
+          message: "WebUI and cpd version skew detected: cpd install needed from the WebUI checkout to update cpd.",
+        };
+      }
+    }
+    if (err === null && (cockpit.status?.versionMismatch || cockpit.status?.alert === "version_skew")) {
+      return {
+        code: "version_skew",
+        message: "WebUI and cpd version skew detected: cpd install needed from the WebUI checkout to update cpd.",
+      };
+    }
+    return err;
+  }, [lastError, cockpit.error, cockpit.status]);
   // While a report is in flight or failed the toast keeps its own error, so the send's failure (lastError)
   // never replaces it (air-d27).
   const shownError = report?.error ?? activeError;
