@@ -2738,3 +2738,70 @@ Normative target. The rules of one `cpd install --root <checkout>` on every mach
 
 - A rerun on a converged machine changes nothing (`docs/commands.md` §14.4: install is idempotent). Assumption of this section, not in any record: a shell already at `app-v0.1.0` is not reinstalled.
 - Open, not decided here: whether install opens CPD.app after it installs it; what install does when `/Applications/CPD.app` is at another version; whether a failed worktree creation or prod build fails the install's exit or only prints.
+
+## 31. `cpd doctor` cross-machine check: target contract (Plan `ports-everywhere`; Job `doctor-cross-machine-docs`)
+
+**Status: target, not implemented.** As of this section, no code runs this check: `engine/src/doctor/mod.rs` runs only local checks. The Lead's answer on this Job (`doctor-cross-machine-docs-a1-q1`) makes this the contract that the next Jobs (`doctor-cross-machine-tests`, which writes red tests from this section, then `doctor-cross-machine-impl`) build to. Every rule below is a Phase choice of this section unless it cites a source. Architecture overview and output example: `docs/architecture/doctor-cross-machine.md`.
+
+### 31.1 Scope
+
+- `cpd doctor` gains one check, `cross_machine`, that probes the WebUI ports of the other machines in the fleet over HTTP: port 3333 (production WebUI server, §30, `docs/architecture/webui-network-ports.md`) and port 33333 (preview Vite server).
+- It is an HTTP reachability probe only. It does not open `/cpd-ws`, does not send an `Origin` header and does not authenticate. The Origin rule of §15.1 is access control for browsers and is not involved.
+- Reachability means that something answered HTTP on that host and port. It does not show that the answer comes from cpd, nor that the service is healthy.
+
+### 31.2 Fleet configuration
+
+- The fleet is read from `$CPD_HOME/config.toml` only (`docs/commands.md` §14.2 `config`). `cpd` reads no other file for it: no dotfiles registry, no SSH config and no DNS discovery. Decision of this section: explicit over implicit.
+- Shape (target, a new `[fleet.<machine>]` table; `docs/contract.md` §8.1 does not list it yet, which is the impl Job's to add):
+
+  ```toml
+  machine = "pro"
+
+  [fleet.air]
+  host = "192.168.3.5"
+
+  [fleet.hs]
+  host = "homeserver"
+  ```
+
+- `<machine>` is a machine name in the syntax of `machine`. `host` is required: a non-empty hostname or an IP literal, with no scheme, port or path.
+- The entry for the local `machine` is refused, not skipped: `config_invalid` with `details.key` = `fleet.<machine>`. An unknown key inside an entry is `config_invalid`, as for every table.
+- `fleet` absent or empty: the `cross_machine` check is not in the report at all. Existing reports do not change.
+
+### 31.3 Probes
+
+- For each fleet machine, sorted by name, and each port in `[3333, 33333]` (fixed, not configurable: pro-d541): one `GET http://<host>:<port>/`, HTTP/1.1, no `Origin`, no credentials, redirects not followed.
+- Deadline 10 s per probe, the same as the doctor's other probes (§14.1). All probes run concurrently, so the check takes at most about 10 s.
+- A probe is **reachable** when a complete HTTP status line arrives before the deadline. Any status code counts as reachable; the code is reported. A `5xx` is reachable and is not a failure of this check.
+- A probe that is not reachable has one reason, from this closed set:
+
+  | `reason` | Meaning |
+  |---|---|
+  | `refused` | the TCP connection was refused |
+  | `unresolved` | the host name did not resolve |
+  | `timeout` | the deadline passed, connect or read |
+  | `no_http_response` | the connection was made but no HTTP status line came back |
+  | `other` | any other failure; `message` carries the OS error text |
+
+- Probes are read-only. The check writes nothing and changes no state, so it is idempotent.
+
+### 31.4 Result
+
+- `name`: `cross_machine`. `severity`: `warn`. Decision of this section: a machine that is asleep or off is an environment fact, not a local fault, so the check never makes the result `doctor_failed` (§14.1 already says `warn` never fails it).
+- `ok`: `true` only when every probe is reachable.
+- `found`: an array with one object per probe, in machine then port order:
+  - reachable: `{"machine": "hs", "host": "homeserver", "port": 3333, "reachable": true, "status": 200}`
+  - unreachable: `{"machine": "hs", "host": "homeserver", "port": 33333, "reachable": false, "reason": "refused"}`, plus `"message"` only for `reason` `other`.
+- `expected`: `"every fleet machine answers on 3333 and 33333"`.
+- `message`, only when `ok` is false: `"<n> of <m> fleet probes unreachable: <machine>:<port> <reason>, ..."` in the same order as `found`.
+
+### 31.5 Refusals and errors
+
+- A malformed `[fleet]` table is `config_invalid` from the `config` check, as §14.1 already says for `config`. The `cross_machine` check does not run when `config` fails; it is then `not_checked`, like the other config-dependent checks.
+- A probe failure is never a doctor error: it is a `found` entry with `reachable: false`. Only a bug in the check itself is an error.
+
+### 31.6 Open points (not decided here)
+
+- Whether the probe should run in the engine's tick as well as in `cpd doctor`. Not decided; the doctor is the only caller in this section.
+- Whether `host` should accept a DNS name that resolves to several addresses and probe each. Not decided; one address is what the probe uses today (the OS resolver's first answer).
+- The timeout is 10 s by analogy with §14.1, not measured on the fleet. Unverified against a real slow link.
