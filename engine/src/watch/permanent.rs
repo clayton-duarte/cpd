@@ -19,3 +19,15 @@ pub(super) fn run(engine: &mut Engine) {
         None => engine.clear(Step::E22, &About::Machine),
     }
 }
+
+#[cfg(test)]
+#[test]
+fn engine_supervises_durable_manager() {
+    panic!("stub for engine_supervises_durable_manager");
+}
+
+#[cfg(test)]
+#[test]
+fn manager_wake_without_tmux() {
+    panic!("stub for manager_wake_without_tmux");
+}
