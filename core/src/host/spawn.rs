@@ -561,7 +561,10 @@ impl FakeSpawn {
                     return false;
                 }
                 // Filter out WebUI launches (e.g. node web/src/server/serve.ts, pnpm run dev for preview)
-                if l.args.iter().any(|a| a.contains("serve.ts") || a.contains("webui")) {
+                if l.args
+                    .iter()
+                    .any(|a| a.contains("serve.ts") || a.contains("webui"))
+                {
                     return false;
                 }
                 true
