@@ -356,7 +356,14 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
             }
         }
         let sql = select_all(&mut store, t, by);
-        let (new_cols, new_rows) = table(&mut store, &sql);
+        let (mut new_cols, mut new_rows) = table(&mut store, &sql);
+        if *t == "jobs" {
+            // Later migration draft-waiting-on adds waiting_on to jobs (NULL for every existing row).
+            assert_eq!(new_cols.pop(), Some("waiting_on".to_owned()));
+            for row in &mut new_rows {
+                assert_eq!(row.pop(), Some(Value::Null));
+            }
+        }
         assert_eq!(new_cols, cols, "{t}: the same columns, in the same order");
         assert_eq!(new_rows, rows, "{t}: every row, every column");
     }

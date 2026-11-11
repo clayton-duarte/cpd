@@ -235,19 +235,21 @@ fn check_against_plan(
     plan: &PlanRow,
     outline: &Outline,
 ) -> Result<(), CpdError> {
-    let counts: Vec<String> = {
-        let mut stmt =
-            conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND status <> 'cancelled'")?;
-        stmt.query_map([plan.id.as_str()], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?
-    };
-    if let Some(key) = outline.done_when.keys().find(|k| !counts.contains(k)) {
-        return Err(CpdError::new(
-            ErrorCode::OutlineInvalid,
-            format!("The outline's done_when names {key}, which is not a Workflow of Plan {} that is not cancelled.", plan.id),
-        )
-        .with("field", format!("done_when.{key}"))
-        .with("key", key.as_str()));
+    for key in outline.done_when.keys() {
+        let is_cancelled: bool = conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'cancelled')",
+                [plan.id.as_str(), key.as_str()],
+                |r| r.get(0),
+            )?;
+        if is_cancelled {
+            return Err(CpdError::new(
+                ErrorCode::OutlineInvalid,
+                format!("The outline's done_when names {key}, which is a cancelled Workflow of Plan {}.", plan.id),
+            )
+            .with("field", format!("done_when.{key}"))
+            .with("key", key.as_str()));
+        }
     }
     for (i, id) in outline.decided.iter().enumerate() {
         let found: Option<i64> = conn

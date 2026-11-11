@@ -8,6 +8,7 @@ export interface CoreSnapshot {
   plans: Array<{ id: string; title: string; phase: string }>;
   jobs: Array<{ plan: string; key: string; status: string }>;
   cursor: number;
+  owners?: string[];
 }
 
 export interface FakeCoreWsSocket {

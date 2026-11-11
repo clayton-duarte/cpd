@@ -151,14 +151,14 @@ fn a_failed_leaf_refuses_needs_unavailable_and_adds_nothing() {
 fn a_draft_added_to_an_open_pr_is_chained_and_a_draft_leaf_is_skipped() {
     let fx = Fx::new();
     open_pr(&fx);
-    let first = add(&fx, "d1", &["--draft"]).ok();
+    let first = add(&fx, "d1", &["--draft", "--waiting-on", "lead"]).ok();
     assert_eq!(
         (&first["job"]["status"], needs(&first)),
         (&json!("draft"), json!(["open-fix"]))
     );
     // The draft `d1` is no leaf: the next Job chains after the open Job again.
     assert_eq!(
-        needs(&add(&fx, "d2", &["--draft"]).ok()),
+        needs(&add(&fx, "d2", &["--draft", "--waiting-on", "lead"]).ok()),
         json!(["open-fix"])
     );
 }

@@ -1914,6 +1914,9 @@ fn job_add_draft(fx: &Fx, plan_id: &str, key: &str, needs: &[&str], extra: &[&st
         "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--draft", "--plan",
         plan_id,
     ];
+    if !extra.iter().any(|a| a.starts_with("--waiting-on")) {
+        args.extend(["--waiting-on", "lead"]);
+    }
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -2062,7 +2065,18 @@ fn draft_add_refused_usage(fx: &Fx, extra: &[&str]) {
         count(&fx.env, "events"),
         count(&fx.env, "jobs"),
     );
-    let mut args = vec!["job", "add", "k", "--title", "T", "--draft", "--plan", "pl"];
+    let mut args = vec![
+        "job",
+        "add",
+        "k",
+        "--title",
+        "T",
+        "--draft",
+        "--waiting-on",
+        "lead",
+        "--plan",
+        "pl",
+    ];
     args.extend(extra);
     refused(&fx.cpd(&args), "usage", 2);
     assert_eq!(
@@ -2371,7 +2385,7 @@ fn a_job_is_not_urgent_unless_added_with_urgent() {
     );
     assert_eq!(job_row(&fx.env, "pl", "late", "urgent"), 1);
     // `--draft` and `--urgent` together: a draft, urgent.
-    let out = job_add_urgent(&fx, "pl", "later", &["--draft"]).ok();
+    let out = job_add_urgent(&fx, "pl", "later", &["--draft", "--waiting-on", "lead"]).ok();
     assert_eq!(
         (&out["job"]["status"], &out["job"]["urgent"]),
         (&json!("draft"), &json!(true))
@@ -2868,7 +2882,7 @@ fn an_impl_job_that_is_not_a_draft_needs_a_test_job_of_its_pr() {
             args.extend(["--needs", needs]);
         }
         if draft {
-            args.push("--draft");
+            args.extend(["--draft", "--waiting-on", "lead"]);
         }
         fx.cpd(&args)
     };

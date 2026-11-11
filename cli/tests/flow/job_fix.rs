@@ -159,8 +159,14 @@ fn approving_a_plan_review_that_holds_drafts_of_an_open_pr_queues_no_update_job(
     let fx = Fx::new();
     open_tdd(&fx);
     // Pull request row of the open PR exists (plan() made it); drafts are added to it in `deploy`, then reviewed.
-    assert_eq!(add(&fx, "d1", &["--draft"]).ok()["job"]["status"], "draft");
-    assert_eq!(add(&fx, "d2", &["--draft"]).ok()["job"]["status"], "draft");
+    assert_eq!(
+        add(&fx, "d1", &["--draft", "--waiting-on", "lead"]).ok()["job"]["status"],
+        "draft"
+    );
+    assert_eq!(
+        add(&fx, "d2", &["--draft", "--waiting-on", "lead"]).ok()["job"]["status"],
+        "draft"
+    );
     fx.outline_for_review("pl");
     let review = fx
         .cpd(&["plan", "review", "--plan", "pl", "--title", "Review title"])

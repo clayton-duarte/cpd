@@ -446,9 +446,9 @@ const refSpec = files("cpd-lead").find((f) => f.name.endsWith("references/spec-f
 const docsDir = new URL("../../docs/", import.meta.url);
 const docText = (n: string) => readFileSync(new URL(n, docsDir), "utf8");
 
-test("draft is never a waiting state in the cpd-lead skill", () => {
-  assert.match(lead, /being edited/, "a draft exists only while being edited");
-  assert.match(lead, /pending (Plan )?review/, "or while covered by a pending review");
+test("a draft names its wait in the cpd-lead skill (pro-d549)", () => {
+  assert.match(lead, /--waiting-on <lead\|user\|explore:<job>>/, "a draft names what it waits on");
+  assert.match(lead, /pending (Plan )?review/, "a user draft is covered by a pending review");
   assert.doesNotMatch(lead, /--draft --title/, "no stub draft form");
   assert.doesNotMatch(lead, /a stub \(/, "no stub description");
   assert.doesNotMatch(lead, /gets the stubs/, "no stubs from workflow add");

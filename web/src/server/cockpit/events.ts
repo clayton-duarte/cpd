@@ -85,7 +85,7 @@ function isTransientLoadError(e: unknown): boolean {
 }
 const SESSION_STATES: readonly string[] = ["working", "waiting", "blocked", "idle", "stopped"];
 type Obj = Record<string, unknown>;
-type RawPanes = { context: Obj; plan: Obj; session: Obj; inbox: Obj };
+type RawPanes = { context: Obj; plan: Obj; session: Obj; inbox: Obj; owners?: readonly string[] };
 const CURSOR_AHEAD = 3;
 
 export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; follow: FollowBoundary; scheduler: Scheduler; extras?: Extras; stream?: CockpitStream }): CockpitService {
@@ -266,7 +266,19 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     if (typeof v !== "object" || v === null || v["ok" as keyof typeof v] !== true) throw new WebError("cpd_malformed_json", `cockpit stream ${pane} pane is not an ok object`, { field: pane });
     return v as Obj;
   };
-  const toRaw = (p: StreamPanes): RawPanes => ({ context: checkOk(p.context, "context"), plan: checkOk(p.plan, "plan"), session: checkOk(p.session, "session"), inbox: checkOk(p.inbox, "inbox") });
+  const checkOwners = (v: unknown): readonly string[] | undefined => {
+    if (v === undefined) return undefined;
+    if (!Array.isArray(v)) throw new WebError("cpd_malformed_json", "cockpit stream owners pane is not an array", { field: "owners" });
+    for (const o of v) if (typeof o !== "string") throw new WebError("cpd_malformed_json", "cockpit stream owner is not a string", { field: "owners" });
+    return v as readonly string[];
+  };
+  const toRaw = (p: StreamPanes): RawPanes => ({
+    context: checkOk(p.context, "context"),
+    plan: checkOk(p.plan, "plan"),
+    session: checkOk(p.session, "session"),
+    inbox: checkOk(p.inbox, "inbox"),
+    owners: checkOwners(p.owners),
+  });
   const emitRaw = (): void => {
     if (raw === null) return;
     try { const m = mapPanes(raw); apply({ tree: m.tree, inbox: m.inbox }); } catch (e) { emitError(e); }

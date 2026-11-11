@@ -276,6 +276,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-touches` (§5.9a) | Lead | no | no |
 | `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
+| `cpd plan check` (§4.16) | Manager, Lead | no | no |
+| `cpd plan reopen` (§4.17) | Lead | no | no |
 | `cpd session retier` (§10.16) | Manager | yes | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd models refresh` (§14.5) | Manager, Lead | no | no |
@@ -1524,9 +1526,9 @@ On a re-planned Plan (`locked_at` set, A1) with no `draft` Job and no Workflow w
 
 **The no-draft lock** (A4, pro-d433). On a re-planned Plan (`locked_at` set) with no `draft` Job and no Workflow with a `draft` Job, `plan lock` needs no approved review and no draft. It moves the Plan `plan → dispatch` (`plan-phase` `{from: "plan", to: "dispatch"}`; `locked_at` kept) and then the done guard settles it (contract §3.1, `settle_done`): a Plan whose Workflows are all `merged` and whose Jobs are all final ends `done` with `plan-done`. This is how a Lead finishes a Plan when an explore Job found nothing to change.
 
-Effects (§3.1, §3.8, §7.2; R34, A8): every Workflow's `draft` Jobs are approved at once and the Workflows with no needs and no base Workflow **start**, all or nothing; the Workflows with needs and the **stacked** Workflows (contract §2.2 "The base Workflow"; a base Workflow of the same Plan included: the lock orders no worktrees), stay `waiting` until engine `workflow-start` (or `workflow start`, §9.7) starts them once their needs are `merged` and their base Workflow is `open`.
+Effects (§3.1, §3.8, §7.2; R34, A8): every Workflow's `draft` Jobs that name no `--waiting-on` are approved at once (the others stay drafts) and the Workflows with no needs and no base Workflow **start**, all or nothing; the Workflows with needs and the **stacked** Workflows (contract §2.2 "The base Workflow"; a base Workflow of the same Plan included: the lock orders no worktrees), stay `waiting` until engine `workflow-start` (or `workflow start`, §9.7) starts them once their needs are `merged` and their base Workflow is `open`.
 - **git**, for each Workflow with no needs and no base Workflow, in its repo (§7.2, R35 per Workflow branch, A5): `fetch origin <base>`; `ls-remote --exit-code --heads origin <lead branch>`. When it is on the remote and does not conflict with `origin/<base>` (`merge-tree --write-tree --name-only` exits 0; a base that merely moved ahead is no conflict, hs-d490): reuse it, `fetch origin <lead branch>` and `worktree add --no-track -b <lead branch> <lead worktree> origin/<lead branch>`. When it is absent: `worktree add --no-track -b <lead branch> <lead worktree> origin/<base>`. A repo with no `origin` (A3): no remote check and no push, `worktree add --no-track` from `<base>`. `--no-track`: a Lead Branch has no upstream, so nothing writes `.git/config` (hs-d243, contract §7.2). Then `pre-start` in the worktree, output in `run/<plan>/logs/lead-<key>.pre-start.log`. Every started Workflow's worktree is created and its `pre-start` run before anything is pushed; if one fails, every worktree and branch the lock created is removed, nothing is pushed, nothing in the database changes and the lock fails with that Workflow's refusal. When all have passed, each new Lead Branch is pushed, `push origin <lead branch>` from its Lead worktree (no `-u`, hs-d243). A failed push does not fail the lock: one `error` Event with code `push_failed` and `details.workflow` is appended per failed Workflow and the next merge or `pr open` pushes again.
-- **Rows**, one transaction, with a compare-and-swap on `phase = 'plan'` and on the review read: `plans.phase = dispatch`, `locked_at`; every `draft` Job of every Workflow `queued` with its Locked-Job fingerprint; for each started Workflow, with a compare-and-swap on `status = 'waiting'`: `status = dispatch`, `lead_worktree`, `started_at`. **Events** `plan-phase` `{from: "plan", to: "dispatch", jobs: [key], workflows: [key]}` (`jobs`: the drafts queued, then the `open` Job each started Workflow gets at its start, §3.8 "Opening"; `workflows`: the Workflows started) and one `workflow-started` `{workflow, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by: "lock"}` per started Workflow. If the transaction fails, the worktrees and branches are removed.
+- **Rows**, one transaction, with a compare-and-swap on `phase = 'plan'` and on the review read: `plans.phase = dispatch`, `locked_at`; every `draft` Job of every Workflow that names no `--waiting-on` `queued` with its Locked-Job fingerprint (a draft that names one stays a draft until its wait resolves and a Plan review approves it, §5.1); for each started Workflow, with a compare-and-swap on `status = 'waiting'`: `status = dispatch`, `lead_worktree`, `started_at`. **Events** `plan-phase` `{from: "plan", to: "dispatch", jobs: [key], workflows: [key]}` (`jobs`: the drafts queued, then the `open` Job each started Workflow gets at its start, §3.8 "Opening"; `workflows`: the Workflows started) and one `workflow-started` `{workflow, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by: "lock"}` per started Workflow. If the transaction fails, the worktrees and branches are removed.
 - **Open Jobs:** the start adds each started Workflow's `open` Job, `queued`, in the start's own transaction (contract §3.8 "Opening"); for a Workflow the lock starts, that is the lock's transaction. Engine `open-jobs` is the fallback (contract §3.7, hs-d340).
 - **tmux:** `watch --ensure` (§12): starts `cpd watch` in `cpd-work:watch` when `locks/watch.lock` is free.
 
@@ -1795,6 +1797,30 @@ A `tier_advice` finding has `pr` null, `job` the Job’s key, `other` null, `pat
 
 Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
 
+### 4.16 `plan check`
+
+Status: planned; the command is not in the binary yet.
+
+```
+cpd plan check --plan <p>
+```
+
+Checks the Plan's registered work, the check a Manager runs for each Plan it oversees (`pi/skills/cpd-manager/SKILL.md`, "Check each Plan's registered work"). It reports two lists: the Workflows the outline's `done_when` declares that the Plan does not hold, and the drafts that are unresolved (a draft whose `--waiting-on` has not resolved and that no pending Plan review covers). `done` is refused while either list is not empty. It writes nothing; the same Plan twice gives the same answer.
+
+Callers: Manager, Lead.
+
+### 4.17 `plan reopen`
+
+Status: planned; the command is not in the binary yet. The phase the Plan returns to is not fixed here.
+
+```
+cpd plan reopen <id>
+```
+
+Reopens a `done` Plan so that follow-up work can be added to it. A Plan that is not `done` is refused `illegal_transition` (exit 3), as `plan lock` refuses a Plan out of phase.
+
+Callers: Lead.
+
 ## 5. `job`
 
 Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except where stated.
@@ -1823,8 +1849,8 @@ Both are required for a `test` Job that is not a stub and refused for every othe
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--draft] [--urgent] [--plan <id>]
-cpd job add <key> --title <text> --tier <T> --spec <file> [--draft] [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--draft --waiting-on <lead|user|explore:<job>>] [--urgent] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--draft --waiting-on <lead|user|explore:<job>>] [--workflow <key>] [--kind <work|docs|test|impl|verify|scout|research>] [--needs <k1,k2>] [--plan <id>]
 ```
 
 `--tier` and `--spec` are always required, with `--draft` too (`usage`, exit 2; pro-d404): a draft exists only while it is being edited in the current turn or covered by a Plan review (contract §2.2 "A parked draft", rule 1). The only incomplete drafts are the template's stub drafts of `workflow add` before the lock (§9.4), which the Lead completes with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up Workflow is added after the lock with `workflow add <key> --repo … --needs … --jobs <file.json>` (§9.4), which queues its Jobs.
@@ -1844,6 +1870,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--draft] [--workflow 
 | `--workflow <key>` | the Job's Workflow (R34, A14), selected by §1.3's rule: required when the Plan has two or more Workflows that are not `cancelled`, defaulted to the one when it has one. Not for `scout` or `research`: `--workflow` is refused `explore_workflow_forbidden` and an explore Job belongs to the Plan (below) |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same Workflow only (A7) |
 | `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. `--tier` and `--spec` are required with it too (`usage`). A Job that only carries out a recorded User decision, with no open design choice, is added without `--draft` (User, hs-d301, amending hs-d173, hs-d174, hs-d179); drafts are for design the User has not decided and when unsure it is a draft. **After the lock a draft is refused when its Workflow waits for another Workflow, or its needs chain, through drafts, to a queued, running or failed Job** (`draft_parked`, the row below; contract §2.2 "A parked draft", rule 3). Not for `scout` or `research` (`explore_no_draft`): an explore Job is never a draft (below) |
+| `--waiting-on <lead\|user\|explore:<job>>` | what a draft waits on, required with `--draft` and refused without it: `user` (the User's approval of its batch, under a pending Plan review), `explore:<job>` (the answer of that explore Job) or `lead` (the Lead's own next step). A draft that names a wait is never queued by `plan lock` and stays a draft until the wait resolves and a Plan review approves it (§4.8) |
 | `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine `scheduling` starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
 | `--kind <work\|docs\|test\|impl\|verify\|scout\|research>` | the Job's kind (hs-d341, contract §2.2 "Job kinds"); default `work`. `scout` and `research` are the explore kinds, below. `verify` adds checks (end-to-end, smoke, load, contract) and changes no product behaviour: it has no Spec section of its own (no `tests` or `test_files`, `spec_invalid`) and its submit runs only the tamper check; it needs an `impl` Job of its Workflow (`impl_job_required`). `open` and `update` are cpd's: `kind_reserved`. The Workflow's stored shape (§9.4) decides which kinds it may have (`shape_violation`, below). A `test` Job's Spec file has `tests` and `test_files` (§5), an `impl` Job needs a `test` Job of its Workflow and both need the repo's `[test-commands]` (below). |
 
@@ -1871,6 +1898,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--draft] [--workflow 
 | the Spec's `resources` is valid for the kind (§5, JSON path `$.resources`) | `spec_invalid` | 2 |
 | every name in the Spec's `resources` is declared by the host, owner or repo policy of the Workflow (contract §8.3 "The `resources` domain"); `details` `{job, workflow, resource, declared, file}`. A stub draft has no Spec of the Lead's and no check (the `open` Job's Spec is cpd's and names no `resources`); `plan review` and `plan lock` do not check again | `resource_undeclared` | 3 |
 | `--workflow` with `--kind scout` or `research` | `explore_workflow_forbidden` | 3 |
+| `--draft` without `--waiting-on`, or `--waiting-on` without `--draft` | `usage` | 2 |
 | `--draft` with `--kind scout` or `research` | `explore_no_draft` | 3 |
 | an explore Job's `needs` are all explore Jobs and no other Job needs an explore Job; `details.jobs` lists the Jobs on the other side. `needs_other_workflow` does not apply to an explore Job, which has no Workflow | `explore_needs_mixed` | 3 |
 | an explore Job's Spec has exactly the four fields of the explore Spec (below): `touches`, `tests`, `test_files` or `resources` is refused, with the JSON path in `details` | `spec_invalid` | 2 |
