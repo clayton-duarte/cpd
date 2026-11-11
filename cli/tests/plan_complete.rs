@@ -216,7 +216,7 @@ pub mod plan_complete {
         // cpd plan review should refuse because done_when contains w2 which is not registered
         let out_review = fx.cpd(&["plan", "review", "--plan", "p1", "--title", "First review"]);
         assert_eq!(out_review.exit, 3);
-        let val: serde_json::Value = serde_json::from_str(&out_review.stderr).unwrap_or_default();
+        let val = out_review.json();
         let code = val["error"]["code"].as_str().unwrap_or("");
         assert!(
             code == "outline_incomplete" || code == "workflow_unregistered",
@@ -226,8 +226,7 @@ pub mod plan_complete {
         // cpd plan lock should also refuse
         let out_lock = fx.cpd(&["plan", "lock", "--plan", "p1"]);
         assert_eq!(out_lock.exit, 3);
-        let val_lock: serde_json::Value =
-            serde_json::from_str(&out_lock.stderr).unwrap_or_default();
+        let val_lock = out_lock.json();
         let lock_code = val_lock["error"]["code"].as_str().unwrap_or("");
         assert!(
             lock_code == "outline_incomplete"
@@ -541,8 +540,7 @@ pub mod plan_complete {
         );
         // It might fail for other reasons (e.g. duplicate) but NOT plan_inactive
         if out_send_after.exit != 0 {
-            let val: serde_json::Value =
-                serde_json::from_str(&out_send_after.stderr).unwrap_or_default();
+            let val = out_send_after.json();
             assert_ne!(val["error"]["code"].as_str().unwrap_or(""), "plan_inactive");
         }
     }
