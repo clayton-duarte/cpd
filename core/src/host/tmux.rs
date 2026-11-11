@@ -134,7 +134,7 @@ pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// The `pane-died` hook (contract §6.1, §6.6, superseded in part by §6.23):
+/// The `pane-died` hook (contract §6.1, §6.6, superseded in part by §6.24):
 /// a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its
 /// program dies; any other pane stays dead, as `remain-on-exit` leaves it.
 pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
