@@ -28,6 +28,10 @@ Agents are one hierarchy, `Manager > Lead > Worker`, mapped 1:1 to `Context > Pl
 
 A key is fixed: never rename a session.
 
+## Typed tools
+
+cpd's operations are typed pi tools, one per domain, each called with an `op` and its `params`. Call the tool for the operation instead of a bash `cpd` subcommand: `cpd_context.decide` records a decision, `cpd_plan.show` shows a Plan. The domains are plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Messages to another agent go through the message domain: `cpd_message.delegate` (down one tier) and `cpd_message.escalate` (up one tier, to the parent).
+
 ## Rules
 
 - **Records first.** Your memory is the Context's records, not this chat. The chat is disposable: a fresh Manager that reads the records must be able to continue your work. Write every decision and note as a record the moment it is settled ([1. Records](#1-records)); an open question is asked of the User with `ask_user_question`, never recorded. Something only in the chat is lost.

@@ -29,6 +29,10 @@ Agents are one hierarchy, `Manager > Lead > Worker`, mapped 1:1 to `Context > Pl
 
 A key is fixed: never rename a session.
 
+## Typed tools
+
+cpd's operations are typed pi tools, one per domain, each called with an `op` and its `params`. Call the tool for the operation instead of a bash `cpd` subcommand: `cpd_context.decide` records a decision, `cpd_plan.show` shows a Plan. The domains are plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Messages to another agent go through the message domain: `cpd_message.delegate` (down one tier) and `cpd_message.escalate` (up one tier, to the parent).
+
 ## Rules
 
 - You plan and orchestrate; Workers write all product code and commits. A repo's configuration is its policy file under `~/.cpd/policy/repos/<owner>/<name>.toml`, outside the repo; you draft it and confirm it with the User (see [Scoping](#scoping)). A Worker cannot reach `~/.cpd`. Never edit the repo checkout or commit product changes.
