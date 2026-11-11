@@ -3,9 +3,7 @@
  *
  * Hard ceiling on model input:
  * cap = min(200000, floor(0.8 * W)) tokens, where W is the active model's context window.
- *
- * This file declares the interface, error types, and stubs for cap calculation and
- * pre-dispatch enforcement. Implementation is completed in cap-impl.
+ * Computed in integers as floor(W * 4 / 5).
  */
 
 export class ModelInputCapError extends Error {
@@ -79,7 +77,33 @@ export interface DispatchGuardContext<TMessage = unknown> {
  * Throws ContextWindowInvalidError if W is not a finite positive integer.
  */
 export function calculateModelInputCap(window: unknown, modelId = "unknown"): number {
-  throw new Error("stub: calculateModelInputCap not implemented");
+  if (
+    typeof window !== "number" ||
+    !Number.isFinite(window) ||
+    !Number.isInteger(window) ||
+    window <= 0
+  ) {
+    throw new ContextWindowInvalidError(modelId, window);
+  }
+
+  const derived = Math.floor((window * 4) / 5);
+  return Math.min(200_000, derived);
+}
+
+/**
+ * Computes effective input tokens from breakdown or totalTokens.
+ */
+function computeEffectiveTokens(breakdown?: InputBreakdown, totalTokens?: number): number {
+  if (breakdown !== undefined) {
+    return (
+      (breakdown.systemPromptTokens ?? 0) +
+      (breakdown.toolSchemaTokens ?? 0) +
+      (breakdown.messageTokens ?? 0) +
+      (breakdown.toolResultTokens ?? 0) +
+      (breakdown.totalTokens ?? 0)
+    );
+  }
+  return totalTokens ?? 0;
 }
 
 /**
@@ -95,5 +119,39 @@ export async function guardModelDispatch<TMessage = unknown>(
   request: DispatchRequest<TMessage>,
   context: DispatchGuardContext<TMessage>
 ): Promise<unknown> {
-  throw new Error("stub: guardModelDispatch not implemented");
+  const modelId = request.model?.id ?? "unknown";
+  const window = request.model?.contextWindow;
+
+  // 1. Resolve and validate window W
+  const cap = calculateModelInputCap(window, modelId);
+  const validWindow = window as number;
+
+  // 2. Count full effective input
+  let effectiveTokens = computeEffectiveTokens(request.breakdown, request.totalTokens);
+
+  // 3. If tokens <= cap, dispatch
+  if (effectiveTokens <= cap) {
+    return await context.send(request);
+  }
+
+  // 4. Otherwise trigger one compaction, re-measure
+  const messagesToCompact = request.messages ? [...request.messages] : [];
+  const compactionResult = await context.compact(messagesToCompact);
+
+  const compactedMessages = compactionResult.compactedMessages;
+  const compactedTokens = compactionResult.compactedTokens;
+
+  // 5. If tokens <= cap, dispatch rebuilt input
+  if (compactedTokens <= cap) {
+    const updatedRequest: DispatchRequest<TMessage> = {
+      ...request,
+      messages: compactedMessages,
+      totalTokens: compactedTokens,
+      breakdown: undefined, // compacted tokens represents the rebuilt effective input
+    };
+    return await context.send(updatedRequest);
+  }
+
+  // 6. Otherwise refuse with InputOverCapError (exit 3) and send NO request
+  throw new InputOverCapError(modelId, validWindow, cap, compactedTokens);
 }
