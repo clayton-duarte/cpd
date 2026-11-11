@@ -65,6 +65,7 @@ impl Infra {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpdHome {
     root: PathBuf,
+    isolated: bool,
 }
 
 impl CpdHome {
@@ -77,7 +78,7 @@ impl CpdHome {
     /// Both must be absolute; an empty `CPD_HOME` is refused, not ignored.
     /// Failure is `usage` (exit 2): the caller fixes its environment.
     pub fn resolve(cpd_home: Option<OsString>, home: Option<PathBuf>) -> Result<CpdHome, CpdError> {
-        let root = match cpd_home {
+        let (root, isolated) = match cpd_home {
             Some(value) => {
                 let path = PathBuf::from(&value);
                 if !path.is_absolute() {
@@ -88,10 +89,10 @@ impl CpdHome {
                     .with("variable", "CPD_HOME")
                     .with("value", value.to_string_lossy().into_owned()));
                 }
-                path
+                (path, true)
             }
             None => match home {
-                Some(home) if home.is_absolute() => home.join(".cpd"),
+                Some(home) if home.is_absolute() => (home.join(".cpd"), false),
                 _ => {
                     return Err(CpdError::new(
                         ErrorCode::Usage,
@@ -101,11 +102,16 @@ impl CpdHome {
                 }
             },
         };
-        Ok(CpdHome { root })
+        Ok(CpdHome { root, isolated })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether this home was resolved with an explicit isolated CPD_HOME path rather than default `~/.cpd`.
+    pub fn is_isolated(&self) -> bool {
+        self.isolated
     }
 
     /// `config.toml`: the machine config (contract §8).

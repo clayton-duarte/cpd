@@ -3072,6 +3072,35 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
 - **`workflow-repair`** (`<YYYYMMDDTHHMM>-workflow-repair`, made by `scripts/new-migration.sh workflow-repair additive`; pro-d465; §4.4 `workflows.repair`, §7.6 "The repair marker"; applied after `plan-reviewed-pr`): `ALTER TABLE workflows ADD COLUMN repair TEXT CHECK (repair IS NULL OR json_valid(repair))`. Additive: every existing Workflow keeps a null `repair`, which means no repair runs. `workflows_locked` and its column list are unchanged. The test: a store before it migrates with every Workflow's `repair` null, passes `PRAGMA foreign_key_check` and the schema check (§4.3), and its `SCHEMA_HASH` is re-pinned by the code Job.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
+### 4.5a Migration regression contracts (b23, D1 pro-d560)
+
+**Status (D1, pro-d560: regression first).** This section pins the baseline migration contracts with regression tests and records what is not known. It changes no behaviour. A behaviour change to these contracts waits until a defect is demonstrated. It authorizes no guard, no preview identity change, no additive-compatibility change and no telemetry. Each rule is defined in the section it names; this section restates none of them.
+
+**Pinned contracts.** A test that fails on a change is the regression signal. Changing a contract means changing its test in the same decision.
+
+| Contract | Defined in | Pinned by |
+|---|---|---|
+| Names sort bytewise (`LC_ALL=C`); pending migrations apply in name order (sorting) | §4.5 N1, O2 | `core/tests/migrations.rs` `the_frozen_check_refuses_a_new_breaking_migration_that_sorts_before_a_name_on_the_base`, `the_frozen_check_passes_a_new_breaking_migration_that_sorts_after_every_name_on_the_base`; `core/src/store/verdict.rs` `a_pending_additive_migration_before_the_floor_opens_and_is_applied` |
+| A breaking migration is a barrier: refused when an applied migration sorts after it or the store applied one this binary lacks (barrier) | §4.5 O3, the verdict table | `core/src/store/verdict.rs` `a_pending_breaking_migration_that_sorts_before_an_applied_one_is_migration_order`, `a_pending_breaking_migration_with_an_unknown_one_applied_is_migration_order` |
+| Additive migrations commute: the same canonical hash in either order | §4.5 A1, O2; §4.3 "Why a canonical form" | `core/src/store/mod.rs` `two_additive_migrations_give_the_same_canonical_hash_in_both_orders`; `core/tests/migrations.rs` `every_additive_migration_is_additive_on_its_prefix` |
+| Frozen once merged: a migration on `origin/main` is never edited, deleted or renamed forward (N5) | §4.5 N5 | `core/tests/migrations.rs` `the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename`, `the_frozen_check_fails_on_a_rename_that_changes_the_body` |
+| The schema catalog: a fresh store's canonical hash is the pinned `SCHEMA_HASH` (catalog) | §4.3 items 1 to 6 | `core/src/store/verdict.rs` `the_reference_of_the_built_in_list_has_the_pinned_hash`, `a_verdict_reads_and_never_writes` |
+| Writes run in one `BEGIN IMMEDIATE` transaction; a failed migration rolls the whole transaction back (transactions) | §4.2; §4.5 "The migrating transaction" | `core/src/store/mod.rs` `a_failed_named_migration_rolls_the_whole_transaction_back` |
+| The install refuses a build whose migrations are not on `origin/main`, or whose store it cannot open (installer refusal) | §3.7, "Which executable starts a driver" (hs-d151): the store check and the branch check | `core/src/install/migration_tests.rs` `a_build_that_adds_a_migration_origin_main_lacks_is_refused_before_building`, `the_store_verdict_refuses_with_its_message_and_the_fix_of_its_code`, `a_failed_fetch_is_a_refusal_because_the_script_cannot_know`, `a_refused_install_leaves_the_installed_binary_as_it_was` |
+
+The one known gap is stated where it lies: a migration that changes no schema object does not move `SCHEMA_HASH` (§4.5, "Why Check 3 holds without a poll"). No test here claims to cover it.
+
+**Provenance of the divergent migration history (b23): unknown.** Source: the host explore findings `air-causality.md` and `air-contract.md`. Recorded as found, with no attribution:
+
+- Verified in git: `origin/main` at `8bfdf19a8` contains commit `0b1a9ab8b` (Tier letter J, #994; migration `20261108T0200-tier-letter-j`, `breaking after 123`) and commit `c6ff8f547` (guard events, #989; migration `20261108T0500-guard-event`, `additive`). `0b1a9ab8b` is the older of the two in `origin/main`'s history.
+- **Unknown:** which DB writer, and which branch, produced the divergent history on the affected stores. No historical writer or source defect is proven on `main`. The landing order above is an observed order, not a cause, and this section makes no root-cause claim.
+
+**Deferred until a defect is demonstrated.**
+
+- No behaviour changes on the strength of this section. A guard, a preview identity change, or an additive-compatibility change is not built until a defect is shown.
+- A defect is shown by a reproduction: a store or build that a pinned contract above says cannot exist, or a pinned test that fails for the right reason. The reproduction goes to the Lead, and only then does a change get a decision.
+- The b21 checker is not defined in this repository. Its relaxation belongs to Job `install-mig-order`, and this section does not change it.
+
 ### 4.6 The Context store
 
 Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the database tables `contexts` and `context_records` (§4.4) are the only store of Context records. ADR-0012's git store, its index and its sync are superseded and gone.
