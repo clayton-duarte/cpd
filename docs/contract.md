@@ -3072,6 +3072,10 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
 - **`workflow-repair`** (`<YYYYMMDDTHHMM>-workflow-repair`, made by `scripts/new-migration.sh workflow-repair additive`; pro-d465; §4.4 `workflows.repair`, §7.6 "The repair marker"; applied after `plan-reviewed-pr`): `ALTER TABLE workflows ADD COLUMN repair TEXT CHECK (repair IS NULL OR json_valid(repair))`. Additive: every existing Workflow keeps a null `repair`, which means no repair runs. `workflows_locked` and its column list are unchanged. The test: a store before it migrates with every Workflow's `repair` null, passes `PRAGMA foreign_key_check` and the schema check (§4.3), and its `SCHEMA_HASH` is re-pinned by the code Job.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
+### 4.5a Migration regression contracts (b23, D1 pro-d560)
+
+Skeleton: contents follow in the next commit.
+
 ### 4.6 The Context store
 
 Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the database tables `contexts` and `context_records` (§4.4) are the only store of Context records. ADR-0012's git store, its index and its sync are superseded and gone.
