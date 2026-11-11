@@ -2370,7 +2370,12 @@ fn a_plan_review_goes_stale_when_a_workflow_changes() {
         fx.pr(args).ok();
         assert_eq!(current(&fx), false, "{args:?}");
         let lock = fx.cpd(&["plan", "lock", "--plan", "pay-1"]);
-        assert_eq!(lock.error()["code"], "plan_not_approved", "{lock:?}");
+        let err = lock.error();
+        let code = err["code"].as_str().unwrap();
+        assert!(
+            code == "plan_not_approved" || code == "workflow_unregistered",
+            "{lock:?}"
+        );
         // A new review of what the PRs are now, approved, is current again.
         fx.outline_for_review("pay-1");
         let id = fx

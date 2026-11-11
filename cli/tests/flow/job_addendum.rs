@@ -271,6 +271,8 @@ fn an_addendum_refuses_a_draft_merged_or_cancelled_job_and_an_attempt_that_is_no
         "--spec",
         &spec,
         "--draft",
+        "--waiting-on",
+        "lead",
         "--plan",
         "pl",
     ])

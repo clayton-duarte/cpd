@@ -61,7 +61,18 @@ fn draft_help_matches_behaviour() {
     // The code the help must match: `--draft` without `--tier` and `--spec` is `usage`.
     job::setup(&fx.env);
     job::plan(&fx.env, "pl", "plan");
-    let run = fx.cpd(&["job", "add", "k", "--title", "T", "--draft", "--plan", "pl"]);
+    let run = fx.cpd(&[
+        "job",
+        "add",
+        "k",
+        "--title",
+        "T",
+        "--draft",
+        "--waiting-on",
+        "lead",
+        "--plan",
+        "pl",
+    ]);
     let error = refused(&run, "usage", 2);
     let message = error["message"].as_str().unwrap();
     assert!(

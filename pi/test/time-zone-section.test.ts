@@ -35,3 +35,21 @@ test("the section is set when there is no policy", async (t) => {
   assert.ok(section);
   assert.ok(section.startsWith("Time zone: "));
 });
+
+test("two consecutive turns in different minutes produce identical time-zone sections", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  t.mock.timers.setTime(Date.parse("2026-10-25T22:29:00.000Z"));
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.load();
+  await f.pi.fire("session_start");
+  const sections1: Record<string, string> = { preamble: "x" };
+  await f.pi.fire("before_agent_start", { messageType: "user", prompt: "turn 1", systemPromptOptions: { sections: sections1 } });
+
+  t.mock.timers.setTime(Date.parse("2026-10-25T22:31:00.000Z"));
+  const sections2: Record<string, string> = { preamble: "x" };
+  await f.pi.fire("before_agent_start", { messageType: "user", prompt: "turn 2", systemPromptOptions: { sections: sections2 } });
+
+  assert.equal(sections1[TIME_ZONE_SECTION], sections2[TIME_ZONE_SECTION]);
+});
+
