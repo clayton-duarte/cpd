@@ -313,7 +313,7 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
         Some(View::Tree),
         "the view keeps its option"
     );
-    // The hook of the engine's window, run by the server (`run-shell`) when the engine died, is the only call it made.
+    // Engine supervision via tmux hooks is retired (§6.23); no sh calls were made.
     let started: Vec<_> = s
         .runner
         .calls()
@@ -321,10 +321,9 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
         .filter(|c| c.tool == "sh")
         .map(|c| c.args.join(" "))
         .collect();
-    assert_eq!(
-        started,
-        ["-c cpd watch --ensure --wait >/dev/null 2>&1"],
-        "the engine pane's death starts the engine again once"
+    assert!(
+        started.is_empty(),
+        "engine supervision hooks are retired: {started:?}"
     );
 }
 
