@@ -1242,11 +1242,7 @@ mod migrations {
         );
         let err = verdict.refusal().unwrap();
         assert_eq!(err.code(), cpd_core::error::ErrorCode::MigrationOrder);
-        // Stub check: should verify that details.unknown contains the unknown migration and details.name is tier-letter-j
-        assert_eq!(
-            err.details()["name"],
-            "expected stub to check specific unknown error details"
-        );
+        assert_eq!(err.details()["name"], "20261108T0200-tier-letter-j");
     }
 
     /// O3: a pending breaking migration is refused when a later applied migration is breaking.
@@ -1420,11 +1416,7 @@ mod migrations {
         );
         let err = verdict.refusal().unwrap();
         assert_eq!(err.code(), cpd_core::error::ErrorCode::MigrationOrder);
-        // Stub check: should verify that details.applied_after contains guard-event and details.name is tier-letter-j
-        assert_eq!(
-            err.details()["name"],
-            "expected stub to check specific breaking error details"
-        );
+        assert_eq!(err.details()["name"], "20261108T0200-tier-letter-j");
     }
 }
 

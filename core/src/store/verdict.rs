@@ -178,7 +178,7 @@ pub(super) fn verdict_with<'a>(
         .collect();
     pending.sort_by_key(|n| n.name);
 
-    let outcome = decide(version, &applied, &known, &unknown, &pending);
+    let outcome = decide(version, &applied, &known, &unknown, &pending, catalog);
     Ok(Verdict {
         outcome,
         unknown,
@@ -194,6 +194,7 @@ fn decide(
     known: &dyn Fn(&str) -> Option<String>,
     unknown: &[String],
     pending: &[&Named],
+    catalog: &Catalog<'_>,
 ) -> Result<Start, CpdError> {
     // R3: an applied migration this binary knows, with another checksum.
     for (name, _, checksum) in applied {
@@ -226,8 +227,22 @@ fn decide(
             .map(|(n, ..)| n.as_str())
             .filter(|n| *n > named.name)
             .collect();
-        if !after.is_empty() || !unknown.is_empty() {
-            return Err(order(named.name, &after, unknown));
+        let blocking_after: Vec<&str> = applied
+            .iter()
+            .filter(|(n, ..)| n.as_str() > named.name)
+            .filter(|(n, compat, _)| {
+                // If the applied migration is unknown, or known but breaking, it blocks.
+                // Known additive migrations do not block (decision pro-d555, bug b21).
+                match catalog.named.iter().find(|m| m.name == n.as_str()) {
+                    Some(m) => m.compat == Compat::Breaking || compat == Compat::Breaking.as_str(),
+                    None => true,
+                }
+            })
+            .map(|(n, ..)| n.as_str())
+            .collect();
+        if !blocking_after.is_empty() || !unknown.is_empty() {
+            let on_origin_main = schema::NAMED.iter().any(|m| m.name == named.name);
+            return Err(order(named.name, &after, unknown, on_origin_main));
         }
     }
     Ok(Start::Named)
@@ -262,13 +277,22 @@ fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
 }
 
 /// `migration_order` (§4.5 O3): `name` cannot be applied to this store; nothing is written.
-fn order(name: &str, applied_after: &[&str], unknown: &[String]) -> CpdError {
+fn order(
+    name: &str,
+    applied_after: &[&str],
+    unknown: &[String],
+    on_origin_main: bool,
+) -> CpdError {
+    let fix = if on_origin_main {
+        "A breaking migration already on origin/main cannot be renamed; upgrade cpd or restore the store."
+    } else {
+        "Rename it to a newer timestamp (git mv) and rebuild, or merge main into the branch."
+    };
     CpdError::new(
         ErrorCode::MigrationOrder,
         format!(
             "Migration {name} cannot be applied to this database: the database has applied migrations that sort after it \
-             or that this cpd does not know, and a breaking migration was written without seeing them. Rename it to a \
-             newer timestamp (git mv) and rebuild, or merge main into the branch."
+             or that this cpd does not know, and a breaking migration was written without seeing them. {fix}"
         ),
     )
     .with("name", name)
@@ -698,19 +722,20 @@ mod tests {
     #[test]
     fn a_pending_breaking_migration_that_sorts_before_an_applied_one_is_migration_order() {
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, &[ADD_B]).unwrap());
+        let breaking_b = breaking(ADD_B);
+        drop(open_named(&home, &[breaking_b]).unwrap());
         let before = breaking(ADD_A); // sorts before the applied b
-        let list = [before, ADD_B];
+        let list = [before, breaking_b];
         let (code, details) = refusal(&judge(&home, &list));
         assert_eq!(code, ErrorCode::MigrationOrder);
         assert_eq!(details["name"], ADD_A.name);
-        assert_eq!(details["applied_after"], json!([ADD_B.name]));
+        assert_eq!(details["applied_after"], json!([breaking_b.name]));
         assert_eq!(details["unknown"], json!([]));
         assert_eq!(ErrorCode::MigrationOrder.exit().code(), 1);
 
         // Nothing is written: the same rows and no new `txns` row.
         let count = |home: &CpdHome| -> (i64, usize) {
-            let mut store = open_named(home, &[ADD_B]).unwrap();
+            let mut store = open_named(home, &[breaking_b]).unwrap();
             let txns = store
                 .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
                 .unwrap();
@@ -798,8 +823,9 @@ mod tests {
             .iter()
             .find(|n| n.name == "20261108T0200-tier-letter-j")
             .expect("tier-letter-j is in NAMED");
-        drop(open_named(&home, &[ADD_B]).unwrap());
-        let list = [*tier, ADD_B];
+        let breaking_b = breaking(ADD_B);
+        drop(open_named(&home, &[breaking_b]).unwrap());
+        let list = [*tier, breaking_b];
         let verdict = judge(&home, &list);
         let err = verdict.refusal().expect("expected migration_order refusal");
         assert_eq!(err.code(), ErrorCode::MigrationOrder);
