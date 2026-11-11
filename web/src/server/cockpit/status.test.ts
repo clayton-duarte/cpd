@@ -73,6 +73,11 @@ describe("status", () => {
     const partial = await readStatus(deps({ version: '{"ok":true,"version":"1.2.3-dev"}' }));
     expect(partial).toEqual({ runner: null, preview: null, incident: null, workers: null, version: "1.2.3-dev", hostAlert: false, mode: "production", drift: null });
   });
+  it("status detects version skew when protocol does not match", async () => {
+    // Decision pro-d556: A protocol difference in either direction or non-matching protocol sets alert state
+    const st = await readStatus(deps({ version: '{"ok":true,"version":"0.21.45-070ddee","protocol":999}' }));
+    expect(st.hostAlert).toBe(true);
+  });
   it("readStatus reports production mode and no drift by default", async () => {
     let reads = 0;
     const drift: StatusDeps["drift"] = async () => (reads += 1, { count: 1, oldestAt: null, stale: false });

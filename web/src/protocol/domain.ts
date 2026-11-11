@@ -234,6 +234,7 @@ export interface WireFile { readonly name: string; readonly text: string } // ca
 export type ErrorCode =
   | "protocol_error" // a frame/line/JSON did not match its schema (host frame, wire message from the server)
   | "unsupported_host_version" // durable host welcome.pi_durable !== "1.3.0" (A3) or protocol not negotiable
+  | "version_skew" // WebUI and cpd protocol mismatch (decision pro-d556)
   | "host_unreachable" // the durable socket cannot be opened (missing, refused, path too long)
   | "host_disconnected" // the socket closed or `bye` arrived while attached
   | "host_error" // the host answered `error`; details {hostCode, ...} carries the host ErrorCode (scout-durable §3)

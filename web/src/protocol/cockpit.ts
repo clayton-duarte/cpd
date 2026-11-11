@@ -205,6 +205,8 @@ export interface StatusModel {
   readonly hostAlert: boolean;
   readonly mode: "production" | "preview";
   readonly drift: { readonly count: number; readonly oldestAt: string | null; readonly stale: boolean } | null;
+  readonly versionMismatch?: boolean;
+  readonly alert?: string;
 }
 /** Dollar totals keyed by Plan id and Context id. */
 export type CostModel = Readonly<Record<string, number>>;
