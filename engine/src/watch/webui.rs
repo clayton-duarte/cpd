@@ -206,7 +206,10 @@ pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
     let install_restart_marker = home.run_dir().join("install-restart.json");
     let has_restart_marker = install_restart_marker.exists();
 
-    let mut services_to_supervise = vec![ServiceKind::Prod];
+    let mut services_to_supervise = Vec::new();
+    if home.root().join("web/src/server/serve.ts").exists() {
+        services_to_supervise.push(ServiceKind::Prod);
+    }
     if preview_worktree_exists(&home) {
         services_to_supervise.push(ServiceKind::Preview);
     }
