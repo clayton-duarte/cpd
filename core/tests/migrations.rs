@@ -896,6 +896,49 @@ mod migrations {
         clone.commit();
         clone.check().unwrap();
     }
+
+    /// O3 (decision pro-d555, bug b21): a pending breaking migration is accepted when
+    /// every applied migration that sorts after it by name is known and additive.
+    /// Specifically tests mac-air's exact migration history: applied seq 123 pr-base-contained,
+    /// seq 124 guard-event additive, then 0200 tier-letter-j breaking after 123 succeeds.
+    #[test]
+    fn test_migration_order_accepts_breaking_when_later_applied_are_additive() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+
+        // Mac-air's history: applied pr-base-contained (seq 123), then guard-event (additive, seq 124).
+        // Then tier-letter-j (breaking after 123, which sorts before guard-event) is pending.
+        let conn = rusqlite::Connection::open(home.db()).unwrap();
+        let verdict = cpd_core::store::verdict(&conn).unwrap();
+        assert!(verdict.opens(), "breaking migration should be accepted when later applied migrations are additive: {verdict:?}");
+    }
+
+    /// O3: a pending breaking migration is refused when a later applied migration is unknown to this binary.
+    #[test]
+    fn test_migration_order_refuses_when_later_applied_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+
+        let conn = rusqlite::Connection::open(home.db()).unwrap();
+        let verdict = cpd_core::store::verdict(&conn).unwrap();
+        assert!(!verdict.opens(), "pending breaking migration should be refused when later applied is unknown");
+        assert_eq!(verdict.refusal().unwrap().code(), cpd_core::error::ErrorCode::MigrationOrder);
+    }
+
+    /// O3: a pending breaking migration is refused when a later applied migration is breaking.
+    #[test]
+    fn test_migration_order_refuses_when_later_applied_is_breaking() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home_in(&dir);
+        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+
+        let conn = rusqlite::Connection::open(home.db()).unwrap();
+        let verdict = cpd_core::store::verdict(&conn).unwrap();
+        assert!(!verdict.opens(), "pending breaking migration should be refused when later applied is breaking");
+        assert_eq!(verdict.refusal().unwrap().code(), cpd_core::error::ErrorCode::MigrationOrder);
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a

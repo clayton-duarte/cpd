@@ -787,6 +787,24 @@ mod tests {
     }
 
     #[test]
+    fn refusal_message_does_not_advise_rename_for_origin_main() {
+        // Contract §4.5 O3: Never renumber a breaking migration already on main to a newer timestamp.
+        // A breaking migration on origin/main that sorts before applied ones must not advise renaming it.
+        let (_dir, home) = tmp_home();
+        drop(open_named(&home, &[ADD_B]).unwrap());
+        let before = breaking(ADD_A);
+        let list = [before, ADD_B];
+        let verdict = judge(&home, &list);
+        let err = verdict.refusal().expect("expected migration_order refusal");
+        assert_eq!(err.code(), ErrorCode::MigrationOrder);
+        let msg = err.message();
+        assert!(
+            !msg.contains("Rename it to a newer timestamp"),
+            "refusal message should not advise renaming for a migration on origin/main, got: {msg}"
+        );
+    }
+
+    #[test]
     fn a_verdict_reads_and_never_writes() {
         let (_dir, home) = tmp_home();
         drop(open_named(&home, &[ADD_A]).unwrap());
