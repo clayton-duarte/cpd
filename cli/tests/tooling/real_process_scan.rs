@@ -55,8 +55,6 @@ pub const DEBT: &[(&str, &str, usize)] = &[
     ("cli/tests/workflow/pr_open.rs", "git", 4),
     // a store test starts the real sh through TestEnv
     ("cli/tests/store/store.rs", "sh", 1),
-    // a tui test runs the real env to read its environment
-    ("cli/tests/tui/tui.rs", "env", 1),
 ];
 
 const PROGRAMS: [&str; 7] = ["tmux", "sh", "python3", "node", "ps", "kill", "env"];
