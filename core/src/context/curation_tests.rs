@@ -1,6 +1,8 @@
 //! Tests of write-time context curation hook (contract §5.9).
 
+use crate::context::curation::write_time_curation_hook;
 use crate::context::{By, Draft, Record};
+use crate::error::ErrorCode;
 use crate::home::CpdHome;
 use crate::ids::{ContextId, RecordId};
 use crate::store::Store;
@@ -42,8 +44,48 @@ fn curation_hook_enforces_supersedes() {
 
     // Step 2: Attempting to write a near-duplicate record without supersedes or novelty
     // must be refused with ErrorCode::NearDuplicate (exit 3) by the write-time curation hook (contract §5.9).
-    // Today, write-time curation hook is not yet implemented, so this write either panics or fails to enforce.
-    panic!(
-        "curation hook not implemented: near-duplicate write without supersedes or novelty must be refused near_duplicate"
-    );
+    let duplicate_text =
+        "The engine communicates over Unix domain socket run/core.sock using NDJSON framing";
+    let res = store.read(|conn| {
+        write_time_curation_hook(
+            conn,
+            &context,
+            duplicate_text,
+            &[],  // no supersedes
+            None, // no novelty
+            None,
+            None,
+        )
+    });
+
+    let err = res.expect_err("near-duplicate write without supersedes or novelty must fail");
+    assert_eq!(err.code(), ErrorCode::NearDuplicate);
+
+    // Step 3: With novelty, it succeeds
+    let res_novel = store.read(|conn| {
+        write_time_curation_hook(
+            conn,
+            &context,
+            duplicate_text,
+            &[],
+            Some("New protocol addition"),
+            None,
+            None,
+        )
+    });
+    assert!(res_novel.is_ok(), "Write with novelty must succeed");
+
+    // Step 4: With supersedes, it succeeds
+    let res_super = store.read(|conn| {
+        write_time_curation_hook(
+            conn,
+            &context,
+            duplicate_text,
+            std::slice::from_ref(&old_id),
+            None,
+            None,
+            None,
+        )
+    });
+    assert!(res_super.is_ok(), "Write with supersedes must succeed");
 }
