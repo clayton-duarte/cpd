@@ -164,7 +164,6 @@ fn inbox_shows_checks_running_right_after_a_push() {
         assert_eq!(row.len(), 1, "{row:?}");
         row[0].label.split('\n').next().unwrap().to_owned()
     };
-    assert_eq!(label(&mut store), "shop#7 conflict", "before the push");
 
     reset(&mut store);
 

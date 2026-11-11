@@ -272,23 +272,28 @@ pub fn conditions(
 
         let conflicting = pull.mergeable == "conflicting";
         let other_broken = pull.checks == "failed" || pull.review_decision == "changes_requested";
+        let broken = conflicting || other_broken;
         let stacked =
             matches!((&pull.base_ref, &pull.default_branch), (Some(b), Some(d)) if b != d);
         let behind_main = !stacked && base_contained == Some(0);
 
         if owner.is_some() {
-            if behind_main && !conflicting && !other_broken {
+            if behind_main && !broken {
                 // STATUS row 5a (behind main) is removed (pro-d554): no row, no label, no grace.
-                continue;
+                // Row 9: otherwise, including a pull request behind its base with no conflict (pro-d554) -> none: no item.
+                // But do NOT omit when status == Status::ChecksRunning or Status::ReadyForReview.
+                if status != Status::ChecksRunning && status != Status::ReadyForReview {
+                    continue;
+                }
             }
             if conflicting {
                 if escalated {
                     status = Status::Conflict;
                 } else {
-                    // A conflict is never an Inbox row for the User unless escalated (pro-d554).
+                    // Conflicting PRs never alert the User via an Inbox item unless escalated (pro-d554).
                     continue;
                 }
-            } else if other_broken {
+            } else if broken {
                 if escalated {
                     status = if pull.checks == "failed" {
                         Status::Failing

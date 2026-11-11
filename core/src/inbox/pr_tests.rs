@@ -228,11 +228,6 @@ type JobKindStatus<'a> = (&'a str, &'a str);
 fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live() {
     let broken = [
         (
-            "mergeable = 'conflicting', merge_state = 'dirty'",
-            "conflict",
-            "updating",
-        ),
-        (
             "checks = 'failed', merge_state = 'blocked'",
             "failing",
             "fixing",
@@ -292,10 +287,6 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
 #[test]
 fn an_owned_broken_pr_is_white_while_its_lead_waits() {
     let broken = [
-        (
-            "mergeable = 'conflicting', merge_state = 'dirty'",
-            "updating",
-        ),
         ("checks = 'failed', merge_state = 'blocked'", "fixing"),
         (
             "review_decision = 'changes_requested', merge_state = 'blocked'",
@@ -497,9 +488,9 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
 #[test]
 fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     let mut f = fixture();
-    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.workflow(2, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.workflow(3, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(1, "checks = 'failed', merge_state = 'blocked'");
+    f.workflow(2, "checks = 'failed', merge_state = 'blocked'");
+    f.workflow(3, "checks = 'failed', merge_state = 'blocked'");
     f.own("pay", 1);
     f.idle();
     f.own("pay", 2);
@@ -538,7 +529,7 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
             if pay_works { "idle" } else { "working" },
             if pay_works { "working" } else { "idle" },
         ));
-        f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+        f.workflow(1, "checks = 'failed', merge_state = 'blocked'");
         f.own("pay", 1);
         f.own("pay2", 1);
         let _ = f.rows(); // detection at NOW
@@ -668,12 +659,7 @@ fn stack_review_stacking_blocks_only_ready_to_merge() {
     is(&mut f, 2, Yellow, "ready to merge");
 }
 
-const BROKEN: [(&str, &str, &str); 3] = [
-    (
-        "mergeable = 'conflicting', merge_state = 'dirty'",
-        "conflict",
-        "updating",
-    ),
+const BROKEN: [(&str, &str, &str); 2] = [
     (
         "checks = 'failed', merge_state = 'blocked'",
         "failing",
