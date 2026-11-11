@@ -16,14 +16,13 @@ fn root() -> PathBuf {
 
 /// The live surfaces of the map: the docs (not history), the skills, the adapter and the non-test Rust. `CONTEXT.md`
 /// and `README.md` are added by `sources_of_interest`.
-const DIRS: [&str; 7] = [
+const DIRS: [&str; 6] = [
     "docs",
     "pi/skills",
     "pi/lib",
     "cli/src",
     "core/src",
     "engine/src",
-    "tui/src",
 ];
 
 /// Directories that hold history or tests, never scanned: `docs/adr|archive|research` (the map allowed them), the
@@ -347,11 +346,6 @@ fn guard() {
         "core/src/host/tmux/no_inbox.rs",
         "engine/src/watch/pill_texts.rs",
         "engine/src/watch/workers/no_inbox.rs",
-        "tui/src/palette/colours.rs",
-        "tui/src/tree/look.rs",
-        "tui/src/dialog/pane.rs",
-        "tui/src/pill_colours.rs",
-        "tui/src/updating_label.rs",
         // R21 keeps `plan show`'s inner `pr`/`pull_request` keys (the pull request, not the object), so the map allows
         // the file.
         "core/src/plan/show.rs",

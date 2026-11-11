@@ -52,7 +52,9 @@ pub(super) fn stopping() -> bool {
 }
 
 /// What every step works with.
-pub(super) struct Engine {
+// Allow private_interfaces since Engine is exposed for integration tests within this crate
+#[allow(private_interfaces)]
+pub struct Engine {
     pub home: CpdHome,
     pub config: Config,
     pub store: Store,
@@ -91,6 +93,8 @@ pub(super) struct Engine {
     pub swr: swr::State,
     /// P1.10: the durable host this engine started or adopted, per Session (contract §6.19).
     pub hosts: hosts::State,
+    /// WebUI supervisor state (pro-d541, pro-d542).
+    pub webui: super::webui::WebUiState,
     /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
     pub janitor_started: Option<std::time::Instant>,
     /// When the engine last started the detached tmux restart (contract §6.1).
@@ -104,9 +108,9 @@ pub(super) struct Engine {
 }
 
 impl Engine {
-    /// An engine on `home` (its config and store) and `tmux`, reading time and starting processes through `ports`.
-    #[cfg(test)]
-    pub(super) fn with_ports(home: CpdHome, tmux: Tmux, ports: &Ports) -> Engine {
+    // Allow private_interfaces for Engine constructor used by integration tests
+    #[allow(private_interfaces)]
+    pub fn with_ports(home: CpdHome, tmux: Tmux, ports: &Ports) -> Engine {
         let config = Config::load(&home).expect("the test home's config");
         let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))
             .expect("the test home's store");
@@ -161,6 +165,7 @@ impl Engine {
             models: models::State::default(),
             swr: swr::State::default(),
             hosts: hosts::State::default(),
+            webui: super::webui::WebUiState::default(),
             janitor_started: None,
             restart_started: None,
             detached: Vec::new(),
@@ -276,7 +281,7 @@ impl Engine {
     /// E12–E16 and E25 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 25] = [
+        let steps: [fn(&mut Engine); 26] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -301,6 +306,7 @@ impl Engine {
             sleep::run,
             archive_leads::run,
             hosts::run,
+            super::webui::run,
             janitor::run,
         ];
         for step in steps {

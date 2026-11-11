@@ -175,6 +175,22 @@ pub fn changed(
     Ok(status_of(&output))
 }
 
+/// Adapts a Rust test name for nextest filters.
+/// An integration test name may be qualified with an area name, such as `engine::main::test_name`
+/// or `engine::watch::test_name`, matching integration test binary `cli/tests/<area>/main.rs`.
+/// In nextest, such tests have ID `cpd::<area> <module>::<test>`, so filtering by `engine::...`
+/// fails to match unless stripped or adapted.
+fn rust_filter(name: &str) -> String {
+    const AREAS: &[&str] = &["engine", "workflow", "flow", "session", "store", "tooling"];
+    for &area in AREAS {
+        let prefix = format!("{area}::");
+        if let Some(rest) = name.strip_prefix(&prefix) {
+            return rest.to_owned();
+        }
+    }
+    name.to_owned()
+}
+
 /// `cpd test run <name>...` (§26.2) from `cwd`, run from the repo root: the output of the tests goes to `out` and
 /// `err`. Non-zero when any test failed or did not run; no name is a `usage` error.
 pub fn run(
@@ -192,23 +208,24 @@ pub fn run(
     }
     let root = repo_root(ports, cwd)?;
     let mut status = 0;
-    let mut rust: Vec<&str> = Vec::new();
+    let mut rust: Vec<String> = Vec::new();
     let mut pi: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut web: Vec<(String, String)> = Vec::new();
     for name in names {
         match kind_of(name) {
-            Kind::Rust => rust.push(name),
+            Kind::Rust => rust.push(rust_filter(name)),
             Kind::Pi { file, title } => pi.entry(file).or_default().push(title),
             Kind::Web { file, title } => web.push((file, title)),
         }
     }
     if !rust.is_empty() {
+        let rust_args: Vec<&str> = rust.iter().map(String::as_str).collect();
         let output = cargo(
             ports,
             &root,
             &[
                 &["nextest", "run", "--workspace", "--no-fail-fast"],
-                rust.as_slice(),
+                rust_args.as_slice(),
             ]
             .concat(),
         )?;
@@ -337,6 +354,7 @@ pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Resul
             Ok(1)
         }
         Kind::Rust => {
+            let filter = rust_filter(name);
             let listed = cargo(
                 ports,
                 &root,
@@ -346,7 +364,7 @@ pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Resul
                     "--workspace",
                     "--message-format",
                     "oneline",
-                    name,
+                    filter.as_str(),
                 ],
             )?;
             if listed.status.success() && text(&listed.stdout).lines().any(|l| !l.is_empty()) {

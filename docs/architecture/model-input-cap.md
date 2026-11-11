@@ -1,6 +1,6 @@
 # The model input cap
 
-Decision **pro-d559** (a Context decision of the User) sets a hard ceiling on the input every model request carries. This note is the detail behind the contract: the formula, the dispatch guard, the metadata rule, the integration points and the tests the implementation must have. The normative rule is [contract §6.22](../contract.md); where the two disagree, the contract wins and this note is fixed.
+Decision **pro-d559** (a Context decision of the User) sets a hard ceiling on the input every model request carries. This note is the detail behind the contract: the formula, the dispatch guard, the metadata rule, the integration points and the tests the implementation must have. The normative rule is [contract §6.23](../contract.md); where the two disagree, the contract wins and this note is fixed.
 
 Status: **decided, not implemented.** No code enforces the cap yet. Every claim about pi's or pi-durable's internals is **unverified** until the implementation Job reads and runs it; the open points are in §9.
 

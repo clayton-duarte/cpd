@@ -284,6 +284,19 @@ impl Store {
             Self::finish_open(&mut store, home, catalog, busy_ms)?;
             return Ok(store);
         }
+        // pro-d562: Production schema/ledger migration is permitted only for verified releases or explicitly isolated stores.
+        // Opening / migrating a default/live store without explicit isolation is refused before writes.
+        if !home.is_isolated() {
+            return Err(CpdError::new(
+                ErrorCode::MigrationOrder,
+                format!(
+                    "Cannot migrate live store at {} without explicit isolation: development and branch builds require an isolated store.",
+                    path.display()
+                ),
+            )
+            .with("path", path.display().to_string())
+            .with("live", true));
+        }
         // A missing database (the WAL switch of a new one) or a pending migration: take the lock, connect under it
         // and migrate. `migrate` re-judges from read-only state inside the lock, since another process may have
         // migrated the store meanwhile.

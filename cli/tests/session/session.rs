@@ -640,7 +640,7 @@ fn fork_refusals_register_nothing() {
         "no_cockpit",
         3,
     );
-    assert_eq!(error["details"]["next"], "cpd tui");
+    assert_eq!(error["details"]["next"], "cpd watch");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions"), 4);
 }
 
@@ -1265,7 +1265,7 @@ fn open_and_park_refusals() {
     setup(&fx.env);
     // No cockpit yet.
     let error = refused(&fx.cpd(&["session", "open", LEAD1]), "no_cockpit", 3);
-    assert_eq!(error["details"]["next"], "cpd tui");
+    assert_eq!(error["details"]["next"], "cpd watch");
     refused(&fx.cpd(&["session", "park"]), "no_cockpit", 3);
     refused(&fx.cpd(&["session", "park", LEAD1]), "no_cockpit", 3);
 
@@ -1436,7 +1436,7 @@ fn history_refusals_change_nothing() {
     archived_lead2(&fx.env);
     // No cockpit yet.
     let error = refused(&fx.cpd(&["session", "history", LEAD2]), "no_cockpit", 3);
-    assert_eq!(error["details"]["next"], "cpd tui");
+    assert_eq!(error["details"]["next"], "cpd watch");
 
     fx.cockpit();
     fx.cpd(&["session", "open", LEAD1]).ok();

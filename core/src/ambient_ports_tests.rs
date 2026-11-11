@@ -177,11 +177,6 @@ const LINES: &[(&str, &str, &str)] = &[
         "`serve`: `cpd watch` on the real ports",
     ),
     (
-        "tui/src/lib.rs",
-        "run_with(&Ports::real(), args, version, run_command, restart)",
-        "`run`: the cockpit on the real ports",
-    ),
-    (
         "core/src/session/run.rs",
         "spawn.kind() == \"ProcessSpawn\"",
         "asks which `Spawn` it was handed, starts nothing",
@@ -254,7 +249,7 @@ fn no_product_file_builds_the_real_ports_by_hand() {
         .parent()
         .expect("the workspace root");
     let mut offenders = Vec::new();
-    for krate in ["core", "engine", "tui", "cli"] {
+    for krate in ["core", "engine", "cli"] {
         let mut files = Vec::new();
         product_files(&root.join(krate).join("src"), &mut files);
         for path in files {

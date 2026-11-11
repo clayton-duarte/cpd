@@ -1,5 +1,5 @@
 /**
- * The model input cap (pro-d559, contract §6.22, docs/architecture/model-input-cap.md).
+ * The model input cap (pro-d559, contract §6.23, docs/architecture/model-input-cap.md).
  *
  * Hard ceiling on model input:
  * cap = min(200000, floor(0.8 * W)) tokens, where W is the active model's context window.

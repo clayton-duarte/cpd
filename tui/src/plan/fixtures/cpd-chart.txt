@@ -1,9 +1,0 @@
- 󰗠 contract-core│O3│a2──╮
-                          ├──󰗠 contract-commands│O3                       ╭──󰝦 rs-context│S3──╮                                           ╭───────────────────────────────────────────────────────────────────╮
- 󰗠 review-in-tmux  │S3  │                            ╭──󰝦 rs-events│S3──┤                     │                  ╭─┬󰝦 rs-job       │S3┬─┤ ╭󰝦 rs-attempt-cmds│S3╮                                          │
-                          ├──󰝦 contract-gate-pr │O3  │                    ├──󰝦 rs-session│O3──┤                  │ ╰󰝦 pi-adapter-v2│S3╯ ├─┤󰝦 rs-ask         │S3├─┬────────────────────╮                   │
- 󰗠 contract-amend  │S3──┤                            ├─┬󰝦 rs-git   │S3┬─┼─────────────────────┼──󰝦 rs-plan│O3──┤                        │ │󰝦 rs-review      │S3│ ├──󰝦 rs-driver│O3──┼──󰝦 rs-watch│O3──┴──󰝦 skill-v2│S3
-                          ├─┬󰝦 rs-store         │O3┬─┤ ╰󰝦 rs-host  │O3╯ ├──󰝦 rs-merge  │O3──┼──────────────────┴──󰝦 rs-pr        │S3──┤ ╰󰝦 rs-spec-metrics│S3╯ │                    │
- 󱑤 rs-workspace    │O3──╯ ╰󰝦 rs-config        │S3╯ ╰────────────────────┤                     ╰───────────────────────────────────────────┴──────────────────────────┴────────────────────╯
-                                                                            ╰──󰝦 rs-doctor │S3
- 󰝦 gate-at-pr      │S3

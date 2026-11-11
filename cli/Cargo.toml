@@ -20,7 +20,6 @@ fakes = ["cpd-core/fakes"]
 [dependencies]
 cpd-core = { path = "../core" }
 cpd-engine = { path = "../engine" }
-cpd-tui = { path = "../tui" }
 clap.workspace = true
 nix.workspace = true
 rusqlite.workspace = true
