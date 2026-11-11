@@ -28,6 +28,12 @@ use crate::plan::locked_fingerprint;
 
 const COMMAND: &str = "job add";
 
+pub(crate) fn validate_waiting_on(target: &str) -> bool {
+    target == "lead"
+        || target == "user"
+        || (target.starts_with("explore:") && target.len() > "explore:".len())
+}
+
 /// What `job add` was asked for, parsed.
 struct Wanted {
     key: JobKey,
@@ -39,6 +45,8 @@ struct Wanted {
     needs: Vec<String>,
     /// `--draft`: a draft in a phase after `plan` too.
     draft: bool,
+    /// What a draft waits on.
+    waiting_on: Option<String>,
     /// `--urgent` (§2.2): not a Locked field, so a rerun without it is `already`.
     urgent: bool,
     /// `--kind` (§2.2 "Job kinds"), `work` by default.
@@ -62,6 +70,22 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let shaping = env
         .store
         .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
+    if args.draft {
+        match args.waiting_on.as_deref() {
+            Some(target) if validate_waiting_on(target) => {}
+            _ => {
+                return Err(CpdError::new(
+                    ErrorCode::DraftDependencyRequired,
+                    "A draft Job requires --waiting-on <lead|user|explore:<job>>.",
+                ));
+            }
+        }
+    } else if args.waiting_on.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::DraftDependencyRequired,
+            "--waiting-on is only valid with --draft.",
+        ));
+    }
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
     check_kind_not_reserved(&kind)?;
@@ -115,6 +139,7 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
         spec,
         needs,
         draft: args.draft,
+        waiting_on: args.waiting_on,
         urgent: args.urgent,
         kind,
     };
@@ -149,7 +174,7 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                             crate::workflow::add::reopen(tx, &plan, &phase, to, &reason)?;
                         }
                     }
-                    insert(tx, &plan, &job)?;
+                    insert(tx, &plan, &job, wanted.waiting_on.as_deref())?;
                     let text = format!(
                         "Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}",
                         job.key, job.status, job.key
@@ -553,13 +578,18 @@ fn same_locked_fields(a: &Job, b: &Job) -> bool {
     )
 }
 
-fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+fn insert(
+    tx: &Connection,
+    plan: &PlanId,
+    job: &Job,
+    waiting_on: Option<&str>,
+) -> Result<(), CpdError> {
     let array = |v: Option<&Value>| v.map(Value::to_string);
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, urgent, kind, tests, test_files, resources, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, cpd_txn(),
+                           status, appended, fingerprint, urgent, kind, tests, test_files, resources, waiting_on, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, ?19, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -580,6 +610,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
             array(job.tests.as_ref()),
             array(job.test_files.as_ref()),
             array(job.resources.as_ref()),
+            waiting_on,
         ],
     )?;
     for need in &job.needs {

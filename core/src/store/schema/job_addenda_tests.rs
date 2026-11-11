@@ -124,12 +124,18 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
         .take_while(|n| !n.name.ends_with("-job-addenda"))
         .collect();
     let mut old = crate::store::tests::open_named(&home, &earlier).unwrap();
-    let (jobs, attempts, events, sessions) = (
+    let (mut jobs, attempts, events, sessions) = (
         dump(&mut old, "jobs"),
         dump(&mut old, "attempts"),
         dump(&mut old, "events"),
         dump(&mut old, "sessions"),
     );
+    // Later migration `draft-waiting-on` adds `waiting_on` to `jobs` (null in every row).
+    for row in &mut jobs {
+        assert!(row.ends_with(']'));
+        row.truncate(row.len() - 1);
+        row.push_str(",null]");
+    }
     // The later migration `agent-key-backfill` rewrites the names of the Lead and the Worker to their keys.
     let sessions: Vec<String> = sessions
         .iter()

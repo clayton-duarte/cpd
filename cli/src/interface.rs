@@ -52,6 +52,8 @@ pub const TABLE: &[Entry] = &[
     ("plan unarchive", &[], true),
     ("plan cancel", &[Lead], false),
     ("plan delete", &[], true),
+    ("plan check", &[Lead, Manager], false),
+    ("plan reopen", &[Lead], false),
     ("job add", &[Lead, Manager], false),
     ("job edit", &[Lead], false),
     ("job cancel", &[Lead, Manager], false),

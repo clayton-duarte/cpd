@@ -31,6 +31,7 @@ struct Edits {
     workflow: Option<String>,
     needs: Option<Vec<String>>,
     kind: Option<String>,
+    waiting_on: Option<String>,
     /// `CPD_ATTEMPT` is set: a Worker's pane, not the Lead's.
     worker: bool,
 }
@@ -44,6 +45,7 @@ enum Decision {
         before: Job,
         after: Job,
         fields: Vec<&'static str>,
+        waiting_on: Option<String>,
     },
 }
 
@@ -61,10 +63,11 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         && args.kind.is_none()
         && args.needs.is_none()
         && !args.no_needs
+        && args.waiting_on.is_none()
     {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
-            "Nothing to edit: pass --title, --tier, --spec, --workflow, --kind, --needs or --no-needs.",
+            "Nothing to edit: pass --title, --tier, --spec, --workflow, --kind, --needs, --no-needs or --waiting-on.",
         ));
     }
     let needs = match (&args.needs, args.no_needs) {
@@ -109,6 +112,7 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         workflow: args.workflow.map(|p| p.as_str().to_owned()),
         needs,
         kind: args.kind,
+        waiting_on: args.waiting_on,
         worker: std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()),
     };
     let key = args.key;
@@ -121,8 +125,8 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         Decision::Already(job) => (job, Vec::new(), true),
         Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits)? {
             Decision::Already(job) => Ok((job, Vec::new(), true)),
-            Decision::Update { before, after, fields } => {
-                update(tx, &plan, &before, &after)?;
+            Decision::Update { before, after, fields, waiting_on } => {
+                update(tx, &plan, &before, &after, waiting_on.as_deref())?;
                 let state = if before.is_draft() { "" } else { " (queued, Locked)" };
                 let text = format!("Job {key} of Plan {plan}{state} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
@@ -151,6 +155,20 @@ fn decide(
     crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
+    if let Some(ref wo) = edits.waiting_on {
+        if !before.is_draft() {
+            return Err(CpdError::new(
+                ErrorCode::DraftDependencyRequired,
+                "--waiting-on is only valid for draft jobs.",
+            ));
+        }
+        if !crate::job::add::validate_waiting_on(wo) {
+            return Err(CpdError::new(
+                ErrorCode::DraftDependencyRequired,
+                "A draft Job requires --waiting-on <lead|user|explore:<job>>.",
+            ));
+        }
+    }
     // open and update Jobs are cpd's, a draft one included.
     if before.is_draft() && matches!(before.kind.as_str(), "open" | "update") {
         return Err(CpdError::new(
@@ -401,6 +419,18 @@ fn decide(
     if before.needs != after.needs {
         fields.push("needs");
     }
+    let current_waiting_on: Option<String> = conn
+        .query_row(
+            "SELECT waiting_on FROM jobs WHERE plan = ?1 AND key = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let waiting_on_changed = edits.waiting_on.is_some() && edits.waiting_on != current_waiting_on;
+    if waiting_on_changed {
+        fields.push("waiting_on");
+    }
     if fields.is_empty() {
         return Ok(Decision::Already(before.clone()));
     }
@@ -411,6 +441,11 @@ fn decide(
         before: before.clone(),
         after,
         fields,
+        waiting_on: if waiting_on_changed {
+            edits.waiting_on.clone()
+        } else {
+            None
+        },
     })
 }
 
@@ -433,7 +468,19 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
 /// Writes the changed `jobs` columns, and deletes and inserts `dependencies`
 /// rows to match (§4.4 allows deletion only for `draft`): the old
 /// Dependencies first, then the columns (`workflow` among them), then the new ones.
-fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(), CpdError> {
+fn update(
+    tx: &Connection,
+    plan: &PlanId,
+    before: &Job,
+    after: &Job,
+    waiting_on: Option<&str>,
+) -> Result<(), CpdError> {
+    if let Some(wo) = waiting_on {
+        tx.execute(
+            "UPDATE jobs SET waiting_on = ?3 WHERE plan = ?1 AND key = ?2",
+            rusqlite::params![plan.as_str(), after.key.as_str(), wo],
+        )?;
+    }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute(
             "DELETE FROM dependencies WHERE plan = ?1 AND job = ?2 AND needs = ?3",
