@@ -1,5 +1,5 @@
 import { ExternalLinkIcon } from "lucide-react";
-import type { ReactElement } from "react";
+import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
@@ -8,7 +8,7 @@ import { ExternalLink } from "../components/ExternalLink.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
-import { layoutDag, NODE_H, NODE_W, type DagNode } from "./plan/layout.ts";
+import { computeWorkflowEdges, layoutDag, NODE_H, NODE_W, topoOrder, type DagNode, type WorkflowEdge } from "./plan/layout.ts";
 
 const phaseOrder: readonly Phase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
 
@@ -243,6 +243,151 @@ function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): 
   );
 }
 
+function WorkflowLegend(): ReactElement {
+  return (
+    <div data-part="wf-legend" className="flex items-center gap-3 font-mono text-meta text-muted-foreground">
+      <span className="flex items-center gap-1.5">
+        <svg aria-hidden="true" width={24} height={8} viewBox="0 0 24 8" fill="none" className="stroke-line" strokeWidth={1.5}>
+          <path d="M1 4H23" />
+          <path d="M19 1L23 4 19 7" strokeWidth={1.5} />
+        </svg>
+        <span>Stacked (base)</span>
+      </span>
+      <span className="flex items-center gap-1.5">
+        <svg aria-hidden="true" width={24} height={8} viewBox="0 0 24 8" fill="none" className="stroke-line" strokeWidth={1.5}>
+          <path d="M1 4H23" strokeDasharray="3 3" />
+          <path d="M19 1L23 4 19 7" strokeWidth={1.5} />
+        </svg>
+        <span>Depends on (needs)</span>
+      </span>
+    </div>
+  );
+}
+
+interface CardBox {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function WorkflowCanvas(props: {
+  plan: PlanViewModel;
+  orderedWorkflows: readonly WorkflowView[];
+  edges: readonly WorkflowEdge[];
+  onAction(action: CockpitAction): void;
+  onRetryJob?: (jobKey: string, workflowKey: string) => void;
+  postableWorkflows?: ReadonlySet<string>;
+}): ReactElement {
+  const { plan, orderedWorkflows, edges, onAction, onRetryJob, postableWorkflows } = props;
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [layoutState, setLayoutState] = useState<{
+    width: number;
+    height: number;
+    boxes: Map<string, CardBox>;
+  }>({ width: 0, height: 0, boxes: new Map() });
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const measure = () => {
+      const cRect = canvas.getBoundingClientRect();
+      const boxes = new Map<string, CardBox>();
+      const cardElements = canvas.querySelectorAll<HTMLElement>("section[data-workflow]");
+      for (const el of cardElements) {
+        const key = el.getAttribute("data-workflow");
+        if (key) {
+          boxes.set(key, {
+            left: el.offsetLeft,
+            top: el.offsetTop,
+            width: el.offsetWidth,
+            height: el.offsetHeight,
+          });
+        }
+      }
+      setLayoutState({
+        width: cRect.width || canvas.scrollWidth || 0,
+        height: cRect.height || canvas.scrollHeight || 0,
+        boxes,
+      });
+    };
+
+    measure();
+
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        measure();
+      });
+      ro.observe(canvas);
+      const cardElements = canvas.querySelectorAll<HTMLElement>("section[data-workflow]");
+      for (const el of cardElements) {
+        ro.observe(el);
+      }
+      return () => ro.disconnect();
+    }
+  }, [orderedWorkflows, edges]);
+
+  const hasEdges = edges.length > 0;
+
+  return (
+    <div ref={canvasRef} data-part="wf-canvas" className="relative flex flex-col gap-2.5">
+      {hasEdges ? (
+        <svg
+          data-part="wf-edges"
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0 top-0"
+          width={layoutState.width}
+          height={layoutState.height}
+          fill="none"
+        >
+          {edges.map((e, idx) => {
+            const uBox = layoutState.boxes.get(e.fromKey);
+            const dBox = layoutState.boxes.get(e.toKey);
+            const x1 = uBox ? uBox.left + uBox.width / 2 : 0;
+            const y1 = uBox ? uBox.top + uBox.height : 0;
+            const x2 = dBox ? dBox.left + dBox.width / 2 : 0;
+            const y2 = dBox ? dBox.top : 0;
+            const ym = (y1 + y2) / 2;
+            const d = `M${x1} ${y1}C${x1} ${ym} ${x2} ${ym} ${x2} ${y2}`;
+            const arrowD = `M${x2 - 4} ${y2 - 6}L${x2} ${y2}L${x2 + 4} ${y2 - 6}`;
+
+            return (
+              <g key={`${e.fromKey}>${e.toKey}-${e.kind}-${idx}`}>
+                <path
+                  data-wf-edge={`${e.fromKey}>${e.toKey}`}
+                  data-edge-kind={e.kind}
+                  fill="none"
+                  strokeWidth={1.5}
+                  className="stroke-line"
+                  strokeDasharray={e.kind === "needs" ? "3 3" : undefined}
+                  d={d}
+                />
+                <path
+                  data-part="wf-arrowhead"
+                  strokeWidth={1.5}
+                  className="stroke-line"
+                  d={arrowD}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      ) : null}
+      {orderedWorkflows.map((wf) => (
+        <WorkflowCard
+          key={wf.key}
+          plan={plan}
+          wf={wf}
+          onAction={onAction}
+          onRetryJob={onRetryJob}
+          postableWorkflows={postableWorkflows}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void;
   onRetryJob?: (jobKey: string, workflowKey: string) => void;
   postableWorkflows?: ReadonlySet<string>;
@@ -254,6 +399,9 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
     return <Empty data-part="plan-empty" className="h-full text-muted-foreground">Select a lead to see plans</Empty>;
   }
   const explore = plan.jobs.filter((j) => j.workflow === null);
+  const edges = computeWorkflowEdges(plan.planId, plan.workflows);
+  const orderedWorkflows = topoOrder(plan.workflows, edges, plan.planId);
+
   return (
     <section aria-label={`Plan ${plan.planId}`} data-phase={plan.phase} className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
       <TopPaneHeader
@@ -280,9 +428,17 @@ export function PlanView(props: { plan: PlanViewModel | null; onAction(action: C
       <ScrollArea data-part="plan-scroll" className="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:w-full [&>[data-slot=scroll-area-viewport]>[data-slot=scroll-area-content]]:!min-w-0">
       <div data-part="plan-body" className="flex flex-col gap-2.5 px-4 py-2.5">
         {explore.length > 0 ? <ExploreStrip jobs={explore} /> : null}
-        {plan.workflows.map((wf) => (
-          <WorkflowCard key={wf.key} plan={plan} wf={wf} onAction={onAction} onRetryJob={props.onRetryJob} postableWorkflows={props.postableWorkflows} />
-        ))}
+        {edges.length > 0 ? <WorkflowLegend /> : null}
+        {orderedWorkflows.length > 0 ? (
+          <WorkflowCanvas
+            plan={plan}
+            orderedWorkflows={orderedWorkflows}
+            edges={edges}
+            onAction={onAction}
+            onRetryJob={props.onRetryJob}
+            postableWorkflows={props.postableWorkflows}
+          />
+        ) : null}
         {plan.reviewedPr !== null && plan.reviewedPr !== undefined && plan.workflows.length === 0 ? <ReviewPrCard pr={plan.reviewedPr} /> : null}
         {plan.workflows.length === 0 && explore.length === 0 && (plan.reviewedPr ?? null) === null ? <p data-part="no-work" className="px-1 text-muted-foreground">No workflows yet</p> : null}
       </div>
