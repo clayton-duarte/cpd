@@ -148,6 +148,7 @@ mod wake;
 #[cfg(test)]
 mod worker_cleanup_tests;
 mod workers;
+pub mod webui;
 pub mod ws;
 
 use std::fs;
