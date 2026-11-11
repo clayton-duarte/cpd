@@ -1253,3 +1253,7 @@ Electron's main process already keeps external navigation out of the app: `setWi
 ### 6.6 Open points
 
 - `mailto:` with `target="_blank"` may open an empty tab in some browsers. The scheme is in the rule because Job `web-impl`'s context lists it. Unverified in any browser.
+
+### 5.5 Workflow dependency arrows (pro-d100, pro-d551)
+
+_Skeleton: to be filled._

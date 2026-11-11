@@ -2569,3 +2569,7 @@ The SVG is the preferred icon. The ICO is the fallback for a browser that does n
 1. The rasteriser and ICO packer: which packages, at which exact versions. Adding them lifts the freeze of A2 and pro-d17 for those lines. Candidates named by the survey, unverified (no network): `@resvg/resvg-js` and `png-to-ico`. The Lead decides before `web-impl` runs.
 2. The preview servers on ports 3333 and 33333 are outside `web/` (`scripts/preview-web.sh`, not read). Unverified whether they serve the favicon paths. If they do not, `/favicon.ico` answers 404 there.
 3. The icon at 16 and 32 px (27.5).
+
+## 28. Workflow dependency fields on WorkflowView (Plan `plan-dag-edges`; pro-d100, pro-d513, pro-d514, pro-d551)
+
+_Skeleton: to be filled._

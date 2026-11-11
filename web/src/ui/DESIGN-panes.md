@@ -636,3 +636,7 @@ File: `web/src/ui/App.tsx` (the outlet's content) and `web/src/ui/router.tsx` (t
 - `renders not-found card with recovery button on unknown route without crashing` (5c): the recovery button navigates to the parent route.
 - `preserves mounted context tree and inbox across route transitions` (DESIGN 3j).
 
+
+#### (iv) Workflow dependency edges
+
+_Skeleton: to be filled._
