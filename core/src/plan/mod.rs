@@ -75,6 +75,8 @@ mod tier_advice_tests;
 
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
+
 use crate::args::{PlanArg, Text, Title, WorkflowTitle};
 use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
@@ -123,6 +125,10 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14)
     Delete(DeleteArgs),
+    /// Check the Plan's registered work: unregistered workflows and unresolved drafts (§4.16)
+    Check(CheckArgs),
+    /// Reopen a done Plan to dispatch phase (§4.17)
+    Reopen(ReopenArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -271,6 +277,19 @@ pub struct DeleteArgs {
     yes: bool,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct CheckArgs {
+    #[command(flatten)]
+    pub plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReopenArgs {
+    /// The Plan id
+    #[arg(value_name = "id")]
+    pub id: PlanId,
+}
+
 /// Whether the Plan has been locked (pro-d433): `locked_at` is set. A re-planned Plan is in phase `plan` and still locked, so every
 /// rule of "before the lock" keys on this, not on the phase. A Plan that is not found is not locked.
 pub(crate) fn is_locked(conn: &rusqlite::Connection, plan: &PlanId) -> Result<bool, CpdError> {
@@ -302,7 +321,72 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Unarchive(args) => archive::plan_unarchive(args),
         Command::Cancel(args) => cancel::plan_cancel(args),
         Command::Delete(args) => delete::plan_delete(args),
+        Command::Check(args) => check(args),
+        Command::Reopen(args) => reopen(args),
     }
+}
+
+fn check(args: CheckArgs) -> Result<Output, CpdError> {
+    let id = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    let (unregistered_workflows, unresolved_drafts) = env.store.read(|conn| {
+        let _plan = row::load(conn, &id)?;
+        let unregistered_workflows: Vec<String> = if let Some(outline) = outline::load(conn, &id)? {
+            let mut unreg: Vec<String> = outline
+                .done_when
+                .keys()
+                .filter(|k| {
+                    let exists: bool = conn
+                        .query_row(
+                            "SELECT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status <> 'cancelled')",
+                            [id.as_str(), k.as_str()],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(false);
+                    !exists
+                })
+                .cloned()
+                .collect();
+            unreg.sort();
+            unreg
+        } else {
+            Vec::new()
+        };
+        let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY seq")?;
+        let rows = stmt.query_map([id.as_str()], |r| r.get(0))?;
+        let unresolved_drafts: Vec<String> = rows.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok((unregistered_workflows, unresolved_drafts))
+    })?;
+    Ok(Output::success(json!({
+        "plan": id.as_str(),
+        "unregistered_workflows": unregistered_workflows,
+        "unresolved_drafts": unresolved_drafts,
+    })))
+}
+
+fn reopen(args: ReopenArgs) -> Result<Output, CpdError> {
+    let id = args.id;
+    let mut env = Env::open()?;
+    let plan = env.store.read(|conn| row::load(conn, &id))?;
+    if plan.phase != Phase::Done {
+        return Err(CpdError::new(
+            ErrorCode::IllegalTransition,
+            format!(
+                "Plan {id} is in phase {}: only a done Plan can be reopened.",
+                plan.phase.as_str()
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("from", plan.phase.as_str())
+        .with("to", "dispatch"));
+    }
+    env.store.write("plan reopen", |tx| {
+        crate::workflow::add::reopen(tx, &id, "done", "dispatch", "plan reopened")
+    })?;
+    Ok(Output::success(json!({
+        "plan": id.as_str(),
+        "phase": "dispatch",
+    })))
 }
 
 /// A file given by path (`--brief-file`, `--feedback-file`): readable UTF-8,

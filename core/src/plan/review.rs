@@ -445,6 +445,35 @@ pub(super) fn outline_incomplete(
     )
 }
 
+/// `workflow_unregistered`: outline done_when declares a workflow that is not registered.
+pub(crate) fn unregistered_workflows(
+    id: &PlanId,
+    outline: &Outline,
+    workflows: &[WorkflowRow],
+) -> Option<CpdError> {
+    let mut unregistered: Vec<&str> = outline
+        .done_when
+        .keys()
+        .filter(|k| !workflows.iter().any(|w| w.status != "cancelled" && w.key.as_str() == k.as_str()))
+        .map(|k| k.as_str())
+        .collect();
+    if unregistered.is_empty() {
+        return None;
+    }
+    unregistered.sort();
+    Some(
+        CpdError::new(
+            ErrorCode::WorkflowUnregistered,
+            format!(
+                "The outline of Plan {id} declares done_when for workflows that are not registered: {}.",
+                unregistered.join(", ")
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("workflows", unregistered),
+    )
+}
+
 /// The pure part of draft checking: returns `Option<CpdError>` for incomplete drafts.
 pub(super) fn drafts_incomplete(id: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     let mut stubs: Vec<&Job> = jobs

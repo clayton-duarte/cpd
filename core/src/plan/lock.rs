@@ -56,6 +56,16 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
                 "plan": id, "phase": "dispatch", "workflows": listed(&workflows, &[], &held), "watch": watch, "already": true,
             })));
         }
+        Phase::Deploy => {
+            env.store.read(|conn| super::done::check_complete(conn, &id))?;
+            let settled = env.store.write(COMMAND, |tx| {
+                super::done::settle_done(tx, &id, None)
+            })?;
+            return Ok(Output::success(json!({
+                "plan": id,
+                "phase": if settled { "done" } else { "deploy" },
+            })));
+        }
         other => {
             return Err(CpdError::new(
                 ErrorCode::IllegalTransition,
@@ -80,6 +90,12 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
     env.store
         .read(|conn| check_drafts_complete(conn, &id, &jobs))?;
+    let outline = env.store.read(|conn| super::outline::load(conn, &id))?;
+    if let Some(outline) = outline.as_ref() {
+        if let Some(e) = super::review::unregistered_workflows(&id, outline, &workflows) {
+            return Err(e);
+        }
+    }
     super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| {
@@ -121,7 +137,17 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
     let started: Vec<Pushed> = prepared.into_iter().map(start::Prepared::push).collect();
 
-    let mut keys: Vec<String> = drafts.iter().map(|j| j.key.clone()).collect();
+    let waiting_keys: std::collections::HashSet<String> = env.store.read(|conn| {
+        let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1 AND waiting_on IS NOT NULL")?;
+        let rows = stmt.query_map([id.as_str()], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<std::collections::HashSet<String>>>()?)
+    })?;
+
+    let mut keys: Vec<String> = drafts
+        .iter()
+        .filter(|j| !waiting_keys.contains(&j.key))
+        .map(|j| j.key.clone())
+        .collect();
     let mut opened: Vec<String> = Vec::new();
     let committed = env.store.write(COMMAND, |tx| {
         // Compare-and-swap on what was read: the phase, the drafts and the review.
@@ -138,9 +164,9 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         if moved == 0 {
             return Err(cas_lost(&id));
         }
-        for job in jobs_now.iter().filter(|j| j.is_draft()) {
+        for job in jobs_now.iter().filter(|j| j.is_draft() && !waiting_keys.contains(&j.key)) {
             tx.execute(
-                "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",
+                "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft' AND waiting_on IS NULL",
                 [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],
             )?;
         }

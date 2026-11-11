@@ -293,9 +293,18 @@ pub mod plan_complete {
 
         // Simulate w1 merged, j1 merged, and plan in deploy
         fx.env.sql(
-            "UPDATE plans SET phase = 'deploy', locked_at = 't' WHERE id = 'p1';
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+             VALUES ('acme/repo', 1, 'https://github.com/acme/repo/pull/1', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
+             UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'p1';
+             UPDATE plans SET phase = 'deploy' WHERE id = 'p1';
+             UPDATE workflows SET lead_worktree = '/wt', started_at = 't', status = 'dispatch' WHERE plan = 'p1' AND key = 'w1';
+             UPDATE workflows SET pr_number = 1, pr_url = 'https://github.com/acme/repo/pull/1', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/repo' AND number = 1),
+                    status = 'open' WHERE plan = 'p1' AND key = 'w1';
              UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'p1' AND key = 'w1';
-             UPDATE jobs SET status = 'merged', merged_sha = 'abc', fingerprint = printf('%064d', 1) WHERE plan = 'p1' AND key = 'j1';",
+             UPDATE jobs SET status = 'queued', fingerprint = printf('%064d', 1) WHERE plan = 'p1' AND key = 'j1';
+             UPDATE jobs SET status = 'running' WHERE plan = 'p1' AND key = 'j1';
+             UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'p1' AND key = 'j1';",
         );
 
         // When settle_done is evaluated (e.g. via cpd plan lock or workflow cancel or pr poll),
@@ -387,9 +396,18 @@ pub mod plan_complete {
 
         // Simulate w1 merged, j1 merged, but j2 remains an unresolved draft
         fx.env.sql(
-            "UPDATE plans SET phase = 'deploy', locked_at = 't' WHERE id = 'p1';
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+             VALUES ('acme/repo', 1, 'https://github.com/acme/repo/pull/1', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
+             UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'p1';
+             UPDATE plans SET phase = 'deploy' WHERE id = 'p1';
+             UPDATE workflows SET lead_worktree = '/wt', started_at = 't', status = 'dispatch' WHERE plan = 'p1' AND key = 'w1';
+             UPDATE workflows SET pr_number = 1, pr_url = 'https://github.com/acme/repo/pull/1', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/repo' AND number = 1),
+                    status = 'open' WHERE plan = 'p1' AND key = 'w1';
              UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'p1' AND key = 'w1';
-             UPDATE jobs SET status = 'merged', merged_sha = 'abc', fingerprint = printf('%064d', 1) WHERE plan = 'p1' AND key = 'j1';",
+             UPDATE jobs SET status = 'queued', fingerprint = printf('%064d', 1) WHERE plan = 'p1' AND key = 'j1';
+             UPDATE jobs SET status = 'running' WHERE plan = 'p1' AND key = 'j1';
+             UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'p1' AND key = 'j1';",
         );
 
         // Attempting to settle done must refuse with plan_incomplete while unresolved drafts remain
@@ -507,8 +525,8 @@ pub mod plan_complete {
         refused(&out_send_before, "plan_inactive", 3);
 
         // Reopen a plan that is not done should be refused illegal_transition
-        create_plan(&fx, "p_active", "dispatch");
-        let out_reopen_active = fx.cpd(&["plan", "reopen", "p_active"]);
+        create_plan(&fx, "p-active", "dispatch");
+        let out_reopen_active = fx.cpd(&["plan", "reopen", "p-active"]);
         refused(&out_reopen_active, "illegal_transition", 3);
 
         // Reopen the done plan
