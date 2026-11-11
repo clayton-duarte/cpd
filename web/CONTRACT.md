@@ -2523,6 +2523,14 @@ The implementation Job (`webui-core-ws-impl`) deletes these. This section names 
 
 **Open, flagged:** pi-native-core §2.6 also lists git (`plugin.ts:361`), tmux (`status.ts:38`) and the classifier (`completion-classify.ts:91`) as shell-outs from the web. Plan 4's removal list names only the cpd-argv layer and `cockpit/stream.ts`. Whether the other three leave the web in this Plan is not stated; this section does not remove them.
 
+### 26.4 Verification and test coverage
+
+The core WebSocket connection and session streaming pipeline are tested and verified by:
+- `web/src/server/core-ws.test.ts`: verifies `CoreWsClient` connecting to `/cpd-ws`, performing `snapshot` synchronization, keeping cursors, subscribing via `events.subscribe`, and streaming live events.
+- `web/src/ui/chat/SessionStream.test.tsx`: verifies `SessionStream` rendering transcript items (user and assistant messages) from a live stream source.
+
+Both test suites pass cleanly under Vitest.
+
 ## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
 
 Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
