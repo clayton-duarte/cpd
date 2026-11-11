@@ -6173,6 +6173,10 @@ Matching this stream to the `.jsonl`: the first assistant line has `timestamp` 1
 
 **What it does not do.** It does not replace the WebUI for daily work. With the WebUI down and the core up, every typed tool works, so only the WebUI is lost. With the core down, state comes from the shell commands alone.
 
+### 6.23 Durable Managers under engine supervision, and the retirement of tmux keep-alive (Plan `durable-mgr-keepalive`)
+
+*Skeleton: the text of this section is written in the Job's next commits.*
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
