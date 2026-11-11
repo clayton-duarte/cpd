@@ -14,10 +14,10 @@ use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed, PollRead};
 use super::posts;
-use super::pulls::{self, Change, PostFacts, Reason};
+use super::pulls::{self, Change, PostFacts, PullRequest, Reason};
 use super::row::PlanWorkflows;
 use super::start::unstack;
-use super::status::{self, ChecksSummary, Mergeable, PrState};
+use super::status::{self, ChecksSummary, MergeState, Mergeable, PrState};
 /// The single-call poll's builder and runner-taking read, for `swr::source::github` (`gh` is private to `pr`).
 #[allow(unused_imports)] // a stub until swr-github calls them
 pub(crate) use super::swr_read::{PollPlan, build_poll_query, head_ref_oid_on};
@@ -26,7 +26,7 @@ use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::host::runner::Runner;
-use crate::ids::{JobKey, OwnerLogin, PlanId, RepoName, WorkflowKey};
+use crate::ids::{JobKey, OwnerLogin, PlanId, RepoName, SessionId, WorkflowKey};
 use crate::inbox::model as inbox;
 use crate::job::open::{self, Cause};
 use crate::lock;
@@ -519,6 +519,25 @@ fn poll_pass(
         || !follows.is_empty()
         || contained.iter().any(|c| !c.held)
         || env.store.read(|conn| {
+            let conflict_needs_update: bool = conn.query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM pull_requests r
+                    JOIN workflows w ON w.pull_request = r.id AND w.status = 'open'
+                    JOIN plans p ON p.id = w.plan AND p.archived_at IS NULL
+                    WHERE r.state = 'open'
+                      AND (r.mergeable = 'conflicting' OR r.merge_state = 'dirty')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM jobs j
+                          WHERE j.plan = w.plan AND j.workflow = w.key
+                            AND j.kind = 'update' AND j.status IN ('queued', 'running')
+                      )
+                )",
+                [],
+                |r| r.get(0),
+            )?;
+            if conflict_needs_update {
+                return Ok(true);
+            }
             for listed in &seen {
                 match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
                     Some(row) if row.holds(listed, read_of(&reads, listed))? => {
@@ -543,18 +562,23 @@ fn poll_pass(
         let mut wanting: Vec<(PlanId, WorkflowKey)> = owned
             .iter()
             .filter(|(_, _, row)| {
-                seen.iter().any(|l| {
-                    l.pr.repo == row.repo
-                        && l.pr.number == row.number
-                        && l.pr.mergeable == Mergeable::Conflicting
-                })
+                row.mergeable == "conflicting"
+                    || row.merge_state == "dirty"
+                    || seen.iter().any(|l| {
+                        l.pr.repo == row.repo
+                            && l.pr.number == row.number
+                            && (l.pr.mergeable == Mergeable::Conflicting
+                                || l.pr.merge_state == MergeState::Dirty)
+                    })
             })
             .map(|(plan, key, _)| (plan.clone(), key.clone()))
             .collect();
         wanting.extend(follows.iter().map(|f| (f.plan.clone(), f.workflow.clone())));
         for (plan, key) in wanting {
-            let tier = open::tier_of_workflow(env, &plan, &key)?;
-            tiers.push((plan, key, tier));
+            if !tiers.iter().any(|(p, k, _)| p == &plan && k == &key) {
+                let tier = open::tier_of_workflow(env, &plan, &key)?;
+                tiers.push((plan, key, tier));
+            }
         }
     }
     // A poll that finds nothing new opens no write transaction (D5).
@@ -749,14 +773,19 @@ fn apply(
             listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
         let polled = &listed.pr;
-        let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else {
-            // A merge a header write already stored changes no row, yet its stale `pr-ready` item is still open (A47).
-            if polled.state == PrState::Merged {
-                inbox::close_pr_ready(tx, &polled.repo, polled.number)?;
+        let change_opt = pulls::upsert(tx, &listed, read_of(reads, &listed))?;
+        let after = match &change_opt {
+            Some(change) => change.after.clone(),
+            None => {
+                if polled.state == PrState::Merged {
+                    inbox::close_pr_ready(tx, &polled.repo, polled.number)?;
+                }
+                match pulls::find(tx, &polled.repo, polled.number)? {
+                    Some(row) => row,
+                    None => continue,
+                }
             }
-            continue;
         };
-        let after = &change.after;
         if after.state == "merged" {
             inbox::close_pr_ready(tx, &after.repo, after.number)?;
         }
@@ -768,11 +797,12 @@ fn apply(
             )?;
         }
         // A row only the comments read changed (its feedback and `updated_at`) is no change of the pull request.
-        if change
-            .before
-            .as_ref()
-            .is_none_or(|before| !before.holds(&listed, None).unwrap_or(false))
-        {
+        if change_opt.as_ref().is_some_and(|change| {
+            change
+                .before
+                .as_ref()
+                .is_none_or(|before| !before.holds(&listed, None).unwrap_or(false))
+        }) {
             out.changed.push(json!({
                 "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
                 "checks": after.checks, "review_decision": after.review_decision,
@@ -782,14 +812,14 @@ fn apply(
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
             if polled.state == PrState::Merged {
                 out.merged.push((plan.clone(), key.clone()));
-                if merge(tx, plan, key, after)? {
+                if merge(tx, plan, key, &after)? {
                     out.done.push(plan.clone());
                 }
                 crate::incident::end_if_until_workflow_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
             } else if let Some(resolved) = checks_of(checks, plan, key) {
                 let db_path = tx.path().unwrap_or("");
-                let conflicting = after.mergeable == "conflicting";
+                let conflicting = after.mergeable == "conflicting" || after.merge_state == "dirty";
                 let checks_failed = after.checks == "failed";
                 let changes_requested = after.review_decision == "changes_requested";
                 let stacked = matches!((&after.base_ref, &after.default_branch), (Some(b), Some(d)) if b != d);
@@ -818,11 +848,13 @@ fn apply(
                 } else {
                     pulls::clear_detection(db_path, &after.repo, after.number);
                 }
-                if tell(tx, plan, key, resolved, &change)? {
+                if let Some(ref change) = change_opt
+                    && tell(tx, plan, key, resolved, change)?
+                {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
                 if let Some(job) =
-                    update_for_conflict(tx, plan, key, &change, || tier_of(plan, key))?
+                    update_for_conflict(tx, plan, key, &after, || tier_of(plan, key))?
                 {
                     out.update_jobs
                         .push((plan.clone(), key.clone(), job, Cause::Conflict));
@@ -1278,15 +1310,11 @@ fn update_for_conflict(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     key: &WorkflowKey,
-    change: &Change,
+    after: &PullRequest,
     tier: impl FnOnce() -> Result<Tier, CpdError>,
 ) -> Result<Option<JobKey>, CpdError> {
-    let became = change.after.mergeable == "conflicting"
-        && change
-            .before
-            .as_ref()
-            .is_none_or(|b| b.mergeable != "conflicting");
-    if !became || change.after.state != "open" {
+    let conflicting = after.mergeable == "conflicting" || after.merge_state == "dirty";
+    if !conflicting || after.state != "open" {
         return Ok(None);
     }
     let archived: bool = tx.query_row(
@@ -1301,7 +1329,31 @@ fn update_for_conflict(
     let Some(workflow) = workflows.iter().find(|p| p.key == *key) else {
         return Ok(None);
     };
-    open::queue_update(tx, plan, workflow, tier()?, COMMAND_BY, Cause::Conflict)
+    let job = open::queue_update(tx, plan, workflow, tier()?, COMMAND_BY, Cause::Conflict)?;
+    if let Some(ref j) = job {
+        let lead_session: Option<String> = tx
+            .query_row(
+                "SELECT lead_session FROM plans WHERE id = ?1",
+                [plan.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(lead) = lead_session
+            && let Ok(lead_id) = SessionId::parse(&lead)
+        {
+            let _ = crate::session::tell(
+                tx,
+                &lead_id,
+                &format!(
+                    "Pull request #{} is conflicting; queued update Job {}.",
+                    after.number,
+                    j.as_str(),
+                ),
+            );
+        }
+    }
+    Ok(job)
 }
 
 /// Why the poll queues a Workflow's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition
