@@ -42,12 +42,12 @@ export interface ServeOptions {
 
 export function findStaticDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // In dist-electron/server.js: here is dist-electron, renderer is in dist-electron/renderer
-  const distCandidate = path.resolve(here, 'renderer');
+  // In dist-electron/server.js: here is dist-electron, browser dist is in ../dist or dist
+  const distCandidate = path.resolve(here, '..', 'dist');
   if (fs.existsSync(distCandidate)) return distCandidate;
 
-  // In source tree: web/src/server -> web/dist-electron/renderer
-  const webDistCandidate = path.resolve(here, '..', '..', 'dist-electron', 'renderer');
+  // In source tree: web/src/server -> web/dist
+  const webDistCandidate = path.resolve(here, '..', '..', 'dist');
   if (fs.existsSync(webDistCandidate)) return webDistCandidate;
 
   return distCandidate;
@@ -66,6 +66,9 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
 
   const services = createServices(boundaries);
   const started = services.cockpit.start();
+  started.catch((e: unknown) => {
+    console.error('cpd-web: cockpit failed to start:', e instanceof Error ? e.message : String(e));
+  });
 
   const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -75,7 +78,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
     }
 
     const urlPath = decodeURIComponent(new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname);
-    const relative = urlPath === '/' ? 'electron.html' : urlPath.replace(/^\/+/, '');
+    const relative = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
     const filePath = path.normalize(path.join(staticDir, relative));
 
     // Guard against path traversal
@@ -87,8 +90,8 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
 
     fs.stat(filePath, (err, stats) => {
       if (err || !stats.isFile()) {
-        // Fallback to electron.html for client-side routing if applicable
-        const indexPath = path.join(staticDir, 'electron.html');
+        // Fallback to index.html for client-side routing if applicable
+        const indexPath = path.join(staticDir, 'index.html');
         fs.stat(indexPath, (indexErr, indexStats) => {
           if (!indexErr && indexStats.isFile()) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
