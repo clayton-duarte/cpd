@@ -291,4 +291,8 @@ describe("ws server", () => {
       expect(acceptsOrigin(origin)).toBe(false);
     }
   });
+
+  it("rejects spoofed ipv6 ula domain names", () => {
+    expect(true).toBe(false);
+  });
 });
