@@ -2,8 +2,9 @@
 //! written by dotfiles' `scripts/cpd-install.sh` on every run and read by cpd each tick.
 //!
 //! One JSON object on one line, `{"status":"ok","since":"<RFC 3339 UTC, Z>"}` or
-//! `{"status":"skipped","reason":"dirty|diverged|branch","since":"<RFC 3339 UTC, Z>"}`. `reason`
-//! is present exactly when the status is `skipped`; unknown fields are refused. A missing file is
+//! `{"status":"skipped","reason":"dirty|diverged|branch","since":"<RFC 3339 UTC, Z>"}` or
+//! `{"status":"failed","reason":"<failure reason>","since":"<RFC 3339 UTC, Z>"}`. `reason`
+//! is present exactly when the status is `skipped` or `failed`; unknown fields are refused. A missing file is
 //! `None`; a file that does not parse is one `install_state_invalid` (once until it clears).
 
 use serde::Deserialize;
@@ -34,12 +35,13 @@ impl Reason {
     }
 }
 
-/// The `status` field: `ok` or `skipped`.
+/// The `status` field: `ok`, `skipped`, or `failed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Status {
     Ok,
     Skipped,
+    Failed,
 }
 
 /// The one JSON object on the line, as written: every field checked at the edge.
@@ -48,16 +50,16 @@ enum Status {
 struct Raw {
     status: Status,
     #[serde(default)]
-    reason: Option<Reason>,
+    reason: Option<String>,
     since: String,
 }
 
-/// A parsed install state. The fields are true: `reason` is present exactly for `skipped`, and
-/// `since` is an RFC 3339 UTC time ending in `Z`.
+/// A parsed install state. The fields are true: `reason` is present exactly for `skipped` and `failed`,
+/// and `since` is an RFC 3339 UTC time ending in `Z`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstallState {
     /// The alerting reason, `None` when the state does not alert.
-    reason: Option<Reason>,
+    reason: Option<String>,
     /// When the current status and reason began, an RFC 3339 UTC time ending in `Z`.
     since: String,
 }
@@ -74,8 +76,9 @@ fn utc_z(text: &str) -> bool {
 
 impl InstallState {
     /// `text` as the install state, or `install_state_invalid`: not JSON or not an object, an unknown
-    /// field, an unknown status, a `reason` present exactly when the status is `skipped`, a known
-    /// reason, and a `since` that is an RFC 3339 UTC time ending in `Z`.
+    /// field, an unknown status, a `reason` present exactly when the status is `skipped` or `failed`,
+    /// a known reason for `skipped` (dirty, diverged, branch), a non-empty failure reason for `failed`,
+    /// and a `since` that is an RFC 3339 UTC time ending in `Z`.
     pub fn parse(text: &str) -> Result<InstallState, CpdError> {
         let raw: Raw = serde_json::from_str(text).map_err(|e| {
             invalid(format!(
@@ -85,7 +88,24 @@ impl InstallState {
         })?;
         let reason = match (raw.status, raw.reason) {
             (Status::Ok, None) => None,
-            (Status::Skipped, Some(reason)) => Some(reason),
+            (Status::Skipped, Some(reason)) => match reason.as_str() {
+                "dirty" | "diverged" | "branch" => Some(reason),
+                _ => {
+                    return Err(invalid(format!(
+                        "The install state's `skipped` reason is unknown: {reason:?}."
+                    ))
+                    .with("reason", "unknown skipped reason"));
+                }
+            },
+            (Status::Failed, Some(reason)) => {
+                if reason.is_empty() {
+                    return Err(invalid(
+                        "The install state is `failed` but carries an empty `reason`.",
+                    )
+                    .with("reason", "empty reason with status failed"));
+                }
+                Some(reason)
+            }
             (Status::Ok, Some(_)) => {
                 return Err(invalid("The install state is `ok` but carries a `reason`.")
                     .with("reason", "reason present with status ok"));
@@ -94,6 +114,12 @@ impl InstallState {
                 return Err(
                     invalid("The install state is `skipped` but carries no `reason`.")
                         .with("reason", "reason missing with status skipped"),
+                );
+            }
+            (Status::Failed, None) => {
+                return Err(
+                    invalid("The install state is `failed` but carries no `reason`.")
+                        .with("reason", "reason missing with status failed"),
                 );
             }
         };
@@ -133,7 +159,7 @@ impl InstallState {
 
     /// The reason the version pill turns red, or `None` when the state does not alert.
     pub fn alert(&self) -> Option<&str> {
-        self.reason.map(Reason::as_str)
+        self.reason.as_deref()
     }
 
     /// When the current status and reason began, an RFC 3339 UTC time ending in `Z` (the host

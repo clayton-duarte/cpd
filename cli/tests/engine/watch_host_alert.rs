@@ -22,6 +22,61 @@ fn args(words: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn a_failed_state_sets_the_alert_option_to_its_reason() {
+    let raw = r#"{"status":"failed","reason":"installer failed (exit 1)","since":"2026-10-24T12:00:00Z"}"#;
+    let state = InstallState::parse(raw).expect("a failed state");
+    assert_eq!(
+        state.alert(),
+        Some("installer failed (exit 1)"),
+        "the pill's colour and text come from the failure's reason"
+    );
+    assert_eq!(
+        host_alert::argv(None, state.alert()),
+        Some(args(&["set", "-g", OPTION, "installer failed (exit 1)"])),
+        "a failed install sets {OPTION} to its reason"
+    );
+}
+
+#[test]
+fn the_core_parses_every_status_the_dotfiles_writer_can_write() {
+    // Dotfiles scripts/cpd-install.sh writes:
+    // - ok: {"status":"ok","since":"<T>"}
+    // - skipped: {"status":"skipped","reason":"<dirty|diverged|branch>","since":"<T>"}
+    // - failed: {"status":"failed","reason":"installer failed (exit <err>)","since":"<T>"}
+    let ok = r#"{"status":"ok","since":"2026-10-24T12:00:00Z"}"#;
+    let skipped_dirty = r#"{"status":"skipped","reason":"dirty","since":"2026-10-24T12:00:00Z"}"#;
+    let skipped_diverged =
+        r#"{"status":"skipped","reason":"diverged","since":"2026-10-24T12:00:00Z"}"#;
+    let skipped_branch = r#"{"status":"skipped","reason":"branch","since":"2026-10-24T12:00:00Z"}"#;
+    let failed = r#"{"status":"failed","reason":"installer failed (exit 1)","since":"2026-10-24T12:00:00Z"}"#;
+
+    let s_ok = InstallState::parse(ok).expect("ok status");
+    assert_eq!(s_ok.alert(), None);
+
+    let s_dirty = InstallState::parse(skipped_dirty).expect("skipped dirty");
+    assert_eq!(s_dirty.alert(), Some("dirty"));
+
+    let s_diverged = InstallState::parse(skipped_diverged).expect("skipped diverged");
+    assert_eq!(s_diverged.alert(), Some("diverged"));
+
+    let s_branch = InstallState::parse(skipped_branch).expect("skipped branch");
+    assert_eq!(s_branch.alert(), Some("branch"));
+
+    let s_failed = InstallState::parse(failed).expect("failed status");
+    assert_eq!(s_failed.alert(), Some("installer failed (exit 1)"));
+
+    // And invalid variations of failed status:
+    // status failed without reason
+    let failed_no_reason = r#"{"status":"failed","since":"2026-10-24T12:00:00Z"}"#;
+    assert_eq!(
+        InstallState::parse(failed_no_reason)
+            .expect_err("failed without reason must fail")
+            .code(),
+        ErrorCode::InstallStateInvalid
+    );
+}
+
+#[test]
 fn a_skipped_state_sets_the_alert_option_to_its_reason() {
     let state = InstallState::parse(SKIPPED_DIRTY).expect("a skipped state");
     assert_eq!(
