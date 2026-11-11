@@ -31,6 +31,7 @@ import type {
 } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
+import { ExternalLink } from "../components/ExternalLink.tsx";
 import { Empty } from "../components/empty.tsx";
 import {
   ContextMenu,
@@ -402,17 +403,15 @@ function InboxItemRow(props: { row: InboxRow } & Handlers): ReactElement {
       </ItemContent>
       <ItemActions className="flex-col items-end justify-between gap-1.5 self-stretch">
         {row.url !== null ? (
-          <a
+          <ExternalLink
             href={row.url}
-            target="_blank"
-            rel="noopener noreferrer"
             aria-label="Open external link"
             data-part="item-link"
             onClick={(e) => e.stopPropagation()}
             className="mt-[1.5px] rounded-xs text-muted-foreground transition-colors hover:text-fg-strong"
           >
             <ExternalLinkIcon className="size-4" />
-          </a>
+          </ExternalLink>
         ) : (
           <ChevronRightIcon className="mt-[1.5px] size-4 text-muted-foreground" />
         )}
