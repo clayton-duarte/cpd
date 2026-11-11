@@ -11,7 +11,15 @@ export interface StreamChild {
   onLine(cb: (line: string) => void): void;
   onExit(cb: (info: { code: number | null; stderr: string }) => void): void;
 }
-export interface StreamPanes { readonly context: unknown; readonly plan: unknown; readonly session: unknown; readonly inbox: unknown; /** The serve status pane of CONTRACT §20, passed through unparsed: the four-pane checks stay, this one is read by the cockpit service. */ readonly status?: unknown }
+export interface StreamPanes {
+  readonly context: unknown;
+  readonly plan: unknown;
+  readonly session: unknown;
+  readonly inbox: unknown;
+  readonly owners?: unknown;
+  /** The serve status pane of CONTRACT §20, passed through unparsed: the four-pane checks stay, this one is read by the cockpit service. */
+  readonly status?: unknown;
+}
 export interface StreamSnapshot { readonly seq: number; readonly panes: StreamPanes }
 export interface StreamDeps {
   spawn(args: string[]): StreamChild;
@@ -59,6 +67,10 @@ function parseFrame(line: string): Frame {
       if (typeof v["seq"] !== "number" || !Number.isInteger(v["seq"])) throw bad("snapshot without an integer seq", { field: "seq" });
       if (!isObj(panes)) throw bad("snapshot without panes", { field: "panes" });
       for (const k of ["context", "plan", "session", "inbox"]) if (!isObj(panes[k])) throw bad(`snapshot pane ${k} is not an object`, { field: k });
+      if (panes["owners"] !== undefined) {
+        if (!Array.isArray(panes["owners"])) throw bad("snapshot without an array owners", { field: "owners" });
+        for (const o of panes["owners"]) if (typeof o !== "string") throw bad("snapshot owner is not a string", { field: "owners" });
+      }
       return { t: "snapshot", snapshot: { seq: v["seq"], panes: panes as unknown as StreamPanes } };
     }
     case "event":

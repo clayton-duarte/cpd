@@ -443,21 +443,14 @@ function mapInbox(inbox: ParsedInbox, sessions: RawSession[], plans: RawPlan[] |
   return buildInbox(inbox, sessions, { ...(plans !== undefined ? { plans } : {}), curationByContext });
 }
 /** Pure mapping of the four raw cpd pane replies (a snapshot's panes) to the tree and inbox panes; the one source of this mapping. */
-export function mapPanes(raw: { context: Reply; plan: Reply; session: Reply; inbox: Reply }, curationByContext: Curation = new Map()): { tree: ContextTreeModel; inbox: InboxModel } {
+export function mapPanes(raw: { context: Reply; plan: Reply; session: Reply; inbox: Reply; owners?: readonly string[] }, curationByContext: Curation = new Map()): { tree: ContextTreeModel; inbox: InboxModel } {
   const inbox = parseInboxList(raw.inbox);
   const plans = parsePlanList(raw.plan);
   const sessions = parseSessionList(raw.session);
-  return { tree: mapTree(raw, plans, sessions, inbox), inbox: mapInbox(inbox, sessions, plans, curationByContext) };
+  return { tree: mapTree(raw, plans, sessions, inbox, raw.owners), inbox: mapInbox(inbox, sessions, plans, curationByContext) };
 }
 
-export function createReadModel(cpd: Cpd, owners?: () => Promise<readonly string[]>): ReadModel {
-  // The policy-owner stems (CONTRACT 20.1), read once per read model and carried on every tree it builds.
-  let ownerList: Promise<readonly string[]> | null = null;
-  const loadOwners = async (): Promise<readonly string[] | undefined> => {
-    if (owners === undefined) return undefined;
-    ownerList ??= owners().catch(() => []);
-    return ownerList;
-  };
+export function createReadModel(cpd: Cpd): ReadModel {
   async function loadPanes(panes: PaneSet, planId: string | null): Promise<PaneUpdate> {
     const wantTree = panes.has("tree");
     const wantInbox = panes.has("inbox") || wantTree;
@@ -475,7 +468,7 @@ export function createReadModel(cpd: Cpd, owners?: () => Promise<readonly string
     const parsedPlans = planR === undefined ? undefined : parsePlanList(planR);
     const parsedSessions = sessR === undefined ? undefined : parseSessionList(sessR);
     if (ctxR !== undefined && parsedPlans !== undefined && parsedSessions !== undefined && inbox !== undefined) {
-      out.tree = mapTree({ context: ctxR, plan: planR!, session: sessR! }, parsedPlans, parsedSessions, inbox, await loadOwners());
+      out.tree = mapTree({ context: ctxR, plan: planR!, session: sessR! }, parsedPlans, parsedSessions, inbox);
     }
     if (panes.has("inbox") && inbox !== undefined) {
       const curateContexts = [
