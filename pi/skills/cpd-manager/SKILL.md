@@ -30,9 +30,9 @@ A key is fixed: never rename a session.
 
 ## Typed tools
 
-cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd context decide`, the plan tool's `op` `show` is `cpd plan show`. The command lines of this skill name the operations they stand for; when no typed tool of that domain is in your tool list, run that command line in bash instead.
+cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd_context` with `{ op: "decide", ... }`, the plan tool's `op` `show` is `cpd_plan` with `{ op: "show" }`. Operations are invoked exclusively through these typed tools.
 
-A message down to a Lead goes through the message tool's `op` `delegate`, to the Leads of your Context's Plans; `cpd session send <context>:<plan>` names the same message.
+A message down to a Lead goes through the message tool's `op` `delegate`, to the Leads of your Context's Plans with `{ to: ["<context>:<plan>"], body: "<text>", unblocks: "<reason>" }`.
 
 ## Rules
 
@@ -49,7 +49,7 @@ A message down to a Lead goes through the message tool's `op` `delegate`, to the
 - Leave to the Lead: `cpd plan phase plan`, `cpd workflow add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd job approve-tests`. Tell the Lead what you need with a message instead.
 - Leave to cpd and the User: `cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`, `cpd context manager` (it started you), `cpd context archive`, `cpd context unarchive`, `cpd plan archive`, `cpd plan unarchive`, `cpd session archive` and `cpd session unarchive` (refused `agent_forbidden`: the User archives, and the engine archives a finished Plan after it sleeps).
 - You may create Leads and open sessions: `cpd plan new` ([2. Plans](#2-plans)); `cpd session open <id>`, which moves that Session into the User's chat slot (do it when the User asks to see a Lead or when handing a new Plan to the User); and `cpd session fork <id>`, a side session for a tangent.
-- **Keep the work moving.** Use the turn-start message and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a Workflow waiting for review) and nudge a stalled Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
+- **Keep the work moving.** Use the turn-start message and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a Workflow waiting for review) and nudge a stalled Lead with `cpd_message` `delegate` to `<context>:<plan>` (sparingly) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
@@ -61,7 +61,7 @@ A message down to a Lead goes through the message tool's `op` `delegate`, to the
 - **Exact CLI syntax (never guess flags or subcommands):**
   - `cpd context decide --context <c> "<decision>"` (positional `<TEXT>`, NO `--title` or `--body`; the sibling command is `cpd context note`, and there is no `context add`).
   - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes. On your own shaping Plan the form is `cpd plan new <id> --context <c> --title "<t>" --shaping` (`--brief-file` and `--by-user` are refused with `--shaping`).
-  - `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (`--unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
+  - `cpd_message` `delegate` with `{ to: ["<context>:<plan>"], body: "<text>", unblocks: "<reason>" }` (`unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
   - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required). On a shaping Plan the list adds `cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>` (the explore kinds only, with no `--draft`), `cpd job list --plan <id>`, `cpd job show <k> --plan <id>`, `cpd job cancel <k> --reason "<why>" --plan <id>` and `cpd answer <escalation> "<text>" --plan <id>` (a Worker's question).
 
 ## Tool hooks
@@ -148,7 +148,7 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 
 - **Split by deliverable and area.** Cut work between Leads by deliverable and by area: the files and directories each touches. A small follow-up goes into its area's existing Workflow, not a new one. Give two Plans the same area only when you cannot avoid it.
 - **Keep a file map.** Map the files of every active Workflow: each pending Job's `touches` from `cpd context pending --context <c>`, and `cpd plan show --plan <p>` per Plan. `cpd plan render`'s Overlaps section shows a Plan's overlaps with other active Plans. Know every unavoidable overlap before the work starts, and tell both Leads in the brief or by message.
-- **Set the landing order.** For overlapping Workflows (files each touches), decide which Plan's Workflow lands first. Coordinate through Context notes (`cpd context note "<fact>"`) so Leads know the order. Within one Plan, the Lead stacks a same-repo Workflow on the one it depends on (`cpd workflow add <key> --repo <path> --base <workflow-key>`), `--needs` across repos. Across Plans, there are no direct dependencies: if a Lead finds itself waiting on another Plan's work, tell the Manager with `cpd session send <context> "<text>" --unblocks "<reason>"`, which moves the work or re-routes it, never sequences across Leads.
+- **Set the landing order.** For overlapping Workflows (files each touches), decide which Plan's Workflow lands first. Coordinate through Context notes (`cpd context note "<fact>"`) so Leads know the order. Within one Plan, the Lead stacks a same-repo Workflow on the one it depends on (`cpd workflow add <key> --repo <path> --base <workflow-key>`), `--needs` across repos. Across Plans, there are no direct dependencies: if a Lead finds itself waiting on another Plan's work, tell the Manager with `cpd_message` `escalate` with `{ body: "<text>", unblocks: "<reason>" }`, which moves the work or re-routes it, never sequences across Leads.
 - **Oversee all-merged Workflows.** cpd opens the pull request as soon as a Workflow's last Job merges (the Workflow's open Job; no Lead opens it). Watch the Workflows whose Jobs are all merged (`cpd context pending --context <c>` shows each Workflow's Jobs) and stack those that would conflict, so each Workflow can simply be merged.
 - **One Workflow in flight per area, the next stacked.** Tell the Leads the order and which branch the next Workflow builds on and targets:
   - The next Workflow is built on the previous Workflow's last commit (its Lead Branch head), never in parallel from the base.
@@ -160,9 +160,9 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 
 - **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, pull request opened or merged, Job failed, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its Workflow and Job counts (the Jobs and their touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and Workflows; `cpd plan show --plan <p>` for one Plan's Workflows, Jobs and open Escalations.
-- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` to register it in one of these forms and to name its key. One Workflow per phase (pro-d549): planned work for a phase that has no Workflow is unregistered.
+- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd_message` `delegate` with `{ to: ["<context>:<plan>"], body: "<text>", unblocks: "<reason>" }` to register it in one of these forms and to name its key. One Workflow per phase (pro-d549): planned work for a phase that has no Workflow is unregistered.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
-- **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` (`cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`). The engine then starts it first and may run it as one Attempt beyond `concurrency`.
+- **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` via `cpd_message` `delegate`. The engine then starts it first and may run it as one Attempt beyond `concurrency`.
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
 
 ## 4. Messaging a Lead
@@ -171,21 +171,20 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Message** (`cpd_message` `delegate` to `<context>:<plan>`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 Lateral comms:
 
-- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
+- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd_message` `delegate` or `escalate` with `{ to: ["cpd"], body: "<text>", unblocks: "cpd defect: <short>" }`.
 - The `cpd` Manager applies the bug report protocol (`cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
-- Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
+- Lead-to-Manager (`<context>`): `cpd_message` `escalate` with `{ body: "<text>", unblocks: "<reason>" }`, the Lead's request to its own Manager.
 
 ### Sending a message
 
 ```
-cpd session send <context>:<plan> "<text>" --unblocks "<reason>"
-cpd session send <context>:<plan> --file <file> --unblocks "<reason>"
+cpd_message op: "delegate", params: { to: ["<context>:<plan>"], body: "<text>", unblocks: "<reason>" }
 ```
 
 A Plan's Lead is `<context>:<plan>`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it only to unblock: to ask a Lead to register draft Jobs, to point it to a new record, or to notify it of a changed Requirement. Write the message so it stands alone.
