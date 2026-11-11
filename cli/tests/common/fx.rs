@@ -794,7 +794,9 @@ impl Fx {
         let _ = (*fakes.runner)
             .clone()
             .with_git(&git_route)
-            .route("tmux", tmux_route.clone());
+            .route("tmux", tmux_route.clone())
+            .on("lsof", |_| true, Reply::exit(1, "", ""))
+            .on("ss", |_| true, Reply::exit(0, "", ""));
         let fx = Fx {
             env,
             fakes,
