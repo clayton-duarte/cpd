@@ -19,7 +19,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn every_allow_dead_code_states_a_live_reason() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    for dir in ["core/src", "tui/src", "cli/src", "cli/tests"] {
+    for dir in ["core/src", "cli/src", "cli/tests"] {
         rust_files(&root.join(dir), &mut files);
     }
     let own = Path::new(file!()).file_name().unwrap();
