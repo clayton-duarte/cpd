@@ -27,7 +27,9 @@ pub(crate) fn check_complete(conn: &rusqlite::Connection, plan: &PlanId) -> Resu
             if status.as_deref() != Some("merged") {
                 return Err(CpdError::new(
                     ErrorCode::PlanIncomplete,
-                    format!("Plan {plan} cannot reach done: workflow {key} is unregistered or unmerged."),
+                    format!(
+                        "Plan {plan} cannot reach done: workflow {key} is unregistered or unmerged."
+                    ),
                 )
                 .with("plan", plan.as_str())
                 .with("workflow", key.as_str()));

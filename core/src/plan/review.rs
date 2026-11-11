@@ -454,7 +454,11 @@ pub(crate) fn unregistered_workflows(
     let mut unregistered: Vec<&str> = outline
         .done_when
         .keys()
-        .filter(|k| !workflows.iter().any(|w| w.status != "cancelled" && w.key.as_str() == k.as_str()))
+        .filter(|k| {
+            !workflows
+                .iter()
+                .any(|w| w.status != "cancelled" && w.key.as_str() == k.as_str())
+        })
         .map(|k| k.as_str())
         .collect();
     if unregistered.is_empty() {

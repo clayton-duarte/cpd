@@ -236,6 +236,7 @@ impl Fixture {
             spec: Some(spec.to_path_buf()),
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             draft,
+            waiting_on: None,
             urgent: false,
             kind: Some(kind.to_owned()),
             workflow: WorkflowArg {
@@ -780,6 +781,7 @@ fn explore_spec_edit_while_queued_without_attempt() {
         no_needs: false,
         workflow: None,
         kind: None,
+        waiting_on: None,
         plan: PlanArg {
             plan: Some(PlanId::parse("pay").unwrap()),
         },

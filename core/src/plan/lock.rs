@@ -57,10 +57,11 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             })));
         }
         Phase::Deploy => {
-            env.store.read(|conn| super::done::check_complete(conn, &id))?;
-            let settled = env.store.write(COMMAND, |tx| {
-                super::done::settle_done(tx, &id, None)
-            })?;
+            env.store
+                .read(|conn| super::done::check_complete(conn, &id))?;
+            let settled = env
+                .store
+                .write(COMMAND, |tx| super::done::settle_done(tx, &id, None))?;
             return Ok(Output::success(json!({
                 "plan": id,
                 "phase": if settled { "done" } else { "deploy" },
@@ -91,10 +92,10 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     env.store
         .read(|conn| check_drafts_complete(conn, &id, &jobs))?;
     let outline = env.store.read(|conn| super::outline::load(conn, &id))?;
-    if let Some(outline) = outline.as_ref() {
-        if let Some(e) = super::review::unregistered_workflows(&id, outline, &workflows) {
-            return Err(e);
-        }
+    if let Some(outline) = outline.as_ref()
+        && let Some(e) = super::review::unregistered_workflows(&id, outline, &workflows)
+    {
+        return Err(e);
     }
     super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
@@ -138,7 +139,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let started: Vec<Pushed> = prepared.into_iter().map(start::Prepared::push).collect();
 
     let waiting_keys: std::collections::HashSet<String> = env.store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1 AND waiting_on IS NOT NULL")?;
+        let mut stmt =
+            conn.prepare("SELECT key FROM jobs WHERE plan = ?1 AND waiting_on IS NOT NULL")?;
         let rows = stmt.query_map([id.as_str()], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<std::collections::HashSet<String>>>()?)
     })?;
