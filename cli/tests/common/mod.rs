@@ -50,16 +50,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 pub mod causes;
-pub mod cockpit;
 pub mod engine;
 pub mod fx;
 pub mod healthy;
-pub mod inbox;
 pub mod newer_migration;
 pub mod pi;
-pub mod screen;
 pub mod session;
-pub mod tree;
 pub mod wrapper;
 
 /// The cpd binary Cargo built for this test run.

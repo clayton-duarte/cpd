@@ -975,7 +975,7 @@ fn apply_status_line_sets_the_global_cpd_version_option() {
 }
 
 /// The tmux calls of `cpd` itself, from the commands that make them, on the fake ports, for each locale: the `-V` probe
-/// of `doctor` and `watch --ensure`, `tui`, `tui --respawn`: every one starts `-u` (a bare call is the defect).
+/// of `doctor` and `watch --ensure`: every one starts `-u` (a bare call is the defect).
 #[test]
 fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
     let mut bare = Vec::new();
@@ -992,17 +992,12 @@ fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
             )
             .on("tmux", |_| true, Reply::exit(1, "", ""));
         fx.allow_unscripted();
-        for args in [
-            &["doctor"][..],
-            &["tui"],
-            &["tui", "--respawn"],
-            &["watch", "--ensure"],
-        ] {
+        for args in [&["doctor"][..], &["watch", "--ensure"]] {
             let _ = fx.cpd_with(fx.env.root(), args, locale.vars());
         }
         let calls = fx.calls("tmux");
         assert!(
-            calls.len() >= 4,
+            calls.len() >= 2,
             "{locale:?}: the fake tmux saw {} calls",
             calls.len()
         );
@@ -1038,7 +1033,7 @@ fn no_source_spawns_tmux_with_a_command_of_its_own() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    for dir in ["core/src", "cli/src", "tui/src"] {
+    for dir in ["core/src", "cli/src"] {
         sources(&root.join(dir), &mut files);
     }
     assert!(files.len() > 50, "found only {} sources", files.len());
