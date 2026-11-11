@@ -69,7 +69,7 @@ fn scanned_part<'a>(path: &str, text: &'a str) -> Option<&'a str> {
     if path.starts_with("cli/tests/") || path.starts_with("core/tests/") {
         return Some(text);
     }
-    let in_src = ["core", "cli", "engine", "tui"]
+    let in_src = ["core", "cli", "engine"]
         .iter()
         .any(|c| path.starts_with(&format!("{c}/src/")));
     if !in_src {

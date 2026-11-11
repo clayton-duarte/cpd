@@ -46,34 +46,16 @@ fn a_config_migration_replaces_config_toml_by_rename() {
     assert_eq!(std::fs::read_to_string(home.config()).unwrap(), NEW);
 }
 
-/// Test files that a `#[cfg(test)] #[path = ...]` declares and that carry no `_tests` suffix.
-const BY_HAND: &[(&str, &str)] = &[
-    (
-        "tui/src/merge/action_d550.rs",
-        "test module declared with #[cfg(test)] #[path]",
-    ),
-    (
-        "tui/src/merge/marker_d550.rs",
-        "test module declared with #[cfg(test)] #[path]",
-    ),
-];
-fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if path.is_dir() {
             if name != "tests" && name != "fakes" {
-                walk(&path, root, out);
+                walk(&path, out);
             }
         } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if !BY_HAND.iter().any(|(f, _)| *f == rel) {
-                out.push(path);
-            }
+            out.push(path);
         }
     }
 }
@@ -99,8 +81,8 @@ fn non_test_text(text: &str) -> &str {
 fn no_source_file_writes_config_toml_with_fs_write() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut files = Vec::new();
-    for krate in ["core", "engine", "cli", "tui"] {
-        walk(&root.join(krate).join("src"), root, &mut files);
+    for krate in ["core", "engine", "cli"] {
+        walk(&root.join(krate).join("src"), &mut files);
     }
     let mut offenders: Vec<String> = files
         .iter()
@@ -125,8 +107,8 @@ fn no_source_file_writes_config_toml_with_fs_write() {
 fn no_source_file_writes_host_toml_with_fs_write() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut files = Vec::new();
-    for krate in ["core", "engine", "cli", "tui"] {
-        walk(&root.join(krate).join("src"), root, &mut files);
+    for krate in ["core", "engine", "cli"] {
+        walk(&root.join(krate).join("src"), &mut files);
     }
     let mut offenders: Vec<String> = files
         .iter()

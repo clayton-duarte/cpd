@@ -182,7 +182,7 @@ pub fn changed(
 /// fails to match unless stripped or adapted.
 fn rust_filter(name: &str) -> String {
     const AREAS: &[&str] = &[
-        "engine", "workflow", "flow", "session", "store", "tui", "tooling",
+        "engine", "workflow", "flow", "session", "store", "tooling",
     ];
     for &area in AREAS {
         let prefix = format!("{area}::");
