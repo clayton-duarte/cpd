@@ -886,3 +886,39 @@ fn a_clean_unposted_pr_behind_base_never_shows_waiting_with_no_reason() {
         );
     }
 }
+
+#[test]
+fn a_clean_mergeable_pr_behind_base_raises_no_inbox_item() {
+    let mut f = fixture();
+    // An authored open PR with base_contained = 0 and merge_state = 'clean' (not conflicting)
+    f.workflow(1, "base_contained = 0, merge_state = 'clean'");
+    f.own("pay", 1);
+    f.idle();
+
+    // After 1 minute (or at any time), a clean PR behind base produces no pr-ready Inbox row
+    // (specifically no BehindMain / 'behind main' row, and no row at all under pro-d554).
+    let later = NOW + time::Duration::seconds(61);
+    let rows: Vec<_> = f.rows_at(later).into_iter().map(|c| c.subject).collect();
+    assert!(
+        !rows.iter().any(|s| s == "pr:acme/shop#1"),
+        "clean mergeable PR behind base raised an inbox item: {rows:?}"
+    );
+}
+
+#[test]
+fn a_conflicting_pr_raises_no_user_inbox_item_and_wakes_lead() {
+    let mut f = fixture();
+    // An authored open PR with merge_state = 'dirty' (conflicting)
+    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.own("pay", 1);
+    f.idle();
+
+    // Under pro-d554, a conflicting PR never alerts the User via a red Inbox item,
+    // even after the 1-minute grace period has elapsed.
+    let later = NOW + time::Duration::seconds(61);
+    let rows: Vec<_> = f.rows_at(later).into_iter().map(|c| c.subject).collect();
+    assert!(
+        !rows.iter().any(|s| s == "pr:acme/shop#1"),
+        "conflicting PR raised an inbox item for user after 60s: {rows:?}"
+    );
+}
