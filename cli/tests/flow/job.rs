@@ -2066,7 +2066,16 @@ fn draft_add_refused_usage(fx: &Fx, extra: &[&str]) {
         count(&fx.env, "jobs"),
     );
     let mut args = vec![
-        "job", "add", "k", "--title", "T", "--draft", "--waiting-on", "lead", "--plan", "pl",
+        "job",
+        "add",
+        "k",
+        "--title",
+        "T",
+        "--draft",
+        "--waiting-on",
+        "lead",
+        "--plan",
+        "pl",
     ];
     args.extend(extra);
     refused(&fx.cpd(&args), "usage", 2);

@@ -125,7 +125,7 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14)
     Delete(DeleteArgs),
-    /// Check the Plan's registered work: unregistered workflows and unresolved drafts (§4.16)
+    /// Check the Plan's registered work: unregistered Workflows and unresolved drafts (§4.16)
     Check(CheckArgs),
     /// Reopen a done Plan to dispatch phase (§4.17)
     Reopen(ReopenArgs),
