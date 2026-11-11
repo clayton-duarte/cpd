@@ -238,8 +238,7 @@ fn assert_server_options(s: &Server) {
         [("pane-died".to_owned(), PANE_DIED_HOOK.to_owned())],
     );
     assert_eq!(
-        PANE_DIED_HOOK,
-        r##"if -F "#{@cpd_view}" "respawn-pane""##,
+        PANE_DIED_HOOK, r##"if -F "#{@cpd_view}" "respawn-pane""##,
         "a view is respawned: {PANE_DIED_HOOK}"
     );
     assert_eq!(s.raw(&["show", "-sv", "exit-empty"]), "off\n");
