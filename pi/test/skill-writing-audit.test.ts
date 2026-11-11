@@ -237,7 +237,7 @@ test("no Rules bullet of either skill starts with Never or Do not", () => {
       if (/^- (\*\*)?(never|do not)\b/i.test(b.line)) bad.push(`${name}/SKILL.md:${b.n}: ${b.line.slice(0, 90)}`);
   // R17 kept: the command lists and the git list stay word for word.
   const bulletWith = (text: string, needles: string[]) => rulesBullets(text).some((b) => needles.every((n) => b.line.includes(n)));
-  const cpdOwn = ["`cpd plan decide`", "`cpd watch`", "`cpd attempt run`", "`cpd job dispatch`", "`cpd session run`", "`cpd tui`", "`cpd events follow`"];
+  const cpdOwn = ["`cpd plan decide`", "`cpd watch`", "`cpd attempt run`", "`cpd job dispatch`", "`cpd session run`", "`cpd events follow`"];
   const leadOwn = ["`cpd plan phase plan`", "`cpd workflow add`", "`cpd job add`", "`cpd plan review`", "`cpd plan lock`", "`cpd answer`", "`cpd job approve-tests`"];
   const git = ["checkout, switch, reset, rebase, merge, pull, stash"];
   assert.ok(bulletWith(lead, cpdOwn), "cpd-lead keeps the cpd-owned command list");

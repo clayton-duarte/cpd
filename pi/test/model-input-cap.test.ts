@@ -1,5 +1,5 @@
 /**
- * Regression tests for hard model input cap (pro-d559, contract §6.22, docs/architecture/model-input-cap.md).
+ * Regression tests for hard model input cap (pro-d559, contract §6.23, docs/architecture/model-input-cap.md).
  *
  * Requirements:
  * (1) cap values: 1M -> 200000, 256K -> 200000, 200K -> 160000, 128K -> 102400 (and boundaries);

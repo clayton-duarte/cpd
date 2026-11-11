@@ -274,7 +274,7 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   const questions = all.find((f) => f.name.endsWith("questions.md"))!.text;
   assert.match(questions, /A dialog holds one short question/);
   const spec = all.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd tui`", "`cpd session run`"]) {
+  for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd session run`"]) {
     assert.ok(spec.includes(rule), `spec-files.md must state: ${rule}`);
   }
 });
