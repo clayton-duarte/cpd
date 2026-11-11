@@ -44,7 +44,14 @@ pub fn ensure_preview_worktree(ports: &Ports, install: &Install, err: &mut dyn W
         let add_out = run_with(
             &*ports.runner,
             &install.root,
-            &["worktree", "add", "-B", "preview/web", wt_str, "origin/main"],
+            &[
+                "worktree",
+                "add",
+                "-B",
+                "preview/web",
+                wt_str,
+                "origin/main",
+            ],
         );
         match add_out {
             Ok(out) if out.code == 0 => {}

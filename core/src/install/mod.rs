@@ -138,8 +138,6 @@ fn steps(
     Ok(i32::from(failed))
 }
 
-
-
 /// The Electron step (commands.md §14.4 step 7a): builds the checkout's Electron app, writes `app-root` and signals the
 /// running Electron; whether a part failed. A failed part skips the rest.
 fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool {
@@ -178,7 +176,11 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
         return fail("b", e);
     }
     // Build production browser bundle (web/CONTRACT.md §30.2)
-    if let Err(e) = app::pnpm(ports, &app.root, &["--filter", "cpd-web-client", "run", "build"]) {
+    if let Err(e) = app::pnpm(
+        ports,
+        &app.root,
+        &["--filter", "cpd-web-client", "run", "build"],
+    ) {
         return fail("prod browser build", e);
     }
     // Stage versioned payload directory
