@@ -134,39 +134,10 @@ pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// What the supervising hooks run when the engine's pane died or its window is
-/// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
-/// (commands.md §12). `cpd` is found on `PATH` as for every pane cpd starts
-/// (`session::PROGRAM`), and its output is dropped, since a `run-shell -b` that
-/// prints puts the active pane into view mode; `ensure` logs its failures in
-/// `run/watch.log`. A macro, so both hooks' strings are built from this one.
-macro_rules! engine_ensure {
-    () => {
-        "run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'"
-    };
-}
-
-/// The `pane-died` hook (contract §6.1, §6.6): a pane that carries `@cpd_view`
-/// (a view of the cockpit) is respawned when its program dies; the pane of the
-/// engine (window `watch`, `host::layout::WATCH_WINDOW`) starts the engine
-/// again with `engine_ensure!`; any other pane (a Lead's) stays dead, as
-/// `remain-on-exit` leaves it, so engine E2 sees its death. tmux runs it with
-/// the dead pane as the current target.
-pub const PANE_DIED_HOOK: &str = concat!(
-    r##"if -F "#{@cpd_view}" "respawn-pane" "if -F '#{==:#{window_name},watch}' \""##,
-    engine_ensure!(),
-    r##"\"""##
-);
-
-/// The `window-unlinked` hook (contract §6.6): the engine's window is gone
-/// (`kill-window`, an install's restart), so no pane died to say so: start the
-/// engine again with `engine_ensure!`. The window is already gone, so its name
-/// is what tells it was the engine's (`hook_window_name`).
-pub const WINDOW_UNLINKED_HOOK: &str = concat!(
-    r##"if -F "#{==:#{hook_window_name},watch}" ""##,
-    engine_ensure!(),
-    r##"""##
-);
+/// The `pane-died` hook (contract §6.1, §6.6, superseded in part by §6.24):
+/// a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its
+/// program dies; any other pane stays dead, as `remain-on-exit` leaves it.
+pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
 
 /// Every global option, key binding and hook of contract §6.1, each as the
 /// arguments after `tmux -L <socket>`, in the order of the reference's
@@ -212,7 +183,6 @@ pub static SERVER_OPTIONS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
         strings(&["set", "-g", "set-titles", "on"]),
         strings(&["set", "-g", "set-titles-string", SET_TITLES_STRING]),
         strings(&["set-hook", "-g", "pane-died", PANE_DIED_HOOK]),
-        strings(&["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK]),
         strings(&["set", "-s", "exit-empty", "off"]),
         strings(&[
             "bind",
@@ -1884,18 +1854,8 @@ mod tests {
     }
 
     #[test]
-    fn the_engines_hooks_name_its_window_and_start_it_again_quietly() {
-        for hook in [PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK] {
-            assert!(
-                hook.contains(&format!("_name}},{}}}", super::super::layout::WATCH_WINDOW)),
-                "{hook}"
-            );
-            assert!(
-                hook.contains("cpd watch --ensure --wait >/dev/null 2>&1"),
-                "{hook}"
-            );
-        }
-        assert!(WINDOW_UNLINKED_HOOK.contains("#{hook_window_name}"));
+    fn the_pane_died_hook_respawns_cockpit_views() {
+        assert_eq!(PANE_DIED_HOOK, r##"if -F "#{@cpd_view}" "respawn-pane""##);
     }
 
     #[test]
