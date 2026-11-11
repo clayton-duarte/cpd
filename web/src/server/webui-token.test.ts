@@ -52,7 +52,7 @@ describe("writeWebuiToken", () => {
     // When s1 stops, in single-file it removes run/webui-token, destroying s2's token.
     s1.remove();
 
-    // Under per-server isolation (contract §6.16, web/CONTRACT.md §26):
+    // Under per-server isolation (contract §6.16, web/CONTRACT.md §27):
     // Each server has its own token file in run/webui-tokens/<pid>.token.
     // s1's removal must not remove s2's file, and s2's token must still exist.
     const tokensDir = join(home, "run", "webui-tokens");

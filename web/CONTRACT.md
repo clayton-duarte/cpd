@@ -2483,16 +2483,64 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 - `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
 - Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
 
-## 26. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+## 26. Direct WebSocket connection to core and the pi session stream (Plan `webui-core-ws`; Job `webui-core-ws-docs`)
+
+Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527 (WebUI connects to core directly), pro-d528, pro-d541 (port 3333); docs/contract.md §5.8 (core's `/cpd-ws` and `run/core.sock`) and §6.21 (the pi live-stream socket). The Lead's answer to escalation `webui-core-ws-docs-a1-q1` decides §26.1. Where this section and §5, §13, §18 of this file, or docs/contract.md §5.5 and §5.6 disagree, this section wins (recency; those sections are superseded at §26.3 and their text is not edited).
+
+### 26.1 The data connection: direct to core `/cpd-ws`
+
+- **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
+- **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
+- **Port 3333.** Port 3333 is the WebUI production HTTP and static server only (pro-d541: a supervised Node service under the engine, bound on `0.0.0.0:3333`, serving the renderer). Under the Lead's answer it does **not** carry `/cpd-ws`: pro-d541's clause that it serves `/cpd-ws` is superseded by that answer (recency).
+- **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
+- **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
+- **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
+- **The handshake and the reconnect** are §5.8's: the client sends `snapshot`, renders it, keeps the returned `cursor`, and sends `events.subscribe` with that cursor. On every reconnect it does the same with the last cursor it processed. This replaces §15.1's "every reconnect resyncs by full `cockpit.snapshot`" for the core connection, because §5.8 is the later record (pro-d527). The transport still carries no reconnect logic of its own (§15.1); the renderer's existing backoff runs.
+- **Events into the store.** Each `event` notification is an Event row (the shape of `cpd events follow`, docs/contract.md §5.2). The renderer's store applies it through the reducer, as it applies a `cockpit.patch` today (§4).
+
+**Open, not fixed by this section:**
+1. The content of `snapshot` (docs/contract.md §5.8 leaves it to this Plan).
+2. The mapping of core's `snapshot` and `event` messages onto the renderer's `cockpit.snapshot` and `cockpit.patch` wire messages (§4). Until the implementation Job fixes it, the store's shapes are unchanged.
+3. Whether core's `/cpd-ws` answers the `ping` and `pong` heartbeat of §15.2. docs/contract.md §5.8 defines no heartbeat.
+
+### 26.2 pi session transcript streaming into the WebUI reactive store
+
+- **Two sources, one per Session kind.** A tmux pi Session streams from its live socket, `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (docs/contract.md §6.21, protocol 1). A durable Session streams from the durable host's socket, `run/host/<id>.sock` (docs/contract.md §6.14, protocol 2). A durable Session has no `run/pi/` socket (§6.21).
+- **Who connects.** A browser cannot open a Unix socket, so the Node side of the WebUI (the process of §26.1 that serves the page) connects to the Session's socket, and forwards its frames to the renderer over the one WebSocket of §15. Pi-native-core §5.2 names the WebUI as the reader; read literally, that cannot run in a browser. **Assumption, decided and stated (reversible, doc-only):** the Node side is the reader. The alternative, core relaying pi's frames over `/cpd-ws`, would add a core method that docs/contract.md §5.8 does not define.
+- **Frames.** The renderer receives the frames of §6.21 unchanged in content (`hello`, `inflight`, `agent_start`, `message_start`, `delta`, `message_end`, `tool_start`, `tool_update`, `tool_end`, `agent_end`). Their handling is §12 of this file (L1 to L6, A6), which is not restated here: a live item is ephemeral and the committed `.jsonl` line replaces it.
+- **The committed record.** The Session's `.jsonl` remains the record and is tailed as today (§12.4). Live frames never write the transcript.
+- **Store.** Frames become items in the reactive store by the reducers of §12.3 (`web/src/state/{transcript,store,connection}.ts`). `connection.ts` coalesces transcript messages as it does today, unchanged.
+- **Lifecycle.** The socket is listened to from `session_start` to `session_shutdown` (§6.21). The Node side retries while the socket is absent (§12, L2, every 1 s) and stops on detach. The socket is not an Event and not a core method.
+
+### 26.3 Removal of the `cpd` argv shell-outs and the cockpit stream
+
+The implementation Job (`webui-core-ws-impl`) deletes these. This section names them; the Job makes the deletion.
+
+- **`web/src/server/cpd-argv.ts`** (`toArgv`, `CpdCommand`) and every call site that builds a `cpd` argv: the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, the Electron paths `web/src/electron/update/`, `pty.ts` and `pty-tabs.ts`, and the call-site modules `web/src/server/cockpit/`, `web/src/server/pi/backend.ts` and `web/src/server/durable/backend.ts`, as far as they spawn `cpd`. The reads and actions they carried move to the core `/cpd-ws` messages of §26.1; each action's replacement is the Job's, and the Lead decides any that core does not yet define.
+- **`web/src/server/cockpit/stream.ts`** and the `cpd cockpit serve` child process, with its `hello`, `snapshot`, `event` and `error` frames. `cockpit serve` is deprecated by Plan 1 (docs/contract.md §5.5, §5.8); the stall watchdog of §15.2 and the `cpd:c2s`/`cpd:s2c` hot route are deleted with it.
+- **The argv contract**: §18 of this file and docs/contract.md §5.6, with the Gate test `web/src/server/cockpit/argv-contract.test.ts` and `cpd argv-check` (its interface, docs/contract.md §5.6).
+- **Superseded, not edited:** §13 (cockpit stream), §18 (argv contract), §15.2 (the stall watchdog), docs/contract.md §5.5 and §5.6 for the web. Each carries its own history, so none is rewritten.
+
+**Open, flagged:** pi-native-core §2.6 also lists git (`plugin.ts:361`), tmux (`status.ts:38`) and the classifier (`completion-classify.ts:91`) as shell-outs from the web. Plan 4's removal list names only the cpd-argv layer and `cockpit/stream.ts`. Whether the other three leave the web in this Plan is not stated; this section does not remove them.
+
+### 26.4 Verification and test coverage
+
+The core WebSocket connection and session streaming pipeline are tested and verified by:
+- `web/src/server/core-ws.test.ts`: verifies `CoreWsClient` connecting to `/cpd-ws`, performing `snapshot` synchronization, keeping cursors, subscribing via `events.subscribe`, and streaming live events.
+- `web/src/ui/chat/SessionStream.test.tsx`: verifies `SessionStream` rendering transcript items (user and assistant messages) from a live stream source.
+
+Both test suites pass cleanly under Vitest.
+
+## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
 
 Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
 
-### 26.1 Who writes a token
+### 27.1 Who writes a token
 
 - Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
 - The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
 
-### 26.2 Lifecycle cases
+### 27.2 Lifecycle cases
 
 | Event | Effect on the files | Effect on the tokens |
 |---|---|---|
@@ -2503,11 +2551,11 @@ Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-syn
 | The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
 | SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
 
-### 26.3 Verifiers
+### 27.3 Verifiers
 
 The verifiers read the directory at each check, as docs/contract.md §6.16 says: the durable host (`pi/durable-host/run.ts`, `webuiVerified`, at each submit) and the cpd CLI (`core/src/session/send.rs`, for `cpd session send --origin webui`). Both accept a presented value when it matches a file of a live pid. The rule is written once, in §6.16; neither verifier keeps its own copy of it in a document.
 
-### 26.4 Status and limits
+### 27.4 Status and limits
 
 - Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
 - Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
