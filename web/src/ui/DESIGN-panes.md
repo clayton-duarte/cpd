@@ -4,7 +4,7 @@ Builds on `web/src/ui/DESIGN.md` (called **DESIGN** below). Reused by reference,
 
 Files: `web/src/ui/cockpit/PlanView.tsx`, `web/src/ui/cockpit/Inbox.tsx`, and `web/src/ui/cockpit/ManagerView.tsx` (1j). Imports are relative (A1). All three stay wrapped in `memo()` by `App` (DESIGN 3e); their props change only by the optional additions named here, and `App` passes only `postableWorkflows` to PlanView (1f). Phase 2 tests: `PlanView.test.tsx` (3 tests), `Inbox.test.tsx` (3 tests); no existing test changes (3d below).
 
-Source for every field: `web/src/protocol/cockpit.ts` (`PlanViewModel`, `WorkflowView`, `JobView`, `AttemptView`, `InboxModel`, `InboxRow`, `InboxRowAction`, `CockpitAction`) and `web/src/server/cockpit/actions.ts` (`actionArgs`). Nothing in `web/src/protocol/**`, `state/**`, `server/**` changes (A6).
+Source for every field: `web/src/protocol/cockpit.ts` (`PlanViewModel`, `WorkflowView`, `JobView`, `AttemptView`, `InboxModel`, `InboxRow`, `InboxRowAction`, `CockpitAction`) and `web/src/server/cockpit/actions.ts` (`actionArgs`). Nothing in `web/src/protocol/**`, `state/**`, `server/**` changes (A6), except `WorkflowView.base_workflow`: CONTRACT §28 supersedes A6 for that field (pro-d100, pro-d513, pro-d514, pro-d551).
 
 ---
 
@@ -58,11 +58,14 @@ section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT l
 └─ ScrollArea[data-part="plan-scroll"]   min-h-0 flex-1, vertical only (DESIGN 3c, pro-d88)
     └─ div[data-part="plan-body"]   flex flex-col gap-2.5 px-4 py-2.5; hidden when the Plan pane is collapsed (DESIGN 3i)
         ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
-        ├─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N   KEPT hooks   (1e to 1g)
+        ├─ div[data-part="wf-legend"]   only when a Workflow dependency edge is drawn (1e(iv)); "Stacked (base)" solid, "Depends on (needs)" dashed
+        └─ div[data-part="wf-canvas"]   relative flex flex-col gap-2.5 (1e(iv)); holds the Workflow cards and the dependency overlay
+            ├─ svg[data-part="wf-edges"][aria-hidden="true"]   only when an edge is drawn (1e(iv))
+            └─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N, in topological order (1e(iv))   KEPT hooks   (1e to 1g)
         ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
         └─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
 ```
-Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
+Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, the legend and the workflow cards (in topological order, 1e(iv)), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
 
 The old bare `<p>{plan.phase}</p>` is replaced by the stepper (no test pins it). The old standalone `h3`/`p` lines become the card header (1f).
 
@@ -198,6 +201,29 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 | `landing`, `checking`, `merging` | `border-status-landing` | `bg-status-landing/[.08]` | `text-fg-strong` | `text-status-landing-bright` (`#e4bb7f`) |
 | `failed` | `border-status-blocked` | `bg-status-blocked/[.09]` | `text-fg-strong` | `text-status-blocked` (`#e17f6e`) |
 | `queued`, `draft`, `cancelled`, unknown | `border-dashed border-line` (`#5a504a`) | none | `text-foreground` | `text-muted-foreground` (`#aba3af`) |
+
+**(iv) Workflow dependency edges (pro-d100, pro-d551; CONTRACT §28).** Drawn between the Workflow cards of `plan`, never inside a card. The card's own job DAG (ii) is unchanged.
+
+1. **Edges.** Two kinds, from the upstream Workflow `u` to the dependant Workflow `d`:
+   - `base`: `u` is the card whose `<planId>/<key>` equals `d.base_workflow`. Only when `d.base_workflow !== null`.
+   - `needs`: one for each key `k` in `d.needs`; `u` is the card with key `k`.
+   An upstream that is not a card of this Plan draws no edge and is not an error (CONTRACT §28.4). A Workflow with both a base and a needs edge to the same upstream gets both paths, which overlap.
+
+2. **Order (topological).** The cards render in the order `topoOrder(plan.workflows, edges)`: at each step, emit the earliest card in `plan.workflows` order whose upstream cards are all emitted. Upstream therefore precedes dependant, and cards with no edge between them keep their `plan.workflows` order (stable). With no edges the order is `plan.workflows`, as today. If no card is ready while cards remain, the Plan has a cycle: it **throws** `plan {planId} has a workflow dependency cycle at {key}`, where `{key}` is the first remaining card in `plan.workflows` order (the rule of (ii) 2). The order is the DOM order of the `section[data-workflow]` cards.
+
+3. **Geometry.** The cards sit in `div[data-part="wf-canvas"]`: `relative flex flex-col gap-2.5`. The gap is the `plan-body` gap, so spacing between cards is as today. Each card's box is measured relative to this wrapper, after layout, and re-measured when the wrapper or a card resizes (`ResizeObserver`, disconnected on unmount). For an edge `u` → `d`, with `x1` = centre x of `u`, `y1` = bottom of `u`, `x2` = centre x of `d`, `y2` = top of `d`, `ym = (y1 + y2) / 2`:
+   - `path[data-wf-edge="{u.key}>{d.key}"][data-edge-kind="base|needs"]`, `fill="none"`, `stroke-width="1.5"`, class `stroke-line`, `d = M{x1} {y1}C{x1} {ym} {x2} {ym} {x2} {y2}`. `base`: solid, no dash. `needs`: `stroke-dasharray="3 3"`.
+   - `path[data-part="wf-arrowhead"]`, one per edge, solid for both kinds, `stroke-width="1.5"`, class `stroke-line`, `d = M{x2−4} {y2−6}L{x2} {y2}L{x2+4} {y2−6}` (pointing down, into the dependant).
+   - Since the order is topological and the cards form one column, `y2 > y1` always.
+   - Overlay `svg[data-part="wf-edges"][aria-hidden="true"]`: `absolute left-0 top-0 pointer-events-none`, `width`/`height` = the wrapper's size, `fill="none"`, first child of the wrapper so the cards paint above it. Rendered only when at least one edge is drawn.
+   - Edges carry no status: the kind alone sets the style. They are not clickable and have no labels.
+
+4. **Legend.** `div[data-part="wf-legend"]`: `flex items-center gap-3 font-mono text-meta text-muted-foreground`, a sibling immediately before `div[data-part="wf-canvas"]` (after the explore strip), rendered only when at least one edge is drawn. Two items, in this order:
+   - a solid sample, `svg` 24×8 (`aria-hidden="true"`) with `path d="M1 4H23"` and the arrowhead `M19 1L23 4 19 7`, then the text `Stacked (base)`;
+   - a dashed sample, the same with `stroke-dasharray="3 3"`, then the text `Depends on (needs)`.
+   The text is the only description of the two styles. Its wording is fixed here.
+
+5. **Plans without Workflow dependencies.** No overlay, no legend, cards in `plan.workflows` order. The `wf-canvas` wrapper still renders, with the same gap, so the layout is as today.
 
 ### 1f. PR link and Post PR
 
@@ -636,7 +662,3 @@ File: `web/src/ui/App.tsx` (the outlet's content) and `web/src/ui/router.tsx` (t
 - `renders not-found card with recovery button on unknown route without crashing` (5c): the recovery button navigates to the parent route.
 - `preserves mounted context tree and inbox across route transitions` (DESIGN 3j).
 
-
-#### (iv) Workflow dependency edges
-
-_Skeleton: to be filled._

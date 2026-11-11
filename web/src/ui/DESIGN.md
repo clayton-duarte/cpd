@@ -1256,4 +1256,13 @@ Electron's main process already keeps external navigation out of the app: `setWi
 
 ### 5.5 Workflow dependency arrows (pro-d100, pro-d551)
 
-_Skeleton: to be filled._
+Records: pro-d100 (PlanView draws the Workflow dependencies: a base and a needs arrow between cards) and pro-d551 (the Workflows are ordered topologically). The contract is DESIGN-panes 1e(iv); the data is CONTRACT §28. Status at this commit: not built (Job `web-impl`).
+
+- **What is drawn.** In `PlanView`, between the Workflow cards of the Plan: one solid arrow for each `base` dependency (`WorkflowView.base_workflow`, the stacked base) and one dashed arrow for each `needs` dependency (`WorkflowView.needs`). Both carry an arrowhead at the dependant's top edge.
+- **Where the data comes from.** Only `base_workflow` and `needs`, as core sends them. The client never infers a dependency from a branch name or from `base` (pro-d513).
+- **Order.** The cards are sorted topologically: an upstream Workflow comes before its dependants. Independent cards keep their `plan.workflows` order. A cycle is an error and is not drawn around (DESIGN-panes 1e(iv) 2).
+- **Legend.** A compact legend above the cards names the two styles: `Stacked (base)` (solid) and `Depends on (needs)` (dashed). It shows only when at least one arrow is drawn.
+- **Plans without Workflow dependencies.** No arrow and no legend: the cards render in `plan.workflows` order, as today.
+- **Not in scope.** Job arrows inside a card (DESIGN-panes 1e(ii)) are unchanged. Arrows are not coloured by status and are not interactive.
+- **Tests.** `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`) pins: a base arrow and a needs arrow between the right cards, the topological order, the legend text, and a Plan with no Workflow dependencies drawing no arrow.
+

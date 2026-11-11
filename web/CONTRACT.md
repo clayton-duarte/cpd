@@ -670,7 +670,7 @@ export interface PlanViewModel {
 }
 ```
 
-Notes: live Job objects carry no `workflow` key although `docs/commands.md:883` says so (`scout-cockpit §1.2` "Verified divergence"); the Job's Workflow is therefore taken from membership in `workflows[].jobs`; a Job in no Workflow (explore) has `workflow: null`. A Job whose `needs` is absent is `[]`.
+Notes: live Job objects carry no `workflow` key although `docs/commands.md:883` says so (`scout-cockpit §1.2` "Verified divergence"); the Job's Workflow is therefore taken from membership in `workflows[].jobs`; a Job in no Workflow (explore) has `workflow: null`. A Job whose `needs` is absent is `[]`. The Workflow fields `base_workflow` (not yet in the type above) and `needs` are specified in §28.
 
 ### 5.3 Attention Inbox
 
@@ -2572,4 +2572,34 @@ The SVG is the preferred icon. The ICO is the fallback for a browser that does n
 
 ## 28. Workflow dependency fields on WorkflowView (Plan `plan-dag-edges`; pro-d100, pro-d513, pro-d514, pro-d551)
 
-_Skeleton: to be filled._
+Normative for the target. **Status at this commit: not built.** `WorkflowView` (5.2) has no `base_workflow` yet, and `buildPlanView` does not copy it. The Job `web-impl` makes this section true. Core already sends both fields; no core change is part of this section.
+
+### 28.1 The field
+
+- `WorkflowView.base_workflow: string | null` (`web/src/protocol/cockpit.ts`), mapped in `buildPlanView` (`web/src/server/cockpit/readmodel.ts`) from the `base_workflow` key of each `workflows[]` object of `cpd plan show`. The mapping is direct: the value passes through unchanged, and `null` stays `null`. The client never derives it from `base`.
+- The name is snake_case, as core sends it, so no rename layer sits between core and the view. The other `WorkflowView` fields are camelCase (`jobKeys`). This is a deliberate deviation for this one field, not a precedent.
+- `base` keeps its meaning: the branch string (`main`, or a Lead Branch). `base_workflow` is a different value and is never compared with a branch name.
+
+### 28.2 Value (verified by reading core)
+
+- Format: `<plan>/<key>`, for example `pay-1/api`. Never a bare key.
+- Core derives it; nothing is stored. The `plan show` query selects `(SELECT q.plan || '/' || q.key FROM workflows q WHERE q.repo = workflows.repo AND q.lead_branch = workflows.base)` (`core/src/plan/show.rs:31`, emitted at `show.rs:43`). It is `null` when the Workflow is not stacked.
+- Limits, stated plainly: the subquery is not filtered by Plan, so the value may name a Workflow of another Plan. It has no `ORDER BY`, so when several Workflows match, the one returned is not specified. Both are facts of the SQL; the consequences were not run (unverified).
+
+### 28.3 Needs (verified by reading core)
+
+- `WorkflowView.needs` lists the keys of Workflows of the same Plan, sorted, from `workflow_needs` (`core/src/plan/prs.rs:122`, `load_needs`). These are Workflow keys, not branch names and not `<plan>/<key>` strings.
+
+### 28.4 Dependency sources
+
+- The only inputs to Workflow-to-Workflow edges are `base_workflow` and `needs`. A dependency is never inferred from a branch name or from the `base` string (pro-d513).
+- The client matches `base_workflow` to a card by composing `<planId>/<key>` from the Plan it renders. This matches the identifier format core sends. It is not a branch-name inference.
+- An upstream that is not a card of the rendered Plan draws no edge, and it is not an error. A stack onto another Plan's Workflow is a valid case. The rule matches the Job rule for `needs` (DESIGN-panes 1e(ii) rule 1).
+
+### 28.5 Supersedes A6 for this field
+
+- DESIGN-panes 0 (A6) says nothing under `web/src/protocol/**` changes. That is superseded for `WorkflowView.base_workflow` by this section (recency: pro-d100, pro-d513, pro-d514, pro-d551). A6 still holds for every other field.
+
+### 28.6 Where it is drawn
+
+DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
