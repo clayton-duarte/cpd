@@ -271,8 +271,7 @@ pub fn conditions(
         });
 
         let conflicting = pull.mergeable == "conflicting";
-        let other_broken =
-            pull.checks == "failed" || pull.review_decision == "changes_requested";
+        let other_broken = pull.checks == "failed" || pull.review_decision == "changes_requested";
         let stacked =
             matches!((&pull.base_ref, &pull.default_branch), (Some(b), Some(d)) if b != d);
         let behind_main = !stacked && base_contained == Some(0);
