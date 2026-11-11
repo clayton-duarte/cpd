@@ -28,20 +28,7 @@ export interface GuardVerdict {
 export function validateToolCall(call: ToolCallTarget): GuardVerdict {
   const { toolName, input, cwd = process.cwd(), home = homedir(), role, guardedTestFiles = [] } = call;
 
-  // 1. mainguard: check primary checkout immutability on write/edit tools
-  if (toolName === "edit" || toolName === "write") {
-    const mainBreach = primaryCheckoutWrite(toolName, input, cwd, home);
-    if (mainBreach !== undefined) {
-      return {
-        blocked: true,
-        reason: mainBreach,
-        protocol: "primary checkout",
-        source: "mainguard",
-      };
-    }
-  }
-
-  // 2. testguard: red test file immutability enforced directly by tool hook for implementation Jobs
+  // 1. testguard: red test file immutability enforced directly by tool hook for implementation Jobs
   if (role === "worker" && (toolName === "edit" || toolName === "write")) {
     const rawPath = (input as { path?: unknown } | null | undefined)?.path;
     if (typeof rawPath === "string" && rawPath !== "") {
@@ -56,6 +43,19 @@ export function validateToolCall(call: ToolCallTarget): GuardVerdict {
           };
         }
       }
+    }
+  }
+
+  // 2. mainguard: check primary checkout immutability on write/edit tools
+  if (toolName === "edit" || toolName === "write") {
+    const mainBreach = primaryCheckoutWrite(toolName, input, cwd, home);
+    if (mainBreach !== undefined) {
+      return {
+        blocked: true,
+        reason: mainBreach,
+        protocol: "primary checkout",
+        source: "mainguard",
+      };
     }
   }
 

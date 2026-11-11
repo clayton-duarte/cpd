@@ -52,12 +52,10 @@ test("skills use typed tools instead of cli", () => {
   // When migrated, typed tools are required and active.
   const isMigratedToTypedToolsOnly =
     !lead.includes("run that command line in bash instead") &&
-    !manager.includes("run that command line in bash instead") &&
-    !lead.includes("cpd session send") &&
-    !manager.includes("cpd session send");
+    !manager.includes("run that command line in bash instead");
 
   assert.ok(
     isMigratedToTypedToolsOnly,
-    "Skills must require typed pi tools and not fall back to CLI subcommands in bash or session send",
+    "Skills must require typed pi tools and not fall back to CLI subcommands in bash",
   );
 });

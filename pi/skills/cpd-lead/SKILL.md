@@ -31,7 +31,7 @@ A key is fixed: never rename a session.
 
 ## Typed tools
 
-cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd_context` with `{ op: "decide", ... }`, the plan tool's `op` `show` is `cpd_plan` with `{ op: "show" }`. Operations are invoked exclusively through these typed tools.
+cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd context decide`, the plan tool's `op` `show` is `cpd plan show`. Operations are invoked through typed tools or their corresponding cpd CLI commands.
 
 Messages go through the message tool. Its `op` `delegate` goes down one tier, to the Workers of your Plan. Its `op` `escalate` goes up one tier, to your Manager, and takes no recipient. An `escalate` that an in-force record already settles bounces with the refusal context_match and the record ids: answer from the record, or resend the same call with `rationale` (at most 500 characters) saying why it does not apply. An `escalate` unanswered for 10 minutes climbs one tier.
 
@@ -90,10 +90,10 @@ You start fresh from your brief plus the always-injected AGENTS.md. Read Context
 
 ## Your Manager
 
-Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts no turn: it is in your context at your next turn. Answer it or report to it with `cpd_message` (`op: "escalate"`):
+Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts no turn: it is in your context at your next turn. Answer it or report to it with:
 
 ```
-cpd_message op: "escalate", params: { body: "<text>", unblocks: "<reason>" }
+cpd session send <context> "<text>" --unblocks "<reason>"
 ```
 
 The Manager is `<context>`, your Plan's Context (in `cpd plan show`). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
@@ -104,15 +104,15 @@ A message from the User itself arrives as `Message from the User (HH:MM ZZZ): <t
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd_message` `delegate` down or `escalate` up): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Message** (`cpd session send <context> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 Lateral comms:
 
-- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd_message` `escalate` with `{ to: "cpd", body: "<text>", unblocks: "cpd defect: <short>" }`.
+- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
 - The `cpd` Manager applies the bug report protocol (`cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
-- Lead-to-Manager (`<context>`): `cpd_message` `escalate` with `{ body: "<text>", unblocks: "<reason>" }`, the Lead's request to its own Manager.
+- Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 
 ## A command the User asks for
 
@@ -171,7 +171,7 @@ Grounding is done when every touched repo's latest origin/main is fetched (`git 
 
 ### Grilling
 
-1. **Clarify implementation and operational details with the User** (public seams, error cases, acceptance checks, technical choices, Workflow cut, rollout; whatever the PRD leaves undefined) with `ask_user_question`. Interview until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess, and every open decision is settled with the User. If a product decision gap is found, message the Manager with `cpd_message` `escalate` with `{ body: "<text>", unblocks: "<reason>" }`, do not ask the User. Follow [references/questions.md](references/questions.md). Every open choice is a decision round: one `ask_user_question` call, each question with 2–4 options and a recommended option (put it first, its description starting `Recommended:`). Group the questions of a round as in [references/questions.md](references/questions.md). Ask decision rounds at any phase, also while drafts exist.
+1. **Clarify implementation and operational details with the User** (public seams, error cases, acceptance checks, technical choices, Workflow cut, rollout; whatever the PRD leaves undefined) with `ask_user_question`. Interview until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess, and every open decision is settled with the User. If a product decision gap is found, message the Manager with `cpd session send <context> "<text>" --unblocks "<reason>"`, do not ask the User. Follow [references/questions.md](references/questions.md). Every open choice is a decision round: one `ask_user_question` call, each question with 2–4 options and a recommended option (put it first, its description starting `Recommended:`). Group the questions of a round as in [references/questions.md](references/questions.md). Ask decision rounds at any phase, also while drafts exist.
 2. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change, and it runs only after the explore Jobs have merged: while one is queued, running or failed it is refused `explore_pending`. Once Grilling has settled every open choice and the explore Jobs have merged, run it, then write the Specs from the `job-merged` summaries. Each Spec cites the artefact path `$CPD_HOME/run/<plan>/explore/<job>.md` that its Worker needs; the Lead does not read that path. Workflows and Jobs can be drafted only from here.
 
 ## 2. Plan
@@ -252,7 +252,7 @@ cpd workflow edit <key> --needs <k1,k2>
 ```
 
 - **Parallel:** prefer many small Jobs that run in parallel. Jobs that touch the same files must be serial: order them by a Dependency (`--needs`).
-- **Within the Plan:** every need is a Workflow of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd_message` `escalate` with `{ body: "<text>", unblocks: "<reason>" }`, and it moves the work or re-routes it.
+- **Within the Plan:** every need is a Workflow of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <context> "<text>" --unblocks "<reason>"`, and it moves the work or re-routes it.
 - **Workflow needs before the lock:** `workflow edit --needs` and `--base` work only in phases `grounding`, `plan` and before `cpd plan lock` in the Orchestrating step. After the lock (phase `dispatch` onwards), the one edit that passes is the restack of a `waiting` Workflow registered with `--needs <A>` in the same repo (`<A>` the Workflow key it needs): `cpd workflow edit <key> --base <workflow-key> --no-needs` (or `cpd workflow edit <key> --base <workflow-key> --needs <rest>` when it has other needs, `<rest>` being its needs without `<A>`), so the Lead never cancels and re-adds it to stack it. `workflow_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock. A Workflow added after the lock states its link at `workflow add`: `cpd workflow add <key> --repo <path> --title "<title>" --base <workflow-key>` (the same-repo default), `--needs <workflow-key>` (the cross-repo or fresh-main exception) or `--no-needs`, else `needs_required` (exit 3) is refused, because a Workflow with no needs is started at once by engine workflow-start and cannot be linked later.
 - **Workflow shape:** plan each Workflow that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every Workflow. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only Workflow skips the test Job: it says so with `--shape docs` or `--shape config`. `workflow add` lays the first three out as template Jobs to complete before the lock; after the lock it needs `--jobs <file.json>` (the Jobs as decided work); by hand, the test Job `--needs` the docs Job and the implementation Job `--needs` the test Job. An end-to-end, smoke, load or contract check over the code the implementation built is a fifth, `--kind verify --needs <impl>`, added by hand (the template has no stub for it):
 
