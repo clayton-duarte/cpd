@@ -143,9 +143,14 @@ struct ConfigCli {
     args: super::ConfigArgs,
 }
 
+/// Serialises the `$CPD_HOME` window of [`run`]: `cargo test` runs these tests as threads of one process, and a
+/// sibling's `set_var` between another's set and read sends its write to the wrong home.
+static CPD_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Runs `cpd config <argv>` in this process, with `$CPD_HOME` pointed at `home`.
 fn run(home: &CpdHome, argv: &[&str]) -> Result<Output, crate::error::CpdError> {
-    // SAFETY: nextest runs one test per process, so no other test reads `CPD_HOME` meanwhile.
+    let _lock = CPD_HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // SAFETY: `CPD_HOME_LOCK` is held, and every test of this file that reads `CPD_HOME` goes through `run`.
     unsafe { std::env::set_var("CPD_HOME", home.root()) };
     let args = ConfigCli::try_parse_from(std::iter::once("cpd").chain(argv.iter().copied()))
         .expect("`cpd config` parses")
