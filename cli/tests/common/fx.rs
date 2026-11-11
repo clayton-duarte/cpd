@@ -795,7 +795,11 @@ impl Fx {
             .clone()
             .with_git(&git_route)
             .route("tmux", tmux_route.clone())
-            .on("lsof", |_| true, Reply::exit(1, "", ""))
+            .on(
+                "lsof",
+                |_| true,
+                Reply::exit(1, "", "lsof: no process found\n"),
+            )
             .on("ss", |_| true, Reply::exit(0, "", ""));
         let fx = Fx {
             env,
