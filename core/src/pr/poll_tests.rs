@@ -997,3 +997,66 @@ fn stacked_on_adopted_base_resolves_head_ref_on_origin() {
         );
     }
 }
+
+#[test]
+fn conflicting_pr_level_triggers_update_job_when_not_queued() {
+    let rig = open_rig(&["api"]);
+    let dir = rig.home.root().join("policy/acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner.toml"), "[pr]\n").unwrap();
+
+    // Fake pi install and node handler for catalog
+    let agent = rig.home.root().join("agent");
+    let release = agent.join("install/releases/1.0.0/node_modules/@earendil-works");
+    for entry in ["pi-coding-agent", "pi-ai"] {
+        std::fs::create_dir_all(release.join(entry).join("dist")).unwrap();
+        std::fs::write(release.join(entry).join("dist/index.js"), "").unwrap();
+    }
+    std::fs::write(agent.join("install/current-version"), "1.0.0\n").unwrap();
+    std::fs::create_dir_all(agent.join("bin")).unwrap();
+    let pi = agent.join("bin/pi");
+    std::fs::write(&pi, "").unwrap();
+    std::fs::set_permissions(&pi, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let old_path = std::env::var_os("PATH");
+    unsafe { std::env::set_var("PATH", agent.join("bin")) };
+    (*rig.fakes.runner).clone().on(
+        "node",
+        |_| true,
+        Reply::ok(r#"{"O":["off","low","medium","high"],"S":["off","low","medium","high"],"H":["off","low","medium","high"],"G":["off"]}"#),
+    );
+
+    // Stored PR is conflicting and dirty, already recorded on a previous poll (no edge transition)
+    rig.sql(
+        "UPDATE pull_requests SET mergeable = 'conflicting', merge_state = 'dirty' WHERE number = 801;",
+    );
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let initial_jobs = update_jobs(&mut store);
+    assert_eq!(initial_jobs.len(), 0, "initially no update job exists");
+
+    // Scripted gh handler where PR is still listed as conflicting
+    let node = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801",
+        "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
+        "viewerDidAuthor":true,"viewerLatestReviewRequest":null,
+        "reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#.to_string();
+    let gh = scripted(vec![node], vec![], true, String::new());
+    let _ = (*rig.fakes.runner).clone().route("gh", gh);
+
+    // Run poll: under pro-d554, conflicting state level-triggers an update Job even when not on an initial edge transition
+    run_poll(&rig);
+
+    if let Some(old) = old_path {
+        unsafe { std::env::set_var("PATH", old) };
+    }
+
+    let jobs = update_jobs(&mut store);
+    assert_eq!(
+        jobs.len(),
+        1,
+        "conflicting PR level-triggers an update Job when none is queued: {jobs:?}"
+    );
+    assert_eq!(
+        last_reason(&mut store).as_deref(),
+        Some("conflict"),
+        "the update Job's cause is conflict"
+    );
+}

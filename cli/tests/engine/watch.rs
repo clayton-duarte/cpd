@@ -573,17 +573,11 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     );
     assert_eq!(fx.count("watch-started"), 1);
 
-    // A dead engine's window is replaced, not duplicated: the supervising hook starts it again (contract §6.6). That tmux fires the
-    // hook is tmux's; what it runs is the string it was given, and that command starts the engine in the same window.
+    // When the engine stops and its pane exits, supervising tmux hooks are retired (§6.23), so no hook runs.
+    // Starting it again with watch --ensure replaces the window.
     engine.stop();
     fx.pane_exit(&pane, 0);
-    let hook: Vec<String> = fx
-        .calls("sh")
-        .into_iter()
-        .map(|call| call.args.join(" "))
-        .collect();
-    assert_eq!(hook.len(), 1, "{hook:?}");
-    assert!(hook[0].contains("watch --ensure --wait"), "{hook:?}");
+    assert!(fx.calls("sh").is_empty());
     fx.cpd(&["watch", "--ensure", "--wait"]).ok();
     assert_eq!(fx.count("watch-started"), 2);
     assert_eq!(work_windows(&fx), "watch\n");
