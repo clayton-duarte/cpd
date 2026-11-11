@@ -10,6 +10,7 @@
 // dependency is pinned by the build Job, loaded here through `createRequire` because `ws`
 // ships no typings.
 import { createRequire } from "node:module";
+import * as net from "node:net";
 import type { Disposable, Scheduler } from "../protocol/runtime.ts";
 import type { ServerMessage } from "../protocol/wire.ts";
 import type { HubConnection } from "./hub/connection.ts";
@@ -103,16 +104,23 @@ function isRfc1918Ipv4(host: string): boolean {
 }
 
 /**
- * Checks if an IPv6 address is Unique Local Address (ULA) (fc00::/7, i.e., starts with fc or fd).
- * URL.hostname for IPv6 removes brackets or retains them depending on parser. In URL standard,
- * url.hostname for [fc00::1] is "[fc00::1]".
+ * Checks if a host is an IPv6 Unique Local Address (ULA) literal (RFC 4193 fc00::/7).
+ * An IPv6 ULA Origin is accepted only when its host is an IPv6 address literal enclosed in
+ * brackets, e.g. [fd12:3456::1], whose first 7 bits are 1111110 (CONTRACT.md §15.1, pro-d552).
+ * Domain names starting with 'fc' or 'fd' (such as fd.evil.com) are rejected.
  */
 function isIpv6Ula(host: string): boolean {
-  const clean = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
-  const lower = clean.toLowerCase();
-  // ULA prefix is fc00::/7, meaning the first 7 bits are 1111110.
-  // First byte has hex prefix fc or fd.
-  return lower.startsWith('fc') || lower.startsWith('fd');
+  if (!host.startsWith("[") || !host.endsWith("]")) return false;
+  const raw = host.slice(1, -1);
+  if (!net.isIPv6(raw)) return false;
+
+  const firstHextet = raw.split(":")[0];
+  if (!firstHextet) return false;
+  const num = parseInt(firstHextet, 16);
+  if (Number.isNaN(num)) return false;
+
+  // fc00::/7 -> first 7 bits are 1111110 -> top byte & 0xfe === 0xfc
+  return ((num >> 8) & 0xfe) === 0xfc;
 }
 
 /**
