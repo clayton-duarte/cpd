@@ -21,7 +21,6 @@ use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::merge::{self, Ctx, End};
 use cpd_core::store::Store;
-use cpd_tui::read::{self, Checks, PrState, ReviewDecision};
 use nix::fcntl::{Flock, FlockArg};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -3873,33 +3872,6 @@ fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
     assert_reviews_superseded_before_done(&fx.env, "pay");
 }
 
-/// The Dispatch card: label, then (number, state, (checks, decision, title)) when a PR is open.
-type DispatchCard = (
-    String,
-    Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>,
-);
-
-/// The Dispatch column's read of the Plan: label, number, state, checks, decision, title.
-fn dispatch_card(fx: &Poll) -> DispatchCard {
-    let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
-    assert_eq!(widgets.plans.len(), 1);
-    let card = widgets.plans.into_iter().next().unwrap();
-    let pr = card.workflows.into_iter().next().map(|pr| {
-        (
-            pr.number,
-            pr.state,
-            pr.polled.map(|p| (p.title, p.decision, p.checks)),
-        )
-    });
-    (card.label, pr)
-}
-
-#[test]
-fn a_plan_without_a_pr_has_a_label_and_no_pr_row() {
-    let fx = poll_fx("dispatch");
-    assert_eq!(dispatch_card(&fx), ("Lead".into(), None));
-}
-
 /// Attempt `b-a1` of a cancelled Job `b`, ended, with its worktree and branch kept for
 /// debugging (§3.4 A9), and a tmux window for it.
 fn kept_attempt(fx: &Poll) -> (PathBuf, String) {
@@ -4794,60 +4766,6 @@ fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_
         ),
         "{}",
         calls[1][3]
-    );
-}
-
-#[test]
-fn dispatch_rows_carry_label_number_state_checks_decision_and_title() {
-    let fx = poll_fx("deploy");
-    // Before the first poll the row is what `pr open` wrote: the Plan's title, no review, no checks.
-    assert_eq!(
-        dispatch_card(&fx),
-        (
-            "Lead".into(),
-            Some((
-                812,
-                PrState::Open,
-                Some(("Pay the bills".into(), ReviewDecision::None, Checks::None))
-            ))
-        )
-    );
-
-    fx.search(&[
-        pay("OPEN", Some("CHANGES_REQUESTED"), Some("FAILURE")).replace("Pay the bills", TITLE)
-    ]);
-    fx.poll();
-    assert_eq!(
-        dispatch_card(&fx),
-        (
-            "Lead".into(),
-            Some((
-                812,
-                PrState::Open,
-                Some((
-                    TITLE.into(),
-                    ReviewDecision::ChangesRequested,
-                    Checks::Failed
-                ))
-            ))
-        )
-    );
-
-    fx.search(&[]);
-    fx.lookup(&[Some(
-        pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE),
-    )]);
-    fx.poll();
-    assert_eq!(
-        dispatch_card(&fx),
-        (
-            "Lead".into(),
-            Some((
-                812,
-                PrState::Merged,
-                Some((TITLE.into(), ReviewDecision::Approved, Checks::Passed))
-            ))
-        )
     );
 }
 

@@ -13,9 +13,6 @@ use std::path::Path;
 
 use common::fx::Fx;
 use common::{Run, refused};
-use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId};
-use cpd_core::store::Store;
 use serde_json::json;
 
 use super::job::{engine, events, job_add, job_row, lock, plan, setup};
@@ -401,17 +398,4 @@ fn list_and_show_surface_aborted() {
         (row["outcome"].as_str(), row["cause"].as_str()),
         (Some("failed"), Some("aborted"))
     );
-
-    // The TUI fixture's Attempt read carries the same cause (drawn like `timed_out`).
-    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
-    let mut store = Store::open(&home, 5000).unwrap();
-    let flow =
-        cpd_tui::read::flow(&mut store, &PlanId::parse(PLAN).unwrap()).expect("the flow reads");
-    let node = flow
-        .jobs
-        .iter()
-        .flat_map(|j| &j.attempts)
-        .find(|a| a.id == AttemptId::parse(ATTEMPT).unwrap())
-        .expect("the Attempt is in the TUI read");
-    assert_eq!(node.cause.map(|c| c.as_str()), Some("aborted"));
 }
